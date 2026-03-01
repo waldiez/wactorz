@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentFlow Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #080b0f;
+    --surface:  #0e1318;
+    --border:   #1a2230;
+    --border2:  #243040;
+    --text:     #c8d8e8;
+    --muted:    #4a6070;
+    --accent:   #00e5ff;
+    --green:    #00ff88;
+    --yellow:   #ffcc00;
+    --red:      #ff3860;
+    --orange:   #ff6b35;
+    --purple:   #bb86fc;
+    --mono:     'JetBrains Mono', monospace;
+    --sans:     'Syne', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 28px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky; top: 0; z-index: 100;
+  }
+
+  .logo {
+    font-family: var(--sans);
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .logo-icon {
+    width: 28px; height: 28px;
+    background: var(--accent);
+    clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+    animation: pulse-hex 3s ease-in-out infinite;
+  }
+
+  @keyframes pulse-hex { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+  .header-right { display: flex; align-items: center; gap: 20px; }
+
+  .connection-badge {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 11px; color: var(--muted);
+    letter-spacing: 0.08em; text-transform: uppercase;
+  }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
+  .dot.connected  { background: var(--green);  box-shadow: 0 0 8px var(--green);  animation: blink 2s ease-in-out infinite; }
+  .dot.error      { background: var(--red); }
+  .dot.connecting { background: var(--yellow); animation: blink 0.8s ease-in-out infinite; }
+
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  .timestamp { font-size: 11px; color: var(--muted); letter-spacing: 0.05em; }
+
+  /* ── Layout ── */
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    grid-template-rows: auto 1fr;
+    gap: 0;
+    height: calc(100vh - 57px);
+  }
+
+  /* ── Summary Bar ── */
+  .summary-bar {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 1px;
+    background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .stat-cell {
+    flex: 1; background: var(--surface);
+    padding: 14px 20px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+
+  .stat-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .stat-value { font-family: var(--sans); font-size: 26px; font-weight: 700; line-height: 1; color: #fff; transition: color 0.3s; }
+  .stat-value.green  { color: var(--green); }
+  .stat-value.red    { color: var(--red); }
+  .stat-value.yellow { color: var(--yellow); }
+
+  /* ── Main Panel ── */
+  .main-panel {
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    padding: 20px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+
+  .section-title {
+    font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 10px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .section-title::after { content:''; flex:1; height:1px; background:var(--border); }
+
+  /* ── Agent Cards ── */
+  #agents-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+    gap: 12px;
+  }
+
+  .agent-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 16px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s, transform 0.15s;
+    animation: card-in 0.3s ease forwards;
+  }
+
+  @keyframes card-in { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+
+  .agent-card:hover { border-color: var(--border2); }
+  .agent-card::before {
+    content:''; position:absolute; left:0; top:0; bottom:0; width:3px;
+    background:var(--muted); transition:background 0.3s;
+  }
+  .agent-card.running::before  { background:var(--green);  box-shadow: 0 0 12px var(--green); }
+  .agent-card.stopped::before  { background:var(--muted); }
+  .agent-card.failed::before   { background:var(--red);    box-shadow: 0 0 12px var(--red); }
+  .agent-card.paused::before   { background:var(--yellow); box-shadow: 0 0 12px var(--yellow); }
+
+  .agent-card.paused { opacity: 0.7; }
+  .agent-card.stopped { opacity: 0.5; }
+
+  .agent-header {
+    display: flex; justify-content: space-between;
+    align-items: flex-start; margin-bottom: 12px;
+  }
+
+  .agent-name { font-family: var(--sans); font-size: 15px; font-weight: 700; color: #fff; }
+  .agent-id   { font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: 0.05em; }
+
+  .state-badge {
+    font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 2px; font-weight: 500;
+  }
+  .state-badge.running  { background:rgba(0,255,136,0.12); color:var(--green); }
+  .state-badge.stopped  { background:rgba(74,96,112,0.2);  color:var(--muted); }
+  .state-badge.failed   { background:rgba(255,56,96,0.12); color:var(--red); }
+  .state-badge.paused   { background:rgba(255,204,0,0.12); color:var(--yellow); }
+  .state-badge.unknown  { background:rgba(74,96,112,0.2);  color:var(--muted); }
+
+  .agent-metrics {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 8px; margin-bottom: 10px;
+  }
+
+  .metric-row { display:flex; flex-direction:column; gap:2px; }
+  .metric-label { font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); }
+  .metric-val   { font-size:13px; color:var(--text); }
+
+  .bar-wrap  { background:var(--border); border-radius:2px; height:4px; margin-top:6px; overflow:hidden; }
+  .bar-fill  { height:100%; border-radius:2px; transition:width 0.5s ease; }
+  .bar-fill.cpu { background:var(--accent); }
+  .bar-fill.mem { background:var(--purple); }
+
+  .agent-task {
+    font-size:11px; color:var(--muted); font-style:italic;
+    border-top:1px solid var(--border); padding-top:8px; margin-top:4px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .agent-task span { color:var(--accent); font-style:normal; }
+
+  /* ── Control Buttons ── */
+  .agent-controls {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+
+  .ctrl-btn {
+    flex: 1;
+    padding: 5px 0;
+    border: 1px solid var(--border2);
+    background: transparent;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    color: var(--muted);
+    transition: all 0.15s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .ctrl-btn:hover { color: #fff; border-color: currentColor; }
+  .ctrl-btn:active { transform: scale(0.97); }
+
+  .ctrl-btn.pause:hover   { color: var(--yellow); border-color: var(--yellow); background: rgba(255,204,0,0.06); }
+  .ctrl-btn.resume:hover  { color: var(--green);  border-color: var(--green);  background: rgba(0,255,136,0.06); }
+  .ctrl-btn.stop:hover    { color: var(--red);    border-color: var(--red);    background: rgba(255,56,96,0.06); }
+  .ctrl-btn.delete:hover  { color: var(--orange); border-color: var(--orange); background: rgba(255,107,53,0.06); }
+
+  .ctrl-btn:disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  .ctrl-btn.sending {
+    animation: btn-pulse 0.6s ease;
+  }
+  @keyframes btn-pulse {
+    0%   { background: rgba(0,229,255,0.15); }
+    100% { background: transparent; }
+  }
+
+  /* ── Toast notification ── */
+  #toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 4px;
+    padding: 10px 20px;
+    font-size: 12px;
+    color: var(--text);
+    letter-spacing: 0.05em;
+    opacity: 0;
+    transition: all 0.25s ease;
+    z-index: 9999;
+    white-space: nowrap;
+  }
+  #toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  #toast.green { border-color: var(--green); color: var(--green); }
+  #toast.red   { border-color: var(--red);   color: var(--red); }
+  #toast.yellow{ border-color: var(--yellow);color: var(--yellow); }
+
+  .last-seen { font-size:10px; color:var(--muted); text-align:right; margin-top:6px; }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    overflow-y: auto;
+    display: flex; flex-direction: column;
+    background: var(--surface);
+  }
+
+  .sidebar-section { padding: 16px; border-bottom: 1px solid var(--border); }
+
+  .alert-list { display:flex; flex-direction:column; gap:6px; max-height:200px; overflow-y:auto; }
+
+  .alert-item {
+    background: rgba(255,56,96,0.06);
+    border: 1px solid rgba(255,56,96,0.2);
+    border-radius: 3px; padding: 8px 10px;
+    font-size: 11px;
+    animation: alert-in 0.3s ease forwards;
+  }
+  @keyframes alert-in { from{opacity:0;transform:translateX(8px)} to{opacity:1;transform:translateX(0)} }
+  .alert-item .alert-name { color:var(--red); font-weight:500; }
+  .alert-item .alert-time { color:var(--muted); font-size:10px; float:right; }
+
+  .log-feed {
+    flex:1; overflow-y:auto;
+    padding: 12px 16px;
+    display: flex; flex-direction:column; gap:4px;
+  }
+
+  .log-line {
+    display:flex; gap:8px; align-items:baseline;
+    padding:4px 0; border-bottom:1px solid rgba(26,34,48,0.6);
+    animation: log-in 0.2s ease forwards; font-size:11px;
+  }
+  @keyframes log-in { from{opacity:0} to{opacity:1} }
+
+  .log-time { color:var(--muted); white-space:nowrap; flex-shrink:0; font-size:10px; }
+  .log-type {
+    font-size:9px; letter-spacing:0.08em; text-transform:uppercase;
+    padding:1px 5px; border-radius:2px; flex-shrink:0;
+  }
+  .log-type.status    { background:rgba(0,229,255,0.1);   color:var(--accent); }
+  .log-type.heartbeat { background:rgba(0,255,136,0.1);   color:var(--green); }
+  .log-type.alert     { background:rgba(255,56,96,0.1);   color:var(--red); }
+  .log-type.spawned   { background:rgba(187,134,252,0.1); color:var(--purple); }
+  .log-type.completed { background:rgba(255,107,53,0.1);  color:var(--orange); }
+  .log-type.command   { background:rgba(255,204,0,0.1);   color:var(--yellow); }
+  .log-type.log       { background:rgba(74,96,112,0.2);   color:var(--muted); }
+  .log-msg { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* ── Empty state ── */
+  .empty-state { grid-column:1/-1; text-align:center; padding:60px 20px; color:var(--muted); }
+  .empty-state .big { font-family:var(--sans); font-size:36px; font-weight:700; margin-bottom:8px; opacity:0.3; }
+  .empty-state .sub { font-size:12px; letter-spacing:0.08em; }
+
+  .no-alerts { color:var(--muted); font-size:11px; padding:10px 0; text-align:center; letter-spacing:0.08em; }
+
+  ::-webkit-scrollbar { width:4px; height:4px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon"></div>
+    AGENTFLOW MONITOR
+  </div>
+  <div class="header-right">
+    <div class="connection-badge">
+      <div class="dot connecting" id="ws-dot"></div>
+      <span id="ws-label">CONNECTING</span>
+    </div>
+    <div class="timestamp" id="clock">--:--:--</div>
+  </div>
+</header>
+
+<div class="layout">
+  <div class="summary-bar">
+    <div class="stat-cell"><div class="stat-label">Total Agents</div><div class="stat-value" id="stat-total">0</div></div>
+    <div class="stat-cell"><div class="stat-label">Running</div><div class="stat-value green" id="stat-running">0</div></div>
+    <div class="stat-cell"><div class="stat-label">Paused</div><div class="stat-value yellow" id="stat-paused">0</div></div>
+    <div class="stat-cell"><div class="stat-label">Stopped</div><div class="stat-value" id="stat-stopped">0</div></div>
+    <div class="stat-cell"><div class="stat-label">Failed</div><div class="stat-value red" id="stat-failed">0</div></div>
+    <div class="stat-cell"><div class="stat-label">Alerts</div><div class="stat-value yellow" id="stat-alerts">0</div></div>
+    <div class="stat-cell"><div class="stat-label">Msgs Processed</div><div class="stat-value" id="stat-msgs">0</div></div>
+  </div>
+
+  <div class="main-panel">
+    <div>
+      <div class="section-title">Live Agents</div>
+      <div id="agents-grid">
+        <div class="empty-state">
+          <div class="big">&#9711;</div>
+          <div class="sub">WAITING FOR AGENTS<br>Connect your MQTT broker to begin</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="section-title">Alerts</div>
+      <div id="alert-list" class="alert-list"><div class="no-alerts">no alerts</div></div>
+    </div>
+    <div class="section-title" style="padding:12px 16px 0;margin-bottom:0;">Event Log</div>
+    <div id="log-feed" class="log-feed"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+// ── State — persists across reconnects, NEVER cleared ─────────────────────
+const agents = {};
+let alerts   = [];
+let ws       = null;
+let reconnectTimer  = null;
+let reconnectDelay  = 2000;
+let isConnecting    = false;
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+function connect() {
+  if (isConnecting) return;           // prevent multiple simultaneous connects
+  isConnecting = true;
+  setStatus('connecting');
+
+  ws = new WebSocket(`ws://${location.host}/ws`);
+
+  ws.onopen = () => {
+    isConnecting   = false;
+    reconnectDelay = 2000;            // reset backoff
+    setStatus('connected');
+    clearTimeout(reconnectTimer);
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'delete_agent') {
+        // Explicit delete — remove from local state and DOM
+        delete agents[msg.agent_id];
+        const card = document.getElementById(`card-${msg.agent_id}`);
+        if (card) card.remove();
+        renderStats();
+        mergeState(msg.state, null);  // sync rest of state
+      } else {
+        mergeState(msg.state, msg.event);
+      }
+    } catch(err) {
+      console.warn('WS parse error', err);
+    }
+  };
+
+  ws.onclose = () => {
+    isConnecting = false;
+    setStatus('error');
+    // Exponential backoff: 2s → 4s → 8s → max 15s
+    reconnectDelay = Math.min(reconnectDelay * 1.5, 15000);
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connect, reconnectDelay);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+}
+
+function setStatus(s) {
+  document.getElementById('ws-dot').className    = `dot ${s}`;
+  document.getElementById('ws-label').textContent = s.toUpperCase();
+}
+
+// ── Send command to server ─────────────────────────────────────────────────
+function sendCommand(agentId, command, btnEl) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showToast('Not connected to monitor server', 'red');
+    return;
+  }
+  ws.send(JSON.stringify({ type: 'command', command, agent_id: agentId }));
+
+  // Visual feedback on button
+  if (btnEl) {
+    btnEl.classList.add('sending');
+    setTimeout(() => btnEl.classList.remove('sending'), 600);
+  }
+
+  const agentName = agents[agentId]?.name || agentId.slice(0, 8);
+  const colors = { pause: 'yellow', stop: 'red', resume: 'green', delete: 'red' };
+  showToast(`${command.toUpperCase()} sent to ${agentName}`, colors[command] || '');
+
+  addLogLine('command', `${command} -> ${agentName}`);
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function showToast(msg, color = '') {
+  const el = document.getElementById('toast');
+  el.textContent  = msg;
+  el.className    = `show ${color}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = color; }, 2500);
+}
+
+// ── Single merge function — used for ALL message types ────────────────────
+function mergeState(state, event) {
+  if (!state) return;
+
+  // ALWAYS merge agents — never replace the dict, never delete existing entries
+  (state.agents || []).forEach(a => {
+    if (!agents[a.agent_id]) {
+      agents[a.agent_id] = {};       // new agent seen for first time
+    }
+    // Merge field by field — keep best known value for each field
+    Object.assign(agents[a.agent_id], a);
+  });
+
+  if (state.alerts && state.alerts.length) alerts = state.alerts;
+  renderAgents();
+  renderAlerts();
+  renderStats();
+  if (state.log_feed && state.log_feed.length) renderLogBatch(state.log_feed);
+  if (event) logEvent(event);
+}
+
+// ── Render Agents ──────────────────────────────────────────────────────────
+function renderAgents() {
+  const grid = document.getElementById('agents-grid');
+  const list = Object.values(agents);
+
+  if (!list.length) {
+    // Only show empty state if we have never seen any agent at all
+    if (!grid.querySelector('.agent-card')) {
+      grid.innerHTML = `<div class="empty-state"><div class="big">&#9711;</div><div class="sub">WAITING FOR AGENTS<br>Connect your MQTT broker to begin</div></div>`;
+    }
+    return;
+  }
+
+  // Add new cards, update existing
+  // Remove empty state placeholder once we have real agents
+  const emptyState = grid.querySelector('.empty-state');
+  if (emptyState) emptyState.remove();
+
+  list.forEach(agent => {
+    const existing = document.getElementById(`card-${agent.agent_id}`);
+    const html = buildCard(agent);
+    if (existing) {
+      // Preserve scroll position — replace innerHTML only
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      const newCard = tmp.firstElementChild;
+      existing.className  = newCard.className;
+      existing.innerHTML  = newCard.innerHTML;
+    } else {
+      grid.insertAdjacentHTML('beforeend', html);
+    }
+  });
+
+  // Only remove cards for agents explicitly deleted via command
+  // (don't auto-remove just because they're not in latest snapshot)
+  grid.querySelectorAll('.agent-card').forEach(card => {
+    const id = card.id.replace('card-', '');
+    if (!agents[id]) card.remove();   // only removed if deleted from agents{}
+  });
+}
+
+function buildCard(a) {
+  const st    = a.state || (typeof a.status === 'string' ? a.status : '') || 'unknown';
+  const name  = a.name  || a.agent_id.slice(0, 8);
+  const cpu   = a.cpu   != null ? (+a.cpu).toFixed(1)  : '--';
+  const mem   = a.mem   != null ? (+a.mem).toFixed(1)  : '--';
+  const task  = a.task  || 'idle';
+  const cpuPct = Math.min(+(a.cpu  || 0), 100);
+  const memPct = Math.min((+(a.mem || 0) / 512) * 100, 100);
+  const metrics = a.metrics || {};
+  const msgs  = metrics.messages_processed ?? a.messages_processed ?? '--';
+  const uptime = metrics.uptime != null ? formatUptime(metrics.uptime) : '--';
+  const lastUpdate = a.last_update ? timeAgo(a.last_update) : 'never';
+
+  // Control buttons — disable based on state and protection
+  const isRunning   = st === 'running';
+  const isPaused    = st === 'paused';
+  const isStopped   = st === 'stopped' || st === 'failed';
+  const isProtected = a.protected === true;
+
+  // Protected agents: only Resume is allowed (in case they somehow get paused)
+  const pauseBtn  = `<button class="ctrl-btn pause"  title="${isProtected ? 'Protected agent' : ''}"
+    ${!isRunning || isProtected ? 'disabled' : ''}
+    onclick="sendCommand('${a.agent_id}','pause',this)">Pause</button>`;
+
+  const resumeBtn = `<button class="ctrl-btn resume"
+    ${!isPaused ? 'disabled' : ''}
+    onclick="sendCommand('${a.agent_id}','resume',this)">Resume</button>`;
+
+  const stopBtn   = `<button class="ctrl-btn stop"   title="${isProtected ? 'Protected agent' : ''}"
+    ${isStopped || isProtected ? 'disabled' : ''}
+    onclick="sendCommand('${a.agent_id}','stop',this)">Stop</button>`;
+
+  const deleteBtn = `<button class="ctrl-btn delete" title="${isProtected ? 'Protected agent — cannot delete' : ''}"
+    ${isProtected ? 'disabled' : ''}
+    onclick="sendCommand('${a.agent_id}','delete',this)">Delete</button>`;
+
+  return `
+  <div class="agent-card ${st}" id="card-${a.agent_id}">
+    <div class="agent-header">
+      <div>
+        <div class="agent-name">${esc(name)}</div>
+        <div class="agent-id">${a.agent_id.slice(0,8)}</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <div class="state-badge ${st}">${st}</div>
+        ${isProtected ? '<div style="font-size:9px;letter-spacing:0.08em;padding:3px 6px;border-radius:2px;background:rgba(0,229,255,0.1);color:var(--accent);text-transform:uppercase;">core</div>' : ''}
+      </div>
+    </div>
+    <div class="agent-metrics">
+      <div class="metric-row">
+        <div class="metric-label">CPU</div>
+        <div class="metric-val">${cpu}%</div>
+        <div class="bar-wrap"><div class="bar-fill cpu" style="width:${cpuPct}%"></div></div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-label">Memory</div>
+        <div class="metric-val">${mem} MB</div>
+        <div class="bar-wrap"><div class="bar-fill mem" style="width:${memPct}%"></div></div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-label">Uptime</div>
+        <div class="metric-val">${uptime}</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-label">Messages</div>
+        <div class="metric-val">${msgs}</div>
+      </div>
+    </div>
+    <div class="agent-task">task: <span>${esc(task)}</span></div>
+    <div class="agent-controls">
+      ${pauseBtn}${resumeBtn}${stopBtn}${deleteBtn}
+    </div>
+    <div class="last-seen">seen ${lastUpdate}</div>
+  </div>`;
+}
+
+// ── Render Stats ───────────────────────────────────────────────────────────
+function renderStats() {
+  const list    = Object.values(agents);
+  const running = list.filter(a => (a.state||a.status) === 'running').length;
+  const paused  = list.filter(a => (a.state||a.status) === 'paused').length;
+  const stopped = list.filter(a => (a.state||a.status) === 'stopped').length;
+  const failed  = list.filter(a => (a.state||a.status) === 'failed').length;
+  const msgs    = list.reduce((s,a) => s + ((a.metrics?.messages_processed ?? a.messages_processed) || 0), 0);
+
+  document.getElementById('stat-total').textContent   = list.length;
+  document.getElementById('stat-running').textContent = running;
+  document.getElementById('stat-paused').textContent  = paused;
+  document.getElementById('stat-stopped').textContent = stopped;
+  document.getElementById('stat-failed').textContent  = failed;
+  document.getElementById('stat-alerts').textContent  = alerts.length;
+  document.getElementById('stat-msgs').textContent    = msgs;
+}
+
+// ── Render Alerts ──────────────────────────────────────────────────────────
+function renderAlerts() {
+  const el = document.getElementById('alert-list');
+  if (!alerts.length) { el.innerHTML = '<div class="no-alerts">no alerts</div>'; return; }
+  el.innerHTML = alerts.slice(0, 8).map(a => `
+    <div class="alert-item">
+      <span class="alert-time">${timeAgo(a.timestamp)}</span>
+      <span class="alert-name">${esc(a.name || a.agent_id?.slice(0,8) || '?')}</span>
+      &mdash; ${a.severity || 'alert'}${a.last_seen_ago ? ', unseen ' + Math.round(a.last_seen_ago) + 's' : ''}
+    </div>`).join('');
+}
+
+// ── Log Feed ───────────────────────────────────────────────────────────────
+const logFeedEl  = document.getElementById('log-feed');
+const MAX_LINES  = 80;
+
+function logEvent(ev) {
+  if (!ev) return;
+  const type    = ev.event?.metric || ev.event?.subtype || ev.type || 'event';
+  const agentId = ev.event?.agent_id || '';
+  const name    = agentId ? (agents[agentId]?.name || agentId.slice(0,8)) : 'system';
+  const data    = ev.event?.data;
+
+  // Skip heartbeats and raw metrics — those are reflected in the card state/alerts
+  if (type === 'heartbeat' || type === 'metrics') return;
+
+  let msg = '';
+  if (type === 'status') {
+    const st = typeof data === 'string' ? data : data?.state || JSON.stringify(data).slice(0,30);
+    msg = `${name} -> ${st}`;
+  } else if (type === 'spawned') {
+    msg = `${name} spawned ${data?.child_name || '?'}`;
+  } else if (type === 'completed') {
+    const preview = data?.result_preview || data?.result || '';
+    msg = `${name} completed${preview ? ': ' + String(preview).slice(0,60) : ''}`;
+  } else if (type === 'alert') {
+    const sev = data?.severity || '';
+    msg = `${name} unresponsive${sev ? ' (' + sev + ')' : ''}`;
+  } else if (type === 'logs') {
+    // User interactions and agent log messages — most useful to show
+    const d = typeof data === 'object' ? data : {};
+    if (d.type === 'user_interaction') {
+      msg = `${name} <- "${(d.input||'').slice(0,60)}"`;
+    } else {
+      const txt = d.message || d.text || d.response || JSON.stringify(data).slice(0,80);
+      msg = `${name}: ${txt}`;
+    }
+  } else if (type === 'command') {
+    msg = `cmd ${data?.command || '?'} -> ${name}`;
+  } else {
+    // Any other event type — show briefly
+    const txt = typeof data === 'string' ? data : JSON.stringify(data||'').slice(0,60);
+    if (!txt || txt === '""') return;  // skip empty
+    msg = `${name}: ${txt}`;
+  }
+
+  if (msg) addLogLine(type, msg);
+}
+
+function renderLogBatch(entries) {
+  logFeedEl.innerHTML = '';
+  entries.slice(0, 50).forEach(e => {
+    const msg = fmtLog(e);
+    if (msg) addLogLine(e.type || 'log', msg, false);
+  });
+}
+
+function fmtLog(e) {
+  // Skip noise
+  if (e.type === 'heartbeat' || e.type === 'metrics') return null;
+
+  const name = e.agent_id ? (agents[e.agent_id]?.name || e.agent_id.slice(0,8)) : 'system';
+  if (e.type === 'spawned')   return `${name} spawned ${e.child_name||'?'}`;
+  if (e.type === 'completed') return `${name} task complete`;
+  if (e.type === 'alert') {
+    const sev = e.severity || '';
+    const n = e.name || name;
+    return `${n} unresponsive${sev ? ' (' + sev + ')' : ''}`;
+  }
+  if (e.type === 'command')   return `${e.command||'cmd'} -> ${name}`;
+  if (e.type === 'status') {
+    const st = typeof e.status === 'string' ? e.status : e.status?.state || JSON.stringify(e.status||'').slice(0,30);
+    return `${name} -> ${st}`;
+  }
+  if (e.type === 'log') {
+    const txt = e.message || e.text || e.input || '';
+    return txt ? `${name}: ${txt.slice(0,80)}` : null;
+  }
+  return null;  // skip unknown types
+}
+
+function addLogLine(type, msg, prepend=true) {
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  const t = new Date().toTimeString().slice(0,8);
+  line.innerHTML = `<span class="log-time">${t}</span><span class="log-type ${type}">${type}</span><span class="log-msg">${esc(msg)}</span>`;
+  if (prepend && logFeedEl.firstChild) logFeedEl.insertBefore(line, logFeedEl.firstChild);
+  else logFeedEl.appendChild(line);
+  while (logFeedEl.children.length > MAX_LINES) logFeedEl.removeChild(logFeedEl.lastChild);
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function timeAgo(ts) {
+  const d = Date.now()/1000 - ts;
+  if (d < 5)    return 'just now';
+  if (d < 60)   return `${Math.round(d)}s ago`;
+  if (d < 3600) return `${Math.round(d/60)}m ago`;
+  return `${Math.round(d/3600)}h ago`;
+}
+
+function formatUptime(s) {
+  if (s < 60)   return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.round(s/60)}m`;
+  return `${Math.floor(s/3600)}h ${Math.round((s%3600)/60)}m`;
+}
+
+// ── Clock + last-seen refresh ──────────────────────────────────────────────
+setInterval(() => {
+  document.getElementById('clock').textContent = new Date().toTimeString().slice(0,8);
+}, 1000);
+
+setInterval(() => {
+  document.querySelectorAll('.last-seen').forEach(el => {
+    const id = el.closest('.agent-card')?.id?.replace('card-','');
+    if (id && agents[id]?.last_update) el.textContent = `seen ${timeAgo(agents[id].last_update)}`;
+  });
+}, 5000);
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+connect();
+</script>
+</body>
+</html>

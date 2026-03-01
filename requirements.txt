@@ -1,0 +1,22 @@
+# Core
+asyncio-mqtt>=0.16.0
+aiomqtt>=1.0.0
+psutil>=5.9.0
+aiohttp>=3.9.0
+
+# LLM Providers (install as needed)
+anthropic>=0.25.0          # pip install anthropic
+openai>=1.0.0              # pip install openai
+# ollama runs locally, no package needed beyond aiohttp
+
+# Chat Interfaces (install as needed)
+discord.py>=2.3.0          # pip install discord.py
+twilio>=8.0.0              # pip install twilio
+
+# ML/DL (install as needed)
+# ultralytics>=8.0.0       # pip install ultralytics  (YOLO)
+# torch>=2.0.0             # pip install torch
+# numpy>=1.24.0
+
+# Optional: Async process management
+supervisor                 # For production 24/7 deployment

@@ -1,0 +1,9 @@
+.env
+.DS_Store
+
+.venv/
+.local/
+.claude/
+.codex/
+.gemini/
+__pycache__/

@@ -146,6 +146,20 @@ class DynamicAgent(Actor):
                     await self.send(msg.sender_id, MessageType.RESULT,
                                     {"info": f"{self.name} has no handle_task defined"})
 
+    def get_status(self) -> dict:
+        s = super().get_status()
+        s["description"] = self.description
+        s["code"]        = self._code
+        s["agent_type"]  = "dynamic"
+        return s
+
+    def _build_heartbeat(self) -> dict:
+        hb = super()._build_heartbeat()
+        hb["code"]        = self._code      # include code in every heartbeat
+        hb["description"] = self.description
+        hb["agent_type"]  = "dynamic"
+        return hb
+
     def _current_task_description(self) -> str:
         return self.description or "running dynamic code"
 

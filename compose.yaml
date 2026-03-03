@@ -48,9 +48,9 @@ services:
     profiles: [full]
     container_name: agentflow-fuseki
     image: agentflow-fuseki
-    build:
-      context: config/fuseki-container
-      dockerfile: Containerfile
+    #build:
+    #  context: config/fuseki-container
+    #  dockerfile: Containerfile
     restart: unless-stopped
     # Port 3030 accessible internally; routed via nginx /fuseki/ externally.
     # Uncomment to expose directly for debugging:

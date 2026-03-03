@@ -178,6 +178,7 @@ DEPLOY_PATH=/opt/agentflow
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | System topology, actor model, message flow, IDs |
 | [docs/agents.md](docs/agents.md) | Every agent in detail; how to add a new one |
+| [docs/windows.md](docs/mqtt_topics.md) | Every mqtt topic in detail |
 | [docs/deployment.md](docs/deployment.md) | Bootstrap, native mode, systemd, SSH keys, env vars |
 | [docs/development.md](docs/development.md) | Dev setup, project structure, debugging tips |
 | [docs/api.md](docs/api.md) | REST endpoints, MQTT topic reference, WebSocket format |

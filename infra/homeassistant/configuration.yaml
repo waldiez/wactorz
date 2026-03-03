@@ -1,0 +1,82 @@
+# Home Assistant configuration for AgentFlow integration
+#
+# After first run, HA will populate this directory with additional files.
+# Edit via the UI at http://<host>:8123 or directly in this directory.
+
+# ── Core ──────────────────────────────────────────────────────────────────────
+homeassistant:
+  name: "AgentFlow Home"
+  latitude: !secret latitude
+  longitude: !secret longitude
+  elevation: 0
+  unit_system: metric
+  currency: USD
+  country: US
+  time_zone: UTC
+  allowlist_external_dirs:
+    - /config
+
+# ── Default integrations ───────────────────────────────────────────────────────
+default_config:
+
+# ── HTTP ──────────────────────────────────────────────────────────────────────
+# nginx is the public reverse proxy; HA must trust its forwarded headers.
+# The Docker network subnet is typically 172.16–172.31.x.x.
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 172.16.0.0/12   # Docker default bridge range (covers 172.16–172.31.x.x)
+
+# ── Frontend ──────────────────────────────────────────────────────────────────
+frontend:
+  themes: !include_dir_merge_named themes/
+
+# ── Automation ────────────────────────────────────────────────────────────────
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+# ── MQTT integration ──────────────────────────────────────────────────────────
+# NOTE: since HA 2022.3 the broker connection (host/port/credentials) is
+# configured via the UI: Settings → Integrations → MQTT.
+# On first boot, go there and enter:
+#   Broker: mosquitto   Port: 1883   (Docker service name; HA is on the same network)
+#
+# MQTT entity declarations still work here:
+mqtt:
+  sensor:
+    - name: "AgentFlow Active Agents"
+      unique_id: agentflow_active_agents
+      state_topic: "system/health"
+      value_template: "{{ value_json.active_agents | default(0) | int }}"
+      unit_of_measurement: agents
+      icon: mdi:robot
+      expire_after: 120     # mark unavailable if no update for 2 min
+
+    - name: "AgentFlow Stale Agents"
+      unique_id: agentflow_stale_agents
+      state_topic: "system/health"
+      value_template: "{{ value_json.stale_count | default(0) | int }}"
+      unit_of_measurement: agents
+      icon: mdi:robot-dead
+      expire_after: 120
+
+# ── REST command integration ───────────────────────────────────────────────────
+# HA is on the Docker network; reach agentflow directly by its service name.
+rest_command:
+  agentflow_chat:
+    url: "http://agentflow:8080/chat"
+    method: POST
+    content_type: "application/json"
+    # Use '' to escape a literal single-quote inside a YAML single-quoted string
+    payload: '{"message": "{{ message }}", "agent_name": "{{ agent_name | default(''main-actor'') }}"}'
+
+  agentflow_stop_agent:
+    url: "http://agentflow:8080/actors/{{ actor_id }}"
+    method: DELETE
+
+# ── Logger ────────────────────────────────────────────────────────────────────
+logger:
+  default: warning
+  logs:
+    homeassistant.components.mqtt: info

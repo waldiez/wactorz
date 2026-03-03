@@ -1,0 +1,41 @@
+[main]
+ssl.enabled = false
+plainMatcher=org.apache.shiro.authc.credential.SimpleCredentialsMatcher
+iniRealm.credentialsMatcher = $plainMatcher
+#localhost=org.apache.jena.fuseki.authz.LocalhostFilter
+
+[users]
+# Implicitly adds "iniRealm =  org.apache.shiro.realm.text.IniRealm"
+# The admin password will be replaced by value of ADMIN_PASSWORD
+# variable by docker-entrypoint.sh on FIRST start up.
+${ADMIN_USER}=${ADMIN_PASSWORD}
+
+[roles]
+
+[urls]
+## Control functions open to anyone
+/$/status = anon
+/$/ping   = anon
+
+## and the rest are restricted
+/$/** = authcBasic,user[admin]
+
+## Sparql update is restricted
+/*/update/** = authcBasic,user[admin]
+
+## GSP update is restricted
+/*/data/** = authcBasic,user[admin]
+
+
+## If you want simple, basic authentication user/password
+## on the operations,
+##    1 - set a password in [users]
+##    2 - change the line above to:
+## /$/** = authcBasic,user[admin]
+## and set a better
+
+## or to allow any access.
+##/$/** = anon
+
+# Everything else
+/**=anon

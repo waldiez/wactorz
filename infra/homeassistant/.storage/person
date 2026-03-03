@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "minor_version": 1,
+  "key": "person",
+  "data": {
+    "items": [
+      {
+        "id": "waldiez",
+        "name": "waldiez",
+        "user_id": "c6494ab9acfa4aa9ad97ac1a78fa5f6b",
+        "device_trackers": []
+      }
+    ]
+  }
+}

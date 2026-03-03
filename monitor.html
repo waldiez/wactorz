@@ -193,6 +193,9 @@
   }
 
   .metric-row { display:flex; flex-direction:column; gap:2px; }
+  .cost-row { margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 4px; }
+  .cost-val { color: #4ade80; font-weight: 600; }
+  .tok-label { font-size: 9px; color: #64748b; margin-left: auto; white-space: nowrap; }
   .metric-label { font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); }
   .metric-val   { font-size:13px; color:var(--text); }
 
@@ -370,6 +373,7 @@
     <div class="stat-cell"><div class="stat-label">Failed</div><div class="stat-value red" id="stat-failed">0</div></div>
     <div class="stat-cell"><div class="stat-label">Alerts</div><div class="stat-value yellow" id="stat-alerts">0</div></div>
     <div class="stat-cell"><div class="stat-label">Msgs Processed</div><div class="stat-value" id="stat-msgs">0</div></div>
+    <div class="stat-cell"><div class="stat-label">Total Cost</div><div class="stat-value green" id="stat-cost">$0.000000</div></div>
   </div>
 
   <div class="main-panel">
@@ -560,8 +564,18 @@ function buildCard(a) {
   const cpuPct = Math.min(+(a.cpu  || 0), 100);
   const memPct = Math.min((+(a.mem || 0) / 512) * 100, 100);
   const metrics = a.metrics || {};
-  const msgs  = metrics.messages_processed ?? a.messages_processed ?? '--';
+  const msgs   = metrics.messages_processed ?? a.messages_processed ?? '--';
   const uptime = metrics.uptime != null ? formatUptime(metrics.uptime) : '--';
+  const costUsd = a.cost_usd ?? metrics.cost_usd;
+  const tokIn   = a.input_tokens  ?? metrics.input_tokens  ?? 0;
+  const tokOut  = a.output_tokens ?? metrics.output_tokens ?? 0;
+  const costRow = costUsd != null
+    ? `<div class="metric-row cost-row">
+        <div class="metric-label">Cost (USD)</div>
+        <div class="metric-val cost-val">$${(+costUsd).toFixed(6)}</div>
+        <div class="metric-label tok-label">${tokIn}↑ ${tokOut}↓ tokens</div>
+       </div>`
+    : '';
   const lastUpdate = a.last_update ? timeAgo(a.last_update) : 'never';
 
   // Control buttons — disable based on state and protection
@@ -618,6 +632,7 @@ function buildCard(a) {
         <div class="metric-label">Messages</div>
         <div class="metric-val">${msgs}</div>
       </div>
+      ${costRow}
     </div>
     <div class="agent-task">task: <span>${esc(task)}</span></div>
     <div class="agent-controls">
@@ -635,6 +650,7 @@ function renderStats() {
   const stopped = list.filter(a => (a.state||a.status) === 'stopped').length;
   const failed  = list.filter(a => (a.state||a.status) === 'failed').length;
   const msgs    = list.reduce((s,a) => s + ((a.metrics?.messages_processed ?? a.messages_processed) || 0), 0);
+  const totalCost = list.reduce((s,a) => s + (+(a.cost_usd ?? a.metrics?.cost_usd ?? 0)), 0);
 
   document.getElementById('stat-total').textContent   = list.length;
   document.getElementById('stat-running').textContent = running;
@@ -643,6 +659,7 @@ function renderStats() {
   document.getElementById('stat-failed').textContent  = failed;
   document.getElementById('stat-alerts').textContent  = alerts.length;
   document.getElementById('stat-msgs').textContent    = msgs;
+  document.getElementById('stat-cost').textContent    = '$' + totalCost.toFixed(6);
 }
 
 // ── Render Alerts ──────────────────────────────────────────────────────────

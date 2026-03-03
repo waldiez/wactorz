@@ -1,0 +1,81 @@
+# AgentFlow — native-binary compose stack
+#
+# Runs ONLY the support services in Docker.
+# The agentflow-server binary runs directly on the host (systemd, screen, or foreground).
+#
+# Why native?
+#   • NautilusAgent (SSH/rsync) uses ~/.ssh/ and host binaries — zero container config
+#   • Smaller artifact: ~15 MB binary vs 39 MB Docker image
+#   • Native Rust binary starts in <100 ms, no container boot overhead
+#   • Build from source on the host with `cargo build --release` (no QEMU cross-compile)
+#
+# Usage:
+#   1. docker compose -f compose.native.yaml up -d        ← start support services
+#   2. source .env && ./agentflow --no-cli                ← run binary on host
+#      (or: bash deploy-native.sh)
+#
+# Networking:
+#   • Mosquitto exposes :1883 (TCP) and :9001 (WS) on the host
+#   • agentflow connects to mosquitto via localhost:1883 (MQTT_HOST=localhost)
+#   • nginx proxies /api/ and /ws to host via host.docker.internal:8080/:8081
+#   • On Linux, host.docker.internal is resolved via extra_hosts below
+#   • On Docker Desktop (Mac/Windows) it is always available
+
+name: agentflow-native
+
+services:
+
+  # ── MQTT broker ───────────────────────────────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: agentflow-mosquitto
+    restart: unless-stopped
+    hostname: mosquitto
+    ports:
+      - "${MQTT_EXTERNAL_PORT:-1883}:1883"    # TCP — for host binary + IoT devices
+      - "${MQTT_WS_EXTERNAL_PORT:-9001}:9001" # WS — for browser MQTT (via nginx /mqtt)
+    volumes:
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-logs:/mosquitto/log
+    networks:
+      - agentflow-net
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "hc", "-W", "3"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── nginx — Dashboard + reverse proxy ─────────────────────────────────────────
+  # Serves the SPA and proxies API/WS requests to the native agentflow binary.
+  # Uses nginx-native.conf which targets host.docker.internal instead of a container name.
+  dashboard:
+    image: nginx:1.27-alpine
+    container_name: agentflow-dashboard
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_EXTERNAL_PORT:-80}:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./infra/nginx/nginx-native.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - agentflow-net
+    extra_hosts:
+      # Linux: make host.docker.internal resolve to the Docker bridge gateway (= the host)
+      # Docker Desktop (Mac/Windows): this is already set — the entry is harmless.
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  agentflow-net:
+
+volumes:
+  mosquitto-data:
+  mosquitto-logs:

@@ -1,0 +1,47 @@
+# AgentFlow — development stack
+#
+# Minimal: just the MQTT broker + a mock agent simulator.
+# No Rust server, no HA, no Fuseki, no nginx needed.
+#
+# Usage:
+#   docker compose -f compose.dev.yaml up -d
+#   cd frontend && npm run dev        # Vite on :3000 with hot-reload
+#
+# The mock-agents service publishes fake heartbeats, spawns, messages
+# and alerts to MQTT so the Babylon.js scene renders without a real backend.
+
+name: agentflow-dev
+
+services:
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: agentflow-dev-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT TCP
+      - "9001:9001"   # WebSocket (Vite dev proxy → ws://localhost:9001)
+    volumes:
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "hc", "-W", "3"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  mock-agents:
+    image: node:22-alpine
+    container_name: agentflow-dev-mock
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ./scripts/mock-agents.mjs:/app/mock-agents.mjs:ro
+      - ./scripts/vendor:/app/vendor:ro
+    command: >
+      sh -c "npm install --silent mqtt && node mock-agents.mjs"
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+    depends_on:
+      mosquitto:
+        condition: service_healthy

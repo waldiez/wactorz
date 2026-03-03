@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "minor_version": 5,
+  "key": "core.config_entries",
+  "data": {
+    "entries": [
+      {"created_at":"2026-03-02T23:56:14.703864+00:00","data":{},"disabled_by":null,"discovery_keys":{},"domain":"sun","entry_id":"01KJRFP8ZF2Z5BJ38SCQMFYTW3","minor_version":1,"modified_at":"2026-03-02T23:56:14.703865+00:00","options":{},"pref_disable_new_entities":false,"pref_disable_polling":false,"source":"import","subentries":[],"title":"Sun","unique_id":null,"version":1},
+      {"created_at":"2026-03-02T23:56:14.912332+00:00","data":{},"disabled_by":null,"discovery_keys":{},"domain":"go2rtc","entry_id":"01KJRFP960E2TDGX5J0HS40XWM","minor_version":1,"modified_at":"2026-03-02T23:56:14.912334+00:00","options":{},"pref_disable_new_entities":false,"pref_disable_polling":false,"source":"system","subentries":[],"title":"go2rtc","unique_id":null,"version":1},
+      {"created_at":"2026-03-02T23:56:14.915636+00:00","data":{},"disabled_by":null,"discovery_keys":{},"domain":"backup","entry_id":"01KJRFP963WE5SVVDFC9E8AV5Z","minor_version":1,"modified_at":"2026-03-02T23:56:14.915637+00:00","options":{},"pref_disable_new_entities":false,"pref_disable_polling":false,"source":"system","subentries":[],"title":"Backup","unique_id":null,"version":1},
+      {"created_at":"2026-03-03T07:36:40.909317+00:00","data":{},"disabled_by":null,"discovery_keys":{},"domain":"shopping_list","entry_id":"01KJSA1BPD4XY9ADCP8QZE7Q58","minor_version":1,"modified_at":"2026-03-03T07:36:40.909321+00:00","options":{},"pref_disable_new_entities":false,"pref_disable_polling":false,"source":"onboarding","subentries":[],"title":"Shopping list","unique_id":"shopping_list","version":1},
+      {"created_at":"2026-03-03T07:36:40.917370+00:00","data":{"language":"en","tld":"com"},"disabled_by":null,"discovery_keys":{},"domain":"google_translate","entry_id":"01KJSA1BPNXYVJ6GHDA7GMPC6H","minor_version":1,"modified_at":"2026-03-03T07:36:40.917372+00:00","options":{},"pref_disable_new_entities":false,"pref_disable_polling":false,"source":"onboarding","subentries":[],"title":"Google Translate text-to-speech","unique_id":null,"version":1},
+      {"created_at":"2026-03-03T07:36:40.995815+00:00","data":{},"disabled_by":null,"discovery_keys":{},"domain":"radio_browser","entry_id":"01KJSA1BS3RSPY59AK63X6ES1W","minor_version":1,"modified_at":"2026-03-03T07:36:40.995817+00:00","options":{},"pref_disable_new_entities":false,"pref_disable_polling":false,"source":"onboarding","subentries":[],"title":"Radio Browser","unique_id":null,"version":1}
+    ]
+  }
+}

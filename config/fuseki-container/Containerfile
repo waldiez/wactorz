@@ -1,0 +1,48 @@
+# Fuseki multi-arch container (amd64 + arm64)
+#
+# Uses eclipse-temurin for its official multi-arch JRE images, then
+# downloads Apache Jena Fuseki and wires up a small entrypoint that:
+#   - Sets JVM heap from $JVM_ARGS
+#   - Optionally creates named datasets on first boot (FUSEKI_CREATE_DATASETS=true)
+#   - Secures the admin password via $ADMIN_PASSWORD
+#
+# Binary ends up at /jena-fuseki/fuseki-server to match the compose command override.
+
+FROM eclipse-temurin:21-jre-jammy
+
+ARG FUSEKI_VERSION=5.0.0
+
+ENV FUSEKI_HOME=/jena-fuseki \
+    FUSEKI_BASE=/fuseki \
+    JVM_ARGS="-Xmx2g" \
+    ADMIN_USER=admin \
+    ADMIN_PASSWORD=admin \
+    FUSEKI_CREATE_DATASETS=false \
+    FUSEKI_DATASET_1="" \
+    FUSEKI_DATASET_2="" \
+    FUSEKI_DATASET_3=""
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL \
+      "https://archive.apache.org/dist/jena/binaries/apache-jena-fuseki-${FUSEKI_VERSION}.tar.gz" \
+      -o /tmp/fuseki.tar.gz && \
+    tar -xzf /tmp/fuseki.tar.gz -C /tmp && \
+    mv /tmp/apache-jena-fuseki-${FUSEKI_VERSION} ${FUSEKI_HOME} && \
+    rm /tmp/fuseki.tar.gz && \
+    mkdir -p ${FUSEKI_BASE}/databases \
+             ${FUSEKI_BASE}/configuration \
+             ${FUSEKI_BASE}/logs && \
+    chmod -R 775 ${FUSEKI_BASE} ${FUSEKI_HOME}
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+VOLUME ["${FUSEKI_BASE}/databases"]
+
+EXPOSE 3030
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/jena-fuseki/fuseki-server"]

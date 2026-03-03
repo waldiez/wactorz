@@ -175,8 +175,12 @@ def parse_topic(topic: str, payload_str: str):
                 ag["name"]  = data.get("name",      agent_id[:8])
                 ag["cpu"]   = data.get("cpu",        0)
                 ag["mem"]   = data.get("memory_mb",  0)
-                ag["task"]  = data.get("task",       "idle")
-                ag["state"] = data.get("state",      "unknown")
+                ag["task"]        = data.get("task",       "idle")
+                ag["state"]       = data.get("state",      "unknown")
+                # Persist code/description/type if present (dynamic agents)
+                for field in ("code", "description", "agent_type"):
+                    if field in data:
+                        ag[field] = data[field]
             logger.info(f"[MQTT] Heartbeat: {state['agents'][agent_id].get('name', agent_id[:8])}")
 
         elif metric == "metrics":
@@ -274,8 +278,15 @@ async def ws_handler(request):
 
     snap = _snapshot()
     logger.info(f"Sending snapshot: {len(snap['agents'])} agents")
-    # Use "full_snapshot" so browser knows to replace its entire state
     await ws.send_str(json.dumps({"type": "full_snapshot", "state": snap}))
+
+    # Schedule a follow-up snapshot after 2s to catch code/fields from
+    # the first heartbeat cycle (dynamic agents publish code in heartbeat)
+    async def _delayed_refresh():
+        await asyncio.sleep(2.0)
+        if not ws.closed:
+            await ws.send_str(json.dumps({"type": "full_snapshot", "state": _snapshot()}))
+    asyncio.create_task(_delayed_refresh())
 
     try:
         async for msg in ws:

@@ -10,11 +10,11 @@
 
 import type { ThemeChangeEvent } from "../types/agent";
 
-type ThemeName = "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social";
+type ThemeName = "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin";
 const STORAGE_KEY = "agentflow-theme";
 
 export class ThemeSwitcher {
-  private buttons: Record<"graph" | "galaxy" | "cards" | "grave" | "social", HTMLButtonElement>;
+  private buttons: Record<"graph" | "galaxy" | "cards" | "grave" | "social" | "fin", HTMLButtonElement>;
   private current: ThemeName = "social";
 
   constructor() {
@@ -24,9 +24,10 @@ export class ThemeSwitcher {
       cards:  document.getElementById("btn-cards")  as HTMLButtonElement,
       grave:  document.getElementById("btn-grave")  as HTMLButtonElement,
       social: document.getElementById("btn-social") as HTMLButtonElement,
+      fin:    document.getElementById("btn-fin")    as HTMLButtonElement,
     };
 
-    (Object.keys(this.buttons) as ("graph" | "galaxy" | "cards" | "grave" | "social")[]).forEach((name) => {
+    (Object.keys(this.buttons) as ("graph" | "galaxy" | "cards" | "grave" | "social" | "fin")[]).forEach((name) => {
       this.buttons[name].addEventListener("click", () => this.switchTo(name));
     });
 
@@ -65,12 +66,13 @@ export class ThemeSwitcher {
   }
 
   private updateButtons(): void {
-    this.buttons.graph.classList.toggle("active", this.current === "graph");
+    this.buttons.graph.classList.toggle("active",  this.current === "graph");
     this.buttons.galaxy.classList.toggle("active", this.current === "galaxy");
     // Both html-cards and babylon-cards highlight the Cards button
     this.buttons.cards.classList.toggle("active",
       this.current === "cards" || this.current === "cards-3d");
     this.buttons.grave.classList.toggle("active",  this.current === "grave");
     this.buttons.social.classList.toggle("active", this.current === "social");
+    this.buttons.fin.classList.toggle("active",    this.current === "fin");
   }
 }

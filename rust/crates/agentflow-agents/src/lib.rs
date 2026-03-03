@@ -13,6 +13,7 @@
 //! - [`QAAgent`] — quality-assurance / safety observer
 //! - [`WeatherAgent`] — current weather via wttr.in (no API key)
 //! - [`NewsAgent`] — headlines via Hacker News API (no API key)
+//! - [`WifAgent`] — finance expert: expense tracking, budgets, calculations
 
 pub mod dynamic_agent;
 pub mod io_agent;
@@ -25,6 +26,7 @@ pub mod news_agent;
 pub mod qa_agent;
 pub mod udx_agent;
 pub mod weather_agent;
+pub mod wif_agent;
 
 pub use dynamic_agent::DynamicAgent;
 pub use io_agent::IOAgent;
@@ -37,3 +39,4 @@ pub use news_agent::NewsAgent;
 pub use qa_agent::QAAgent;
 pub use udx_agent::UdxAgent;
 pub use weather_agent::WeatherAgent;
+pub use wif_agent::WifAgent;

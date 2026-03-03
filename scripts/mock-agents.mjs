@@ -32,14 +32,15 @@ function nextHlcWid(name) {
 
 // ── Agent roster ──────────────────────────────────────────────────────────────
 const AGENT_DEFS = [
-  { name: "main-actor",      role: "orchestrator", color: "amber"  },
-  { name: "monitor-agent",   role: "monitor",      color: "teal"   },
-  { name: "io-agent",        role: "gateway",      color: "cyan"   },
-  { name: "qa-agent",        role: "guardian",     color: "green"  },
-  { name: "nautilus-agent",  role: "transfer",     color: "indigo" },
-  { name: "udx-agent",       role: "expert",       color: "gold"   },
-  { name: "weather-agent",   role: "data",         color: "sky"    },
-  { name: "news-agent",      role: "data",         color: "red"    },
+  { name: "main-actor",      role: "orchestrator", color: "amber"   },
+  { name: "monitor-agent",   role: "monitor",      color: "teal"    },
+  { name: "io-agent",        role: "gateway",      color: "cyan"    },
+  { name: "qa-agent",        role: "guardian",     color: "green"   },
+  { name: "nautilus-agent",  role: "transfer",     color: "indigo"  },
+  { name: "udx-agent",       role: "expert",       color: "gold"    },
+  { name: "weather-agent",   role: "data",         color: "sky"     },
+  { name: "news-agent",      role: "data",         color: "red"     },
+  { name: "wif-agent",       role: "financier",    color: "emerald" },
 ];
 
 const agents = AGENT_DEFS.map((def) => ({
@@ -126,6 +127,20 @@ const NEWS_RESPONSES = [
   "📰 Fetching top stories from Hacker News… *(in real mode this calls the HN Firebase API — no API key needed)*",
 ];
 
+// WIF finance-agent mock replies
+const WIF_RESPONSES = [
+  "**WIF — Finance Expert** 💹\n\n```\nadd <amount> [category] [note]       log an expense\nbudget <category> <amount>           set budget limit\nsummary [today|week|month|all]       spending report\nbalance                              budget vs actuals\ncalc compound <p> <rate%> <years>    compound interest\ncalc loan <p> <rate%> <years>        loan / mortgage\ncalc roi <initial> <final>            return on invest\ntips [saving|investing|debt|budget]  financial advice\nhelp                                 this message\n```",
+  "✅ Logged **$42.50** → `food` _lunch sushi_\n🟢 **food** budget: $127.50 / $300.00 (43%) — $172.50 left",
+  "**💰 Expense Summary — This Month**\n\n  █ **food**: $127.50\n  ▆ **transport**: $84.00\n  ▄ **entertainment**: $55.00 🟡 92% of $60\n  ▂ **misc**: $22.00\n\n**Total: $288.50** (14 transactions)",
+  "**📊 Budget Balance**\n\n🟢 **food**: [████████░░] $127.50 / $300.00 (43%) — $172.50 left\n🟢 **transport**: [██████░░░░] $84.00 / $140.00 (60%) — $56.00 left\n🔴 **entertainment**: [██████████] $55.00 / $60.00 (92%) — $5.00 left\n\n🟢 **TOTAL**: $266.50 / $500.00 (53%)",
+  "**📈 Compound Interest (monthly)**\n\nPrincipal : $10,000.00\nRate      : 7.00% p.a.\nTerm      : 20 years\n\n→ Future Value  : **$40,387.63**\n→ Interest Earned: **$30,387.63** (304% gain)",
+  "**🏠 Loan / Mortgage Calculator**\n\nPrincipal : $300,000.00\nRate      : 4.50% p.a.\nTerm      : 30 years\n\n→ Monthly Payment : **$1,520.06**\n→ Total Repaid    : **$547,220.13**\n→ Total Interest  : **$247,220.13**",
+  "**💡 Saving Tips**\n\n1. **50/30/20 rule** — 50% needs · 30% wants · 20% savings\n2. **Pay yourself first** — automate a transfer on payday\n3. **Emergency fund** — target 3–6 months of expenses\n4. **Cut subscriptions** — review monthly recurring charges\n5. **Track everything** — use `add <amount> <category>` to log expenses",
+  "📋 Budget set: **entertainment** → **$60.00**\n🟢 Currently at $0.00 (0%)",
+  "📰 _No expenses recorded yet. Try `add 25 food coffee` to get started._",
+  "📈 **Return on Investment**\n\nInitial : $5,000.00\nFinal   : $7,250.00\nGain    : $+2,250.00\n\n→ ROI: **+45.00%**",
+];
+
 // Nautilus-specific replies for the mock (sync/exec flavour)
 const NAUTILUS_RESPONSES = [
   "✓ SSH connection to `remote-host` established.\n```\nLinux remote-host 6.1.0 #1 SMP x86_64 GNU/Linux\n```",
@@ -162,7 +177,8 @@ client.on("message", (topic, raw) => {
     responder.name === "nautilus-agent" ? NAUTILUS_RESPONSES :
     responder.name === "udx-agent"      ? UDX_RESPONSES      :
     responder.name === "weather-agent"  ? WEATHER_RESPONSES  :
-    responder.name === "news-agent"     ? NEWS_RESPONSES      :
+    responder.name === "news-agent"     ? NEWS_RESPONSES     :
+    responder.name === "wif-agent"      ? WIF_RESPONSES      :
     MOCK_RESPONSES;
   setTimeout(() => {
     publish(`agents/${responder.id}/chat`, {

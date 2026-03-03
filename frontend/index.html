@@ -917,6 +917,313 @@
       @media (min-width: 380px) and (max-width: 639px) {
         .sd-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
       }
+
+      /* ══════════════════════════════════════════════════════════════════
+         FIN (WIF Finance Terminal) Dashboard
+         Bloomberg-terminal aesthetic: monospace, dark, high contrast.
+         Colour vocabulary: emerald green = running/positive,
+           crimson = stopped/loss, amber = paused/warning,
+           sky blue = initialising.
+         Full WCAG AA contrast on all text/UI elements.
+         Reduced-motion and high-contrast media queries included.
+      ══════════════════════════════════════════════════════════════════ */
+
+      /* ── Theme button ─────────────────────────────────────────────── */
+      #theme-switcher #btn-fin.active {
+        background: rgba(0, 217, 126, 0.15);
+        color: #00d97e;
+        box-shadow: 0 0 12px rgba(0, 217, 126, 0.22);
+      }
+
+      /* ── Root container ───────────────────────────────────────────── */
+      .fin-root {
+        display: none;
+        position: fixed; top: 0; left: 0; right: 0; bottom: 70px;
+        z-index: 160;
+        background: #060a12;
+        flex-direction: column;
+        overflow: hidden;
+        font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', ui-monospace, monospace;
+        /* CSS custom properties — finance palette */
+        --fin-green:  #00d97e;
+        --fin-red:    #ff4466;
+        --fin-amber:  #f5a623;
+        --fin-blue:   #38bdf8;
+        --fin-gold:   #ffd700;
+        --fin-violet: #a78bfa;
+        --fin-cyan:   #22d3ee;
+        --fin-text:   #e2e8f0;
+        --fin-dim:    #4a5a7a;
+        --fin-border: #1a2540;
+        --fin-panel:  #0c1220;
+      }
+      .fin-root.fin-visible { display: flex; }
+
+      /* ── Top bar ──────────────────────────────────────────────────── */
+      .fin-topbar {
+        display: flex; align-items: center; gap: 16px;
+        padding: 10px 20px;
+        background: #080d18;
+        border-bottom: 1px solid var(--fin-border);
+        flex-shrink: 0; min-height: 46px;
+      }
+      .fin-topbar-left  { display: flex; align-items: center; gap: 10px; }
+      .fin-topbar-center { flex: 1; text-align: center; }
+      .fin-topbar-right  { display: flex; align-items: center; gap: 12px; }
+
+      .fin-logo    { font-size: 15px; font-weight: 700; color: var(--fin-green); letter-spacing: 0.08em; }
+      .fin-tagline { font-size: 10px; color: var(--fin-dim); letter-spacing: 0.18em; }
+      .fin-clock   { font-size: 12px; color: #64748b; letter-spacing: 0.05em; font-variant-numeric: tabular-nums; }
+      .fin-agent-count { font-size: 11px; color: var(--fin-dim); letter-spacing: 0.12em; }
+      .fin-agent-count span { color: var(--fin-green); font-weight: 700; }
+
+      .fin-3d-btn {
+        padding: 4px 12px; border-radius: 14px;
+        border: 1px solid rgba(0,217,126,0.35); background: rgba(0,217,126,0.07);
+        color: var(--fin-green); font-size: 11px; cursor: pointer;
+        font-family: inherit; letter-spacing: 0.06em;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .fin-3d-btn:hover { background: rgba(0,217,126,0.16); border-color: rgba(0,217,126,0.6); }
+      .fin-3d-btn:focus-visible { outline: 2px solid var(--fin-green); outline-offset: 2px; }
+
+      /* ── Card grid ────────────────────────────────────────────────── */
+      .fin-grid {
+        flex: 1; overflow-y: auto; overflow-x: hidden;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+        gap: 12px; padding: 16px 20px; align-content: start;
+        scrollbar-width: thin; scrollbar-color: #1a2540 transparent;
+      }
+      .fin-grid::-webkit-scrollbar { width: 6px; }
+      .fin-grid::-webkit-scrollbar-track { background: transparent; }
+      .fin-grid::-webkit-scrollbar-thumb { background: #1a2540; border-radius: 3px; }
+
+      /* ── Individual card ──────────────────────────────────────────── */
+      .fin-card {
+        --card-accent: var(--fin-green);
+        background: var(--fin-panel);
+        border: 1px solid var(--fin-border);
+        border-radius: 8px;
+        overflow: hidden;
+        display: flex; flex-direction: column;
+        cursor: default;
+        transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+        animation: fin-enter 0.25s cubic-bezier(0.34,1.2,0.64,1) both;
+        position: relative;
+      }
+      /* Left accent stripe — finance charts use this pattern */
+      .fin-card::before {
+        content: '';
+        position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+        background: var(--card-accent); opacity: 0.8;
+        pointer-events: none;
+      }
+      .fin-card:hover {
+        border-color: color-mix(in srgb, var(--card-accent) 45%, var(--fin-border));
+        box-shadow: 0 4px 28px rgba(0,0,0,0.5),
+                    0 0 0 1px color-mix(in srgb, var(--card-accent) 18%, transparent);
+        transform: translateY(-2px);
+      }
+      /* Keyboard focus — high-contrast ring */
+      .fin-card:focus-visible {
+        outline: 2px solid var(--card-accent);
+        outline-offset: 2px;
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--card-accent) 20%, transparent);
+      }
+      .fin-card-main {
+        border-color: rgba(255,215,0,0.22);
+        box-shadow: 0 0 24px rgba(255,215,0,0.04);
+      }
+      .fin-card-main:hover { box-shadow: 0 4px 28px rgba(255,215,0,0.12), 0 0 0 1px rgba(255,215,0,0.22); }
+
+      /* ── Card header ──────────────────────────────────────────────── */
+      .fin-card-header {
+        padding: 10px 12px 8px 15px; /* 15px left: clear the accent stripe */
+        display: flex; flex-direction: column; gap: 6px;
+      }
+      .fin-status-row { display: flex; align-items: center; gap: 7px; }
+
+      /* Status dot */
+      .fin-dot {
+        width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+        transition: background 0.3s, box-shadow 0.3s;
+      }
+      .fin-dot-running      { background: var(--fin-green); box-shadow: 0 0 6px var(--fin-green); }
+      .fin-dot-paused       { background: var(--fin-amber); }
+      .fin-dot-initializing { background: var(--fin-blue);  box-shadow: 0 0 5px var(--fin-blue); }
+      .fin-dot-stopped      { background: #334155; }
+      .fin-dot-error        { background: var(--fin-red);   box-shadow: 0 0 6px var(--fin-red); }
+      .fin-pulse { animation: fin-dot-pulse 0.45s ease !important; }
+      @keyframes fin-dot-pulse { 0%,100%{transform:scale(1)} 35%{transform:scale(2.8)} }
+
+      /* Status label */
+      .fin-status {
+        font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
+        padding: 2px 8px; border-radius: 3px;
+      }
+      .fin-status-running      { background: rgba(0,217,126,0.12); color: var(--fin-green); border: 1px solid rgba(0,217,126,0.28); }
+      .fin-status-paused       { background: rgba(245,166,35,0.12); color: var(--fin-amber); border: 1px solid rgba(245,166,35,0.28); }
+      .fin-status-initializing { background: rgba(56,189,248,0.12); color: var(--fin-blue);  border: 1px solid rgba(56,189,248,0.28); }
+      .fin-status-stopped      { background: rgba(51,65,85,0.3);    color: #64748b;          border: 1px solid rgba(51,65,85,0.5); }
+      .fin-status-error        { background: rgba(255,68,102,0.12); color: var(--fin-red);   border: 1px solid rgba(255,68,102,0.28); }
+
+      .fin-protected { font-size: 11px; color: var(--fin-gold); margin-left: auto; }
+
+      /* Agent id row: avatar + ticker + type */
+      .fin-card-id    { display: flex; align-items: center; gap: 8px; }
+      .fin-avatar-wrap { flex-shrink: 0; }
+      .fin-avatar {
+        width: 32px; height: 32px; border-radius: 50%;
+        overflow: hidden; background: #1a2035;
+        border: 1.5px solid color-mix(in srgb, var(--card-accent) 50%, transparent);
+        display: flex; align-items: center; justify-content: center;
+      }
+      .fin-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .fin-id-text    { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+      .fin-ticker {
+        font-size: 13px; font-weight: 700; color: var(--fin-text);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        letter-spacing: 0.04em; line-height: 1.2;
+      }
+      .fin-type-badge {
+        display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
+        padding: 1px 6px; border-radius: 3px; width: fit-content;
+        background: rgba(255,255,255,0.06); color: #64748b;
+      }
+
+      /* ── Divider ──────────────────────────────────────────────────── */
+      .fin-divider { height: 1px; background: var(--fin-border); }
+
+      /* ── Metrics row ──────────────────────────────────────────────── */
+      .fin-metrics {
+        display: flex; padding: 8px 12px 8px 15px;
+      }
+      .fin-metric {
+        flex: 1; display: flex; flex-direction: column; gap: 1px; align-items: center;
+        border-right: 1px solid var(--fin-border);
+      }
+      .fin-metric:last-child { border-right: none; }
+      .fin-metric-val {
+        font-size: 17px; font-weight: 700; color: var(--fin-text);
+        line-height: 1; font-variant-numeric: tabular-nums;
+      }
+      .fin-metric-key {
+        font-size: 8px; letter-spacing: 0.16em; color: var(--fin-dim); text-transform: uppercase;
+      }
+
+      /* ── Sparkline ────────────────────────────────────────────────── */
+      .fin-spark-row {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 4px 12px 6px 15px;
+      }
+      .fin-spark {
+        font-size: 13px; letter-spacing: 0.05em;
+        color: var(--card-accent); opacity: 0.75;
+      }
+      .fin-spark-label { font-size: 8px; letter-spacing: 0.16em; color: var(--fin-dim); }
+
+      /* ── Footer: chat + controls ──────────────────────────────────── */
+      .fin-footer {
+        padding: 8px 12px 10px 15px;
+        border-top: 1px solid var(--fin-border);
+        display: flex; flex-direction: column; gap: 6px; margin-top: auto;
+      }
+      .fin-chat-btn {
+        background: none;
+        border: 1px solid color-mix(in srgb, var(--card-accent) 28%, transparent);
+        border-radius: 5px; padding: 5px 12px;
+        font-size: 12px; color: var(--card-accent); cursor: pointer;
+        font-family: inherit; letter-spacing: 0.04em;
+        width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .fin-chat-btn:hover {
+        background: color-mix(in srgb, var(--card-accent) 10%, transparent);
+        border-color: color-mix(in srgb, var(--card-accent) 55%, transparent);
+      }
+      .fin-chat-btn:focus-visible { outline: 2px solid var(--card-accent); outline-offset: 2px; }
+
+      .fin-controls { display: flex; gap: 4px; justify-content: flex-end; }
+      .fin-ctrl {
+        background: none; border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 4px; padding: 3px 7px; font-size: 12px;
+        color: rgba(255,255,255,0.45); cursor: pointer; font-family: inherit; line-height: 1;
+        transition: background 0.12s, border-color 0.12s, color 0.12s;
+      }
+      .fin-ctrl:hover:not(:disabled) {
+        background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.2);
+        color: rgba(255,255,255,0.88);
+      }
+      .fin-ctrl-danger:hover:not(:disabled) {
+        background: rgba(255,68,102,0.1); border-color: rgba(255,68,102,0.4);
+        color: var(--fin-red);
+      }
+      .fin-ctrl:disabled { opacity: 0.2; cursor: not-allowed; }
+      .fin-ctrl:focus-visible { outline: 2px solid rgba(255,255,255,0.4); outline-offset: 2px; }
+
+      /* ── Flash / enter / exit animations ─────────────────────────── */
+      .fin-chat-flash {
+        box-shadow: 0 0 0 2px var(--card-accent) !important;
+        transition: box-shadow 0s !important;
+      }
+      .fin-alert-error { animation: fin-flash-red  0.9s ease !important; }
+      .fin-alert-warn  { animation: fin-flash-warn 0.9s ease !important; }
+      @keyframes fin-flash-red  {
+        0%,100%{ box-shadow: none; }
+        40%    { box-shadow: 0 0 22px rgba(255,68,102,.55), inset 0 0 18px rgba(255,68,102,.12); }
+      }
+      @keyframes fin-flash-warn {
+        0%,100%{ box-shadow: none; }
+        40%    { box-shadow: 0 0 22px rgba(245,166,35,.55), inset 0 0 18px rgba(245,166,35,.12); }
+      }
+      @keyframes fin-enter {
+        from { opacity: 0; transform: scale(0.94) translateY(8px); }
+        to   { opacity: 1; transform: scale(1) translateY(0); }
+      }
+      @keyframes fin-exit {
+        to { opacity: 0; transform: scale(0.9); pointer-events: none; }
+      }
+
+      /* ── Accessibility: reduced motion ────────────────────────────── */
+      @media (prefers-reduced-motion: reduce) {
+        .fin-card, .fin-chat-btn, .fin-ctrl, .fin-3d-btn { transition: none; }
+        .fin-card:hover { transform: none; }
+        .fin-pulse,
+        .fin-dot-running,
+        .fin-dot-initializing,
+        .fin-chat-flash,
+        .fin-alert-error,
+        .fin-alert-warn { animation: none !important; }
+        @keyframes fin-enter { from { opacity: 0; } to { opacity: 1; } }
+      }
+
+      /* ── Accessibility: high contrast ─────────────────────────────── */
+      @media (prefers-contrast: more) {
+        .fin-root    { --fin-border: #3a4f70; }
+        .fin-card    { border-width: 2px; }
+        .fin-card:hover { border-color: var(--card-accent); }
+        .fin-status  { border-width: 2px; }
+        .fin-divider { background: #2a3f60; }
+        .fin-type-badge { color: #94a3b8; background: rgba(255,255,255,0.1); }
+        .fin-ctrl    { border-color: rgba(255,255,255,0.22); color: rgba(255,255,255,0.65); }
+        .fin-metric-val { color: #f0f4ff; }
+        .fin-spark   { opacity: 1; }
+      }
+
+      /* ── Responsive: tablet ───────────────────────────────────────── */
+      @media (max-width: 1023px) {
+        .fin-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; padding: 12px 16px; }
+      }
+
+      /* ── Responsive: mobile ───────────────────────────────────────── */
+      @media (max-width: 639px) {
+        .fin-root   { bottom: max(64px, calc(58px + env(safe-area-inset-bottom, 6px))); }
+        .fin-topbar { padding: 8px 12px; }
+        .fin-tagline, .fin-clock, .fin-3d-btn { display: none; }
+        .fin-grid   { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; padding: 10px; }
+        .fin-metric-val { font-size: 15px; }
+      }
     </style>
   </head>
   <body>
@@ -942,6 +1249,7 @@
       <button id="btn-cards">Cards</button>
       <button id="btn-grave">☠ Papadeath</button>
       <button id="btn-social" class="active">🌐 Social</button>
+      <button id="btn-fin">💹 WIF</button>
     </div>
 
     <!-- Activity feed toggle (below theme switcher) -->

@@ -30,6 +30,7 @@ function coverGradient(info: AgentInfo): string {
   if (n.includes("math"))                                 return "linear-gradient(135deg,#1e1b4b,#3730a3,#818cf8)";
   if (n.includes("weather"))                              return "linear-gradient(135deg,#0c4a6e,#0ea5e9,#bae6fd)";
   if (n.includes("news"))                                 return "linear-gradient(135deg,#1a1a2e,#16213e,#e94560)";
+  if (t.includes("financier") || n.includes("wif"))       return "linear-gradient(135deg,#052e16,#065f46,#00d97e)";
   if (t.includes("data") || n.includes("fetcher"))        return "linear-gradient(135deg,#0f3460,#533483,#e94560)";
   if (n.includes("ml") || n.includes("classifier"))      return "linear-gradient(135deg,#4c0519,#be123c,#fb7185)";
   return "linear-gradient(135deg,#0f2027,#203a43,#2c5364)";
@@ -47,6 +48,7 @@ function bioline(info: AgentInfo): string {
   if (n.includes("math"))          return "Math evaluator · runs Rhai expressions";
   if (n.includes("weather"))       return "Weather on demand · powered by wttr.in";
   if (n.includes("news"))          return "Live headlines · Hacker News feed";
+  if (t.includes("financier") || n.includes("wif")) return "Finance expert · budgets, expenses & calculations";
   if (t.includes("data") || n.includes("fetcher")) return "On-demand data fetcher";
   if (n.includes("ml") || n.includes("classifier")) return "ML inference agent";
   return info.name.replace(/-/g, " ");

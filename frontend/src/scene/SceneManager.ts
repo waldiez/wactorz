@@ -29,15 +29,16 @@ import { CardBabylonTheme } from "./themes/CardBabylonTheme";
 import { GraveTheme } from "./themes/GraveTheme";
 import { CardDashboard } from "../ui/CardDashboard";
 import { SocialDashboard } from "../ui/SocialDashboard";
+import { FinDashboard } from "../ui/FinDashboard";
 
-export type ThemeName = "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social";
+export type ThemeName = "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin";
 
 // ── NullTheme — minimal placeholder used when HTML overlays are active ─────────
 
 class NullTheme extends ThemeBase {
-  readonly name: "cards" | "social";
+  readonly name: "cards" | "social" | "fin";
 
-  constructor(scene: Scene, variant: "cards" | "social" = "cards") {
+  constructor(scene: Scene, variant: "cards" | "social" | "fin" = "cards") {
     super(scene);
     this.name = variant;
   }
@@ -68,6 +69,7 @@ export class SceneManager {
   private activeTheme: ThemeBase;
   private cardDashboard: CardDashboard | null = null;
   private socialDashboard: SocialDashboard | null = null;
+  private finDashboard: FinDashboard | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     // ── Engine + Scene ────────────────────────────────────────────────────────
@@ -113,8 +115,8 @@ export class SceneManager {
   setTheme(name: ThemeName): void {
     if (this.activeTheme.name === name) return;
 
-    const leavingHTML = ["cards", "social"].includes(this.activeTheme.name);
-    const enteringHTML = name === "cards" || name === "social";
+    const leavingHTML = ["cards", "social", "fin"].includes(this.activeTheme.name);
+    const enteringHTML = name === "cards" || name === "social" || name === "fin";
     const entering3D = name === "cards-3d";
 
     // Restore camera when leaving any HTML/cards mode back to a 3D view
@@ -127,8 +129,9 @@ export class SceneManager {
     this.activeTheme.teardown();
 
     // Tear down whichever HTML overlay is currently active
-    if (this.cardDashboard) { this.cardDashboard.hide(); this.cardDashboard = null; }
+    if (this.cardDashboard)   { this.cardDashboard.hide();   this.cardDashboard = null; }
     if (this.socialDashboard) { this.socialDashboard.hide(); this.socialDashboard = null; }
+    if (this.finDashboard)    { this.finDashboard.hide();    this.finDashboard = null; }
 
     if (name === "cards") {
       this.activeTheme = new NullTheme(this.scene, "cards");
@@ -140,6 +143,11 @@ export class SceneManager {
       this.activeTheme.setup();
       this.socialDashboard = new SocialDashboard();
       this.socialDashboard.show([...this.agents.values()]);
+    } else if (name === "fin") {
+      this.activeTheme = new NullTheme(this.scene, "fin");
+      this.activeTheme.setup();
+      this.finDashboard = new FinDashboard();
+      this.finDashboard.show([...this.agents.values()]);
     } else {
       if (entering3D) {
         this.camera.alpha = Math.PI / 2;
@@ -192,6 +200,8 @@ export class SceneManager {
       existing ? this.cardDashboard.updateAgent(agent) : this.cardDashboard.addAgent(agent);
     } else if (this.socialDashboard) {
       existing ? this.socialDashboard.updateAgent(agent) : this.socialDashboard.addAgent(agent);
+    } else if (this.finDashboard) {
+      existing ? this.finDashboard.updateAgent(agent) : this.finDashboard.addAgent(agent);
     } else {
       existing ? this.activeTheme.updateAgent(agent) : this.activeTheme.addAgent(agent);
     }
@@ -199,9 +209,10 @@ export class SceneManager {
 
   removeAgent(id: string): void {
     this.agents.delete(id);
-    if (this.cardDashboard) this.cardDashboard.removeAgent(id);
+    if (this.cardDashboard)        this.cardDashboard.removeAgent(id);
     else if (this.socialDashboard) this.socialDashboard.removeAgent(id);
-    else this.activeTheme.removeAgent(id);
+    else if (this.finDashboard)    this.finDashboard.removeAgent(id);
+    else                           this.activeTheme.removeAgent(id);
   }
 
   onHeartbeat(payload: HeartbeatPayload): void {
@@ -209,9 +220,10 @@ export class SceneManager {
     if (agent) {
       agent.state = payload.state;
       agent.lastHeartbeatAt = new Date(payload.timestampMs).toISOString();
-      if (this.cardDashboard) this.cardDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
+      if (this.cardDashboard)        this.cardDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
       else if (this.socialDashboard) this.socialDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
-      else this.activeTheme.onHeartbeat(payload.agentId);
+      else if (this.finDashboard)    this.finDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
+      else                           this.activeTheme.onHeartbeat(payload.agentId);
     } else {
       this.addOrUpdateAgent({
         id: payload.agentId,
@@ -224,9 +236,10 @@ export class SceneManager {
   }
 
   onAlert(payload: AlertPayload): void {
-    if (this.cardDashboard) this.cardDashboard.showAlert(payload.agentId, payload.severity);
+    if (this.cardDashboard)        this.cardDashboard.showAlert(payload.agentId, payload.severity);
     else if (this.socialDashboard) this.socialDashboard.showAlert(payload.agentId, payload.severity);
-    else this.activeTheme.onAlert(payload.agentId, payload.severity);
+    else if (this.finDashboard)    this.finDashboard.showAlert(payload.agentId, payload.severity);
+    else                           this.activeTheme.onAlert(payload.agentId, payload.severity);
   }
 
   onChat(fromName: string, toName: string): void {
@@ -237,10 +250,11 @@ export class SceneManager {
       if (agent.name === toName) toId = agent.id;
     }
     if (!fromId) return;
-    if (this.cardDashboard) this.cardDashboard.onChat(fromId, toId ?? "");
+    if (this.cardDashboard)        this.cardDashboard.onChat(fromId, toId ?? "");
     else if (this.socialDashboard) this.socialDashboard.onChat(fromId, toId ?? "");
-    else if (toId) this.activeTheme.onChat(fromId, toId);
-    else this.activeTheme.onHeartbeat(fromId);
+    else if (this.finDashboard)    this.finDashboard.onChat(fromId, toId ?? "");
+    else if (toId)                 this.activeTheme.onChat(fromId, toId);
+    else                           this.activeTheme.onHeartbeat(fromId);
   }
 
   onSpawn(payload: SpawnPayload): void {
@@ -252,7 +266,7 @@ export class SceneManager {
       agentType: payload.agentType,
     });
     // Only fire 3D spawn effect when a 3D theme is actually rendering
-    if (!this.cardDashboard && !this.socialDashboard) {
+    if (!this.cardDashboard && !this.socialDashboard && !this.finDashboard) {
       this.activeTheme.onSpawn(payload.agentId);
     }
   }
@@ -267,7 +281,7 @@ export class SceneManager {
    * No-op in cards mode (chat panel opens instead via agent-selected event).
    */
   onAgentSelected(agentId: string): void {
-    if (this.cardDashboard || this.socialDashboard) return; // HTML overlay — no camera to pan
+    if (this.cardDashboard || this.socialDashboard || this.finDashboard) return; // HTML overlay
     const node = this.activeTheme.getNode(agentId);
     if (!node) return;
 
@@ -285,6 +299,8 @@ export class SceneManager {
 
   dispose(): void {
     this.cardDashboard?.destroy();
+    this.socialDashboard?.destroy();
+    this.finDashboard?.destroy();
     this.activeTheme.teardown();
     this.engine.dispose();
   }

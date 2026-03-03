@@ -38,6 +38,7 @@ const AGENT_DEFS = [
   { name: "weather-agent",   role: "dynamic",      color: "blue"  },
   { name: "ml-classifier",   role: "ml",           color: "violet"},
   { name: "nautilus-agent",  role: "transfer",     color: "indigo"},
+  { name: "udx-agent",       role: "expert",       color: "gold"  },
 ];
 
 const agents = AGENT_DEFS.map((def) => ({
@@ -98,6 +99,17 @@ const MOCK_RESPONSES = [
   "Acknowledged. Routing to the appropriate subsystem.",
 ];
 
+// UDX knowledge-base replies for the mock
+const UDX_RESPONSES = [
+  "**UDX** here! Type `help` for a full command list, or try `docs architecture`, `explain mqtt`, `agents`, or `status`.",
+  "**AgentFlow actors** communicate via MQTT topics only — no shared state, no locks. Try `explain actor-model` for details.",
+  "**Live agents** in this session: main-actor (orchestrator), monitor-agent (watchdog), io-agent (gateway), nautilus-agent (SSH/rsync), udx-agent (that's me!). Use `agents` for the full list.",
+  "**Deployment tip**: run `bash scripts/package-native.sh` to produce a self-contained `agentflow-native-*.tar.gz` (~12 MB) that runs without Docker. Use `docs deploy` for the full guide.",
+  "**NautilusAgent** bridges SSH/rsync — try `@nautilus-agent ping user@host`. Arguments are never shell-interpolated, so injection attacks are impossible.",
+  "**MQTT topic structure**: `agents/{id}/spawn|heartbeat|status|alert|chat` + `system/health` + `io/chat`. Use `docs mqtt` for the full reference.",
+  "**REST API** lives at `/api/`. Quick ref: `GET /api/actors`, `POST /api/actors/:id/pause`, `DELETE /api/actors/:id`. Use `docs api` for all endpoints.",
+];
+
 // Nautilus-specific replies for the mock (sync/exec flavour)
 const NAUTILUS_RESPONSES = [
   "✓ SSH connection to `remote-host` established.\n```\nLinux remote-host 6.1.0 #1 SMP x86_64 GNU/Linux\n```",
@@ -130,7 +142,10 @@ client.on("message", (topic, raw) => {
 
   // Simulate a short "thinking" delay (0.8–2.5 s)
   const delay = 800 + Math.random() * 1700;
-  const pool = responder.name === "nautilus-agent" ? NAUTILUS_RESPONSES : MOCK_RESPONSES;
+  const pool =
+    responder.name === "nautilus-agent" ? NAUTILUS_RESPONSES :
+    responder.name === "udx-agent"      ? UDX_RESPONSES      :
+    MOCK_RESPONSES;
   setTimeout(() => {
     publish(`agents/${responder.id}/chat`, {
       id:          nextWid(),

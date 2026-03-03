@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
 
-use agentflow_agents::{IOAgent, LlmConfig, LlmProvider, MainActor, MonitorAgent, NautilusAgent, QAAgent};
+use agentflow_agents::{IOAgent, LlmConfig, LlmProvider, MainActor, MonitorAgent, NautilusAgent, QAAgent, UdxAgent};
 use agentflow_core::{ActorConfig, ActorSystem, EventPublisher};
 use agentflow_interfaces::{RestServer, WsBridge};
 use agentflow_interfaces::ws::WsEnvelope;
@@ -247,6 +247,14 @@ async fn main() -> Result<()> {
     );
     system.spawn_actor(nautilus_agent).await?;
     info!("NautilusAgent spawned");
+
+    let udx_config = ActorConfig::new("udx-agent");
+    let udx_agent = Box::new(
+        UdxAgent::new(udx_config, system.clone())
+            .with_publisher(publisher.clone()),
+    );
+    system.spawn_actor(udx_agent).await?;
+    info!("UdxAgent spawned");
 
     // ── REST server ───────────────────────────────────────────────────────────
     let rest_addr: SocketAddr = args.api_addr;

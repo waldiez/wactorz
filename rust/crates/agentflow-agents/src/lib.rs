@@ -8,6 +8,7 @@
 //! - [`MonitorAgent`] — health monitor; raises alerts on stale actors
 //! - [`IOAgent`] — UI gateway; routes `io/chat` messages to actors
 //! - [`NautilusAgent`] — SSH & rsync file-transfer bridge
+//! - [`UdxAgent`]     — User and Developer Xpert (built-in knowledge base)
 //! - [`MlAgent`] — base class for ML-inference agents
 //! - [`QAAgent`] — quality-assurance / safety observer
 
@@ -19,6 +20,7 @@ pub mod ml_agent;
 pub mod monitor_agent;
 pub mod nautilus_agent;
 pub mod qa_agent;
+pub mod udx_agent;
 
 pub use dynamic_agent::DynamicAgent;
 pub use io_agent::IOAgent;
@@ -28,3 +30,4 @@ pub use ml_agent::MlAgent;
 pub use monitor_agent::MonitorAgent;
 pub use nautilus_agent::{NautilusAgent, NautilusConfig};
 pub use qa_agent::QAAgent;
+pub use udx_agent::UdxAgent;

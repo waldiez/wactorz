@@ -25,6 +25,7 @@ function coverGradient(info: AgentInfo): string {
   if (t.includes("monitor") || n.includes("monitor"))    return "linear-gradient(135deg,#172554,#1e3a8a,#3b82f6)";
   if (t.includes("guardian") || n.includes("qa"))        return "linear-gradient(135deg,#14532d,#15803d,#4ade80)";
   if (t.includes("gateway")  || n.includes("io"))        return "linear-gradient(135deg,#0c4a6e,#0284c7,#38bdf8)";
+  if (t.includes("expert")   || n.includes("udx"))       return "linear-gradient(135deg,#713f12,#b45309,#fcd34d)";
   if (t.includes("dynamic")  || t.includes("script"))    return "linear-gradient(135deg,#581c87,#7c3aed,#a78bfa)";
   if (n.includes("math"))                                 return "linear-gradient(135deg,#1e1b4b,#3730a3,#818cf8)";
   if (n.includes("weather"))                              return "linear-gradient(135deg,#0c4a6e,#0ea5e9,#bae6fd)";
@@ -39,6 +40,7 @@ function bioline(info: AgentInfo): string {
   if (t.includes("monitor"))       return "System health monitor · tracks all actors";
   if (t.includes("guardian"))      return "QA guardian · passive safety observer";
   if (t.includes("gateway"))       return "User I/O gateway · routes messages";
+  if (t.includes("expert") || n.includes("udx")) return "User & Developer Xpert · built-in knowledge base";
   if (t.includes("dynamic"))       return "Runtime script agent · LLM-generated";
   if (n.includes("math"))          return "Math evaluator · runs Rhai expressions";
   if (n.includes("weather"))       return "Weather data fetcher";

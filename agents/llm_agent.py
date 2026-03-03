@@ -13,10 +13,33 @@ from ..core.actor import Actor, Message, MessageType
 logger = logging.getLogger(__name__)
 
 
+# Pricing per 1M tokens (input, output) in USD — update as needed
+PRICING = {
+    # Anthropic
+    "claude-opus-4-6":        (15.00, 75.00),
+    "claude-sonnet-4-6":      ( 3.00, 15.00),
+    "claude-haiku-4-5":       ( 0.80,  4.00),
+    # OpenAI
+    "gpt-4o":                 ( 2.50, 10.00),
+    "gpt-4o-mini":            ( 0.15,  0.60),
+    "gpt-4-turbo":            (10.00, 30.00),
+    # Ollama — local, no cost
+    "ollama":                 ( 0.00,  0.00),
+}
+
+def _calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    key = next((k for k in PRICING if model.startswith(k)), None)
+    if not key:
+        return 0.0
+    price_in, price_out = PRICING[key]
+    return (input_tokens * price_in + output_tokens * price_out) / 1_000_000
+
+
 class LLMProvider:
     """Base class for LLM providers."""
 
-    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> str:
+    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+        """Returns (text, usage) where usage = {input_tokens, output_tokens, cost_usd}"""
         raise NotImplementedError
 
 
@@ -26,14 +49,22 @@ class AnthropicProvider(LLMProvider):
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
         self.model = model
 
-    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> str:
+    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         response = await self.client.messages.create(
             model=self.model,
             max_tokens=kwargs.get("max_tokens", 4096),
             system=system,
             messages=messages,
         )
-        return response.content[0].text
+        text = response.content[0].text
+        usage = {
+            "input_tokens":  response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "cost_usd":      _calc_cost(self.model,
+                                        response.usage.input_tokens,
+                                        response.usage.output_tokens),
+        }
+        return text, usage
 
 
 class OpenAIProvider(LLMProvider):
@@ -42,14 +73,22 @@ class OpenAIProvider(LLMProvider):
         self.client = openai.AsyncOpenAI(api_key=api_key)
         self.model = model
 
-    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> str:
+    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=full_messages,
             max_tokens=kwargs.get("max_tokens", 4096),
         )
-        return response.choices[0].message.content
+        text = response.choices[0].message.content
+        usage = {
+            "input_tokens":  response.usage.prompt_tokens,
+            "output_tokens": response.usage.completion_tokens,
+            "cost_usd":      _calc_cost(self.model,
+                                        response.usage.prompt_tokens,
+                                        response.usage.completion_tokens),
+        }
+        return text, usage
 
 
 class OllamaProvider(LLMProvider):
@@ -58,7 +97,7 @@ class OllamaProvider(LLMProvider):
         self.model = model
         self.base_url = base_url
 
-    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> str:
+    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         import aiohttp
         payload = {"model": self.model, "messages": messages, "stream": False}
         if system:
@@ -66,7 +105,11 @@ class OllamaProvider(LLMProvider):
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{self.base_url}/api/chat", json=payload) as resp:
                 data = await resp.json()
-                return data["message"]["content"]
+        text = data["message"]["content"]
+        prompt_eval = data.get("prompt_eval_count", 0)
+        eval_count  = data.get("eval_count", 0)
+        usage = {"input_tokens": prompt_eval, "output_tokens": eval_count, "cost_usd": 0.0}
+        return text, usage
 
 
 class LLMAgent(Actor):
@@ -88,6 +131,10 @@ class LLMAgent(Actor):
         self.max_history = max_history
         self._conversation_history: list[dict] = []
         self._current_task = "idle"
+        # Cost / token tracking — must be set here so subclasses (MainActor etc.) inherit them
+        self.total_input_tokens  = 0
+        self.total_output_tokens = 0
+        self.total_cost_usd      = 0.0
 
     def _current_task_description(self) -> str:
         return self._current_task
@@ -163,11 +210,16 @@ class LLMAgent(Actor):
 
         self.metrics.messages_processed += 1
         self._conversation_history.append({"role": "user", "content": user_message})
-        response = await self.llm.complete(
+        response, usage = await self.llm.complete(
             messages=self._conversation_history[-self.max_history:],
             system=self.system_prompt,
         )
         self._conversation_history.append({"role": "assistant", "content": response})
+
+        # Accumulate token usage and cost
+        self.total_input_tokens  += usage.get("input_tokens", 0)
+        self.total_output_tokens += usage.get("output_tokens", 0)
+        self.total_cost_usd      += usage.get("cost_usd", 0.0)
 
         # Publish updated metrics immediately so dashboard reflects the new count
         await self._mqtt_publish(
@@ -175,6 +227,13 @@ class LLMAgent(Actor):
             self._build_metrics(),
         )
         return response
+
+    def _build_metrics(self) -> dict:
+        m = super()._build_metrics()
+        m["input_tokens"]  = self.total_input_tokens
+        m["output_tokens"] = self.total_output_tokens
+        m["cost_usd"]      = round(self.total_cost_usd, 6)
+        return m
 
     def clear_history(self):
         self._conversation_history = []

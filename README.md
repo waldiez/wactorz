@@ -181,6 +181,7 @@ DEPLOY_PATH=/opt/agentflow
 | [docs/deployment.md](docs/deployment.md) | Bootstrap, native mode, systemd, SSH keys, env vars |
 | [docs/development.md](docs/development.md) | Dev setup, project structure, debugging tips |
 | [docs/api.md](docs/api.md) | REST endpoints, MQTT topic reference, WebSocket format |
+| [docs/windows.md](docs/windows.md) | Windows (x86-64 + ARM64) — Docker, dev mode, native binary |
 
 ---
 

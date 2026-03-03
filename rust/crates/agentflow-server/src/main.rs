@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
 
-use agentflow_agents::{IOAgent, LlmConfig, LlmProvider, MainActor, MonitorAgent, NautilusAgent, QAAgent, UdxAgent};
+use agentflow_agents::{IOAgent, LlmConfig, LlmProvider, MainActor, MonitorAgent, NautilusAgent, NewsAgent, QAAgent, UdxAgent, WeatherAgent};
 use agentflow_core::{ActorConfig, ActorSystem, EventPublisher};
 use agentflow_interfaces::{RestServer, WsBridge};
 use agentflow_interfaces::ws::WsEnvelope;
@@ -255,6 +255,22 @@ async fn main() -> Result<()> {
     );
     system.spawn_actor(udx_agent).await?;
     info!("UdxAgent spawned");
+
+    let weather_config = ActorConfig::new("weather-agent");
+    let weather_agent = Box::new(
+        WeatherAgent::new(weather_config)
+            .with_publisher(publisher.clone()),
+    );
+    system.spawn_actor(weather_agent).await?;
+    info!("WeatherAgent spawned");
+
+    let news_config = ActorConfig::new("news-agent");
+    let news_agent = Box::new(
+        NewsAgent::new(news_config)
+            .with_publisher(publisher.clone()),
+    );
+    system.spawn_actor(news_agent).await?;
+    info!("NewsAgent spawned");
 
     // ── REST server ───────────────────────────────────────────────────────────
     let rest_addr: SocketAddr = args.api_addr;

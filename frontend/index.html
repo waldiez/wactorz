@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 
     <!-- ── Primary SEO ──────────────────────────────────────────────────────── -->
     <title>AgentFlow — Multi-Agent Orchestration Dashboard</title>
@@ -76,7 +76,9 @@
 
       /* ── HUD (top-left) ─────────────────────────────────────────────────── */
       #hud {
-        position: fixed; top: 16px; left: 16px;
+        position: fixed;
+        top:  max(16px, env(safe-area-inset-top,  0px));
+        left: max(16px, env(safe-area-inset-left, 0px));
         padding: 12px 18px;
         min-width: 200px;
         z-index: 100;
@@ -116,7 +118,9 @@
 
       /* ── Theme switcher (top-right) ─────────────────────────────────────── */
       #theme-switcher {
-        position: fixed; top: 16px; right: 16px;
+        position: fixed;
+        top:   max(16px, env(safe-area-inset-top,   0px));
+        right: max(16px, env(safe-area-inset-right, 0px));
         display: flex; align-items: center;
         padding: 4px; border-radius: 40px;
         z-index: 100;
@@ -141,7 +145,8 @@
 
       /* ── Chat panel (right side) ────────────────────────────────────────── */
       #chat-panel {
-        position: fixed; top: 0; right: 0; bottom: 70px;
+        position: fixed; top: 0; right: 0;
+        bottom: max(70px, calc(60px + env(safe-area-inset-bottom, 0px)));
         width: 340px;
         display: flex; flex-direction: column;
         transform: translateX(100%);
@@ -360,6 +365,10 @@
         min-height: 64px;
         display: flex; align-items: flex-end; gap: 10px;
         padding: 10px 16px;
+        /* iOS home-indicator / Android gesture bar safe area */
+        padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+        padding-left:   max(16px, env(safe-area-inset-left,   0px));
+        padding-right:  max(16px, env(safe-area-inset-right,  0px));
         background: rgba(8, 12, 32, 0.9);
         backdrop-filter: blur(18px);
         -webkit-backdrop-filter: blur(18px);
@@ -837,7 +846,11 @@
         #renderCanvas { display: none; }
 
         /* HUD: compact top-left pill */
-        #hud { top: 8px; left: 8px; padding: 8px 12px; min-width: 0; }
+        #hud {
+          top:  max(8px, env(safe-area-inset-top,  0px));
+          left: max(8px, env(safe-area-inset-left, 0px));
+          padding: 8px 12px; min-width: 0;
+        }
         #hud .hud-count { font-size: 20px; }
         #hud .hud-label { display: none; }
         #hud .hud-links { display: none; }
@@ -845,12 +858,19 @@
 
         /* Theme switcher: horizontally scrollable, no wrapping */
         #theme-switcher {
-          top: 8px; right: 8px; max-width: calc(100vw - 160px);
+          top:   max(8px, env(safe-area-inset-top,   0px));
+          right: max(8px, env(safe-area-inset-right, 0px));
+          max-width: calc(100vw - 160px);
           overflow-x: auto; -webkit-overflow-scrolling: touch;
           scrollbar-width: none; border-radius: 30px;
         }
         #theme-switcher::-webkit-scrollbar { display: none; }
-        #theme-switcher button { padding: 5px 10px; font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+        #theme-switcher button {
+          padding: 6px 10px; font-size: 11px;
+          white-space: nowrap; flex-shrink: 0;
+          /* 36px min height for touch — the pill container clips them, so no border-radius change needed */
+          min-height: 36px;
+        }
 
         /* Feed toggle: below theme switcher */
         #feed-toggle { top: 50px; right: 8px; padding: 4px 8px; font-size: 10px; }
@@ -861,8 +881,8 @@
         /* Chat panel: full screen on mobile */
         #chat-panel { width: 100%; left: 0; border-left: none; border-radius: 0; }
 
-        /* Social dashboard: full height on mobile */
-        .sd-root { bottom: 64px; }
+        /* Social dashboard: clear of IO bar + safe area */
+        .sd-root { bottom: max(64px, calc(58px + env(safe-area-inset-bottom, 6px))); }
         .sd-topbar { padding: 10px 12px; }
         .sd-tagline { display: none; }
         .sd-3d-btn { display: none; }
@@ -881,10 +901,16 @@
         .sd-stats { padding: 6px 0; }
         .sd-stat strong { font-size: 14px; }
 
-        /* IO bar: compact */
-        #io-bar { padding: 8px 10px; gap: 8px; min-height: 56px; }
-        #mic-btn, #send-btn { width: 36px; height: 36px; font-size: 15px; }
-        #text-input { font-size: 13px; }
+        /* IO bar: compact + iOS safe-area */
+        #io-bar {
+          padding: 8px 12px;
+          padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+          gap: 8px;
+          min-height: 58px;
+        }
+        /* 44px touch targets — minimum recommended by Apple HIG */
+        #mic-btn, #send-btn { width: 44px; height: 44px; font-size: 16px; }
+        #text-input { font-size: 16px; } /* 16px prevents iOS auto-zoom on focus */
       }
 
       /* Extra small phones (< 380px): 2-column only if fits */

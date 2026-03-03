@@ -32,13 +32,14 @@ function nextHlcWid(name) {
 
 // ── Agent roster ──────────────────────────────────────────────────────────────
 const AGENT_DEFS = [
-  { name: "main-actor",      role: "orchestrator", color: "amber" },
-  { name: "monitor-agent",   role: "monitor",      color: "teal"  },
-  { name: "data-fetcher",    role: "dynamic",      color: "cyan"  },
-  { name: "weather-agent",   role: "dynamic",      color: "blue"  },
-  { name: "ml-classifier",   role: "ml",           color: "violet"},
-  { name: "nautilus-agent",  role: "transfer",     color: "indigo"},
-  { name: "udx-agent",       role: "expert",       color: "gold"  },
+  { name: "main-actor",      role: "orchestrator", color: "amber"  },
+  { name: "monitor-agent",   role: "monitor",      color: "teal"   },
+  { name: "io-agent",        role: "gateway",      color: "cyan"   },
+  { name: "qa-agent",        role: "guardian",     color: "green"  },
+  { name: "nautilus-agent",  role: "transfer",     color: "indigo" },
+  { name: "udx-agent",       role: "expert",       color: "gold"   },
+  { name: "weather-agent",   role: "data",         color: "sky"    },
+  { name: "news-agent",      role: "data",         color: "red"    },
 ];
 
 const agents = AGENT_DEFS.map((def) => ({
@@ -110,6 +111,21 @@ const UDX_RESPONSES = [
   "**REST API** lives at `/api/`. Quick ref: `GET /api/actors`, `POST /api/actors/:id/pause`, `DELETE /api/actors/:id`. Use `docs api` for all endpoints.",
 ];
 
+// Weather-agent mock replies
+const WEATHER_RESPONSES = [
+  "**Weather in London**\n\n🌡 **14°C / 57°F** (feels like 11°C)\n☁ Overcast\n💧 Humidity: 82%\n💨 Wind: 22 km/h SW\n👁 Visibility: 9 km\n☀ UV index: 1",
+  "**Weather in Tokyo**\n\n🌡 **21°C / 70°F** (feels like 20°C)\n🌤 Partly cloudy\n💧 Humidity: 65%\n💨 Wind: 14 km/h NE\n👁 Visibility: 16 km\n☀ UV index: 4",
+  "**Weather in New York**\n\n🌡 **8°C / 46°F** (feels like 5°C)\n🌧 Light rain\n💧 Humidity: 90%\n💨 Wind: 30 km/h NW\n👁 Visibility: 6 km\n☀ UV index: 0",
+  "🌦 Fetching weather… *(in real mode this calls wttr.in — no API key needed)*",
+];
+
+// News-agent mock replies
+const NEWS_RESPONSES = [
+  "**Hacker News — Top Stories** (top 5)\n\n1. **[Show HN: I built a multi-agent system in Rust](https://example.com)** — ⬆ 342 · [HN](https://news.ycombinator.com)\n2. **[The unreasonable effectiveness of LLMs as orchestrators](https://example.com)** — ⬆ 289 · [HN](https://news.ycombinator.com)\n3. **[Ask HN: How do you handle secret management in containers?](https://news.ycombinator.com)** — ⬆ 201 · [HN](https://news.ycombinator.com)\n4. **[Rust 2026 roadmap announced](https://example.com)** — ⬆ 178 · [HN](https://news.ycombinator.com)\n5. **[Babylon.js 8.0 released](https://example.com)** — ⬆ 154 · [HN](https://news.ycombinator.com)",
+  "**Hacker News — Newest Stories** (top 5)\n\n1. **[Actor model vs. CSP: a 2026 comparison](https://example.com)** — ⬆ 12\n2. **[MQTT vs WebSockets for real-time dashboards](https://example.com)** — ⬆ 8\n3. **[Building a zero-dependency Rust HTTP client](https://example.com)** — ⬆ 5\n4. **[Ask HN: Best free weather API?](https://news.ycombinator.com)** — ⬆ 3\n5. **[Show HN: AgentFlow dashboard in Babylon.js](https://example.com)** — ⬆ 2",
+  "📰 Fetching top stories from Hacker News… *(in real mode this calls the HN Firebase API — no API key needed)*",
+];
+
 // Nautilus-specific replies for the mock (sync/exec flavour)
 const NAUTILUS_RESPONSES = [
   "✓ SSH connection to `remote-host` established.\n```\nLinux remote-host 6.1.0 #1 SMP x86_64 GNU/Linux\n```",
@@ -145,6 +161,8 @@ client.on("message", (topic, raw) => {
   const pool =
     responder.name === "nautilus-agent" ? NAUTILUS_RESPONSES :
     responder.name === "udx-agent"      ? UDX_RESPONSES      :
+    responder.name === "weather-agent"  ? WEATHER_RESPONSES  :
+    responder.name === "news-agent"     ? NEWS_RESPONSES      :
     MOCK_RESPONSES;
   setTimeout(() => {
     publish(`agents/${responder.id}/chat`, {

@@ -83,6 +83,7 @@ export class ActivityFeed {
     this.isOpen = !this.isOpen;
     this.panel.classList.toggle("open", this.isOpen);
     this.toggleBtn.classList.toggle("active", this.isOpen);
+    this.toggleBtn.setAttribute("aria-expanded", String(this.isOpen));
 
     if (this.isOpen) {
       this.unseenCount = 0;
@@ -94,10 +95,13 @@ export class ActivityFeed {
   private renderItem(item: FeedItem): void {
     const row = document.createElement("div");
     row.className = "feed-row";
+    row.setAttribute("role", "listitem");
 
     const dot = document.createElement("span");
     dot.className = "feed-dot";
     dot.style.background = TYPE_COLORS[item.type] ?? "#6aabff";
+    dot.setAttribute("role", "img");
+    dot.setAttribute("aria-label", `${item.type} event`);
 
     const text = document.createElement("span");
     text.className = "feed-text";

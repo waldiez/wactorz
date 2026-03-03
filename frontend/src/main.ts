@@ -20,13 +20,30 @@ import { ActivityFeed } from "./ui/ActivityFeed";
 import { MentionPopup } from "./ui/MentionPopup";
 import { VoiceInput } from "./io/VoiceInput";
 import { IOManager } from "./io/IOManager";
+import { coin } from "./ui/WaldiezCoin";
+import { CoinTicker } from "./ui/CoinTicker";
 
 import type { AgentInfo, ThemeChangeEvent } from "./types/agent";
+import type { AppMode } from "./ui/CoinTicker";
+
+// ── Mode (edu / demo) ─────────────────────────────────────────────────────────
+
+const _searchParams = new URLSearchParams(window.location.search);
+const _savedMode    = localStorage.getItem("waldiez_mode") as AppMode | null;
+const appMode: AppMode =
+  (_searchParams.get("mode") as AppMode | null) ?? _savedMode ?? "demo";
+if (_searchParams.get("mode")) {
+  localStorage.setItem("waldiez_mode", appMode);
+}
 
 // ── Scene ─────────────────────────────────────────────────────────────────────
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
-const scene = new SceneManager(canvas);
+const scene = new SceneManager(canvas, appMode);
+
+// ── Coin ticker ───────────────────────────────────────────────────────────────
+
+const coinTicker = new CoinTicker(coin, appMode);
 
 // ── MQTT ──────────────────────────────────────────────────────────────────────
 
@@ -166,6 +183,17 @@ mqtt.on("qa-flag", (payload) => {
     type: "qa-flag",
     label: `[${payload.category}] ${payload.excerpt}`,
     agentName: `qa-agent ← ${payload.from}`,
+    timestamp: payload.timestampMs,
+  });
+});
+
+mqtt.on("coin", (payload) => {
+  coin.sync(payload);
+  coinTicker.update(payload.balance, payload.delta, payload.reason);
+  feed.push({
+    type: "heartbeat", // reuse heartbeat colour (blue) for economy events
+    label: `${payload.delta >= 0 ? "+" : ""}${payload.delta} Ƿ — ${payload.reason}`,
+    agentName: "wiz-agent",
     timestamp: payload.timestampMs,
   });
 });

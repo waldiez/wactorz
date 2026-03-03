@@ -17,7 +17,7 @@ import { playMessageEffect } from "../effects/MessageEffect";
 
 export abstract class ThemeBase {
   /** Unique theme identifier used by {@link SceneManager}. */
-  abstract readonly name: "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin";
+  abstract readonly name: "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin" | "ops";
 
   /** The nodes currently in this theme, keyed by agent ID. */
   protected nodes: Map<string, AgentNodeBase> = new Map();

@@ -10,11 +10,11 @@
 
 import type { ThemeChangeEvent } from "../types/agent";
 
-type ThemeName = "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin";
+type ThemeName = "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin" | "ops";
 const STORAGE_KEY = "agentflow-theme";
 
 export class ThemeSwitcher {
-  private buttons: Record<"graph" | "galaxy" | "cards" | "grave" | "social" | "fin", HTMLButtonElement>;
+  private buttons: Record<"graph" | "galaxy" | "cards" | "grave" | "social" | "fin" | "ops", HTMLButtonElement>;
   private current: ThemeName = "social";
 
   constructor() {
@@ -25,9 +25,10 @@ export class ThemeSwitcher {
       grave:  document.getElementById("btn-grave")  as HTMLButtonElement,
       social: document.getElementById("btn-social") as HTMLButtonElement,
       fin:    document.getElementById("btn-fin")    as HTMLButtonElement,
+      ops:    document.getElementById("btn-ops")    as HTMLButtonElement,
     };
 
-    (Object.keys(this.buttons) as ("graph" | "galaxy" | "cards" | "grave" | "social" | "fin")[]).forEach((name) => {
+    (Object.keys(this.buttons) as ("graph" | "galaxy" | "cards" | "grave" | "social" | "fin" | "ops")[]).forEach((name) => {
       this.buttons[name].addEventListener("click", () => this.switchTo(name));
     });
 
@@ -74,5 +75,14 @@ export class ThemeSwitcher {
     this.buttons.grave.classList.toggle("active",  this.current === "grave");
     this.buttons.social.classList.toggle("active", this.current === "social");
     this.buttons.fin.classList.toggle("active",    this.current === "fin");
+    this.buttons.ops.classList.toggle("active",    this.current === "ops");
+
+    // ARIA: update aria-selected for all tab buttons
+    (Object.keys(this.buttons) as ("graph" | "galaxy" | "cards" | "grave" | "social" | "fin" | "ops")[]).forEach((name) => {
+      const active = name === "cards"
+        ? (this.current === "cards" || this.current === "cards-3d")
+        : this.current === name;
+      this.buttons[name].setAttribute("aria-selected", String(active));
+    });
   }
 }

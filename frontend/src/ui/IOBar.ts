@@ -39,6 +39,12 @@ export class IOBar {
     this.textInput = document.getElementById("text-input") as HTMLTextAreaElement;
     this.sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
 
+    // ARIA labels
+    this.textInput.setAttribute("aria-label", "Message input. Type @name to mention an agent. Shift+Enter for new line.");
+    this.micBtn.setAttribute("aria-label", "Toggle voice input");
+    this.micBtn.setAttribute("aria-pressed", "false");
+    this.sendBtn.setAttribute("aria-label", "Send message");
+
     this.bindEvents();
   }
 
@@ -153,11 +159,13 @@ export class IOBar {
       this.voiceInput.stop();
       this.micBtn.classList.remove("recording");
       this.micBtn.title = "Voice input";
+      this.micBtn.setAttribute("aria-pressed", "false");
     } else {
       const started = this.voiceInput.start();
       if (started) {
         this.micBtn.classList.add("recording");
         this.micBtn.title = "Stop recording";
+        this.micBtn.setAttribute("aria-pressed", "true");
       }
     }
   }

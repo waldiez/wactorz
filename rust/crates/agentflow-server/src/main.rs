@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
 
-use agentflow_agents::{IOAgent, LlmConfig, LlmProvider, MainActor, MonitorAgent, NautilusAgent, NewsAgent, QAAgent, UdxAgent, WeatherAgent, WifAgent};
+use agentflow_agents::{IOAgent, LlmConfig, LlmProvider, MainActor, MonitorAgent, NautilusAgent, NewsAgent, QAAgent, UdxAgent, WeatherAgent, WifAgent, WizAgent};
 use agentflow_core::{ActorConfig, ActorSystem, EventPublisher};
 use agentflow_interfaces::{RestServer, WsBridge};
 use agentflow_interfaces::ws::WsEnvelope;
@@ -96,6 +96,7 @@ async fn main() -> Result<()> {
     // Registry clone for routing inbound chat messages → actor mailboxes
     let registry_for_route  = system.registry.clone();
     let registry_for_qa     = system.registry.clone();
+    let registry_for_wiz    = system.registry.clone();
 
     // Start MQTT event loop task
     tokio::spawn(async move {
@@ -122,6 +123,46 @@ async fn main() -> Result<()> {
                                     qa_content,
                                 );
                                 let _ = reg_qa.send(&entry.id, msg).await;
+                            }
+                        });
+                    }
+
+                    // Route spawn/heartbeat/alert events → wiz-agent (economy tracking)
+                    if topic.ends_with("/spawn") || topic.ends_with("/heartbeat") || topic.ends_with("/alert") {
+                        let event_type = if topic.ends_with("/spawn") { "spawn" }
+                            else if topic.ends_with("/heartbeat") { "heartbeat" }
+                            else { "alert" };
+                        let mut wiz_payload = json_val.clone();
+                        wiz_payload["__event"] = serde_json::Value::String(event_type.to_string());
+                        let reg_wiz = registry_for_wiz.clone();
+                        let wiz_content = serde_json::to_string(&wiz_payload).unwrap_or_default();
+                        tokio::spawn(async move {
+                            if let Some(entry) = reg_wiz.get_by_name("wiz-agent").await {
+                                let msg = agentflow_core::Message::text(
+                                    Some("mqtt-router".to_string()),
+                                    Some(entry.id.clone()),
+                                    wiz_content,
+                                );
+                                let _ = reg_wiz.send(&entry.id, msg).await;
+                            }
+                        });
+                    }
+
+                    // Route system/health and system/qa-flag → wiz-agent
+                    if topic == "system/health" || topic == "system/qa-flag" {
+                        let event_type = if topic == "system/health" { "health" } else { "qa-flag" };
+                        let mut wiz_payload = json_val.clone();
+                        wiz_payload["__event"] = serde_json::Value::String(event_type.to_string());
+                        let reg_wiz = registry_for_wiz.clone();
+                        let wiz_content = serde_json::to_string(&wiz_payload).unwrap_or_default();
+                        tokio::spawn(async move {
+                            if let Some(entry) = reg_wiz.get_by_name("wiz-agent").await {
+                                let msg = agentflow_core::Message::text(
+                                    Some("mqtt-router".to_string()),
+                                    Some(entry.id.clone()),
+                                    wiz_content,
+                                );
+                                let _ = reg_wiz.send(&entry.id, msg).await;
                             }
                         });
                     }
@@ -279,6 +320,14 @@ async fn main() -> Result<()> {
     );
     system.spawn_actor(wif_agent).await?;
     info!("WifAgent spawned");
+
+    let wiz_config = ActorConfig::new("wiz-agent");
+    let wiz_agent = Box::new(
+        WizAgent::new(wiz_config)
+            .with_publisher(publisher.clone()),
+    );
+    system.spawn_actor(wiz_agent).await?;
+    info!("WizAgent spawned");
 
     // ── REST server ───────────────────────────────────────────────────────────
     let rest_addr: SocketAddr = args.api_addr;

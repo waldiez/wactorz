@@ -46,6 +46,59 @@
       /* ── Reset ──────────────────────────────────────────────────────────── */
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+      /* ── Screen-reader only utility ─────────────────────────────────────── */
+      .sr-only {
+        position: absolute; width: 1px; height: 1px;
+        padding: 0; margin: -1px; overflow: hidden;
+        clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0;
+      }
+
+      /* ── Skip navigation ────────────────────────────────────────────────── */
+      .skip-nav {
+        position: absolute; top: -999px; left: 16px;
+        padding: 8px 16px; background: #6aabff; color: #050818;
+        border-radius: 4px; font-weight: 700; z-index: 9999;
+        text-decoration: none;
+      }
+      .skip-nav:focus { top: 16px; }
+
+      /* ── Mood CSS tokens ─────────────────────────────────────────────────── */
+      :root {
+        --mood-bg:           #050818;
+        --mood-panel:        #0a0f28;
+        --mood-text:         #e0e8ff;
+        --mood-muted:        #4a6078;
+        --mood-accent:       #6aabff;
+        --mood-accent-soft:  rgba(100, 160, 255, 0.18);
+        --mood-line:         rgba(100, 160, 255, 0.12);
+      }
+      body[data-mood="velocity"] {
+        --mood-bg:           #091326;
+        --mood-panel:        #111e36;
+        --mood-text:         #e9f3ff;
+        --mood-muted:        #95afd3;
+        --mood-accent:       #2fd4ff;
+        --mood-accent-soft:  rgba(47, 212, 255, 0.15);
+        --mood-line:         rgba(47, 212, 255, 0.15);
+      }
+      body[data-mood="heritage"] {
+        --mood-bg:           #1a0f06;
+        --mood-panel:        #241509;
+        --mood-text:         #f0e8d8;
+        --mood-muted:        #8a6b4a;
+        --mood-accent:       #d4923a;
+        --mood-accent-soft:  rgba(212, 146, 58, 0.15);
+        --mood-line:         rgba(212, 146, 58, 0.15);
+      }
+
+      /* Background mood orbs (decorative) */
+      .mood-orb {
+        position: fixed; border-radius: 50%;
+        filter: blur(80px); pointer-events: none;
+        z-index: 0; opacity: 0.12; transition: background 1.2s ease;
+      }
+      @media (prefers-reduced-motion: reduce) { .mood-orb { transition: none; } }
+
       /* ── Base ───────────────────────────────────────────────────────────── */
       html, body {
         width: 100%; height: 100%;
@@ -1224,72 +1277,276 @@
         .fin-grid   { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; padding: 10px; }
         .fin-metric-val { font-size: 15px; }
       }
+
+      /* ══════════════════════════════════════════════════════════════════
+         THEME-SWITCHER: Ops button + ARIA tab styling
+      ══════════════════════════════════════════════════════════════════ */
+      #theme-switcher #btn-ops.active {
+        background: rgba(47, 212, 255, 0.15);
+        color: #2fd4ff;
+        box-shadow: 0 0 12px rgba(47, 212, 255, 0.22);
+      }
+
+      /* ══════════════════════════════════════════════════════════════════
+         OPS DASHBOARD — WAB Live-Ops aesthetic
+         Uses mood CSS custom properties (--mood-*) that shift with verdict.
+      ══════════════════════════════════════════════════════════════════ */
+      .ops-root {
+        display: none;
+        position: fixed; top: 0; left: 0; right: 0; bottom: 70px;
+        z-index: 160;
+        background: var(--mood-bg, #050818);
+        flex-direction: column; overflow: hidden;
+        font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+        transition: background 1.2s ease;
+      }
+      .ops-root.ops-visible { display: flex; }
+      @media (prefers-reduced-motion: reduce) { .ops-root { transition: none; } }
+
+      /* ── Topbar ───────────────────────────────────────────────────── */
+      .ops-topbar {
+        display: flex; align-items: center; gap: 12px;
+        padding: 10px 20px;
+        background: rgba(0,0,0,0.35);
+        border-bottom: 1px solid var(--mood-line, rgba(100,160,255,0.12));
+        flex-shrink: 0;
+      }
+      .ops-brand   { font-size: 15px; font-weight: 700; color: var(--mood-accent, #6aabff); letter-spacing: 0.08em; }
+      .ops-title   { font-size: 10px; color: var(--mood-muted, #4a6078); letter-spacing: 0.22em; }
+      .ops-source-chip {
+        padding: 2px 8px; border-radius: 10px;
+        background: rgba(47,212,255,0.12); color: #2fd4ff;
+        font-size: 10px; font-weight: 600; letter-spacing: 0.1em;
+      }
+      .ops-3d-btn {
+        margin-left: auto; padding: 4px 12px; border-radius: 14px;
+        border: 1px solid var(--mood-accent-soft, rgba(100,160,255,0.25));
+        background: var(--mood-accent-soft, rgba(100,160,255,0.08));
+        color: var(--mood-accent, #6aabff); font-size: 11px; cursor: pointer;
+        font-family: inherit; letter-spacing: 0.06em; transition: background 0.15s;
+      }
+      .ops-3d-btn:hover   { background: rgba(100,160,255,0.18); }
+      .ops-3d-btn:focus-visible { outline: 2px solid var(--mood-accent, #6aabff); outline-offset: 2px; }
+
+      /* ── Grid layout ─────────────────────────────────────────────── */
+      .ops-grid {
+        flex: 1; overflow-y: auto;
+        display: grid;
+        grid-template-columns: 8fr 4fr;
+        grid-template-rows: auto auto;
+        gap: 12px; padding: 16px 20px;
+        align-content: start;
+      }
+      .ops-hero    { grid-column: 1; grid-row: 1; }
+      .ops-sidebar { grid-column: 2; grid-row: 1; }
+      .ops-tokens  { grid-column: 1; grid-row: 2; }
+      .ops-events  { grid-column: 2; grid-row: 2; }
+
+      /* ── Hero / verdict ──────────────────────────────────────────── */
+      .ops-hero {
+        background: var(--mood-panel, #0a0f28);
+        border: 1px solid var(--mood-line, rgba(100,160,255,0.12));
+        border-radius: 12px; padding: 20px;
+      }
+      .ops-kpi-row { display: flex; gap: 24px; flex-wrap: wrap; }
+      .ops-kpi     { display: flex; flex-direction: column; gap: 6px; }
+      .ops-kpi-label { font-size: 10px; color: var(--mood-muted, #4a6078); letter-spacing: 0.18em; }
+      .ops-verdict-text {
+        font-size: 28px; font-weight: 700; letter-spacing: 0.05em;
+        transition: color 0.8s ease;
+      }
+      .ops-verdict-healthy   { color: #34d399; }
+      .ops-verdict-degraded  { color: #fbbf24; }
+      .ops-verdict-unhealthy { color: #fb7185; }
+      @media (prefers-reduced-motion: reduce) { .ops-verdict-text { transition: none; } }
+
+      .ops-progress-text { font-size: 14px; font-weight: 700; letter-spacing: 0.12em; }
+      .ops-proceed { color: #34d399; }
+      .ops-hold    { color: #fb7185; }
+
+      .ops-integrity-val { font-size: 28px; font-weight: 700; color: var(--mood-accent, #6aabff); }
+
+      .ops-roi-footnote { font-size: 10px; color: var(--mood-muted, #4a6078); margin-top: 12px; }
+
+      /* ── Sidebar chips ───────────────────────────────────────────── */
+      .ops-sidebar {
+        background: var(--mood-panel, #0a0f28);
+        border: 1px solid var(--mood-line, rgba(100,160,255,0.12));
+        border-radius: 12px; padding: 16px;
+        display: flex; flex-direction: column; gap: 8px;
+      }
+      .ops-chip {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 8px 12px; border-radius: 8px;
+        font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
+      }
+      .ops-chip-ok  { background: rgba(52,211,153,0.1); color: #34d399; border: 1px solid rgba(52,211,153,0.2); }
+      .ops-chip-ok span { font-size: 10px; }
+
+      /* ── Token counts ────────────────────────────────────────────── */
+      .ops-tokens {
+        background: var(--mood-panel, #0a0f28);
+        border: 1px solid var(--mood-line, rgba(100,160,255,0.12));
+        border-radius: 12px; padding: 16px;
+        display: flex; gap: 24px;
+      }
+      .ops-token { display: flex; flex-direction: column; gap: 4px; }
+      .ops-token-val { font-size: 24px; font-weight: 700; color: var(--mood-text, #e0e8ff); }
+      .ops-token-key { font-size: 10px; color: var(--mood-muted, #4a6078); letter-spacing: 0.15em; }
+      .ops-token-ok    { color: #34d399; }
+      .ops-token-stale { color: #fbbf24; }
+
+      /* ── Event log ───────────────────────────────────────────────── */
+      .ops-events {
+        background: var(--mood-panel, #0a0f28);
+        border: 1px solid var(--mood-line, rgba(100,160,255,0.12));
+        border-radius: 12px; padding: 16px;
+        display: flex; flex-direction: column; gap: 8px;
+      }
+      .ops-events-header { font-size: 10px; color: var(--mood-muted, #4a6078); letter-spacing: 0.18em; }
+      .ops-event-list {
+        list-style: none; overflow-y: auto; max-height: 160px;
+        display: flex; flex-direction: column; gap: 4px;
+        scrollbar-width: thin;
+      }
+      .ops-event-item {
+        font-size: 11px; color: var(--mood-muted, #4a6078);
+        padding: 3px 0; border-bottom: 1px solid var(--mood-line, rgba(100,160,255,0.06));
+        font-family: monospace;
+      }
+
+      /* ── Responsive ──────────────────────────────────────────────── */
+      @media (max-width: 1023px) {
+        .ops-grid { grid-template-columns: 1fr; }
+        .ops-hero, .ops-sidebar, .ops-tokens, .ops-events { grid-column: 1; grid-row: auto; }
+      }
+      @media (max-width: 639px) {
+        .ops-root   { bottom: max(64px, calc(58px + env(safe-area-inset-bottom, 6px))); }
+        .ops-topbar { padding: 8px 12px; }
+        .ops-title  { display: none; }
+      }
+
+      /* ══════════════════════════════════════════════════════════════════
+         WALDIEZ COIN TICKER
+      ══════════════════════════════════════════════════════════════════ */
+      #coin-display {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 3px 10px; border-radius: 14px;
+        background: rgba(100,160,255,0.08);
+        border: 1px solid rgba(100,160,255,0.2);
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px; font-weight: 700;
+        color: #6aabff; cursor: default;
+        margin-top: 8px; pointer-events: auto;
+        transition: background 0.3s, color 0.3s;
+      }
+      #coin-display.coin-earn {
+        background: rgba(52,211,153,0.2); color: #34d399;
+        border-color: rgba(52,211,153,0.4);
+        animation: coin-flash-earn 0.7s ease;
+      }
+      #coin-display.coin-debit {
+        background: rgba(251,113,133,0.2); color: #fb7185;
+        border-color: rgba(251,113,133,0.4);
+        animation: coin-flash-debit 0.7s ease;
+      }
+      @keyframes coin-flash-earn  { 0%{transform:scale(1)} 50%{transform:scale(1.12)} 100%{transform:scale(1)} }
+      @keyframes coin-flash-debit { 0%{transform:scale(1)} 50%{transform:scale(0.92)} 100%{transform:scale(1)} }
+      @media (prefers-reduced-motion: reduce) {
+        #coin-display { animation: none !important; transition: none; }
+      }
+
+      /* Coin toast notification */
+      .coin-toast {
+        position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+        background: rgba(10,15,40,0.92); border: 1px solid rgba(100,160,255,0.25);
+        border-radius: 10px; padding: 10px 18px;
+        font-size: 13px; color: #a8c8ff;
+        z-index: 500; pointer-events: none;
+        animation: toast-in 0.3s ease, toast-out 0.5s 3.5s ease forwards;
+      }
+      @keyframes toast-in  { from{opacity:0;transform:translateX(-50%) translateY(10px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
+      @keyframes toast-out { to{opacity:0;transform:translateX(-50%) translateY(10px)} }
     </style>
   </head>
   <body>
+    <!-- Skip navigation (accessibility) -->
+    <a class="skip-nav" href="#io-bar">Skip to chat</a>
+
+    <!-- Mood orbs (decorative, aria-hidden) -->
+    <div class="mood-orb" style="width:400px;height:400px;top:-100px;left:-100px;background:var(--mood-accent,#6aabff)" aria-hidden="true"></div>
+    <div class="mood-orb" style="width:300px;height:300px;bottom:100px;right:-80px;background:var(--mood-accent,#6aabff)" aria-hidden="true"></div>
+
     <!-- 3D canvas -->
-    <canvas id="renderCanvas"></canvas>
+    <canvas id="renderCanvas"
+            role="img"
+            aria-label="3D agent network graph — interactive visualization"
+            tabindex="0"></canvas>
 
     <!-- HUD: agent count + health badge + page links -->
-    <div id="hud" class="glass">
-      <div class="hud-title">AgentFlow</div>
-      <div class="hud-count" id="hud-count">0</div>
-      <div class="hud-label">Active Agents</div>
-      <div class="hud-badge healthy" id="hud-health">System Healthy</div>
-      <nav class="hud-links">
+    <div id="hud" class="glass" role="complementary" aria-label="System status">
+      <div class="hud-title" aria-hidden="true">AgentFlow</div>
+      <div class="hud-count" id="hud-count" aria-live="polite" aria-label="Active agent count: 0">0</div>
+      <div class="hud-label" aria-hidden="true">Active Agents</div>
+      <div class="hud-badge healthy" id="hud-health" role="status" aria-live="polite">System Healthy</div>
+      <div id="coin-display" aria-label="WaldiezCoin balance: Ƿ 0">Ƿ 0</div>
+      <nav class="hud-links" aria-label="External links">
         <a href="/fuseki/" target="_blank" rel="noopener" class="hud-link">⬡ Fuseki</a>
         <a id="ha-link" href="#" target="_blank" rel="noopener" class="hud-link">⌂ Home Assistant</a>
       </nav>
     </div>
 
     <!-- Theme switcher pill -->
-    <div id="theme-switcher" class="glass">
-      <button id="btn-graph">Graph</button>
-      <button id="btn-galaxy">Galaxy</button>
-      <button id="btn-cards">Cards</button>
-      <button id="btn-grave">☠ Papadeath</button>
-      <button id="btn-social" class="active">🌐 Social</button>
-      <button id="btn-fin">💹 WIF</button>
+    <div id="theme-switcher" class="glass" role="tablist" aria-label="Display theme">
+      <button id="btn-graph"  role="tab" aria-selected="false">Graph</button>
+      <button id="btn-galaxy" role="tab" aria-selected="false">Galaxy</button>
+      <button id="btn-cards"  role="tab" aria-selected="false">Cards</button>
+      <button id="btn-grave"  role="tab" aria-selected="false">☠ Papadeath</button>
+      <button id="btn-social" role="tab" aria-selected="true" class="active">🌐 Social</button>
+      <button id="btn-fin"    role="tab" aria-selected="false">💹 WIF</button>
+      <button id="btn-ops"    role="tab" aria-selected="false">⚙ Ops</button>
     </div>
 
     <!-- Activity feed toggle (below theme switcher) -->
-    <button id="feed-toggle" title="Toggle activity feed">
-      Feed <span id="feed-badge"></span>
+    <button id="feed-toggle" title="Toggle activity feed"
+            aria-expanded="false" aria-controls="activity-feed">
+      Feed <span id="feed-badge" aria-hidden="true"></span>
     </button>
 
     <!-- Activity feed panel -->
-    <div id="activity-feed">
-      <div id="feed-list"></div>
+    <div id="activity-feed" role="log" aria-label="Agent activity log" aria-live="polite">
+      <div id="feed-list" aria-atomic="false"></div>
     </div>
 
     <!-- Chat panel (slides in from right on agent click) -->
-    <div id="chat-panel">
+    <div id="chat-panel" role="dialog" aria-modal="true" aria-labelledby="panel-agent-name">
       <div class="panel-header">
         <img id="panel-agent-avatar" class="panel-avatar" src="" alt=""
              onerror="this.style.opacity='0'" style="opacity:0">
         <div class="panel-header-info">
           <div class="agent-name" id="panel-agent-name">— no agent selected —</div>
-          <span class="status-badge" id="panel-agent-status">running</span>
+          <span class="status-badge" id="panel-agent-status" aria-live="polite">running</span>
         </div>
-        <button class="close-btn" id="panel-close" title="Close">✕</button>
+        <button class="close-btn" id="panel-close" title="Close" aria-label="Close chat panel">✕</button>
       </div>
-      <div id="chat-messages"></div>
+      <div id="chat-messages" role="log" aria-live="polite" aria-atomic="false"></div>
     </div>
 
     <!-- Node hover tooltip -->
-    <div id="node-tooltip"></div>
+    <div id="node-tooltip" role="tooltip" aria-hidden="true"></div>
 
     <!-- IO bar: mic + multiline textarea + send -->
-    <div id="io-bar">
-      <button id="mic-btn" title="Voice input">🎙</button>
+    <div id="io-bar" role="region" aria-label="Message input area">
+      <button id="mic-btn" title="Voice input" aria-label="Toggle voice input" aria-pressed="false">🎙</button>
       <textarea
         id="text-input"
         rows="1"
         placeholder="Talk to io-agent… (type @name to target)"
         autocomplete="off"
         spellcheck="false"
+        aria-label="Message input. Type @name to mention an agent. Shift+Enter for new line."
       ></textarea>
-      <button id="send-btn" title="Send">▶</button>
+      <button id="send-btn" title="Send" aria-label="Send message">▶</button>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

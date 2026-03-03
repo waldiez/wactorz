@@ -34,6 +34,14 @@ export interface QaFlagPayload {
   timestampMs: number;
 }
 
+/** WaldiezCoin economy event published by WizAgent. */
+export interface CoinPayload {
+  balance: number;
+  delta: number;
+  reason: string;
+  timestampMs: number;
+}
+
 export interface MQTTEvents {
   connected: void;
   disconnected: void;
@@ -44,6 +52,7 @@ export interface MQTTEvents {
   spawn: SpawnPayload;
   chat: ChatMessage;
   "qa-flag": QaFlagPayload;
+  coin: CoinPayload;
   /** Catch-all for raw messages not matching a known pattern. */
   raw: { topic: string; payload: unknown };
 }
@@ -71,7 +80,7 @@ export class MQTTClient {
 
     this.client.on("connect", () => {
       console.info("[MQTT] Connected to", this.brokerUrl);
-      this.client?.subscribe(["agents/#", "system/health", "system/spawn"], { qos: 1 });
+      this.client?.subscribe(["agents/#", "system/#"], { qos: 1 });
       this.emit("connected", undefined);
     });
 
@@ -170,6 +179,12 @@ export class MQTTClient {
     // system/qa-flag
     if (topic === "system/qa-flag") {
       this.emit("qa-flag", payload as QaFlagPayload);
+      return;
+    }
+
+    // system/coin
+    if (topic === "system/coin") {
+      this.emit("coin", payload as CoinPayload);
       return;
     }
 

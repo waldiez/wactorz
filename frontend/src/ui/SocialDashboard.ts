@@ -263,14 +263,17 @@ export class SocialDashboard {
     const msgs   = this.messages.get(agent.id)   ?? 0;
     const handle = `@${(agent.agentType ?? agent.name).replace(/[^a-z0-9]/gi, "").toLowerCase()}`;
 
-    const card = document.createElement("div");
+    const card = document.createElement("article");
     card.className = "sd-card";
     card.dataset.id = agent.id;
     card.title = agent.id;
+    card.setAttribute("role", "article");
+    card.setAttribute("aria-label", `${agent.name} agent card`);
+    card.setAttribute("tabindex", "0");
 
     card.innerHTML = `
       <div class="sd-cover" style="background:${coverGradient(agent)}">
-        ${agent.protected ? '<span class="sd-star" title="Core protected agent">⭐</span>' : ""}
+        ${agent.protected ? '<span class="sd-star" title="Core protected agent" aria-label="Core protected agent">⭐</span>' : ""}
       </div>
       <div class="sd-body">
         <div class="sd-avatar-wrap">
@@ -278,34 +281,37 @@ export class SocialDashboard {
             <img src="${imgUrl}" alt="${agent.name}" loading="lazy"
                  onerror="this.style.display='none'">
           </div>
-          <span class="sd-state-dot sd-dot-${st}"></span>
+          <span class="sd-state-dot sd-dot-${st}"
+                role="img" aria-label="${st} status"></span>
         </div>
 
         <div class="sd-info">
           <span class="sd-name">${agent.name}</span>
           <span class="sd-handle">${handle}</span>
           <p class="sd-bio">${bioline(agent)}</p>
-          <span class="sd-type-badge sd-badge-${st}">${st.toUpperCase()}</span>
+          <span class="sd-type-badge sd-badge-${st}" aria-live="polite">${st.toUpperCase()}</span>
         </div>
 
         <div class="sd-stats">
           <div class="sd-stat">
-            <strong class="sd-hb-count">${hb}</strong>
-            <span>♡ beats</span>
+            <strong class="sd-hb-count" aria-live="polite" aria-label="Heartbeats: ${hb}">${hb}</strong>
+            <span aria-hidden="true">♡ beats</span>
           </div>
           <div class="sd-stat">
-            <strong class="sd-msg-count">${msgs}</strong>
-            <span>💬 msgs</span>
+            <strong class="sd-msg-count" aria-live="polite" aria-label="Messages: ${msgs}">${msgs}</strong>
+            <span aria-hidden="true">💬 msgs</span>
           </div>
         </div>
 
         <div class="sd-footer">
-          <button class="sd-chat-btn" data-name="${agent.name}">💬 Chat</button>
-          <div class="cd-controls">
-            <button class="cd-ctrl" data-action="pause"  title="Pause">⏸</button>
-            <button class="cd-ctrl" data-action="resume" title="Resume">▶</button>
-            <button class="cd-ctrl cd-ctrl-danger" data-action="stop"   title="Stop">⏹</button>
-            <button class="cd-ctrl cd-ctrl-danger" data-action="delete" title="Delete">🗑</button>
+          <button class="sd-chat-btn" data-name="${agent.name}"
+                  aria-label="Chat with ${agent.name}"
+                  aria-haspopup="dialog">💬 Chat</button>
+          <div class="cd-controls" role="group" aria-label="${agent.name} lifecycle controls">
+            <button class="cd-ctrl" data-action="pause"  title="Pause"  aria-label="Pause ${agent.name}">⏸</button>
+            <button class="cd-ctrl" data-action="resume" title="Resume" aria-label="Resume ${agent.name}">▶</button>
+            <button class="cd-ctrl cd-ctrl-danger" data-action="stop"   title="Stop"   aria-label="Stop ${agent.name}">⏹</button>
+            <button class="cd-ctrl cd-ctrl-danger" data-action="delete" title="Delete" aria-label="Delete ${agent.name}">🗑</button>
           </div>
         </div>
       </div>
@@ -314,6 +320,14 @@ export class SocialDashboard {
     card.querySelector(".sd-chat-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
       document.dispatchEvent(new CustomEvent("agent-selected", { detail: { agent } }));
+    });
+
+    // Keyboard: Enter/Space on card → open chat
+    card.addEventListener("keydown", (e) => {
+      if ((e.key === "Enter" || e.key === " ") && e.target === card) {
+        e.preventDefault();
+        document.dispatchEvent(new CustomEvent("agent-selected", { detail: { agent } }));
+      }
     });
 
     card.querySelector(".cd-controls")?.addEventListener("click", (e) => {
@@ -354,13 +368,15 @@ export class SocialDashboard {
     const el = document.createElement("div");
     el.id = "social-dashboard";
     el.className = "sd-root";
+    el.setAttribute("role", "main");
+    el.setAttribute("aria-label", "AgentFlow Social Dashboard");
     el.innerHTML = `
-      <div class="sd-topbar">
-        <span class="sd-logo">🌐 AgentFlow Social</span>
-        <span class="sd-tagline">Live multi-agent network</span>
-        <button class="sd-3d-btn" title="Switch to 3D view">⬡ 3D</button>
+      <div class="sd-topbar" role="banner">
+        <span class="sd-logo" aria-label="AgentFlow Social">🌐 AgentFlow Social</span>
+        <span class="sd-tagline" aria-hidden="true">Live multi-agent network</span>
+        <button class="sd-3d-btn" title="Switch to 3D view" aria-label="Switch to 3D graph view">⬡ 3D</button>
       </div>
-      <div class="sd-grid"></div>
+      <div class="sd-grid" role="region" aria-label="Agent cards"></div>
     `;
     el.querySelector(".sd-3d-btn")?.addEventListener("click", () => {
       document.dispatchEvent(new CustomEvent("theme-change", { detail: { theme: "graph" } }));

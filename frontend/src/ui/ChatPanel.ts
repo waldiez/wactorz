@@ -50,6 +50,15 @@ export class ChatPanel {
     this.closeBtn      = document.getElementById("panel-close") as HTMLButtonElement;
     this.messagesEl    = document.getElementById("chat-messages")!;
 
+    // ARIA: panel is a dialog
+    this.panel.setAttribute("role", "dialog");
+    this.panel.setAttribute("aria-modal", "true");
+    this.panel.setAttribute("aria-labelledby", "panel-agent-name");
+    this.messagesEl.setAttribute("role", "log");
+    this.messagesEl.setAttribute("aria-live", "polite");
+    this.messagesEl.setAttribute("aria-atomic", "false");
+    this.closeBtn.setAttribute("aria-label", "Close chat panel");
+
     this.closeBtn.addEventListener("click", () => this.close());
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.close(); });
 
@@ -170,6 +179,7 @@ export class ChatPanel {
     const el = document.createElement("div");
     el.className = "msg agent typing";
     el.dataset["typingFor"] = agentId;
+    el.setAttribute("aria-label", `${agentName ?? agentId} is typing`);
 
     const meta = document.createElement("div");
     meta.className = "msg-meta";
@@ -244,6 +254,8 @@ export class ChatPanel {
     if (isUser || isSystem) {
       const el = document.createElement("div");
       el.className = isSystem ? "msg msg-system" : "msg user";
+      el.setAttribute("role", "article");
+      el.setAttribute("aria-label", `Message from ${isSystem ? "system" : "you"}`);
 
       const meta = document.createElement("div");
       meta.className = "msg-meta";
@@ -261,6 +273,8 @@ export class ChatPanel {
       // Agent message: row = [avatar  |  bubble]
       const row = document.createElement("div");
       row.className = "msg-row";
+      row.setAttribute("role", "article");
+      row.setAttribute("aria-label", `Message from ${msg.from}`);
 
       const avatar = document.createElement("img");
       avatar.className = "msg-avatar";

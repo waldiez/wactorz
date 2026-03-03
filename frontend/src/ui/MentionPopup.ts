@@ -21,6 +21,8 @@ export class MentionPopup {
 
     this.popup = document.createElement("ul");
     this.popup.id = "mention-popup";
+    this.popup.setAttribute("role", "listbox");
+    this.popup.setAttribute("aria-label", "Agent suggestions");
     document.body.appendChild(this.popup);
 
     this.bindEvents();
@@ -87,12 +89,19 @@ export class MentionPopup {
       const li = document.createElement("li");
       li.textContent = `@${agent.name}`;
       li.dataset["name"] = agent.name;
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", "false");
       li.addEventListener("mousedown", (e) => {
         e.preventDefault(); // keep focus on input
         this.select(agent.name);
       });
       this.popup.appendChild(li);
     }
+
+    // Link textarea to popup for screen readers
+    this.input.setAttribute("aria-controls", "mention-popup");
+    this.input.setAttribute("aria-expanded", "true");
+    this.input.setAttribute("aria-haspopup", "listbox");
 
     // Position above the IO bar
     const inputRect = this.input.getBoundingClientRect();
@@ -107,6 +116,9 @@ export class MentionPopup {
   private hide(): void {
     this.popup.style.display = "none";
     this.focusedIdx = -1;
+    this.input.removeAttribute("aria-controls");
+    this.input.setAttribute("aria-expanded", "false");
+    this.input.removeAttribute("aria-haspopup");
   }
 
   private isVisible(): boolean {
@@ -115,7 +127,9 @@ export class MentionPopup {
 
   private updateFocus(items: NodeListOf<HTMLLIElement>): void {
     items.forEach((li, i) => {
-      li.classList.toggle("focused", i === this.focusedIdx);
+      const focused = i === this.focusedIdx;
+      li.classList.toggle("focused", focused);
+      li.setAttribute("aria-selected", String(focused));
     });
   }
 

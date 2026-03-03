@@ -78,5 +78,5 @@ export interface AgentSelectedEvent {
 
 /** Custom DOM event payload for theme switching. */
 export interface ThemeChangeEvent {
-  theme: "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin";
+  theme: "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin" | "ops";
 }

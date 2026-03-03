@@ -41,6 +41,7 @@ const AGENT_DEFS = [
   { name: "weather-agent",   role: "data",         color: "sky"     },
   { name: "news-agent",      role: "data",         color: "red"     },
   { name: "wif-agent",       role: "financier",    color: "emerald" },
+  { name: "wiz-agent",       role: "coin",         color: "gold"    },
 ];
 
 const agents = AGENT_DEFS.map((def) => ({
@@ -83,6 +84,7 @@ client.on("connect", () => {
   startAlerts();
   startSystemHealth();
   startDynamicSpawns();
+  startCoinEvents();
 });
 
 client.on("error", (err) => console.error("[mock] MQTT error:", err.message));
@@ -125,6 +127,16 @@ const NEWS_RESPONSES = [
   "**Hacker News — Top Stories** (top 5)\n\n1. **[Show HN: I built a multi-agent system in Rust](https://example.com)** — ⬆ 342 · [HN](https://news.ycombinator.com)\n2. **[The unreasonable effectiveness of LLMs as orchestrators](https://example.com)** — ⬆ 289 · [HN](https://news.ycombinator.com)\n3. **[Ask HN: How do you handle secret management in containers?](https://news.ycombinator.com)** — ⬆ 201 · [HN](https://news.ycombinator.com)\n4. **[Rust 2026 roadmap announced](https://example.com)** — ⬆ 178 · [HN](https://news.ycombinator.com)\n5. **[Babylon.js 8.0 released](https://example.com)** — ⬆ 154 · [HN](https://news.ycombinator.com)",
   "**Hacker News — Newest Stories** (top 5)\n\n1. **[Actor model vs. CSP: a 2026 comparison](https://example.com)** — ⬆ 12\n2. **[MQTT vs WebSockets for real-time dashboards](https://example.com)** — ⬆ 8\n3. **[Building a zero-dependency Rust HTTP client](https://example.com)** — ⬆ 5\n4. **[Ask HN: Best free weather API?](https://news.ycombinator.com)** — ⬆ 3\n5. **[Show HN: AgentFlow dashboard in Babylon.js](https://example.com)** — ⬆ 2",
   "📰 Fetching top stories from Hacker News… *(in real mode this calls the HN Firebase API — no API key needed)*",
+];
+
+// WIZ coin-economy mock replies
+const WIZ_RESPONSES = [
+  "**WIZ — WaldiezCoin Economy** Ƿ\n\n```\nbalance              current coin balance\nhistory [n]          last n transactions (default 10)\nearn <n> <reason>    credit coins manually\ndebit <n> <reason>   debit coins manually\nhelp                 this message\n```",
+  "💰 **Balance**: Ƿ 1,250\n📈 Net today: **+Ƿ 142** (12 events)",
+  "📋 **Recent Transactions**\n\n  +10  spawn: data-fetcher\n  +2   heartbeat: main-actor\n  +5   system healthy\n  +2   heartbeat: io-agent\n  −3   stale alert: ml-classifier\n  +2   heartbeat: main-actor\n\n**Balance: Ƿ 1,254**",
+  "✅ Credited **Ƿ 50** → _manual bonus_\n**New balance: Ƿ 1,304**",
+  "📉 Debited **Ƿ 25** → _QA flag penalty_\n**New balance: Ƿ 1,279**",
+  "💡 **Economy Rules**\n\n  +10  agent spawned\n  +2   agent heartbeat\n  +5   all agents healthy\n  −5   QA content flag\n  −3   stale agent alert\n\nEarn coins by keeping your swarm healthy!",
 ];
 
 // WIF finance-agent mock replies
@@ -179,6 +191,7 @@ client.on("message", (topic, raw) => {
     responder.name === "weather-agent"  ? WEATHER_RESPONSES  :
     responder.name === "news-agent"     ? NEWS_RESPONSES     :
     responder.name === "wif-agent"      ? WIF_RESPONSES      :
+    responder.name === "wiz-agent"      ? WIZ_RESPONSES      :
     MOCK_RESPONSES;
   setTimeout(() => {
     publish(`agents/${responder.id}/chat`, {
@@ -326,6 +339,36 @@ function startDynamicSpawns() {
       console.log(`[mock] stopped: ${name}`);
     }, ttl);
   }, 20_000);
+}
+
+// ── WaldiezCoin events — published on system/coin ─────────────────────────────
+let _mockBalance = 0;
+
+const COIN_EARN_REASONS = [
+  { delta: 2, reason: "heartbeat" },
+  { delta: 10, reason: "agent spawned" },
+  { delta: 5, reason: "all agents healthy" },
+];
+const COIN_DEBIT_REASONS = [
+  { delta: -3, reason: "stale agent alert" },
+  { delta: -5, reason: "QA content flag" },
+];
+
+function startCoinEvents() {
+  // Emit a coin event every heartbeat cycle (5s) — earn or occasionally debit
+  setInterval(() => {
+    const isDebit = Math.random() < 0.12; // 12% chance of debit
+    const entry = isDebit ? pick(COIN_DEBIT_REASONS) : pick(COIN_EARN_REASONS);
+    _mockBalance += entry.delta;
+    publish("system/coin", {
+      balance:     _mockBalance,
+      delta:       entry.delta,
+      reason:      entry.reason,
+      timestampMs: Date.now(),
+    });
+  }, 5_000);
+  // Publish initial balance
+  publish("system/coin", { balance: _mockBalance, delta: 0, reason: "connected", timestampMs: Date.now() });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

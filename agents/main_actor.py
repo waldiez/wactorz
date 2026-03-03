@@ -23,16 +23,40 @@ You can spawn new agents on demand. When the user asks for an agent, you:
 2. Wrap it in a <spawn> block
 
 == SPAWN FORMAT ==
+There are TWO types of agents you can spawn:
+
+--- TYPE 1: LLM Agent (for conversation, Q&A, reasoning, explanation) ---
+Use when the agent's job is to respond to messages using language understanding.
+No "code" field needed — just provide a system prompt.
+
 <spawn>
 {
   "name": "agent-name",
+  "type": "llm",
+  "description": "what this agent does",
+  "system_prompt": "You are a helpful assistant specialized in ..."
+}
+</spawn>
+
+--- TYPE 2: Dynamic Agent (for data pipelines, sensors, MQTT, APIs, tools) ---
+Use when the agent needs to run custom Python logic (webcam, serial port, timers, etc.)
+Provide a "code" field with the Python functions.
+
+<spawn>
+{
+  "name": "agent-name",
+  "type": "dynamic",
   "description": "what this agent does",
   "poll_interval": 1.0,
   "code": "PYTHON CODE HERE"
 }
 </spawn>
 
-== CODE STRUCTURE ==
+RULE: If the user asks for a chat agent, math tutor, language teacher, Q&A bot,
+explainer, or any agent that primarily responds to questions with text —
+ALWAYS use type "llm" with a system_prompt. Never write code for this.
+
+== CODE STRUCTURE (Dynamic agents only) ==
 The code must define these async functions:
 
 async def setup(agent):
@@ -65,6 +89,36 @@ Inside your code, the `agent` object provides:
   agent.recall(key)                   — load from disk
   agent.send_to(agent_name, payload)  — send task to another agent
 
+  agent.llm                           — pre-configured LLM (same as main, already authenticated)
+  agent.llm.chat(prompt, system="")   — single-turn LLM call, returns string
+  agent.llm.complete(messages, system="") — multi-turn LLM call with full history
+
+== LLM USAGE — READ THIS CAREFULLY ==
+The agent already has a working LLM via agent.llm. DO NOT set up your own LLM.
+NEVER import openai, anthropic, ollama, or any LLM library.
+NEVER check for API keys. NEVER create a "configure" action for API keys.
+NEVER write call_llm(), call_openai(), call_ollama() or similar helper functions.
+
+For any agent that needs language understanding, reasoning, or text generation, just call:
+    reply = await agent.llm.chat("your prompt here")
+or for multi-turn with history:
+    reply = await agent.llm.complete(messages=history, system="You are a helpful assistant.")
+
+
+
+== REPLACING AN EXISTING AGENT ==
+To fix or improve a running agent, use the same name and add "replace": true.
+This stops the old agent and starts the new one immediately:
+<spawn>
+{
+  "name": "yolo-agent",
+  "replace": true,
+  "description": "Improved version",
+  "poll_interval": 0.5,
+  "code": "..."
+}
+</spawn>
+
 == RULES ==
 - Always import libraries INSIDE functions (not at module level)
 - Use agent.state to pass data between setup() and process()
@@ -72,10 +126,167 @@ Inside your code, the `agent` object provides:
 - For blocking operations (cv2, torch inference) wrap in:
     import asyncio
     result = await asyncio.get_event_loop().run_in_executor(None, blocking_fn)
+- Python 3.10 compatibility: NEVER nest quotes inside f-strings
+  BAD:  f'Hello {"world"}'  or  f'{"x" if c else "y"}'
+  GOOD: val = "x" if c else "y"; f'{val}'  — always hoist expressions to a variable first
+- Use double-quoted f-strings f"..." as default to avoid conflicts with string literals
 
 == EXISTING AGENTS ==
 - main    : you (orchestrator)
 - monitor : health monitoring
+
+== REMOTE SPAWNING ==
+To spawn an agent on a remote machine (e.g. Raspberry Pi), add "node" to the spawn block:
+<spawn>
+{
+  "name": "rpi-yolo-agent",
+  "node": "rpi-node",
+  "description": "YOLO on RPi camera",
+  "poll_interval": 1.0,
+  "code": "..."
+}
+</spawn>
+
+The node name must match what was used when starting remote_runner.py on that machine.
+If no "node" is specified, the agent runs locally on the main machine.
+
+== DEVOPS AGENT EXAMPLE ==
+When asked to deploy or manage remote machines, spawn a devops agent like this:
+
+<spawn>
+{
+  "name": "devops-agent",
+  "description": "Manages remote node deployment via SSH",
+  "poll_interval": 3600,
+  "code": "
+import asyncio, os, json
+from pathlib import Path
+
+async def setup(agent):
+    try:
+        import asyncssh
+        agent.state['ssh_available'] = True
+        await agent.log('DevOps agent ready. asyncssh available.')
+    except ImportError:
+        agent.state['ssh_available'] = False
+        await agent.alert('asyncssh not installed. Run: pip install asyncssh', 'warning')
+
+async def process(agent):
+    await asyncio.sleep(3600)
+
+async def handle_task(agent, payload):
+    action = payload.get('action', '')
+    if action == 'deploy_node':
+        return await deploy_node(agent, payload)
+    elif action == 'run_command':
+        return await run_remote_command(agent, payload)
+    elif action == 'check_node':
+        return await check_node(agent, payload)
+    return {'error': f'Unknown action: {action}'}
+
+async def deploy_node(agent, payload):
+    import asyncssh
+    host      = payload.get('host')
+    user      = payload.get('user', 'pi')
+    node_name = payload.get('node_name', 'remote-node')
+    broker    = payload.get('broker', 'localhost')
+    password  = payload.get('password')
+
+    await agent.log(f'Deploying node {node_name} to {user}@{host}...')
+
+    # Find remote_runner.py
+    candidates = [
+        Path(__file__).parent.parent / 'remote_runner.py',
+        Path('remote_runner.py'),
+    ]
+    runner_path = next((p for p in candidates if p.exists()), None)
+    if not runner_path:
+        return {'error': 'remote_runner.py not found'}
+
+    conn_kwargs = dict(host=host, username=user, known_hosts=None)
+    if password:
+        conn_kwargs['password'] = password
+
+    try:
+        async with asyncssh.connect(**conn_kwargs) as conn:
+            # Create directory
+            await conn.run('mkdir -p ~/agentflow')
+            await agent.log(f'[{node_name}] Created ~/agentflow')
+
+            # Upload remote_runner.py
+            async with conn.start_sftp_client() as sftp:
+                await sftp.put(str(runner_path), f'/home/{user}/agentflow/remote_runner.py')
+            await agent.log(f'[{node_name}] Uploaded remote_runner.py')
+
+            # Install deps
+            await conn.run('pip install aiomqtt psutil --break-system-packages -q 2>&1')
+            await agent.log(f'[{node_name}] Dependencies installed')
+
+            # Kill existing instance
+            await conn.run(f'pkill -f "remote_runner.py.*--name {node_name}" 2>/dev/null; true')
+
+            # Start in background
+            cmd = (
+                f'nohup python3 ~/agentflow/remote_runner.py '
+                f'--broker {broker} --name {node_name} '
+                f'> ~/agentflow/{node_name}.log 2>&1 &'
+            )
+            await conn.run(cmd)
+            await agent.log(f'[{node_name}] Runner started! Will appear in dashboard shortly.')
+
+        return {'success': True, 'node': node_name, 'host': host}
+    except Exception as e:
+        await agent.alert(f'Deploy failed for {node_name}: {e}', 'critical')
+        return {'error': str(e)}
+
+async def run_remote_command(agent, payload):
+    import asyncssh
+    host     = payload.get('host')
+    user     = payload.get('user', 'pi')
+    command  = payload.get('command', 'echo hello')
+    password = payload.get('password')
+
+    conn_kwargs = dict(host=host, username=user, known_hosts=None)
+    if password:
+        conn_kwargs['password'] = password
+
+    try:
+        async with asyncssh.connect(**conn_kwargs) as conn:
+            result = await conn.run(command)
+            return {'stdout': result.stdout, 'stderr': result.stderr, 'exit_code': result.exit_status}
+    except Exception as e:
+        return {'error': str(e)}
+
+async def check_node(agent, payload):
+    import asyncssh
+    host     = payload.get('host')
+    user     = payload.get('user', 'pi')
+    password = payload.get('password')
+
+    conn_kwargs = dict(host=host, username=user, known_hosts=None)
+    if password:
+        conn_kwargs['password'] = password
+
+    try:
+        async with asyncssh.connect(**conn_kwargs) as conn:
+            cpu    = await conn.run('top -bn1 | grep Cpu | awk '{print $2}'')
+            mem    = await conn.run('free -m | awk 'NR==2{print $3"/"$2" MB"}'')
+            uptime = await conn.run('uptime -p')
+            return {
+                'host':   host,
+                'cpu':    cpu.stdout.strip(),
+                'memory': mem.stdout.strip(),
+                'uptime': uptime.stdout.strip(),
+            }
+    except Exception as e:
+        return {'error': str(e)}
+"
+}
+</spawn>
+
+After spawning the devops agent, the user can talk to it directly:
+@devops-agent deploy rpi-node to pi@192.168.1.50 with broker 192.168.1.10
+
 
 == EXAMPLE — Webcam YOLO agent ==
 <spawn>
@@ -194,7 +405,9 @@ class MainActor(LLMAgent):
 
         if spawned:
             names = ", ".join(f"'{a.name}'" for a in spawned)
-            clean += f"\n\n[System: Spawned {names} — will auto-restore on restart]"
+            replaced = '"replace": true' in response or '"replace":true' in response
+            action = "Replaced" if replaced else "Spawned"
+            clean += f"\n\n[System: {action} {names} — will auto-restore on restart]"
 
         return clean
 
@@ -203,42 +416,57 @@ class MainActor(LLMAgent):
     @staticmethod
     def _parse_spawn_config(raw: str) -> dict:
         """
-        Robustly parse a spawn config block that may contain raw multiline
-        code strings — which break json.loads due to unescaped newlines.
+        Robustly parse a spawn config that may contain raw multiline code strings.
+        Uses character scanning to correctly handle } and " inside the code value.
         """
         raw = raw.strip()
 
-        # Strategy 1: standard JSON (works when LLM escapes newlines as \\n)
+        # Strategy 1: standard JSON (works when LLM properly escapes newlines)
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
             pass
 
-        # Strategy 2: pull the code block out manually, parse everything else
-        # Match "code": "..." where ... may span multiple lines
-        code_match = re.search(r'"code"\s*:\s*"(.*?)"\s*\n?\s*[}\]]', raw, re.DOTALL)
-        if code_match:
-            code_raw   = code_match.group(1)
-            # Replace the raw code block with a safe placeholder
-            placeholder = raw[:code_match.start()] + '"code": "__CODE__"' + raw[code_match.end()-1:]
-            config      = json.loads(placeholder)
-            # Restore code — unescape anything the LLM escaped
-            config["code"] = (code_raw
-                              .replace("\\n", "\n")
-                              .replace('\\"', '"')
-                              .replace("\\t", "\t"))
-            return config
-
-        # Strategy 3: the code value uses single-quotes or backticks — rare but handle it
-        code_match2 = re.search(r'"code"\s*:\s*`(.*?)`', raw, re.DOTALL)
-        if code_match2:
-            code_raw    = code_match2.group(1)
+        # Strategy 2: backtick-delimited code (rare but some LLMs use it)
+        bt_match = re.search(r'"code"\s*:\s*`(.*?)`', raw, re.DOTALL)
+        if bt_match:
+            code_raw    = bt_match.group(1)
             placeholder = re.sub(r'"code"\s*:\s*`.*?`', '"code": "__CODE__"', raw, flags=re.DOTALL)
             config      = json.loads(placeholder)
             config["code"] = code_raw
             return config
 
-        raise ValueError(f"Cannot parse spawn config:\n{raw[:200]}")
+        # Strategy 3: character scanner — find opening " after "code":
+        # then scan forward respecting escape sequences to find the real closing "
+        # This correctly handles } and { inside the code value.
+        key_match = re.search(r'"code"\s*:\s*"', raw)
+        if not key_match:
+            raise ValueError(f"No 'code' key found in spawn config:\n{raw[:200]}")
+
+        code_start = key_match.end()   # index right after the opening "
+        i = code_start
+        while i < len(raw):
+            if raw[i] == '\\':
+                i += 2             # skip escaped character
+                continue
+            if raw[i] == '"':
+                break              # found unescaped closing quote
+            i += 1
+
+        code_raw    = raw[code_start:i]
+        placeholder = raw[:key_match.start()] + '"code": "__CODE__"' + raw[i+1:]
+
+        try:
+            config = json.loads(placeholder)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Spawn config JSON invalid after code extraction: {e}\nPlaceholder:\n{placeholder[:300]}")
+
+        # Unescape sequences the LLM may have added
+        config["code"] = (code_raw
+                          .replace("\\n", "\n")
+                          .replace('\\"', '"')
+                          .replace("\\t", "\t"))
+        return config
 
     async def _process_spawn_commands(self, response: str):
         spawned = []
@@ -247,46 +475,125 @@ class MainActor(LLMAgent):
         for match in re.findall(pattern, response, re.DOTALL):
             try:
                 config = self._parse_spawn_config(match.strip())
-                if not config.get("code", "").strip():
-                    logger.error(f"[{self.name}] Spawn config has no code: {config.get('name')}")
+                # LLM agents have no "code" — only check for code if type is dynamic
+                agent_type = config.get("type", "dynamic")
+                has_code   = bool(config.get("code", "").strip())
+                has_prompt = bool(config.get("system_prompt", "").strip())
+                if agent_type == "dynamic" and not has_code:
+                    logger.error(f"[{self.name}] Dynamic agent has no code: {config.get('name')}")
                     continue
+                if agent_type == "llm" and not has_prompt:
+                    logger.warning(f"[{self.name}] LLM agent has no system_prompt, using default: {config.get('name')}")
                 actor = await self._spawn_from_config(config, save=True)
                 if actor:
                     spawned.append(actor)
             except Exception as e:
-                logger.error(f"[{self.name}] Spawn failed: {e}\n{match[:300]}")
+                logger.error(f"[{self.name}] Spawn failed: {e}\nRaw block:\n{match[:500]}")
 
         clean = re.sub(pattern, '', response, flags=re.DOTALL).strip()
         return clean, spawned
 
     async def _spawn_from_config(self, config: dict, save: bool = True) -> Optional[Actor]:
+        name = config.get("name", "dynamic-agent")
+        node = config.get("node", "").strip()
+
+        # Remote spawn — publish to the node's spawn topic via MQTT
+        if node:
+            return await self._spawn_remote(config, node, save)
+
+        # Local spawn
         from .dynamic_agent import DynamicAgent
 
-        name = config.get("name", "dynamic-agent")
+        existing = self._registry.find_by_name(name) if self._registry else None
+        replace  = config.get("replace", False)
 
-        # Don't duplicate
-        if self._registry and self._registry.find_by_name(name):
-            logger.info(f"[{self.name}] '{name}' already exists.")
-            return self._registry.find_by_name(name)
+        if existing:
+            if not replace:
+                logger.info(f"[{self.name}] '{name}' already exists (use replace=true to update).")
+                return existing
+            # Stop the old agent cleanly before spawning the replacement
+            logger.info(f"[{self.name}] Replacing '{name}' with updated code...")
+            try:
+                if self._registry:
+                    await self._registry.unregister(existing.actor_id)
+                await existing.stop()
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"[{self.name}] Error stopping old '{name}': {e}")
 
-        code = config.get("code", "")
-        if not code.strip():
-            logger.warning(f"[{self.name}] Spawn config for '{name}' has no code.")
+        agent_type    = config.get("type", "dynamic")
+        code          = config.get("code", "").strip()
+        system_prompt = config.get("system_prompt", "").strip()
+
+        # Auto-detect: no code = LLM agent, has code = dynamic agent
+        if agent_type == "llm" or (not code and system_prompt):
+            actor = await self._spawn_llm_agent(config, name)
+        elif code:
+            actor = await self._spawn_dynamic_agent(config, name, code)
+        else:
+            logger.warning(f"[{self.name}] Spawn config for '{name}' has neither code nor system_prompt.")
             return None
-
-        actor = await self.spawn(
-            DynamicAgent,
-            name=name,
-            code=code,
-            poll_interval=float(config.get("poll_interval", 1.0)),
-            description=config.get("description", ""),
-            persistence_dir=str(self._persistence_dir.parent),
-        )
 
         if actor and save:
             self._save_to_spawn_registry(config)
 
         return actor
+
+    async def _spawn_llm_agent(self, config: dict, name: str):
+        """Spawn a proper LLMAgent — best for chat, Q&A, reasoning tasks."""
+        from .llm_agent import LLMAgent
+        system_prompt = config.get("system_prompt", "You are a helpful assistant.")
+        logger.info(f"[{self.name}] Spawning LLM agent '{name}'")
+        actor = await self.spawn(
+            LLMAgent,
+            name=name,
+            llm_provider=self.llm,
+            system_prompt=system_prompt,
+            persistence_dir=str(self._persistence_dir.parent),
+        )
+        return actor
+
+    async def _spawn_dynamic_agent(self, config: dict, name: str, code: str):
+        """Spawn a DynamicAgent — best for data pipelines, sensors, tools."""
+        from .dynamic_agent import DynamicAgent
+        actor = await self.spawn(
+            DynamicAgent,
+            name=name,
+            code=code,
+            poll_interval=float(config.get("poll_interval", 1.0)),
+            description=config.get("description", ""  ),
+            llm_provider=self.llm,
+            persistence_dir=str(self._persistence_dir.parent),
+        )
+        return actor
+
+    async def _spawn_remote(self, config: dict, node: str, save: bool) -> None:
+        """
+        Publish a spawn command to a remote node via MQTT.
+        The remote_runner.py on that machine will receive it and run the agent.
+        Remote agents appear in the dashboard exactly like local ones
+        because they connect to the same MQTT broker.
+        """
+        name = config.get("name", "remote-agent")
+        logger.info(f"[{self.name}] Spawning '{name}' on remote node '{node}'")
+
+        await self._mqtt_publish(
+            f"nodes/{node}/spawn",
+            config,
+        )
+
+        await self._mqtt_publish(
+            f"agents/{self.actor_id}/logs",
+            {"type": "spawned", "message": f"Spawned '{name}' on node '{node}'",
+             "child_name": name, "node": node, "timestamp": __import__("time").time()}
+        )
+
+        if save:
+            self._save_to_spawn_registry(config)
+
+        # Return None — remote actors don't have a local Python object
+        # but they will appear in the dashboard via MQTT heartbeats
+        return None
 
     # ── Delegation ─────────────────────────────────────────────────────────
 

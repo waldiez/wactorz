@@ -76,6 +76,7 @@ Inside your code, the `agent` object provides:
 == EXISTING AGENTS ==
 - main    : you (orchestrator)
 - monitor : health monitoring
+- home-assistant-hardware : recommends compatible hardware for Home Assistant automations
 
 == EXAMPLE — Webcam YOLO agent ==
 <spawn>
@@ -124,6 +125,15 @@ async def cleanup(agent):
 
 
 class MainActor(LLMAgent):
+
+    HOME_AUTOMATION_INTENT_SYSTEM_PROMPT = (
+        "You are an intent classifier for Home Assistant routing. "
+        "Respond with exactly one token: HA or NOT_HA.\n"
+        "HA = user is asking to automate/control a physical home environment, devices, scenes, "
+        "sensors, routines, or events (lights, doors, climate, presence, ambiance, alerts, etc.), "
+        "including natural-language goals that imply automation.\n"
+        "NOT_HA = anything else (coding, general chat, pure web/software tasks, unrelated requests)."
+    )
 
     def __init__(self, llm_provider: Optional[LLMProvider] = None, **kwargs):
         kwargs.setdefault("name", "main")
@@ -183,7 +193,111 @@ class MainActor(LLMAgent):
 
     # ── User input ─────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _looks_like_home_automation_request(text: str) -> bool:
+        lowered = (text or "").lower()
+        if "home assistant" in lowered:
+            return True
+        if lowered.startswith("spawn ") or lowered.startswith("/"):
+            return False
+
+        has_trigger = any(
+            token in lowered
+            for token in [
+                "when ",
+                "if ",
+                "on ",
+                "whenever ",
+                "after ",
+                "before ",
+                "as soon as ",
+                "at ",
+            ]
+        )
+
+        has_action = any(
+            token in lowered
+            for token in [
+                "turn on",
+                "turn off",
+                "open",
+                "close",
+                "lock",
+                "unlock",
+                "dim",
+                "set",
+            ]
+        )
+
+        has_automation_intent = any(
+            token in lowered
+            for token in [
+                "automate",
+                "automation",
+                "routine",
+                "scene",
+                "trigger",
+                "schedule",
+                "presence",
+                "motion",
+                "door",
+                "window",
+                "sensor",
+                "alarm",
+                "romantic",
+                "cozy",
+                "ambience",
+                "ambiance",
+            ]
+        )
+
+        has_home_context = any(
+            token in lowered
+            for token in [
+                "home",
+                "house",
+                "apartment",
+                "room",
+                "living room",
+                "bedroom",
+                "kitchen",
+                "hallway",
+                "garage",
+                "porch",
+            ]
+        )
+
+        return (has_trigger and has_action) or (has_trigger and has_automation_intent) or (has_automation_intent and has_home_context)
+
+    async def _is_home_automation_request(self, text: str) -> bool:
+        if self._looks_like_home_automation_request(text):
+            return True
+
+        if not text or text.lower().startswith("spawn ") or text.startswith("/"):
+            return False
+
+        if self.llm is None:
+            return False
+
+        try:
+            decision_task = self.llm.complete(
+                messages=[{"role": "user", "content": text}],
+                system=self.HOME_AUTOMATION_INTENT_SYSTEM_PROMPT,
+                max_tokens=4,
+            )
+            decision, _ = await asyncio.wait_for(decision_task, timeout=4.0)
+            normalized = (decision or "").strip().upper()
+            return normalized.startswith("HA")
+        except Exception as e:
+            logger.debug(f"[{self.name}] HA intent fallback failed: {e}")
+            return False
+
     async def process_user_input(self, text: str) -> str:
+        if await self._is_home_automation_request(text):
+            delegated = await self.delegate_task("home-assistant-hardware", text, timeout=20.0)
+            if delegated and isinstance(delegated, dict) and delegated.get("result"):
+                return str(delegated["result"])
+
         response = await self.chat(text)
         clean, spawned = await self._process_spawn_commands(response)
 

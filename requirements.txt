@@ -20,3 +20,4 @@ twilio>=8.0.0              # pip install twilio
 
 # Optional: Async process management
 supervisor                 # For production 24/7 deployment
+websockets

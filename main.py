@@ -32,6 +32,7 @@ async def build_system(args):
     from agentflow.agents.main_actor import MainActor
     from agentflow.agents.monitor_agent import MonitorActor
     from agentflow.agents.code_agent import CodeAgent
+    from agentflow.agents.home_assistant_hardware_agent import HomeAssistantHardwareAgent
     from agentflow.agents.ml_agent import AnomalyDetectorAgent
     from agentflow.agents.llm_agent import AnthropicProvider, OpenAIProvider, OllamaProvider
 
@@ -62,6 +63,11 @@ async def build_system(args):
         execution_mode="subprocess",
         persistence_dir="./state",
     )
+    home_assistant_hardware_agent = HomeAssistantHardwareAgent(
+        llm_provider=provider,
+        name="home-assistant-hardware",
+        persistence_dir="./state",
+    )
     anomaly_agent = AnomalyDetectorAgent(
         name="anomaly-detector",
         continuous=False,
@@ -72,8 +78,8 @@ async def build_system(args):
         mqtt_broker=args.mqtt_broker,
         mqtt_port=args.mqtt_port,
     )
-    await system.start(main_actor, monitor, code_agent, anomaly_agent)
-    logger.info("AgentFlow system started with 4 agents.")
+    await system.start(main_actor, monitor, code_agent, home_assistant_hardware_agent, anomaly_agent)
+    logger.info("AgentFlow system started with 5 agents.")
     return system, main_actor
 
 

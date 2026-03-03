@@ -6,11 +6,13 @@ from .agents.main_actor import MainActor
 from .agents.monitor_agent import MonitorActor
 from .agents.code_agent import CodeAgent
 from .agents.ml_agent import MLAgent, YOLOAgent, AnomalyDetectorAgent
+from .agents.home_assistant_hardware_agent import HomeAssistantHardwareAgent
 
 __all__ = [
     "Actor", "ActorState", "Message", "MessageType",
     "ActorSystem", "ActorRegistry",
     "LLMAgent", "AnthropicProvider", "OpenAIProvider", "OllamaProvider",
     "MainActor", "MonitorActor", "CodeAgent",
+    "HomeAssistantHardwareAgent",
     "MLAgent", "YOLOAgent", "AnomalyDetectorAgent",
 ]

@@ -183,6 +183,9 @@ def parse_topic(topic: str, payload_str: str):
             update_agent(agent_id, "metrics", data)
             if isinstance(data, dict):
                 state["agents"][agent_id]["messages_processed"] = data.get("messages_processed", 0)
+                state["agents"][agent_id]["cost_usd"]      = data.get("cost_usd", 0.0)
+                state["agents"][agent_id]["input_tokens"]  = data.get("input_tokens", 0)
+                state["agents"][agent_id]["output_tokens"] = data.get("output_tokens", 0)
 
         elif metric == "logs":
             add_log({"type": "log", "agent_id": agent_id, "timestamp": time.time(),

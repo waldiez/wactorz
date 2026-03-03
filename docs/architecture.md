@@ -1,0 +1,160 @@
+# Architecture
+
+## Overview
+
+AgentFlow is an async, multi-agent orchestration system built on the **Actor Model** with **MQTT** as the communication backbone.  Every agent is an independent actor with its own message inbox; no shared mutable state exists between actors.
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  Browser                                                           │
+│  Babylon.js SPA  ←──WebSocket──►  nginx  ←─── /ws  ──►           │
+│                  ←──REST──────►          ←─── /api/ ──►           │
+│                  ←──MQTT/WS───►          ←─── /mqtt ──►           │
+└──────────────────────────────────────────────────────────────────┘
+                                    │
+                             nginx  │  (single public entry point)
+                              /:80  │
+                                    │
+          ┌─────────────────────────┼──────────────────────────────┐
+          │                         │                              │
+          ▼                         ▼                              ▼
+  agentflow (Rust)          Mosquitto (MQTT)              Fuseki (RDF)
+  :8080 REST                :1883 TCP / :9001 WS          :3030 SPARQL
+  :8081 WS bridge
+          │
+          │  pub/sub via MQTT
+          ├── MainActor        (LLM orchestrator)
+          ├── MonitorAgent     (health watchdog)
+          ├── IOAgent          (UI gateway)
+          ├── QAAgent          (safety observer)
+          ├── NautilusAgent    (SSH / rsync bridge)
+          ├── UDXAgent         (built-in knowledge base)
+          └── DynamicAgent*   (LLM-generated scripts, spawned at runtime)
+```
+
+---
+
+## Components
+
+### agentflow-server (Rust binary)
+
+The single `agentflow` binary that runs the entire backend.
+
+| Crate | Role |
+|---|---|
+| `agentflow-core` | `Actor` trait, `ActorRegistry`, message types, `EventPublisher` |
+| `agentflow-agents` | All concrete agent implementations |
+| `agentflow-mqtt` | MQTT client wrapper + topic constants |
+| `agentflow-interfaces` | REST API (axum), WebSocket bridge, interactive CLI |
+| `agentflow-server` | Binary entry point — wires everything together |
+
+### Mosquitto
+
+The MQTT broker.  All inter-actor and actor-to-frontend communication passes through it.  In the full Docker stack, Mosquitto is not exposed directly — all traffic is proxied through nginx.
+
+### nginx
+
+The single public HTTP entry point.
+
+| Path | Proxied to |
+|---|---|
+| `/` | `frontend/dist/` (static SPA) |
+| `/api/` | `agentflow:8080` (REST) |
+| `/ws` | `agentflow:8081` (WebSocket bridge) |
+| `/mqtt` | `mosquitto:9001` (MQTT over WebSocket) |
+| `/fuseki/` | `fuseki:3030` (SPARQL, path-stripped) |
+
+### Fuseki (optional)
+
+Apache Jena Fuseki for RDF/SPARQL storage.  Not required for basic operation.
+
+### Babylon.js SPA
+
+A Vite + TypeScript single-page application.  Connects to the backend via:
+
+- **MQTT over WebSocket** (`/mqtt`) — receives every MQTT message in real time
+- **REST** (`/api/`) — agent lifecycle control (pause, resume, stop, delete)
+- **WebSocket** (`/ws`) — an alternative MQTT re-broadcast endpoint
+
+---
+
+## Actor Model
+
+Each agent implements the `Actor` trait:
+
+```rust
+#[async_trait]
+pub trait Actor: Send {
+    fn id(&self)       -> String;
+    fn name(&self)     -> &str;
+    fn state(&self)    -> ActorState;
+    fn mailbox(&self)  -> mpsc::Sender<Message>;
+
+    async fn on_start(&mut self)                   -> Result<()>;
+    async fn handle_message(&mut self, msg: Message) -> Result<()>;
+    async fn on_heartbeat(&mut self)               -> Result<()>;
+    async fn on_stop(&mut self)                    -> Result<()> { Ok(()) }
+    async fn run(&mut self)                        -> Result<()>;
+}
+```
+
+`ActorSystem::spawn_actor(box)` registers the actor in the `ActorRegistry` and calls `tokio::spawn(actor.run())`.  The `run()` loop is a `tokio::select!` over the mailbox channel and a heartbeat interval.
+
+---
+
+## Message Flow
+
+### User → Agent
+
+```
+Browser IO bar
+  │  publishes  io/chat  { from: "user", content: "@agent-name text" }
+  ▼
+Mosquitto
+  │  subscribed by agentflow-server
+  ▼
+MQTT event loop  →  IOAgent mailbox
+  │
+  ▼
+IOAgent.handle_message()
+  │  parses @mention, looks up registry
+  ▼
+target actor mailbox  →  handle_message()  →  LLM call
+  │
+  ▼
+actor publishes  agents/{id}/chat  { from: actor, to: "user", content: … }
+  │
+  ▼
+Mosquitto  →  WebSocket bridge  →  Browser
+```
+
+### Agent Lifecycle Events
+
+Every agent publishes to its own MQTT topics on lifecycle events:
+
+| Event | Topic | Triggered by |
+|---|---|---|
+| Spawn | `agents/{id}/spawn` | `on_start()` |
+| Heartbeat | `agents/{id}/heartbeat` | periodic tick |
+| State change | `agents/{id}/status` | state mutation |
+| Alert | `agents/{id}/alert` | error condition |
+| Chat reply | `agents/{id}/chat` | `handle_message()` |
+
+---
+
+## IDs
+
+All actor IDs use **HLC-WIDs** (Hybrid Logical Clock Wide IDs) from the [`waldiez-wid`](https://github.com/waldiez/wid) crate.  They are time-ordered, globally unique, and human-readable.
+
+Message IDs use simpler **WIDs**.
+
+---
+
+## Deployment Modes
+
+| Mode | Docker containers | Binary |
+|---|---|---|
+| **Full Docker** (`compose.yaml`) | agentflow + nginx + mosquitto + fuseki + HA | inside container |
+| **Native binary** (`compose.native.yaml`) | nginx + mosquitto only | runs on host OS |
+
+See [deployment.md](deployment.md) for full instructions.

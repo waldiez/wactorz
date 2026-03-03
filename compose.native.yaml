@@ -10,16 +10,18 @@
 #   • Build from source on the host with `cargo build --release` (no QEMU cross-compile)
 #
 # Usage:
-#   1. docker compose -f compose.native.yaml up -d        ← start support services
-#   2. source .env && ./agentflow --no-cli                ← run binary on host
-#      (or: bash deploy-native.sh)
+#   # Full mode (includes Docker nginx):
+#   docker compose -f compose.native.yaml up -d
+#
+#   # Mosquitto only (if you already have nginx on the host with SSL/certbot):
+#   docker compose -f compose.native.yaml up -d mosquitto
+#   # Then add infra/nginx/agentflow-snippet.conf to your existing server block.
 #
 # Networking:
 #   • Mosquitto exposes :1883 (TCP) and :9001 (WS) on the host
 #   • agentflow connects to mosquitto via localhost:1883 (MQTT_HOST=localhost)
-#   • nginx proxies /api/ and /ws to host via host.docker.internal:8080/:8081
-#   • On Linux, host.docker.internal is resolved via extra_hosts below
-#   • On Docker Desktop (Mac/Windows) it is always available
+#   • nginx (Docker) proxies /api/ and /ws to host via host.docker.internal
+#   • nginx (existing host) uses 127.0.0.1 — see infra/nginx/agentflow-snippet.conf
 
 name: agentflow-native
 

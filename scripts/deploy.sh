@@ -27,6 +27,9 @@
 #   DEPLOY_RESTART_CMD       remote restart command   (default: systemctl restart agentflow)
 #   DEPLOY_SKIP_BINARY       set to 1 to skip binary build/deploy (frontend-only redeploy)
 #   CARGO_BUILD_TARGET       cross-compile target     (e.g. x86_64-unknown-linux-gnu)
+#   DEPLOY_NGINX_MODE        docker   = start the Docker nginx container (default)
+#                            existing = host nginx already running (certbot/SSL);
+#                                       deploy snippet to DEPLOY_NGINX_CONF and reload
 #
 #   NAUTILUS_SSH_KEY         path to SSH private key  (auto-generated if absent)
 #   NAUTILUS_STRICT_HOST_KEYS  0 = accept-new (default)  1 = strict
@@ -83,11 +86,16 @@ DEPLOY_PATH="${DEPLOY_PATH:-/opt/agentflow}"
 DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
 DEPLOY_RESTART_CMD="${DEPLOY_RESTART_CMD:-systemctl restart agentflow}"
 DEPLOY_SKIP_BINARY="${DEPLOY_SKIP_BINARY:-0}"
+DEPLOY_NGINX_MODE="${DEPLOY_NGINX_MODE:-docker}"
+# Path on the remote where the snippet will be dropped (existing nginx mode).
+# Adjust to match your nginx include pattern.
+DEPLOY_NGINX_CONF="${DEPLOY_NGINX_CONF:-/etc/nginx/conf.d/agentflow.conf}"
 NAUTILUS_STRICT_HOST_KEYS="${NAUTILUS_STRICT_HOST_KEYS:-0}"
 NAUTILUS_CONNECT_TIMEOUT="${NAUTILUS_CONNECT_TIMEOUT:-10}"
 
 info "Target  : ${DEPLOY_HOST}:${DEPLOY_PATH}"
 info "SSH port: ${DEPLOY_SSH_PORT}"
+info "nginx   : ${DEPLOY_NGINX_MODE}"
 
 # ── SSH key setup ─────────────────────────────────────────────────────────────
 banner "SSH key"
@@ -262,20 +270,59 @@ rsync -az \
 ssh_run "[ -f ${DEPLOY_PATH}/.env ] || cp ${DEPLOY_PATH}/.env.example ${DEPLOY_PATH}/.env"
 ok ".env.example synced (existing .env preserved)"
 
-# ── Start support services (Mosquitto + nginx) ────────────────────────────────
-banner "Starting support services (Mosquitto + nginx)…"
+# ── Start Mosquitto (always via Docker) ───────────────────────────────────────
+banner "Starting Mosquitto…"
 if ssh_run "command -v docker >/dev/null 2>&1"; then
-    # Ensure Compose plugin or standalone is available
     COMPOSE_CMD="docker compose"
-    ssh_run "${COMPOSE_CMD} version >/dev/null 2>&1" \
-        || COMPOSE_CMD="docker-compose"
+    ssh_run "${COMPOSE_CMD} version >/dev/null 2>&1" || COMPOSE_CMD="docker-compose"
 
-    ssh_run "cd ${DEPLOY_PATH} && ${COMPOSE_CMD} -f compose.native.yaml up -d"
-    ok "Mosquitto + nginx running"
+    if [ "${DEPLOY_NGINX_MODE}" = "existing" ]; then
+        # Only start mosquitto — nginx is already running on the host
+        ssh_run "cd ${DEPLOY_PATH} && ${COMPOSE_CMD} -f compose.native.yaml up -d mosquitto"
+        ok "Mosquitto running (Docker nginx skipped — using host nginx)"
+    else
+        ssh_run "cd ${DEPLOY_PATH} && ${COMPOSE_CMD} -f compose.native.yaml up -d"
+        ok "Mosquitto + nginx running"
+    fi
 else
-    warn "Docker not found on remote — skipping support service startup."
-    warn "Install Docker then run:"
-    info "  cd ${DEPLOY_PATH} && docker compose -f compose.native.yaml up -d"
+    warn "Docker not found — skipping Mosquitto startup."
+    warn "Install Docker or run: sudo apt install mosquitto mosquitto-clients"
+fi
+
+# ── Configure nginx ────────────────────────────────────────────────────────────
+if [ "${DEPLOY_NGINX_MODE}" = "existing" ]; then
+    banner "Configuring existing nginx…"
+
+    # Build a ready-to-include conf file from the snippet, substituting the
+    # actual DEPLOY_PATH for the frontend root
+    PATCHED_SNIPPET="/tmp/agentflow-nginx-snippet.tmp"
+    sed "s|/opt/agentflow|${DEPLOY_PATH}|g" \
+        infra/nginx/agentflow-snippet.conf > "$PATCHED_SNIPPET"
+
+    # Upload to home dir, then sudo-move to the nginx conf path
+    rsync -az \
+        -e "${RSYNC_SSH_E}" \
+        "$PATCHED_SNIPPET" \
+        "${DEPLOY_HOST}:~/agentflow-nginx-snippet.tmp"
+    rm -f "$PATCHED_SNIPPET"
+
+    ssh_run "sudo mv ~/agentflow-nginx-snippet.tmp ${DEPLOY_NGINX_CONF}"
+    ok "Snippet deployed to ${DEPLOY_NGINX_CONF}"
+
+    echo ""
+    warn "The snippet contains location blocks — NOT a full server { } block."
+    warn "Include it inside your existing SSL server block if not already done:"
+    info "  include ${DEPLOY_NGINX_CONF};"
+    echo ""
+
+    if ssh_run "sudo nginx -t 2>/dev/null"; then
+        ssh_run "sudo systemctl reload nginx"
+        ok "nginx reloaded"
+    else
+        warn "nginx -t failed — check your config:"
+        info "  sudo nginx -t"
+        info "  sudo journalctl -u nginx -n 20"
+    fi
 fi
 
 # ── Install / update systemd service ─────────────────────────────────────────

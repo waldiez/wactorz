@@ -82,6 +82,8 @@ bash deploy-native.sh        # interactive wizard
 cp .env.example .env
 nano .env
 # Set: LLM_API_KEY, DEPLOY_HOST, DEPLOY_PATH, NAUTILUS_SSH_KEY
+# If the remote already has nginx running (certbot/SSL), also set:
+#   DEPLOY_NGINX_MODE=existing
 
 # 2. Run the deploy wizard (builds frontend + binary, rsyncs, restarts)
 bash scripts/deploy.sh
@@ -93,7 +95,39 @@ The wizard will:
 3. Build the binary via `cargo build --release` or Docker buildx
 4. rsync `frontend/dist/` and the binary to the remote host
 5. Create `.env` from `.env.example` on the remote (preserves existing)
-6. Restart the service via systemd or docker compose
+6. Start Mosquitto via Docker + configure nginx (see modes below)
+7. Install + start the `agentflow` systemd service
+
+#### nginx modes
+
+| `DEPLOY_NGINX_MODE` | What happens |
+|---|---|
+| `docker` (default) | Starts the Docker nginx container from `compose.native.yaml` on port 80 |
+| `existing` | Skips Docker nginx; uploads `infra/nginx/agentflow-snippet.conf` to `DEPLOY_NGINX_CONF` on the remote and reloads the host nginx |
+
+**If you already have nginx running (e.g. with certbot/SSL):**
+
+```bash
+# In your local .env:
+DEPLOY_NGINX_MODE=existing
+DEPLOY_NGINX_CONF=/etc/nginx/conf.d/agentflow.conf   # adjust if needed
+
+# Run deploy normally:
+bash scripts/deploy.sh
+```
+
+Then, on the remote, include the snippet inside your SSL `server { }` block (once):
+
+```nginx
+# /etc/nginx/sites-enabled/your-site.conf  (inside server { } block)
+include /etc/nginx/conf.d/agentflow.conf;
+```
+
+After `sudo nginx -t && sudo systemctl reload nginx`, the dashboard is live at your existing HTTPS URL.
+
+**Important: MQTT_HOST must be `localhost` in native mode.**
+The agentflow binary connects to Mosquitto on `localhost:1883`.
+If you copied `.env` from a Docker setup, change `MQTT_HOST=mosquitto` → `MQTT_HOST=localhost`.
 
 ### Subsequent deploys — from the AgentFlow dashboard
 
@@ -158,6 +192,8 @@ See `.env.example` for the full annotated list.  The most important ones:
 | `DEPLOY_SSH_PORT` | `22` | SSH port on remote host |
 | `DEPLOY_RESTART_CMD` | `systemctl restart agentflow` | Service restart command |
 | `DEPLOY_SKIP_BINARY` | `0` | `1` = frontend-only deploy |
+| `DEPLOY_NGINX_MODE` | `docker` | `docker` or `existing` (host nginx already running) |
+| `DEPLOY_NGINX_CONF` | `/etc/nginx/conf.d/agentflow.conf` | Remote path for the nginx snippet |
 | `CARGO_BUILD_TARGET` | _(host arch)_ | e.g. `x86_64-unknown-linux-gnu` |
 | `RUST_LOG` | `agentflow=info` | Logging filter |
 

@@ -286,6 +286,26 @@
   #toast.yellow{ border-color: var(--yellow);color: var(--yellow); }
 
   .last-seen { font-size:10px; color:var(--muted); text-align:right; margin-top:6px; }
+  .ctrl-btn.code-toggle { color: #7dd3fc; border-color: #7dd3fc33; font-size: 10px; padding: 2px 8px; }
+  .ctrl-btn.code-toggle:hover { color: #38bdf8; border-color: #38bdf8; background: rgba(56,189,248,0.06); }
+  .ctrl-btn.code-toggle.active { color: #38bdf8; border-color: #38bdf8; background: rgba(56,189,248,0.10); }
+  .code-panel {
+    display: none; margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.08);
+    padding-top: 8px;
+  }
+  .code-panel.open { display: block; }
+  .code-panel pre {
+    background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+    padding: 10px; margin: 0; overflow-x: auto; max-height: 300px; overflow-y: auto;
+    font-family: 'Consolas','Monaco','Courier New',monospace; font-size: 11px;
+    line-height: 1.5; color: #e6edf3; white-space: pre;
+  }
+  /* Simple syntax highlighting via CSS */
+  .kw  { color: #ff7b72; }  /* keywords */
+  .fn  { color: #d2a8ff; }  /* function names */
+  .st  { color: #a5d6ff; }  /* strings */
+  .cm  { color: #8b949e; font-style: italic; }  /* comments */
+  .nb  { color: #79c0ff; }  /* builtins / agent.* */
 
   /* ── Sidebar ── */
   .sidebar {
@@ -578,6 +598,18 @@ function buildCard(a) {
     : '';
   const lastUpdate = a.last_update ? timeAgo(a.last_update) : 'never';
 
+  // Code panel (dynamic agents only)
+  const agentCode = a.code || '';
+  const codeBtn = agentCode
+    ? `<button class="ctrl-btn code-toggle" id="codebtn-${a.agent_id}"
+         onclick="toggleCode('${a.agent_id}')">&#10092;&#10093; Code</button>`
+    : '';
+  const codePanel = agentCode
+    ? `<div class="code-panel" id="codepanel-${a.agent_id}">
+         <pre>${syntaxHighlight(esc(agentCode))}</pre>
+       </div>`
+    : '';
+
   // Control buttons — disable based on state and protection
   const isRunning   = st === 'running';
   const isPaused    = st === 'paused';
@@ -636,10 +668,38 @@ function buildCard(a) {
     </div>
     <div class="agent-task">task: <span>${esc(task)}</span></div>
     <div class="agent-controls">
-      ${pauseBtn}${resumeBtn}${stopBtn}${deleteBtn}
+      ${pauseBtn}${resumeBtn}${stopBtn}${deleteBtn}${codeBtn}
     </div>
+    ${codePanel}
     <div class="last-seen">seen ${lastUpdate}</div>
   </div>`;
+}
+
+// ── Code toggle ────────────────────────────────────────────────────────────
+function toggleCode(agentId) {
+  const panel = document.getElementById('codepanel-' + agentId);
+  const btn   = document.getElementById('codebtn-'   + agentId);
+  if (!panel) return;
+  const open = panel.classList.toggle('open');
+  btn.classList.toggle('active', open);
+  btn.textContent = open ? '✕ Code' : '⟨⟩ Code';
+}
+
+function syntaxHighlight(code) {
+  var KEYWORDS = ['async','await','def','import','from','return','if','else',
+    'elif','for','while','in','not','and','or','None','True','False','class',
+    'try','except','pass','raise','with','as','lambda','yield'];
+  return code.split('\n').map(function(line) {
+    var ci = line.indexOf('#');
+    var pre = ci >= 0 ? line.slice(0, ci) : line;
+    var com = ci >= 0 ? '<span class="cm">' + line.slice(ci) + '</span>' : '';
+    pre = pre.replace(/\b(agent\.[a-zA-Z_]+)/g, '<span class="nb">$1</span>');
+    KEYWORDS.forEach(function(kw) {
+      var re = new RegExp('\\b' + kw + '\\b', 'g');
+      pre = pre.replace(re, '<span class="kw">' + kw + '</span>');
+    });
+    return pre + com;
+  }).join('\n');
 }
 
 // ── Render Stats ───────────────────────────────────────────────────────────

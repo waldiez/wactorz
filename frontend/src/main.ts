@@ -22,6 +22,7 @@ import { VoiceInput } from "./io/VoiceInput";
 import { IOManager } from "./io/IOManager";
 import { coin } from "./ui/WaldiezCoin";
 import { CoinTicker } from "./ui/CoinTicker";
+import { LLMCostTracker } from "./ui/LLMCostTracker";
 
 import type { AgentInfo, ThemeChangeEvent } from "./types/agent";
 import type { AppMode } from "./ui/CoinTicker";
@@ -44,6 +45,10 @@ const scene = new SceneManager(canvas, appMode);
 // ── Coin ticker ───────────────────────────────────────────────────────────────
 
 const coinTicker = new CoinTicker(coin, appMode);
+
+// ── LLM cost tracker ──────────────────────────────────────────────────────────
+
+const llmCostTracker = new LLMCostTracker();
 
 // ── MQTT ──────────────────────────────────────────────────────────────────────
 
@@ -196,6 +201,10 @@ mqtt.on("coin", (payload) => {
     agentName: "wiz-agent",
     timestamp: payload.timestampMs,
   });
+});
+
+mqtt.on("metrics", (payload) => {
+  llmCostTracker.onMetrics(payload);
 });
 
 mqtt.on("disconnected", () => {

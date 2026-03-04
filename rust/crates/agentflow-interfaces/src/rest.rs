@@ -28,12 +28,13 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use agentflow_core::message::{ActorCommand, Message};
-use agentflow_core::ActorSystem;
+use agentflow_core::{ActorSystem, EventPublisher};
 
 /// Shared application state injected into axum handlers.
 #[derive(Clone)]
 pub struct AppState {
     pub system: ActorSystem,
+    pub publisher: EventPublisher,
 }
 
 /// JSON body for POST /actors/{id}/message
@@ -58,9 +59,9 @@ pub struct RestServer {
 }
 
 impl RestServer {
-    pub fn new(system: ActorSystem, addr: SocketAddr) -> Self {
+    pub fn new(system: ActorSystem, publisher: EventPublisher, addr: SocketAddr) -> Self {
         Self {
-            state: AppState { system },
+            state: AppState { system, publisher },
             addr,
         }
     }
@@ -155,7 +156,21 @@ async fn stop_actor_handler(
     }
     let msg = Message::command(id.clone(), ActorCommand::Stop);
     match state.system.registry.send(&id, msg).await {
-        Ok(_) => (StatusCode::OK, "stopping").into_response(),
+        Ok(_) => {
+            state.publisher.publish(
+                format!("agents/{id}/status"),
+                &serde_json::json!({
+                    "agentId": id,
+                    "agentName": entry.name,
+                    "state": "stopped",
+                    "timestampMs": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                }),
+            );
+            (StatusCode::OK, "stopping").into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -183,7 +198,21 @@ async fn pause_actor_handler(
     }
     let msg = Message::command(id.clone(), ActorCommand::Pause);
     match state.system.registry.send(&id, msg).await {
-        Ok(_) => (StatusCode::OK, Json(serde_json::json!({"status": "pausing"}))).into_response(),
+        Ok(_) => {
+            state.publisher.publish(
+                format!("agents/{id}/status"),
+                &serde_json::json!({
+                    "agentId": id,
+                    "agentName": entry.name,
+                    "state": "paused",
+                    "timestampMs": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                }),
+            );
+            (StatusCode::OK, Json(serde_json::json!({"status": "pausing"}))).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -201,7 +230,21 @@ async fn resume_actor_handler(
     }
     let msg = Message::command(id.clone(), ActorCommand::Resume);
     match state.system.registry.send(&id, msg).await {
-        Ok(_) => (StatusCode::OK, Json(serde_json::json!({"status": "resuming"}))).into_response(),
+        Ok(_) => {
+            state.publisher.publish(
+                format!("agents/{id}/status"),
+                &serde_json::json!({
+                    "agentId": id,
+                    "agentName": entry.name,
+                    "state": "running",
+                    "timestampMs": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                }),
+            );
+            (StatusCode::OK, Json(serde_json::json!({"status": "resuming"}))).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

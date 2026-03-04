@@ -350,7 +350,17 @@ export class SocialDashboard {
     fetch(url, { method })
       .then((r) => {
         if (!r.ok && r.status !== 404) { this.flashError(id); return; }
-        if (action === "delete") this.removeAgent(id);
+        // Optimistic state update so the UI reflects the command immediately
+        const agent = this.agents.get(id);
+        if (action === "delete") {
+          this.removeAgent(id);
+        } else if (agent) {
+          const next: AgentInfo = {
+            ...agent,
+            state: action === "pause" ? "paused" : action === "resume" ? "running" : "stopped",
+          };
+          this.updateAgent(next);
+        }
       })
       .catch(() => this.flashError(id));
   }

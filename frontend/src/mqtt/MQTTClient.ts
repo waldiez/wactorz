@@ -42,6 +42,22 @@ export interface CoinPayload {
   timestampMs: number;
 }
 
+/** LLM usage metrics published by LlmAgent / main-actor. */
+export interface MetricsPayload {
+  agentId: string;
+  agentName: string;
+  /** Cumulative cost in USD for this call. */
+  cost_usd?: number;
+  costUsd?: number;
+  input_tokens?: number;
+  inputTokens?: number;
+  output_tokens?: number;
+  outputTokens?: number;
+  model?: string;
+  provider?: string;
+  timestampMs?: number;
+}
+
 export interface MQTTEvents {
   connected: void;
   disconnected: void;
@@ -53,6 +69,7 @@ export interface MQTTEvents {
   chat: ChatMessage;
   "qa-flag": QaFlagPayload;
   coin: CoinPayload;
+  metrics: MetricsPayload;
   /** Catch-all for raw messages not matching a known pattern. */
   raw: { topic: string; payload: unknown };
 }
@@ -185,6 +202,13 @@ export class MQTTClient {
     // system/coin
     if (topic === "system/coin") {
       this.emit("coin", payload as CoinPayload);
+      return;
+    }
+
+    // agents/{id}/metrics  (LLM cost + token usage)
+    if (/^agents\/[^/]+\/metrics$/.test(topic)) {
+      const agentId = topic.split("/")[1] ?? "";
+      this.emit("metrics", { agentId, ...(payload as object) } as MetricsPayload);
       return;
     }
 

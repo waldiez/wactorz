@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
 
-use agentflow_agents::{IOAgent, LlmConfig, LlmProvider, MainActor, MonitorAgent, NautilusAgent, NewsAgent, QAAgent, UdxAgent, WeatherAgent, WifAgent, WizAgent};
+use agentflow_agents::{FusekiAgent, HomeAssistantAgent, IOAgent, LlmConfig, LlmProvider, MainActor, MonitorAgent, NautilusAgent, NewsAgent, QAAgent, TickAgent, UdxAgent, WeatherAgent, WifAgent, WizAgent};
 use agentflow_core::{ActorConfig, ActorSystem, EventPublisher};
 use agentflow_interfaces::{RestServer, WsBridge};
 use agentflow_interfaces::ws::WsEnvelope;
@@ -329,11 +329,36 @@ async fn main() -> Result<()> {
     system.spawn_actor(wiz_agent).await?;
     info!("WizAgent spawned");
 
+    let ha_config = ActorConfig::new("ha-agent");
+    let ha_agent = Box::new(
+        HomeAssistantAgent::new(ha_config)
+            .with_publisher(publisher.clone()),
+    );
+    system.spawn_actor(ha_agent).await?;
+    info!("HomeAssistantAgent spawned");
+
+    let fuseki_config = ActorConfig::new("fern-agent");
+    let fuseki_agent = Box::new(
+        FusekiAgent::new(fuseki_config)
+            .with_publisher(publisher.clone()),
+    );
+    system.spawn_actor(fuseki_agent).await?;
+    info!("FusekiAgent (fern) spawned");
+
+    let tick_config = ActorConfig::new("chron-agent");
+    let tick_agent = Box::new(
+        TickAgent::new(tick_config)
+            .with_publisher(publisher.clone()),
+    );
+    system.spawn_actor(tick_agent).await?;
+    info!("TickAgent (chron) spawned");
+
     // ── REST server ───────────────────────────────────────────────────────────
     let rest_addr: SocketAddr = args.api_addr;
     let system_for_rest = system.clone();
+    let publisher_for_rest = publisher.clone();
     tokio::spawn(async move {
-        let server = RestServer::new(system_for_rest, rest_addr);
+        let server = RestServer::new(system_for_rest, publisher_for_rest, rest_addr);
         if let Err(e) = server.serve().await {
             tracing::error!("REST error: {e}");
         }

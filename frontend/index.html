@@ -256,14 +256,16 @@
       }
       #chat-messages .msg.user {
         align-self: flex-end;
-        background: rgba(100, 160, 255, 0.18);
-        color: #d0e4ff;
+        background: rgba(80, 140, 255, 0.32);
+        color: #e8f2ff;
+        border: 1px solid rgba(100, 160, 255, 0.35);
         border-bottom-right-radius: 3px;
       }
       #chat-messages .msg.agent {
         align-self: flex-start;
-        background: rgba(30, 40, 80, 0.8);
-        color: #b0c8f0;
+        background: rgba(18, 26, 60, 0.95);
+        color: #ccdeff;
+        border: 1px solid rgba(60, 90, 160, 0.4);
         border-bottom-left-radius: 3px;
       }
       #chat-messages .msg .msg-meta {
@@ -1456,6 +1458,47 @@
         #coin-display { animation: none !important; transition: none; }
       }
 
+      /* ══════════════════════════════════════════════════════════════════
+         LLM COST TRACKER
+      ══════════════════════════════════════════════════════════════════ */
+      #llm-cost-display {
+        display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap;
+        padding: 3px 10px; border-radius: 14px;
+        background: rgba(120,80,255,0.08); border: 1px solid rgba(120,80,255,0.2);
+        color: #b8a0ff; font-size: 11px; font-weight: 600;
+        cursor: pointer; pointer-events: auto; margin-top: 8px;
+        transition: background 0.2s; position: relative;
+      }
+      #llm-cost-display:hover { background: rgba(120,80,255,0.16); }
+      #llm-cost-display:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+      .llm-cost-idle { color: #6b7a9a; }
+      .llm-cost-total { color: #c4b5fd; font-weight: 700; }
+      .llm-cost-tok   { color: #8b9fc8; font-size: 10px; }
+      .llm-cost-breakdown {
+        position: absolute; top: calc(100% + 6px); left: 0;
+        background: rgba(8,12,32,0.97); border: 1px solid rgba(120,80,255,0.3);
+        border-radius: 10px; padding: 8px 12px; min-width: 180px;
+        z-index: 500; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+        display: flex; flex-direction: column; gap: 4px;
+      }
+      .llm-cost-row {
+        display: flex; justify-content: space-between; align-items: center;
+        gap: 8px; font-size: 11px;
+      }
+      .llm-cost-name { color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100px; }
+      .llm-cost-val  { color: #c4b5fd; font-weight: 600; white-space: nowrap; }
+      .llm-cost-val small { color: #6b7a9a; font-weight: 400; }
+      .llm-cost-reset {
+        margin-top: 4px; align-self: flex-end;
+        background: none; border: 1px solid rgba(120,80,255,0.3);
+        border-radius: 6px; padding: 2px 8px; color: #8b9fc8; font-size: 10px;
+        cursor: pointer;
+      }
+      .llm-cost-reset:hover { background: rgba(120,80,255,0.15); color: #c4b5fd; }
+      @media (prefers-reduced-motion: reduce) {
+        #llm-cost-display { transition: none; }
+      }
+
       /* Coin toast notification */
       .coin-toast {
         position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
@@ -1490,6 +1533,8 @@
       <div class="hud-label" aria-hidden="true">Active Agents</div>
       <div class="hud-badge healthy" id="hud-health" role="status" aria-live="polite">System Healthy</div>
       <div id="coin-display" aria-label="WaldiezCoin balance: Ƿ 0">Ƿ 0</div>
+      <div id="llm-cost-display" role="button" tabindex="0" aria-label="LLM spend: $0.00"
+           aria-expanded="false">LLM $0.00</div>
       <nav class="hud-links" aria-label="External links">
         <a href="/fuseki/" target="_blank" rel="noopener" class="hud-link">⬡ Fuseki</a>
         <a id="ha-link" href="#" target="_blank" rel="noopener" class="hud-link">⌂ Home Assistant</a>

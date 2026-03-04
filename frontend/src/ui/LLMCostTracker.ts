@@ -1,7 +1,7 @@
 /**
  * LLMCostTracker — HUD widget that tracks LLM API spending per agent.
  *
- * Subscribes to `agents/*/metrics` via MQTTClient and accumulates
+ * Subscribes to `agents/\*\/metrics` via MQTTClient and accumulates
  * cost_usd, input_tokens, and output_tokens per agent.
  *
  * Renders into `#llm-cost-display` in the DOM.

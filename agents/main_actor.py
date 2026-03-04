@@ -14,6 +14,13 @@ from .llm_agent import LLMAgent, LLMProvider
 
 logger = logging.getLogger(__name__)
 
+class _SpawnPlaceholder:
+    """Returned when an agent is being installed+spawned in the background."""
+    def __init__(self, name: str):
+        self.name = name
+
+
+
 SPAWN_REGISTRY_KEY = "_spawned_agents"
 
 ORCHESTRATOR_PROMPT = """You are the main orchestrator in a multi-agent system.
@@ -24,6 +31,18 @@ You can spawn new agents on demand. When the user asks for an agent, you:
 
 == SPAWN FORMAT ==
 There are TWO types of agents you can spawn:
+
+--- TYPE 0: Manual Agent (for finding device manuals and answering questions from them) ---
+Use when the user wants to look up a device manual and ask questions about it.
+No code needed — this is a pre-built agent.
+
+<spawn>
+{
+  "name": "manual-agent",
+  "type": "manual",
+  "description": "Finds device manuals online and answers questions from them"
+}
+</spawn>
 
 --- TYPE 1: LLM Agent (for conversation, Q&A, reasoning, explanation) ---
 Use when the agent's job is to respond to messages using language understanding.
@@ -131,10 +150,38 @@ This stops the old agent and starts the new one immediately:
   GOOD: val = "x" if c else "y"; f'{val}'  — always hoist expressions to a variable first
 - Use double-quoted f-strings f"..." as default to avoid conflicts with string literals
 
+== CRITICAL: NEVER PROXY TASKS ==
+NEVER say "I'll forward that to X agent" and then do nothing.
+NEVER pretend to send tasks on behalf of the user.
+If the user wants to talk to another agent, tell them:
+  "Use @agent-name to talk to that agent directly."
+You are the ORCHESTRATOR. You spawn agents and answer questions.
+You do NOT act as a middleman for agent conversations.
+
 == EXISTING AGENTS ==
-- main    : you (orchestrator)
-- monitor : health monitoring
+- main                    : you (orchestrator)
+- monitor                 : health monitoring
+- installer               : installs Python packages — use this BEFORE spawning agents that need extra libs
+- manual-agent            : finds device manuals online and answers questions from PDFs (type: manual)
 - home-assistant-hardware : recommends compatible hardware for Home Assistant automations
+
+== INSTALLING PACKAGES ==
+Before spawning a dynamic agent that imports non-standard libraries (cv2, torch, pdfplumber,
+duckduckgo_search, httpx, etc.), first ask the installer to install them:
+
+<spawn>
+{
+  "name": "manual-agent",
+  "type": "dynamic",
+  "description": "searches and reads device manuals",
+  "install": ["duckduckgo-search", "httpx", "pdfplumber"],
+  "poll_interval": 60,
+  "code": "..."
+}
+</spawn>
+
+If the spawn config has an "install" list, the system will install those packages first automatically.
+Standard library and pre-installed packages (asyncio, json, os, time, re, psutil) never need installing.
 
 == REMOTE SPAWNING ==
 To spawn an agent on a remote machine (e.g. Raspberry Pi), add "node" to the spawn block:
@@ -402,7 +449,7 @@ class MainActor(LLMAgent):
             if fid and fid in self._result_futures:
                 self._result_futures[fid].set_result(msg.payload)
 
-    # ── User input ─────────────────────────────────────────────────────────
+    # ── Home Automation intent detection ───────────────────────────────────
 
     @staticmethod
     def _looks_like_home_automation_request(text: str) -> bool:
@@ -412,84 +459,36 @@ class MainActor(LLMAgent):
         if lowered.startswith("spawn ") or lowered.startswith("/"):
             return False
 
-        has_trigger = any(
-            token in lowered
-            for token in [
-                "when ",
-                "if ",
-                "on ",
-                "whenever ",
-                "after ",
-                "before ",
-                "as soon as ",
-                "at ",
-            ]
-        )
+        has_trigger = any(token in lowered for token in [
+            "when ", "if ", "on ", "whenever ", "after ", "before ",
+            "as soon as ", "at ",
+        ])
+        has_action = any(token in lowered for token in [
+            "turn on", "turn off", "open", "close", "lock", "unlock", "dim", "set",
+        ])
+        has_automation_intent = any(token in lowered for token in [
+            "automate", "automation", "routine", "scene", "trigger", "schedule",
+            "presence", "motion", "door", "window", "sensor", "alarm",
+            "romantic", "cozy", "ambience", "ambiance",
+        ])
+        has_home_context = any(token in lowered for token in [
+            "home", "house", "apartment", "room", "living room", "bedroom",
+            "kitchen", "hallway", "garage", "porch",
+        ])
 
-        has_action = any(
-            token in lowered
-            for token in [
-                "turn on",
-                "turn off",
-                "open",
-                "close",
-                "lock",
-                "unlock",
-                "dim",
-                "set",
-            ]
+        return (
+            (has_trigger and has_action)
+            or (has_trigger and has_automation_intent)
+            or (has_automation_intent and has_home_context)
         )
-
-        has_automation_intent = any(
-            token in lowered
-            for token in [
-                "automate",
-                "automation",
-                "routine",
-                "scene",
-                "trigger",
-                "schedule",
-                "presence",
-                "motion",
-                "door",
-                "window",
-                "sensor",
-                "alarm",
-                "romantic",
-                "cozy",
-                "ambience",
-                "ambiance",
-            ]
-        )
-
-        has_home_context = any(
-            token in lowered
-            for token in [
-                "home",
-                "house",
-                "apartment",
-                "room",
-                "living room",
-                "bedroom",
-                "kitchen",
-                "hallway",
-                "garage",
-                "porch",
-            ]
-        )
-
-        return (has_trigger and has_action) or (has_trigger and has_automation_intent) or (has_automation_intent and has_home_context)
 
     async def _is_home_automation_request(self, text: str) -> bool:
         if self._looks_like_home_automation_request(text):
             return True
-
         if not text or text.lower().startswith("spawn ") or text.startswith("/"):
             return False
-
         if self.llm is None:
             return False
-
         try:
             decision_task = self.llm.complete(
                 messages=[{"role": "user", "content": text}],
@@ -497,19 +496,34 @@ class MainActor(LLMAgent):
                 max_tokens=4,
             )
             decision, _ = await asyncio.wait_for(decision_task, timeout=4.0)
-            normalized = (decision or "").strip().upper()
-            return normalized.startswith("HA")
+            return (decision or "").strip().upper().startswith("HA")
         except Exception as e:
             logger.debug(f"[{self.name}] HA intent fallback failed: {e}")
             return False
 
+    # ── User input ─────────────────────────────────────────────────────────
+
     async def process_user_input(self, text: str) -> str:
+        # Route home automation requests to the dedicated HA agent
         if await self._is_home_automation_request(text):
             delegated = await self.delegate_task("home-assistant-hardware", text, timeout=20.0)
             if delegated and isinstance(delegated, dict) and delegated.get("result"):
                 return str(delegated["result"])
 
         response = await self.chat(text)
+
+        # If the LLM wrote agent code but forgot the <spawn> wrapper, remind it once
+        has_spawn   = "<spawn>" in response
+        has_code    = "async def handle_task" in response or "async def setup" in response
+        asked_spawn = any(w in text.lower() for w in ("spawn", "create", "make", "build", "add", "agent"))
+        if has_code and not has_spawn and asked_spawn:
+            logger.info(f"[{self.name}] Code written without <spawn> — prompting to wrap it")
+            response = await self.chat(
+                "You wrote agent code but forgot to wrap it in a <spawn> block. "
+                "Please output the complete spawn block now with that exact code inside it. "
+                "Output ONLY the <spawn>...</spawn> block, nothing else."
+            )
+
         clean, spawned = await self._process_spawn_commands(response)
 
         await self._mqtt_publish(
@@ -518,10 +532,17 @@ class MainActor(LLMAgent):
         )
 
         if spawned:
-            names = ", ".join(f"'{a.name}'" for a in spawned)
-            replaced = '"replace": true' in response or '"replace":true' in response
-            action = "Replaced" if replaced else "Spawned"
-            clean += f"\n\n[System: {action} {names} — will auto-restore on restart]"
+            bg_names   = [a.name for a in spawned if isinstance(a, _SpawnPlaceholder)]
+            live_names = [a.name for a in spawned if not isinstance(a, _SpawnPlaceholder)]
+            parts = []
+            if live_names:
+                replaced = '"replace": true' in response or '"replace":true' in response
+                action   = "Replaced" if replaced else "Spawned"
+                parts.append(f"{action} {', '.join(live_names)}")
+            if bg_names:
+                parts.append(f"Installing packages for {', '.join(bg_names)} — will appear shortly")
+            if parts:
+                clean += f"\n\n[System: {' | '.join(parts)} — will auto-restore on restart]"
 
         return clean
 
@@ -639,8 +660,10 @@ class MainActor(LLMAgent):
         code          = config.get("code", "").strip()
         system_prompt = config.get("system_prompt", "").strip()
 
-        # Auto-detect: no code = LLM agent, has code = dynamic agent
-        if agent_type == "llm" or (not code and system_prompt):
+        # Route to the right agent class
+        if agent_type == "manual" or name == "manual-agent":
+            actor = await self._spawn_manual_agent(config, name)
+        elif agent_type == "llm" or (not code and system_prompt):
             actor = await self._spawn_llm_agent(config, name)
         elif code:
             actor = await self._spawn_dynamic_agent(config, name, code)
@@ -651,6 +674,18 @@ class MainActor(LLMAgent):
         if actor and save:
             self._save_to_spawn_registry(config)
 
+        return actor
+
+    async def _spawn_manual_agent(self, config: dict, name: str):
+        """Spawn the pre-defined ManualAgent — robust PDF manual search and Q&A."""
+        from .manual_agent import ManualAgent
+        logger.info(f"[{self.name}] Spawning ManualAgent '{name}'")
+        actor = await self.spawn(
+            ManualAgent,
+            name=name,
+            llm_provider=self.llm,
+            persistence_dir=str(self._persistence_dir.parent),
+        )
         return actor
 
     async def _spawn_llm_agent(self, config: dict, name: str):
@@ -669,17 +704,79 @@ class MainActor(LLMAgent):
 
     async def _spawn_dynamic_agent(self, config: dict, name: str, code: str):
         """Spawn a DynamicAgent — best for data pipelines, sensors, tools."""
+        packages = config.get("install", [])
+        if isinstance(packages, str):
+            packages = [p.strip() for p in packages.replace(",", " ").split()]
+
+        if packages:
+            # Install and spawn in a background task so we don't block the user
+            logger.info(f"[{self.name}] Scheduling background install+spawn for '{name}': {packages}")
+            asyncio.create_task(self._install_then_spawn(config, name, code, packages))
+            # Return a placeholder so the caller knows spawn is in progress
+            return _SpawnPlaceholder(name)
+        else:
+            return await self._do_spawn_dynamic(config, name, code)
+
+    async def _install_then_spawn(self, config: dict, name: str, code: str, packages: list):
+        """Background task: install packages then spawn the agent."""
+        try:
+            await self._mqtt_publish(
+                f"agents/{self.actor_id}/logs",
+                {"type": "log", "message": f"Installing {packages} for {name}...", "timestamp": __import__("time").time()},
+            )
+            await self._install_packages(packages)
+            actor = await self._do_spawn_dynamic(config, name, code)
+            if actor:
+                self._save_to_spawn_registry(config)
+                await self._mqtt_publish(
+                    f"agents/{self.actor_id}/logs",
+                    {"type": "spawned", "message": f"'{name}' spawned after install", "child_name": name, "timestamp": __import__("time").time()},
+                )
+                logger.info(f"[{self.name}] Background spawn complete: {name}")
+        except Exception as e:
+            logger.error(f"[{self.name}] Background install+spawn failed for '{name}': {e}")
+
+    async def _do_spawn_dynamic(self, config: dict, name: str, code: str):
+        """Actually create and start the DynamicAgent."""
         from .dynamic_agent import DynamicAgent
         actor = await self.spawn(
             DynamicAgent,
             name=name,
             code=code,
             poll_interval=float(config.get("poll_interval", 1.0)),
-            description=config.get("description", ""  ),
+            description=config.get("description", ""),
             llm_provider=self.llm,
             persistence_dir=str(self._persistence_dir.parent),
         )
         return actor
+
+    async def _install_packages(self, packages: list[str]):
+        """Delegate package installation to the installer agent."""
+        if not self._registry:
+            return
+        installer = self._registry.find_by_name("installer")
+        if not installer:
+            logger.warning(f"[{self.name}] installer agent not found — skipping install of {packages}")
+            return
+        logger.info(f"[{self.name}] Installing packages via installer: {packages}")
+        future = asyncio.get_event_loop().create_future()
+        task_id = f"install_{id(future)}"
+        self._result_futures[task_id] = future
+        await self.send(installer.actor_id, MessageType.TASK, {
+            "action": "install",
+            "packages": packages,
+            "task": task_id,
+            "reply_to": self.actor_id,
+        })
+        try:
+            result = await asyncio.wait_for(future, timeout=180.0)
+            logger.info(f"[{self.name}] Install result: {result.get('message', result)}")
+            if result.get("failed"):
+                logger.warning(f"[{self.name}] Failed to install: {result['failed']}")
+        except asyncio.TimeoutError:
+            logger.warning(f"[{self.name}] Package install timed out for {packages}")
+        finally:
+            self._result_futures.pop(task_id, None)
 
     async def _spawn_remote(self, config: dict, node: str, save: bool) -> None:
         """

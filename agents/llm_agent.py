@@ -99,9 +99,8 @@ class OllamaProvider(LLMProvider):
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         import aiohttp
-        payload = {"model": self.model, "messages": messages, "stream": False}
-        if system:
-            payload["system"] = system
+        full_messages = ([{"role": "system", "content": system}] if system else []) + messages
+        payload = {"model": self.model, "messages": full_messages, "stream": False}
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{self.base_url}/api/chat", json=payload) as resp:
                 data = await resp.json()

@@ -403,7 +403,7 @@ impl HomeAssistantAgent {
     }
 
     async fn dispatch(&self, text: &str) {
-        let tokens: Vec<&str> = text.split_whitespace().collect();
+        let _tokens: Vec<&str> = text.split_whitespace().collect();
         let prefix_stripped = {
             let lower = text.to_lowercase();
             if lower.starts_with("@ha-agent") || lower.starts_with("@ha_agent") {

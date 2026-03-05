@@ -196,7 +196,7 @@ class HomeAssistantHardwareAgent(LLMAgent):
             return data
 
         try:
-            devices = await fetch_devices_entities_with_location(self.ha_url, self.ha_token)
+            devices = await fetch_devices_entities_with_location(self.ha_url, self.ha_token, include_states=True)
             if not isinstance(devices, list):
                 devices = []
 

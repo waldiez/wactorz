@@ -6,14 +6,21 @@ from .ha_web_socket_client import HAWebSocketClient
 async def fetch_devices_entities_with_location(
     ws_url: str,
     token: str,
+    include_states: bool = False,
 ) -> List[Dict[str, Any]]:
     async with HAWebSocketClient(ws_url, token) as ha:
         # Core registries
         areas = await ha.call("config/area_registry/list")
         devices = await ha.call("config/device_registry/list")
         entities = await ha.call("config/entity_registry/list")
+        states = await ha.call("get_states") if include_states else []
 
         area_name_by_id = {a["area_id"]: a.get("name") for a in areas}
+
+        # Build a state lookup by entity_id when states are requested
+        states_by_entity_id: Dict[str, Dict[str, Any]] = (
+            {s["entity_id"]: s for s in states} if include_states else {}
+        )
 
         # Group entities by device_id
         entities_by_device: Dict[str, List[Dict[str, Any]]] = {}
@@ -36,18 +43,23 @@ async def fetch_devices_entities_with_location(
                 entity_area_id = e.get("area_id") or device_area_id
                 entity_area_name = area_name_by_id.get(entity_area_id) if entity_area_id else None
 
-                ents.append(
-                    {
-                        "entity_id": e.get("entity_id"),
-                        "unique_id": e.get("unique_id"),
-                        "platform": e.get("platform"),
-                        "area": entity_area_name,
-                        # "disabled_by": e.get("disabled_by"),
-                        # "hidden_by": e.get("hidden_by"),
-                        "original_name": e.get("original_name"),
-                        "name": e.get("name"),
-                    }
-                )
+                entity_entry: Dict[str, Any] = {
+                    "entity_id": e.get("entity_id"),
+                    "unique_id": e.get("unique_id"),
+                    "platform": e.get("platform"),
+                    "area": entity_area_name,
+                    # "disabled_by": e.get("disabled_by"),
+                    # "hidden_by": e.get("hidden_by"),
+                    "original_name": e.get("original_name"),
+                    "name": e.get("name"),
+                }
+
+                if include_states:
+                    state_data = states_by_entity_id.get(e.get("entity_id", ""), {})
+                    entity_entry["state"] = state_data.get("state")
+                    entity_entry["attributes"] = state_data.get("attributes", {})
+
+                ents.append(entity_entry)
 
             output.append(
                 {

@@ -36,6 +36,22 @@ async def get_automations(base_url: str, token: str) -> list[dict[str, Any]]:
         return automations or []
 
 
+async def delete_automation(base_url: str, token: str, automation_id: str) -> bool:
+    """Delete an automation by ID. Returns True if deletion was successful.
+    This is undocumented but that is the endpoint used by the HA frontend to delete automations, 
+    so it should be stable."""
+    normalized_base = normalize_ha_base_url(base_url)
+    endpoint = f"{normalized_base}/api/config/automation/config/{automation_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.delete(endpoint, headers=headers) as response:
+            print(f"response.status: {response.status}")
+            return response.status == 200
+
+
 async def fetch_devices_entities_with_location(
     ws_url: str,
     token: str,

@@ -35,6 +35,8 @@ async def build_system(args):
     from agentflow.agents.ml_agent import AnomalyDetectorAgent
     from agentflow.agents.installer_agent import InstallerAgent
     from agentflow.agents.llm_agent import AnthropicProvider, OpenAIProvider, OllamaProvider
+    from agentflow.agents.home_assistant_hardware_agent import HomeAssistantHardwareAgent
+    from agentflow.agents.home_assistant_automation_agent import HomeAssistantAutomationAgent
 
     if args.llm == "anthropic":
         provider = AnthropicProvider(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -72,13 +74,31 @@ async def build_system(args):
         name="installer",
         persistence_dir="./state",
     )
+    home_assistant_hardware_agent = HomeAssistantHardwareAgent(
+        llm_provider=provider,
+        name="home-assistant-hardware",
+        persistence_dir="./state",
+    )
+    home_assistant_automation_agent = HomeAssistantAutomationAgent(
+        llm_provider=provider,
+        name="home-assistant-automation",
+        persistence_dir="./state",
+    )
 
     system = ActorSystem(
         mqtt_broker=args.mqtt_broker,
         mqtt_port=args.mqtt_port,
     )
-    await system.start(main_actor, monitor, code_agent, anomaly_agent, installer)
-    logger.info("AgentFlow system started with 5 agents (+ installer).")
+    await system.start(
+        main_actor,
+        monitor,
+        code_agent,
+        anomaly_agent,
+        installer,
+        home_assistant_hardware_agent,
+        home_assistant_automation_agent,
+    )
+    logger.info("AgentFlow system started with 7 agents (+ installer).")
     return system, main_actor
 
 

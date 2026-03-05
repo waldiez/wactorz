@@ -7,7 +7,7 @@ import asyncio
 import logging
 import json
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from ..core.actor import Actor, Message, MessageType, ActorState
 from .llm_agent import LLMAgent, LLMProvider
@@ -164,6 +164,7 @@ You do NOT act as a middleman for agent conversations.
 - installer               : installs Python packages — use this BEFORE spawning agents that need extra libs
 - manual-agent            : finds device manuals online and answers questions from PDFs (type: manual)
 - home-assistant-hardware : recommends compatible hardware for Home Assistant automations
+- home-assistant-automation : creates and inserts Home Assistant automations via REST API
 
 == INSTALLING PACKAGES ==
 Before spawning a dynamic agent that imports non-standard libraries (cv2, torch, pdfplumber,
@@ -501,14 +502,47 @@ class MainActor(LLMAgent):
             logger.debug(f"[{self.name}] HA intent fallback failed: {e}")
             return False
 
+    @staticmethod
+    def _extract_entities_from_hardware_result(hardware_result: dict[str, Any]) -> list[str]:
+        entities: list[str] = []
+        seen: set[str] = set()
+        for item in hardware_result.get("hardware", []) or []:
+            if not isinstance(item, dict):
+                continue
+            for entity_id in item.get("required_entities", []) or []:
+                normalized = str(entity_id).strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                entities.append(normalized)
+        return entities
+
     # ── User input ─────────────────────────────────────────────────────────
 
     async def process_user_input(self, text: str) -> str:
-        # Route home automation requests to the dedicated HA agent
+        # Route home automation requests to dedicated HA agents
         if await self._is_home_automation_request(text):
-            delegated = await self.delegate_task("home-assistant-hardware", text, timeout=20.0)
-            if delegated and isinstance(delegated, dict) and delegated.get("result"):
-                return str(delegated["result"])
+            hardware = await self.delegate_task("home-assistant-hardware", text, timeout=60.0)
+            if not hardware:
+                return "I could not evaluate available Home Assistant hardware right now. Please retry."
+
+            if not hardware.get("can_fulfill"):
+                return str(hardware.get("result", "I cannot fulfill this automation with the available hardware."))
+
+            selected_entities = self._extract_entities_from_hardware_result(hardware)
+            automation = await self.delegate_task(
+                "home-assistant-automation",
+                {
+                    "text": text,
+                    "entities": selected_entities,
+                    "hardware": hardware.get("hardware", []),
+                },
+                timeout=60.0,
+            )
+            if automation and isinstance(automation, dict) and automation.get("result"):
+                return str(automation["result"])
+
+            return "I selected hardware but could not create the automation in Home Assistant right now."
 
         response = await self.chat(text)
 

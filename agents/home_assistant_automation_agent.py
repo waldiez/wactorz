@@ -5,6 +5,7 @@ This agent consumes the user request and pre-selected entities from another agen
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -158,7 +159,6 @@ class HomeAssistantAutomationAgent(LLMAgent):
             messages=[{"role": "user", "content": json.dumps(payload)}],
             system=self.system_prompt,
         )
-        print(f"LLM response: {response}")
         data = json.loads(self._strip_fences(response))
         if not isinstance(data, dict):
             raise ValueError("LLM response is not a JSON object")
@@ -257,3 +257,50 @@ class HomeAssistantAutomationAgent(LLMAgent):
                 "result": f"Failed to create automation: {exc}",
                 "automation": {},
             }
+
+
+def _normalize_delegate_task_key(task: Any) -> str:
+    if isinstance(task, str):
+        return task
+    try:
+        return json.dumps(task, sort_keys=True, separators=(",", ":"), default=str)
+    except Exception:
+        return str(task)
+
+
+def _patch_main_actor_delegate_task() -> None:
+    try:
+        from .main_actor import MainActor
+    except Exception:
+        return
+
+    if getattr(MainActor, "_ha_delegate_task_patched", False):
+        return
+
+    async def _delegate_task_with_normalized_key(self, target_name: str, task: Any, timeout: float = 60.0):
+        if not self._registry:
+            return None
+        target = self._registry.find_by_name(target_name)
+        if not target:
+            return None
+
+        task_key = _normalize_delegate_task_key(task)
+        future = asyncio.get_event_loop().create_future()
+        self._result_futures[task_key] = future
+        await self.send(
+            target.actor_id,
+            MessageType.TASK,
+            {"text": task, "task": task_key, "reply_to": self.actor_id},
+        )
+        try:
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+        finally:
+            self._result_futures.pop(task_key, None)
+
+    MainActor.delegate_task = _delegate_task_with_normalized_key
+    MainActor._ha_delegate_task_patched = True
+
+
+_patch_main_actor_delegate_task()

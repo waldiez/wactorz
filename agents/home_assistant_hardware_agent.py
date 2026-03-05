@@ -151,11 +151,17 @@ class HomeAssistantHardwareAgent(LLMAgent):
         available = await self._get_available_devices()
         result = await self._recommend_hardware(text, available)
         if isinstance(result, dict):
-            result.setdefault("task", text)
+            result["task"] = self._extract_task_id(msg.payload, text)
 
         self.metrics.tasks_completed += 1
         if msg.sender_id:
             await self.send(msg.sender_id, MessageType.RESULT, result)
+
+    @staticmethod
+    def _extract_task_id(payload: Any, fallback: str) -> str:
+        if isinstance(payload, dict) and isinstance(payload.get("task"), str):
+            return payload["task"]
+        return fallback
 
     @staticmethod
     def _extract_text(payload: Any) -> str:

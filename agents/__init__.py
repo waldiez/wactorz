@@ -4,6 +4,7 @@ from .monitor_agent import MonitorActor
 from .code_agent import CodeAgent
 from .ml_agent import MLAgent, YOLOAgent, AnomalyDetectorAgent
 from .home_assistant_hardware_agent import HomeAssistantHardwareAgent
+from .home_assistant_automation_agent import HomeAssistantAutomationAgent
 from .io_agent import IOAgent
 from .qa_agent import QAAgent
 from .nautilus_agent import NautilusAgent

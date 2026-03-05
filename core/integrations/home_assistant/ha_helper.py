@@ -1,4 +1,9 @@
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
+import re
+import time
+
+import aiohttp
 
 from .ha_web_socket_client import HAWebSocketClient
 
@@ -8,6 +13,7 @@ async def fetch_devices_entities_with_location(
     token: str,
     include_states: bool = False,
 ) -> List[Dict[str, Any]]:
+    ws_url = normalize_ha_ws_url(ws_url)
     async with HAWebSocketClient(ws_url, token) as ha:
         # Core registries
         areas = await ha.call("config/area_registry/list")
@@ -75,3 +81,130 @@ async def fetch_devices_entities_with_location(
             )
 
         return sorted(output, key=lambda x: (x["name"] or ""))
+
+
+def normalize_ha_ws_url(url: str) -> str:
+    raw = (url or "").strip().rstrip("/")
+    if not raw:
+        return ""
+
+    parsed = urlparse(raw)
+    scheme = (parsed.scheme or "").lower()
+
+    if scheme in {"ws", "wss"}:
+        if raw.endswith("/api/websocket"):
+            return raw
+        return f"{raw}/api/websocket"
+
+    if scheme in {"http", "https"}:
+        ws_scheme = "wss" if scheme == "https" else "ws"
+        path = (parsed.path or "").rstrip("/")
+        if path.endswith("/api/websocket"):
+            new_path = path
+        elif path:
+            new_path = f"{path}/api/websocket"
+        else:
+            new_path = "/api/websocket"
+        netloc = parsed.netloc or parsed.path
+        return f"{ws_scheme}://{netloc}{new_path}"
+
+    return raw
+
+
+def normalize_ha_base_url(url: str) -> str:
+    raw = (url or "").strip().rstrip("/")
+    if not raw:
+        return ""
+
+    parsed = urlparse(raw)
+    scheme = (parsed.scheme or "").lower()
+
+    if scheme in {"http", "https"}:
+        netloc = parsed.netloc or parsed.path
+        path = (parsed.path or "").rstrip("/")
+        if path.endswith("/api/websocket"):
+            path = path[: -len("/api/websocket")]
+        return f"{scheme}://{netloc}{path}"
+
+    if scheme in {"ws", "wss"}:
+        http_scheme = "https" if scheme == "wss" else "http"
+        netloc = parsed.netloc or parsed.path
+        path = (parsed.path or "").rstrip("/")
+        if path.endswith("/api/websocket"):
+            path = path[: -len("/api/websocket")]
+        return f"{http_scheme}://{netloc}{path}"
+
+    return raw
+
+
+def extract_entity_ids(devices: List[Dict[str, Any]]) -> List[str]:
+    entity_ids: List[str] = []
+    seen: set[str] = set()
+    for device in devices:
+        for entity in device.get("entities", []) or []:
+            entity_id = str(entity.get("entity_id", "")).strip()
+            if not entity_id or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            entity_ids.append(entity_id)
+    return entity_ids
+
+
+async def create_automation_via_websocket(
+    ws_url: str,
+    token: str,
+    automation_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    return await create_automation_via_rest(ws_url, token, automation_config)
+
+
+async def create_automation_via_rest(
+    base_url: str,
+    token: str,
+    automation_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    normalized_base = normalize_ha_base_url(base_url)
+    alias = str(automation_config.get("name") or "Generated automation").strip()
+    description = str(automation_config.get("description") or "").strip()
+    trigger = automation_config.get("trigger") or []
+    condition = automation_config.get("condition") or []
+    action = automation_config.get("action") or []
+    mode = str(automation_config.get("mode") or "single").strip() or "single"
+
+    slug_base = re.sub(r"[^a-z0-9]+", "_", alias.lower()).strip("_") or "generated_automation"
+    automation_id = f"{slug_base}_{int(time.time())}"
+
+    payload = {
+        "alias": alias,
+        "description": description,
+        "trigger": trigger,
+        "condition": condition,
+        "action": action,
+        "mode": mode,
+    }
+
+    endpoint = f"{normalized_base}/api/config/automation/config/{automation_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(endpoint, headers=headers, json=payload) as response:
+            content_type = (response.headers.get("Content-Type") or "").lower()
+            body: Any
+            if "application/json" in content_type:
+                body = await response.json()
+            else:
+                body = await response.text()
+
+            if response.status >= 400:
+                raise RuntimeError(
+                    f"REST automation create failed ({response.status}): {body}"
+                )
+
+            return {
+                "automation_id": automation_id,
+                "status": response.status,
+                "result": body,
+            }

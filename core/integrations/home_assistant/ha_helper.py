@@ -8,6 +8,34 @@ import aiohttp
 from .ha_web_socket_client import HAWebSocketClient
 
 
+async def get_automations(base_url: str, token: str) -> list[dict[str, Any]]:
+    """
+    Fetch all automations from Home Assistant and return a rich JSON list.
+    """
+    ws_url = normalize_ha_ws_url(base_url)
+    rest_url = normalize_ha_base_url(base_url)
+
+    async with HAWebSocketClient(ws_url, token) as ha:
+        states = await ha.call("get_states")
+        automation_ids: list[str] = []
+        for s in (states or []):
+            if not isinstance(s, dict):
+                continue
+            entity_id = s.get("entity_id")
+            if isinstance(entity_id, str) and entity_id.startswith("automation."):
+                automation_ids.append(s.get("attributes")["id"] if isinstance(s.get("attributes"), dict) else "")
+
+        automations: list[dict[str, Any]] = []
+        for id in automation_ids:
+            config = None
+            if isinstance(id, str) and id.strip():
+                config = await _fetch_automation_config(rest_url, id.strip(), token)
+                automations.append(config)
+
+
+        return automations or []
+
+
 async def fetch_devices_entities_with_location(
     ws_url: str,
     token: str,
@@ -156,6 +184,24 @@ async def create_automation_via_websocket(
     automation_config: Dict[str, Any],
 ) -> Dict[str, Any]:
     return await create_automation_via_rest(ws_url, token, automation_config)
+
+
+async def _fetch_automation_config(rest_base: str, automation_id: str, token: str) -> dict[str, Any] | None:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    
+    url = f"{rest_base}/api/config/automation/config/{automation_id}"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                return data if isinstance(data, dict) else None
+        except (aiohttp.ClientError, ValueError):
+            return None
 
 
 async def create_automation_via_rest(

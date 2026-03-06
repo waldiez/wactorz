@@ -7,7 +7,7 @@ import asyncio
 import logging
 import json
 import re
-from typing import Any, Optional
+from typing import Optional
 
 from ..core.actor import Actor, Message, MessageType, ActorState
 from .llm_agent import LLMAgent, LLMProvider
@@ -106,11 +106,15 @@ Inside your code, the `agent` object provides:
   agent.alert(message, severity)      — trigger a dashboard alert
   agent.persist(key, value)           — save to disk (survives restart)
   agent.recall(key)                   — load from disk
-  agent.send_to(agent_name, payload)  — send task to another agent
+  agent.send_to(agent_name, payload)          — send task to agent, wait for result (60s timeout)
+  agent.send_to_many([(name, payload), ...])  — send to multiple agents IN PARALLEL, returns list
 
   agent.llm                           — pre-configured LLM (same as main, already authenticated)
   agent.llm.chat(prompt, system="")   — single-turn LLM call, returns string
   agent.llm.complete(messages, system="") — multi-turn LLM call with full history
+
+  The LLM provider is set at startup (Anthropic / OpenAI / Ollama / NVIDIA NIM).
+  Agents always use the same provider as main — no configuration needed inside agent code.
 
 == LLM USAGE — READ THIS CAREFULLY ==
 The agent already has a working LLM via agent.llm. DO NOT set up your own LLM.
@@ -150,6 +154,15 @@ This stops the old agent and starts the new one immediately:
   GOOD: val = "x" if c else "y"; f'{val}'  — always hoist expressions to a variable first
 - Use double-quoted f-strings f"..." as default to avoid conflicts with string literals
 
+== PIPELINES — for complex multi-agent tasks ==
+When the user asks for something that requires multiple agents working together
+(e.g. "find the manual AND answer a question", "research AND summarise AND email"),
+use the run_pipeline capability. Tell the user:
+  "I'll coordinate this as a pipeline across [agent1], [agent2]..."
+Then in code you can call: await main.run_pipeline(goal, [agents])
+The system will spawn an ephemeral TaskManager that plans, executes in parallel
+where possible, and reports back — without flooding main's context.
+
 == CRITICAL: NEVER PROXY TASKS ==
 NEVER say "I'll forward that to X agent" and then do nothing.
 NEVER pretend to send tasks on behalf of the user.
@@ -163,7 +176,7 @@ You do NOT act as a middleman for agent conversations.
 - monitor                 : health monitoring
 - installer               : installs Python packages — use this BEFORE spawning agents that need extra libs
 - manual-agent            : finds device manuals online and answers questions from PDFs (type: manual)
-- home-assistant-hardware : recommends compatible hardware for Home Assistant automations
+- home-assistant-hardware  : recommends compatible hardware for Home Assistant automations
 - home-assistant-automation : creates and inserts Home Assistant automations via REST API
 
 == INSTALLING PACKAGES ==
@@ -503,9 +516,9 @@ class MainActor(LLMAgent):
             return False
 
     @staticmethod
-    def _extract_entities_from_hardware_result(hardware_result: dict[str, Any]) -> list[str]:
-        entities: list[str] = []
-        seen: set[str] = set()
+    def _extract_entities_from_hardware_result(hardware_result: dict) -> list:
+        entities: list = []
+        seen: set = set()
         for item in hardware_result.get("hardware", []) or []:
             if not isinstance(item, dict):
                 continue
@@ -579,6 +592,79 @@ class MainActor(LLMAgent):
                 clean += f"\n\n[System: {' | '.join(parts)} — will auto-restore on restart]"
 
         return clean
+
+    async def process_user_input_stream(self, text: str):
+        """
+        Streaming version of process_user_input().
+        Yields text chunks as the LLM generates them, then a final dict:
+          {"done": True, "spawned": [...names...], "system_msg": "..."}
+
+        The CLI calls this and prints chunks immediately.
+        REST/Discord/WhatsApp should use process_user_input() instead.
+        """
+        # HA routing has no streaming — fall back to blocking for those
+        if await self._is_home_automation_request(text):
+            hardware = await self.delegate_task("home-assistant-hardware", text, timeout=60.0)
+            if not hardware:
+                yield "I could not evaluate available Home Assistant hardware right now. Please retry."
+                yield {"done": True, "spawned": [], "system_msg": ""}
+                return
+
+            if not hardware.get("can_fulfill"):
+                yield str(hardware.get("result", "I cannot fulfill this automation with the available hardware."))
+                yield {"done": True, "spawned": [], "system_msg": ""}
+                return
+
+            selected_entities = self._extract_entities_from_hardware_result(hardware)
+            automation = await self.delegate_task(
+                "home-assistant-automation",
+                {
+                    "text": text,
+                    "entities": selected_entities,
+                    "hardware": hardware.get("hardware", []),
+                },
+                timeout=60.0,
+            )
+            result = (
+                str(automation["result"])
+                if automation and isinstance(automation, dict) and automation.get("result")
+                else "I selected hardware but could not create the automation in Home Assistant right now."
+            )
+            yield result
+            yield {"done": True, "spawned": [], "system_msg": ""}
+            return
+
+        # Stream the LLM response chunk by chunk
+        full_chunks = []
+        async for chunk in self.chat_stream(text):
+            if isinstance(chunk, dict):
+                break   # usage dict — discard, already tracked inside chat_stream
+            full_chunks.append(chunk)
+            yield chunk
+
+        full_response = "".join(full_chunks)
+
+        # Process any <spawn> blocks in the completed response
+        _, spawned = await self._process_spawn_commands(full_response)
+
+        system_msg = ""
+        if spawned:
+            names      = ", ".join(f"'{a.name}'" for a in spawned if not isinstance(a, _SpawnPlaceholder))
+            bg_names   = [a.name for a in spawned if isinstance(a, _SpawnPlaceholder)]
+            parts = []
+            if names:
+                replaced = '"replace": true' in full_response or '"replace":true' in full_response
+                parts.append(f"{'Replaced' if replaced else 'Spawned'} {names} — will auto-restore on restart")
+            if bg_names:
+                parts.append(f"Installing packages for {', '.join(bg_names)} — will appear shortly")
+            system_msg = " | ".join(parts)
+
+        await self._mqtt_publish(
+            f"agents/{self.actor_id}/logs",
+            {"type": "user_interaction", "input": text[:100], "response": full_response[:200]},
+        )
+
+        yield {"done": True, "spawned": spawned, "system_msg": system_msg}
 
     # ── Spawn ──────────────────────────────────────────────────────────────
 
@@ -809,6 +895,48 @@ class MainActor(LLMAgent):
                 logger.warning(f"[{self.name}] Failed to install: {result['failed']}")
         except asyncio.TimeoutError:
             logger.warning(f"[{self.name}] Package install timed out for {packages}")
+        finally:
+            self._result_futures.pop(task_id, None)
+
+    async def run_pipeline(self, goal: str, agents: list[str], timeout: float = 300.0, force_replan: bool = False) -> dict:
+        """
+        Spawn an ephemeral TaskManager to coordinate a multi-agent pipeline.
+        Returns the final synthesised result without blocking main's context.
+
+        Usage:
+            result = await main.run_pipeline(
+                goal="Find the Philips EP2220 manual and answer: how do I descale it?",
+                agents=["manual-agent", "installer"]
+            )
+        """
+        from .task_manager import TaskManager
+        import uuid
+
+        task_id = uuid.uuid4().hex[:8]
+        future  = asyncio.get_event_loop().create_future()
+        self._result_futures[task_id] = future
+
+        mgr = await self.spawn(
+            TaskManager,
+            goal=goal,
+            available_agents=agents,
+            llm_provider=self.llm,
+            reply_to_id=self.actor_id,
+            reply_task_id=task_id,
+            auto_destroy=True,
+            force_replan=force_replan,
+            cache_dir=str(self._persistence_dir.parent / "plan_cache"),
+            persistence_dir=str(self._persistence_dir.parent),
+        )
+
+        logger.info(f"[{self.name}] Pipeline started: {mgr.name} for goal: {goal[:60]}")
+
+        try:
+            result = await asyncio.wait_for(future, timeout=timeout)
+            return result
+        except asyncio.TimeoutError:
+            logger.warning(f"[{self.name}] Pipeline timed out after {timeout}s")
+            return {"error": f"Pipeline timed out after {timeout}s"}
         finally:
             self._result_futures.pop(task_id, None)
 

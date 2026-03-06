@@ -329,12 +329,30 @@ class CLIInterface:
                         print(f"[usage] @{agent_name} <your message>\n")
                         continue
                     print(f"\n[routing to @{agent_name}]")
-                    response = await self._get_agent_response(agent_name, message)
-                    print(f"\n@{agent_name}: {response}\n")
+                    target = self.agent._registry.find_by_name(agent_name) if self.agent._registry else None
+                    # Stream if target is an LLMAgent with chat_stream support
+                    if target and hasattr(target, "chat_stream"):
+                        print(f"\n@{agent_name}: ", end="", flush=True)
+                        async for chunk in target.chat_stream(message):
+                            if not isinstance(chunk, dict):
+                                print(chunk, end="", flush=True)
+                        print("\n")
+                    else:
+                        response = await self._get_agent_response(agent_name, message)
+                        print(f"\n@{agent_name}: {response}\n")
                     continue
 
-                response = await self.agent.process_user_input(text)
-                print(f"\n@main: {response}\n")
+                print("\n@main: ", end="", flush=True)
+                system_msg = ""
+                async for chunk in self.agent.process_user_input_stream(text):
+                    if isinstance(chunk, dict):
+                        system_msg = chunk.get("system_msg", "")
+                    else:
+                        print(chunk, end="", flush=True)
+                print()  # newline after streamed response
+                if system_msg:
+                    print(f"[System: {system_msg}]")
+                print()
 
             except (KeyboardInterrupt, EOFError):
                 break

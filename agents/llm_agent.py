@@ -73,6 +73,27 @@ class AnthropicProvider(LLMProvider):
         }
         return text, usage
 
+    async def stream(self, messages: list[dict], system: str = "", **kwargs):
+        """Yield text chunks as they arrive. Final item is a dict with usage."""
+        input_tokens = output_tokens = 0
+        async with self.client.messages.stream(
+            model=self.model,
+            max_tokens=kwargs.get("max_tokens", 4096),
+            system=system,
+            messages=messages,
+        ) as s:
+            async for chunk in s.text_stream:
+                yield chunk
+            # Final message has usage counts
+            final = await s.get_final_message()
+            input_tokens  = final.usage.input_tokens
+            output_tokens = final.usage.output_tokens
+        yield {
+            "input_tokens":  input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd":      _calc_cost(self.model, input_tokens, output_tokens),
+        }
+
 
 class OpenAIProvider(LLMProvider):
     def __init__(self, model: str = "gpt-4o", api_key: Optional[str] = None):
@@ -97,6 +118,30 @@ class OpenAIProvider(LLMProvider):
         }
         return text, usage
 
+    async def stream(self, messages: list[dict], system: str = "", **kwargs):
+        """Yield text chunks as they arrive. Final item is a dict with usage."""
+        full_messages = ([{"role": "system", "content": system}] if system else []) + messages
+        input_tokens = output_tokens = 0
+        async with await self.client.chat.completions.create(
+            model=self.model,
+            messages=full_messages,
+            max_tokens=kwargs.get("max_tokens", 4096),
+            stream=True,
+            stream_options={"include_usage": True},
+        ) as s:
+            async for chunk in s:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    yield delta
+                if chunk.usage:
+                    input_tokens  = chunk.usage.prompt_tokens
+                    output_tokens = chunk.usage.completion_tokens
+        yield {
+            "input_tokens":  input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd":      _calc_cost(self.model, input_tokens, output_tokens),
+        }
+
 
 class OllamaProvider(LLMProvider):
     """Local LLM via Ollama."""
@@ -117,6 +162,30 @@ class OllamaProvider(LLMProvider):
         eval_count  = data.get("eval_count", 0)
         usage = {"input_tokens": prompt_eval, "output_tokens": eval_count, "cost_usd": 0.0}
         return text, usage
+
+    async def stream(self, messages: list[dict], system: str = "", **kwargs):
+        """Yield text chunks as they arrive. Final item is a dict with usage."""
+        import aiohttp, json as _json
+        payload = {"model": self.model, "messages": messages, "stream": True}
+        if system:
+            payload["system"] = system
+        input_tokens = output_tokens = 0
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{self.base_url}/api/chat", json=payload) as resp:
+                async for raw in resp.content:
+                    if not raw.strip():
+                        continue
+                    try:
+                        data = _json.loads(raw)
+                    except Exception:
+                        continue
+                    delta = (data.get("message") or {}).get("content", "")
+                    if delta:
+                        yield delta
+                    if data.get("done"):
+                        input_tokens  = data.get("prompt_eval_count", 0)
+                        output_tokens = data.get("eval_count", 0)
+        yield {"input_tokens": input_tokens, "output_tokens": output_tokens, "cost_usd": 0.0}
 
 
 class NIMProvider(LLMProvider):
@@ -170,6 +239,29 @@ class NIMProvider(LLMProvider):
             "cost_usd":      _calc_cost(self.model, input_tok, output_tok),
         }
         return text, usage
+
+    async def stream(self, messages: list[dict], system: str = "", **kwargs):
+        """Yield text chunks as they arrive. Final item is a dict with usage."""
+        full_messages = ([{"role": "system", "content": system}] if system else []) + messages
+        input_tokens = output_tokens = 0
+        async with await self.client.chat.completions.create(
+            model=self.model,
+            messages=full_messages,
+            max_tokens=kwargs.get("max_tokens", 4096),
+            stream=True,
+        ) as s:
+            async for chunk in s:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    yield delta
+                if chunk.usage:
+                    input_tokens  = chunk.usage.prompt_tokens
+                    output_tokens = chunk.usage.completion_tokens
+        yield {
+            "input_tokens":  input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd":      _calc_cost(self.model, input_tokens, output_tokens),
+        }
 
 
 class LLMAgent(Actor):
@@ -288,6 +380,55 @@ class LLMAgent(Actor):
             self._build_metrics(),
         )
         return response
+
+    async def chat_stream(self, user_message: str):
+        """
+        Streaming version of chat(). Yields text chunks, then a final usage dict.
+        The caller is responsible for printing chunks as they arrive.
+
+        Usage:
+            async for chunk in agent.chat_stream("hello"):
+                if isinstance(chunk, dict):
+                    usage = chunk   # final usage summary
+                else:
+                    print(chunk, end="", flush=True)
+        """
+        if self.llm is None or not hasattr(self.llm, "stream"):
+            # Fallback: non-streaming — yield whole response as single chunk
+            response = await self.chat(user_message)
+            yield response
+            return
+
+        self.metrics.messages_processed += 1
+        self._conversation_history.append({"role": "user", "content": user_message})
+
+        full_text = []
+        usage     = {}
+
+        async for chunk in self.llm.stream(
+            messages=self._conversation_history[-self.max_history:],
+            system=self.system_prompt,
+        ):
+            if isinstance(chunk, dict):
+                usage = chunk
+            else:
+                full_text.append(chunk)
+                yield chunk
+
+        response = "".join(full_text)
+        self._conversation_history.append({"role": "assistant", "content": response})
+
+        self.total_input_tokens  += usage.get("input_tokens", 0)
+        self.total_output_tokens += usage.get("output_tokens", 0)
+        self.total_cost_usd      += usage.get("cost_usd", 0.0)
+
+        await self._mqtt_publish(
+            f"agents/{self.actor_id}/metrics",
+            self._build_metrics(),
+        )
+
+        # Yield final usage dict so caller can log it
+        yield usage
 
     def _build_metrics(self) -> dict:
         m = super()._build_metrics()

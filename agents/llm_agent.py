@@ -25,6 +25,13 @@ PRICING = {
     "gpt-4-turbo":            (10.00, 30.00),
     # Ollama — local, no cost
     "ollama":                 ( 0.00,  0.00),
+    # NVIDIA NIM — free tier: 1000 req/month per model
+    # Most models are free; paid ones listed below
+    "nvidia/llama-3.1-nemotron-70b": ( 0.35,  0.40),
+    "meta/llama-3.1-405b":           ( 3.45,  3.45),
+    "mistralai/mistral-large":       ( 2.00,  6.00),
+    # All other NIM models: $0 (free tier)
+    "nim/":                          ( 0.00,  0.00),
 }
 
 def _calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
@@ -99,8 +106,9 @@ class OllamaProvider(LLMProvider):
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         import aiohttp
-        full_messages = ([{"role": "system", "content": system}] if system else []) + messages
-        payload = {"model": self.model, "messages": full_messages, "stream": False}
+        payload = {"model": self.model, "messages": messages, "stream": False}
+        if system:
+            payload["system"] = system
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{self.base_url}/api/chat", json=payload) as resp:
                 data = await resp.json()
@@ -108,6 +116,59 @@ class OllamaProvider(LLMProvider):
         prompt_eval = data.get("prompt_eval_count", 0)
         eval_count  = data.get("eval_count", 0)
         usage = {"input_tokens": prompt_eval, "output_tokens": eval_count, "cost_usd": 0.0}
+        return text, usage
+
+
+class NIMProvider(LLMProvider):
+    """
+    NVIDIA NIM — OpenAI-compatible API hosted at integrate.api.nvidia.com.
+    Free tier: 1000 requests/month per model. No local GPU required.
+
+    Popular free models:
+      meta/llama-3.1-8b-instruct          — fast, lightweight
+      meta/llama-3.3-70b-instruct         — strong general purpose
+      mistralai/mistral-7b-instruct-v0.3  — fast & capable
+      mistralai/mixtral-8x7b-instruct-v0.1
+      google/gemma-3-27b-it
+      microsoft/phi-3-mini-128k-instruct
+      deepseek-ai/deepseek-r1             — reasoning model
+      deepseek-ai/deepseek-r1-distill-qwen-7b
+      nvidia/llama-3.1-nemotron-70b-instruct
+      nvidia/llama-3.3-nemotron-super-49b-v1
+
+    Get a free API key at: https://build.nvidia.com
+    """
+
+    NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
+
+    def __init__(
+        self,
+        model:    str = "meta/llama-3.3-70b-instruct",
+        api_key:  Optional[str] = None,
+        base_url: str = NIM_BASE_URL,
+    ):
+        import openai
+        self.model  = model
+        self.client = openai.AsyncOpenAI(
+            api_key=api_key or "dummy",   # NIM free tier may not require a key locally
+            base_url=base_url,
+        )
+
+    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+        full_messages = ([{"role": "system", "content": system}] if system else []) + messages
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=full_messages,
+            max_tokens=kwargs.get("max_tokens", 4096),
+        )
+        text = response.choices[0].message.content
+        input_tok  = response.usage.prompt_tokens     if response.usage else 0
+        output_tok = response.usage.completion_tokens if response.usage else 0
+        usage = {
+            "input_tokens":  input_tok,
+            "output_tokens": output_tok,
+            "cost_usd":      _calc_cost(self.model, input_tok, output_tok),
+        }
         return text, usage
 
 
@@ -185,14 +246,15 @@ class LLMAgent(Actor):
                 },
             )
 
-            # Reply to sender
-            if msg.reply_to or msg.sender_id:
-                target = msg.reply_to or msg.sender_id
-                await self.send(target, MessageType.RESULT, {
-                    "text": response,
-                    "task": task_text,
-                    "duration": duration,
-                })
+            # Reply to sender — echo _task_id so send_to() futures resolve
+            payload_dict = msg.payload if isinstance(msg.payload, dict) else {}
+            task_id  = payload_dict.get("_task_id")
+            reply_to = payload_dict.get("_reply_to") or msg.reply_to or msg.sender_id
+            if reply_to:
+                result = {"text": response, "task": task_text, "duration": duration}
+                if task_id:
+                    result["_task_id"] = task_id
+                await self.send(reply_to, MessageType.RESULT, result)
 
         except Exception as e:
             self.metrics.tasks_failed += 1

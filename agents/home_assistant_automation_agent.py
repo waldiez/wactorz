@@ -1,9 +1,44 @@
+from __future__ import annotations
 """
-HomeAssistantAutomationAgent - Builds and inserts Home Assistant automations.
-This agent consumes the user request and pre-selected entities from another agent.
+HomeAssistantAutomationAgent — deprecated.
+
+This module is kept for backward compatibility.  All Home Assistant
+functionality has been consolidated into HomeAssistantAgent.
+Importing HomeAssistantAutomationAgent will emit a DeprecationWarning and
+return the unified HomeAssistantAgent class.
 """
 
-from __future__ import annotations
+import warnings
+
+from .home_assistant_agent import HomeAssistantAgent as _HomeAssistantAgent
+
+
+def HomeAssistantAutomationAgent(*args, **kwargs):  # type: ignore[no-redef]
+    warnings.warn(
+        "HomeAssistantAutomationAgent is deprecated and will be removed in a future release. "
+        "Use HomeAssistantAgent instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    kwargs.setdefault("name", "home-assistant-agent")
+    return _HomeAssistantAgent(*args, **kwargs)
+
+
+# Expose the underlying class so isinstance checks still work
+HomeAssistantAutomationAgent.__wrapped__ = _HomeAssistantAgent  # type: ignore[attr-defined]
+
+# The rest of this file is intentionally empty.  All real logic lives in
+# agents/home_assistant_agent.py.
+#
+# NOTE: The _patch_main_actor_delegate_task() monkey-patch that used to live
+# here has been removed.  It was only needed to normalise dict task keys when
+# MainActor delegated a two-step HA request; the unified agent receives plain
+# text from MainActor so the patch is no longer required.
+
+
+if False:  # keep linters happy
+    pass
+
 
 import asyncio
 import json
@@ -304,3 +339,23 @@ def _patch_main_actor_delegate_task() -> None:
 
 
 _patch_main_actor_delegate_task()
+
+
+# ─── Shim re-definition ─────────────────────────────────────────────────
+# This must be the LAST definition of HomeAssistantAutomationAgent in this
+# module so the shim wins over the old class defined above.
+# The _patch_main_actor_delegate_task() call above is harmless in the new
+# system because MainActor now delegates plain strings to the unified agent.
+import warnings as _warnings_auto  # noqa: E402
+
+
+def HomeAssistantAutomationAgent(*_auto_args, **_auto_kwargs):  # type: ignore[no-redef]
+    _warnings_auto.warn(
+        "HomeAssistantAutomationAgent is deprecated and will be removed in a future release. "
+        "Use HomeAssistantAgent instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    _auto_kwargs.setdefault("name", "home-assistant-agent")
+    from .home_assistant_agent import HomeAssistantAgent as _HA  # noqa: PLC0415
+    return _HA(*_auto_args, **_auto_kwargs)

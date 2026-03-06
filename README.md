@@ -33,7 +33,7 @@ agentflow (Rust binary)
 - **5 dashboard views** — 3D Graph, Galaxy, Card grid, Social cards, Graveyard (tombstones for stopped agents)
 - **Typing indicators + markdown** — chat panel renders `**bold**`, `` `code` ``, fenced blocks
 - **@mention routing** — `@agent-name text` in the IO bar routes directly to any agent
-- **Home Assistant hardware advisor** — home-automation requests are auto-delegated to `home-assistant-hardware` to recommend compatible devices/entities
+- **Home Assistant agent** — home-automation requests are auto-delegated to `home-assistant-agent`; handles hardware recommendations and automation create/edit/delete/list
 - **NautilusAgent** — SSH ping/exec/sync/push from the chat; deploy the system from inside itself
 - **UDXAgent** — instant answers about the system; no LLM key needed
 - **Native binary mode** — run the Rust binary directly on the host; Docker only for Mosquitto + nginx
@@ -108,7 +108,9 @@ Open a chat thread by clicking any agent card or 3D node.
 
 ```
 @main-actor explain the actor model
-@home-assistant-hardware when my hallway motion sensor triggers, turn on the hallway light
+@home-assistant-agent when my hallway motion sensor triggers, turn on the hallway light
+@home-assistant-agent list my automations
+@home-assistant-agent delete the motion light automation
 @nautilus-agent ping deploy@myserver.com
 @nautilus-agent exec deploy@myserver.com df -h
 @udx-agent docs deployment
@@ -130,12 +132,12 @@ Open a chat thread by clicking any agent card or 3D node.
 | `monitor-agent`           | monitor      | ⭐        | Polls all actors every 15 s; alerts on 60 s silence                                    |
 | `io-agent`                | gateway      |           | Routes `io/chat` to actors by `@mention`                                               |
 | `qa-agent`                | qa           | ⭐        | Passively inspects all chat for policy violations                                      |
-| `home-assistant-hardware` | specialist   |           | Recommends hardware/entities for Home Assistant automations; never creates automations |
+| `home-assistant-agent`   | specialist   |           | Hardware recommendations; automation create, edit, delete, list via Home Assistant REST API |
 | `nautilus-agent`          | transfer     |           | SSH + rsync: `ping`, `exec`, `sync`, `push`                                            |
 | `udx-agent`               | expert       |           | Built-in docs: `help`, `explain`, `docs`, `agents`, `status`                           |
 | `dynamic-*`               | dynamic      |           | LLM-generated Rhai scripts, spawned at runtime                                         |
 
-Home automation intent (for example: “when door opens, turn on kitchen light”) is routed by `main-actor` to `home-assistant-hardware` automatically.
+Home automation intent (for example: "when door opens, turn on kitchen light") is routed by `main-actor` to `home-assistant-agent` automatically.
 
 ---
 

@@ -176,8 +176,7 @@ You do NOT act as a middleman for agent conversations.
 - monitor                 : health monitoring
 - installer               : installs Python packages — use this BEFORE spawning agents that need extra libs
 - manual-agent            : finds device manuals online and answers questions from PDFs (type: manual)
-- home-assistant-hardware  : recommends compatible hardware for Home Assistant automations
-- home-assistant-automation : creates and inserts Home Assistant automations via REST API
+- home-assistant-agent    : manages all Home Assistant operations (hardware recommendations, automation create/edit/delete/list)
 
 == INSTALLING PACKAGES ==
 Before spawning a dynamic agent that imports non-standard libraries (cv2, torch, pdfplumber,
@@ -515,47 +514,17 @@ class MainActor(LLMAgent):
             logger.debug(f"[{self.name}] HA intent fallback failed: {e}")
             return False
 
-    @staticmethod
-    def _extract_entities_from_hardware_result(hardware_result: dict) -> list:
-        entities: list = []
-        seen: set = set()
-        for item in hardware_result.get("hardware", []) or []:
-            if not isinstance(item, dict):
-                continue
-            for entity_id in item.get("required_entities", []) or []:
-                normalized = str(entity_id).strip()
-                if not normalized or normalized in seen:
-                    continue
-                seen.add(normalized)
-                entities.append(normalized)
-        return entities
-
     # ── User input ─────────────────────────────────────────────────────────
 
     async def process_user_input(self, text: str) -> str:
-        # Route home automation requests to dedicated HA agents
+        # Route home automation requests to the unified HA agent
         if await self._is_home_automation_request(text):
-            hardware = await self.delegate_task("home-assistant-hardware", text, timeout=60.0)
-            if not hardware:
-                return "I could not evaluate available Home Assistant hardware right now. Please retry."
-
-            if not hardware.get("can_fulfill"):
-                return str(hardware.get("result", "I cannot fulfill this automation with the available hardware."))
-
-            selected_entities = self._extract_entities_from_hardware_result(hardware)
-            automation = await self.delegate_task(
-                "home-assistant-automation",
-                {
-                    "text": text,
-                    "entities": selected_entities,
-                    "hardware": hardware.get("hardware", []),
-                },
-                timeout=60.0,
-            )
-            if automation and isinstance(automation, dict) and automation.get("result"):
-                return str(automation["result"])
-
-            return "I selected hardware but could not create the automation in Home Assistant right now."
+            result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
+            if result and isinstance(result, dict) and result.get("result"):
+                return str(result["result"])
+            if not result:
+                return "I could not reach the Home Assistant agent right now. Please retry."
+            return "The Home Assistant agent did not return a result. Please retry."
 
         response = await self.chat(text)
 
@@ -604,33 +573,13 @@ class MainActor(LLMAgent):
         """
         # HA routing has no streaming — fall back to blocking for those
         if await self._is_home_automation_request(text):
-            hardware = await self.delegate_task("home-assistant-hardware", text, timeout=60.0)
-            if not hardware:
-                yield "I could not evaluate available Home Assistant hardware right now. Please retry."
-                yield {"done": True, "spawned": [], "system_msg": ""}
-                return
-
-            if not hardware.get("can_fulfill"):
-                yield str(hardware.get("result", "I cannot fulfill this automation with the available hardware."))
-                yield {"done": True, "spawned": [], "system_msg": ""}
-                return
-
-            selected_entities = self._extract_entities_from_hardware_result(hardware)
-            automation = await self.delegate_task(
-                "home-assistant-automation",
-                {
-                    "text": text,
-                    "entities": selected_entities,
-                    "hardware": hardware.get("hardware", []),
-                },
-                timeout=60.0,
-            )
-            result = (
-                str(automation["result"])
-                if automation and isinstance(automation, dict) and automation.get("result")
-                else "I selected hardware but could not create the automation in Home Assistant right now."
-            )
-            yield result
+            result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
+            if result and isinstance(result, dict) and result.get("result"):
+                yield str(result["result"])
+            elif not result:
+                yield "I could not reach the Home Assistant agent right now. Please retry."
+            else:
+                yield "The Home Assistant agent did not return a result. Please retry."
             yield {"done": True, "spawned": [], "system_msg": ""}
             return
 

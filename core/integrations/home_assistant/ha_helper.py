@@ -194,6 +194,63 @@ def extract_entity_ids(devices: List[Dict[str, Any]]) -> List[str]:
     return entity_ids
 
 
+async def update_automation(
+    base_url: str,
+    token: str,
+    automation_id: str,
+    automation_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Overwrite an existing automation by POSTing to its config endpoint.
+
+    The HA REST API uses the same POST /api/config/automation/config/{id}
+    endpoint for both creation and update; supplying an existing id performs
+    an in-place update, preserving the automation's internal ID and history.
+    """
+    normalized_base = normalize_ha_base_url(base_url)
+
+    alias = str(automation_config.get("name") or "Updated automation").strip()
+    description = str(automation_config.get("description") or "").strip()
+    trigger = automation_config.get("trigger") or []
+    condition = automation_config.get("condition") or []
+    action = automation_config.get("action") or []
+    mode = str(automation_config.get("mode") or "single").strip() or "single"
+
+    payload = {
+        "alias": alias,
+        "description": description,
+        "trigger": trigger,
+        "condition": condition,
+        "action": action,
+        "mode": mode,
+    }
+
+    endpoint = f"{normalized_base}/api/config/automation/config/{automation_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(endpoint, headers=headers, json=payload) as response:
+            content_type = (response.headers.get("Content-Type") or "").lower()
+            body: Any
+            if "application/json" in content_type:
+                body = await response.json()
+            else:
+                body = await response.text()
+
+            if response.status >= 400:
+                raise RuntimeError(
+                    f"REST automation update failed ({response.status}): {body}"
+                )
+
+            return {
+                "automation_id": automation_id,
+                "status": response.status,
+                "result": body,
+            }
+
+
 async def create_automation_via_websocket(
     ws_url: str,
     token: str,

@@ -9,7 +9,6 @@ import importlib
 import logging
 import sys
 import time
-import subprocess
 
 from ..core.actor import Actor, Message, MessageType
 
@@ -34,7 +33,7 @@ PACKAGE_TO_IMPORT = {
     "transformers":      "transformers",
     "ultralytics":       "ultralytics",
     "pyserial":          "serial",
-    #"duckduckgo-search": "duckduckgo_search",
+    "duckduckgo-search": "duckduckgo_search",
     "ddgs":              "duckduckgo_search",
     "asyncssh":          "asyncssh",
     "rich":              "rich",
@@ -96,6 +95,12 @@ class InstallerAgent(Actor):
     async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:
             result = await self._handle_install(msg)
+            # Echo task_id back so caller's future can resolve
+            if isinstance(msg.payload, dict):
+                task_id = msg.payload.get("task") or msg.payload.get("_task_id")
+                if task_id:
+                    result["task"] = task_id
+                    result["_task_id"] = task_id
             target = msg.reply_to or msg.sender_id
             if target:
                 await self.send(target, MessageType.RESULT, result)
@@ -201,46 +206,37 @@ class InstallerAgent(Actor):
             "message": f"Installed {len(results) - len(failed)}/{len(results)} packages",
         }
 
-
-
     async def _pip_install(self, package: str) -> tuple[bool, str]:
-        """Run pip install using subprocess in a thread (Windows-compatible).
+        """Run pip install using the same interpreter that launched this process.
 
-        Using run_in_executor + subprocess.run instead of create_subprocess_exec
-        because Windows SelectorEventLoop doesn't support async subprocesses,
-        and ProactorEventLoop breaks MQTT's add_reader/add_writer.
+        sys.executable inside a venv points to  venv/Scripts/python.exe  (Windows)
+        or  venv/bin/python  (Linux/Mac), so packages always land in the right place.
+        --break-system-packages is Linux-only and skipped on Windows.
         """
         cmd = [sys.executable, "-m", "pip", "install", package]
         if sys.platform != "win32":
             cmd.append("--break-system-packages")
 
-        def _run_pip():
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=180,
-                )
-                output = result.stdout + result.stderr
-                return result.returncode == 0, output
-            except subprocess.TimeoutExpired:
-                return False, "Timed out after 180s"
-            except Exception as e:
-                return False, f"subprocess error: {e}"
-
         try:
-            loop = asyncio.get_running_loop()
-            success, output = await loop.run_in_executor(None, _run_pip)
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+            output = (stdout + stderr).decode("utf-8", errors="replace")
 
-            if success:
-                importlib.invalidate_caches()
+            if proc.returncode != 0:
+                return False, output
 
-            return success, output
+            # Refresh import machinery so the new package is visible immediately
+            importlib.invalidate_caches()
+            return True, output
 
+        except asyncio.TimeoutError:
+            return False, "Timed out after 180s"
         except Exception as e:
-            logger.error(f"[{self.name}] _pip_install failed for {package}: {e!r}")
-            return False, f"executor error: {e}"
+            return False, str(e)
 
     def _is_installed(self, import_name: str) -> bool:
         """Check importability, always refreshing the import cache first."""

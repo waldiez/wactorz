@@ -221,8 +221,10 @@ class Actor(ABC):
 
     async def _handle_status_request(self, msg: Message):
         status = self.get_status()
-        if msg.reply_to:
-            await self.send(msg.sender_id, MessageType.STATUS_RESPONSE, status)
+        # Reply to sender_id (always), reply_to is optional override
+        target = msg.reply_to or msg.sender_id
+        if target:
+            await self.send(target, MessageType.STATUS_RESPONSE, status)
 
     async def _handle_heartbeat_msg(self, msg: Message):
         pass  # Monitor actor handles these

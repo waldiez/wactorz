@@ -8,6 +8,7 @@ from .agents.code_agent import CodeAgent
 from .agents.ml_agent import MLAgent, YOLOAgent, AnomalyDetectorAgent
 from .agents.home_assistant_hardware_agent import HomeAssistantHardwareAgent
 from .agents.manual_agent import ManualAgent
+from .agents.planner_agent import PlannerAgent
 
 __all__ = [
     "Actor", "ActorState", "Message", "MessageType",
@@ -17,4 +18,5 @@ __all__ = [
     "HomeAssistantHardwareAgent",
     "MLAgent", "YOLOAgent", "AnomalyDetectorAgent",
     "ManualAgent",
+    "PlannerAgent",
 ]

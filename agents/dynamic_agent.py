@@ -62,6 +62,12 @@ class DynamicAgent(Actor):
         self.total_output_tokens = 0
         self.total_cost_usd      = 0.0
 
+        # Error tracking for health classification
+        self._consecutive_errors: int   = 0
+        self._error_threshold:    int   = 3      # DEGRADED after this many
+        self._last_error_time:    float = 0.0
+        self._error_phase:        str   = ""     # compile|setup|process|handle_task
+
         # Public API exposed to generated code via `agent` parameter
         self._api            = _AgentAPI(self)
 
@@ -76,10 +82,8 @@ class DynamicAgent(Actor):
             except Exception as e:
                 err = traceback.format_exc()
                 logger.error(f"[{self.name}] setup() failed: {e}\n{err}")
-                await self._mqtt_publish(
-                    f"agents/{self.actor_id}/logs",
-                    {"type": "log", "message": f"SETUP ERROR: {e}", "timestamp": time.time()}
-                )
+                await self._publish_error(
+                    phase="setup", error=e, traceback_str=err, fatal=True)
         if self._fn_process:
             self._tasks.append(asyncio.create_task(self._process_loop()))
 
@@ -355,10 +359,8 @@ class DynamicAgent(Actor):
         except Exception as e:
             err = traceback.format_exc()
             logger.error(f"[{self.name}] Code compilation failed: {e}\n{err}")
-            asyncio.create_task(self._mqtt_publish(
-                f"agents/{self.actor_id}/logs",
-                {"type": "log", "message": f"CODE ERROR: {e}", "timestamp": time.time()}
-            ))
+            asyncio.create_task(self._publish_error(
+                phase="compile", error=e, traceback_str=err, fatal=True))
 
     # ── Process loop ───────────────────────────────────────────────────────
 
@@ -370,12 +372,16 @@ class DynamicAgent(Actor):
                 continue
             try:
                 await self._fn_process(self._api)
+                self._reset_error_count()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 self.metrics.errors += 1
-                logger.error(f"[{self.name}] process() error: {e}\n{traceback.format_exc()}")
-                await asyncio.sleep(2)   # back off on errors
+                tb = traceback.format_exc()
+                logger.error(f"[{self.name}] process() error: {e}\n{tb}")
+                await self._publish_error(phase="process", error=e, traceback_str=tb)
+                backoff = min(2 ** self._consecutive_errors, 30)
+                await asyncio.sleep(backoff)
             await asyncio.sleep(self.poll_interval)
 
     # ── Message handling ───────────────────────────────────────────────────
@@ -389,13 +395,77 @@ class DynamicAgent(Actor):
                     if msg.sender_id and result is not None:
                         await self.send(msg.sender_id, MessageType.RESULT, result)
                 except Exception as e:
-                    logger.error(f"[{self.name}] handle_task() error: {e}")
+                    tb = traceback.format_exc()
+                    logger.error(f"[{self.name}] handle_task() error: {e}\n{tb}")
+                    await self._publish_error(phase="handle_task", error=e, traceback_str=tb)
                     if msg.sender_id:
-                        await self.send(msg.sender_id, MessageType.RESULT, {"error": str(e)})
+                        await self.send(msg.sender_id, MessageType.RESULT, {
+                            "error":       str(e),
+                            "error_phase": "handle_task",
+                            "agent":       self.name,
+                        })
             else:
                 if msg.sender_id:
                     await self.send(msg.sender_id, MessageType.RESULT,
                                     {"info": f"{self.name} has no handle_task defined"})
+
+    async def _publish_error(
+        self,
+        phase: str,
+        error: Exception,
+        traceback_str: str = "",
+        fatal: bool = False,
+    ):
+        """
+        Publish a structured error event to agents/{id}/errors AND send
+        a direct actor message to MonitorAgent so it works without MQTT.
+        """
+        self._consecutive_errors += 1
+        self._last_error_time     = time.time()
+        self._error_phase         = phase
+        severity = (
+            "critical"
+            if fatal or self._consecutive_errors >= self._error_threshold
+            else "warning"
+        )
+        event = {
+            "actor_id":    self.actor_id,
+            "name":        self.name,
+            "phase":       phase,
+            "error":       str(error),
+            "traceback":   traceback_str[-1200:] if traceback_str else "",
+            "consecutive": self._consecutive_errors,
+            "fatal":       fatal,
+            "severity":    severity,
+            "degraded":    self._consecutive_errors >= self._error_threshold,
+            "timestamp":   time.time(),
+        }
+        await self._mqtt_publish(f"agents/{self.actor_id}/errors", event)
+        # Direct actor message to monitor (works without MQTT broker)
+        if self._registry:
+            monitor = self._registry.find_by_name("monitor")
+            if monitor and monitor.actor_id != self.actor_id:
+                try:
+                    await self.send(monitor.actor_id, MessageType.TASK, {
+                        **event,
+                        "_monitor_error_event": True,
+                    })
+                except Exception:
+                    pass
+        # Mirror to /alert so the dashboard picks it up immediately
+        await self._mqtt_publish(f"agents/{self.actor_id}/alert", {
+            "actor_id":  self.actor_id,
+            "name":      self.name,
+            "message":   f"[{phase}] {error}",
+            "severity":  severity,
+            "timestamp": time.time(),
+        })
+
+    def _reset_error_count(self):
+        if self._consecutive_errors > 0:
+            logger.info(f"[{self.name}] Recovered — resetting error counter.")
+            self._consecutive_errors = 0
+            self._error_phase        = ""
 
     def get_status(self) -> dict:
         s = super().get_status()
@@ -480,6 +550,37 @@ class _LLMInterface:
         return reply
 
 
+def _ensure_result_handler(actor):
+    """
+    Patch handle_message once so that RESULT messages carrying _task_id
+    resolve the corresponding future. Safe to call multiple times.
+    """
+    if getattr(actor, "_result_handler_patched", False):
+        return
+    actor._result_handler_patched = True
+    if not hasattr(actor, "_result_futures"):
+        actor._result_futures = {}
+    original = actor.handle_message.__func__ if hasattr(actor.handle_message, "__func__") else None
+
+    import types
+    async def _patched_handle_message(self, msg: Message):
+        if msg.type == MessageType.RESULT:
+            payload = msg.payload if isinstance(msg.payload, dict) else {}
+            task_id = payload.get("_task_id")
+            if task_id and task_id in self._result_futures:
+                if not self._result_futures[task_id].done():
+                    self._result_futures[task_id].set_result(payload)
+                return
+        # Fall through to original handle_message
+        if original:
+            await original(self, msg)
+        else:
+            pass  # base class has no-op handle_message
+
+    actor.handle_message = types.MethodType(_patched_handle_message, actor)
+
+
+
 class _AgentAPI:
     """
     Clean API surface exposed to LLM-generated code via the `agent` parameter.
@@ -544,31 +645,96 @@ class _AgentAPI:
 
     # ── Inter-agent messaging ──────────────────────────────────────────────
 
-    async def send_to(self, agent_name: str, payload: Any) -> Optional[Any]:
-        """Send a TASK to another agent by name and wait for result."""
+    async def send_to(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Optional[Any]:
+        """Send a TASK to another agent by name and wait for its result.
+
+        Works with DynamicAgent, LLMAgent, ManualAgent — any Actor subclass.
+        Uses a dedicated future keyed by a unique task_id so concurrent calls
+        don't interfere with each other.
+        """
         registry = self._actor._registry
         if not registry:
+            logger.warning(f"[{self.name}] send_to: no registry")
             return None
         target = registry.find_by_name(agent_name)
         if not target:
             logger.warning(f"[{self.name}] send_to: agent '{agent_name}' not found")
-            return None
+            return {"error": f"Agent '{agent_name}' not found"}
+
+        import uuid
+        task_id = str(uuid.uuid4())[:8]
+
+        # Register a future in the actor's result table
+        if not hasattr(self._actor, "_result_futures"):
+            self._actor._result_futures = {}
         future = asyncio.get_event_loop().create_future()
-        # Simple one-shot reply via a temporary handler
-        orig_handle = self._actor.handle_message
-        async def _tmp_handle(msg: Message):
-            if msg.type == MessageType.RESULT and not future.done():
-                future.set_result(msg.payload)
-            else:
-                await orig_handle(msg)
-        self._actor.handle_message = _tmp_handle
+        self._actor._result_futures[task_id] = future
+
+        # Ensure the actor resolves result futures in handle_message
+        _ensure_result_handler(self._actor)
+
+        # Payload: always a dict with task_id and reply_to so target can respond
+        if not isinstance(payload, dict):
+            payload = {"message": payload, "text": str(payload)}
+        payload = dict(payload)
+        payload["_task_id"]  = task_id
+        payload["_reply_to"] = self._actor.actor_id
+
         await self._actor.send(target.actor_id, MessageType.TASK, payload)
         try:
-            return await asyncio.wait_for(future, timeout=30.0)
+            result = await asyncio.wait_for(future, timeout=timeout)
+            return result
         except asyncio.TimeoutError:
-            return None
+            logger.warning(f"[{self.name}] send_to '{agent_name}' timed out after {timeout}s")
+            return {"error": f"Timeout waiting for '{agent_name}'"}
         finally:
-            self._actor.handle_message = orig_handle
+            self._actor._result_futures.pop(task_id, None)
+
+    async def send_to_many(self, tasks: list[tuple[str, Any]], timeout: float = 60.0) -> list:
+        """Send tasks to multiple agents IN PARALLEL and collect all results.
+
+        tasks: list of (agent_name, payload) tuples
+        Returns list of results in the same order.
+
+        Example:
+            results = await agent.send_to_many([
+                ("weather-agent", {"city": "Athens"}),
+                ("news-agent",    {"topic": "AI"}),
+            ])
+            weather, news = results[0], results[1]
+        """
+        coros = [self.send_to(name, payload, timeout) for name, payload in tasks]
+        return list(await asyncio.gather(*coros, return_exceptions=True))
+
+    def agents(self) -> list[dict]:
+        """
+        Return all running agents with name, type and description.
+        Use this to discover what workers are available before delegating.
+
+        Example:
+            available = agent.agents()
+            workers = [a for a in available if a["name"] != "main"]
+        """
+        registry = self._actor._registry
+        if not registry:
+            return []
+        result = []
+        for actor in registry.all_actors():
+            result.append({
+                "name":        actor.name,
+                "type":        type(actor).__name__,
+                "description": (
+                    getattr(actor, "description", "")
+                    or getattr(actor, "system_prompt", "")[:100]
+                    or ""
+                ),
+                "state": actor.state.name if hasattr(actor.state, "name") else str(actor.state),
+            })
+        return result
+
+    async def delegate(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Optional[Any]:
+        """Alias for send_to() — cleaner name for planner/coordinator agents."""
+        return await self.send_to(agent_name, payload, timeout=timeout)
 
     # ── Metrics ────────────────────────────────────────────────────────────
 

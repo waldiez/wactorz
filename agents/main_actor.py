@@ -411,6 +411,8 @@ class MainActor(LLMAgent):
         kwargs.setdefault("system_prompt", ORCHESTRATOR_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
         self._result_futures: dict[str, asyncio.Future] = {}
+        # Queued monitor notifications — prepended to next user response
+        self._pending_notifications: list[dict] = []
         self.protected = True
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
@@ -456,11 +458,21 @@ class MainActor(LLMAgent):
 
     async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:
+            # Intercept monitor notifications BEFORE passing to LLM _handle_task
+            if isinstance(msg.payload, dict) and msg.payload.get("_monitor_notification"):
+                self._pending_notifications.append(msg.payload)
+                logger.info(f"[{self.name}] Monitor alert queued: {msg.payload.get('message','')[:80]}")
+                return
             await self._handle_task(msg)
+
         elif msg.type == MessageType.RESULT:
-            fid = msg.payload.get("task") if isinstance(msg.payload, dict) else None
-            if fid and fid in self._result_futures:
-                self._result_futures[fid].set_result(msg.payload)
+            if isinstance(msg.payload, dict):
+                # Support both key names: "_task_id" (new) and "task" (legacy)
+                fid = msg.payload.get("_task_id") or msg.payload.get("task")
+                if fid and fid in self._result_futures:
+                    fut = self._result_futures[fid]
+                    if not fut.done():
+                        fut.set_result(msg.payload)
 
     # ── Home Automation intent detection ───────────────────────────────────
 
@@ -516,15 +528,35 @@ class MainActor(LLMAgent):
 
     # ── User input ─────────────────────────────────────────────────────────
 
+    def _drain_notifications(self) -> str:
+        """Pop queued monitor notifications as a formatted prefix string."""
+        if not self._pending_notifications:
+            return ""
+        icons = {"critical": "\U0001f534", "warning": "\U0001f7e1", "info": "\u2705"}
+        lines = []
+        for n in self._pending_notifications:
+            icon = icons.get(n.get("severity", "warning"), "\u26a0\ufe0f")
+            lines.append(f"{icon} **System:** {n.get('message', '').strip()}")
+        self._pending_notifications.clear()
+        return "\n".join(lines) + "\n\n---\n\n"
+
     async def process_user_input(self, text: str) -> str:
+        note_prefix = self._drain_notifications()
+
         # Route home automation requests to the unified HA agent
         if await self._is_home_automation_request(text):
             result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
             if result and isinstance(result, dict) and result.get("result"):
-                return str(result["result"])
+                return note_prefix + str(result["result"])
             if not result:
-                return "I could not reach the Home Assistant agent right now. Please retry."
-            return "The Home Assistant agent did not return a result. Please retry."
+                return note_prefix + "I could not reach the Home Assistant agent right now. Please retry."
+            return note_prefix + "The Home Assistant agent did not return a result. Please retry."
+
+        # Detect complex multi-agent tasks and route to PlannerAgent
+        if await self._needs_planning(text):
+            result = await self._run_planner(text)
+            if result:
+                return note_prefix + result
 
         response = await self.chat(text)
 
@@ -560,7 +592,7 @@ class MainActor(LLMAgent):
             if parts:
                 clean += f"\n\n[System: {' | '.join(parts)} — will auto-restore on restart]"
 
-        return clean
+        return note_prefix + clean
 
     async def process_user_input_stream(self, text: str):
         """
@@ -571,6 +603,11 @@ class MainActor(LLMAgent):
         The CLI calls this and prints chunks immediately.
         REST/Discord/WhatsApp should use process_user_input() instead.
         """
+        # Drain monitor notifications first
+        note_prefix = self._drain_notifications()
+        if note_prefix:
+            yield note_prefix
+
         # HA routing has no streaming — fall back to blocking for those
         if await self._is_home_automation_request(text):
             result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
@@ -582,6 +619,14 @@ class MainActor(LLMAgent):
                 yield "The Home Assistant agent did not return a result. Please retry."
             yield {"done": True, "spawned": [], "system_msg": ""}
             return
+
+        # Detect complex multi-agent tasks and route to PlannerAgent
+        if await self._needs_planning(text):
+            result = await self._run_planner(text)
+            if result:
+                yield result
+                yield {"done": True, "spawned": [], "system_msg": ""}
+                return
 
         # Stream the LLM response chunk by chunk
         full_chunks = []
@@ -615,7 +660,96 @@ class MainActor(LLMAgent):
 
         yield {"done": True, "spawned": spawned, "system_msg": system_msg}
 
-    # ── Spawn ──────────────────────────────────────────────────────────────
+    # ── Planner ────────────────────────────────────────────────────────────
+
+    _PLANNING_KEYWORDS = [
+        # Coordination signals
+        "and then", "after that", "also", "combine", "compare",
+        "coordinate", "plan", "pipeline", "orchestrate", "summarize both",
+        "using multiple", "all agents", "several agents",
+        # Multi-step / multi-domain signals
+        "first.*then", "step by step", "in order",
+        "weather.*news", "news.*weather", "manual.*code", "search.*analyze",
+    ]
+
+    async def _needs_planning(self, text: str) -> bool:
+        """
+        Heuristic: does this task benefit from multi-agent coordination?
+        Keeps main fast — only escalates genuinely complex requests.
+        """
+        import re
+        lowered = text.lower()
+
+        # Explicit user request for coordination
+        if any(w in lowered for w in ("coordinate:", "plan:", "pipeline:", "@planner")):
+            return True
+
+        # Keyword heuristic — multiple signals needed to avoid false positives
+        hits = sum(1 for kw in self._PLANNING_KEYWORDS if re.search(kw, lowered))
+        if hits >= 2:
+            return True
+
+        # References two or more known agent names
+        if self._registry:
+            agent_names = [a.name for a in self._registry.all_actors()
+                           if a.name not in {"main", "monitor", "installer"}]
+            mentioned = sum(1 for name in agent_names if name in lowered)
+            if mentioned >= 2:
+                return True
+
+        return False
+
+    async def _run_planner(self, task: str) -> Optional[str]:
+        """Spawn a PlannerAgent, hand it the task, wait for the result."""
+        from .planner_agent import PlannerAgent
+        import uuid
+
+        planner_name = f"planner-{uuid.uuid4().hex[:6]}"
+        logger.info(f"[{self.name}] Spawning planner '{planner_name}' for: {task[:60]}")
+
+        await self._mqtt_publish(
+            f"agents/{self.actor_id}/logs",
+            {"type": "log", "message": f"Complex task detected — spawning planner...", "timestamp": __import__('time').time()},
+        )
+
+        task_id = f"plan_{uuid.uuid4().hex[:8]}"
+        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        self._result_futures[task_id] = future
+
+        try:
+            planner = await self.spawn(
+                PlannerAgent,
+                name=planner_name,
+                llm_provider=self.llm,
+                task=task,
+                reply_to_id=self.actor_id,
+                reply_task_id=task_id,   # so main can match the result future
+                auto_terminate=True,
+                persistence_dir=str(self._persistence_dir.parent),
+            )
+            if not planner:
+                return None
+
+            # Planner will call on_start → _run_plan → send RESULT back to us
+            # We wait here with a generous timeout
+            result_payload = await asyncio.wait_for(future, timeout=120.0)
+            answer = result_payload.get("result") or result_payload.get("text") or ""
+            # Surface any agents the planner spawned
+            spawned_names = result_payload.get("spawned", [])
+            if spawned_names:
+                answer += f"\n\n[System: Planner created new agents: {', '.join(spawned_names)} — saved for future use]"
+            return answer
+
+        except asyncio.TimeoutError:
+            logger.warning(f"[{self.name}] Planner timed out for: {task[:60]}")
+            return None
+        except Exception as e:
+            logger.error(f"[{self.name}] Planner error: {e}")
+            return None
+        finally:
+            self._result_futures.pop(task_id, None)
+
+        # ── Spawn ──────────────────────────────────────────────────────────────
 
     @staticmethod
     def _parse_spawn_config(raw: str) -> dict:
@@ -823,27 +957,43 @@ class MainActor(LLMAgent):
         """Delegate package installation to the installer agent."""
         if not self._registry:
             return
+
+        # Fast path: check which packages actually need installing
+        import importlib, sys
+        needed = []
+        for pkg in packages:
+            import_name = pkg.replace("-", "_").split("[")[0]
+            try:
+                importlib.import_module(import_name)
+            except ImportError:
+                needed.append(pkg)
+        if not needed:
+            logger.info(f"[{self.name}] All packages already available: {packages} — skipping install")
+            return
+
         installer = self._registry.find_by_name("installer")
         if not installer:
-            logger.warning(f"[{self.name}] installer agent not found — skipping install of {packages}")
+            logger.warning(f"[{self.name}] installer agent not found — skipping install of {needed}")
             return
-        logger.info(f"[{self.name}] Installing packages via installer: {packages}")
+        logger.info(f"[{self.name}] Installing packages via installer: {needed}")
+        import uuid
+        task_id = f"install_{uuid.uuid4().hex[:8]}"
         future = asyncio.get_event_loop().create_future()
-        task_id = f"install_{id(future)}"
         self._result_futures[task_id] = future
         await self.send(installer.actor_id, MessageType.TASK, {
             "action": "install",
-            "packages": packages,
+            "packages": needed,
             "task": task_id,
+            "_task_id": task_id,
             "reply_to": self.actor_id,
         })
         try:
-            result = await asyncio.wait_for(future, timeout=180.0)
+            result = await asyncio.wait_for(future, timeout=120.0)
             logger.info(f"[{self.name}] Install result: {result.get('message', result)}")
             if result.get("failed"):
                 logger.warning(f"[{self.name}] Failed to install: {result['failed']}")
         except asyncio.TimeoutError:
-            logger.warning(f"[{self.name}] Package install timed out for {packages}")
+            logger.warning(f"[{self.name}] Package install timed out for {needed}")
         finally:
             self._result_futures.pop(task_id, None)
 

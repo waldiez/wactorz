@@ -294,7 +294,19 @@ class LLMAgent(Actor):
     async def on_start(self):
         # Restore conversation history from persistence
         saved = self.recall("conversation_history", [])
-        self._conversation_history = saved[-self.max_history:]
+        clean = []
+        for m in saved:
+            if not isinstance(m, dict):
+                continue
+            role    = m.get("role", "")
+            content = m.get("content", "")
+            if role not in ("user", "assistant"):
+                continue
+            if not isinstance(content, str):
+                content = str(content)
+            if content.strip():
+                clean.append({"role": role, "content": content})
+        self._conversation_history = clean[-self.max_history:]
 
     async def on_stop(self):
         self.persist("conversation_history", self._conversation_history)
@@ -304,7 +316,17 @@ class LLMAgent(Actor):
             await self._handle_task(msg)
 
     async def _handle_task(self, msg: Message):
-        task_text = msg.payload.get("text") if isinstance(msg.payload, dict) else str(msg.payload)
+        if isinstance(msg.payload, dict):
+            # Accept "text", "task", "message", or fall back to JSON dump
+            task_text = (
+                msg.payload.get("text")
+                or msg.payload.get("task")
+                or msg.payload.get("message")
+                or msg.payload.get("query")
+                or str(msg.payload)
+            )
+        else:
+            task_text = str(msg.payload) if msg.payload is not None else ""
         self._current_task = task_text[:60]
 
         if self.llm is None:
@@ -363,8 +385,15 @@ class LLMAgent(Actor):
 
         self.metrics.messages_processed += 1
         self._conversation_history.append({"role": "user", "content": user_message})
+        safe_history = [
+            {"role": m["role"], "content": str(m["content"])}
+            for m in self._conversation_history[-self.max_history:]
+            if isinstance(m, dict)
+            and m.get("role") in ("user", "assistant")
+            and m.get("content") is not None
+        ]
         response, usage = await self.llm.complete(
-            messages=self._conversation_history[-self.max_history:],
+            messages=safe_history,
             system=self.system_prompt,
         )
         self._conversation_history.append({"role": "assistant", "content": response})
@@ -405,8 +434,15 @@ class LLMAgent(Actor):
         full_text = []
         usage     = {}
 
+        safe_history = [
+            {"role": m["role"], "content": str(m["content"])}
+            for m in self._conversation_history[-self.max_history:]
+            if isinstance(m, dict)
+            and m.get("role") in ("user", "assistant")
+            and m.get("content") is not None
+        ]
         async for chunk in self.llm.stream(
-            messages=self._conversation_history[-self.max_history:],
+            messages=safe_history,
             system=self.system_prompt,
         ):
             if isinstance(chunk, dict):

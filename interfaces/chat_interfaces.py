@@ -290,6 +290,11 @@ class CLIInterface:
                     self._print_help()
                     continue
 
+                if text.lower() == "/clear-plans":
+                    self.agent.persist("_plan_cache", {})
+                    print("\n[System: Plan cache cleared.]\n")
+                    continue
+
                 if text.lower() in ("/agents", "agents"):
                     agents = await self.agent.list_agents()
                     print()

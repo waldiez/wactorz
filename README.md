@@ -18,9 +18,10 @@
 9. [Interfaces](#9-interfaces)
 10. [MQTT Topic Reference](#10-mqtt-topic-reference)
 11. [Built-in Specialist Agents](#11-built-in-specialist-agents)
-12. [Installation & Configuration](#12-installation--configuration)
-13. [Troubleshooting](#13-troubleshooting)
-14. [File Structure](#appendix-file-structure)
+12. [Remote Nodes & Edge Deployment](#12-remote-nodes--edge-deployment)
+13. [Installation & Configuration](#13-installation--configuration)
+14. [Troubleshooting](#14-troubleshooting)
+15. [File Structure](#appendix-file-structure)
 
 ---
 
@@ -73,7 +74,7 @@ Message flow:
 | `agents/llm_agent.py` | Agent | Base LLM agent with conversation history, cost tracking, streaming, and 4 providers |
 | `agents/dynamic_agent.py` | Agent | Runtime-generated agents — executes LLM-written Python code in a sandboxed namespace |
 | `agents/planner_agent.py` | Agent | Multi-step task planner — decomposes tasks, fans out to workers, synthesizes results |
-| `agents/installer_agent.py` | Agent | Package manager — installs pip packages on demand for dynamic agents |
+| `agents/installer_agent.py` | Agent | Package manager — installs pip packages locally and on remote nodes via SSH |
 | `agents/manual_agent.py` | Agent | PDF specialist — 3-layer search strategy to find and extract manual content |
 | `agents/home_assistant_agent.py` | Agent | Unified HA agent — hardware recommendations and automation CRUD via HA REST API |
 | `interfaces/chat_interfaces.py` | I/O | CLI (streaming), REST, Discord, WhatsApp — all call `process_user_input[_stream]` |
@@ -199,6 +200,7 @@ Simply describe what you want in the chat. The LLM will write the code and wrap 
 |-------|-------------|
 | `name` | Unique agent name. Use `"replace": true` to hot-swap a running agent |
 | `type` | `"dynamic"` (runtime code), `"llm"` (pure conversation), `"manual"` (PDF search) |
+| `node` | Remote node name to spawn on (e.g. `"rpi-kitchen"`). Omit to run locally |
 | `install` | List of pip packages to install before spawning. Fast-path skips if already importable |
 | `poll_interval` | Seconds between `process()` calls. Use `3600` for infrequent background tasks |
 | `replace` | If `true`, stops the existing agent with this name before spawning the new one |
@@ -321,6 +323,10 @@ python -m agentflow --llm nim --nim-model meta/llama-3.3-70b-instruct
 | Command | Description |
 |---------|-------------|
 | `/agents` | List all running agents with type and status |
+| `/nodes` | List remote nodes with online/offline status and their agents |
+| `/deploy <node-name>` | Bootstrap a new remote node via SSH (discovers Pi automatically) |
+| `/deploy-pkg <host> <pkg...>` | Install pip packages on a remote node via SSH |
+| `/migrate <agent> <node>` | Move a running agent to a different node |
 | `/cost` | Show per-agent token usage and cost breakdown |
 | `/clear` | Clear the main agent's conversation history |
 | `/clear-plans` | Wipe the planner's plan cache |
@@ -351,7 +357,14 @@ Start `monitor_server.py` alongside agentflow. Open `monitor.html` in a browser.
 | `agents/{id}/alert` | Alert events (heartbeat timeout or error escalation) |
 | `agents/{id}/metrics` | Token usage, cost, tasks completed after each LLM call |
 | `agents/{id}/completed` | Task completion notification with result preview |
+| `agents/by-name/{name}/task` | Address a task to an agent by name (used by remote agents) |
 | `system/health` | Global health snapshot every 15s — running/stopped/failed counts |
+| `nodes/{name}/spawn` | Spawn a new agent on a remote node |
+| `nodes/{name}/stop` | Stop a named agent on a remote node |
+| `nodes/{name}/migrate` | Move an agent from this node to another |
+| `nodes/{name}/list` | Request list of agents running on a node |
+| `nodes/{name}/heartbeat` | Node liveness pulse — agent list, broker, timestamp |
+| `nodes/{name}/migrate_result` | Migration success/failure notification |
 
 ---
 
@@ -387,7 +400,152 @@ Pre-built agents for code execution and ML inference. `CodeAgent` runs arbitrary
 
 ---
 
-## 12. Installation & Configuration
+## 12. Remote Nodes & Edge Deployment
+
+AgentFlow can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. The edge node only needs a single file and one pip package.
+
+### How It Works
+
+```
+[Main machine]                        [Raspberry Pi / Edge node]
+main_actor ──MQTT──► nodes/{name}/spawn ──► remote_runner.py
+                                               │  compiles + runs agent
+                                               │  heartbeats every 10s
+dashboard  ◄──MQTT── agents/{id}/heartbeat ◄───┘
+```
+
+The `remote_runner.py` is fully self-contained — it reimplements the DynamicAgent contract inline without importing anything from the agentflow package. Remote agents appear in the dashboard and respond to MQTT commands exactly like local agents.
+
+### Edge Node Requirements
+
+```bash
+# That's it — one package, one file
+pip install aiomqtt --break-system-packages
+python3 remote_runner.py --broker 192.168.1.10 --name rpi-kitchen
+```
+
+The broker address must be reachable **from the Pi** (your main machine's LAN IP, not `localhost`).
+
+### Deploying a Node
+
+The installer agent handles SSH deployment — no manual file copying needed.
+
+**From the CLI:**
+
+```
+/deploy rpi-kitchen
+```
+
+This will:
+1. Discover the Pi on your LAN (mDNS first, then port-22 scan)
+2. Prompt for SSH user, password, and your MQTT broker IP
+3. Upload `remote_runner.py` via SFTP
+4. Install `aiomqtt` on the Pi
+5. Start the runner in the background
+6. The node appears in `/nodes` within ~15 seconds
+
+**From the chat:**
+
+```
+set up my Raspberry Pi at 192.168.1.50 as a node called rpi-kitchen
+```
+
+The LLM will call `delegate_to_installer` with a `node_deploy` action automatically.
+
+### Spawning Agents on a Remote Node
+
+Add `"node"` to any spawn block:
+
+```json
+<spawn>
+{
+  "name": "temp-sensor",
+  "node": "rpi-kitchen",
+  "type": "dynamic",
+  "description": "Reads temperature from DHT22 and publishes to MQTT",
+  "poll_interval": 30,
+  "code": "
+async def setup(agent):
+    await agent.log('Sensor ready on ' + agent.node)
+
+async def process(agent):
+    import random
+    temp = round(20 + random.uniform(-2, 2), 1)
+    await agent.publish('sensors/temperature', {'value': temp, 'unit': 'C', 'node': agent.node})
+  "
+}
+</spawn>
+```
+
+Or just ask in chat: *"spawn a temperature sensor agent on rpi-kitchen"*
+
+### Installing Packages on a Node
+
+Before spawning an agent that needs hardware libraries:
+
+```
+/deploy-pkg 192.168.1.50 adafruit-circuitpython-dht RPi.GPIO
+```
+
+Or include `"install"` in the spawn block — the remote runner will pip-install them before starting the agent.
+
+### Migrating Agents Between Nodes
+
+Move a running agent to a different machine without stopping it manually:
+
+```
+/migrate temp-sensor rpi-bedroom
+```
+
+Or via chat: *"move temp-sensor to rpi-bedroom"*
+
+The system stops the agent on its current node, starts it fresh on the target, and updates the spawn registry so it restores to the right machine on the next restart.
+
+### Viewing Connected Nodes
+
+```
+/nodes
+```
+
+Output:
+```
+  local                online   @main @monitor @installer @home-assistant-agent
+  rpi-kitchen          online   @temp-sensor
+  rpi-bedroom          OFFLINE  (no agents)
+```
+
+A node is considered online if it sent a heartbeat in the last 30 seconds.
+
+### Remote Agent API
+
+Remote agents have the same `agent.*` API as local agents, with one addition and one limitation:
+
+| Feature | Local | Remote |
+|---------|-------|--------|
+| `agent.publish(topic, data)` | ✅ | ✅ |
+| `agent.log(msg)` / `agent.alert(msg)` | ✅ | ✅ |
+| `agent.persist(key, val)` / `agent.recall(key)` | ✅ | ✅ (JSON file on the Pi) |
+| `agent.send_to(name, payload)` | ✅ | ✅ (via MQTT round-trip) |
+| `agent.node` | ❌ | ✅ (node name string) |
+| `agent.llm.chat(prompt)` | ✅ | ❌ (no LLM provider on edge) |
+
+For LLM reasoning from a remote agent, use `agent.send_to('main', {'text': prompt})` — main will call its LLM and return the result over MQTT.
+
+### Installer Agent — Remote Actions
+
+The installer agent gained three new actions for node management:
+
+| Action | Description |
+|--------|-------------|
+| `node_deploy` | Full bootstrap: upload runner + install aiomqtt + start process |
+| `node_install` | Install pip packages on a running node via SSH |
+| `node_run` | Run any shell command on a remote node via SSH |
+
+All three accept `host`, `user`, and either `password` or `key_path` for SSH auth.
+
+---
+
+## 13. Installation & Configuration
 
 ### Quick Start
 
@@ -444,7 +602,7 @@ By default AgentFlow connects to `localhost:1883`. Override with `--mqtt-host` a
 
 ---
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 ### Conversation history corruption (400 Bad Request loop)
 
@@ -470,30 +628,31 @@ The monitor uses two liveness signals: `STATUS_RESPONSE` messages (from the 15-s
 
 ```
 agentflow/
-├── main.py                        Entry point — CLI args, actor system setup
+├── main.py                        Entry point — CLI args, actor system setup, supervision tree
+├── remote_runner.py               Self-contained edge node runner — deploy to any Pi or machine
 ├── monitor_server.py              MQTT → WebSocket bridge for dashboard
 ├── monitor.html                   Live web dashboard
 ├── fix_history.py                 One-time corrupted history cleanup utility
 ├── requirements.txt
 │
 ├── core/
-│   ├── actor.py                   Base Actor — mailbox, lifecycle, heartbeat, spawn
-│   └── registry.py                ActorSystem, ActorRegistry — routing & delivery
+│   ├── actor.py                   Base Actor — mailbox, lifecycle, heartbeat, spawn, supervisor
+│   └── registry.py                ActorSystem, ActorRegistry, Supervisor — routing & OTP restarts
 │
 ├── agents/
 │   ├── llm_agent.py               LLMAgent — 4 providers, streaming, cost tracking
-│   ├── main_actor.py              MainActor — orchestrator, spawn parser, notifications
+│   ├── main_actor.py              MainActor — orchestrator, spawn parser, node tracking, migration
 │   ├── dynamic_agent.py           DynamicAgent — runtime code executor, error events
 │   ├── planner_agent.py           PlannerAgent — plan cache, decompose, fan-out, synthesize
 │   ├── monitor_agent.py           MonitorAgent — heartbeat, error registry, recovery
-│   ├── installer_agent.py         InstallerAgent — pip install on demand
+│   ├── installer_agent.py         InstallerAgent — pip install locally + SSH deploy to remote nodes
 │   ├── manual_agent.py            ManualAgent — 3-layer PDF search and extraction
 │   ├── home_assistant_agent.py    HomeAssistantAgent — HA automation CRUD
 │   ├── code_agent.py              CodeAgent — sandboxed Python execution
 │   └── ml_agent.py                MLAgent, YOLOAgent, AnomalyDetectorAgent
 │
 └── interfaces/
-    └── chat_interfaces.py         CLI, REST, Discord, WhatsApp
+    └── chat_interfaces.py         CLI (with /deploy, /migrate, /nodes), REST, Discord, WhatsApp
 ```
 
 ---

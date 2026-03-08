@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 async def build_system(args):
     from agentflow.core.registry import ActorSystem
+    from agentflow.core.actor import SupervisorStrategy
     from agentflow.agents.main_actor import MainActor
     from agentflow.agents.monitor_agent import MonitorActor
     from agentflow.agents.code_agent import CodeAgent
@@ -53,57 +54,83 @@ async def build_system(args):
         provider = None
         logger.warning("No LLM provider set. Agents will have limited capabilities.")
 
-    main_actor = MainActor(
-        llm_provider=provider,
-        name="main",
-        persistence_dir="./state",
-    )
-    monitor = MonitorActor(
-        check_interval=15.0,
-        heartbeat_timeout=60.0,
-        auto_restart=False,
-        persistence_dir="./state",
-    )
-    code_agent = CodeAgent(
-        llm_provider=provider,
-        name="code-agent",
-        execution_mode="subprocess",
-        persistence_dir="./state",
-    )
-    anomaly_agent = AnomalyDetectorAgent(
-        name="anomaly-detector",
-        continuous=False,
-        persistence_dir="./state",
-    )
-    installer = InstallerAgent(
-        name="installer",
-        persistence_dir="./state",
-    )
-    manual_agent = ManualAgent(
-        llm_provider=provider,
-        name="manual-agent",
-        persistence_dir="./state",
-    )
-    home_assistant_agent = HomeAssistantAgent(
-        llm_provider=provider,
-        name="home-assistant-agent",
-        persistence_dir="./state",
-    )
-
+    # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
     system = ActorSystem(
         mqtt_broker=args.mqtt_broker,
         mqtt_port=args.mqtt_port,
     )
-    await system.start(
-        main_actor,
-        monitor,
-        code_agent,
-        anomaly_agent,
-        installer,
-        manual_agent,
-        home_assistant_agent,
+    # MQTT client must exist before factories run so injected actors can publish
+    system._mqtt_client = await __import__(
+        "agentflow.core.registry", fromlist=["_MQTTPublisher"]
+    )._MQTTPublisher.create(args.mqtt_broker, args.mqtt_port)
+
+    # ── Factory helpers (called fresh on each (re)start by the Supervisor) ────
+    def make_provider():
+        return provider   # stateless — same instance is fine
+
+    def make_main():
+        return MainActor(llm_provider=make_provider(), name="main",
+                         persistence_dir="./state")
+
+    def make_monitor():
+        return MonitorActor(check_interval=15.0, heartbeat_timeout=60.0,
+                            auto_restart=False, persistence_dir="./state")
+
+    def make_installer():
+        return InstallerAgent(name="installer", persistence_dir="./state")
+
+    def make_code_agent():
+        return CodeAgent(llm_provider=make_provider(), name="code-agent",
+                         execution_mode="subprocess", persistence_dir="./state")
+
+    def make_manual_agent():
+        return ManualAgent(llm_provider=make_provider(), name="manual-agent",
+                           persistence_dir="./state")
+
+    def make_ha_agent():
+        return HomeAssistantAgent(llm_provider=make_provider(),
+                                  name="home-assistant-agent",
+                                  persistence_dir="./state")
+
+    def make_anomaly_agent():
+        return AnomalyDetectorAgent(name="anomaly-detector", continuous=False,
+                                    persistence_dir="./state")
+
+    # ── Register critical actors under the Supervisor ─────────────────────────
+    #
+    # Strategy guide used here:
+    #   main      — ONE_FOR_ONE: its crash doesn't require restarting others.
+    #               High max_restarts (10) because it's the user-facing brain.
+    #
+    #   monitor   — ONE_FOR_ONE: independent health watcher; restart it alone.
+    #
+    #   installer — ONE_FOR_ONE: stateless pip runner; restart it alone.
+    #               Lower max_restarts (3) — repeated failures mean something
+    #               is wrong with the environment, not a transient glitch.
+    #
+    #   code-agent, manual-agent, home-assistant-agent — ONE_FOR_ONE with
+    #               moderate budgets: specialist agents that are independent.
+    #
+    #   anomaly-detector — ONE_FOR_ONE: sensor pipeline, restart alone.
+    #
+    (
+        system.supervisor
+        .supervise("main",                  make_main,          strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
+        .supervise("monitor",               make_monitor,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=1.0)
+        .supervise("installer",             make_installer,     strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=3,  restart_delay=2.0)
+        .supervise("code-agent",            make_code_agent,    strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
+        .supervise("manual-agent",          make_manual_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
+        .supervise("home-assistant-agent",  make_ha_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
+        .supervise("anomaly-detector",      make_anomaly_agent, strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
     )
-    logger.info("AgentFlow system started with 7 agents (+ installer).")
+
+    # Supervisor.start() spawns all actors via their factories and starts the watch loop
+    await system.supervisor.start()
+
+    # Convenience references for the caller
+    main_actor = system.registry.find_by_name("main")
+
+    logger.info("AgentFlow system started. Supervision tree active.")
     return system, main_actor
 
 

@@ -22,6 +22,7 @@ class _SpawnPlaceholder:
 
 
 SPAWN_REGISTRY_KEY = "_spawned_agents"
+NODE_REGISTRY_KEY  = "_known_nodes"       # tracks online remote nodes
 
 ORCHESTRATOR_PROMPT = """You are the main orchestrator in a multi-agent system.
 
@@ -174,7 +175,8 @@ You do NOT act as a middleman for agent conversations.
 == EXISTING AGENTS ==
 - main                    : you (orchestrator)
 - monitor                 : health monitoring
-- installer               : installs Python packages — use this BEFORE spawning agents that need extra libs
+- installer               : installs Python packages locally AND on remote nodes via SSH
+                            Actions: install, node_deploy, node_install, node_run, check, history
 - manual-agent            : finds device manuals online and answers questions from PDFs (type: manual)
 - home-assistant-agent    : manages all Home Assistant operations (hardware recommendations, automation create/edit/delete/list)
 
@@ -196,20 +198,100 @@ duckduckgo_search, httpx, etc.), first ask the installer to install them:
 If the spawn config has an "install" list, the system will install those packages first automatically.
 Standard library and pre-installed packages (asyncio, json, os, time, re, psutil) never need installing.
 
-== REMOTE SPAWNING ==
-To spawn an agent on a remote machine (e.g. Raspberry Pi), add "node" to the spawn block:
+== REMOTE NODES & SPAWNING ==
+AgentFlow can run agents on any machine (Raspberry Pi, VM, cloud server) that is
+running remote_runner.py connected to the same MQTT broker.
+
+To spawn an agent on a remote node, add "node" to the spawn block.
+The node name must match the --name used when starting remote_runner.py.
+
+Example — spawn a temperature sensor agent on a Pi:
 <spawn>
 {
-  "name": "rpi-yolo-agent",
-  "node": "rpi-node",
-  "description": "YOLO on RPi camera",
-  "poll_interval": 1.0,
-  "code": "..."
+  "name": "temp-sensor",
+  "node": "rpi-kitchen",
+  "type": "dynamic",
+  "description": "Reads temperature from DHT22 sensor on the kitchen Pi",
+  "poll_interval": 30,
+  "code": "
+async def setup(agent):
+    await agent.log('Sensor agent ready on ' + agent.node)
+
+async def process(agent):
+    import random   # replace with real adafruit_dht read
+    temp = round(20 + random.uniform(-2, 2), 1)
+    await agent.publish('sensors/temperature', {'value': temp, 'unit': 'C', 'node': agent.node})
+    await agent.log(f'Temperature: {temp}C')
+  "
 }
 </spawn>
 
-The node name must match what was used when starting remote_runner.py on that machine.
-If no "node" is specified, the agent runs locally on the main machine.
+Inside remote agent code, agent.node gives the node name the agent is running on.
+
+== AGENT MIGRATION ==
+To move a running agent from one machine to another, call migrate_agent():
+
+  result = await main.migrate_agent("agent-name", "target-node-name")
+
+The system will:
+  1. Stop the agent on its current machine
+  2. Start it fresh on the target machine
+  3. Update the spawn registry so it restores to the right machine on restart
+  4. Notify you via the dashboard when migration completes
+
+Example:
+  User: "Move temp-sensor to rpi-bedroom"
+  You:  await main.migrate_agent("temp-sensor", "rpi-bedroom")
+
+== LISTING NODES ==
+To see which remote nodes are currently online:
+  nodes = main.list_nodes()
+  # Returns: [{"node": "rpi-kitchen", "agents": ["temp-sensor"], "online": True, "last_seen": ...}]
+
+Use this before spawning to verify the target node is reachable.
+A node is considered online if it sent a heartbeat in the last 30 seconds.
+
+== DEPLOYING A NEW NODE ==
+When the user wants to add a new Pi or machine, use the installer agent directly.
+No need to spawn a devops-agent — installer handles SSH deploys natively.
+
+Example:
+  User: "set up my Raspberry Pi at 192.168.1.50 as a node called rpi-kitchen"
+  You:  Send installer a node_deploy task:
+
+  result = await main.delegate_to_installer({
+      "action":     "node_deploy",
+      "host":       "192.168.1.50",
+      "user":       "pi",
+      "node_name":  "rpi-kitchen",
+      "broker":     "192.168.1.10",   # your main machine IP, reachable from the Pi
+      "password":   "raspberry",       # or use key_path for SSH key auth
+  })
+
+  This will:
+    1. Upload remote_runner.py to the Pi via SFTP
+    2. Install aiomqtt (the only dependency)
+    3. Start the runner in the background
+    4. The node appears in /nodes within ~15 seconds
+
+To install extra packages on a node BEFORE spawning an agent there:
+  result = await main.delegate_to_installer({
+      "action":   "node_install",
+      "host":     "192.168.1.50",
+      "user":     "pi",
+      "packages": ["adafruit-circuitpython-dht", "RPi.GPIO"],
+  })
+
+To run a shell command on a node:
+  result = await main.delegate_to_installer({
+      "action":  "node_run",
+      "host":    "192.168.1.50",
+      "user":    "pi",
+      "command": "python3 --version",
+  })
+
+The devops-agent is still available as a spawn option for more complex SSH workflows,
+but for standard node setup the installer is simpler and faster.
 
 == DEVOPS AGENT EXAMPLE ==
 When asked to deploy or manage remote machines, spawn a devops agent like this:
@@ -414,12 +496,16 @@ class MainActor(LLMAgent):
         # Queued monitor notifications — prepended to next user response
         self._pending_notifications: list[dict] = []
         self.protected = True
+        # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
+        self._known_nodes: dict[str, dict] = {}
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def on_start(self):
         await super().on_start()
         await self._restore_spawned_agents()
+        # Listen for remote node heartbeats so we know what's online
+        self._tasks.append(asyncio.create_task(self._node_heartbeat_listener()))
 
     # ── Spawn registry ─────────────────────────────────────────────────────
 
@@ -445,6 +531,15 @@ class MainActor(LLMAgent):
             return
         logger.info(f"[{self.name}] Restoring {len(reg)} agent(s): {list(reg.keys())}")
         for name, config in reg.items():
+            node = config.get("node", "").strip()
+            if node:
+                # Remote agent — re-publish spawn to its node; no local object expected
+                logger.info(f"[{self.name}] Re-spawning remote agent '{name}' on node '{node}'")
+                try:
+                    await self._spawn_remote(config, node, save=False)
+                except Exception as e:
+                    logger.error(f"[{self.name}] Failed to restore remote '{name}' on '{node}': {e}")
+                continue
             if self._registry and self._registry.find_by_name(name):
                 logger.info(f"[{self.name}] '{name}' already running, skipping.")
                 continue
@@ -1067,7 +1162,170 @@ class MainActor(LLMAgent):
         # but they will appear in the dashboard via MQTT heartbeats
         return None
 
+    # ── Node registry ──────────────────────────────────────────────────────
+
+    def list_nodes(self) -> list[dict]:
+        """Return all known remote nodes with their last-seen time and running agents."""
+        import time as _time
+        now = _time.time()
+        return [
+            {
+                "node":      name,
+                "agents":    info.get("agents", []),
+                "last_seen": info.get("last_seen", 0),
+                "online":    (now - info.get("last_seen", 0)) < 30,
+            }
+            for name, info in self._known_nodes.items()
+        ]
+
+    async def migrate_agent(self, agent_name: str, target_node: str) -> dict:
+        """
+        Move a running agent to a different node.
+
+        If the agent is local: saves updated config (with new node) and re-spawns remotely.
+        If the agent is remote: publishes a migrate command to its current node.
+        Returns {"success": bool, "message": str}
+        """
+        import time as _time
+
+        reg = self._get_spawn_registry()
+        config = reg.get(agent_name)
+        if not config:
+            return {"success": False, "message": f"Agent '{agent_name}' not in spawn registry."}
+
+        current_node = config.get("node", "").strip()
+
+        if current_node == target_node:
+            return {"success": False, "message": f"Agent '{agent_name}' is already on '{target_node}'."}
+
+        if current_node:
+            # ── Remote → Remote migration ────────────────────────────────────
+            logger.info(f"[{self.name}] Migrating '{agent_name}' from node '{current_node}' → '{target_node}'")
+            await self._mqtt_publish(
+                f"nodes/{current_node}/migrate",
+                {"name": agent_name, "target_node": target_node},
+            )
+        else:
+            # ── Local → Remote migration ─────────────────────────────────────
+            logger.info(f"[{self.name}] Migrating LOCAL agent '{agent_name}' → remote node '{target_node}'")
+
+            # Stop the local instance
+            if self._registry:
+                local = self._registry.find_by_name(agent_name)
+                if local:
+                    try:
+                        await self._registry.unregister(local.actor_id)
+                        await local.stop()
+                        await asyncio.sleep(0.3)
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] Could not stop local '{agent_name}': {e}")
+
+            # Update config with new node target and re-spawn remotely
+            new_config = dict(config)
+            new_config["node"] = target_node
+            new_config.pop("replace", None)
+
+            await self._spawn_remote(new_config, target_node, save=True)
+
+        # Update spawn registry so next restart re-spawns to the right node
+        updated = dict(config)
+        updated["node"] = target_node
+        self._save_to_spawn_registry(updated)
+
+        msg = (f"Migrating '{agent_name}' from '{current_node or 'local'}' "
+               f"→ '{target_node}'. It will appear in the dashboard shortly.")
+        logger.info(f"[{self.name}] {msg}")
+        return {"success": True, "message": msg}
+
+    async def _node_heartbeat_listener(self):
+        """
+        Subscribe to nodes/+/heartbeat so main knows which remote nodes are online.
+        Updates self._known_nodes which is used by list_nodes() and the LLM context.
+        """
+        try:
+            import aiomqtt
+        except ImportError:
+            logger.warning("[main] aiomqtt not available — node heartbeat tracking disabled.")
+            return
+
+        while self.state.value not in ("stopped", "failed"):
+            try:
+                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                    await client.subscribe("nodes/+/heartbeat")
+                    await client.subscribe("nodes/+/migrate_result")
+                    logger.info("[main] Subscribed to node heartbeats.")
+                    async for msg in client.messages:
+                        topic = str(msg.topic)
+                        try:
+                            data = json.loads(msg.payload.decode())
+                        except Exception:
+                            continue
+
+                        parts = topic.split("/")
+                        if len(parts) < 3:
+                            continue
+                        node_name = parts[1]
+
+                        if topic.endswith("/heartbeat"):
+                            import time as _t
+                            self._known_nodes[node_name] = {
+                                "last_seen": _t.time(),
+                                "agents":   data.get("agents", []),
+                                "node_id":  data.get("node_id", ""),
+                            }
+                        elif topic.endswith("/migrate_result"):
+                            success = data.get("success", False)
+                            agent   = data.get("agent", "?")
+                            to_node = data.get("to_node", "?")
+                            sev     = "info" if success else "warning"
+                            self._pending_notifications.append({
+                                "_monitor_notification": True,
+                                "message": (
+                                    f"Migration of '{agent}' to '{to_node}' succeeded."
+                                    if success else
+                                    f"Migration of '{agent}' failed: {data.get('error', '?')}"
+                                ),
+                                "severity": sev,
+                                "timestamp": __import__("time").time(),
+                            })
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                if self.state.value not in ("stopped", "failed"):
+                    logger.warning(f"[main] Node heartbeat listener error: {e}. Reconnecting in 5s…")
+                    await asyncio.sleep(5)
+
     # ── Delegation ─────────────────────────────────────────────────────────
+
+    async def delegate_to_installer(self, payload: dict, timeout: float = 300.0) -> dict:
+        """
+        Send a task to the installer agent and wait for the result.
+        Handles node_deploy, node_install, node_run, install, check actions.
+        timeout is generous (300s) because deploys involve SSH + pip installs.
+        """
+        if not self._registry:
+            return {"error": "No registry available"}
+        installer = self._registry.find_by_name("installer")
+        if not installer:
+            return {"error": "installer agent not found"}
+
+        import uuid as _uuid
+        task_id = f"inst_{_uuid.uuid4().hex[:8]}"
+        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        self._result_futures[task_id] = future
+
+        payload = dict(payload)
+        payload["_task_id"] = task_id
+        payload["task"]     = task_id
+
+        await self.send(installer.actor_id, MessageType.TASK, payload)
+        try:
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            return {"error": f"Installer timed out after {timeout}s"}
+        finally:
+            self._result_futures.pop(task_id, None)
 
     async def delegate_task(self, target_name: str, task: str, timeout: float = 60.0) -> Optional[dict]:
         if not self._registry:

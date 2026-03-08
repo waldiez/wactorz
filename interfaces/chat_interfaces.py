@@ -39,16 +39,19 @@ class CLIInterface:
     def _print_help(self):
         print("""
   Commands:
-    @<name> <msg>          speak directly to a named agent
-    /agents                list all active agents and their state
-    /nodes                 list connected remote nodes and their agents
-    /deploy <node-name>    set up a remote machine as an AgentFlow node
-                           auto-discovers via mDNS then network scan
-                           e.g.  /deploy rpi-node
-    /help                  show this help
-    quit / exit            shutdown
+    @<n> <msg>               speak directly to a named agent
+    /agents                     list all active agents and their state
+    /nodes                      list remote nodes (online/offline) and their agents
+    /migrate <agent> <node>     move a running agent to a different node
+                                e.g.  /migrate temp-sensor rpi-bedroom
+    /deploy <node-name>         set up a remote machine as an AgentFlow node
+                                e.g.  /deploy rpi-node
+    /help                       show this help
+    quit / exit                 shutdown
 
   Everything else goes to the main orchestrator.
+  Spawn on a remote node: "spawn a temp sensor on rpi-kitchen"
+  Migrate via chat:       "move temp-sensor to rpi-bedroom"
 """)
 
     # ── Agent routing ──────────────────────────────────────────────────────
@@ -187,8 +190,9 @@ class CLIInterface:
 
     async def _deploy(self, node_name: str, host: str = ""):
         """
-        SSH into a remote machine, upload remote_runner.py, install deps, start runner.
-        Host is discovered automatically if not provided.
+        Deploy an AgentFlow edge node to a remote machine.
+        Discovers the host, prompts for credentials, then delegates the
+        actual SSH work to the installer agent (node_deploy action).
         """
         # Discover host
         if not host:
@@ -200,75 +204,44 @@ class CLIInterface:
         # Credentials
         loop = asyncio.get_event_loop()
         user     = await loop.run_in_executor(None, lambda: input(f"\n  SSH user [pi]: ").strip() or "pi")
-        password = await loop.run_in_executor(None, lambda: __import__("getpass").getpass("  SSH password: "))
-        ssh_port = await loop.run_in_executor(None, lambda: input("  SSH port [22]: ").strip() or "22")
-        broker   = await loop.run_in_executor(None, lambda: input("  MQTT broker IP (this PC's LAN IP): ").strip() or "localhost")
+        password = await loop.run_in_executor(None, lambda: __import__("getpass").getpass("  SSH password (leave blank for key auth): "))
+        broker   = await loop.run_in_executor(None, lambda: input("  MQTT broker IP (this machine's LAN IP): ").strip() or "localhost")
 
-        try:
-            import asyncssh
-        except ImportError:
-            print("\n[error] asyncssh not installed. Run: pip install asyncssh")
+        print(f"\n  Deploying to {user}@{host} as node '{node_name}'...")
+        print("  (This may take 20-60s while packages install on the remote machine)")
+
+        if not hasattr(self.agent, "delegate_to_installer"):
+            print("[error] delegate_to_installer not available. Is the installer agent running?")
             return
 
-        # Find remote_runner.py
-        runner = REMOTE_RUNNER_PATH
-        if not os.path.exists(runner):
-            runner = "remote_runner.py"   # fallback to cwd
-        if not os.path.exists(runner):
-            print("[error] remote_runner.py not found. Make sure it's in the project root.")
-            return
+        result = await self.agent.delegate_to_installer({
+            "action":    "node_deploy",
+            "host":      host,
+            "user":      user,
+            "password":  password,
+            "node_name": node_name,
+            "broker":    broker,
+        }, timeout=120.0)
 
-        print(f"\n  Deploying to {user}@{host}:{ssh_port} as node '{node_name}'")
+        if result.get("success"):
+            print(f"""
+  Node '{node_name}' is live! It will appear in /nodes within ~15 seconds.
 
-        try:
-            async with asyncssh.connect(
-                host, port=int(ssh_port), username=user, password=password, known_hosts=None
-            ) as conn:
-                print("  [1/4] Connected ✓")
+  Now spawn agents on it — just tell main:
+    "spawn a CPU monitor agent on {node_name}"
+    "spawn a temperature sensor on {node_name}"
 
-                await conn.run("mkdir -p ~/agentflow", check=True)
+  To install extra packages on the Pi before spawning:
+    /deploy-pkg {node_name} adafruit-circuitpython-dht RPi.GPIO
 
-                async with conn.start_sftp_client() as sftp:
-                    await sftp.put(runner, f"/home/{user}/agentflow/remote_runner.py")
-                print("  [2/4] Uploaded remote_runner.py ✓")
-
-                res = await conn.run(
-                    "pip install aiomqtt psutil --break-system-packages -q 2>&1 | tail -2",
-                    check=False
-                )
-                print(f"  [3/4] Dependencies installed ✓")
-                if res.stdout.strip():
-                    print(f"        {res.stdout.strip()}")
-
-                # Kill any existing runner for this node name
-                await conn.run(
-                    f"pkill -f 'remote_runner.py.*--name {node_name}' 2>/dev/null; true",
-                    check=False
-                )
-
-                cmd = (
-                    f"nohup python3 ~/agentflow/remote_runner.py "
-                    f"--broker {broker} --name {node_name} "
-                    f"> ~/agentflow/{node_name}.log 2>&1 &"
-                )
-                await conn.run(cmd, check=True)
-                print(f"  [4/4] Remote runner started ✓")
-
-                print(f"""
-  Node '{node_name}' is live! It will appear in /nodes shortly.
-  Remote logs: {user}@{host}:~/agentflow/{node_name}.log
-
-  Now spawn agents on it:
-    @main spawn an agent on {node_name} that monitors CPU and RAM
-    @main spawn an agent on {node_name} that reads from the Pi camera and runs YOLO
+  Remote logs on the Pi:
+    ~/agentflow/{node_name}.log
 """)
-
-        except asyncssh.PermissionDenied:
-            print("[error] Permission denied. Check username/password.")
-        except asyncssh.ConnectionLost:
-            print(f"[error] Connection lost to {host}.")
-        except Exception as e:
-            print(f"[error] Deploy failed: {e}")
+        else:
+            err = result.get("error", "Unknown error")
+            print(f"[error] Deploy failed: {err}")
+            if "asyncssh" in err:
+                print("  Hint: pip install asyncssh")
 
     # ── Main loop ──────────────────────────────────────────────────────────
 
@@ -306,15 +279,73 @@ class CLIInterface:
                     continue
 
                 if text.lower() in ("/nodes", "nodes"):
+                    # Show remote nodes from heartbeat tracking + local agents by node
+                    remote_nodes = []
+                    if hasattr(self.agent, "list_nodes"):
+                        remote_nodes = self.agent.list_nodes()
                     agents = await self.agent.list_agents()
-                    nodes  = {}
-                    for a in agents:
-                        n = a.get("node") or "local"
-                        nodes.setdefault(n, []).append(a["name"])
+
+                    # Build local node group from actor registry
+                    local_names = [a["name"] for a in agents if not a.get("node")]
                     print()
-                    for node, names in sorted(nodes.items()):
-                        print(f"  {node:20s} {', '.join('@' + n for n in names)}")
+                    print(f"  {'local':20s} {'online':6s}  {', '.join('@' + n for n in local_names) or '(none)'}")
+                    for nd in sorted(remote_nodes, key=lambda x: x["node"]):
+                        status = "online" if nd["online"] else "OFFLINE"
+                        names  = ', '.join('@' + n for n in nd["agents"]) or '(no agents)'
+                        print(f"  {nd['node']:20s} {status:6s}  {names}")
+                    if not remote_nodes:
+                        print("  (no remote nodes seen yet — deploy one with /deploy <node> <host>)")
                     print()
+                    continue
+
+                if text.lower().startswith("/migrate"):
+                    # /migrate <agent-name> <target-node>
+                    parts = text.split()
+                    if len(parts) < 3:
+                        print("[usage] /migrate <agent-name> <target-node>")
+                        print("        Moves a running agent to a different node.")
+                        print("        Example: /migrate temp-sensor rpi-bedroom")
+                        print()
+                    elif not hasattr(self.agent, "migrate_agent"):
+                        print("[error] migrate_agent not available on this actor.\n")
+                    else:
+                        agent_name  = parts[1]
+                        target_node = parts[2]
+                        print(f"[Migrating @{agent_name} to {target_node}...]")
+                        result = await self.agent.migrate_agent(agent_name, target_node)
+                        ok  = result.get("success", False)
+                        sym = "OK" if ok else "FAIL"
+                        print(f"[{sym}] {result.get('message', '')}\n")
+                    continue
+
+                if text.lower().startswith("/deploy-pkg"):
+                    # /deploy-pkg <host-ip> <pkg1> [pkg2 ...]
+                    parts = text.split()
+                    if len(parts) < 3:
+                        print("[usage] /deploy-pkg <host-ip> <package> [package2 ...]")
+                        print("        e.g.  /deploy-pkg 192.168.1.50 adafruit-circuitpython-dht RPi.GPIO")
+                        print()
+                    elif not hasattr(self.agent, "delegate_to_installer"):
+                        print("[error] installer not available\n")
+                    else:
+                        host     = parts[1]
+                        packages = parts[2:]
+                        loop     = asyncio.get_event_loop()
+                        user     = await loop.run_in_executor(None, lambda: input("  SSH user [pi]: ").strip() or "pi")
+                        password = await loop.run_in_executor(None, lambda: __import__("getpass").getpass("  SSH password: "))
+                        print(f"  Installing {packages} on {host}...")
+                        result = await self.agent.delegate_to_installer({
+                            "action":   "node_install",
+                            "host":     host,
+                            "user":     user,
+                            "password": password,
+                            "packages": packages,
+                        }, timeout=120.0)
+                        ok = result.get("success", False)
+                        if ok:
+                            print(f"  [OK] {packages} installed on {host}\n")
+                        else:
+                            print(f"  [FAIL] {result.get('error', result)}\n")
                     continue
 
                 if text.lower().startswith("/deploy"):

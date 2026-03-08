@@ -16,6 +16,25 @@ from enum import Enum
 from typing import Any, Callable, Optional
 from pathlib import Path
 
+
+class SupervisorStrategy(str, Enum):
+    """
+    Restart strategy for supervised actors — inspired by Erlang/OTP.
+
+    ONE_FOR_ONE   — restart only the crashed actor, leave siblings untouched.
+                    Use for independent workers (weather-agent, news-agent, …).
+
+    ONE_FOR_ALL   — if one supervised actor crashes, restart ALL siblings too.
+                    Use when actors share state or have hard ordering dependencies.
+
+    REST_FOR_ONE  — restart the crashed actor AND every actor that was registered
+                    after it (i.e. downstream dependents).
+                    Use when later actors depend on earlier ones being healthy first.
+    """
+    ONE_FOR_ONE  = "one_for_one"
+    ONE_FOR_ALL  = "one_for_all"
+    REST_FOR_ONE = "rest_for_one"
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,6 +92,7 @@ class ActorMetrics:
     last_heartbeat: float = field(default_factory=time.time)
     tasks_completed: int = 0
     tasks_failed: int = 0
+    restart_count: int = 0          # incremented by Supervisor on each restart
 
     @property
     def uptime(self) -> float:
@@ -123,6 +143,9 @@ class Actor(ABC):
 
         # Protection — if True, stop/delete/pause commands are ignored
         self.protected: bool = False
+
+        # Supervisor reference — set by Supervisor when this actor is registered under it
+        self.supervisor_id: Optional[str] = None
 
         # Handlers
         self._handlers: dict[MessageType, Callable] = {}
@@ -270,6 +293,7 @@ class Actor(ABC):
             "uptime": self.metrics.uptime,
             "tasks_completed": self.metrics.tasks_completed,
             "tasks_failed": self.metrics.tasks_failed,
+            "restart_count": self.metrics.restart_count,
         }
 
     async def _command_listener(self):
@@ -432,6 +456,8 @@ class Actor(ABC):
             "state": self.state.value,
             "uptime": self.metrics.uptime,
             "messages_processed": self.metrics.messages_processed,
+            "restart_count": self.metrics.restart_count,
+            "supervised": self.supervisor_id is not None,
         }
 
     # ─── Abstract / Override ──────────────────────────────────────────────────

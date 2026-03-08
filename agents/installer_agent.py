@@ -127,6 +127,21 @@ class InstallerAgent(Actor):
         if action == "history":
             return {"history": self._install_log[-20:]}
 
+        if action == "node_install":
+            # Install packages on a remote node via SSH
+            # payload: {host, user, packages, password (opt), key_path (opt)}
+            return await self._node_install(payload)
+
+        if action == "node_deploy":
+            # Full bootstrap: copy remote_runner.py + install deps + start runner
+            # payload: {host, user, node_name, broker, password (opt), key_path (opt)}
+            return await self._node_deploy(payload)
+
+        if action == "node_run":
+            # Run an arbitrary command on a remote node via SSH
+            # payload: {host, user, command, password (opt), key_path (opt)}
+            return await self._node_run(payload)
+
         return {"error": f"Unknown action: {action}"}
 
     # ── Core install logic ──────────────────────────────────────────────────
@@ -259,3 +274,212 @@ class InstallerAgent(Actor):
 
     def _resolve_imports(self, imports: list[str]) -> dict:
         return {"resolved": {imp: IMPORT_TO_PACKAGE.get(imp, imp) for imp in imports}}
+
+    # ── Remote node helpers (SSH via asyncssh) ──────────────────────────────
+
+    def _ssh_kwargs(self, payload: dict) -> dict:
+        """Build asyncssh connection kwargs from a task payload."""
+        kwargs = dict(
+            host        = payload["host"],
+            username    = payload.get("user", "pi"),
+            known_hosts = None,   # disable host key checking for LAN deploys
+        )
+        if payload.get("password"):
+            kwargs["password"] = payload["password"]
+        if payload.get("key_path"):
+            kwargs["client_keys"] = [payload["key_path"]]
+        return kwargs
+
+    async def _ssh_run(self, conn, command: str) -> tuple[bool, str]:
+        """Run a single command over an open SSH connection. Returns (ok, output)."""
+        result = await conn.run(command, check=False)
+        output = (result.stdout or "") + (result.stderr or "")
+        return result.exit_status == 0, output.strip()
+
+    def _log_remote(self, message: str):
+        logger.info(f"[{self.name}] {message}")
+        asyncio.create_task(self._mqtt_publish(
+            f"agents/{self.actor_id}/logs",
+            {"type": "log", "message": message, "timestamp": time.time()},
+        ))
+
+    async def _node_install(self, payload: dict) -> dict:
+        """
+        Install pip packages on a remote node via SSH.
+
+        payload keys:
+          host      — IP or hostname of the remote machine
+          user      — SSH username (default: "pi")
+          packages  — list of package names to install
+          password  — SSH password (optional, prefer key auth)
+          key_path  — path to SSH private key (optional)
+        """
+        try:
+            import asyncssh
+        except ImportError:
+            return {"error": "asyncssh not installed. Run: pip install asyncssh"}
+
+        host     = payload.get("host")
+        packages = payload.get("packages", [])
+        if isinstance(packages, str):
+            packages = [p.strip() for p in packages.replace(",", " ").split()]
+        if not host:
+            return {"error": "Missing 'host' in payload"}
+        if not packages:
+            return {"error": "No packages specified"}
+
+        pkg_str = " ".join(packages)
+        self._log_remote(f"Installing {pkg_str} on {host}...")
+
+        try:
+            async with asyncssh.connect(**self._ssh_kwargs(payload)) as conn:
+                ok, output = await self._ssh_run(
+                    conn,
+                    f"pip install {pkg_str} --break-system-packages -q 2>&1"
+                )
+                if ok:
+                    self._log_remote(f"✓ {pkg_str} installed on {host}")
+                    return {"success": True, "host": host, "packages": packages, "output": output[-300:]}
+                else:
+                    self._log_remote(f"✗ Install failed on {host}: {output[-200:]}")
+                    return {"success": False, "host": host, "error": output[-400:]}
+
+        except Exception as e:
+            return {"success": False, "host": host, "error": str(e)}
+
+    async def _node_deploy(self, payload: dict) -> dict:
+        """
+        Full bootstrap of a new AgentFlow edge node via SSH.
+
+        Steps:
+          1. Create ~/agentflow/ directory
+          2. Upload remote_runner.py
+          3. Install aiomqtt (the only runtime dependency)
+          4. Kill any existing runner with the same node name
+          5. Start the runner in the background
+          6. Verify it appears online within 15 seconds
+
+        payload keys:
+          host       — IP or hostname
+          user       — SSH username (default: "pi")
+          node_name  — name this node will use (default: "remote-node")
+          broker     — MQTT broker host reachable FROM the Pi (default: "localhost")
+          password   — SSH password (optional)
+          key_path   — path to SSH private key (optional)
+          port       — MQTT broker port (default: 1883)
+        """
+        try:
+            import asyncssh
+        except ImportError:
+            return {"error": "asyncssh not installed. Run: pip install asyncssh"}
+
+        host      = payload.get("host")
+        user      = payload.get("user", "pi")
+        node_name = payload.get("node_name", "remote-node")
+        broker    = payload.get("broker", "localhost")
+        mqtt_port = payload.get("port", 1883)
+
+        if not host:
+            return {"error": "Missing 'host' in payload"}
+
+        # Find remote_runner.py relative to this file
+        import pathlib
+        candidates = [
+            pathlib.Path(__file__).parent.parent / "remote_runner.py",
+            pathlib.Path("remote_runner.py"),
+            pathlib.Path(__file__).parent.parent.parent / "remote_runner.py",
+        ]
+        runner_path = next((p for p in candidates if p.exists()), None)
+        if not runner_path:
+            return {"error": "remote_runner.py not found. Make sure it is in the agentflow root."}
+
+        self._log_remote(f"Deploying node '{node_name}' to {user}@{host}...")
+
+        try:
+            async with asyncssh.connect(**self._ssh_kwargs(payload)) as conn:
+
+                # 1. Create directory
+                await self._ssh_run(conn, "mkdir -p ~/agentflow")
+                self._log_remote(f"[{node_name}] Directory created.")
+
+                # 2. Upload remote_runner.py
+                async with conn.start_sftp_client() as sftp:
+                    await sftp.put(str(runner_path), f"/home/{user}/agentflow/remote_runner.py")
+                self._log_remote(f"[{node_name}] remote_runner.py uploaded.")
+
+                # 3. Install the only required dependency
+                ok, out = await self._ssh_run(
+                    conn, "pip install aiomqtt --break-system-packages -q 2>&1"
+                )
+                if not ok:
+                    self._log_remote(f"[{node_name}] pip install warning: {out[:150]}")
+                else:
+                    self._log_remote(f"[{node_name}] aiomqtt installed.")
+
+                # 4. Kill any existing instance with this node name
+                await self._ssh_run(
+                    conn,
+                    f"pkill -f 'remote_runner.py.*--name {node_name}' 2>/dev/null; true"
+                )
+
+                # 5. Start runner in the background
+                cmd = (
+                    f"nohup python3 ~/agentflow/remote_runner.py "
+                    f"--broker {broker} --port {mqtt_port} --name {node_name} "
+                    f"> ~/agentflow/{node_name}.log 2>&1 &"
+                )
+                await self._ssh_run(conn, cmd)
+                self._log_remote(f"[{node_name}] Runner started.")
+
+            self._log_remote(
+                f"[{node_name}] Deploy complete! Node will appear in /nodes within 15s."
+            )
+            return {
+                "success":   True,
+                "node_name": node_name,
+                "host":      host,
+                "broker":    broker,
+                "message":   (
+                    f"Node '{node_name}' deployed to {user}@{host}. "
+                    f"It will appear in /nodes within ~15 seconds."
+                ),
+            }
+
+        except Exception as e:
+            msg = f"Deploy failed for '{node_name}' on {host}: {e}"
+            self._log_remote(msg)
+            return {"success": False, "node_name": node_name, "host": host, "error": str(e)}
+
+    async def _node_run(self, payload: dict) -> dict:
+        """
+        Run an arbitrary shell command on a remote node via SSH.
+
+        payload keys:
+          host     — IP or hostname
+          user     — SSH username (default: "pi")
+          command  — shell command to run
+          password / key_path — auth (optional)
+        """
+        try:
+            import asyncssh
+        except ImportError:
+            return {"error": "asyncssh not installed. Run: pip install asyncssh"}
+
+        host    = payload.get("host")
+        command = payload.get("command", "echo hello")
+        if not host:
+            return {"error": "Missing 'host' in payload"}
+
+        self._log_remote(f"Running on {host}: {command[:80]}")
+        try:
+            async with asyncssh.connect(**self._ssh_kwargs(payload)) as conn:
+                ok, output = await self._ssh_run(conn, command)
+                return {
+                    "success":   ok,
+                    "host":      host,
+                    "command":   command,
+                    "output":    output,
+                    "exit_code": 0 if ok else 1,
+                }
+        except Exception as e:
+            return {"success": False, "host": host, "error": str(e)}

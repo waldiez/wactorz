@@ -255,6 +255,15 @@ class HomeAssistantAgent(LLMAgent):
         result = await self._process(user_message)
         return str(result.get("result", ""))
 
+    async def chat_stream(self, user_message: str):
+        """
+        Override LLMAgent streaming path so direct @home-assistant-agent calls
+        still use Home Assistant intent routing instead of generic LLM chat.
+        """
+        response = await self.chat(user_message)
+        yield response
+        yield {}
+
     async def handle_message(self, msg: Message) -> None:
         if msg.type != MessageType.TASK:
             return

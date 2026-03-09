@@ -22,6 +22,8 @@ Or manually in the chat spawn block:
       "type": "dynamic",
       "description": "Reads temperature from DHT22 sensor",
       "poll_interval": 30,
+      "max_restarts": 5,
+      "restart_delay": 3.0,
       "code": "
         async def setup(agent):
             await agent.log('DHT22 sensor agent ready')
@@ -45,6 +47,12 @@ Architecture:
 The remote runner is intentionally self-contained — it reimplements just enough
 of the Actor/DynamicAgent contract to run user code without needing the full
 agentflow package installed on the edge device.
+
+Each agent runs under a local supervisor (mirroring the main machine's OTP-style
+ONE_FOR_ONE strategy). If an agent crashes, the supervisor restarts it with
+exponential back-off (3s → 6s → 12s … capped at 60s). After max_restarts
+consecutive failures the agent is marked failed and removed from the registry.
+Compile errors and setup() fatals are never retried — broken code won't fix itself.
 """
 
 import argparse
@@ -178,6 +186,12 @@ class _RemoteAgent:
         self._fn_process     = None
         self._fn_handle_task = None
 
+        # ── Supervisor state ──────────────────────────────────────────────────
+        self._max_restarts   = int(config.get("max_restarts", 5))
+        self._restart_delay  = float(config.get("restart_delay", 3.0))
+        self._restart_count  = 0
+        self._failed         = False   # True = budget exhausted, do not restart
+
         self._load_state()
 
     # ── State persistence (JSON, not pickle — portable across Python versions) ─
@@ -219,7 +233,81 @@ class _RemoteAgent:
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def start(self):
+        """
+        Start the agent under a supervision loop.
+        The supervisor restarts the agent on unexpected crashes up to
+        max_restarts times, with exponential back-off between attempts.
+        Compile errors and deliberate stop() calls are never retried.
+        """
         self._running = True
+        asyncio.create_task(self._supervisor_loop())
+
+    async def _supervisor_loop(self):
+        """
+        Supervisor that mirrors the local OTP ONE_FOR_ONE strategy.
+        Runs _run_lifecycle() in a loop; on crash, waits and retries.
+        """
+        while self._running and not self._failed:
+            try:
+                await self._run_lifecycle()
+            except asyncio.CancelledError:
+                break   # deliberate stop() — do not restart
+            except Exception as e:
+                if not self._running:
+                    break   # stop() was called mid-crash, don't restart
+
+                self._restart_count += 1
+                if self._restart_count > self._max_restarts:
+                    self._failed = True
+                    logger.error(
+                        f"[{self.name}] Crashed {self._restart_count} times — "
+                        f"giving up (max_restarts={self._max_restarts})."
+                    )
+                    await self._publish(
+                        f"agents/{self.actor_id}/errors",
+                        {"phase": "supervisor", "severity": "fatal",
+                         "error": f"Restart budget exhausted after {self._restart_count} crashes: {e}",
+                         "restart_count": self._restart_count,
+                         "agent": self.name, "timestamp": time.time()},
+                    )
+                    await self._publish_heartbeat("failed")
+                    # Remove from runner registry so /nodes shows it as gone
+                    self._runner._agents.pop(self.name, None)
+                    break
+
+                delay = min(self._restart_delay * (2 ** (self._restart_count - 1)), 60.0)
+                logger.warning(
+                    f"[{self.name}] Crashed (attempt {self._restart_count}/{self._max_restarts}). "
+                    f"Restarting in {delay:.1f}s..."
+                )
+                await self._publish(
+                    f"agents/{self.actor_id}/errors",
+                    {"phase": "supervisor", "severity": "warning",
+                     "error": f"Agent crashed, restarting in {delay:.1f}s (attempt "
+                              f"{self._restart_count}/{self._max_restarts}): {e}",
+                     "restart_count": self._restart_count,
+                     "agent": self.name, "timestamp": time.time()},
+                )
+                await self._publish_heartbeat("restarting")
+                # Cancel any leftover tasks from the crashed run
+                for t in self._tasks:
+                    t.cancel()
+                self._tasks.clear()
+                await asyncio.sleep(delay)
+                # Re-compile fresh (code doesn't change, but namespace must be clean)
+                self._ns = {}
+
+    async def _run_lifecycle(self):
+        """
+        One full agent lifecycle: compile → setup → process loop + heartbeat loop.
+        Raises on unhandled exceptions so _supervisor_loop can catch and restart.
+        Compile errors and setup fatals publish an error event then return cleanly
+        (no restart — broken code won't fix itself on retry).
+        """
+        # Reset per-run namespace and function pointers
+        self._ns = {}
+        self._fn_setup = self._fn_process = self._fn_handle_task = None
+
         err = self._compile()
         if err:
             logger.error(f"[{self.name}] {err}")
@@ -228,6 +316,7 @@ class _RemoteAgent:
                 {"phase": "compile", "severity": "fatal",
                  "error": err, "agent": self.name, "timestamp": time.time()},
             )
+            self._running = False   # compile error → stop supervising
             return
 
         await self._publish_heartbeat("running")
@@ -245,41 +334,86 @@ class _RemoteAgent:
                      "error": str(e), "traceback": err_str,
                      "agent": self.name, "timestamp": time.time()},
                 )
+                self._running = False   # setup fatal → stop supervising
+                return
 
+        inner_tasks = []
         if self._fn_process:
-            self._tasks.append(asyncio.create_task(self._process_loop()))
+            inner_tasks.append(asyncio.create_task(self._process_loop()))
+        inner_tasks.append(asyncio.create_task(self._heartbeat_loop()))
+        self._tasks = inner_tasks
 
-        self._tasks.append(asyncio.create_task(self._heartbeat_loop()))
+        # Wait for any task to finish (process escalation OR deliberate stop/cancel).
+        # We use first-exception semantics: as soon as one task raises, cancel the rest.
+        done, pending = await asyncio.wait(
+            inner_tasks, return_when=asyncio.FIRST_EXCEPTION
+        )
+        # Cancel any still-running tasks (e.g. _heartbeat_loop after process escalation)
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        # Re-raise any non-cancellation exception so the supervisor can restart
+        for t in done:
+            exc = t.exception()
+            if exc is not None and not isinstance(exc, asyncio.CancelledError):
+                raise exc
 
     async def stop(self):
         self._running = False
         for t in self._tasks:
             t.cancel()
+        self._tasks.clear()
         self._save_state()
         await self._publish_heartbeat("stopped")
         logger.info(f"[{self.name}] Stopped.")
 
     # ── Loops ─────────────────────────────────────────────────────────────────
 
+    # After this many consecutive process() errors, raise to trigger a supervisor restart
+    _PROCESS_ESCALATE_AFTER = 5
+
     async def _process_loop(self):
+        """
+        Run process() in a loop with per-error backoff.
+        After _PROCESS_ESCALATE_AFTER consecutive errors, raises RuntimeError
+        so the supervisor loop gets a clean restart (fresh namespace, reset state).
+        A single successful call resets the consecutive counter.
+        """
         consecutive_errors = 0
+        successful_runs    = 0
         while self._running:
             try:
                 await self._fn_process(self._api)
-                consecutive_errors = 0
+                consecutive_errors  = 0
+                successful_runs    += 1
+                # After sustained healthy operation, credit back one restart token
+                if successful_runs >= 10:
+                    successful_runs = 0
+                    if self._restart_count > 0:
+                        self._restart_count -= 1
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 consecutive_errors += 1
+                successful_runs     = 0
                 err_str = traceback.format_exc()
+                severity = "critical" if consecutive_errors >= 3 else "warning"
                 logger.error(f"[{self.name}] process() error #{consecutive_errors}: {e}")
                 await self._publish(
                     f"agents/{self.actor_id}/errors",
-                    {"phase": "process", "severity": "critical" if consecutive_errors >= 3 else "warning",
+                    {"phase": "process", "severity": severity,
                      "error": str(e), "consecutive": consecutive_errors,
+                     "traceback": err_str[:800],
                      "agent": self.name, "timestamp": time.time()},
                 )
-                # Exponential backoff
+                if consecutive_errors >= self._PROCESS_ESCALATE_AFTER:
+                    # Too many consecutive failures — let supervisor restart with clean namespace
+                    raise RuntimeError(
+                        f"process() failed {consecutive_errors} times in a row, "
+                        f"last error: {e}"
+                    )
+                # Exponential backoff before next attempt
                 await asyncio.sleep(min(2 ** consecutive_errors, 30))
                 continue
             try:
@@ -674,5 +808,145 @@ def main():
         loop.close()
 
 
+# ── Self-test (python3 remote_runner.py --test) ───────────────────────────────
+
+
+
+
+async def _run_supervisor_tests():
+    """Standalone tests. No MQTT broker required."""
+    passed = 0
+    failed = 0
+
+    class _StubRunner:
+        node_name = "test-node"
+        def __init__(self):
+            self._agents = {}
+            self.events  = []
+        async def publish(self, topic, data):
+            self.events.append((topic, data if isinstance(data, dict) else data))
+
+    def make_agent(code, max_restarts=3, restart_delay=0.01, poll_interval=0.01, escalate_after=5):
+        runner = _StubRunner()
+        config = {
+            "name": "test-agent", "code": code,
+            "max_restarts": max_restarts, "restart_delay": restart_delay,
+            "poll_interval": poll_interval,
+        }
+        agent = _RemoteAgent(config, runner)
+        agent._PROCESS_ESCALATE_AFTER = escalate_after
+        agent._running = True   # start() sets this; we call _supervisor_loop directly in tests
+        runner._agents["test-agent"] = agent
+        return agent, runner
+
+    def check(name, condition, detail=""):
+        nonlocal passed, failed
+        if condition:
+            print(f"  PASS  {name}")
+            passed += 1
+        else:
+            print(f"  FAIL  {name}" + (f": {detail}" if detail else ""))
+            failed += 1
+
+    print("\n-- remote_runner supervisor tests --")
+
+    # Test 1: Stable agent never restarted
+    agent, runner = make_agent("async def process(agent): pass")
+    task = asyncio.create_task(agent._supervisor_loop())
+    await asyncio.sleep(0.15)
+    agent._running = False
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try: await task
+    except: pass
+    check("stable: restart_count=0", agent._restart_count == 0, f"got {agent._restart_count}")
+    check("stable: not failed", not agent._failed)
+
+    # Test 2: Crashing process escalates and triggers supervisor restart
+    crash_code = "async def process(agent):\n    raise RuntimeError('boom')"
+    agent, runner = make_agent(crash_code, max_restarts=3, restart_delay=0.01,
+                                poll_interval=0.001, escalate_after=2)
+    task = asyncio.create_task(agent._supervisor_loop())
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=3.0)
+    except asyncio.TimeoutError:
+        pass
+    check("crash: error events published", any(
+        isinstance(e, dict) and e.get("phase") in ("process","supervisor")
+        for _, e in runner.events), f"{[(t,d.get('phase') if isinstance(d,dict) else '?') for t,d in runner.events[:5]]}")
+    check("crash: restart_count > 0", agent._restart_count > 0, f"got {agent._restart_count}")
+    # Either failed completely, or has accumulated restarts (budget=3 may not exhaust in time)
+    check("crash: supervisor restarted at least once",
+          agent._failed or agent._restart_count >= 1, f"count={agent._restart_count}")
+
+    # Test 3: Budget exhaustion
+    agent, runner = make_agent(crash_code, max_restarts=1, restart_delay=0.01,
+                                poll_interval=0.001, escalate_after=1)
+    task = asyncio.create_task(agent._supervisor_loop())
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=3.0)
+    except asyncio.TimeoutError:
+        pass
+    check("budget: _failed=True", agent._failed, f"count={agent._restart_count}")
+    check("budget: fatal event", any(
+        isinstance(e, dict) and e.get("severity") == "fatal"
+        for _, e in runner.events))
+    check("budget: removed from runner", "test-agent" not in runner._agents)
+
+    # Test 4: deliberate stop() no restart
+    agent, runner = make_agent("async def process(agent): pass")
+    task = asyncio.create_task(agent._supervisor_loop())
+    await asyncio.sleep(0.05)
+    await agent.stop()
+    task.cancel()
+    try: await task
+    except: pass
+    check("stop(): restart_count=0", agent._restart_count == 0)
+    check("stop(): not failed", not agent._failed)
+
+    # Test 5: health credit after 10 successful runs
+    agent, runner = make_agent("async def process(agent): pass", poll_interval=0.001)
+    agent._restart_count = 2
+    task = asyncio.create_task(agent._supervisor_loop())
+    await asyncio.sleep(0.3)
+    agent._running = False
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try: await task
+    except: pass
+    check("health credit: restart_count < 2", agent._restart_count < 2, f"got {agent._restart_count}")
+
+    # Test 6: compile error stops supervision
+    agent, runner = make_agent("this is not valid python !!!")
+    task = asyncio.create_task(agent._supervisor_loop())
+    await asyncio.sleep(0.15)
+    task.cancel()
+    try: await task
+    except: pass
+    check("compile: _running=False", not agent._running)
+    check("compile: restart_count=0", agent._restart_count == 0)
+    check("compile: fatal event", any(
+        isinstance(e, dict) and e.get("phase") == "compile"
+        for _, e in runner.events), f"{runner.events}")
+
+    # Test 7: setup() error stops supervision
+    setup_fail = "async def setup(agent):\n    raise RuntimeError('bad')\nasync def process(agent):\n    pass"
+    agent, runner = make_agent(setup_fail)
+    task = asyncio.create_task(agent._supervisor_loop())
+    await asyncio.sleep(0.15)
+    task.cancel()
+    try: await task
+    except: pass
+    check("setup: _running=False", not agent._running)
+    check("setup: restart_count=0", agent._restart_count == 0)
+
+    print(f"\n  {passed} passed, {failed} failed\n")
+    return failed == 0
+
+
 if __name__ == "__main__":
-    main()
+    if "--test" in sys.argv:
+        ok = asyncio.run(_run_supervisor_tests())
+        sys.exit(0 if ok else 1)
+    else:
+        main()

@@ -58,6 +58,7 @@ list_automations
 list_areas
 list_devices
 list_entities
+unknown
 
 Guidelines:
 - recommend_hardware  → user wants hardware/device suggestions or compatibility info
@@ -68,6 +69,7 @@ Guidelines:
 - list_areas          → user wants to see/list/show areas
 - list_devices        → user wants to see/list/show devices
 - list_entities       → user wants to see/list/show entities
+- unknown             → request is unclear or not one of the supported Home Assistant operations
 """
 
 HARDWARE_SELECTION_PROMPT = """You are a Home Assistant hardware selection specialist.
@@ -339,14 +341,17 @@ class HomeAssistantAgent(LLMAgent):
             devices = await self._get_devices()
             return await self._recommend_hardware(text, devices)
 
-        # Default: create_automation — hardware selection then automation generation.
-        devices = await self._get_devices()
-        hardware_result = await self._select_hardware(text, devices)
-        if not hardware_result.get("can_fulfill"):
-            return hardware_result
+        if action == "create_automation":
+            # Create flow: hardware selection then automation generation.
+            devices = await self._get_devices()
+            hardware_result = await self._select_hardware(text, devices)
+            if not hardware_result.get("can_fulfill"):
+                return hardware_result
 
-        entities = self._extract_entity_ids_from_hardware(hardware_result)
-        return await self._create_automation(text, entities, hardware_result.get("hardware", []))
+            entities = self._extract_entity_ids_from_hardware(hardware_result)
+            return await self._create_automation(text, entities, hardware_result.get("hardware", []))
+
+        return self._unsupported_action_response(text)
 
     # ── Intent classification ────────────────────────────────────────────────
 
@@ -361,6 +366,7 @@ class HomeAssistantAgent(LLMAgent):
             "list_areas",
             "list_devices",
             "list_entities",
+            "unknown",
         }
 
         if self.llm is None:
@@ -398,7 +404,19 @@ class HomeAssistantAgent(LLMAgent):
             return "edit_automation"
         if any(w in lower for w in ("hardware", "what device", "what sensor", "what do i need", "compatible with")):
             return "recommend_hardware"
-        return "create_automation"
+        if any(w in lower for w in ("create", "add automation", "new automation", "build automation", "make automation")):
+            return "create_automation"
+        return "unknown"
+
+    @staticmethod
+    def _unsupported_action_response(text: str) -> dict[str, Any]:
+        return {
+            "task": text,
+            "result": (
+                "I can help with Home Assistant hardware recommendations and automations: "
+                "create, edit, delete, list automations, list areas, list devices, and list entities."
+            ),
+        }
 
     # ── Device discovery ─────────────────────────────────────────────────────
 

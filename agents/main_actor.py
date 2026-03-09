@@ -613,7 +613,7 @@ class MainActor(LLMAgent):
             decision_task = self.llm.complete(
                 messages=[{"role": "user", "content": text}],
                 system=self.HOME_AUTOMATION_INTENT_SYSTEM_PROMPT,
-                max_tokens=4,
+                max_completion_tokens=4,
             )
             decision, _ = await asyncio.wait_for(decision_task, timeout=4.0)
             return (decision or "").strip().upper().startswith("HA")

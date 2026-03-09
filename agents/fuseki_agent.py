@@ -22,12 +22,14 @@ import logging
 import os
 import time
 
+from ..config import CONFIG
+
 from ..core.actor import Actor, Message, MessageType
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_URL     = os.getenv("FUSEKI_URL", "http://fuseki:3030")
-_DEFAULT_DATASET = os.getenv("FUSEKI_DATASET", "/ds")
+_DEFAULT_URL     = CONFIG.fuseki_url
+_DEFAULT_DATASET = CONFIG.fuseki_dataset
 _TIMEOUT         = 20
 
 _COMMON_PREFIXES = """\

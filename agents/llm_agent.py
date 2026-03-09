@@ -23,6 +23,7 @@ PRICING = {
     "gpt-4o":                 ( 2.50, 10.00),
     "gpt-4o-mini":            ( 0.15,  0.60),
     "gpt-4-turbo":            (10.00, 30.00),
+    "gpt-5-mini":             ( 0.25,  2.00),
     # Ollama — local, no cost
     "ollama":                 ( 0.00,  0.00),
     # NVIDIA NIM — free tier: 1000 req/month per model
@@ -96,7 +97,7 @@ class AnthropicProvider(LLMProvider):
 
 
 class OpenAIProvider(LLMProvider):
-    def __init__(self, model: str = "gpt-4o", api_key: Optional[str] = None):
+    def __init__(self, model: str = "gpt-5-mini", api_key: Optional[str] = None):
         import openai
         self.client = openai.AsyncOpenAI(api_key=api_key)
         self.model = model
@@ -106,7 +107,7 @@ class OpenAIProvider(LLMProvider):
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=full_messages,
-            max_tokens=kwargs.get("max_tokens", 4096),
+            max_completion_tokens=kwargs.get("max_tokens", 4096),
         )
         text = response.choices[0].message.content
         usage = {
@@ -125,7 +126,7 @@ class OpenAIProvider(LLMProvider):
         async with await self.client.chat.completions.create(
             model=self.model,
             messages=full_messages,
-            max_tokens=kwargs.get("max_tokens", 4096),
+            max_completion_tokens=kwargs.get("max_completion_tokens", 4096),
             stream=True,
             stream_options={"include_usage": True},
         ) as s:

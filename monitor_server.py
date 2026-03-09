@@ -5,6 +5,8 @@ Supports: receiving agent state, sending pause/stop/resume/delete commands
 import sys
 import asyncio
 
+from config import CONFIG
+
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     import io
@@ -26,9 +28,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-MQTT_BROKER = "localhost"
-MQTT_PORT   = 1883
-WS_PORT     = 8888
+MQTT_BROKER = CONFIG.mqtt_host
+MQTT_PORT   = CONFIG.mqtt_port
+WS_PORT     = CONFIG.ws_port
 MQTT_TOPICS = ["agents/#", "system/#"]
 
 state = {

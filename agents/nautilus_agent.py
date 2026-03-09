@@ -25,6 +25,8 @@ import logging
 import os
 import time
 
+from ..config import CONFIG
+
 from ..core.actor import Actor, Message, MessageType
 
 logger = logging.getLogger(__name__)
@@ -59,8 +61,8 @@ class NautilusAgent(Actor):
         kwargs.setdefault("name", "nautilus-agent")
         super().__init__(**kwargs)
         self.protected = False
-        self._ssh_key    = os.getenv("NAUTILUS_SSH_KEY")
-        strict_env       = os.getenv("NAUTILUS_STRICT_HOST_KEYS", "").lower()
+        self._ssh_key    = CONFIG.nautilus_ssh_key
+        strict_env       = CONFIG.nautilus_strict_host_keys
         self._strict     = strict_env in ("1", "true")
 
     # ── Lifecycle ──────────────────────────────────────────────────────────

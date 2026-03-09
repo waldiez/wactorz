@@ -16,11 +16,13 @@ import os
 import time
 import urllib.parse
 
+from ..config import CONFIG
+
 from ..core.actor import Actor, Message, MessageType
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_LOCATION = os.getenv("WEATHER_DEFAULT_LOCATION", "London")
+_DEFAULT_LOCATION = CONFIG.weather_default_location
 _USER_AGENT       = "AgentFlow-WeatherAgent/1.0"
 _TIMEOUT_SEC      = 10
 

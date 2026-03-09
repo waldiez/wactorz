@@ -4,6 +4,8 @@ AgentFlow - Entry Point
 import sys
 import asyncio
 
+from agentflow.config import CONFIG
+
 # Windows: MUST be set before any async library is imported or started
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 async def build_system(args):
+    # CONFIG = get_config()
     from agentflow.core.registry import ActorSystem
     from agentflow.core.actor import SupervisorStrategy
     from agentflow.agents.main_actor import MainActor
@@ -39,16 +42,21 @@ async def build_system(args):
     from agentflow.agents.llm_agent import AnthropicProvider, OpenAIProvider, OllamaProvider, NIMProvider
     from agentflow.agents.home_assistant_agent import HomeAssistantAgent
 
-    if args.llm == "anthropic":
-        provider = AnthropicProvider(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    elif args.llm == "openai":
-        provider = OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
-    elif args.llm == "ollama":
-        provider = OllamaProvider(model=args.ollama_model)
-    elif args.llm == "nim":
+    llm = args.llm or CONFIG.llm_provider
+    if llm == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY") or CONFIG.llm_api_key
+        provider = AnthropicProvider(model=CONFIG.llm_model, api_key=api_key)
+    elif llm == "openai":
+        api_key = os.getenv("OPENAI_API_KEY") or CONFIG.llm_api_key
+        provider = OpenAIProvider(model=CONFIG.llm_model, api_key=api_key)
+    elif llm == "ollama":
+        ollama_model = args.ollama_model or CONFIG.llm_model
+        provider = OllamaProvider(model=ollama_model, base_url=CONFIG.ollama_url)
+    elif llm == "nim":
+        nim_model = args.nim_model or CONFIG.llm_model
         provider = NIMProvider(
-            model=args.nim_model,
-            api_key=os.getenv("NIM_API_KEY") or os.getenv("NVIDIA_API_KEY"),
+            model=nim_model,
+            api_key=CONFIG.nim_api_key or CONFIG.nvidia_api_key,
         )
     else:
         provider = None
@@ -56,13 +64,13 @@ async def build_system(args):
 
     # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
     system = ActorSystem(
-        mqtt_broker=args.mqtt_broker,
-        mqtt_port=args.mqtt_port,
+        mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
+        mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
     )
     # MQTT client must exist before factories run so injected actors can publish
     system._mqtt_client = await __import__(
         "agentflow.core.registry", fromlist=["_MQTTPublisher"]
-    )._MQTTPublisher.create(args.mqtt_broker, args.mqtt_port)
+    )._MQTTPublisher.create(args.mqtt_broker or CONFIG.mqtt_host, args.mqtt_port or CONFIG.mqtt_port)
 
     # ── Factory helpers (called fresh on each (re)start by the Supervisor) ────
     def make_provider():
@@ -136,15 +144,15 @@ async def build_system(args):
 
 async def main():
     parser = argparse.ArgumentParser(description="AgentFlow - Multi-Agent Framework")
-    parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp"], default="cli")
-    parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--llm", choices=["anthropic", "openai", "ollama", "nim", "none"], default="anthropic")
-    parser.add_argument("--ollama-model", default="llama3")
-    parser.add_argument("--nim-model", default="meta/llama-3.3-70b-instruct",
+    parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp"])
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--llm", choices=["anthropic", "openai", "ollama", "nim", "none"])
+    parser.add_argument("--ollama-model")
+    parser.add_argument("--nim-model",
                         help="NVIDIA NIM model, e.g. meta/llama-3.3-70b-instruct or deepseek-ai/deepseek-r1")
-    parser.add_argument("--discord-token", default=os.getenv("DISCORD_BOT_TOKEN", ""))
-    parser.add_argument("--mqtt-broker", default="localhost")
-    parser.add_argument("--mqtt-port", type=int, default=1883)
+    parser.add_argument("--discord-token")
+    parser.add_argument("--mqtt-broker")
+    parser.add_argument("--mqtt-port", type=int)
     args = parser.parse_args()
 
     system, main_actor = await build_system(args)
@@ -153,25 +161,30 @@ async def main():
         CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface
     )
 
-    if args.interface == "cli":
+    # CONFIG = get_config()
+    interface = args.interface or CONFIG.interface
+    if interface == "cli":
         iface = CLIInterface(main_actor)
         await asyncio.gather(iface.run(), system.run_forever())
-    elif args.interface == "rest":
-        iface = RESTInterface(main_actor, port=args.port, api_key=os.getenv("API_KEY"))
+    elif interface == "rest":
+        port = args.port or CONFIG.port
+        iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)
         await asyncio.gather(iface.run(), system.run_forever())
-    elif args.interface == "discord":
-        if not args.discord_token:
+    elif interface == "discord":
+        discord_token = args.discord_token or CONFIG.discord_token
+        if not discord_token:
             logger.error("DISCORD_BOT_TOKEN not set.")
             sys.exit(1)
-        iface = DiscordInterface(main_actor, token=args.discord_token)
+        iface = DiscordInterface(main_actor, token=discord_token)
         await asyncio.gather(iface.run(), system.run_forever())
-    elif args.interface == "whatsapp":
+    elif interface == "whatsapp":
+        port = args.port or CONFIG.port
         iface = WhatsAppInterface(
             main_actor,
-            account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
-            auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
-            from_number=os.getenv("TWILIO_WHATSAPP_NUMBER", ""),
-            port=args.port,
+            account_sid=CONFIG.twilio_account_sid,
+            auth_token=CONFIG.twilio_auth_token,
+            from_number=CONFIG.twilio_whatsapp_number,
+            port=port,
         )
         await asyncio.gather(iface.run(), system.run_forever())
 

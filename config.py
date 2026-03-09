@@ -1,0 +1,60 @@
+from dotenv import load_dotenv
+from dataclasses import dataclass
+import os
+
+
+load_dotenv()
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    interface: str
+    port: int
+    llm_provider: str
+    llm_model: str
+    llm_api_key: str
+    ollama_url: str
+    mqtt_host: str
+    mqtt_port: int
+    ha_url: str
+    ha_token: str
+    discord_token: str
+    ws_port: int
+    nim_api_key: str
+    nvidia_api_key: str
+    twilio_account_sid: str
+    twilio_auth_token: str
+    twilio_whatsapp_number: str
+    api_key: str
+    nautilus_ssh_key: str
+    nautilus_strict_host_keys: bool
+    weather_default_location: str
+    fuseki_url: str
+    fuseki_dataset: str
+
+
+CONFIG = AppConfig(
+    interface=os.getenv("INTERFACE", "cli"),
+    port=int(os.getenv("PORT", 8000)),
+    llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
+    llm_model=os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
+    llm_api_key=os.getenv("LLM_API_KEY", ""),
+    ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
+    mqtt_host=os.getenv("MQTT_HOST", "localhost"),
+    mqtt_port=int(os.getenv("MQTT_PORT", 1883)),
+    ha_url=os.getenv("HA_URL", ""),
+    ha_token=os.getenv("HA_TOKEN", ""),
+    discord_token=os.getenv("DISCORD_BOT_TOKEN", ""),
+    ws_port=int(os.getenv("WS_PORT", 8888)),
+    nim_api_key=os.getenv("NIM_API_KEY", ""),
+    nvidia_api_key=os.getenv("NVIDIA_API_KEY", ""),
+    twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
+    twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
+    twilio_whatsapp_number=os.getenv("TWILIO_WHATSAPP_NUMBER", ""),
+    api_key=os.getenv("API_KEY", ""),
+    nautilus_ssh_key=os.getenv("NAUTILUS_SSH_KEY", ""),
+    nautilus_strict_host_keys=os.getenv("NAUTILUS_STRICT_HOST_KEYS", "0"),
+    weather_default_location=os.getenv("WEATHER_DEFAULT_LOCATION", "London"),
+    fuseki_url=os.getenv("FUSEKI_URL", "http://fuseki:3030"),
+    fuseki_dataset=os.getenv("FUSEKI_DATASET", "/ds")
+)

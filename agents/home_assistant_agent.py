@@ -23,6 +23,8 @@ import re
 import time
 from typing import Any
 
+from ..config import CONFIG
+
 from ..core.actor import Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import (
     create_automation_via_rest,
@@ -239,8 +241,8 @@ class HomeAssistantAgent(LLMAgent):
         kwargs.setdefault("name", "home-assistant-agent")
         kwargs.setdefault("system_prompt", AUTOMATION_CREATION_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
-        self.ha_url = (os.getenv("HOME_ASSISTANT_URL") or os.getenv("HA_URL") or "").rstrip("/")
-        self.ha_token = (os.getenv("HOME_ASSISTANT_TOKEN") or os.getenv("HA_TOKEN") or "").strip()
+        self.ha_url = (CONFIG.ha_url).rstrip("/")
+        self.ha_token = (CONFIG.ha_token).strip()
         self._device_cache: dict[str, Any] = {"timestamp": 0.0, "data": None}
         self._device_cache_ttl = 30.0
         self._automation_cache: dict[str, Any] = {"timestamp": 0.0, "data": None}

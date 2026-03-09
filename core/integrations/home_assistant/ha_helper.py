@@ -127,6 +127,55 @@ async def fetch_devices_entities_with_location(
         return sorted(output, key=lambda x: (x["name"] or ""))
 
 
+async def get_areas(ws_url: str, token: str) -> List[Dict[str, Any]]:
+    ws_url = normalize_ha_ws_url(ws_url)
+    async with HAWebSocketClient(ws_url, token) as ha:
+        areas = await ha.call("config/area_registry/list")
+        return areas or []
+    
+
+async def get_devices(ws_url: str, token: str) -> List[Dict[str, Any]]:
+    ws_url = normalize_ha_ws_url(ws_url)
+    async with HAWebSocketClient(ws_url, token) as ha:
+        devices = await ha.call("config/device_registry/list")
+        return devices or []
+    
+
+async def get_devices_simple(ws_url: str, token: str) -> List[Dict[str, Any]]:
+    ws_url = normalize_ha_ws_url(ws_url)
+    devices = await get_devices(ws_url, token)
+    return [
+        {
+            "device_id": d["id"],
+            "name": d.get("name_by_user") or d.get("name"),
+            "manufacturer": d.get("manufacturer"),
+            "model": d.get("model"),
+        }
+        for d in (devices or [])
+    ]
+
+
+async def get_entities(ws_url: str, token: str) -> List[Dict[str, Any]]:
+    ws_url = normalize_ha_ws_url(ws_url)
+    async with HAWebSocketClient(ws_url, token) as ha:
+        entities = await ha.call("config/entity_registry/list")
+        return entities or []
+    
+
+async def get_entities_simple(ws_url: str, token: str) -> List[Dict[str, Any]]:
+    ws_url = normalize_ha_ws_url(ws_url)
+    entities = await get_entities(ws_url, token)
+    return [
+        {
+            "entity_id": e.get("entity_id"),
+            "unique_id": e.get("unique_id"),
+            "platform": e.get("platform"),
+            "original_name": e.get("original_name"),
+            "name": e.get("name"),
+        }
+        for e in (entities or [])
+    ]
+
 def normalize_ha_ws_url(url: str) -> str:
     raw = (url or "").strip().rstrip("/")
     if not raw:

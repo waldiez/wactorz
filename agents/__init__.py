@@ -17,3 +17,30 @@ from .wif_agent import WifAgent
 from .wiz_agent import WizAgent
 from .fuseki_agent import FusekiAgent
 from .tick_agent import TickAgent
+from .smart_cities_agent import SmartCitiesAgent
+
+__all__ = [
+    "SmartCitiesAgent",
+    "TickAgent",
+    "FusekiAgent",
+    "WizAgent",
+    "WifAgent",
+    "UdxAgent",
+    "WeatherAgent",
+    "NewsAgent",
+    "NautilusAgent",
+    "QAAgent",
+    "IOAgent",
+    #
+    "LLMAgent",
+    "AnthropicProvider",
+    "OpenAIProvider",
+    "OllamaProvider",
+    "MainActor",
+    "MonitorActor",
+    "CodeAgent",
+    "MLAgent",
+    "YOLOAgent",
+    "AnomalyDetectorAgent",
+    "HomeAssistantAgent",
+]

@@ -248,6 +248,17 @@ class HomeAssistantAgent(LLMAgent):
         self._automation_cache: dict[str, Any] = {"timestamp": 0.0, "data": None}
         self._automation_cache_ttl = 30.0
 
+    
+    # ── Cost tracking helper ─────────────────────────────────────────────────
+
+    def _accumulate_usage(self, usage: dict) -> None:
+        """Add token counts and cost from one llm.complete() call to running totals."""
+        if not isinstance(usage, dict):
+            return
+        self.total_input_tokens  += usage.get("input_tokens", 0)
+        self.total_output_tokens += usage.get("output_tokens", 0)
+        self.total_cost_usd      += usage.get("cost_usd", 0.0)
+
     # ── Public entry points ──────────────────────────────────────────────────
 
     async def chat(self, user_message: str) -> str:
@@ -327,11 +338,12 @@ class HomeAssistantAgent(LLMAgent):
             return self._classify_action_heuristic(text)
 
         try:
-            response, _ = await self.llm.complete(
+            response, usage = await self.llm.complete(
                 messages=[{"role": "user", "content": text}],
                 system=HA_ACTION_CLASSIFICATION_PROMPT,
                 max_tokens=20,
             )
+            self._accumulate_usage(usage)
             word = (response or "").strip().lower().split()[0] if (response or "").strip() else ""
             if word in valid:
                 return word
@@ -443,7 +455,8 @@ class HomeAssistantAgent(LLMAgent):
 
         user_msg = {"role": "user", "content": json.dumps(payload)}
         try:
-            response, _ = await self.llm.complete(messages=[user_msg], system=HARDWARE_SELECTION_PROMPT)
+            response, usage = await self.llm.complete(messages=[user_msg], system=HARDWARE_SELECTION_PROMPT)
+            self._accumulate_usage(usage)
             data = json.loads(self._strip_fences(response))
             if not isinstance(data, dict):
                 raise ValueError("LLM response is not a JSON object")
@@ -464,10 +477,11 @@ class HomeAssistantAgent(LLMAgent):
                         "or set can_fulfill=false."
                     ),
                 }
-                retry, _ = await self.llm.complete(
+                retry, usage = await self.llm.complete(
                     messages=[user_msg, {"role": "assistant", "content": response}, correction],
                     system=HARDWARE_SELECTION_PROMPT,
                 )
+                self._accumulate_usage(usage)
                 retry_data = json.loads(self._strip_fences(retry))
                 if isinstance(retry_data, dict):
                     selected = retry_data.get("hardware") or []
@@ -600,10 +614,11 @@ class HomeAssistantAgent(LLMAgent):
             "selected_entities": entities,
             "hardware_context": hardware,
         }
-        response, _ = await self.llm.complete(
+        response, usage = await self.llm.complete(
             messages=[{"role": "user", "content": json.dumps(payload)}],
             system=AUTOMATION_CREATION_PROMPT,
         )
+        self._accumulate_usage(usage)
         data = json.loads(self._strip_fences(response))
         if not isinstance(data, dict):
             raise ValueError("LLM response is not a JSON object")
@@ -680,10 +695,11 @@ class HomeAssistantAgent(LLMAgent):
 
         payload = {"user_request": text, "automations": automations}
         try:
-            response, _ = await self.llm.complete(
+            response, usage = await self.llm.complete(
                 messages=[{"role": "user", "content": json.dumps(payload)}],
                 system=HA_DELETE_CONFIRM_PROMPT,
             )
+            self._accumulate_usage(usage)
             data = json.loads(self._strip_fences(response))
         except Exception as exc:
             return {"result": f"Could not identify automation to delete: {exc}", "deleted": False}
@@ -735,10 +751,11 @@ class HomeAssistantAgent(LLMAgent):
         # Step 1 — identify which automation the user wants to edit
         ident_payload = {"user_request": text, "automations": automations}
         try:
-            ident_response, _ = await self.llm.complete(
+            ident_response, usage = await self.llm.complete(
                 messages=[{"role": "user", "content": json.dumps(ident_payload)}],
                 system=HA_IDENTIFY_AUTOMATION_PROMPT,
             )
+            self._accumulate_usage(usage)
             ident_data = json.loads(self._strip_fences(ident_response))
         except Exception as exc:
             return {"result": f"Could not identify automation to edit: {exc}", "edited": False}
@@ -788,10 +805,11 @@ class HomeAssistantAgent(LLMAgent):
             "available_entities": entity_ids[:100],
         }
         try:
-            edit_response, _ = await self.llm.complete(
+            edit_response, usage = await self.llm.complete(
                 messages=[{"role": "user", "content": json.dumps(edit_payload)}],
                 system=HA_EDIT_AUTOMATION_PROMPT,
             )
+            self._accumulate_usage(usage)
             edit_data = json.loads(self._strip_fences(edit_response))
         except Exception as exc:
             return {"result": f"LLM could not generate updated automation: {exc}", "edited": False}

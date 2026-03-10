@@ -437,10 +437,10 @@ class Actor(ABC):
 
     # ─── MQTT ─────────────────────────────────────────────────────────────────
 
-    async def _mqtt_publish(self, topic: str, payload: Any):
+    async def _mqtt_publish(self, topic: str, payload: Any, retain: bool = False, qos: int = 0):
         if self._mqtt_client:
             try:
-                await self._mqtt_client.publish(topic, json.dumps(payload))
+                await self._mqtt_client.publish(topic, json.dumps(payload), retain=retain, qos=qos)
             except Exception as e:
                 logger.debug(f"[{self.name}] MQTT publish failed: {e}")
 

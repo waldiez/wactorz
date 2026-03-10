@@ -213,6 +213,8 @@ Example — spawn a temperature sensor agent on a Pi:
   "type": "dynamic",
   "description": "Reads temperature from DHT22 sensor on the kitchen Pi",
   "poll_interval": 30,
+  "max_restarts": 5,
+  "restart_delay": 3.0,
   "code": "
 async def setup(agent):
     await agent.log('Sensor agent ready on ' + agent.node)
@@ -225,6 +227,11 @@ async def process(agent):
   "
 }
 </spawn>
+
+Remote agents run under a local supervisor — if an agent crashes, it is automatically
+restarted with exponential back-off (restart_delay doubles each attempt, capped at 60s).
+After max_restarts consecutive failures it is marked failed and removed.
+Compile errors and setup() fatals are never retried.
 
 Inside remote agent code, agent.node gives the node name the agent is running on.
 
@@ -244,11 +251,15 @@ Example:
   You:  await main.migrate_agent("temp-sensor", "rpi-bedroom")
 
 == LISTING NODES ==
-To see which remote nodes are currently online:
+To see which remote nodes are currently online (in your own response code, call it directly):
   nodes = main.list_nodes()
   # Returns: [{"node": "rpi-kitchen", "agents": ["temp-sensor"], "online": True, "last_seen": ...}]
 
-Use this before spawning to verify the target node is reachable.
+IMPORTANT: In generated DynamicAgent CODE (setup/process/handle_task), NEVER use 'main'.
+Use the agent API instead — it has the same data:
+  nodes = agent.nodes()   # works inside generated agent code
+
+Use before spawning to verify the target node is reachable.
 A node is considered online if it sent a heartbeat in the last 30 seconds.
 
 == DEPLOYING A NEW NODE ==
@@ -613,7 +624,7 @@ class MainActor(LLMAgent):
             decision_task = self.llm.complete(
                 messages=[{"role": "user", "content": text}],
                 system=self.HOME_AUTOMATION_INTENT_SYSTEM_PROMPT,
-                max_completion_tokens=4,
+                max_tokens=4,
             )
             decision, _ = await asyncio.wait_for(decision_task, timeout=4.0)
             return (decision or "").strip().upper().startswith("HA")
@@ -637,6 +648,21 @@ class MainActor(LLMAgent):
 
     async def process_user_input(self, text: str) -> str:
         note_prefix = self._drain_notifications()
+
+        # ── Direct API intercepts — handle without LLM round-trip ──────────
+        stripped = text.strip().rstrip("()")
+        if stripped in ("main.list_nodes", "list_nodes", "/nodes"):
+            nodes = self.list_nodes()
+            if not nodes:
+                return note_prefix + "No remote nodes seen yet. Deploy one with /deploy <node-name>."
+            import time as _t
+            lines = []
+            for nd in sorted(nodes, key=lambda x: x["node"]):
+                status   = "🟢 online" if nd["online"] else "🔴 offline"
+                agents   = ", ".join(nd["agents"]) or "(no agents)"
+                age      = int(_t.time() - nd["last_seen"])
+                lines.append(f"  {nd['node']:22s} {status}  |  agents: {agents}  |  last heartbeat: {age}s ago")
+            return note_prefix + "Remote nodes:\n" + "\n".join(lines)
 
         # Route home automation requests to the unified HA agent
         if await self._is_home_automation_request(text):
@@ -1147,6 +1173,8 @@ class MainActor(LLMAgent):
         await self._mqtt_publish(
             f"nodes/{node}/spawn",
             config,
+            retain=True,   # broker holds this until the Pi subscriber connects
+            qos=1,         # at-least-once delivery
         )
 
         await self._mqtt_publish(

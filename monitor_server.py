@@ -5,8 +5,6 @@ Supports: receiving agent state, sending pause/stop/resume/delete commands
 import sys
 import asyncio
 
-from config import CONFIG
-
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     import io
@@ -28,13 +26,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-MQTT_BROKER = CONFIG.mqtt_host
-MQTT_PORT   = CONFIG.mqtt_port
-WS_PORT     = CONFIG.ws_port
-MQTT_TOPICS = ["agents/#", "system/#"]
+MQTT_BROKER = "localhost"
+MQTT_PORT   = 1883
+WS_PORT     = 8888
+MQTT_TOPICS = ["agents/#", "system/#", "nodes/#"]
 
 state = {
     "agents":        {},
+    "nodes":         {},   # node_name -> {node, agents, last_seen, online}
     "alerts":        [],
     "system_health": {},
     "log_feed":      [],
@@ -177,21 +176,19 @@ def parse_topic(topic: str, payload_str: str):
                 ag["name"]  = data.get("name",      agent_id[:8])
                 ag["cpu"]   = data.get("cpu",        0)
                 ag["mem"]   = data.get("memory_mb",  0)
-                ag["task"]        = data.get("task",       "idle")
-                ag["state"]       = data.get("state",      "unknown")
-                # Persist code/description/type if present (dynamic agents)
-                for field in ("code", "description", "agent_type"):
-                    if field in data:
-                        ag[field] = data[field]
+                ag["task"]  = data.get("task",       "idle")
+                ag["state"] = data.get("state",      "unknown")
             logger.info(f"[MQTT] Heartbeat: {state['agents'][agent_id].get('name', agent_id[:8])}")
 
         elif metric == "metrics":
             update_agent(agent_id, "metrics", data)
             if isinstance(data, dict):
                 state["agents"][agent_id]["messages_processed"] = data.get("messages_processed", 0)
-                state["agents"][agent_id]["cost_usd"]      = data.get("cost_usd", 0.0)
-                state["agents"][agent_id]["input_tokens"]  = data.get("input_tokens", 0)
-                state["agents"][agent_id]["output_tokens"] = data.get("output_tokens", 0)
+                # Accumulate cost and tokens across all agents
+                if "cost_usd" in data:
+                    state["agents"][agent_id]["cost_usd"]      = data.get("cost_usd", 0.0)
+                    state["agents"][agent_id]["input_tokens"]  = data.get("input_tokens", 0)
+                    state["agents"][agent_id]["output_tokens"] = data.get("output_tokens", 0)
 
         elif metric == "logs":
             add_log({"type": "log", "agent_id": agent_id, "timestamp": time.time(),
@@ -221,15 +218,38 @@ def parse_topic(topic: str, payload_str: str):
 
         return {"type": "agent", "agent_id": agent_id, "metric": metric, "data": data}
 
+    if parts[0] == "nodes" and len(parts) >= 3:
+        node_name = parts[1]
+        metric    = parts[2]
+        if metric == "heartbeat" and isinstance(data, dict):
+            state["nodes"][node_name] = {
+                "node":      node_name,
+                "agents":    data.get("agents", []),
+                "last_seen": time.time(),
+                "online":    True,
+                "node_id":   data.get("node_id", ""),
+            }
+            logger.info(f"[MQTT] Node heartbeat: {node_name} | agents: {data.get('agents', [])}")
+            return {"type": "node", "node_name": node_name, "data": data}
+
     return None
+
+def _node_online(last_seen: float) -> bool:
+    return (time.time() - last_seen) < 45   # 3 missed heartbeats @ 15s = offline
 
 
 def _snapshot() -> dict:
+    # Mark nodes offline if heartbeat is too old
+    for nd in state["nodes"].values():
+        nd["online"] = _node_online(nd.get("last_seen", 0))
+    total_cost = sum(a.get("cost_usd", 0.0) for a in state["agents"].values())
     return {
         "agents":        list(state["agents"].values()),
+        "nodes":         list(state["nodes"].values()),
         "alerts":        state["alerts"][:10],
         "log_feed":      state["log_feed"][:20],
         "system_health": state["system_health"],
+        "total_cost_usd": round(total_cost, 6),
     }
 
 
@@ -280,15 +300,8 @@ async def ws_handler(request):
 
     snap = _snapshot()
     logger.info(f"Sending snapshot: {len(snap['agents'])} agents")
+    # Use "full_snapshot" so browser knows to replace its entire state
     await ws.send_str(json.dumps({"type": "full_snapshot", "state": snap}))
-
-    # Schedule a follow-up snapshot after 2s to catch code/fields from
-    # the first heartbeat cycle (dynamic agents publish code in heartbeat)
-    async def _delayed_refresh():
-        await asyncio.sleep(2.0)
-        if not ws.closed:
-            await ws.send_str(json.dumps({"type": "full_snapshot", "state": _snapshot()}))
-    asyncio.create_task(_delayed_refresh())
 
     try:
         async for msg in ws:
@@ -327,4 +340,24 @@ async def main():
 
 
 if __name__ == "__main__":
+    import argparse, os
+    parser = argparse.ArgumentParser(description="AgentFlow Monitor Server")
+    parser.add_argument("--broker",    default=os.getenv("AGENTFLOW_BROKER", "localhost"),
+                        help="MQTT broker host (default: localhost or $AGENTFLOW_BROKER)")
+    parser.add_argument("--mqtt-port", type=int, default=1883)
+    parser.add_argument("--ws-port",   type=int, default=8888)
+    args = parser.parse_args()
+
+    # Override module-level config before asyncio.run so mqtt_listener picks them up
+    MQTT_BROKER = args.broker
+    MQTT_PORT   = args.mqtt_port
+    WS_PORT     = args.ws_port
+
+    import sys
+    # Patch the module globals directly so all functions see the updated values
+    thismodule = sys.modules[__name__]
+    thismodule.MQTT_BROKER = args.broker
+    thismodule.MQTT_PORT   = args.mqtt_port
+    thismodule.WS_PORT     = args.ws_port
+
     asyncio.run(main())

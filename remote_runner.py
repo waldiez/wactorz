@@ -8,7 +8,7 @@ and runs DynamicAgents locally. Those agents heartbeat back to the same broker
 so they appear in the central dashboard exactly like local agents.
 
 Usage on the remote machine:
-    pip install aiomqtt psutil aiohttp --break-system-packages
+    pip install aiomqtt paho-mqtt psutil aiohttp --break-system-packages
     python3 remote_runner.py --broker 192.168.1.10 --name rpi-livingroom
 
 From the main AgentFlow chat (automatic via devops-agent):
@@ -94,6 +94,17 @@ class _RemoteAgentAPI:
     # ── MQTT ──────────────────────────────────────────────────────────────────
     async def publish(self, topic: str, data: Any):
         await self._agent._publish(topic, data)
+
+    async def publish_result(self, data: Any):
+        """Publish agent result to agents/{id}/results — mirrors DynamicAgent API."""
+        await self._agent._publish(
+            f"agents/{self.actor_id}/results",
+            {"agent": self.name, "node": self.node, "result": data, "timestamp": time.time()},
+        )
+
+    async def set_status(self, status: str):
+        """Update agent task status string visible in dashboard."""
+        self._agent._status = status
 
     # ── Logging ───────────────────────────────────────────────────────────────
     async def log(self, message: str):
@@ -486,19 +497,25 @@ class _RemoteRunner:
         self.port       = port
         self.node_name  = node_name
         self._agents:   dict[str, _RemoteAgent] = {}   # name → agent
-        self._pub_queue: asyncio.Queue = asyncio.Queue()
+        self._pub_queue: asyncio.Queue = None   # created in run() inside the event loop
         self._running   = False
 
     # ── MQTT publish (queue-based, reconnect-safe) ────────────────────────────
 
-    async def publish(self, topic: str, data: Any):
-        payload = json.dumps(data) if not isinstance(data, str) else data
-        await self._pub_queue.put((topic, payload))
+    async def publish(self, topic: str, data: Any, retain: bool = False):
+        payload = json.dumps(data) if not isinstance(data, (str, bytes)) else data
+        if isinstance(payload, str):
+            payload = payload.encode()
+        await self._pub_queue.put((topic, payload, retain))
 
     # ── Spawn / stop agents ───────────────────────────────────────────────────
 
     async def spawn_agent(self, config: dict):
+        if not isinstance(config, dict):
+            logger.warning(f"[runner] spawn_agent: invalid config type {type(config)}, ignoring.")
+            return
         name = config.get("name", f"agent-{uuid.uuid4().hex[:6]}")
+        logger.info(f"[runner] Spawning agent '{name}'...")
         if name in self._agents:
             if config.get("replace", False):
                 logger.info(f"[runner] Replacing agent '{name}'")
@@ -511,10 +528,20 @@ class _RemoteRunner:
         if packages:
             await self._install_packages(packages)
 
-        agent = _RemoteAgent(config, self)
-        self._agents[name] = agent
-        await agent.start()
-        logger.info(f"[runner] Agent '{name}' started.")
+        try:
+            agent = _RemoteAgent(config, self)
+            self._agents[name] = agent
+            await agent.start()
+            logger.info(f"[runner] Agent '{name}' started.")
+        except Exception as e:
+            logger.error(f"[runner] Failed to start agent '{name}': {e}")
+            self._agents.pop(name, None)
+            await self.publish(
+                f"agents/{self.node_name}/logs",
+                {"type": "error", "message": f"Failed to start '{name}': {e}",
+                 "node": self.node_name, "timestamp": time.time()},
+            )
+            return
 
         await self.publish(
             f"agents/{self.node_name}/logs",
@@ -547,46 +574,73 @@ class _RemoteRunner:
 
     # ── Status heartbeat for the node itself ──────────────────────────────────
 
-    async def _node_heartbeat_loop(self, interval: float = 15.0):
+    async def _node_heartbeat_loop(self, interval: float = 10.0):
         """Publish a heartbeat for the runner process itself so it appears in dashboard."""
         node_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"agentflow.node.{self.node_name}"))
         while self._running:
             try:
-                await asyncio.sleep(interval)
                 agent_names = list(self._agents.keys())
                 await self.publish(
                     f"nodes/{self.node_name}/heartbeat",
                     {
-                        "node":       self.node_name,
-                        "node_id":    node_id,
-                        "timestamp":  time.time(),
-                        "agents":     agent_names,
+                        "node":        self.node_name,
+                        "node_id":     node_id,
+                        "timestamp":   time.time(),
+                        "agents":      agent_names,
                         "agent_count": len(agent_names),
-                        "broker":     self.broker,
+                        "broker":      self.broker,
                     },
                 )
+                await asyncio.sleep(interval)
             except asyncio.CancelledError:
                 break
             except Exception:
-                pass
+                await asyncio.sleep(interval)
 
-    # ── MQTT publisher task (reconnect-safe) ──────────────────────────────────
+    # ── MQTT publisher task (paho-mqtt direct — aiomqtt v2.x doesn't flush reliably) ──
 
     async def _publisher_loop(self):
-        import aiomqtt
+        """
+        Uses paho-mqtt directly for reliable fire-and-forget publishing.
+        aiomqtt v2.x wraps paho but its internal network loop doesn't get CPU
+        time when we block on queue.get(), causing silent message loss.
+        paho.loop_start() runs a background thread that handles ACKs/keepalives.
+        """
+        import paho.mqtt.client as paho_mqtt
+        loop = asyncio.get_event_loop()
+
+        def _connect():
+            c = paho_mqtt.Client(client_id=f"runner-pub-{self.node_name}-{uuid.uuid4().hex[:6]}")
+            c.connect(self.broker, self.port, keepalive=60)
+            c.loop_start()
+            return c
+
+        client = None
         while self._running:
             try:
-                async with aiomqtt.Client(self.broker, self.port) as client:
+                if client is None:
+                    client = await loop.run_in_executor(None, _connect)
                     logger.info(f"[runner] Publisher connected to {self.broker}:{self.port}")
-                    while self._running:
-                        topic, payload = await self._pub_queue.get()
-                        await client.publish(topic, payload)
-                        self._pub_queue.task_done()
+
+                item = await self._pub_queue.get()
+                topic, payload = item[0], item[1]
+                retain = item[2] if len(item) > 2 else False
+                client.publish(topic, payload, qos=1, retain=retain)
+                self._pub_queue.task_done()
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning(f"[runner] Publisher disconnected: {e}. Reconnecting in 3s...")
+                logger.warning(f"[runner] Publisher error: {e}. Reconnecting in 3s...")
+                if client:
+                    try: client.loop_stop(); client.disconnect()
+                    except Exception: pass
+                    client = None
                 await asyncio.sleep(3)
+
+        if client:
+            try: client.loop_stop(); client.disconnect()
+            except Exception: pass
 
     # ── MQTT subscriber task ──────────────────────────────────────────────────
 
@@ -626,7 +680,16 @@ class _RemoteRunner:
                             data = msg.payload.decode()
 
                         if topic_str == f"nodes/{self.node_name}/spawn":
-                            asyncio.create_task(self.spawn_agent(data))
+                            if not msg.payload:   # empty = retain-clear message, ignore
+                                continue
+                            def _log_task_exc(t):
+                                if not t.cancelled() and t.exception():
+                                    logger.error(f"[runner] spawn_agent task failed: {t.exception()}")
+                            task = asyncio.create_task(self.spawn_agent(data))
+                            task.add_done_callback(_log_task_exc)
+                            # Clear the retained message so this spawn doesn't
+                            # re-fire every time the subscriber reconnects/restarts
+                            asyncio.create_task(self.publish(topic_str, b"", retain=True))
 
                         elif topic_str == f"nodes/{self.node_name}/stop":
                             name = data.get("name") if isinstance(data, dict) else str(data)
@@ -683,6 +746,7 @@ class _RemoteRunner:
 
     async def run(self):
         self._running = True
+        self._pub_queue = asyncio.Queue()   # must be created inside the running event loop
         logger.info(f"[runner] Starting node '{self.node_name}' → broker {self.broker}:{self.port}")
 
         tasks = [
@@ -691,13 +755,7 @@ class _RemoteRunner:
             asyncio.create_task(self._node_heartbeat_loop()),
         ]
 
-        # Announce presence
-        await asyncio.sleep(1)   # let publisher connect first
-        await self.publish(
-            f"nodes/{self.node_name}/heartbeat",
-            {"node": self.node_name, "status": "online",
-             "timestamp": time.time(), "agents": []},
-        )
+        await asyncio.sleep(1)   # let publisher connect before anything else fires
         logger.info(f"[runner] Node '{self.node_name}' online.")
 
         try:
@@ -775,18 +833,24 @@ def main():
                         help="MQTT broker host (default: localhost or $AGENTFLOW_BROKER)")
     parser.add_argument("--port",    type=int, default=1883,
                         help="MQTT broker port (default: 1883)")
-    parser.add_argument("--name",    default=os.getenv("AGENTFLOW_NODE", f"node-{uuid.uuid4().hex[:6]}"),
+    _default_node = os.getenv("AGENTFLOW_NODE", f"node-{uuid.uuid4().hex[:6]}")
+    parser.add_argument("--name",    default=_default_node,
                         help="Unique node name (default: $AGENTFLOW_NODE or random)")
+    parser.add_argument("--node",    default=None,
+                        help="Alias for --name (either works)")
     parser.add_argument("--loglevel", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
+
+    # --node takes priority over --name if both supplied
+    node_name = args.node if args.node else args.name
 
     logging.basicConfig(
         level=getattr(logging, args.loglevel),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    runner = _RemoteRunner(broker=args.broker, port=args.port, node_name=args.name)
+    runner = _RemoteRunner(broker=args.broker, port=args.port, node_name=node_name)
 
     # Graceful shutdown on SIGINT / SIGTERM
     loop = asyncio.new_event_loop()

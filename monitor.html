@@ -193,9 +193,6 @@
   }
 
   .metric-row { display:flex; flex-direction:column; gap:2px; }
-  .cost-row { margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 4px; }
-  .cost-val { color: #4ade80; font-weight: 600; }
-  .tok-label { font-size: 9px; color: #64748b; margin-left: auto; white-space: nowrap; }
   .metric-label { font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); }
   .metric-val   { font-size:13px; color:var(--text); }
 
@@ -286,26 +283,6 @@
   #toast.yellow{ border-color: var(--yellow);color: var(--yellow); }
 
   .last-seen { font-size:10px; color:var(--muted); text-align:right; margin-top:6px; }
-  .ctrl-btn.code-toggle { color: #7dd3fc; border-color: #7dd3fc33; font-size: 10px; padding: 2px 8px; }
-  .ctrl-btn.code-toggle:hover { color: #38bdf8; border-color: #38bdf8; background: rgba(56,189,248,0.06); }
-  .ctrl-btn.code-toggle.active { color: #38bdf8; border-color: #38bdf8; background: rgba(56,189,248,0.10); }
-  .code-panel {
-    display: none; margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.08);
-    padding-top: 8px;
-  }
-  .code-panel.open { display: block; }
-  .code-panel pre {
-    background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
-    padding: 10px; margin: 0; overflow-x: auto; max-height: 300px; overflow-y: auto;
-    font-family: 'Consolas','Monaco','Courier New',monospace; font-size: 11px;
-    line-height: 1.5; color: #e6edf3; white-space: pre;
-  }
-  /* Simple syntax highlighting via CSS */
-  .kw  { color: #ff7b72; }  /* keywords */
-  .fn  { color: #d2a8ff; }  /* function names */
-  .st  { color: #a5d6ff; }  /* strings */
-  .cm  { color: #8b949e; font-style: italic; }  /* comments */
-  .nb  { color: #79c0ff; }  /* builtins / agent.* */
 
   /* ── Sidebar ── */
   .sidebar {
@@ -393,7 +370,7 @@
     <div class="stat-cell"><div class="stat-label">Failed</div><div class="stat-value red" id="stat-failed">0</div></div>
     <div class="stat-cell"><div class="stat-label">Alerts</div><div class="stat-value yellow" id="stat-alerts">0</div></div>
     <div class="stat-cell"><div class="stat-label">Msgs Processed</div><div class="stat-value" id="stat-msgs">0</div></div>
-    <div class="stat-cell"><div class="stat-label">Total Cost</div><div class="stat-value green" id="stat-cost">$0.000000</div></div>
+    <div class="stat-cell"><div class="stat-label">LLM Cost</div><div class="stat-value green" id="stat-cost">$0.000</div></div>
   </div>
 
   <div class="main-panel">
@@ -404,6 +381,12 @@
           <div class="big">&#9711;</div>
           <div class="sub">WAITING FOR AGENTS<br>Connect your MQTT broker to begin</div>
         </div>
+      </div>
+    </div>
+    <div style="margin-top:24px">
+      <div class="section-title">Remote Nodes</div>
+      <div id="nodes-list" style="display:flex;flex-wrap:wrap;gap:10px;padding:4px 0;">
+        <div style="color:var(--muted);font-size:13px;padding:6px 0;">No remote nodes yet — deploy one with <code>/deploy &lt;name&gt;</code></div>
       </div>
     </div>
   </div>
@@ -424,7 +407,9 @@
 <script>
 // ── State — persists across reconnects, NEVER cleared ─────────────────────
 const agents = {};
+const nodes  = {};   // node_name -> node info
 let alerts   = [];
+let totalCostUsd = 0.0;
 let ws       = null;
 let reconnectTimer  = null;
 let reconnectDelay  = 2000;
@@ -526,10 +511,17 @@ function mergeState(state, event) {
     Object.assign(agents[a.agent_id], a);
   });
 
+  // Merge nodes — upsert by node name
+  (state.nodes || []).forEach(n => {
+    nodes[n.node] = n;
+  });
+
   if (state.alerts && state.alerts.length) alerts = state.alerts;
+  if (typeof state.total_cost_usd === 'number') totalCostUsd = state.total_cost_usd;
   renderAgents();
   renderAlerts();
   renderStats();
+  renderNodes();
   if (state.log_feed && state.log_feed.length) renderLogBatch(state.log_feed);
   if (event) logEvent(event);
 }
@@ -584,31 +576,14 @@ function buildCard(a) {
   const cpuPct = Math.min(+(a.cpu  || 0), 100);
   const memPct = Math.min((+(a.mem || 0) / 512) * 100, 100);
   const metrics = a.metrics || {};
-  const msgs   = metrics.messages_processed ?? a.messages_processed ?? '--';
+  const msgs  = metrics.messages_processed ?? a.messages_processed ?? '--';
   const uptime = metrics.uptime != null ? formatUptime(metrics.uptime) : '--';
-  const costUsd = a.cost_usd ?? metrics.cost_usd;
-  const tokIn   = a.input_tokens  ?? metrics.input_tokens  ?? 0;
-  const tokOut  = a.output_tokens ?? metrics.output_tokens ?? 0;
-  const costRow = costUsd != null
-    ? `<div class="metric-row cost-row">
-        <div class="metric-label">Cost (USD)</div>
-        <div class="metric-val cost-val">$${(+costUsd).toFixed(6)}</div>
-        <div class="metric-label tok-label">${tokIn}↑ ${tokOut}↓ tokens</div>
-       </div>`
-    : '';
   const lastUpdate = a.last_update ? timeAgo(a.last_update) : 'never';
-
-  // Code panel (dynamic agents only)
-  const agentCode = a.code || '';
-  const codeBtn = agentCode
-    ? `<button class="ctrl-btn code-toggle" id="codebtn-${a.agent_id}"
-         onclick="toggleCode('${a.agent_id}')">&#10092;&#10093; Code</button>`
-    : '';
-  const codePanel = agentCode
-    ? `<div class="code-panel" id="codepanel-${a.agent_id}">
-         <pre>${syntaxHighlight(esc(agentCode))}</pre>
-       </div>`
-    : '';
+  const costUsd = a.cost_usd != null ? a.cost_usd : null;
+  const costStr = costUsd == null ? null
+    : costUsd < 0.001 ? null   // hide $0.000 to avoid clutter
+    : costUsd < 0.01  ? (costUsd * 100).toFixed(2) + '¢'
+    : '$' + costUsd.toFixed(3);
 
   // Control buttons — disable based on state and protection
   const isRunning   = st === 'running';
@@ -664,42 +639,17 @@ function buildCard(a) {
         <div class="metric-label">Messages</div>
         <div class="metric-val">${msgs}</div>
       </div>
-      ${costRow}
+      ${costStr ? `<div class="metric-row">
+        <div class="metric-label">LLM Cost</div>
+        <div class="metric-val" style="color:var(--green)">${costStr}</div>
+      </div>` : ''}
     </div>
     <div class="agent-task">task: <span>${esc(task)}</span></div>
     <div class="agent-controls">
-      ${pauseBtn}${resumeBtn}${stopBtn}${deleteBtn}${codeBtn}
+      ${pauseBtn}${resumeBtn}${stopBtn}${deleteBtn}
     </div>
-    ${codePanel}
     <div class="last-seen">seen ${lastUpdate}</div>
   </div>`;
-}
-
-// ── Code toggle ────────────────────────────────────────────────────────────
-function toggleCode(agentId) {
-  const panel = document.getElementById('codepanel-' + agentId);
-  const btn   = document.getElementById('codebtn-'   + agentId);
-  if (!panel) return;
-  const open = panel.classList.toggle('open');
-  btn.classList.toggle('active', open);
-  btn.textContent = open ? '✕ Code' : '⟨⟩ Code';
-}
-
-function syntaxHighlight(code) {
-  var KEYWORDS = ['async','await','def','import','from','return','if','else',
-    'elif','for','while','in','not','and','or','None','True','False','class',
-    'try','except','pass','raise','with','as','lambda','yield'];
-  return code.split('\n').map(function(line) {
-    var ci = line.indexOf('#');
-    var pre = ci >= 0 ? line.slice(0, ci) : line;
-    var com = ci >= 0 ? '<span class="cm">' + line.slice(ci) + '</span>' : '';
-    pre = pre.replace(/\b(agent\.[a-zA-Z_]+)/g, '<span class="nb">$1</span>');
-    KEYWORDS.forEach(function(kw) {
-      var re = new RegExp('\\b' + kw + '\\b', 'g');
-      pre = pre.replace(re, '<span class="kw">' + kw + '</span>');
-    });
-    return pre + com;
-  }).join('\n');
 }
 
 // ── Render Stats ───────────────────────────────────────────────────────────
@@ -710,7 +660,6 @@ function renderStats() {
   const stopped = list.filter(a => (a.state||a.status) === 'stopped').length;
   const failed  = list.filter(a => (a.state||a.status) === 'failed').length;
   const msgs    = list.reduce((s,a) => s + ((a.metrics?.messages_processed ?? a.messages_processed) || 0), 0);
-  const totalCost = list.reduce((s,a) => s + (+(a.cost_usd ?? a.metrics?.cost_usd ?? 0)), 0);
 
   document.getElementById('stat-total').textContent   = list.length;
   document.getElementById('stat-running').textContent = running;
@@ -719,7 +668,42 @@ function renderStats() {
   document.getElementById('stat-failed').textContent  = failed;
   document.getElementById('stat-alerts').textContent  = alerts.length;
   document.getElementById('stat-msgs').textContent    = msgs;
-  document.getElementById('stat-cost').textContent    = '$' + totalCost.toFixed(6);
+  // Cost display: show cents if < $0.01, else dollars to 3dp
+  const costEl = document.getElementById('stat-cost');
+  if (totalCostUsd < 0.001) {
+    costEl.textContent = '$0.000';
+  } else if (totalCostUsd < 0.01) {
+    costEl.textContent = (totalCostUsd * 100).toFixed(2) + '¢';
+  } else {
+    costEl.textContent = '$' + totalCostUsd.toFixed(3);
+  }
+  costEl.className = 'stat-value ' + (totalCostUsd > 1.0 ? 'yellow' : totalCostUsd > 0 ? 'green' : '');
+}
+
+// ── Render Nodes ───────────────────────────────────────────────────────────
+function renderNodes() {
+  const el   = document.getElementById('nodes-list');
+  const list = Object.values(nodes);
+  if (!list.length) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:6px 0;">No remote nodes yet — deploy one with <code>/deploy &lt;name&gt;</code></div>';
+    return;
+  }
+  el.innerHTML = list.map(nd => {
+    const online  = nd.online;
+    const color   = online ? 'var(--green)' : 'var(--muted)';
+    const dot     = online ? '●' : '○';
+    const ags     = (nd.agents || []).join(', ') || '—';
+    const ago     = nd.last_seen ? Math.round((Date.now()/1000) - nd.last_seen) + 's ago' : '';
+    return `<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;
+                        padding:10px 14px;min-width:200px;font-size:13px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span style="color:${color};font-size:16px;">${dot}</span>
+        <strong style="color:var(--text);">${esc(nd.node)}</strong>
+        <span style="color:var(--muted);margin-left:auto;font-size:11px;">${ago}</span>
+      </div>
+      <div style="color:var(--muted);">agents: <span style="color:var(--text);">${esc(ags)}</span></div>
+    </div>`;
+  }).join('');
 }
 
 // ── Render Alerts ──────────────────────────────────────────────────────────

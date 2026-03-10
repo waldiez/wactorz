@@ -74,7 +74,46 @@ class DynamicAgent(Actor):
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def on_start(self):
-        self._compile_code()
+        # ── Compile with LLM self-correction on syntax errors ─────────────
+        current_code = self._code
+        error_msg    = self._compile_code(current_code)
+
+        if error_msg:
+            for attempt in range(1, self._MAX_COMPILE_RETRIES + 1):
+                logger.warning(
+                    f"[{self.name}] Compile error (attempt {attempt}): {error_msg}"
+                )
+                fixed = await self._fix_syntax_with_llm(current_code, error_msg)
+                if fixed is None:
+                    # LLM unavailable — no point retrying
+                    break
+                self._ns = {}                      # fresh namespace for retry
+                new_err = self._compile_code(fixed)
+                if new_err is None:
+                    # Fix worked — update stored code so restarts use the good version
+                    self._code = fixed
+                    error_msg  = None
+                    logger.info(f"[{self.name}] Code fixed by LLM after {attempt} attempt(s).")
+                    await self._mqtt_publish(
+                        f"agents/{self.actor_id}/logs",
+                        {"type": "log",
+                         "message": f"Syntax error fixed by LLM after {attempt} attempt(s).",
+                         "timestamp": time.time()},
+                    )
+                    break
+                # Fix compiled but still broken — feed it back for the next attempt
+                current_code = fixed
+                error_msg    = new_err
+
+        if error_msg:
+            # All attempts exhausted — publish fatal and stop
+            err_exc = SyntaxError(error_msg)
+            logger.error(f"[{self.name}] Code compilation failed permanently: {error_msg}")
+            await self._publish_error(phase="compile", error=err_exc,
+                                      traceback_str=error_msg, fatal=True)
+            return
+
+        # ── setup() ───────────────────────────────────────────────────────
         if self._fn_setup:
             try:
                 await self._fn_setup(self._api)
@@ -214,131 +253,25 @@ class DynamicAgent(Actor):
             i += 1
 
         return "\n".join(result)
-    @staticmethod
-    def _fix_fstrings(code: str) -> str:
+
+
+
+
+    # Max times on_start will ask the LLM to fix a syntax error before giving up
+    _MAX_COMPILE_RETRIES = 2
+
+    def _compile_code(self, code: Optional[str] = None) -> Optional[str]:
         """
-        Rewrite Python 3.12-style f-strings (nested same-delimiter quotes)
-        so they run on Python 3.10 by hoisting inner expressions to temp vars.
-        e.g.: f'...{'x' if c else 'y'}...' -> _fs1 = 'x' if c else 'y'; f'...{_fs1}...'
+        Sanitize then compile LLM-generated code into self._ns.
+
+        Returns the error message string if compilation fails, None on success.
+        Callers use the error string to ask the LLM to fix the code and retry
+        (see on_start / _fix_syntax_with_llm).
         """
-        import re
-        lines = code.split('\n')
-        result = []
-        counter = [0]
+        source = code if code is not None else self._code
+        clean  = self._sanitize_code(source)
 
-        for line in lines:
-            if "f'" not in line and 'f"' not in line:
-                result.append(line)
-                continue
-            indent = len(line) - len(line.lstrip())
-            prefix = ' ' * indent
-            new_lines = []
-
-            def hoist(m):
-                expr = m.group(1)
-                # Only hoist if the expression contains string literals
-                if "'" in expr or '"' in expr:
-                    counter[0] += 1
-                    vname = f'_fs{counter[0]}'
-                    new_lines.append(f'{prefix}{vname} = {expr}')
-                    return '{' + vname + '}'
-                return m.group(0)
-
-            fixed = re.sub(r'\{([^{}]+)\}', hoist, line)
-            result.extend(new_lines)
-            result.append(fixed)
-
-        return '\n'.join(result)
-
-    @staticmethod
-    def _fix_multiline_strings(code: str) -> str:
-        """
-        Convert unterminated single/double-quoted strings that span multiple lines
-        into triple-quoted strings. The LLM sometimes writes f'...
-...' with
-        real newlines which is a SyntaxError in Python 3.10.
-        """
-        def has_unterminated(s):
-            in_str = None
-            j = 0
-            while j < len(s):
-                c = s[j]
-                if c == "\\":
-                    j += 2
-                    continue
-                if in_str is None:
-                    if c in ('"', "'"):
-                        if s[j:j+3] in ('"""', "'''"):
-                            end = s.find(s[j:j+3], j + 3)
-                            if end == -1:
-                                return None  # already triple-quoted, spans lines
-                            j = end + 3
-                            continue
-                        in_str = c
-                elif c == in_str:
-                    in_str = None
-                j += 1
-            return in_str
-
-        lines = code.split("\n")
-        result = []
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            unclosed = has_unterminated(line.rstrip())
-            if unclosed and i + 1 < len(lines):
-                collected = [line.rstrip()]
-                j = i + 1
-                while j < len(lines):
-                    next_line = lines[j].rstrip()
-                    collected.append(next_line)
-                    raw = next_line.replace("\\" + unclosed, "")
-                    if raw.count(unclosed) % 2 == 1:
-                        break
-                    j += 1
-                if j > i:
-                    # Find opening quote position in first collected line
-                    first = collected[0]
-                    # Walk backwards to find last unmatched open quote
-                    open_pos = None
-                    in_s = None
-                    for k, c in enumerate(first):
-                        if c == "\\":
-                            continue
-                        if in_s is None and c == unclosed:
-                            open_pos = k
-                            in_s = c
-                        elif in_s == c:
-                            in_s = None
-                            open_pos = None
-                    if open_pos is not None:
-                        tq = unclosed * 3
-                        before    = first[:open_pos]
-                        after_open = first[open_pos + 1:]
-                        last      = collected[-1]
-                        close_pos = last.find(unclosed)
-                        if close_pos >= 0:
-                            before_close = last[:close_pos]
-                            after_close  = last[close_pos + 1:]
-                            parts = [after_open] + collected[1:-1] + [before_close]
-                            result.append(before + tq + "\n".join(parts) + tq + after_close)
-                            i = j + 1
-                            continue
-            result.append(line)
-            i += 1
-        return "\n".join(result)
-
-    def _compile_code(self):
-        """Compile and exec the LLM-generated code into self._ns."""
-        # Step 1: sanitize — remove any self-instantiated LLM clients
-        clean_code = self._sanitize_code(self._code)
-        # Step 2: fix multi-line string literals (real newlines inside quotes)
-        clean_code = self._fix_multiline_strings(clean_code)
-        # Step 3: fix Python 3.12-style nested f-string quotes for 3.10
-        clean_code = self._fix_fstrings(clean_code)
-
-        # Pre-inject the LLM interface so generated code can use it directly
-        # via agent.llm.chat() which the _AgentAPI already provides
+        # Pre-inject the LLM shim so generated code can call agent.llm directly
         def _get_llm_shim(*args, **kwargs):
             return self._api.llm
         self._ns["get_llm"]    = _get_llm_shim
@@ -346,21 +279,69 @@ class DynamicAgent(Actor):
         self._ns["create_llm"] = _get_llm_shim
 
         try:
-            exec(compile(clean_code, f"<{self.name}>", "exec"), self._ns)
+            exec(compile(clean, f"<{self.name}>", "exec"), self._ns)
             self._fn_setup       = self._ns.get("setup")
             self._fn_process     = self._ns.get("process")
             self._fn_handle_task = self._ns.get("handle_task")
-
             fns = [f for f in ["setup", "process", "handle_task", "cleanup"] if f in self._ns]
             logger.info(f"[{self.name}] Code compiled OK. Functions: {fns}")
-
             if not fns:
-                logger.warning(f"[{self.name}] No functions found in code!")
+                logger.warning(f"[{self.name}] No functions found in compiled code.")
+            return None   # success
         except Exception as e:
-            err = traceback.format_exc()
-            logger.error(f"[{self.name}] Code compilation failed: {e}\n{err}")
-            asyncio.create_task(self._publish_error(
-                phase="compile", error=e, traceback_str=err, fatal=True))
+            return f"{type(e).__name__}: {e}"
+
+    async def _fix_syntax_with_llm(self, bad_code: str, error_msg: str) -> Optional[str]:
+        """
+        Ask the configured LLM to fix a syntax error in agent code.
+
+        Returns the (possibly still-broken) code string from the LLM, or None
+        only if the LLM is completely unavailable (no provider, API error).
+        The caller is responsible for verifying the fix with _compile_code().
+        """
+        if self._llm_provider is None:
+            return None
+
+        prompt = (
+            "The following Python code has a syntax error.\n"
+            f"Error: {error_msg}\n\n"
+            "Fix ONLY the syntax error. Do not change logic or add features.\n"
+            "Return ONLY the corrected Python code — no explanations, "
+            "no markdown fences, no commentary.\n\n"
+            f"```python\n{bad_code}\n```"
+        )
+        logger.info(f"[{self.name}] Asking LLM to fix syntax error: {error_msg[:120]}")
+        await self._mqtt_publish(
+            f"agents/{self.actor_id}/logs",
+            {"type": "log",
+             "message": f"Syntax error — asking LLM to fix: {error_msg[:120]}",
+             "timestamp": time.time()},
+        )
+        try:
+            response, usage = await self._llm_provider.complete(
+                messages=[{"role": "user", "content": prompt}],
+                system="You are a Python syntax expert. Return only valid Python code.",
+                max_tokens=4096,
+            )
+            # Track cost
+            if hasattr(self, "total_input_tokens"):
+                self.total_input_tokens  += usage.get("input_tokens", 0)
+                self.total_output_tokens += usage.get("output_tokens", 0)
+                self.total_cost_usd      += usage.get("cost_usd", 0.0)
+
+            # Strip markdown fences the LLM may add despite instructions
+            fixed = response.strip()
+            if fixed.startswith("```"):
+                fixed = "\n".join(
+                    l for l in fixed.split("\n")
+                    if not l.strip().startswith("```")
+                ).strip()
+
+            return fixed   # caller validates with _compile_code()
+
+        except Exception as e:
+            logger.warning(f"[{self.name}] LLM fix call failed: {e}")
+            return None    # only None when LLM is truly unreachable
 
     # ── Process loop ───────────────────────────────────────────────────────
 
@@ -731,6 +712,21 @@ class _AgentAPI:
                 "state": actor.state.name if hasattr(actor.state, "name") else str(actor.state),
             })
         return result
+
+    def nodes(self) -> list[dict]:
+        """
+        Return all known remote nodes with online status and running agents.
+        Only available when the agent is running under a MainActor system.
+
+        Example:
+            for nd in agent.nodes():
+                status = 'online' if nd['online'] else 'offline'
+                await agent.log(f"{nd['node']}: {status}, agents: {nd['agents']}")
+        """
+        main = self._actor._registry.find_by_name("main") if self._actor._registry else None
+        if main and hasattr(main, "list_nodes"):
+            return main.list_nodes()
+        return []
 
     async def delegate(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Optional[Any]:
         """Alias for send_to() — cleaner name for planner/coordinator agents."""

@@ -428,9 +428,9 @@ class _MQTTPublisher:
             logger.warning(f"[ActorSystem] MQTT unavailable: {e}")
         return pub
 
-    async def publish(self, topic: str, payload: str):
+    async def publish(self, topic: str, payload: str, retain: bool = False, qos: int = 0):
         if self._available:
-            await self._queue.put((topic, payload))
+            await self._queue.put((topic, payload, retain, qos))
 
     async def disconnect(self):
         if self._task:
@@ -444,8 +444,11 @@ class _MQTTPublisher:
                 async with aiomqtt.Client(broker, port) as client:
                     logger.info("[MQTT] Publisher connected.")
                     while True:
-                        topic, payload = await self._queue.get()
-                        await client.publish(topic, payload)
+                        item = await self._queue.get()
+                        topic, payload = item[0], item[1]
+                        retain = item[2] if len(item) > 2 else False
+                        qos    = item[3] if len(item) > 3 else 0
+                        await client.publish(topic, payload, retain=retain, qos=qos)
                         self._queue.task_done()
             except asyncio.CancelledError:
                 break

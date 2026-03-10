@@ -153,10 +153,12 @@ class CLIInterface:
             ans = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: input(f"  Pick [1-{len(found)}] or type IP manually: ").strip()
             )
-            if ans.isdigit() and 1 <= int(ans) <= len(found):
-                return found[int(ans) - 1]
+            # Accept "3", "[3]", or "[ 3 ]" — all mean pick item 3
+            ans_stripped = ans.strip("[] \t")
+            if ans_stripped.isdigit() and 1 <= int(ans_stripped) <= len(found):
+                return found[int(ans_stripped) - 1]
             elif ans:
-                return ans
+                return ans  # treat as a literal IP/hostname
         else:
             print("[discover] No SSH hosts found on local network.")
 

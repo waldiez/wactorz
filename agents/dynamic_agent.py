@@ -732,6 +732,40 @@ class _AgentAPI:
         """Alias for send_to() — cleaner name for planner/coordinator agents."""
         return await self.send_to(agent_name, payload, timeout=timeout)
 
+    async def mqtt_get(self, topic: str, timeout: float = 10.0) -> Optional[Any]:
+        """
+        Wait for one MQTT message on topic and return its parsed payload.
+        Useful for reading live data published by remote agents.
+
+        Example:
+            stats = await agent.mqtt_get('rpi-room/cpu')
+            cpu = stats.get('cpu_percent') if stats else None
+        """
+        import asyncio, json
+        try:
+            import aiomqtt
+        except ImportError:
+            return None
+        actor = self._actor
+        result = []
+        async def _fetch():
+            try:
+                async with aiomqtt.Client(actor._mqtt_broker, actor._mqtt_port) as client:
+                    await client.subscribe(topic)
+                    async for msg in client.messages:
+                        try:
+                            result.append(json.loads(msg.payload.decode()))
+                        except Exception:
+                            result.append(msg.payload.decode())
+                        return
+            except Exception:
+                pass
+        try:
+            await asyncio.wait_for(_fetch(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        return result[0] if result else None
+
     # ── Metrics ────────────────────────────────────────────────────────────
 
     def increment_processed(self):

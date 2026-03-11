@@ -733,6 +733,9 @@ class _RemoteRunner:
                                     reply_topic = data.get("_reply_topic")
                                     result = await agent.handle_task(payload)
                                     if reply_topic:
+                                        # Normalise to dict so the caller can use .get()
+                                        if not isinstance(result, dict):
+                                            result = {"result": str(result) if result is not None else ""}
                                         await self.publish(reply_topic, result)
 
             except asyncio.CancelledError:

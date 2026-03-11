@@ -7,6 +7,7 @@ import asyncio
 import logging
 import json
 import re
+import uuid
 from typing import Optional
 
 from ..core.actor import Actor, Message, MessageType, ActorState
@@ -107,8 +108,11 @@ Inside your code, the `agent` object provides:
   agent.alert(message, severity)      — trigger a dashboard alert
   agent.persist(key, value)           — save to disk (survives restart)
   agent.recall(key)                   — load from disk
-  agent.send_to(agent_name, payload)          — send task to agent, wait for result (60s timeout)
-  agent.send_to_many([(name, payload), ...])  — send to multiple agents IN PARALLEL, returns list
+  agent.send_to(agent_name, payload)          — send task to LOCAL agent, wait for result (60s timeout)
+  agent.send_to_many([(name, payload), ...])  — send to multiple LOCAL agents IN PARALLEL, returns list
+  agent.mqtt_get(topic, timeout=10)   — wait for one MQTT message on topic, returns parsed payload
+                                        USE THIS to read data from remote/Pi agents instead of send_to()
+                                        Example: stats = await agent.mqtt_get('rpi-room/cpu')
 
   agent.llm                           — pre-configured LLM (same as main, already authenticated)
   agent.llm.chat(prompt, system="")   — single-turn LLM call, returns string
@@ -663,6 +667,79 @@ class MainActor(LLMAgent):
                 age      = int(_t.time() - nd["last_seen"])
                 lines.append(f"  {nd['node']:22s} {status}  |  agents: {agents}  |  last heartbeat: {age}s ago")
             return note_prefix + "Remote nodes:\n" + "\n".join(lines)
+
+        # ── @mention direct routing ─────────────────────────────────────────
+        if text.startswith("@"):
+            # Extract agent name and message: "@cpu-monitor-rpi-room what is the cpu?"
+            parts       = text.split(None, 1)
+            target_name = parts[0].lstrip("@").rstrip(":,")
+            message     = parts[1].strip() if len(parts) > 1 else text
+
+            # Try local registry first
+            local_target = self._registry.find_by_name(target_name) if self._registry else None
+            if local_target:
+                result = await self.delegate_task(target_name, message, timeout=60.0)
+                if result:
+                    reply = result.get("result") or result.get("response") or str(result)
+                    return note_prefix + f"**{target_name}**: {reply}"
+                return note_prefix + f"{target_name} did not respond."
+
+            # Check if it's a known remote agent
+            remote_node = None
+            for node_name, nd in self._known_nodes.items():
+                if target_name in nd.get("agents", []):
+                    remote_node = node_name
+                    break
+
+            if remote_node:
+                # Send via MQTT and wait for reply
+                import time as _t
+                reply_topic = f"main/reply/{self.actor_id}/{uuid.uuid4().hex[:8]}"
+                future: asyncio.Future = asyncio.get_event_loop().create_future()
+                self._result_futures[reply_topic] = future
+
+                await self._mqtt_publish(
+                    f"agents/by-name/{target_name}/task",
+                    {"text": message, "_reply_topic": reply_topic,
+                     "_remote_task": True, "payload": message},
+                )
+
+                # Subscribe briefly for the reply
+                async def _wait_reply():
+                    try:
+                        import aiomqtt
+                        async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                            await client.subscribe(reply_topic)
+                            async for msg in client.messages:
+                                try:
+                                    data = json.loads(msg.payload.decode())
+                                    if not future.done():
+                                        future.set_result(data)
+                                except Exception:
+                                    pass
+                                return
+                    except Exception as e:
+                        if not future.done():
+                            future.set_exception(e)
+
+                reply_task = asyncio.create_task(_wait_reply())
+                try:
+                    result = await asyncio.wait_for(asyncio.shield(future), timeout=30.0)
+                    reply_task.cancel()
+                    reply = result.get("result") or result.get("response") or str(result)
+                    return note_prefix + f"**{target_name}** (on {remote_node}): {reply}"
+                except asyncio.TimeoutError:
+                    reply_task.cancel()
+                    return note_prefix + f"{target_name} on {remote_node} did not respond within 30s."
+                finally:
+                    self._result_futures.pop(reply_topic, None)
+
+            # Not found locally or remotely
+            known_remote = [a for nd in self._known_nodes.values() for a in nd.get("agents", [])]
+            if known_remote:
+                return note_prefix + (f"Agent '{target_name}' not found. "
+                    f"Remote agents: {', '.join(known_remote)}")
+            return note_prefix + f"Agent '{target_name}' not found."
 
         # Route home automation requests to the unified HA agent
         if await self._is_home_automation_request(text):

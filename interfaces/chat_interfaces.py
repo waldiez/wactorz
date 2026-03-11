@@ -105,6 +105,76 @@ class CLIInterface:
             return str(result)
         return f"[{agent_name}] Task sent (no synchronous response)"
 
+    async def _get_remote_agent_response(self, agent_name: str, message: str) -> str:
+        """Route a message to a remote agent via MQTT and wait for reply."""
+        main = self.agent
+
+        # Find which node hosts this agent
+        remote_node = None
+        for node_name, nd in main._known_nodes.items():
+            if agent_name in nd.get("agents", []):
+                remote_node = node_name
+                break
+
+        if not remote_node:
+            known = [a for nd in main._known_nodes.values() for a in nd.get("agents", [])]
+            if known:
+                return f"[error] Agent '{agent_name}' not found. Remote agents: {', '.join(known)}"
+            return f"[error] Agent '{agent_name}' not found. No remote nodes connected."
+
+        import json, uuid as _uuid
+        try:
+            import aiomqtt
+        except ImportError:
+            return "[error] aiomqtt not installed"
+
+        reply_topic = f"main/reply/{main.actor_id}/{_uuid.uuid4().hex[:8]}"
+        result_holder = []
+
+        async def _listen_for_reply():
+            try:
+                async with aiomqtt.Client(main._mqtt_broker, main._mqtt_port) as client:
+                    await client.subscribe(reply_topic)
+                    async for msg in client.messages:
+                        try:
+                            result_holder.append(json.loads(msg.payload.decode()))
+                        except Exception:
+                            result_holder.append({"result": msg.payload.decode()})
+                        return
+            except Exception as e:
+                result_holder.append({"error": str(e)})
+
+        import asyncio
+        listener = asyncio.create_task(_listen_for_reply())
+        await asyncio.sleep(0.15)  # let subscriber connect first
+
+        await main._mqtt_publish(
+            f"agents/by-name/{agent_name}/task",
+            {"text": message, "payload": message,
+             "_remote_task": True, "_reply_topic": reply_topic},
+        )
+
+        try:
+            await asyncio.wait_for(asyncio.shield(listener), timeout=30.0)
+        except asyncio.TimeoutError:
+            listener.cancel()
+            return f"[timeout] {agent_name} on {remote_node} did not respond within 30s"
+
+        if not result_holder:
+            return f"[error] No reply from {agent_name}"
+
+        result = result_holder[0]
+        if isinstance(result, str):
+            return result
+        if not isinstance(result, dict):
+            return str(result)
+        if "error" in result:
+            return f"[error] {result['error']}"
+        for key in ("reply", "answer", "result", "text", "response"):
+            if result.get(key):
+                return str(result[key])
+        return str(result)
+
     # ── Node discovery ─────────────────────────────────────────────────────
 
     async def _discover_host(self, node_name: str) -> str:
@@ -375,8 +445,12 @@ class CLIInterface:
                             if not isinstance(chunk, dict):
                                 print(chunk, end="", flush=True)
                         print("\n")
-                    else:
+                    elif target:
                         response = await self._get_agent_response(agent_name, message)
+                        print(f"\n@{agent_name}: {response}\n")
+                    else:
+                        # Not found locally — try remote nodes
+                        response = await self._get_remote_agent_response(agent_name, message)
                         print(f"\n@{agent_name}: {response}\n")
                     continue
 

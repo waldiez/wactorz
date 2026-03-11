@@ -234,8 +234,16 @@ Rules:
 
 class HomeAssistantAgent(LLMAgent):
     """Unified Home Assistant agent: hardware recommendations and automation CRUD."""
-    DESCRIPTION  = "Controls Home Assistant: automations, devices, areas, entities"
-    CAPABILITIES = ["home_automation", "ha_automations", "ha_devices", "ha_entities"]
+    DESCRIPTION   = "Controls Home Assistant: automations, devices, areas, entities"
+    CAPABILITIES  = ["home_automation", "ha_automations", "ha_devices", "ha_entities"]
+    INPUT_SCHEMA  = {
+        "text": "str — natural language command or query, e.g. 'turn on living room lights', "
+                "'list all automations', 'create automation that turns off lights at 11pm'"
+    }
+    OUTPUT_SCHEMA = {
+        "result": "str — human-readable confirmation or list of results",
+        "data":   "list|dict|null — structured HA API response when applicable"
+    }
 
     def __init__(self, llm_provider: LLMProvider | None = None, **kwargs) -> None:
         kwargs.setdefault("name", "home-assistant-agent")

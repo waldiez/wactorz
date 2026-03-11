@@ -42,7 +42,8 @@ No code needed — this is a pre-built agent.
 {
   "name": "manual-agent",
   "type": "manual",
-  "description": "Finds device manuals online and answers questions from them"
+  "description": "Finds device manuals online and answers questions from them",
+  "capabilities": ["manuals", "pdf", "device_docs"]
 }
 </spawn>
 
@@ -54,24 +55,56 @@ No "code" field needed — just provide a system prompt.
 {
   "name": "agent-name",
   "type": "llm",
-  "description": "what this agent does",
+  "description": "what this agent does — be specific and precise",
+  "capabilities": ["keyword1", "keyword2"],
+  "input_schema":  {"text": "str — the question or request"},
+  "output_schema": {"result": "str — the response"},
   "system_prompt": "You are a helpful assistant specialized in ..."
 }
 </spawn>
 
 --- TYPE 2: Dynamic Agent (for data pipelines, sensors, MQTT, APIs, tools) ---
-Use when the agent needs to run custom Python logic (webcam, serial port, timers, etc.)
+Use when the agent needs to run custom Python logic (webcam, serial port, timers, APIs, etc.)
 Provide a "code" field with the Python functions.
 
 <spawn>
 {
   "name": "agent-name",
   "type": "dynamic",
-  "description": "what this agent does",
+  "description": "what this agent does — be specific and precise",
+  "capabilities": ["keyword1", "keyword2"],
+  "input_schema":  {"field": "type — description of each input field"},
+  "output_schema": {"field": "type — description of each output field"},
   "poll_interval": 1.0,
   "code": "PYTHON CODE HERE"
 }
 </spawn>
+
+== CAPABILITY & SCHEMA RULES — ALWAYS FOLLOW ==
+
+CAPABILITIES: Always include a "capabilities" list. These are short keywords the planner
+uses to find the right agent for a task. Be specific:
+  GOOD: ["weather", "temperature", "forecast", "wttr"]
+  BAD:  ["data", "api", "agent"]
+
+DESCRIPTION: Always write a precise, one-sentence description. Include what the agent
+does, what data it uses, and what it returns:
+  GOOD: "Fetches live weather for a city using wttr.in and returns temperature and conditions"
+  BAD:  "Gets weather data"
+
+INPUT_SCHEMA: Required for dynamic agents and recommended for LLM agents.
+Describe every field the agent expects in handle_task(agent, payload):
+  {"city": "str — city name to fetch weather for",
+   "units": "str — 'celsius' or 'fahrenheit', default 'celsius'"}
+  For agents that only receive free-text tasks, use: {"text": "str — natural language request"}
+  For sensor/publisher agents with no handle_task, omit input_schema entirely.
+
+OUTPUT_SCHEMA: Required for dynamic agents and recommended for LLM agents.
+Describe every field returned by handle_task:
+  {"temp_c": "float — temperature in celsius",
+   "condition": "str — weather description",
+   "error": "str|null — error message if request failed"}
+  For agents that return plain text, use: {"result": "str — the response"}
 
 RULE: If the user asks for a chat agent, math tutor, language teacher, Q&A bot,
 explainer, or any agent that primarily responds to questions with text —
@@ -117,6 +150,10 @@ Inside your code, the `agent` object provides:
                                         Example: agent.topics("temp") → topics with "temp" in name
                                         Returns: [{"topic": str, "agents": [{"name", "node"}]}, ...]
                                         USE THIS to discover what data is available before subscribing
+  agent.capabilities(keyword="")      — list all known agents with their full capability profile
+                                        Returns: [{"name", "description", "capabilities", "input_schema", "output_schema"}, ...]
+                                        Example: agent.capabilities("weather") → agents that handle weather
+                                        USE THIS before delegating to another agent to know exact input/output format
 
   agent.llm                           — pre-configured LLM (same as main, already authenticated)
   agent.llm.chat(prompt, system="")   — single-turn LLM call, returns string
@@ -219,7 +256,9 @@ Example — spawn a temperature sensor agent on a Pi:
   "name": "temp-sensor",
   "node": "rpi-kitchen",
   "type": "dynamic",
-  "description": "Reads temperature from DHT22 sensor on the kitchen Pi",
+  "description": "Reads temperature and humidity from DHT22 sensor on the kitchen Pi, publishes to MQTT every 30s",
+  "capabilities": ["temperature", "humidity", "dht22", "sensor", "climate"],
+  "output_schema": {"temperature_c": "float", "humidity_pct": "float", "timestamp": "float"},
   "poll_interval": 30,
   "max_restarts": 5,
   "restart_delay": 3.0,
@@ -318,7 +357,10 @@ When asked to deploy or manage remote machines, spawn a devops agent like this:
 <spawn>
 {
   "name": "devops-agent",
-  "description": "Manages remote node deployment via SSH",
+  "description": "Manages remote nodes via SSH: deploy, run commands, check health",
+  "capabilities": ["ssh", "deploy", "remote", "devops", "node_management"],
+  "input_schema":  {"action": "str — deploy_node|run_command|check_node", "host": "str", "user": "str"},
+  "output_schema": {"success": "bool", "stdout": "str|null", "error": "str|null"},
   "poll_interval": 3600,
   "code": "
 import asyncio, os, json
@@ -450,11 +492,35 @@ After spawning the devops agent, the user can talk to it directly:
 @devops-agent deploy rpi-node to pi@192.168.1.50 with broker 192.168.1.10
 
 
+== EXAMPLE — Math agent (Dynamic with full schemas) ==
+<spawn>
+{
+  "name": "math-agent",
+  "type": "dynamic",
+  "description": "Performs arithmetic operations: add, subtract, multiply, divide, power, sqrt",
+  "capabilities": ["math", "arithmetic", "calculator", "compute"],
+  "input_schema":  {
+    "operation": "str — one of: add, subtract, multiply, divide, power, sqrt",
+    "a": "float — first number",
+    "b": "float — second number (not required for sqrt)"
+  },
+  "output_schema": {
+    "result": "float — the computed result",
+    "expression": "str — human-readable e.g. 10 + 5 = 15",
+    "error": "str|null — error message if operation failed"
+  },
+  "poll_interval": 3600,
+  "code": "async def setup(agent):\n    await agent.log(\'math-agent ready\')\n\nasync def handle_task(agent, payload):\n    import math\n    op = str(payload.get(\'operation\', \'\')).lower().strip()\n    a  = float(payload.get(\'a\', 0))\n    b  = float(payload.get(\'b\', 0))\n    ops = {\n        \'add\':      (a + b,        f\'{a} + {b} = {a + b}\'),\n        \'subtract\': (a - b,        f\'{a} - {b} = {a - b}\'),\n        \'multiply\': (a * b,        f\'{a} * {b} = {a * b}\'),\n        \'divide\':   (a / b if b != 0 else None, f\'{a} / {b}\'),\n        \'power\':    (a ** b,       f\'{a} ^ {b} = {a ** b}\'),\n        \'sqrt\':     (math.sqrt(a), f\'sqrt({a}) = {math.sqrt(a)}\'),\n    }\n    if op not in ops:\n        return {\'result\': None, \'expression\': \'\', \'error\': f\'Unknown op: {op}. Use: {list(ops)}\'}\n    result, expr = ops[op]\n    if result is None:\n        return {\'result\': None, \'expression\': expr, \'error\': \'Division by zero\'}\n    expr_full = expr if \'=\' in expr else f\'{expr} = {result}\'\n    await agent.log(f\'Computed: {expr_full}\')\n    return {\'result\': result, \'expression\': expr_full, \'error\': None}\n\nasync def process(agent):\n    import asyncio\n    await asyncio.sleep(3600)"
+}
+</spawn>
+
 == EXAMPLE — Webcam YOLO agent ==
 <spawn>
 {
   "name": "yolo-agent",
-  "description": "Webcam YOLO object detection, publishes detections to MQTT",
+  "description": "Reads webcam frames, runs YOLOv8 object detection, publishes detections to MQTT",
+  "capabilities": ["yolo", "object_detection", "webcam", "vision", "camera"],
+  "output_schema": {"detections": "list — [{class, confidence}]", "count": "int", "timestamp": "float"},
   "poll_interval": 0.5,
   "code": "
 async def setup(agent):
@@ -521,6 +587,7 @@ class MainActor(LLMAgent):
         self._known_nodes: dict[str, dict] = {}
         # Topic registry: topic → [manifest, ...] — built from agents/+/manifest
         self._topic_registry: dict[str, list] = {}  # topic → list of agent manifests
+        self._agent_manifests: dict[str, dict] = {}  # agent name → latest manifest (includes schemas)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -694,7 +761,27 @@ class MainActor(LLMAgent):
                 lines.append(f"  {t['topic']:40s} ← {agent_strs}")
             return note_prefix + "\n".join(lines)
 
-        # ── @mention direct routing ─────────────────────────────────────────
+        if stripped.startswith("/capabilities"):
+            keyword = stripped[14:].strip().lstrip("(").rstrip(")")
+            caps = self.list_capabilities(keyword)
+            if not caps:
+                msg = "No agents found" + (f" matching '{keyword}'" if keyword else "") + "."
+                msg += " Agents publish their capabilities on startup."
+                return note_prefix + msg
+            lines = ["Agent capabilities" + (" matching " + repr(keyword) if keyword else "") + ":"]
+            for a in caps:
+                lines.append("")
+                lines.append("  [" + a["name"] + "]" + (" on " + a["node"] if a.get("node") else ""))
+                lines.append("    description : " + a["description"])
+                if a["capabilities"]:
+                    lines.append("    capabilities: " + ", ".join(a["capabilities"]))
+                if a["input_schema"]:
+                    lines.append("    input       : " + str(a["input_schema"]))
+                if a["output_schema"]:
+                    lines.append("    output      : " + str(a["output_schema"]))
+            return note_prefix + "\n".join(lines)
+
+                # ── @mention direct routing ─────────────────────────────────────────
         if text.startswith("@"):
             # Extract agent name and message: "@cpu-monitor-rpi-room what is the cpu?"
             parts       = text.split(None, 1)
@@ -1172,6 +1259,8 @@ class MainActor(LLMAgent):
             code=code,
             poll_interval=float(config.get("poll_interval", 1.0)),
             description=config.get("description", ""),
+            input_schema=config.get("input_schema", {}),
+            output_schema=config.get("output_schema", {}),
             llm_provider=self.llm,
             persistence_dir=str(self._persistence_dir.parent),
         )
@@ -1365,6 +1454,35 @@ class MainActor(LLMAgent):
             })
         return sorted(results, key=lambda x: x["topic"])
 
+    def list_capabilities(self, keyword: str = "") -> list[dict]:
+        """
+        Return all known agents with their full capability profile:
+        name, description, capabilities, input_schema, output_schema.
+
+        Example:
+            list_capabilities()            → all agents
+            list_capabilities("weather")   → agents with "weather" in description/capabilities
+        """
+        results = []
+        kw = keyword.lower()
+        for name, manifest in self._agent_manifests.items():
+            desc  = manifest.get("description", "")
+            caps  = manifest.get("capabilities", [])
+            # Filter by keyword across description and capabilities
+            if kw:
+                haystack = desc.lower() + " " + " ".join(caps).lower() + " " + name.lower()
+                if kw not in haystack:
+                    continue
+            results.append({
+                "name":          name,
+                "node":          manifest.get("node"),
+                "description":   desc,
+                "capabilities":  caps,
+                "input_schema":  manifest.get("input_schema",  {}),
+                "output_schema": manifest.get("output_schema", {}),
+            })
+        return sorted(results, key=lambda x: x["name"])
+
     async def _manifest_listener(self):
         """
         Subscribe to agents/+/manifest and build a searchable topic registry.
@@ -1402,6 +1520,8 @@ class MainActor(LLMAgent):
                                     break
                             if not updated:
                                 existing.append(data)
+                        # Also store full manifest by agent name for capability queries
+                        self._agent_manifests[agent_name] = data
                         logger.debug(f"[main] Manifest from '{agent_name}': {published}")
             except asyncio.CancelledError:
                 break

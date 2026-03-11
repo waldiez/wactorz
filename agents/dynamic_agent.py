@@ -40,6 +40,8 @@ class DynamicAgent(Actor):
         code: str,                          # LLM-generated Python source
         poll_interval: float = 1.0,         # seconds between process() calls
         description: str = "",              # what this agent does
+        input_schema: dict = None,          # expected task payload fields
+        output_schema: dict = None,         # returned result fields
         llm_provider=None,                  # optional LLM for agent.llm.chat()
         **kwargs,
     ):
@@ -47,6 +49,8 @@ class DynamicAgent(Actor):
         self._code           = code
         self.poll_interval   = poll_interval
         self.description     = description
+        self.input_schema    = input_schema  or {}
+        self.output_schema   = output_schema or {}
         self._llm_provider   = llm_provider
 
         # Compiled functions — populated in on_start
@@ -603,15 +607,19 @@ class _AgentAPI:
     async def _publish_manifest(self):
         """Publish retained capability manifest so main/planner can discover this agent's topics."""
         import time as _t
+        actor = self._actor
         manifest = {
-            "name":        self.name,
-            "actor_id":    self.actor_id,
-            "node":        getattr(self._actor, "_node", None),
-            "description": getattr(self._actor, "_description", ""),
-            "publishes":   sorted(self._published_topics),
-            "timestamp":   _t.time(),
+            "name":          self.name,
+            "actor_id":      self.actor_id,
+            "node":          getattr(actor, "_node", None),
+            "description":   getattr(actor, "description", ""),
+            "capabilities":  [],
+            "input_schema":  getattr(actor, "input_schema",  {}),
+            "output_schema": getattr(actor, "output_schema", {}),
+            "publishes":     sorted(self._published_topics),
+            "timestamp":     _t.time(),
         }
-        await self._actor._mqtt_publish(
+        await actor._mqtt_publish(
             f"agents/{self.actor_id}/manifest", manifest, retain=True
         )
 
@@ -766,6 +774,22 @@ class _AgentAPI:
         main = self._actor._registry.find_by_name("main") if self._actor._registry else None
         if main and hasattr(main, "list_topics"):
             return main.list_topics(keyword)
+        return []
+
+    def capabilities(self, keyword: str = "") -> list[dict]:
+        """
+        Return all known agents with their full capability profile.
+        Each entry: {"name", "description", "capabilities", "input_schema", "output_schema"}
+
+        Example:
+            weather_agents = agent.capabilities("weather")
+            for a in weather_agents:
+                print(a["input_schema"])   # know exactly what to send
+                print(a["output_schema"])  # know exactly what to expect back
+        """
+        main = self._actor._registry.find_by_name("main") if self._actor._registry else None
+        if main and hasattr(main, "list_capabilities"):
+            return main.list_capabilities(keyword)
         return []
 
     async def delegate(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Optional[Any]:

@@ -28,8 +28,16 @@ class CodeAgent(LLMAgent):
     An agent that can generate Python code via LLM and execute it.
     Supports in-process execution (fast) and subprocess execution (safe).
     """
-    DESCRIPTION  = "Generates and executes Python code on request"
-    CAPABILITIES = ["code_generation", "code_execution", "python"]
+    DESCRIPTION   = "Generates and executes Python code on request"
+    CAPABILITIES  = ["code_generation", "code_execution", "python"]
+    INPUT_SCHEMA  = {
+        "text": "str — describe what code to write or run, e.g. 'calculate fibonacci(30)', "
+                "'parse this CSV and return row count', 'sort this list: [3,1,2]'"
+    }
+    OUTPUT_SCHEMA = {
+        "result": "str — code output or return value",
+        "code":   "str — the generated Python code that was executed"
+    }
 
     def __init__(
         self,

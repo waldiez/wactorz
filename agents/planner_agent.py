@@ -196,18 +196,31 @@ class PlannerAgent(Actor):
     def _discover_workers(self) -> list[dict]:
         if not self._registry:
             return []
+        # Pull full manifests from main's capability registry (includes schemas)
+        main = self._registry.find_by_name("main")
+        manifest_map: dict = {}
+        if main and hasattr(main, "list_capabilities"):
+            for cap in main.list_capabilities():
+                manifest_map[cap["name"]] = cap
+
         workers = []
         for actor in self._registry.all_actors():
             if actor.name in _SKIP_AGENTS or actor.name == self.name:
                 continue
+            # Prefer manifest data (richer), fall back to live actor attrs
+            manifest = manifest_map.get(actor.name, {})
             workers.append({
-                "name":        actor.name,
-                "type":        type(actor).__name__,
-                "description": (
-                    getattr(actor, "description", "")
+                "name":          actor.name,
+                "type":          type(actor).__name__,
+                "description":   (
+                    manifest.get("description")
+                    or getattr(actor, "description", "")
                     or getattr(actor, "system_prompt", "")[:100]
                     or type(actor).__name__
                 ),
+                "capabilities":  manifest.get("capabilities", []),
+                "input_schema":  manifest.get("input_schema",  {}),
+                "output_schema": manifest.get("output_schema", {}),
             })
         return workers
 
@@ -218,15 +231,22 @@ class PlannerAgent(Actor):
         if not self.llm:
             return []
 
-        workers_desc = "\n".join(
-            f"  - {w['name']} ({w['type']}): {w['description']}"
-            for w in workers
-        )
+        def _fmt_worker(w: dict) -> str:
+            lines = [f"  - {w['name']} ({w['type']}): {w['description']}"]
+            if w.get("capabilities"):
+                lines.append(f"    capabilities: {', '.join(w['capabilities'])}")
+            if w.get("input_schema"):
+                lines.append(f"    input_schema : {w['input_schema']}")
+            if w.get("output_schema"):
+                lines.append(f"    output_schema: {w['output_schema']}")
+            return "\n".join(lines)
+
+        workers_desc = "\n".join(_fmt_worker(w) for w in workers)
 
         prompt = f"""You are a task planner for a multi-agent system.
 Break the task into steps. Each step is handled by one agent.
 
-AVAILABLE AGENTS:
+AVAILABLE AGENTS (with input/output contracts):
 {workers_desc}
 
 TASK: {task}
@@ -259,7 +279,9 @@ OUTPUT RULES:
   {{
     "name": "weather-agent",
     "type": "dynamic",
-    "description": "Fetches live weather data",
+    "description": "Fetches live weather data for a city",
+    "input_schema":  {{"city": "str — city name to fetch weather for"}},
+    "output_schema": {{"city": "str", "temp_c": "str", "description": "str"}},
     "poll_interval": 3600,
     "code": "async def setup(agent):\n    await agent.log('ready')\nasync def process(agent):\n    import asyncio\n    await asyncio.sleep(3600)\nasync def handle_task(agent, payload):\n    import httpx\n    city = payload.get('city', 'Athens')\n    async with httpx.AsyncClient(timeout=10) as c:\n        r = await c.get(f'https://wttr.in/{{city}}?format=j1')\n        d = r.json()\n    cur = d['current_condition'][0]\n    return {{'city': city, 'temp_c': cur['temp_C'], 'description': cur['weatherDesc'][0]['value']}}"
   }}
@@ -370,6 +392,8 @@ Example:
                 code=code,
                 poll_interval=float(config.get("poll_interval", 1.0)),
                 description=config.get("description", ""),
+                input_schema=config.get("input_schema", {}),
+                output_schema=config.get("output_schema", {}),
                 llm_provider=self.llm,
                 persistence_dir=str(self._persistence_dir.parent),
             )

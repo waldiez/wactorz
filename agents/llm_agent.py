@@ -314,8 +314,15 @@ class LLMAgent(Actor):
             or (self.__class__.__doc__ or "").strip().split("\n")[0]
             or self.name
         )
-        capabilities = getattr(self, "CAPABILITIES", [])
-        await self.publish_manifest(description=description, capabilities=capabilities)
+        capabilities  = getattr(self, "CAPABILITIES", [])
+        input_schema  = getattr(self, "INPUT_SCHEMA",  {})
+        output_schema = getattr(self, "OUTPUT_SCHEMA", {})
+        await self.publish_manifest(
+            description=description,
+            capabilities=capabilities,
+            input_schema=input_schema,
+            output_schema=output_schema,
+        )
 
     async def on_stop(self):
         self.persist("conversation_history", self._conversation_history)

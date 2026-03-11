@@ -101,13 +101,17 @@ class _RemoteAgentAPI:
 
     async def _publish_manifest(self):
         """Advertise this agent's published topics so main can discover them."""
+        cfg = self._agent._config
         manifest = {
-            "name":        self.name,
-            "actor_id":    self.actor_id,
-            "node":        self.node,
-            "description": self._agent._config.get("description", ""),
-            "publishes":   sorted(self._published_topics),
-            "timestamp":   time.time(),
+            "name":          self.name,
+            "actor_id":      self.actor_id,
+            "node":          self.node,
+            "description":   cfg.get("description", ""),
+            "capabilities":  cfg.get("capabilities", []),
+            "input_schema":  cfg.get("input_schema",  {}),
+            "output_schema": cfg.get("output_schema", {}),
+            "publishes":     sorted(self._published_topics),
+            "timestamp":     time.time(),
         }
         await self._agent._runner.publish(
             f"agents/{self.actor_id}/manifest", manifest, retain=True

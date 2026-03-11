@@ -467,20 +467,27 @@ class Actor(ABC):
         pass
 
     async def publish_manifest(self, description: str = "", publishes: list = None,
-                                capabilities: list = None):
+                                capabilities: list = None, input_schema: dict = None,
+                                output_schema: dict = None):
         """
         Publish a capability manifest so main's topic registry can discover this actor.
         Call from on_start() in any actor that wants to be discoverable.
         Manifests are retained — main sees them immediately even after restart.
+
+        input_schema / output_schema — dicts describing expected payload fields, e.g.:
+            input_schema  = {"city": "str — city name to fetch weather for"}
+            output_schema = {"temp_c": "float", "condition": "str", "humidity": "int"}
         """
         import time as _t
         manifest = {
-            "name":         self.name,
-            "actor_id":     self.actor_id,
-            "description":  description,
-            "publishes":    publishes or [],
-            "capabilities": capabilities or [],
-            "timestamp":    _t.time(),
+            "name":          self.name,
+            "actor_id":      self.actor_id,
+            "description":   description,
+            "publishes":     publishes or [],
+            "capabilities":  capabilities or [],
+            "input_schema":  input_schema or {},
+            "output_schema": output_schema or {},
+            "timestamp":     _t.time(),
         }
         await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 

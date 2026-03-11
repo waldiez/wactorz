@@ -91,6 +91,10 @@ class InstallerAgent(Actor):
             f"agents/{self.actor_id}/logs",
             {"type": "log", "message": f"Installer ready ({sys.executable})", "timestamp": time.time()},
         )
+        await self.publish_manifest(
+            description="Installs Python packages on demand via pip",
+            capabilities=["pip_install", "package_management"],
+        )
 
     async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:

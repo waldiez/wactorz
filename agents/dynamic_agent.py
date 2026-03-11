@@ -126,6 +126,10 @@ class DynamicAgent(Actor):
         if self._fn_process:
             self._tasks.append(asyncio.create_task(self._process_loop()))
 
+        # Publish manifest immediately so main's registry knows this agent exists
+        # even if it never calls publish() (pure handle_task agents, etc.)
+        await self._api._publish_manifest()
+
     async def on_stop(self):
         # Give generated code a chance to clean up
         cleanup = self._ns.get("cleanup")
@@ -576,12 +580,17 @@ class _AgentAPI:
         self.state: dict = {}
         # LLM interface — available if llm_provider was passed at spawn time
         self.llm = _LLMInterface(actor, self.state) if actor._llm_provider else None
+        # Auto-discovered topics this agent publishes to
+        self._published_topics: set = set()
 
     # ── MQTT ───────────────────────────────────────────────────────────────
 
     async def publish(self, topic: str, data: Any):
-        """Publish data to an MQTT topic. topic is used as-is."""
+        """Publish data to an MQTT topic. Auto-registers topic in capability manifest."""
         await self._actor._mqtt_publish(topic, data)
+        if topic not in self._published_topics:
+            self._published_topics.add(topic)
+            await self._publish_manifest()
 
     async def publish_detection(self, data: Any):
         """Convenience: publish to agents/{id}/detections"""
@@ -590,6 +599,21 @@ class _AgentAPI:
     async def publish_result(self, data: Any):
         """Convenience: publish to agents/{id}/result"""
         await self._actor._mqtt_publish(f"agents/{self._actor.actor_id}/result", data)
+
+    async def _publish_manifest(self):
+        """Publish retained capability manifest so main/planner can discover this agent's topics."""
+        import time as _t
+        manifest = {
+            "name":        self.name,
+            "actor_id":    self.actor_id,
+            "node":        getattr(self._actor, "_node", None),
+            "description": getattr(self._actor, "_description", ""),
+            "publishes":   sorted(self._published_topics),
+            "timestamp":   _t.time(),
+        }
+        await self._actor._mqtt_publish(
+            f"agents/{self.actor_id}/manifest", manifest, retain=True
+        )
 
     # ── Logging / alerting ─────────────────────────────────────────────────
 
@@ -726,6 +750,22 @@ class _AgentAPI:
         main = self._actor._registry.find_by_name("main") if self._actor._registry else None
         if main and hasattr(main, "list_nodes"):
             return main.list_nodes()
+        return []
+
+    def topics(self, keyword: str = "") -> list[dict]:
+        """
+        Return all known MQTT topics published by agents, optionally filtered by keyword.
+        Each entry: {"topic": str, "agents": [{"name", "node", "description"}, ...]}
+
+        Example:
+            temp_topics = agent.topics("temp")   # find all temperature-related topics
+            all_topics  = agent.topics()         # everything
+            for t in temp_topics:
+                data = await agent.mqtt_get(t["topic"])
+        """
+        main = self._actor._registry.find_by_name("main") if self._actor._registry else None
+        if main and hasattr(main, "list_topics"):
+            return main.list_topics(keyword)
         return []
 
     async def delegate(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Optional[Any]:

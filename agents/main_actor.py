@@ -113,6 +113,10 @@ Inside your code, the `agent` object provides:
   agent.mqtt_get(topic, timeout=10)   — wait for one MQTT message on topic, returns parsed payload
                                         USE THIS to read data from remote/Pi agents instead of send_to()
                                         Example: stats = await agent.mqtt_get('rpi-room/cpu')
+  agent.topics(keyword="")            — list all MQTT topics published by known agents
+                                        Example: agent.topics("temp") → topics with "temp" in name
+                                        Returns: [{"topic": str, "agents": [{"name", "node"}]}, ...]
+                                        USE THIS to discover what data is available before subscribing
 
   agent.llm                           — pre-configured LLM (same as main, already authenticated)
   agent.llm.chat(prompt, system="")   — single-turn LLM call, returns string
@@ -493,6 +497,8 @@ async def cleanup(agent):
 
 
 class MainActor(LLMAgent):
+    DESCRIPTION  = "Main orchestrator: spawns agents, routes tasks, manages the multi-agent system"
+    CAPABILITIES = ["spawn_agent", "list_agents", "list_nodes", "list_topics", "orchestration"]
 
     HOME_AUTOMATION_INTENT_SYSTEM_PROMPT = (
         "You are an intent classifier for Home Assistant routing. "
@@ -513,6 +519,8 @@ class MainActor(LLMAgent):
         self.protected = True
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
         self._known_nodes: dict[str, dict] = {}
+        # Topic registry: topic → [manifest, ...] — built from agents/+/manifest
+        self._topic_registry: dict[str, list] = {}  # topic → list of agent manifests
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -521,6 +529,8 @@ class MainActor(LLMAgent):
         await self._restore_spawned_agents()
         # Listen for remote node heartbeats so we know what's online
         self._tasks.append(asyncio.create_task(self._node_heartbeat_listener()))
+        # Listen for agent capability manifests to build topic registry
+        self._tasks.append(asyncio.create_task(self._manifest_listener()))
 
     # ── Spawn registry ─────────────────────────────────────────────────────
 
@@ -667,6 +677,22 @@ class MainActor(LLMAgent):
                 age      = int(_t.time() - nd["last_seen"])
                 lines.append(f"  {nd['node']:22s} {status}  |  agents: {agents}  |  last heartbeat: {age}s ago")
             return note_prefix + "Remote nodes:\n" + "\n".join(lines)
+
+        if stripped.startswith("/topics"):
+            keyword = stripped[7:].strip().lstrip("(").rstrip(")")
+            topics = self.list_topics(keyword)
+            if not topics:
+                msg = f"No topics found" + (f" matching '{keyword}'" if keyword else "") + "."
+                msg += " Topics are registered automatically when agents publish for the first time."
+                return note_prefix + msg
+            lines = [f"Known MQTT topics{' matching ' + repr(keyword) if keyword else ''}:"]
+            for t in topics:
+                agent_strs = ", ".join(
+                    f"{a['name']}" + (f" ({a['node']})" if a.get("node") else "")
+                    for a in t["agents"]
+                )
+                lines.append(f"  {t['topic']:40s} ← {agent_strs}")
+            return note_prefix + "\n".join(lines)
 
         # ── @mention direct routing ─────────────────────────────────────────
         if text.startswith("@"):
@@ -1243,16 +1269,23 @@ class MainActor(LLMAgent):
         The remote_runner.py on that machine will receive it and run the agent.
         Remote agents appear in the dashboard exactly like local ones
         because they connect to the same MQTT broker.
+
+        Also updates nodes/{node}/desired_state (retained) with ALL agents for
+        this node so the runner can self-heal after a reboot.
         """
         name = config.get("name", "remote-agent")
         logger.info(f"[{self.name}] Spawning '{name}' on remote node '{node}'")
 
+        # Publish individual spawn (for immediate delivery)
         await self._mqtt_publish(
             f"nodes/{node}/spawn",
             config,
-            retain=True,   # broker holds this until the Pi subscriber connects
-            qos=1,         # at-least-once delivery
+            retain=True,
+            qos=1,
         )
+
+        # Update desired state for the whole node (retained — survives Pi reboot)
+        await self._update_node_desired_state(node, config)
 
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
@@ -1263,9 +1296,36 @@ class MainActor(LLMAgent):
         if save:
             self._save_to_spawn_registry(config)
 
-        # Return None — remote actors don't have a local Python object
-        # but they will appear in the dashboard via MQTT heartbeats
         return None
+
+    async def _update_node_desired_state(self, node: str, new_config: dict = None,
+                                          remove_name: str = None) -> None:
+        """
+        Maintain nodes/{node}/desired_state as a retained MQTT message containing
+        ALL agents that should run on this node. The runner reads this on startup
+        and reconciles — spawning missing agents, ignoring already-running ones.
+        """
+        # Build desired state from spawn registry filtered to this node
+        reg = self._get_spawn_registry()
+        agents = {
+            name: cfg for name, cfg in reg.items()
+            if cfg.get("node", "").strip() == node
+        }
+
+        # Apply pending change before publishing
+        if new_config:
+            agents[new_config["name"]] = new_config
+        if remove_name:
+            agents.pop(remove_name, None)
+
+        await self._mqtt_publish(
+            f"nodes/{node}/desired_state",
+            {"node": node, "agents": list(agents.values()),
+             "timestamp": __import__("time").time()},
+            retain=True,
+            qos=1,
+        )
+        logger.info(f"[{self.name}] Desired state for '{node}': {list(agents.keys())}")
 
     # ── Node registry ──────────────────────────────────────────────────────
 
@@ -1282,6 +1342,73 @@ class MainActor(LLMAgent):
             }
             for name, info in self._known_nodes.items()
         ]
+
+    def list_topics(self, keyword: str = "") -> list[dict]:
+        """
+        Return all known MQTT topics published by agents, optionally filtered by keyword.
+        Each entry: {"topic": str, "agents": [{"name", "node", "description"}, ...]}
+
+        Example:
+            list_topics("cpu")     → topics containing "cpu"
+            list_topics("temp")    → topics containing "temp"
+            list_topics()          → all topics
+        """
+        results = []
+        kw = keyword.lower()
+        for topic, manifests in self._topic_registry.items():
+            if kw and kw not in topic.lower():
+                continue
+            results.append({
+                "topic":   topic,
+                "agents":  [{"name": m.get("name"), "node": m.get("node"),
+                             "description": m.get("description", "")} for m in manifests],
+            })
+        return sorted(results, key=lambda x: x["topic"])
+
+    async def _manifest_listener(self):
+        """
+        Subscribe to agents/+/manifest and build a searchable topic registry.
+        Retained manifests are delivered immediately on subscribe so the registry
+        is populated even for agents that started before main restarted.
+        """
+        try:
+            import aiomqtt
+        except ImportError:
+            return
+
+        while self.state.value not in ("stopped", "failed"):
+            try:
+                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                    await client.subscribe("agents/+/manifest")
+                    logger.info("[main] Subscribed to agent manifests.")
+                    async for msg in client.messages:
+                        try:
+                            data = json.loads(msg.payload.decode())
+                        except Exception:
+                            continue
+                        if not isinstance(data, dict):
+                            continue
+                        agent_name = data.get("name", "?")
+                        published  = data.get("publishes", [])
+                        # Update topic registry
+                        for topic in published:
+                            existing = self._topic_registry.setdefault(topic, [])
+                            # Replace existing entry for this agent or append
+                            updated = False
+                            for i, m in enumerate(existing):
+                                if m.get("name") == agent_name:
+                                    existing[i] = data
+                                    updated = True
+                                    break
+                            if not updated:
+                                existing.append(data)
+                        logger.debug(f"[main] Manifest from '{agent_name}': {published}")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                if self.state.value not in ("stopped", "failed"):
+                    logger.warning(f"[main] Manifest listener error: {e}. Reconnecting in 5s…")
+                    await asyncio.sleep(5)
 
     async def migrate_agent(self, agent_name: str, target_node: str) -> dict:
         """
@@ -1461,7 +1588,17 @@ class MainActor(LLMAgent):
             await self.send(target.actor_id, command)
 
     async def delete_spawned_agent(self, name: str):
+        # Find node before removing from registry
+        reg = self._get_spawn_registry()
+        node = reg.get(name, {}).get("node", "").strip()
+
         self._remove_from_spawn_registry(name)
+
+        # Update desired state so Pi doesn't re-spawn on reconcile
+        if node:
+            await self._update_node_desired_state(node, remove_name=name)
+            await self._mqtt_publish(f"nodes/{node}/stop", {"name": name}, qos=1)
+
         if self._registry:
             target = self._registry.find_by_name(name)
             if target:

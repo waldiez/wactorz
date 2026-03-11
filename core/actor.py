@@ -466,6 +466,24 @@ class Actor(ABC):
         """Called when actor starts. Override for init logic."""
         pass
 
+    async def publish_manifest(self, description: str = "", publishes: list = None,
+                                capabilities: list = None):
+        """
+        Publish a capability manifest so main's topic registry can discover this actor.
+        Call from on_start() in any actor that wants to be discoverable.
+        Manifests are retained — main sees them immediately even after restart.
+        """
+        import time as _t
+        manifest = {
+            "name":         self.name,
+            "actor_id":     self.actor_id,
+            "description":  description,
+            "publishes":    publishes or [],
+            "capabilities": capabilities or [],
+            "timestamp":    _t.time(),
+        }
+        await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
+
     async def on_stop(self):
         """Called when actor stops. Override for cleanup."""
         pass

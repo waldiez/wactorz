@@ -80,6 +80,7 @@ class _RemoteAgentAPI:
 
     def __init__(self, agent: "_RemoteAgent"):
         self._agent = agent
+        self._published_topics: set = set()
 
     # ── Identity ──────────────────────────────────────────────────────────────
     @property
@@ -94,6 +95,23 @@ class _RemoteAgentAPI:
     # ── MQTT ──────────────────────────────────────────────────────────────────
     async def publish(self, topic: str, data: Any):
         await self._agent._publish(topic, data)
+        if topic not in self._published_topics:
+            self._published_topics.add(topic)
+            await self._publish_manifest()
+
+    async def _publish_manifest(self):
+        """Advertise this agent's published topics so main can discover them."""
+        manifest = {
+            "name":        self.name,
+            "actor_id":    self.actor_id,
+            "node":        self.node,
+            "description": self._agent._config.get("description", ""),
+            "publishes":   sorted(self._published_topics),
+            "timestamp":   time.time(),
+        }
+        await self._agent._runner.publish(
+            f"agents/{self.actor_id}/manifest", manifest, retain=True
+        )
 
     async def publish_result(self, data: Any):
         """Publish agent result to agents/{id}/results — mirrors DynamicAgent API."""
@@ -353,6 +371,10 @@ class _RemoteAgent:
             inner_tasks.append(asyncio.create_task(self._process_loop()))
         inner_tasks.append(asyncio.create_task(self._heartbeat_loop()))
         self._tasks = inner_tasks
+
+        # Publish manifest immediately so main knows this remote agent exists
+        # even before it calls publish() on any data topic
+        await self._api._publish_manifest()
 
         # Wait for any task to finish (process escalation OR deliberate stop/cancel).
         # We use first-exception semantics: as soon as one task raises, cancel the rest.
@@ -657,6 +679,7 @@ class _RemoteRunner:
         import aiomqtt
         topics = [
             f"nodes/{self.node_name}/spawn",
+            f"nodes/{self.node_name}/desired_state",   # reconciliation on reboot
             f"nodes/{self.node_name}/stop",
             f"nodes/{self.node_name}/stop_all",
             f"nodes/{self.node_name}/migrate",
@@ -679,7 +702,29 @@ class _RemoteRunner:
                         except Exception:
                             data = msg.payload.decode()
 
-                        if topic_str == f"nodes/{self.node_name}/spawn":
+                        if topic_str == f"nodes/{self.node_name}/desired_state":
+                            # Reconcile: start any agents in desired state not already running
+                            if not msg.payload or not isinstance(data, dict):
+                                continue
+                            desired = data.get("agents", [])
+                            if not desired:
+                                continue
+                            logger.info(f"[runner] Reconciling desired state: {[a.get('name') for a in desired]}")
+                            for agent_config in desired:
+                                aname = agent_config.get("name")
+                                if not aname:
+                                    continue
+                                if aname in self._agents:
+                                    logger.info(f"[runner] '{aname}' already running, skipping.")
+                                else:
+                                    logger.info(f"[runner] Reconcile: starting missing agent '{aname}'")
+                                    def _log_exc(t):
+                                        if not t.cancelled() and t.exception():
+                                            logger.error(f"[runner] reconcile task failed: {t.exception()}")
+                                    task = asyncio.create_task(self.spawn_agent(agent_config))
+                                    task.add_done_callback(_log_exc)
+
+                        elif topic_str == f"nodes/{self.node_name}/spawn":
                             if not msg.payload:   # empty = retain-clear message, ignore
                                 continue
                             def _log_task_exc(t):

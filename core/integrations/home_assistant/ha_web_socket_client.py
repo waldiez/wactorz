@@ -2,6 +2,7 @@ import websockets
 import json
 from typing import Any
 
+
 class HAWebSocketClient:
     def __init__(self, ws_url: str, token: str):
         self.ws_url = ws_url
@@ -45,3 +46,37 @@ class HAWebSocketClient:
                 if not resp.get("success"):
                     raise RuntimeError(f"WS call failed: {resp}")
                 return resp.get("result")
+
+    async def receive_json(self) -> dict[str, Any]:
+        """Receive the next raw JSON message from Home Assistant."""
+        assert self._ws is not None
+        payload = json.loads(await self._ws.recv())
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Unexpected websocket payload: {payload!r}")
+        return payload
+
+    async def subscribe_events(self, event_type: str | None = None) -> int:
+        """Subscribe to Home Assistant events and return the subscription id."""
+        assert self._ws is not None
+        self._msg_id += 1
+        msg_id = self._msg_id
+
+        payload = {"id": msg_id, "type": "subscribe_events"}
+        if event_type:
+            payload["event_type"] = event_type
+        await self._ws.send(json.dumps(payload))
+
+        while True:
+            resp = await self.receive_json()
+            if resp.get("id") != msg_id:
+                continue
+            if not resp.get("success"):
+                raise RuntimeError(f"WS subscribe failed: {resp}")
+            return msg_id
+
+    async def receive_event(self, subscription_id: int) -> dict[str, Any]:
+        """Wait for the next event message for a specific subscription."""
+        while True:
+            resp = await self.receive_json()
+            if resp.get("type") == "event" and resp.get("id") == subscription_id:
+                return resp

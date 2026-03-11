@@ -4,6 +4,7 @@ from .monitor_agent import MonitorActor
 from .code_agent import CodeAgent
 from .ml_agent import MLAgent, YOLOAgent, AnomalyDetectorAgent
 from .home_assistant_agent import HomeAssistantAgent
+from .home_assistant_map_agent import HomeAssistantMapAgent
 # Deprecated shims — kept for backward compatibility
 from .home_assistant_hardware_agent import HomeAssistantHardwareAgent  # noqa: F401
 from .home_assistant_automation_agent import HomeAssistantAutomationAgent  # noqa: F401

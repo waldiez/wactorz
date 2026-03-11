@@ -42,6 +42,7 @@ async def build_system(args):
     from agentflow.agents.llm_agent import AnthropicProvider, OpenAIProvider, OllamaProvider, NIMProvider
     from agentflow.agents.home_assistant_agent import HomeAssistantAgent
     from agentflow.agents.home_assistant_map_agent import HomeAssistantMapAgent
+    from agentflow.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
 
     llm = args.llm or CONFIG.llm_provider
     if llm == "anthropic":
@@ -107,6 +108,12 @@ async def build_system(args):
             persistence_dir="./state",
         )
 
+    def make_ha_state_bridge():
+        return HomeAssistantStateBridgeAgent(
+            name="home-assistant-state-bridge",
+            persistence_dir="./state",
+        )
+
     def make_anomaly_agent():
         return AnomalyDetectorAgent(name="anomaly-detector", continuous=False,
                                     persistence_dir="./state")
@@ -137,6 +144,7 @@ async def build_system(args):
         .supervise("manual-agent",          make_manual_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-agent",  make_ha_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-map-agent", make_ha_map_agent, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
+        .supervise("home-assistant-state-bridge", make_ha_state_bridge, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
         .supervise("anomaly-detector",      make_anomaly_agent, strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
     )
 

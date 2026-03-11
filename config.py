@@ -18,6 +18,9 @@ class AppConfig:
     mqtt_port: int
     ha_url: str
     ha_token: str
+    ha_state_bridge_output_topic: str
+    ha_state_bridge_domains: str
+    ha_state_bridge_per_entity: bool
     discord_token: str
     ws_port: int
     nim_api_key: str
@@ -44,6 +47,9 @@ CONFIG = AppConfig(
     mqtt_port=int(os.getenv("MQTT_PORT", 1883)),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
+    ha_state_bridge_output_topic=os.getenv("HA_STATE_BRIDGE_OUTPUT_TOPIC", "homeassistant/state_changes"),
+    ha_state_bridge_domains=os.getenv("HA_STATE_BRIDGE_DOMAINS", ""),
+    ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0") not in ("0", "false", "no"),
     discord_token=os.getenv("DISCORD_BOT_TOKEN", ""),
     ws_port=int(os.getenv("WS_PORT", 8888)),
     nim_api_key=os.getenv("NIM_API_KEY", ""),

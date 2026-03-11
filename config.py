@@ -1,9 +1,13 @@
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from dataclasses import dataclass
+from pathlib import Path
 import os
 
-
-load_dotenv()
+_env_file = Path(__file__).parent / ".env"
+if _env_file.exists():
+    load_dotenv(_env_file)
+else:
+    load_dotenv(find_dotenv())
 
 
 @dataclass(frozen=True)

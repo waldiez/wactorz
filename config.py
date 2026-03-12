@@ -3,6 +3,13 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 
+
+def _env_truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "dev"}
+
+
+DEV_MODE = _env_truthy("AGENTFLOW_DEV_MODE")
+
 _env_file = Path(__file__).parent / ".env"
 if _env_file.exists():
     load_dotenv(_env_file)
@@ -41,8 +48,8 @@ class AppConfig:
 
 
 CONFIG = AppConfig(
-    interface=os.getenv("INTERFACE", "cli"),
-    port=int(os.getenv("PORT", 8000)),
+    interface=os.getenv("INTERFACE", "rest" if DEV_MODE else "cli"),
+    port=int(os.getenv("PORT", 8080 if DEV_MODE else 8000)),
     llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
     llm_model=os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
     llm_api_key=os.getenv("LLM_API_KEY", ""),

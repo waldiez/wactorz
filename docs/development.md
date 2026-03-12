@@ -35,6 +35,27 @@ The mock simulator (`scripts/mock-agents.mjs`) publishes realistic MQTT events:
 
 The Vite dev server proxies `/api/`, `/ws`, and `/mqtt` to the local ports exposed by `compose.dev.yaml`.
 
+## Python-first dev mode
+
+For day-to-day development, the repo can default to the Python backend while
+keeping the same frontend-facing API contract as Rust.
+
+```bash
+# Terminal 1 — MQTT broker
+docker compose -f compose.dev.yaml up -d mosquitto
+
+# Terminal 2 — Python backend, REST on :8080
+AGENTFLOW_DEV_MODE=1 ./run.sh
+
+# Terminal 3 — frontend SPA
+cd frontend && npm install && npm run dev
+```
+
+In this mode:
+- `run.sh` defaults to the Python backend unless `AGENTFLOW_BACKEND` overrides it.
+- The Python backend defaults to `INTERFACE=rest` and `PORT=8080`.
+- The primary frontend is `frontend/index.html`, not the legacy `monitor.html`.
+
 ### Stop mock stack
 
 ```bash
@@ -158,6 +179,41 @@ cargo clippy -- -D warnings
 # Format
 cargo fmt
 ```
+
+## Backend parity proof
+
+The repo now carries a shared backend parity contract for the core supervisor
+semantics that both runtimes claim to implement.
+
+```bash
+# Run language-specific tests plus the cross-runtime parity diff
+make test
+
+# Run only the parity proof
+make parity
+
+# Generate coverage artifacts used by CI
+python -m pip install -r requirements-dev.txt
+make coverage
+```
+
+The shared fixture lives at `tests/parity_fixtures/backend_supervisor_parity.json`.
+Both the Python harness and the Rust harness execute those same scenarios and must
+produce the same normalized JSON output for the build to pass.
+
+## Pre-commit
+
+```bash
+python -m pip install -r requirements-dev.txt
+make precommit-install
+make precommit-run
+```
+
+The configured hooks run:
+- Python unit tests
+- Rust backend parity test
+- Cross-backend parity diff
+- Frontend type-checking
 
 ### Cross-compile for Linux from macOS
 

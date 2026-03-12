@@ -6,6 +6,7 @@ Supported: CLI (terminal), Discord, WhatsApp (via Twilio), REST.
 import asyncio
 import logging
 import os
+from typing import Any
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -587,12 +588,47 @@ class RESTInterface:
         self.port = port
         self.api_key = api_key
 
+    @staticmethod
+    def _normalize_state(state: str) -> str:
+        if state == "idle":
+            return "initializing"
+        return state
+
+    def _actor_payload(self, actor: Any) -> dict:
+        status = actor.get_status()
+        return {
+            "id": actor.actor_id,
+            "name": actor.name,
+            "state": self._normalize_state(status.get("state", "unknown")),
+            "protected": bool(getattr(actor, "protected", False)),
+        }
+
+    def _metrics_payload(self, actor: Any) -> dict:
+        return {
+            "messages_received": 0,
+            "messages_processed": actor.metrics.messages_processed,
+            "messages_failed": actor.metrics.errors,
+            "heartbeats": 0,
+            "last_message_at": int(actor.metrics.last_heartbeat),
+            "restart_count": actor.metrics.restart_count,
+            "llm_input_tokens": 0,
+            "llm_output_tokens": 0,
+            "llm_cost_usd": 0.0,
+        }
+
     async def run(self):
         try:
             from aiohttp import web
         except ImportError:
             logger.error("aiohttp not installed. Run: pip install aiohttp")
             return
+
+        registry = self.agent._registry
+
+        def _lookup_actor(actor_id: str):
+            if registry is None:
+                return None
+            return registry.get(actor_id)
 
         async def chat_endpoint(request):
             if self.api_key:
@@ -602,15 +638,22 @@ class RESTInterface:
 
             body = await request.json()
             message = body.get("message", "")
+            agent_name = body.get("agent_name") or "main"
             if not message:
                 return web.json_response({"error": "No message provided"}, status=400)
 
             response = await self.agent.process_user_input(message)
-            return web.json_response({"response": response, "agent": self.agent.name})
+            return web.json_response({
+                "status": "sent",
+                "agent": agent_name,
+                "response": response,
+            })
 
         async def agents_endpoint(request):
-            agents = await self.agent.list_agents()
-            return web.json_response({"agents": agents})
+            if registry is None:
+                return web.json_response([])
+            actors = [self._actor_payload(actor) for actor in registry.all_actors()]
+            return web.json_response(actors)
 
         async def command_endpoint(request):
             body = await request.json()
@@ -627,7 +670,70 @@ class RESTInterface:
                 return web.json_response({"ok": True})
             return web.json_response({"error": "Invalid command"}, status=400)
 
+        async def actor_endpoint(request):
+            actor = _lookup_actor(request.match_info["actor_id"])
+            if actor is None:
+                return web.Response(status=404, text="actor not found")
+            return web.json_response(self._actor_payload(actor))
+
+        async def actor_message_endpoint(request):
+            actor = _lookup_actor(request.match_info["actor_id"])
+            if actor is None:
+                return web.Response(status=404, text="actor not found")
+            body = await request.json()
+            content = body.get("content", "")
+            if not content:
+                return web.json_response({"error": "No content provided"}, status=400)
+            await self.agent.send(actor.actor_id, MessageType.TASK, {"text": content, "content": content})
+            return web.json_response({"status": "sent"})
+
+        async def stop_actor_endpoint(request):
+            actor = _lookup_actor(request.match_info["actor_id"])
+            if actor is None:
+                return web.Response(status=404, text="actor not found")
+            if getattr(actor, "protected", False):
+                return web.Response(status=403, text="actor is protected")
+            await actor.stop()
+            if registry is not None:
+                await registry.unregister(actor.actor_id)
+            return web.Response(text="stopping")
+
+        async def pause_actor_endpoint(request):
+            actor = _lookup_actor(request.match_info["actor_id"])
+            if actor is None:
+                return web.Response(status=404, text="actor not found")
+            if getattr(actor, "protected", False):
+                return web.Response(status=403, text="actor is protected")
+            await actor.pause()
+            return web.json_response({"status": "pausing"})
+
+        async def resume_actor_endpoint(request):
+            actor = _lookup_actor(request.match_info["actor_id"])
+            if actor is None:
+                return web.Response(status=404, text="actor not found")
+            if getattr(actor, "protected", False):
+                return web.Response(status=403, text="actor is protected")
+            await actor.resume()
+            return web.json_response({"status": "resuming"})
+
+        async def metrics_endpoint(request):
+            actor = _lookup_actor(request.match_info["actor_id"])
+            if actor is None:
+                return web.Response(status=404, text="actor not found")
+            return web.json_response(self._metrics_payload(actor))
+
+        async def health_endpoint(request):
+            return web.json_response({"status": "ok"})
+
         app = web.Application()
+        app.router.add_get("/health", health_endpoint)
+        app.router.add_get("/actors", agents_endpoint)
+        app.router.add_get("/actors/{actor_id}", actor_endpoint)
+        app.router.add_post("/actors/{actor_id}/message", actor_message_endpoint)
+        app.router.add_delete("/actors/{actor_id}", stop_actor_endpoint)
+        app.router.add_post("/actors/{actor_id}/pause", pause_actor_endpoint)
+        app.router.add_post("/actors/{actor_id}/resume", resume_actor_endpoint)
+        app.router.add_get("/actors/{actor_id}/metrics", metrics_endpoint)
         app.router.add_post("/chat", chat_endpoint)
         app.router.add_get("/agents", agents_endpoint)
         app.router.add_post("/agents/command", command_endpoint)

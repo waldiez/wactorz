@@ -10,6 +10,7 @@
 //! - [`ActorRegistry`] / [`ActorSystem`] — actor lookup and orchestration
 
 pub mod actor;
+pub mod backend_parity;
 pub mod message;
 pub mod metrics;
 pub mod persist;

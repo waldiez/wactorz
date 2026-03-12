@@ -1,6 +1,6 @@
-.PHONY: help dev dev-full build build-rust build-frontend check fmt lint clean \
+.PHONY: help dev dev-full dev-backend dev-backend-rust precommit-install precommit-run build build-rust build-frontend check fmt lint clean \
         up down logs shell release release-full release-native release-source \
-        run run-py
+        run run-py test test-py test-rust parity coverage coverage-py coverage-rust ci
 
 COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
@@ -18,6 +18,12 @@ run: ## Start the backend via run.sh (respects AGENTFLOW_BACKEND)
 
 run-py: ## Explicitly start the Python backend
 	AGENTFLOW_BACKEND=python ./run.sh
+
+dev-backend: ## Start the backend in dev mode (defaults to Python REST on :8080)
+	AGENTFLOW_DEV_MODE=1 ./run.sh
+
+dev-backend-rust: ## Start the Rust backend while keeping dev-mode defaults elsewhere
+	AGENTFLOW_DEV_MODE=1 AGENTFLOW_BACKEND=rust ./run.sh
 
 # ── Development ─────────────────────────────────────────────────────────────
 
@@ -90,3 +96,34 @@ clean: ## Remove Rust build artifacts and frontend dist
 
 install-frontend: ## Install frontend npm dependencies
 	cd $(FRONTEND_DIR) && npm install
+
+precommit-install: ## Install the git pre-commit hook
+	pre-commit install
+
+precommit-run: ## Run all configured pre-commit hooks across the repo
+	pre-commit run --all-files
+
+test: test-py test-rust parity ## Run Python, Rust, and cross-backend parity tests
+
+test-py: ## Run Python tests
+	python3 -m unittest discover -s tests -p 'test_*.py'
+
+test-rust: ## Run Rust tests
+	cd $(RUST_DIR) && cargo test
+
+parity: ## Prove Python and Rust core supervisor semantics match
+	python3 scripts/check_backend_parity.py
+
+coverage: coverage-py coverage-rust ## Generate Python and Rust coverage reports
+
+coverage-py: ## Generate Python coverage XML + terminal report
+	mkdir -p coverage
+	python3 -m coverage run -m unittest discover -s tests -p 'test_*.py'
+	python3 -m coverage xml -o coverage/python-coverage.xml
+	python3 -m coverage report
+
+coverage-rust: ## Generate Rust coverage with cargo-llvm-cov
+	mkdir -p coverage
+	cd $(RUST_DIR) && cargo llvm-cov --workspace --lcov --output-path ../coverage/rust.lcov
+
+ci: test coverage ## Run the local CI-equivalent checks

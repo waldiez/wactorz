@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
 
-use crate::actor::{Actor, ActorConfig, ActorState};
+use crate::actor::{Actor, ActorState};
 
 use crate::message::{ActorCommand, Message};
 use crate::metrics::ActorMetrics;
@@ -303,6 +303,11 @@ impl Supervisor {
             poll_interval: Duration::from_secs(2),
             watch_task: None,
         }
+    }
+
+    pub fn with_poll_interval_secs(&mut self, secs: f64) -> &mut Self {
+        self.poll_interval = Duration::from_secs_f64(secs);
+        self
     }
 
     /// Register an actor to be supervised. Call before [`start`].

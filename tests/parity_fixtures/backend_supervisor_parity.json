@@ -1,0 +1,75 @@
+{
+  "contract": "backend-supervisor-parity-v1",
+  "scenarios": [
+    {
+      "name": "one_for_one",
+      "strategy": "one_for_one",
+      "actors": [
+        { "name": "crash-once", "kind": "crasher", "crash_count": 1 },
+        { "name": "sibling", "kind": "stable", "crash_count": 0 }
+      ],
+      "expected": {
+        "start_counts": {
+          "crash-once": 2,
+          "sibling": 1
+        },
+        "restart_counts": {
+          "crash-once": 1,
+          "sibling": 0
+        },
+        "final_states": {
+          "crash-once": "running",
+          "sibling": "running"
+        }
+      }
+    },
+    {
+      "name": "one_for_all",
+      "strategy": "one_for_all",
+      "actors": [
+        { "name": "crash-once", "kind": "crasher", "crash_count": 1 },
+        { "name": "sibling", "kind": "stable", "crash_count": 0 }
+      ],
+      "expected": {
+        "start_counts": {
+          "crash-once": 2,
+          "sibling": 2
+        },
+        "restart_counts": {
+          "crash-once": 1,
+          "sibling": 1
+        },
+        "final_states": {
+          "crash-once": "running",
+          "sibling": "running"
+        }
+      }
+    },
+    {
+      "name": "rest_for_one",
+      "strategy": "rest_for_one",
+      "actors": [
+        { "name": "upstream", "kind": "stable", "crash_count": 0 },
+        { "name": "crash-once", "kind": "crasher", "crash_count": 1 },
+        { "name": "downstream", "kind": "stable", "crash_count": 0 }
+      ],
+      "expected": {
+        "start_counts": {
+          "upstream": 1,
+          "crash-once": 2,
+          "downstream": 2
+        },
+        "restart_counts": {
+          "upstream": 0,
+          "crash-once": 1,
+          "downstream": 1
+        },
+        "final_states": {
+          "upstream": "running",
+          "crash-once": "running",
+          "downstream": "running"
+        }
+      }
+    }
+  ]
+}

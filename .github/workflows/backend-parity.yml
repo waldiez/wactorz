@@ -1,0 +1,47 @@
+name: backend-parity
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install Python dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Python tests
+        run: make test-py
+
+      - name: Rust tests
+        run: make test-rust
+
+      - name: Cross-backend parity
+        run: make parity
+
+      - name: Python coverage
+        run: make coverage-py
+
+      - name: Rust coverage
+        run: make coverage-rust
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-artifacts
+          path: |
+            coverage/python-coverage.xml
+            coverage/rust.lcov

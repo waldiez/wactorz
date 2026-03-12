@@ -1,0 +1,24 @@
+repos:
+  - repo: local
+    hooks:
+      - id: python-tests
+        name: python tests
+        entry: python3 -m unittest discover -s tests -p test_*.py
+        language: system
+        pass_filenames: false
+      - id: rust-core-parity-test
+        name: rust core parity test
+        entry: bash -lc 'cd rust && cargo test -p agentflow-core backend_supervisor_contract_matches_fixture'
+        language: system
+        pass_filenames: false
+      - id: backend-parity
+        name: cross-backend parity
+        entry: python3 scripts/check_backend_parity.py
+        language: system
+        pass_filenames: false
+      - id: frontend-typecheck
+        name: frontend typecheck
+        entry: bash -lc 'cd frontend && bun install && bun run typecheck'
+        language: system
+        pass_filenames: false
+        files: ^frontend/

@@ -78,8 +78,8 @@ Message flow:
 | `agents/manual_agent.py` | Agent | PDF specialist — 3-layer search strategy to find and extract manual content |
 | `agents/home_assistant_agent.py` | Agent | Unified HA agent — hardware recommendations and automation CRUD via HA REST API |
 | `interfaces/chat_interfaces.py` | I/O | CLI (streaming), REST, Discord, WhatsApp — all call `process_user_input[_stream]` |
-| `monitor_server.py` | I/O | MQTT→WebSocket bridge that feeds the live dashboard |
-| `monitor.html` | I/O | Real-time web dashboard — agent cards, logs, cost meters, error alerts |
+| `monitor_server.py` | I/O | Legacy MQTT→WebSocket bridge for the old standalone monitor |
+| `frontend/` | I/O | Primary dashboard SPA — Babylon.js frontend served as `index.html` |
 
 ---
 
@@ -343,7 +343,7 @@ Set `DISCORD_TOKEN` or `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_WHAT
 
 ### Live Dashboard
 
-Start `monitor_server.py` alongside agentflow. Open `monitor.html` in a browser. The dashboard shows real-time agent cards, log streams, token cost meters, spawn/stop controls, and error alerts — all fed via MQTT over WebSocket.
+For the primary dashboard, run the SPA in `frontend/` and open `frontend/index.html` through Vite or nginx. `monitor_server.py` + `monitor.html` remain available as a legacy standalone monitor.
 
 ---
 
@@ -663,7 +663,7 @@ AgentFlow now includes a high-performance **Rust** backend and a **Babylon.js** 
 
 ### Unified Entry Point
 
-Use the `run.sh` script to select your backend. It respects the `AGENTFLOW_BACKEND` environment variable.
+Use `run.sh` to select your backend. It respects `AGENTFLOW_BACKEND`, and in `AGENTFLOW_DEV_MODE=1` it defaults to the Python backend so local frontend development targets the Python-first path by default.
 
 ```bash
 # Start with the Rust Performance Core (Default)
@@ -671,6 +671,9 @@ Use the `run.sh` script to select your backend. It respects the `AGENTFLOW_BACKE
 
 # Start with the Python Foundation (Legacy/Specialist)
 AGENTFLOW_BACKEND=python ./run.sh
+
+# Local development defaults: Python backend + REST on :8080
+AGENTFLOW_DEV_MODE=1 ./run.sh
 ```
 
 ### Interactive Dashboard

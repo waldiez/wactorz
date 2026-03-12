@@ -10,7 +10,13 @@ if [ -f .env ]; then
 fi
 
 # Default to rust if not set
-BACKEND=${AGENTFLOW_BACKEND:-rust}
+if [[ "${AGENTFLOW_DEV_MODE:-0}" =~ ^(1|true|TRUE|yes|YES|on|ON|dev|DEV)$ ]]; then
+    DEFAULT_BACKEND="python"
+else
+    DEFAULT_BACKEND="rust"
+fi
+
+BACKEND=${AGENTFLOW_BACKEND:-$DEFAULT_BACKEND}
 RUST_BIN="./rust/target/release/agentflow-server"
 
 echo "Starting AgentFlow with ${BACKEND} backend..."

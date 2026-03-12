@@ -322,7 +322,7 @@ async def ws_handler(request):
 
 async def index_handler(request):
     from aiohttp import web
-    html_path = Path(__file__).parent / "monitor.html"
+    html_path = Path(__file__).parent / "frontent" / "index.html"
     return web.FileResponse(html_path)
 
 

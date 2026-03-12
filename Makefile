@@ -1,5 +1,6 @@
 .PHONY: help dev dev-full build build-rust build-frontend check fmt lint clean \
-        up down logs shell release release-full release-native release-source
+        up down logs shell release release-full release-native release-source \
+        run run-py
 
 COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
@@ -9,6 +10,14 @@ RUST_DIR     := rust
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' | sort
+
+# ── Runtime ─────────────────────────────────────────────────────────────────
+
+run: ## Start the backend via run.sh (respects AGENTFLOW_BACKEND)
+	./run.sh
+
+run-py: ## Explicitly start the Python backend
+	AGENTFLOW_BACKEND=python ./run.sh
 
 # ── Development ─────────────────────────────────────────────────────────────
 

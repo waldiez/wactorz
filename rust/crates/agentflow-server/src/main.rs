@@ -1,0 +1,566 @@
+//! AgentFlow server entry point.
+//!
+//! Starts the full system:
+//! 1. Parses CLI arguments (via [`clap`])
+//! 2. Initialises structured logging (via [`tracing_subscriber`])
+//! 3. Creates the [`ActorSystem`]
+//! 4. Connects to MQTT broker
+//! 5. Spawns [`MainActor`] and [`MonitorAgent`]
+//! 6. Starts the REST API + WebSocket bridge
+//! 7. Optionally starts the interactive CLI
+//! 8. Awaits a Ctrl-C signal then shuts down gracefully
+
+use anyhow::Result;
+use clap::Parser;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tracing::info;
+
+use agentflow_agents::{
+    DynamicAgent, HomeAssistantAgent, InstallerAgent, IOAgent, LlmConfig, LlmProvider, MainActor,
+    ManualAgent, MonitorAgent, NautilusAgent, NewsAgent, OsAgent, QAAgent, UdxAgent, WeatherAgent,
+    WifAgent, WikAgent, WisAgent, WmeAgent,
+};
+use agentflow_core::{ActorConfig, ActorSystem, EventPublisher, Supervisor, SupervisorStrategy};
+use agentflow_interfaces::ws::WsEnvelope;
+use agentflow_interfaces::{RestServer, WsBridge};
+use agentflow_mqtt::{MqttClient, MqttConfig};
+
+/// AgentFlow: async multi-agent orchestration framework
+#[derive(Debug, Parser)]
+#[command(name = "agentflow", version, about)]
+pub struct Args {
+    /// MQTT broker host
+    #[arg(long, default_value = "localhost", env = "MQTT_HOST")]
+    pub mqtt_host: String,
+
+    /// MQTT broker port
+    #[arg(long, default_value_t = 1883, env = "MQTT_PORT")]
+    pub mqtt_port: u16,
+
+    /// REST API listen address
+    #[arg(long, default_value = "127.0.0.1:8080", env = "API_ADDR")]
+    pub api_addr: SocketAddr,
+
+    /// WebSocket bridge listen address
+    #[arg(long, default_value = "127.0.0.1:8081", env = "WS_ADDR")]
+    pub ws_addr: SocketAddr,
+
+    /// LLM provider (anthropic | openai | ollama | nim | gemini)
+    #[arg(long, default_value = "anthropic", env = "LLM_PROVIDER")]
+    pub llm_provider: String,
+
+    /// LLM model name
+    #[arg(long, default_value = "claude-sonnet-4-6", env = "LLM_MODEL")]
+    pub llm_model: String,
+
+    /// LLM API key
+    #[arg(long, env = "LLM_API_KEY")]
+    pub llm_api_key: Option<String>,
+
+    /// NVIDIA NIM model (e.g. meta/llama-3.3-70b-instruct).
+    /// Implies --llm-provider nim when set.
+    #[arg(long, env = "NIM_MODEL")]
+    pub nim_model: Option<String>,
+
+    /// Disable interactive CLI (useful for container deployments)
+    #[arg(long, default_value_t = false, env = "NO_CLI")]
+    pub no_cli: bool,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // ── Logging ───────────────────────────────────────────────────────────────
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "agentflow=info,tower_http=debug".into()),
+        )
+        .init();
+
+    let args = Args::parse();
+    info!("Starting AgentFlow server");
+
+    // ── Publisher channel ─────────────────────────────────────────────────────
+    let (publisher, mut pub_rx) = EventPublisher::channel();
+
+    // ── Actor system ──────────────────────────────────────────────────────────
+    let system = ActorSystem::with_publisher(publisher.clone());
+
+    // ── MQTT ──────────────────────────────────────────────────────────────────
+    let mqtt_config = MqttConfig {
+        host: args.mqtt_host.clone(),
+        port: args.mqtt_port,
+        client_id: "agentflow-server".into(),
+        ..Default::default()
+    };
+
+    let (mqtt_client, mut event_loop) = MqttClient::new(mqtt_config)?;
+    let mqtt_client = Arc::new(mqtt_client);
+
+    // WebSocket broadcast channel
+    let (ws_tx, _) = tokio::sync::broadcast::channel::<WsEnvelope>(100);
+    let ws_tx_for_mqtt = ws_tx.clone();
+
+    // Registry clone for routing inbound chat messages → actor mailboxes
+    let registry_for_route = system.registry.clone();
+    let registry_for_qa = system.registry.clone();
+    // WIK receives system/llm/error; LlmAgent/MainActor receives system/llm/switch
+    let registry_for_wik = system.registry.clone();
+    let registry_for_switch = system.registry.clone();
+
+    // Start MQTT event loop task
+    tokio::spawn(async move {
+        MqttClient::run_event_loop(&mut event_loop, move |evt| {
+            if let agentflow_mqtt::MqttEvent::Incoming { topic, payload } = evt {
+                tracing::debug!("MQTT in: {topic}");
+                if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&payload) {
+                    // Broadcast to WebSocket clients
+                    let envelope = WsEnvelope {
+                        topic: topic.clone(),
+                        payload: json_val.clone(),
+                    };
+                    let _ = ws_tx_for_mqtt.send(envelope);
+
+                    // ── system/llm/error → forward to wik-agent ──────────────
+                    if topic == agentflow_mqtt::topics::SYSTEM_LLM_ERROR {
+                        let reg = registry_for_wik.clone();
+                        let payload_str = serde_json::to_string(&json_val).unwrap_or_default();
+                        tokio::spawn(async move {
+                            if let Some(entry) = reg.get_by_name("wik-agent").await {
+                                let msg = agentflow_core::Message::text(
+                                    Some("system".to_string()),
+                                    Some(entry.id.clone()),
+                                    payload_str,
+                                );
+                                let _ = reg.send(&entry.id, msg).await;
+                            }
+                        });
+                    }
+
+                    // ── system/llm/switch → forward to main-actor as Task ─────
+                    if topic == agentflow_mqtt::topics::SYSTEM_LLM_SWITCH {
+                        let reg = registry_for_switch.clone();
+                        let switch_payload = json_val.clone();
+                        tokio::spawn(async move {
+                            if let Some(entry) = reg.get_by_name("main-actor").await {
+                                let msg = agentflow_core::Message::new(
+                                    Some("wik-agent".to_string()),
+                                    Some(entry.id.clone()),
+                                    agentflow_core::message::MessageType::Task {
+                                        task_id: "wik/switch".to_string(),
+                                        description: "LLM provider switch".to_string(),
+                                        payload: switch_payload,
+                                    },
+                                );
+                                let _ = reg.send(&entry.id, msg).await;
+                            }
+                        });
+                    }
+
+                    // Forward all chat messages to QA agent for passive inspection
+                    if topic.ends_with("/chat") {
+                        let reg_qa = registry_for_qa.clone();
+                        let qa_content = serde_json::to_string(&json_val).unwrap_or_default();
+                        tokio::spawn(async move {
+                            if let Some(entry) = reg_qa.get_by_name("qa-agent").await {
+                                let msg = agentflow_core::Message::text(
+                                    Some("mqtt-router".to_string()),
+                                    Some(entry.id.clone()),
+                                    qa_content,
+                                );
+                                let _ = reg_qa.send(&entry.id, msg).await;
+                            }
+                        });
+                    }
+
+                    // Route agents/{id}/chat from user → actor mailbox
+                    if topic.ends_with("/chat") {
+                        let from = json_val.get("from").and_then(|v| v.as_str()).unwrap_or("");
+                        let content = json_val
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        if !content.is_empty() && (from == "user" || from.is_empty()) {
+                            if topic == agentflow_mqtt::topics::IO_CHAT {
+                                // io/chat → look up io-agent by name
+                                let reg = registry_for_route.clone();
+                                tokio::spawn(async move {
+                                    if let Some(entry) = reg.get_by_name("io-agent").await {
+                                        let msg = agentflow_core::Message::text(
+                                            Some("user".to_string()),
+                                            Some(entry.id.clone()),
+                                            content,
+                                        );
+                                        let _ = reg.send(&entry.id, msg).await;
+                                    }
+                                });
+                            } else if let Some(actor_id) = topic
+                                .strip_prefix("agents/")
+                                .and_then(|s| s.strip_suffix("/chat"))
+                            {
+                                // agents/{id}/chat → send directly to that actor
+                                let reg = registry_for_route.clone();
+                                let id = actor_id.to_string();
+                                tokio::spawn(async move {
+                                    let msg = agentflow_core::Message::text(
+                                        Some("user".to_string()),
+                                        Some(id.clone()),
+                                        content,
+                                    );
+                                    let _ = reg.send(&id, msg).await;
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+    });
+
+    // Subscribe to all agent and system topics, plus the IO gateway topic
+    if let Err(e) = mqtt_client.subscribe("agents/#").await {
+        tracing::warn!("MQTT subscribe failed (broker may not be running): {e}");
+    }
+    if let Err(e) = mqtt_client.subscribe("system/#").await {
+        tracing::warn!("MQTT subscribe failed (broker may not be running): {e}");
+    }
+    if let Err(e) = mqtt_client.subscribe(agentflow_mqtt::topics::IO_CHAT).await {
+        tracing::warn!("MQTT subscribe io/chat failed: {e}");
+    }
+    if let Err(e) = mqtt_client.subscribe("system/llm/#").await {
+        tracing::warn!("MQTT subscribe system/llm/# failed: {e}");
+    }
+
+    // Publisher bridge task: drain pub_rx → MQTT
+    let mqtt_for_bridge = Arc::clone(&mqtt_client);
+    tokio::spawn(async move {
+        while let Some((topic, payload)) = pub_rx.recv().await {
+            if let Err(e) = mqtt_for_bridge.publish_raw(&topic, payload).await {
+                tracing::error!("MQTT publish error: {e}");
+            }
+        }
+    });
+
+    // ── LLM config ────────────────────────────────────────────────────────────
+    let (llm_provider, llm_model) = if let Some(nim_model) = &args.nim_model {
+        (LlmProvider::Nim, nim_model.clone())
+    } else {
+        let p = match args.llm_provider.as_str() {
+            "openai" => LlmProvider::OpenAI,
+            "ollama" => LlmProvider::Ollama,
+            "gemini" => LlmProvider::Gemini,
+            "nim" => LlmProvider::Nim,
+            _ => LlmProvider::Anthropic,
+        };
+        (p, args.llm_model.clone())
+    };
+    let llm_config = LlmConfig {
+        provider: llm_provider,
+        model: llm_model,
+        api_key: args.llm_api_key.clone(),
+        ..Default::default()
+    };
+
+    // ── Supervisor + agents ───────────────────────────────────────────────────
+    // NATO alphabet node names make HLC-WIDs human-readable in logs & IDs.
+    // Canonical assignment (sequential order of introduction):
+    //   alpha=main-actor  bravo=monitor  charlie=io  delta=qa
+    //   echo=udx  foxtrot=nautilus  golf=weather  hotel=news
+    //   india=wif  juliet=wme  whiskey=wis  kilo=wik  oscar=os
+    //   (delta=installer, echo=code, foxtrot=manual, golf=home-assistant in legacy patato4)
+
+    let mut sup = Supervisor::new(system.clone());
+
+    {
+        let lc = llm_config.clone();
+        let sys = system.clone();
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "main-actor",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("main-actor", "alpha").protected();
+                Box::new(MainActor::new(c, lc.clone(), sys.clone()).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            10,
+            60.0,
+            2.0,
+        );
+    }
+    {
+        let sys = system.clone();
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "monitor-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("monitor-agent", "bravo").protected();
+                Box::new(MonitorAgent::new(c, sys.clone()).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            10,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let sys = system.clone();
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "io-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("io-agent", "charlie");
+                Box::new(IOAgent::new(c, sys.clone()).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            10,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "qa-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("qa-agent", "delta").protected();
+                Box::new(QAAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            10,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let sys = system.clone();
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "udx-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("udx-agent", "echo");
+                Box::new(UdxAgent::new(c, sys.clone()).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            10,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "nautilus-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("nautilus-agent", "foxtrot");
+                Box::new(NautilusAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            2.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "weather-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("weather-agent", "golf");
+                Box::new(WeatherAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "news-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("news-agent", "hotel");
+                Box::new(NewsAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "wif-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("wif-agent", "india");
+                Box::new(WifAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "wme-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("wme-agent", "juliet");
+                Box::new(WmeAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "wis-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("wis-agent", "whiskey");
+                Box::new(WisAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "wik-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("wik-agent", "kilo");
+                Box::new(WikAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "os-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("os-agent", "oscar");
+                Box::new(OsAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
+        );
+    }
+
+    // ── Additional Agents (installer, code, manual, home-assistant) ──────────
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "installer-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("installer-agent", "lima");
+                Box::new(InstallerAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            2.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "code-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("code-agent", "mike");
+                Box::new(DynamicAgent::new(c, "").with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let lc = llm_config.clone();
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "manual-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("manual-agent", "november");
+                Box::new(ManualAgent::new(c, lc.clone()).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "home-assistant-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("home-assistant-agent", "quebec");
+                Box::new(HomeAssistantAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            2.0,
+        );
+    }
+
+    sup.start().await?;
+    info!("Supervisor started — 17 agents active");
+
+    // ── REST server ───────────────────────────────────────────────────────────
+    let rest_addr: SocketAddr = args.api_addr;
+    let system_for_rest = system.clone();
+    tokio::spawn(async move {
+        let server = RestServer::new(system_for_rest, rest_addr);
+        if let Err(e) = server.serve().await {
+            tracing::error!("REST error: {e}");
+        }
+    });
+
+    // ── WebSocket bridge ──────────────────────────────────────────────────────
+    let ws_addr: SocketAddr = args.ws_addr;
+    let ws_bridge = WsBridge::new(ws_tx);
+    tokio::spawn(async move {
+        let router = ws_bridge.router();
+        match tokio::net::TcpListener::bind(ws_addr).await {
+            Ok(listener) => {
+                tracing::info!("WS bridge listening on {ws_addr}");
+                if let Err(e) = axum::serve(listener, router).await {
+                    tracing::error!("WS bridge error: {e}");
+                }
+            }
+            Err(e) => tracing::error!("WS bind error: {e}"),
+        }
+    });
+
+    // ── CLI (optional) ────────────────────────────────────────────────────────
+    if !args.no_cli {
+        tokio::spawn(agentflow_interfaces::cli::run_cli(system.clone()));
+    }
+
+    // ── Wait for shutdown ─────────────────────────────────────────────────────
+    tokio::signal::ctrl_c().await?;
+    info!("Received Ctrl-C, shutting down…");
+    sup.stop().await;
+    system.shutdown().await?;
+    info!("Goodbye.");
+    Ok(())
+}

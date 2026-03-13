@@ -14,14 +14,27 @@
 const LS_BEEP = "agentflow.beep";
 const LS_TTS  = "agentflow.tts";
 
+/** Patterns that indicate the user wants the reply spoken aloud. */
+const SPEAK_REQUEST = /\b(speak|read|say|tell me|voice|out ?loud|aloud|read ?(it|that|this) ?out)\b/i;
+
 export class TTSManager {
   private _beepEnabled: boolean;
   private _ttsEnabled:  boolean;
+  private _forceNext  = false;        // speak the very next reply regardless of toggle
   private _audioCtx: AudioContext | null = null;
 
   constructor() {
     this._beepEnabled = localStorage.getItem(LS_BEEP) !== "0";
     this._ttsEnabled  = localStorage.getItem(LS_TTS)  === "1";
+  }
+
+  /**
+   * Call with the user's outgoing message text.
+   * If it contains a speech request, the next reply will be spoken once
+   * even if the TTS toggle is off.
+   */
+  checkUserIntent(text: string): void {
+    if (SPEAK_REQUEST.test(text)) this._forceNext = true;
   }
 
   get beepEnabled(): boolean { return this._beepEnabled; }
@@ -43,7 +56,10 @@ export class TTSManager {
   /** Call on incoming agent message. Beeps and/or speaks depending on settings. */
   notify(text: string, _from?: string): void {
     if (this._beepEnabled) this._beep();
-    if (this._ttsEnabled)  this._speak(text);
+    if (this._ttsEnabled || this._forceNext) {
+      this._forceNext = false;
+      this._speak(text);
+    }
   }
 
   // ── Private ──────────────────────────────────────────────────────────────────

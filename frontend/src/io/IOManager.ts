@@ -69,6 +69,9 @@ export class IOManager {
       timestampMs: Date.now(),
     };
 
+    // Check if user is asking for the reply to be spoken aloud
+    tts.checkUserIntent(text);
+
     // Make the panel visible before appending so the user sees the message
     this.chatPanel.ensureOpen(agent?.name ?? "main-actor");
 

@@ -1,11 +1,13 @@
 .PHONY: help dev dev-full dev-backend dev-backend-rust precommit-install precommit-run build build-rust build-frontend check fmt lint clean \
         up down logs shell release release-full release-native release-source \
-        run run-py test test-py test-rust parity coverage coverage-py coverage-rust ci
+        run run-py test test-py test-rust parity coverage coverage-py coverage-rust ci \
+        install install-py install-frontend docs-serve docs-build publish
 
 COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
 FRONTEND_DIR := frontend
 RUST_DIR     := rust
+PKG_MGR      := $(shell command -v bun 2>/dev/null && echo bun || (command -v pnpm 2>/dev/null && echo pnpm) || echo npm)
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | \
@@ -33,8 +35,12 @@ dev: ## Start mock stack (mosquitto + mock-agents only)
 dev-down: ## Stop mock stack
 	$(COMPOSE_DEV) down
 
+dev-full: ## Start full stack in dev mode (Python + mock agents + Vite)
+	$(COMPOSE_DEV) up -d && AGENTFLOW_DEV_MODE=1 ./run.sh &
+	cd $(FRONTEND_DIR) && $(PKG_MGR) run dev
+
 dev-ui: ## Start Vite dev server only (needs mosquitto running)
-	cd $(FRONTEND_DIR) && npm run dev
+	cd $(FRONTEND_DIR) && $(PKG_MGR) run dev
 
 # ── Build ───────────────────────────────────────────────────────────────────
 
@@ -44,18 +50,18 @@ build-rust: ## Build Rust workspace (release)
 	cd $(RUST_DIR) && cargo build --release
 
 build-frontend: ## Build Vite frontend
-	cd $(FRONTEND_DIR) && npm run build
+	cd $(FRONTEND_DIR) && $(PKG_MGR) run build
 
 check: ## Cargo check (fast, no codegen)
 	cd $(RUST_DIR) && cargo check
 
 fmt: ## Format Rust + TypeScript
 	cd $(RUST_DIR) && cargo fmt
-	cd $(FRONTEND_DIR) && npx prettier --write "src/**/*.ts" index.html
+	cd $(FRONTEND_DIR) && $(PKG_MGR) run fmt 2>/dev/null || $(PKG_MGR) x prettier --write "src/**/*.ts"
 
 lint: ## Clippy + TS typecheck
 	cd $(RUST_DIR) && cargo clippy -- -D warnings
-	cd $(FRONTEND_DIR) && npm run typecheck
+	cd $(FRONTEND_DIR) && $(PKG_MGR) run typecheck
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 
@@ -70,6 +76,9 @@ logs: ## Follow full stack logs
 
 logs-%: ## Follow logs for a specific service, e.g. make logs-agentflow
 	$(COMPOSE) logs -f $*
+
+shell: ## Open a shell in the agentflow container
+	$(COMPOSE) exec agentflow sh
 
 shell-%: ## Open a shell in a running container, e.g. make shell-agentflow
 	$(COMPOSE) exec $* sh
@@ -94,8 +103,13 @@ clean: ## Remove Rust build artifacts and frontend dist
 	cd $(RUST_DIR) && cargo clean
 	rm -rf $(FRONTEND_DIR)/dist
 
-install-frontend: ## Install frontend npm dependencies
-	cd $(FRONTEND_DIR) && npm install
+install: install-py install-frontend ## Install everything (Python + frontend)
+
+install-py: ## Install Python package in editable mode with all extras
+	pip install -e ".[all]"
+
+install-frontend: ## Install frontend dependencies
+	cd $(FRONTEND_DIR) && $(PKG_MGR) install
 
 precommit-install: ## Install the git pre-commit hook
 	pre-commit install
@@ -125,5 +139,18 @@ coverage-py: ## Generate Python coverage XML + terminal report
 coverage-rust: ## Generate Rust coverage with cargo-llvm-cov
 	mkdir -p coverage
 	cd $(RUST_DIR) && cargo llvm-cov --workspace --lcov --output-path ../coverage/rust.lcov
+
+docs-serve: ## Serve MkDocs locally with live reload
+	mkdocs serve
+
+docs-build: ## Build the full docs site (MkDocs + rustdoc)
+	mkdocs build --site-dir site/guide
+	mkdir -p site/api/rust site
+	cp docs/index.html site/index.html
+	cd $(RUST_DIR) && cargo doc --no-deps --target-dir ../site/api/rust_target
+	cp -r site/api/rust_target/doc/. site/api/rust/ 2>/dev/null || true
+
+publish: ## Build wheel + sdist and upload to PyPI (requires twine + API token)
+	python scripts/build.py --upload
 
 ci: test coverage ## Run the local CI-equivalent checks

@@ -9,6 +9,7 @@ Usage:
     python3 scripts/build_docs.py               # build → site/
     python3 scripts/build_docs.py --serve       # build + serve on :8001
     python3 scripts/build_docs.py --serve 8002  # custom port
+    python3 scripts/build_docs.py --reload      # serve + watch docs/ for changes
 """
 import argparse
 import http.server
@@ -18,8 +19,16 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
+
+try:
+    from watchdog.events import FileSystemEvent, FileSystemEventHandler
+    from watchdog.observers import Observer
+    HAS_WATCHDOG = True
+except ImportError:
+    HAS_WATCHDOG = False
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
@@ -359,13 +368,113 @@ def build_jsdocs(site_dir: Path = SITE) -> None:
         print(f"  typedoc  → site/api/js/")
 
 
+# ── Watcher ────────────────────────────────────────────────────────────────────
+
+WATCH_PATTERNS = {".py", ".md", ".html", ".css", ".json", ".yaml", ".yml"}
+WATCH_IGNORE   = {"__pycache__", ".git", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
+WATCH_DIRS     = [DOCS, ROOT / "agentflow"]
+
+
+def _start_watcher() -> None:
+    """Watch core source + docs/ and rebuild on changes. Uses watchdog when available, falls back to polling."""
+    if HAS_WATCHDOG:
+        _start_watchdog_watcher()
+    else:
+        print("  [reload] watchdog not installed, falling back to polling (pip install watchdog)")
+        t = threading.Thread(target=_poll_and_rebuild, daemon=True)
+        t.start()
+
+
+def _poll_and_rebuild(interval: float = 1.0) -> None:
+    def _snapshot() -> dict:
+        result = {}
+        for d in WATCH_DIRS:
+            if d.exists():
+                result.update({p: p.stat().st_mtime for p in d.rglob("*") if p.is_file()})
+        return result
+
+    known = _snapshot()
+    while True:
+        time.sleep(interval)
+        try:
+            current = _snapshot()
+        except OSError:
+            continue
+        if current != known:
+            for p in current:
+                if current[p] != known.get(p):
+                    print(f"  [reload] {Path(p).relative_to(ROOT)}")
+            known = current
+            try:
+                build()
+            except Exception as exc:
+                print(f"  [reload] build error: {exc}")
+
+
+def _start_watchdog_watcher() -> None:
+    class _RebuildHandler(FileSystemEventHandler):
+        def __init__(self) -> None:
+            super().__init__()
+            self._timer: threading.Timer | None = None
+            self._last = 0.0
+
+        def _should_watch(self, path: str) -> bool:
+            p = Path(path)
+            if not any(p.name.endswith(ext) for ext in WATCH_PATTERNS):
+                return False
+            return not any(part in WATCH_IGNORE for part in p.parts)
+
+        def _schedule(self, path: str) -> None:
+            if time.time() - self._last < 2.0:
+                return
+            if self._timer:
+                self._timer.cancel()
+            self._timer = threading.Timer(0.5, self._rebuild, args=(path,))
+            self._timer.start()
+
+        def _rebuild(self, path: str) -> None:
+            self._last = time.time()
+            try:
+                print(f"  [reload] {Path(path).relative_to(ROOT)}")
+            except ValueError:
+                print(f"  [reload] {path}")
+            try:
+                build()
+            except Exception as exc:
+                print(f"  [reload] build error: {exc}")
+
+        def on_modified(self, event: FileSystemEvent) -> None:
+            if not event.is_directory and self._should_watch(str(event.src_path)):
+                self._schedule(str(event.src_path))
+
+        def on_created(self, event: FileSystemEvent) -> None:
+            if not event.is_directory and self._should_watch(str(event.src_path)):
+                self._schedule(str(event.src_path))
+
+        def on_deleted(self, event: FileSystemEvent) -> None:
+            if not event.is_directory and self._should_watch(str(event.src_path)):
+                self._schedule(str(event.src_path))
+
+    handler = _RebuildHandler()
+    observer = Observer()
+    for d in WATCH_DIRS:
+        if d.exists():
+            observer.schedule(handler, str(d), recursive=True)
+            print(f"  watching {d.relative_to(ROOT)}/")
+    observer.daemon = True
+    observer.start()
+
+
 # ── Serve ──────────────────────────────────────────────────────────────────────
 
-def serve(port: int = 8001, full: bool = False) -> None:
+def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
     build()
     if full:
         build_rust()
         build_jsdocs()
+
+    if reload:
+        _start_watcher()
 
     os.chdir(SITE)
     handler = http.server.SimpleHTTPRequestHandler
@@ -411,10 +520,15 @@ if __name__ == "__main__":
                         help="serve after building (default port 8001)")
     parser.add_argument("--full", action="store_true",
                         help="also build rustdoc and typedoc")
+    parser.add_argument("--reload", action="store_true",
+                        help="watch docs/ and rebuild on changes (implies --serve)")
     args = parser.parse_args()
 
+    if args.reload:
+        args.serve = args.serve or 8001
+
     if args.serve is not None:
-        serve(args.serve, full=args.full)
+        serve(args.serve, full=args.full, reload=args.reload)
     else:
         build()
         if args.full:

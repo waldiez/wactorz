@@ -46,12 +46,14 @@ ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
 docs      = [
     "markdown>=3.5",
     "pygments>=2.17",
+    "watchdog>=5.0.0",
 ]
 dev       = [
     "agentflow[docs]",
     "pre-commit>=3.0.0",
     "coverage>=7.0.0",
     "twine>=5.0.0",
+    "watchdog>=5.0.0",
 ]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install agentflow[all]`

@@ -1,11 +1,11 @@
 
-
 import asyncio
 import argparse
 import logging
 import os
 import sys
-import asyncio
+import threading
+import time
 
 from pathlib import Path
 
@@ -36,6 +36,72 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+_RELOAD_PATTERNS = {".py", ".json", ".yaml", ".yml"}
+_RELOAD_IGNORE   = {"__pycache__", ".git", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
+_PKG_DIR         = Path(__file__).resolve().parent   # agentflow/
+_RELOAD_CWD      = os.getcwd()
+
+
+def _start_reloader() -> None:
+    """Watch agentflow/ for source changes and restart the process via os.execv."""
+    try:
+        from watchdog.events import FileSystemEvent, FileSystemEventHandler
+        from watchdog.observers import Observer
+
+        class _RestartHandler(FileSystemEventHandler):
+            def __init__(self) -> None:
+                super().__init__()
+                self._timer: threading.Timer | None = None
+                self._last = 0.0
+
+            def _should_watch(self, path: str) -> bool:
+                p = Path(path)
+                if not any(p.name.endswith(ext) for ext in _RELOAD_PATTERNS):
+                    return False
+                return not any(part in _RELOAD_IGNORE for part in p.parts)
+
+            def _schedule(self) -> None:
+                if time.time() - self._last < 2.0:
+                    return
+                if self._timer:
+                    self._timer.cancel()
+                self._timer = threading.Timer(0.5, self._restart)
+                self._timer.start()
+
+            def _restart(self) -> None:
+                self._last = time.time()
+                logger.info("[reload] restarting …")
+                try:
+                    os.chdir(_RELOAD_CWD)
+                    time.sleep(0.1)
+                    os.execv(sys.executable, [sys.executable] + sys.argv)  # nosec
+                except Exception as exc:
+                    logger.error("[reload] restart failed: %s", exc)
+                    os._exit(1)  # nosec
+
+            def on_modified(self, event: FileSystemEvent) -> None:
+                if not event.is_directory and self._should_watch(str(event.src_path)):
+                    logger.info("[reload] changed: %s", event.src_path)
+                    self._schedule()
+
+            def on_created(self, event: FileSystemEvent) -> None:
+                if not event.is_directory and self._should_watch(str(event.src_path)):
+                    self._schedule()
+
+            def on_deleted(self, event: FileSystemEvent) -> None:
+                if not event.is_directory and self._should_watch(str(event.src_path)):
+                    self._schedule()
+
+        observer = Observer()
+        observer.schedule(_RestartHandler(), str(_PKG_DIR), recursive=True)
+        observer.daemon = True
+        observer.start()
+        logger.info("[reload] watching %s", _PKG_DIR)
+
+    except ImportError:
+        logger.warning("[reload] watchdog not installed — pip install watchdog")
+
+
 def get_args():
 	parser = argparse.ArgumentParser(description="AgentFlow - Multi-Agent Framework")
 	parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp"])
@@ -51,6 +117,8 @@ def get_args():
 	                    help="Port for the background web UI / monitor server (default: 8888)")
 	parser.add_argument("--no-monitor", action="store_true",
 	                    help="Disable the background web UI server")
+	parser.add_argument("--reload", action="store_true",
+	                    help="Watch agentflow/ for changes and auto-restart (dev mode)")
 	args, _ = parser.parse_known_args()
 
 	return args
@@ -213,6 +281,8 @@ async def build_system(args: argparse.Namespace):
 
 async def app():
 	args = get_args()
+	if args.reload:
+	    _start_reloader()
 	system, main_actor = await build_system(args)
 
 	if not args.no_monitor:

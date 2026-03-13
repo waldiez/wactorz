@@ -29,9 +29,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python deps
-        run: |
-          pip install -e ".[all]"
-          pip install mkdocs-material mkdocstrings[python] mike
+        run: pip install -e ".[all,docs]"
 
       # ── Rust docs ─────────────────────────────────────────────────────
       - uses: dtolnay/rust-toolchain@stable

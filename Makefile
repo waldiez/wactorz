@@ -1,7 +1,7 @@
 .PHONY: help dev dev-full dev-backend dev-backend-rust precommit-install precommit-run build build-rust build-frontend check fmt lint clean \
         up down logs shell release release-full release-native release-source \
         run run-py test test-py test-rust parity coverage coverage-py coverage-rust ci \
-        install install-py install-frontend docs-serve docs-build publish
+        install install-py install-docs install-dev install-frontend docs-serve docs-build publish
 
 COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
@@ -107,6 +107,12 @@ install: install-py install-frontend ## Install everything (Python + frontend)
 
 install-py: ## Install Python package in editable mode with all extras
 	pip install -e ".[all]"
+
+install-docs: ## Install docs dependencies (MkDocs Material + mkdocstrings + mike)
+	pip install -e ".[docs]"
+
+install-dev: ## Install everything including dev/docs deps
+	pip install -e ".[all,docs,dev]"
 
 install-frontend: ## Install frontend dependencies
 	cd $(FRONTEND_DIR) && $(PKG_MGR) install

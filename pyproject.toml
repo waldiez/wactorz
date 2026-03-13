@@ -43,6 +43,18 @@ openai    = ["openai>=1.0.0"]
 discord   = ["discord.py>=2.3.0"]
 whatsapp  = ["twilio>=8.0.0"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
+docs      = [
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.25.0",
+    "mkdocs-gen-files>=0.5.0",
+    "mkdocs-literate-nav>=0.6.0",
+    "mike>=2.0.0",
+]
+dev       = [
+    "agentflow[docs]",
+    "pre-commit>=3.0.0",
+    "coverage>=7.0.0",
+]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install agentflow[all]`
 all = [
@@ -57,7 +69,9 @@ agentflow         = "agentflow.cli:main"
 agentflow-monitor = "agentflow.monitor_server:cli_main"
 
 [project.urls]
-Repository = "https://github.com/waldiez/agentflow"
+Homepage      = "https://waldiez.github.io/agentflow/"
+Repository    = "https://github.com/waldiez/agentflow"
+Documentation = "https://waldiez.github.io/agentflow/guide/"
 "Bug Tracker" = "https://github.com/waldiez/agentflow/issues"
 
 # ── Version ────────────────────────────────────────────────────────────────────

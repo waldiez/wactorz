@@ -45,7 +45,9 @@ struct MediaEntry {
     media_type: String, // "movie" | "show" | "book" | "podcast"
     rating: Option<f64>,
     genre: Option<String>,
+    #[expect(dead_code)]
     progress: Option<String>, // "s1e3", "150 pages", "95 min", …
+    #[expect(dead_code)]
     ts_ms: u64,
 }
 
@@ -53,6 +55,7 @@ struct MediaEntry {
 struct QueueItem {
     title: String,
     media_type: String,
+    #[expect(dead_code)]
     added_ms: u64,
 }
 

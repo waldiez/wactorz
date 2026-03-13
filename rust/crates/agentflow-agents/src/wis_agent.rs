@@ -169,6 +169,7 @@ struct MusicEntry {
     artist: Option<String>,
     rating: Option<f64>,
     genre: Option<String>,
+    #[expect(dead_code)]
     ts_ms: u64,
 }
 

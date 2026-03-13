@@ -67,7 +67,7 @@ impl TickAgent {
 
         if let Some(pub_) = &self.publisher {
             pub_.publish(
-                &format!("agents/{}/tick", self.config.id),
+                format!("agents/{}/tick", self.config.id),
                 &serde_json::json!({
                     "agentId":    self.config.id,
                     "agentName":  self.config.name,
@@ -111,11 +111,10 @@ impl Actor for TickAgent {
     async fn handle_message(&mut self, message: Message) -> Result<()> {
         use agentflow_core::message::MessageType;
         // Accept interval change via Task payload {"interval_secs": N}
-        if let MessageType::Task { payload, .. } = &message.payload {
-            if let Some(n) = payload.get("interval_secs").and_then(|v| v.as_u64()) {
+        if let MessageType::Task { payload, .. } = &message.payload
+            && let Some(n) = payload.get("interval_secs").and_then(|v| v.as_u64()) {
                 self.interval_secs = n;
                 tracing::info!("[{}] interval changed to {n}s", self.config.name);
-            }
         }
         Ok(())
     }

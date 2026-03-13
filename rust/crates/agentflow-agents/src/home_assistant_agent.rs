@@ -80,6 +80,7 @@ impl HomeAssistantAgent {
     }
 
     /// POST /api/services/<domain>/<service> — call a HA service.
+    #[expect(dead_code)]
     async fn call_service(&self, domain: &str, service: &str, data: serde_json::Value) -> Result<serde_json::Value> {
         let resp = self.http
             .post(format!("{}/api/services/{}/{}", self.ha_url, domain, service))

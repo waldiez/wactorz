@@ -720,7 +720,7 @@ async def static_handler(request):
 async def docs_handler(request):
     from aiohttp import web
     if not DOCS_SITE.is_dir():
-        raise web.HTTPNotFound(reason="Docs not built — run: make docs-build")
+        raise web.HTTPNotFound(reason="Docs not built — run: python3 scripts/build_docs.py  (or: make docs-build)")
     rel = request.match_info.get("path", "") or "index.html"
     if not rel or rel.endswith("/"):
         rel += "index.html"

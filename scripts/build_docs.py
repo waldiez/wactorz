@@ -336,7 +336,11 @@ def build_rust(site_dir: Path = SITE) -> None:
         print("  [skip] rust/ not found")
         return
     print("  building rustdoc …")
-    r = subprocess.run(["cargo", "doc", "--no-deps", "--workspace"], cwd=rust_dir, check=False)
+    try:
+        r = subprocess.run(["cargo", "doc", "--no-deps", "--workspace"], cwd=rust_dir, check=False)
+    except FileNotFoundError:
+        print("  [skip] cargo not found")
+        return
     if r.returncode != 0:
         print("  [warn] cargo doc failed")
         return
@@ -357,11 +361,15 @@ def build_jsdocs(site_dir: Path = SITE) -> None:
         return
     print("  building typedoc …")
     out_dir.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(
-        ["bun", "run", "docs"],
-        cwd=frontend_dir, check=False,
-        env={**os.environ, "FORCE_COLOR": "0"},
-    )
+    try:
+        r = subprocess.run(
+            ["bun", "run", "docs"],
+            cwd=frontend_dir, check=False,
+            env={**os.environ, "FORCE_COLOR": "0"},
+        )
+    except FileNotFoundError:
+        print("  [skip] bun not found")
+        return
     if r.returncode != 0:
         print("  [warn] typedoc failed")
     else:

@@ -406,6 +406,9 @@ async def main():
     logger.info(f"Monitor running -> http://localhost:{WS_PORT}")
     await mqtt_listener()
 
+def cli_main() -> None:
+    """Entry point for the `agentflow-monitor` console script."""
+    asyncio.run(main())
 
 if __name__ == "__main__":
     import argparse, os
@@ -434,8 +437,3 @@ if __name__ == "__main__":
     thismodule.WS_PORT      = args.ws_port
 
     cli_main()
-
-
-def cli_main() -> None:
-    """Entry point for the `agentflow-monitor` console script."""
-    asyncio.run(main())

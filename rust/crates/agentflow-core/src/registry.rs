@@ -383,12 +383,17 @@ impl Supervisor {
         if let Some(task) = self.watch_task.take() {
             task.abort();
         }
-        let mut specs = self.specs.lock().unwrap();
-        for (name, entry) in specs.iter_mut() {
-            entry.stopped = true;
-            if let Some(id) = &entry.actor_id {
+        let actor_ids: Vec<(String, Option<String>)> = {
+            let mut specs = self.specs.lock().unwrap();
+            specs.iter_mut().map(|(name, entry)| {
+                entry.stopped = true;
+                (name.clone(), entry.actor_id.clone())
+            }).collect()
+        };
+        for (name, actor_id) in actor_ids {
+            if let Some(id) = actor_id {
                 let _ = self.system.registry
-                    .send(id, Message::command(id.clone(), ActorCommand::Stop))
+                    .send(&id, Message::command(id.clone(), ActorCommand::Stop))
                     .await;
             }
             tracing::debug!("[Supervisor] Requested stop for '{name}'");

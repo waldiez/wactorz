@@ -657,7 +657,7 @@ impl WisAgent {
                  1. **Dedicated sessions** — close other tabs; active listening ≠ background music\n\
                  2. **FLAC/lossless** — audible difference on good headphones above 256 kbps\n\
                  3. **Headphone break-in** — new drivers need ~50 h to loosen and open up\n\
-                 4. **Equal-loudness** — human hearing is non-linear; 75–85 dB SPL is the sweet spot\n\
+                 4. **Equal-loudness** — human hearing is non-linear; 75-85 dB SPL is the sweet spot\n\
                  5. **Log what you hear** — use `add song/album` right after; memory fades fast\n\n\
                  _Try: `theory interval C G` to train your ear while listening._".to_string()
             }
@@ -665,7 +665,7 @@ impl WisAgent {
                 "**🎚 Mixing Tips**\n\n\
                  1. **Gain staging first** — keep channel peaks at -18 dBFS before touching EQ\n\
                  2. **Cut before you boost** — subtractive EQ sounds more natural than additive\n\
-                 3. **Low-cut everything** — highpass filters below 80–100 Hz clean up mud fast\n\
+                 3. **Low-cut everything** — highpass filters below 80-100 Hz clean up mud fast\n\
                  4. **Reference tracks** — A/B with a commercial mix in the same genre every 20 min\n\
                  5. **Rest your ears** — mix for 45 min, break for 15; fatigue kills judgement\n\n\
                  _Use `theory bpm` to calculate delay sync times for your project tempo._".to_string()

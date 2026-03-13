@@ -58,7 +58,7 @@ impl InstallerAgent {
             .await
         {
             Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let _stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
                 let success = out.status.success();
                 let output = if success {

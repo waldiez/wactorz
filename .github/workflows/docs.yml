@@ -62,7 +62,6 @@ jobs:
           bunx typedoc --out ../docs/api/js src/index.ts \
             --name "AgentFlow JS" \
             --readme none \
-            --navigationLinks '{"GitHub":"https://github.com/waldiez/agentflow"}' \
             || echo "TypeDoc not configured, skipping"
         continue-on-error: true
 

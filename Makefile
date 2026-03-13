@@ -146,15 +146,15 @@ coverage-rust: ## Generate Rust coverage with cargo-llvm-cov
 	mkdir -p coverage
 	cd $(RUST_DIR) && cargo llvm-cov --workspace --lcov --output-path ../coverage/rust.lcov
 
-docs-serve: ## Serve MkDocs locally with live reload
+docs-serve: ## Serve MkDocs guide locally with live reload (http://localhost:8000)
 	mkdocs serve
 
-docs-build: ## Build the full docs site (MkDocs + rustdoc)
-	mkdocs build --site-dir site/guide
-	mkdir -p site/api/rust site
+docs-build: ## Build full docs site (MkDocs + rustdoc) into site/
+	mkdocs build
 	cp docs/index.html site/index.html
-	cd $(RUST_DIR) && cargo doc --no-deps --target-dir ../site/api/rust_target
-	cp -r site/api/rust_target/doc/. site/api/rust/ 2>/dev/null || true
+	mkdir -p site/api/rust
+	cd $(RUST_DIR) && cargo doc --no-deps --workspace && \
+	  cp -r target/doc/. ../site/api/rust/ 2>/dev/null || true
 
 publish: ## Build wheel + sdist and upload to PyPI (requires twine + API token)
 	python scripts/build.py --upload

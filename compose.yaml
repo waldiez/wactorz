@@ -1,19 +1,22 @@
 # AgentFlow — Docker Compose stack
 #
-# Services:
-#   mosquitto      MQTT broker (1883 TCP only; WebSocket tunnelled through nginx at /mqtt)
-#   fuseki         Apache Jena Fuseki RDF/SPARQL store (internal; via nginx /fuseki/)
-#   homeassistant  Home Assistant (internal; via nginx port 8123 transparent proxy)
-#   agentflow      Rust server (internal; REST/WS via nginx /api/ and /ws)
-#   dashboard      nginx — single public HTTP entry point
+# Default (docker compose up -d):
+#   mosquitto only — MQTT broker on :1883 (TCP) and :9001 (WebSocket)
+#   Then run:  agentflow
+#
+# Profiles:
+#   rust  — also starts the Rust API server + nginx dashboard
+#           docker compose --profile rust up -d
+#   full  — rust + Fuseki + Home Assistant
+#           docker compose --profile full up -d
 #
 # External ports:
-#   :80    → Dashboard SPA, /api/, /ws, /mqtt (MQTT WS), /fuseki/
-#   :8123  → Home Assistant (nginx transparent proxy — HA stays at root path)
-#   :1883  → MQTT TCP (direct; for IoT devices / external MQTT clients)
+#   :1883  → MQTT TCP
+#   :9001  → MQTT WebSocket
+#   :80    → Dashboard SPA, /api/, /ws, /mqtt, /fuseki/  (rust/full profile)
+#   :8123  → Home Assistant proxy                         (full profile)
 #
-# Copy .env.example → .env and fill in secrets before running:
-#   docker compose up -d
+# Copy .env.example → .env and fill in secrets before running.
 
 name: agentflow
 
@@ -110,7 +113,9 @@ services:
       start_period: 60s
 
   # ── AgentFlow Rust server ────────────────────────────────────────────────────
+  # Optional — only started with: docker compose --profile rust up -d
   agentflow:
+    profiles: [rust, full]
     build:
       context: ./rust
       dockerfile: Dockerfile
@@ -148,7 +153,9 @@ services:
   # Single external entry point for all HTTP services.
   # Port 80:   Dashboard SPA, /api/ (REST), /ws (WS bridge), /mqtt (MQTT WS), /fuseki/
   # Port 8123: Home Assistant transparent proxy (HA served at root; SPA paths intact)
+  # Optional — only started with: docker compose --profile rust up -d
   dashboard:
+    profiles: [rust, full]
     image: nginx:1.27-alpine
     container_name: agentflow-dashboard
     restart: unless-stopped

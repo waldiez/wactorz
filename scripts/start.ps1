@@ -96,64 +96,10 @@ if (Test-Path $envFile) {
     Write-Host "WARNING: no .env or .env.example found. You may need to create the .env file manually."
 }
 
-# ── 3. Free up ports used by AgentFlow ───────────────────────────────────────
-#
-# Ports we need: 1883 (MQTT TCP), 9001 (MQTT WS)
-# Stop any running container that is occupying these ports — but leave
-# everything else alone.
+# ── 3. Mosquitto (MQTT broker) ────────────────────────────────────────────────
 
-$neededPorts = @("1883", "9001")
-
-$running = docker ps --format "{{.ID}} {{.Names}} {{.Ports}}" 2>$null
-if ($running) {
-    foreach ($line in $running) {
-        $parts = $line -split " ", 3
-        $id    = $parts[0]
-        $name  = $parts[1]
-        $ports = if ($parts.Count -ge 3) { $parts[2] } else { "" }
-
-        # Skip our own mosquitto container
-        if ($name -eq "mosquitto") { continue }
-
-        foreach ($port in $neededPorts) {
-            if ($ports -match "0\.0\.0\.0:$port->|:::$port->") {
-                Write-Host "Port $port is used by container '$name' — stopping it..."
-                docker stop $id | Out-Null
-                break
-            }
-        }
-    }
-}
-
-# ── 4. Mosquitto (MQTT broker) ────────────────────────────────────────────────
-
-$confPath = Join-Path $repoDir "infra\mosquitto\mosquitto.conf"
-
-try {
-    $status = docker inspect --format "{{.State.Status}}" mosquitto 2>$null
-    if ($LASTEXITCODE -ne 0) { $status = "missing" }
-} catch {
-    $status = "missing"
-}
-
-switch ($status) {
-    "running" {
-        Write-Host "mosquitto is already running."
-    }
-    "missing" {
-        Write-Host "Creating and starting mosquitto container..."
-        docker run -d --name mosquitto `
-            --restart unless-stopped `
-            -p 1883:1883 `
-            -p 9001:9001 `
-            -v "${confPath}:/mosquitto/config/mosquitto.conf" `
-            eclipse-mosquitto:2.0
-    }
-    default {
-        Write-Host "Starting existing mosquitto container (was: $status)..."
-        docker start mosquitto
-    }
-}
+Write-Host "Starting mosquitto..."
+docker compose up -d
 
 # ── 5. Install AgentFlow ──────────────────────────────────────────────────────
 

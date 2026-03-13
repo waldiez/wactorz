@@ -1,9 +1,10 @@
 """
 Hatchling pre-build hook — ensures the Vite frontend is built before packaging.
 
-Both ``frontend/dist/`` and ``site/`` are committed to the repository and
-bundled into the wheel as-is (no build tools required at install time).
-The hook only rebuilds ``frontend/dist/`` if it is missing or stale.
+``static/app/`` (Vite SPA) and ``static/docs/`` (docs site) are committed
+to the repository and bundled into the wheel as-is — no build tools are
+required at install time.  The hook only rebuilds ``static/app/`` if it
+is missing or stale.
 
 Configure in pyproject.toml:
 
@@ -60,10 +61,10 @@ class CustomBuildHook(BuildHookInterface):
 
     def _build_frontend(self, root: Path) -> None:
         frontend   = root / "frontend"
-        dist_index = frontend / "dist" / "index.html"
+        dist_index = root / "static" / "app" / "index.html"
 
         if not _is_stale(dist_index):
-            self.app.display_info("[build-hook] frontend/dist is fresh — skipping rebuild")
+            self.app.display_info("[build-hook] static/app is fresh — skipping rebuild")
             return
 
         if not frontend.is_dir():

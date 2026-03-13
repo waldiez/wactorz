@@ -58,7 +58,7 @@ services:
     ports:
       - "${DASHBOARD_EXTERNAL_PORT:-80}:80"
     volumes:
-      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./static/app:/usr/share/nginx/html:ro
       - ./infra/nginx/nginx-native.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - agentflow-net

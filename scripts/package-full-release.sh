@@ -5,7 +5,7 @@
 # Produces:  agentflow-full-<YYYYMMDD>.zip
 #
 # The zip contains BOTH:
-#   1. Pre-built Vite SPA           (frontend/dist/)
+#   1. Pre-built Vite SPA           (static/app/)
 #   2. Exported linux/amd64 image   (agentflow-server.tar.gz)
 #   3. Full source code             (rust/, frontend/src etc.)
 #
@@ -35,7 +35,7 @@ echo "════════════════════════�
 echo ""
 echo "▶ Building frontend…"
 cd frontend && npm run build && cd ..
-echo "  ✓ frontend/dist/ ready"
+echo "  ✓ static/app/ ready"
 
 # ── 2. Cross-compile Docker image for linux/amd64 ────────────────────────────
 echo ""
@@ -164,7 +164,7 @@ services:
     ports:
       - "${DASHBOARD_EXTERNAL_PORT:-80}:80"
     volumes:
-      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./static/app:/usr/share/nginx/html:ro
       - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - agentflow-net
@@ -356,7 +356,7 @@ docker compose -f compose.dev.yaml up -d
 cd frontend
 npm ci
 npm run build
-# nginx picks up frontend/dist/ automatically (volume mount)
+# nginx picks up static/app/ automatically (volume mount)
 docker exec agentflow-dashboard nginx -s reload
 ```
 

@@ -5,7 +5,7 @@
 # Produces:  agentflow-release-<YYYYMMDD>.tar.gz
 #
 # The archive is self-contained:
-#   • Pre-built Vite SPA  (frontend/dist/)
+#   • Pre-built Vite SPA  (static/app/)
 #   • Exported Docker image  (agentflow-server.tar.gz inside the archive)
 #   • All infra configs  (nginx, mosquitto)
 #   • A deploy.sh wizard  (set env → docker load → docker compose up)
@@ -38,7 +38,7 @@ echo "▶ Building frontend (npm run build)…"
 cd frontend
 npm run build
 cd ..
-echo "  ✓ frontend/dist/ ready"
+echo "  ✓ static/app/ ready"
 
 # ── 2. Build + export the Docker image for linux/amd64 ───────────────────────
 # Always target linux/amd64 — the most common server architecture.
@@ -69,7 +69,7 @@ mkdir -p \
   "${WORK_DIR}/scripts"
 
 # Pre-built SPA
-cp -r frontend/dist "${WORK_DIR}/frontend/dist"
+cp -r static/app "${WORK_DIR}/static/app"
 
 # Infrastructure configs
 cp infra/nginx/nginx.conf        "${WORK_DIR}/infra/nginx/nginx.conf"
@@ -150,7 +150,7 @@ services:
     ports:
       - "${DASHBOARD_EXTERNAL_PORT:-80}:80"
     volumes:
-      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./static/app:/usr/share/nginx/html:ro
       - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - agentflow-net
@@ -175,7 +175,7 @@ COMPOSEYAML
 cat > "${WORK_DIR}/compose.dev.yaml" << 'DEVYAML'
 # AgentFlow — dev/demo mode (mock agents, no LLM required)
 # Run:  docker compose -f compose.dev.yaml up -d
-# Then open http://localhost:9000 (or serve frontend/dist/ with any static server)
+# Then open http://localhost:9000 (or serve static/app/ with any static server)
 
 name: agentflow-dev
 
@@ -218,7 +218,7 @@ services:
     ports:
       - "9000:80"
     volumes:
-      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./static/app:/usr/share/nginx/html:ro
       - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - mock-agents

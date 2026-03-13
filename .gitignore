@@ -152,9 +152,10 @@ __pycache__/
 rust/**/target/
 **.log
 
-# Pre-built assets committed to the repo (bundled into the wheel by the build hook)
-!frontend/dist/
-!site/
+# Pre-built assets committed to the repo and bundled into the wheel as-is.
+# Both app (Vite) and docs (build_docs.py) output go under static/.
+!static/
+frontend/dist/
 frontend/node_modules/
 
 # HA secrets — never commit real credentials

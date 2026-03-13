@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Agents — AgentFlow</title>
+  <meta name="description" content="AgentFlow — Actor-model multi-agent AI framework"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
+    .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">
+    <div class="logo-mark"></div>AgentFlow
+  </a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/agentflow" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://pypi.org/project/agentflow/" target="_blank" rel="noopener">PyPI</a>
+    <a href="../api/rust/" target="_blank">Rust Docs</a>
+    <a href="../api/js/" target="_blank">JS Docs</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-label">Guide</div>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="active">Agents</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+      <a href="../guide/windows.html" class="">Windows</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Reference</div>
+      <a href="../reference/api.html" class="">REST & WebSocket API</a>
+      <a href="../reference/mqtt_topics.html" class="">MQTT Topics</a>
+      <a href="../reference/python-api.html" class="">Python API</a>
+    </div>
+    <a href="https://waldiez.github.io/agentflow/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
+    <a href="https://waldiez.github.io/agentflow/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
+  </aside>
+  <main class="content">
+<h1 id="agents">Agents</h1>
+<p>All agents are Rust structs implementing the <code>Actor</code> trait.  They communicate exclusively via MQTT — no direct function calls between agents.</p>
+<hr />
+<h2 id="core-protected-agents">Core (protected) agents</h2>
+<p>These agents are marked <code>protected: true</code> and cannot be stopped or deleted from the dashboard.</p>
+<h3 id="mainactor">MainActor</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>main-actor</code></td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>orchestrator</code></td>
+</tr>
+<tr>
+<td><strong>Topic</strong></td>
+<td><code>agents/{id}/chat</code></td>
+</tr>
+</tbody>
+</table>
+<p>The LLM brain of the system.  Receives user messages, calls the configured LLM (Anthropic / OpenAI / Ollama), and parses <code>&lt;spawn&gt;</code> directives in the response to dynamically create new agents.</p>
+<p><strong>Spawn syntax</strong> (in LLM response):</p>
+<div class="highlight"><pre><span></span><code><span class="nt">&lt;spawn</span><span class="w"> </span><span class="na">agent-type=</span><span class="s">&quot;dynamic&quot;</span><span class="w"> </span><span class="na">name=</span><span class="s">&quot;my-agent&quot;</span><span class="nt">&gt;</span>
+<span class="w">  </span>//<span class="w"> </span>Rhai<span class="w"> </span>script<span class="w"> </span>body
+<span class="w">  </span>fn<span class="w"> </span>handle(msg)<span class="w"> </span>{<span class="w"> </span>...<span class="w"> </span>}
+<span class="nt">&lt;/spawn&gt;</span>
+</code></pre></div>
+
+<p><strong>Configuration</strong> (<code>.env</code>):</p>
+<div class="highlight"><pre><span></span><code>LLM_PROVIDER=anthropic        # anthropic | openai | ollama
+LLM_MODEL=claude-sonnet-4-6   # any model ID
+LLM_API_KEY=sk-ant-...
+</code></pre></div>
+
+<hr />
+<h3 id="monitoragent">MonitorAgent</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>monitor-agent</code></td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>monitor</code></td>
+</tr>
+<tr>
+<td><strong>Publishes</strong></td>
+<td><code>system/health</code>, <code>agents/{id}/alert</code></td>
+</tr>
+</tbody>
+</table>
+<p>Polls all registered actors every heartbeat cycle.  Raises a <code>severity: error</code> alert if any actor's last heartbeat is older than 60 seconds.  Publishes a <code>system/health</code> digest on every tick.</p>
+<hr />
+<h3 id="qaagent">QAAgent</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>qa-agent</code></td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>qa</code></td>
+</tr>
+<tr>
+<td><strong>Listens</strong></td>
+<td>all <code>*/chat</code> messages (via MQTT router)</td>
+</tr>
+</tbody>
+</table>
+<p>Passively inspects every chat message flowing through the broker.  Flags content that matches harmful patterns (prompt injection, PII, profanity).  Publishes a <code>system/alert</code> if a policy is violated.</p>
+<hr />
+<h2 id="standard-agents">Standard agents</h2>
+<h3 id="ioagent">IOAgent</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>io-agent</code></td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>gateway</code></td>
+</tr>
+<tr>
+<td><strong>Listens</strong></td>
+<td><code>io/chat</code> (fixed topic — no ID discovery needed)</td>
+</tr>
+</tbody>
+</table>
+<p>Bridges the frontend IO bar to the actor system.</p>
+<ul>
+<li><code>@agent-name text</code> → routes <code>text</code> to the named agent's mailbox</li>
+<li>No <code>@</code> prefix → routes to <code>main-actor</code></li>
+</ul>
+<hr />
+<h3 id="nautilusagent">NautilusAgent</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>nautilus-agent</code></td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>transfer</code></td>
+</tr>
+</tbody>
+</table>
+<p>Named after the <em>nautilus</em> shell (SSH = <strong>Secure Shell</strong>) and Jules Verne's submarine.  Bridges remote filesystem operations into the chat interface.</p>
+<p><strong>Commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ping &lt;user@host&gt;</code></td>
+<td>Test SSH connectivity</td>
+</tr>
+<tr>
+<td><code>exec &lt;user@host&gt; &lt;cmd [args…]&gt;</code></td>
+<td>Run a command over SSH</td>
+</tr>
+<tr>
+<td><code>sync &lt;[user@]host:src&gt; &lt;dst&gt;</code></td>
+<td>rsync pull from remote</td>
+</tr>
+<tr>
+<td><code>push &lt;src&gt; &lt;[user@]host:dst&gt;</code></td>
+<td>rsync push to remote</td>
+</tr>
+<tr>
+<td><code>help</code></td>
+<td>List available commands</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Examples</strong> (from the IO bar):</p>
+<div class="highlight"><pre><span></span><code><span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">ping</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="n">com</span>
+<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="k">exec</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="n">com</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">-</span><span class="n">h</span>
+<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">push</span><span class="w"> </span><span class="p">.</span><span class="o">/</span><span class="k">static</span><span class="o">/</span><span class="n">app</span><span class="o">/</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="nl">com</span><span class="p">:</span><span class="o">/</span><span class="n">opt</span><span class="o">/</span><span class="n">agentflow</span><span class="o">/</span><span class="k">static</span><span class="o">/</span><span class="n">app</span><span class="o">/</span>
+<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="k">exec</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="n">com</span><span class="w"> </span><span class="n">sudo</span><span class="w"> </span><span class="n">systemctl</span><span class="w"> </span><span class="n">restart</span><span class="w"> </span><span class="n">agentflow</span>
+</code></pre></div>
+
+<p><strong>Security</strong>: arguments are never passed through a shell — each token is a discrete <code>Command::arg()</code>, preventing injection attacks.</p>
+<p><strong>Configuration</strong> (<code>.env</code>):</p>
+<div class="highlight"><pre><span></span><code>NAUTILUS_SSH_KEY=~/.ssh/agentflow_deploy
+NAUTILUS_STRICT_HOST_KEYS=0
+NAUTILUS_CONNECT_TIMEOUT=10
+NAUTILUS_EXEC_TIMEOUT=120
+NAUTILUS_RSYNC_FLAGS=
+</code></pre></div>
+
+<hr />
+<h3 id="udxagent">UDXAgent</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>udx-agent</code></td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>expert</code></td>
+</tr>
+</tbody>
+</table>
+<p>User and Developer Xpert.  Zero-LLM, always-available knowledge agent.  Answers questions about AgentFlow instantly from a built-in knowledge base — no API key needed.</p>
+<p><strong>Commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>help [topic]</code></td>
+<td>Overview or topic-specific help</td>
+</tr>
+<tr>
+<td><code>docs &lt;topic&gt;</code></td>
+<td>In-depth documentation</td>
+</tr>
+<tr>
+<td><code>explain &lt;concept&gt;</code></td>
+<td>Explain a concept</td>
+</tr>
+<tr>
+<td><code>agents</code></td>
+<td>List all live agents (queries registry)</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>System health snapshot</td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td>Build info</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Topics</strong>: <code>architecture</code>, <code>agents</code>, <code>chat</code>, <code>dashboard</code>, <code>api</code>, <code>mqtt</code>, <code>deploy</code></p>
+<p><strong>Concepts</strong>: <code>actor-model</code>, <code>mqtt</code>, <code>hlc-wid</code>, <code>rust</code>, <code>babylon</code>, <code>nautilus</code>, <code>io</code>, <code>qa</code>, <code>monitor</code>, <code>dynamic</code>, <code>main</code>, <code>udx</code></p>
+<p><strong>Example</strong> (from the IO bar):</p>
+<div class="highlight"><pre><span></span><code><span class="nv">@udx</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">help</span>
+<span class="nv">@udx</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">explain</span><span class="w"> </span><span class="n">mqtt</span>
+<span class="nv">@udx</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">docs</span><span class="w"> </span><span class="n">deployment</span>
+<span class="nv">@udx</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">status</span>
+</code></pre></div>
+
+<hr />
+<h3 id="dynamicagent">DynamicAgent</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>dynamic-{uuid}</code> (generated)</td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>dynamic</code></td>
+</tr>
+</tbody>
+</table>
+<p>Spawned on-demand by <code>MainActor</code> when the LLM response contains a <code>&lt;spawn&gt;</code> directive.  Executes Rhai scripts generated at runtime.  Enables the LLM to extend the system with new capabilities without a server restart.</p>
+<hr />
+<h3 id="mlagent">MlAgent</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>ml</code></td>
+</tr>
+</tbody>
+</table>
+<p>Base struct for ML-inference agents.  ONNX and Candle backends are currently stubbed (<code>anyhow::bail!</code> placeholders) pending full implementation.</p>
+<hr />
+<h2 id="adding-a-new-agent">Adding a new agent</h2>
+<ol>
+<li>Create <code>rust/crates/agentflow-agents/src/my_agent.rs</code> — implement <code>Actor</code> trait (copy <code>io_agent.rs</code> as a template)</li>
+<li>Export in <code>lib.rs</code>:
+   <code>rust
+   pub mod my_agent;
+   pub use my_agent::MyAgent;</code></li>
+<li>Spawn in <code>main.rs</code>:
+   <code>rust
+   let cfg = ActorConfig::new("my-agent");
+   let agent = Box::new(MyAgent::new(cfg).with_publisher(publisher.clone()));
+   system.spawn_actor(agent).await?;</code></li>
+<li>Add mock responses in <code>scripts/mock-agents.mjs</code> for dev-mode testing</li>
+<li>Add cover gradient + bioline in <code>frontend/src/ui/SocialDashboard.ts</code> if desired</li>
+</ol>
+  </main>
+</div>
+
+<footer>
+  <span>AgentFlow &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/agentflow">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/agentflow/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

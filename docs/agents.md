@@ -99,7 +99,7 @@ Named after the *nautilus* shell (SSH = **Secure Shell**) and Jules Verne's subm
 ```
 @nautilus-agent ping deploy@myserver.com
 @nautilus-agent exec deploy@myserver.com df -h
-@nautilus-agent push ./frontend/dist/ deploy@myserver.com:/opt/agentflow/frontend/dist/
+@nautilus-agent push ./static/app/ deploy@myserver.com:/opt/agentflow/static/app/
 @nautilus-agent exec deploy@myserver.com sudo systemctl restart agentflow
 ```
 

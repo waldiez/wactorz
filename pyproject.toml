@@ -98,14 +98,13 @@ exclude = [
     "frontend/node_modules",
 ]
 
-# Bundle the pre-built Vite frontend and standalone monitor inside the package.
-# After `pip install`, these land at  {site-packages}/agentflow/frontend/dist/
-# and {site-packages}/agentflow/monitor.html — exactly where monitor_server.py
-# expects them.
+# Bundle the pre-built static assets inside the package.
+# static/app/  → frontend SPA (Vite build output)
+# static/docs/ → documentation site (build_docs.py output)
+# After `pip install` these land at {site-packages}/agentflow/static/.
 [tool.hatch.build.targets.wheel.force-include]
-"frontend/dist" = "agentflow/frontend/dist"
-"monitor.html"  = "agentflow/monitor.html"
-"site"          = "agentflow/docs_site"
+"static"       = "agentflow/static"
+"monitor.html" = "agentflow/monitor.html"
 
 # ── sdist (source distribution for PyPI) ──────────────────────────────────────
 [tool.hatch.build.targets.sdist]

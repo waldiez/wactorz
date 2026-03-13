@@ -2,11 +2,11 @@
 """
 AgentFlow docs builder.
 
-Converts docs/*.md → site/*.html using a custom dark template that matches
+Converts docs/*.md → static/docs/*.html using a custom dark template that matches
 the landing page (Chakra Petch + JetBrains Mono, #05080e background).
 
 Usage:
-    python3 scripts/build_docs.py               # build → site/
+    python3 scripts/build_docs.py               # build → static/docs/
     python3 scripts/build_docs.py --serve       # build + serve on :8001
     python3 scripts/build_docs.py --serve 8002  # custom port
     python3 scripts/build_docs.py --reload      # serve + watch docs/ for changes
@@ -30,9 +30,10 @@ try:
 except ImportError:
     HAS_WATCHDOG = False
 
-ROOT = Path(__file__).resolve().parents[1]
-DOCS = ROOT / "docs"
-SITE = ROOT / "site"
+ROOT   = Path(__file__).resolve().parents[1]
+DOCS   = ROOT / "docs"
+SITE   = ROOT / "static" / "docs"
+STATIC = ROOT / "static"
 
 # ── Navigation definition ──────────────────────────────────────────────────────
 # Each section maps to a subdirectory under site/
@@ -286,7 +287,7 @@ def build(site_dir: Path = SITE) -> None:
     landing = DOCS / "_landing.html"
     if landing.exists():
         shutil.copy(landing, site_dir / "index.html")
-        print(f"  landing  → site/index.html")
+        print(f"  landing  → static/docs/index.html")
 
     # Render each markdown page into its subdir
     first_per_subdir: dict[str, str] = {}
@@ -308,21 +309,21 @@ def build(site_dir: Path = SITE) -> None:
         html = TEMPLATE.format(title=title, sidebar=sidebar, body=body, root=root)
         out = out_dir / _md_to_html_path(md_name)
         out.write_text(html, encoding="utf-8")
-        print(f"  {md_name:<30} → site/{subdir}/{out.name}")
+        print(f"  {md_name:<30} → static/docs/{subdir}/{out.name}")
 
     # index.html redirect for each subdir → first page
     for subdir, first_md in first_per_subdir.items():
         idx = site_dir / subdir / "index.html"
         first_html = _md_to_html_path(first_md)
         idx.write_text(_redirect(f"./{first_html}"))
-        print(f"  index    → site/{subdir}/index.html → {first_html}")
+        print(f"  index    → static/docs/{subdir}/index.html → {first_html}")
 
     # Compat redirect: landing page links to ./api/python/
     py_api_compat = site_dir / "api" / "python"
     py_api_compat.mkdir(parents=True, exist_ok=True)
     compat_idx = py_api_compat / "index.html"
     compat_idx.write_text(_redirect("../../reference/python-api.html"))
-    print(f"  compat   → site/api/python/ → ../../reference/python-api.html")
+    print(f"  compat   → static/docs/api/python/ → ../../reference/python-api.html")
 
     print(f"\n✓  site built → {site_dir}")
 
@@ -347,7 +348,7 @@ def build_rust(site_dir: Path = SITE) -> None:
     doc_src = rust_dir / "target" / "doc"
     if doc_src.is_dir():
         shutil.copytree(doc_src, out_dir, dirs_exist_ok=True)
-        print(f"  rustdoc  → site/api/rust/")
+        print(f"  rustdoc  → static/docs/api/rust/")
     index_script = ROOT / "scripts" / "rustdoc_index.py"
     if index_script.exists():
         subprocess.run([sys.executable, str(index_script), str(out_dir)], check=False)
@@ -373,7 +374,7 @@ def build_jsdocs(site_dir: Path = SITE) -> None:
     if r.returncode != 0:
         print("  [warn] typedoc failed")
     else:
-        print(f"  typedoc  → site/api/js/")
+        print(f"  typedoc  → static/docs/api/js/")
 
 
 # ── Watcher ────────────────────────────────────────────────────────────────────
@@ -381,6 +382,7 @@ def build_jsdocs(site_dir: Path = SITE) -> None:
 WATCH_PATTERNS = {".py", ".md", ".html", ".css", ".json", ".yaml", ".yml"}
 WATCH_IGNORE   = {"__pycache__", ".git", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
 WATCH_DIRS     = [DOCS, ROOT / "agentflow"]
+
 
 
 def _start_watcher() -> None:

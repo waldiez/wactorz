@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Architecture — AgentFlow</title>
+  <meta name="description" content="AgentFlow — Actor-model multi-agent AI framework"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
+    .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">
+    <div class="logo-mark"></div>AgentFlow
+  </a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/agentflow" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://pypi.org/project/agentflow/" target="_blank" rel="noopener">PyPI</a>
+    <a href="../api/rust/" target="_blank">Rust Docs</a>
+    <a href="../api/js/" target="_blank">JS Docs</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-label">Guide</div>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/architecture.html" class="active">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+      <a href="../guide/windows.html" class="">Windows</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Reference</div>
+      <a href="../reference/api.html" class="">REST & WebSocket API</a>
+      <a href="../reference/mqtt_topics.html" class="">MQTT Topics</a>
+      <a href="../reference/python-api.html" class="">Python API</a>
+    </div>
+    <a href="https://waldiez.github.io/agentflow/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
+    <a href="https://waldiez.github.io/agentflow/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
+  </aside>
+  <main class="content">
+<h1 id="architecture">Architecture</h1>
+<h2 id="overview">Overview</h2>
+<p>AgentFlow is an async, multi-agent orchestration system built on the <strong>Actor Model</strong> with <strong>MQTT</strong> as the communication backbone.  Every agent is an independent actor with its own message inbox; no shared mutable state exists between actors.</p>
+<div class="highlight"><pre><span></span><code><span class="err">┌────────────────────────────────────────────────────────────────────┐</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">Browser</span><span class="w">                                                           </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">Babylon</span><span class="p">.</span><span class="nx">js</span><span class="w"> </span><span class="nx">SPA</span><span class="w">  </span><span class="err">←──</span><span class="nx">WebSocket</span><span class="err">──►</span><span class="w">  </span><span class="nx">nginx</span><span class="w">  </span><span class="err">←───</span><span class="w"> </span><span class="o">/</span><span class="nx">ws</span><span class="w">  </span><span class="err">──►</span><span class="w">           </span><span class="err">│</span>
+<span class="err">│</span><span class="w">                  </span><span class="err">←──</span><span class="nx">REST</span><span class="err">──────►</span><span class="w">          </span><span class="err">←───</span><span class="w"> </span><span class="o">/</span><span class="kn">api</span><span class="o">/</span><span class="w"> </span><span class="err">──►</span><span class="w">           </span><span class="err">│</span>
+<span class="err">│</span><span class="w">                  </span><span class="err">←──</span><span class="nx">MQTT</span><span class="o">/</span><span class="nx">WS</span><span class="err">───►</span><span class="w">          </span><span class="err">←───</span><span class="w"> </span><span class="o">/</span><span class="nx">mqtt</span><span class="w"> </span><span class="err">──►</span><span class="w">           </span><span class="err">│</span>
+<span class="err">└──────────────────────────────────────────────────────────────────┘</span>
+<span class="w">                                    </span><span class="err">│</span>
+<span class="w">                             </span><span class="nx">nginx</span><span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="p">(</span><span class="nx">single</span><span class="w"> </span><span class="nx">public</span><span class="w"> </span><span class="nx">entry</span><span class="w"> </span><span class="nx">point</span><span class="p">)</span>
+<span class="w">                              </span><span class="o">/</span><span class="p">:</span><span class="mi">80</span><span class="w">  </span><span class="err">│</span>
+<span class="w">                                    </span><span class="err">│</span>
+<span class="w">          </span><span class="err">┌─────────────────────────┼──────────────────────────────┐</span>
+<span class="w">          </span><span class="err">│</span><span class="w">                         </span><span class="err">│</span><span class="w">                              </span><span class="err">│</span>
+<span class="w">          </span><span class="err">▼</span><span class="w">                         </span><span class="err">▼</span><span class="w">                              </span><span class="err">▼</span>
+<span class="w">  </span><span class="nx">agentflow</span><span class="w"> </span><span class="p">(</span><span class="nx">Rust</span><span class="p">)</span><span class="w">          </span><span class="nx">Mosquitto</span><span class="w"> </span><span class="p">(</span><span class="nx">MQTT</span><span class="p">)</span><span class="w">              </span><span class="nx">Fuseki</span><span class="w"> </span><span class="p">(</span><span class="nx">RDF</span><span class="p">)</span>
+<span class="w">  </span><span class="p">:</span><span class="mi">8080</span><span class="w"> </span><span class="nx">REST</span><span class="w">                </span><span class="p">:</span><span class="mi">1883</span><span class="w"> </span><span class="nx">TCP</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">:</span><span class="mi">9001</span><span class="w"> </span><span class="nx">WS</span><span class="w">          </span><span class="p">:</span><span class="mi">3030</span><span class="w"> </span><span class="nx">SPARQL</span>
+<span class="w">  </span><span class="p">:</span><span class="mi">8081</span><span class="w"> </span><span class="nx">WS</span><span class="w"> </span><span class="nx">bridge</span>
+<span class="w">          </span><span class="err">│</span>
+<span class="w">          </span><span class="err">│</span><span class="w">  </span><span class="nx">pub</span><span class="o">/</span><span class="nx">sub</span><span class="w"> </span><span class="nx">via</span><span class="w"> </span><span class="nx">MQTT</span>
+<span class="w">          </span><span class="err">├──</span><span class="w"> </span><span class="nx">MainActor</span><span class="w">        </span><span class="p">(</span><span class="nx">LLM</span><span class="w"> </span><span class="nx">orchestrator</span><span class="p">)</span>
+<span class="w">          </span><span class="err">├──</span><span class="w"> </span><span class="nx">MonitorAgent</span><span class="w">     </span><span class="p">(</span><span class="nx">health</span><span class="w"> </span><span class="nx">watchdog</span><span class="p">)</span>
+<span class="w">          </span><span class="err">├──</span><span class="w"> </span><span class="nx">IOAgent</span><span class="w">          </span><span class="p">(</span><span class="nx">UI</span><span class="w"> </span><span class="nx">gateway</span><span class="p">)</span>
+<span class="w">          </span><span class="err">├──</span><span class="w"> </span><span class="nx">QAAgent</span><span class="w">          </span><span class="p">(</span><span class="nx">safety</span><span class="w"> </span><span class="nx">observer</span><span class="p">)</span>
+<span class="w">          </span><span class="err">├──</span><span class="w"> </span><span class="nx">NautilusAgent</span><span class="w">    </span><span class="p">(</span><span class="nx">SSH</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">rsync</span><span class="w"> </span><span class="nx">bridge</span><span class="p">)</span>
+<span class="w">          </span><span class="err">├──</span><span class="w"> </span><span class="nx">UDXAgent</span><span class="w">         </span><span class="p">(</span><span class="nx">built</span><span class="o">-</span><span class="k">in</span><span class="w"> </span><span class="nx">knowledge</span><span class="w"> </span><span class="kd">base</span><span class="p">)</span>
+<span class="w">          </span><span class="err">└──</span><span class="w"> </span><span class="nx">DynamicAgent</span><span class="o">*</span><span class="w">   </span><span class="p">(</span><span class="nx">LLM</span><span class="o">-</span><span class="nx">generated</span><span class="w"> </span><span class="nx">scripts</span><span class="p">,</span><span class="w"> </span><span class="nx">spawned</span><span class="w"> </span><span class="nx">at</span><span class="w"> </span><span class="nx">runtime</span><span class="p">)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="components">Components</h2>
+<h3 id="agentflow-server-rust-binary">agentflow-server (Rust binary)</h3>
+<p>The single <code>agentflow</code> binary that runs the entire backend.</p>
+<table>
+<thead>
+<tr>
+<th>Crate</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>agentflow-core</code></td>
+<td><code>Actor</code> trait, <code>ActorRegistry</code>, message types, <code>EventPublisher</code></td>
+</tr>
+<tr>
+<td><code>agentflow-agents</code></td>
+<td>All concrete agent implementations</td>
+</tr>
+<tr>
+<td><code>agentflow-mqtt</code></td>
+<td>MQTT client wrapper + topic constants</td>
+</tr>
+<tr>
+<td><code>agentflow-interfaces</code></td>
+<td>REST API (axum), WebSocket bridge, interactive CLI</td>
+</tr>
+<tr>
+<td><code>agentflow-server</code></td>
+<td>Binary entry point — wires everything together</td>
+</tr>
+</tbody>
+</table>
+<h3 id="mosquitto">Mosquitto</h3>
+<p>The MQTT broker.  All inter-actor and actor-to-frontend communication passes through it.  In the full Docker stack, Mosquitto is not exposed directly — all traffic is proxied through nginx.</p>
+<h3 id="nginx">nginx</h3>
+<p>The single public HTTP entry point.</p>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Proxied to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/</code></td>
+<td><code>static/app/</code> (static SPA)</td>
+</tr>
+<tr>
+<td><code>/api/</code></td>
+<td><code>agentflow:8080</code> (REST)</td>
+</tr>
+<tr>
+<td><code>/ws</code></td>
+<td><code>agentflow:8081</code> (WebSocket bridge)</td>
+</tr>
+<tr>
+<td><code>/mqtt</code></td>
+<td><code>mosquitto:9001</code> (MQTT over WebSocket)</td>
+</tr>
+<tr>
+<td><code>/fuseki/</code></td>
+<td><code>fuseki:3030</code> (SPARQL, path-stripped)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="fuseki-optional">Fuseki (optional)</h3>
+<p>Apache Jena Fuseki for RDF/SPARQL storage.  Not required for basic operation.</p>
+<h3 id="babylonjs-spa">Babylon.js SPA</h3>
+<p>A Vite + TypeScript single-page application.  Connects to the backend via:</p>
+<ul>
+<li><strong>MQTT over WebSocket</strong> (<code>/mqtt</code>) — receives every MQTT message in real time</li>
+<li><strong>REST</strong> (<code>/api/</code>) — agent lifecycle control (pause, resume, stop, delete)</li>
+<li><strong>WebSocket</strong> (<code>/ws</code>) — an alternative MQTT re-broadcast endpoint</li>
+</ul>
+<hr />
+<h2 id="actor-model">Actor Model</h2>
+<p>Each agent implements the <code>Actor</code> trait:</p>
+<div class="highlight"><pre><span></span><code><span class="cp">#[async_trait]</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">Actor</span>: <span class="nb">Send</span> <span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">id</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w">       </span>-&gt; <span class="nb">String</span><span class="p">;</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w">     </span>-&gt; <span class="kp">&amp;</span><span class="kt">str</span><span class="p">;</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">state</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w">    </span>-&gt; <span class="nc">ActorState</span><span class="p">;</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">mailbox</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w">  </span>-&gt; <span class="nc">mpsc</span>::<span class="n">Sender</span><span class="o">&lt;</span><span class="n">Message</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span> <span class="nf">on_start</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w">                   </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span> <span class="nf">handle_message</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">msg</span>: <span class="nc">Message</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span> <span class="nf">on_heartbeat</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w">               </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span> <span class="nf">on_stop</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w">                    </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(())</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span> <span class="nf">run</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span><span class="w">                        </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><code>ActorSystem::spawn_actor(box)</code> registers the actor in the <code>ActorRegistry</code> and calls <code>tokio::spawn(actor.run())</code>.  The <code>run()</code> loop is a <code>tokio::select!</code> over the mailbox channel and a heartbeat interval.</p>
+<hr />
+<h2 id="message-flow">Message Flow</h2>
+<h3 id="user-agent">User → Agent</h3>
+<div class="highlight"><pre><span></span><code><span class="n">Browser</span><span class="w"> </span><span class="n">IO</span><span class="w"> </span><span class="n">bar</span>
+<span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">publishes</span><span class="w">  </span><span class="n">io</span><span class="o">/</span><span class="n">chat</span><span class="w">  </span><span class="err">{</span><span class="w"> </span><span class="k">from</span><span class="err">:</span><span class="w"> </span><span class="ss">&quot;user&quot;</span><span class="p">,</span><span class="w"> </span><span class="nl">content</span><span class="p">:</span><span class="w"> </span><span class="ss">&quot;@agent-name text&quot;</span><span class="w"> </span><span class="err">}</span>
+<span class="w">  </span><span class="err">▼</span>
+<span class="n">Mosquitto</span>
+<span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">subscribed</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="n">agentflow</span><span class="o">-</span><span class="n">server</span>
+<span class="w">  </span><span class="err">▼</span>
+<span class="n">MQTT</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="n">loop</span><span class="w">  </span><span class="err">→</span><span class="w">  </span><span class="n">IOAgent</span><span class="w"> </span><span class="n">mailbox</span>
+<span class="w">  </span><span class="err">│</span>
+<span class="w">  </span><span class="err">▼</span>
+<span class="n">IOAgent</span><span class="p">.</span><span class="n">handle_message</span><span class="p">()</span>
+<span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">parses</span><span class="w"> </span><span class="nv">@mention</span><span class="p">,</span><span class="w"> </span><span class="n">looks</span><span class="w"> </span><span class="n">up</span><span class="w"> </span><span class="n">registry</span>
+<span class="w">  </span><span class="err">▼</span>
+<span class="n">target</span><span class="w"> </span><span class="n">actor</span><span class="w"> </span><span class="n">mailbox</span><span class="w">  </span><span class="err">→</span><span class="w">  </span><span class="n">handle_message</span><span class="p">()</span><span class="w">  </span><span class="err">→</span><span class="w">  </span><span class="n">LLM</span><span class="w"> </span><span class="k">call</span>
+<span class="w">  </span><span class="err">│</span>
+<span class="w">  </span><span class="err">▼</span>
+<span class="n">actor</span><span class="w"> </span><span class="n">publishes</span><span class="w">  </span><span class="n">agents</span><span class="o">/</span><span class="err">{</span><span class="n">id</span><span class="err">}</span><span class="o">/</span><span class="n">chat</span><span class="w">  </span><span class="err">{</span><span class="w"> </span><span class="k">from</span><span class="err">:</span><span class="w"> </span><span class="n">actor</span><span class="p">,</span><span class="w"> </span><span class="k">to</span><span class="err">:</span><span class="w"> </span><span class="ss">&quot;user&quot;</span><span class="p">,</span><span class="w"> </span><span class="nl">content</span><span class="p">:</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="err">}</span>
+<span class="w">  </span><span class="err">│</span>
+<span class="w">  </span><span class="err">▼</span>
+<span class="n">Mosquitto</span><span class="w">  </span><span class="err">→</span><span class="w">  </span><span class="n">WebSocket</span><span class="w"> </span><span class="n">bridge</span><span class="w">  </span><span class="err">→</span><span class="w">  </span><span class="n">Browser</span>
+</code></pre></div>
+
+<h3 id="agent-lifecycle-events">Agent Lifecycle Events</h3>
+<p>Every agent publishes to its own MQTT topics on lifecycle events:</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Topic</th>
+<th>Triggered by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Spawn</td>
+<td><code>agents/{id}/spawn</code></td>
+<td><code>on_start()</code></td>
+</tr>
+<tr>
+<td>Heartbeat</td>
+<td><code>agents/{id}/heartbeat</code></td>
+<td>periodic tick</td>
+</tr>
+<tr>
+<td>State change</td>
+<td><code>agents/{id}/status</code></td>
+<td>state mutation</td>
+</tr>
+<tr>
+<td>Alert</td>
+<td><code>agents/{id}/alert</code></td>
+<td>error condition</td>
+</tr>
+<tr>
+<td>Chat reply</td>
+<td><code>agents/{id}/chat</code></td>
+<td><code>handle_message()</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="ids">IDs</h2>
+<p>All actor IDs use <strong>HLC-WIDs</strong> (Hybrid Logical Clock Wide IDs) from the <a href="https://github.com/waldiez/wid"><code>waldiez-wid</code></a> crate.  They are time-ordered, globally unique, and human-readable.</p>
+<p>Message IDs use simpler <strong>WIDs</strong>.</p>
+<hr />
+<h2 id="deployment-modes">Deployment Modes</h2>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Docker containers</th>
+<th>Binary</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Full Docker</strong> (<code>compose.yaml</code>)</td>
+<td>agentflow + nginx + mosquitto + fuseki + HA</td>
+<td>inside container</td>
+</tr>
+<tr>
+<td><strong>Native binary</strong> (<code>compose.native.yaml</code>)</td>
+<td>nginx + mosquitto only</td>
+<td>runs on host OS</td>
+</tr>
+</tbody>
+</table>
+<p>See <a href="deployment.md">deployment.md</a> for full instructions.</p>
+  </main>
+</div>
+
+<footer>
+  <span>AgentFlow &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/agentflow">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/agentflow/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

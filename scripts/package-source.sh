@@ -6,7 +6,7 @@
 #
 # Contents (NO pre-built binary — the target host builds it from source):
 #   rust/                   Rust workspace (full source)
-#   frontend/dist/          Pre-built Vite SPA  (built locally, saves Node on host)
+#   static/app/          Pre-built Vite SPA  (built locally, saves Node on host)
 #   infra/                  nginx + mosquitto configs
 #   systemd/                systemd unit template
 #   scripts/                build-native.sh, mock-agents.mjs
@@ -51,7 +51,7 @@ echo "${BOLD}▶ Building frontend…${RESET}"
 cd frontend
 npm run build
 cd ..
-echo "  ${GREEN}✓ frontend/dist/ ready${RESET}"
+echo "  ${GREEN}✓ static/app/ ready${RESET}"
 
 # ── 2. Stage ─────────────────────────────────────────────────────────────────
 echo ""
@@ -68,7 +68,7 @@ mkdir -p \
 cp -r rust "${WORK_DIR}/rust"
 
 # Pre-built SPA (so target host needs no Node.js)
-cp -r frontend/dist "${WORK_DIR}/frontend/dist"
+cp -r static/app "${WORK_DIR}/static/app"
 
 # Infrastructure
 cp infra/nginx/nginx-native.conf      "${WORK_DIR}/infra/nginx/nginx-native.conf"
@@ -229,7 +229,7 @@ elif [ "${NGINX_MODE}" = "2" ]; then
         ${COMPOSE_CMD} -f compose.native.yaml up -d dashboard
         ok "Docker nginx running on port :80"
     else
-        warn "Docker not available — serve frontend/dist/ with your own web server."
+        warn "Docker not available — serve static/app/ with your own web server."
     fi
 fi
 

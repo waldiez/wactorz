@@ -352,7 +352,7 @@ cd frontend && npm run dev   # → http://localhost:5173
 **Via `monitor_server.py` (zero-nginx option):**
 
 ```bash
-cd frontend && npm run build   # produces frontend/dist/
+cd frontend && npm run build   # produces static/app/
 python monitor_server.py       # → http://localhost:8888
 # Optionally: --mqtt-ws-port 9001 (default) if Mosquitto WS is on a different port
 ```

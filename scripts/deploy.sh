@@ -8,7 +8,7 @@
 #   1.  SSH key check / auto-generate
 #   2.  Build frontend  (npm run build)
 #   3.  Build Rust binary  (cargo | Docker buildx cross-compile)
-#   4.  rsync frontend/dist/, binary, infra files to the remote
+#   4.  rsync static/app/, binary, infra files to the remote
 #   5.  Start Mosquitto + nginx via docker compose (support services)
 #   6.  Patch & install systemd unit — enable + start on first run,
 #       restart on subsequent runs
@@ -16,7 +16,7 @@
 # After the first deploy you can redeploy directly from the AgentFlow
 # dashboard using NautilusAgent:
 #
-#   @nautilus-agent push ./frontend/dist/ user@host:/opt/agentflow/frontend/dist/
+#   @nautilus-agent push ./static/app/ user@host:/opt/agentflow/static/app/
 #   @nautilus-agent exec user@host sudo systemctl restart agentflow
 #
 # ── Configuration (read from .env or environment) ─────────────────────────────
@@ -173,7 +173,7 @@ fi
 banner "Building frontend…"
 [ -d frontend ] || die "frontend/ not found — run from repo root."
 (cd frontend && npm install --silent && npm run build)
-ok "frontend/dist/ ready"
+ok "static/app/ ready"
 
 # ── Build Rust binary (optional) ─────────────────────────────────────────────
 BINARY_SRC=""
@@ -223,11 +223,11 @@ ssh_run "mkdir -p \
 ok "Remote directories ready"
 
 # ── Sync frontend ─────────────────────────────────────────────────────────────
-banner "Syncing frontend/dist/ → ${DEPLOY_HOST}:${DEPLOY_PATH}/frontend/dist/"
+banner "Syncing static/app/ → ${DEPLOY_HOST}:${DEPLOY_PATH}/static/app/"
 rsync -az --delete \
     -e "${RSYNC_SSH_E}" \
-    frontend/dist/ \
-    "${DEPLOY_HOST}:${DEPLOY_PATH}/frontend/dist/"
+    static/app/ \
+    "${DEPLOY_HOST}:${DEPLOY_PATH}/static/app/"
 ok "Frontend synced"
 
 # ── Deploy binary ─────────────────────────────────────────────────────────────
@@ -381,8 +381,8 @@ printf  "║     Logs        journalctl -u agentflow -f%-9s║\n" ""
 echo    "╠══════════════════════════════════════════════════════╣"
 echo    "║  Future redeploys — from the AgentFlow dashboard:   ║"
 echo    "║                                                      ║"
-printf  "║  ${DIM}@nautilus-agent push ./frontend/dist/ \\%-12s${RESET}${BOLD}${GREEN}║\n" ""
-printf  "║  ${DIM}  %s:${DEPLOY_PATH}/frontend/dist/%-2s${RESET}${BOLD}${GREEN}║\n" "${DEPLOY_HOST}" ""
+printf  "║  ${DIM}@nautilus-agent push ./static/app/ \\%-12s${RESET}${BOLD}${GREEN}║\n" ""
+printf  "║  ${DIM}  %s:${DEPLOY_PATH}/static/app/%-2s${RESET}${BOLD}${GREEN}║\n" "${DEPLOY_HOST}" ""
 printf  "║  ${DIM}@nautilus-agent exec %s \\%-15s${RESET}${BOLD}${GREEN}║\n" "${DEPLOY_HOST}" ""
 printf  "║  ${DIM}  sudo systemctl restart agentflow%-18s${RESET}${BOLD}${GREEN}║\n" ""
 echo    "╚══════════════════════════════════════════════════════╝${RESET}"

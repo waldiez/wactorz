@@ -163,7 +163,7 @@ services:
       - "${DASHBOARD_EXTERNAL_PORT:-80}:80"    # Main entry point
       # - "${HA_EXTERNAL_PORT:-8123}:8123"       # Home Assistant proxy
     volumes:
-      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./static/app:/usr/share/nginx/html:ro
       - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - agentflow-net

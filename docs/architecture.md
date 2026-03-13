@@ -58,7 +58,7 @@ The single public HTTP entry point.
 
 | Path | Proxied to |
 |---|---|
-| `/` | `frontend/dist/` (static SPA) |
+| `/` | `static/app/` (static SPA) |
 | `/api/` | `agentflow:8080` (REST) |
 | `/ws` | `agentflow:8081` (WebSocket bridge) |
 | `/mqtt` | `mosquitto:9001` (MQTT over WebSocket) |

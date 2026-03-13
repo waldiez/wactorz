@@ -253,7 +253,7 @@ npm run typecheck   # or: npx tsc --noEmit
 
 # Production build
 npm run build
-# → frontend/dist/
+# → static/app/
 
 # Preview production build locally
 npm run preview

@@ -6,7 +6,7 @@
 #
 # Contents (NO Docker image — binary is run directly on the host):
 #   agentflow               stripped linux/amd64 binary
-#   frontend/dist/          pre-built Vite SPA
+#   static/app/          pre-built Vite SPA
 #   infra/nginx/            nginx-native.conf (proxies to host binary)
 #   infra/mosquitto/        mosquitto.conf
 #   compose.native.yaml     Docker for Mosquitto + nginx only
@@ -42,7 +42,7 @@ echo "════════════════════════�
 echo ""
 echo "▶ Building frontend…"
 cd frontend && npm run build && cd ..
-echo "  ✓ frontend/dist/ ready"
+echo "  ✓ static/app/ ready"
 
 # ── 2. Build linux/amd64 Docker image — then extract just the binary ──────────
 echo ""
@@ -80,7 +80,7 @@ chmod +x "${WORK_DIR}/${BINARY}"
 rm -f "/tmp/${BINARY}-linux-amd64"
 
 # Pre-built SPA
-cp -r frontend/dist "${WORK_DIR}/frontend/dist"
+cp -r static/app "${WORK_DIR}/static/app"
 
 # Infrastructure
 cp infra/nginx/nginx-native.conf      "${WORK_DIR}/infra/nginx/nginx-native.conf"

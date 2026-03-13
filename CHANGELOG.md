@@ -12,7 +12,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Version
 - **MQTT TCP bridge** in `monitor_server.py` — `/mqtt` WebSocket endpoint now falls back to raw TCP (port 1883) when Mosquitto's WS listener (port 9001) is unavailable
 - **Web UI auto-start** — `agentflow` CLI spawns the monitor server as a quiet background asyncio task (`--no-monitor` to opt out, `--monitor-port` to override port 8888)
 - **`/api/actors` REST endpoint** on Python monitor server — returns live agent state from MQTT-derived in-memory store
-- **`agentflow[all]` wheel** now bundles `frontend/dist/` and `monitor.html` via hatchling `force-include`; custom build hook rebuilds frontend when stale
+- **`agentflow[all]` wheel** now bundles `static/app/` and `monitor.html` via hatchling `force-include`; custom build hook rebuilds frontend when stale
 - **`agentflow/_version.py`** — single source of version truth, imported by `__init__.py` and `pyproject.toml`
 - **Rust WS bridge** — `/mqtt` proxy route added alongside `/ws`; `WsBridge` now tracks MonitorState and broadcasts `full_snapshot`/`patch`/`delete_agent` to `/ws` clients
 - **`scripts/build.py`** — clean build script (hatchling + twine) with `--upload` flag for PyPI
@@ -28,7 +28,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Version
 ### Changed
 - `agentflow/__init__.py` — optional agent imports (LLM, HA, ML) now wrapped in `try/except ImportError` so importing any submodule works without all optional deps installed
 - Python payload normalisers centralised in `MQTTClient.ts` — `normaliseHeartbeat`, `normaliseChat`, `normaliseStatus`
-- Monitor server `_find_dir()` helper resolves `frontend/dist` for both editable and installed-wheel layouts
+- Monitor server `_find_dir()` helper resolves `static/app` for both editable and installed-wheel layouts
 
 ---
 

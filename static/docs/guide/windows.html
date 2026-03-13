@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AgentFlow on Windows — AgentFlow</title>
+  <meta name="description" content="AgentFlow — Actor-model multi-agent AI framework"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
+    .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">
+    <div class="logo-mark"></div>AgentFlow
+  </a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/agentflow" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://pypi.org/project/agentflow/" target="_blank" rel="noopener">PyPI</a>
+    <a href="../api/rust/" target="_blank">Rust Docs</a>
+    <a href="../api/js/" target="_blank">JS Docs</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-label">Guide</div>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+      <a href="../guide/windows.html" class="active">Windows</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Reference</div>
+      <a href="../reference/api.html" class="">REST & WebSocket API</a>
+      <a href="../reference/mqtt_topics.html" class="">MQTT Topics</a>
+      <a href="../reference/python-api.html" class="">Python API</a>
+    </div>
+    <a href="https://waldiez.github.io/agentflow/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
+    <a href="https://waldiez.github.io/agentflow/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
+  </aside>
+  <main class="content">
+<h1 id="agentflow-on-windows">AgentFlow on Windows</h1>
+<p>Covers x86-64 (Intel/AMD) and <strong>ARM64</strong> (Snapdragon X, Surface Pro X, Copilot+ PCs).</p>
+<hr />
+<h2 id="which-option-fits-you">Which option fits you?</h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Docker needed</th>
+<th>Rust needed</th>
+<th>Node.js needed</th>
+<th>ARM64 native</th>
+<th>Best for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A — Full Docker</strong></td>
+<td>✅</td>
+<td>✗</td>
+<td>✗</td>
+<td>✅ via emulation</td>
+<td>Fastest start, production-like</td>
+</tr>
+<tr>
+<td><strong>B — Dev mode</strong></td>
+<td>✅</td>
+<td>✗</td>
+<td>✅</td>
+<td>✅</td>
+<td>Frontend development</td>
+</tr>
+<tr>
+<td><strong>C — Native binary</strong></td>
+<td>partial</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+<td>Maximum performance, SSH access</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Recommended starting point</strong>: Option A for a working dashboard in under 5 minutes.</p>
+<hr />
+<h2 id="prerequisites">Prerequisites</h2>
+<h3 id="install-windows-terminal-highly-recommended">Install Windows Terminal (highly recommended)</h3>
+<div class="highlight"><pre><span></span><code><span class="n">winget</span> <span class="n">install</span> <span class="n">Microsoft</span><span class="p">.</span><span class="n">WindowsTerminal</span>
+</code></pre></div>
+
+<h3 id="install-git">Install Git</h3>
+<div class="highlight"><pre><span></span><code><span class="n">winget</span> <span class="n">install</span> <span class="n">Git</span><span class="p">.</span><span class="n">Git</span>
+</code></pre></div>
+
+<p>Includes <strong>Git Bash</strong> — a minimal Unix shell that can run <code>.sh</code> scripts.
+After install: open Git Bash from the Start menu or Windows Terminal.</p>
+<h3 id="install-docker-desktop">Install Docker Desktop</h3>
+<div class="highlight"><pre><span></span><code><span class="n">winget</span> <span class="n">install</span> <span class="n">Docker</span><span class="p">.</span><span class="n">DockerDesktop</span>
+</code></pre></div>
+
+<p>Requires Windows 10 22H2+ or Windows 11.
+After install, open Docker Desktop and wait for the engine to start.</p>
+<p><strong>ARM64 note:</strong> Docker Desktop on ARM64 Windows (Snapdragon X, Surface Pro) runs
+<code>linux/arm64</code> containers natively and <code>linux/amd64</code> via QEMU emulation.
+The pre-built AgentFlow images are <code>linux/amd64</code>; they run fine on ARM64 via emulation,
+or you can build a native <code>linux/arm64</code> image yourself (see below).</p>
+<h3 id="install-nodejs-needed-for-options-b-and-c">Install Node.js (needed for Options B and C)</h3>
+<div class="highlight"><pre><span></span><code><span class="n">winget</span> <span class="n">install</span> <span class="n">OpenJS</span><span class="p">.</span><span class="n">NodeJS</span><span class="p">.</span><span class="n">LTS</span>
+</code></pre></div>
+
+<p>ARM64 native builds are available and installed automatically by <code>winget</code>.</p>
+<h3 id="install-rust-needed-for-option-c">Install Rust (needed for Option C)</h3>
+<div class="highlight"><pre><span></span><code><span class="n">winget</span> <span class="n">install</span> <span class="n">Rustlang</span><span class="p">.</span><span class="n">Rustup</span>
+</code></pre></div>
+
+<p>After install, open a new terminal and verify:</p>
+<div class="highlight"><pre><span></span><code><span class="n">rustc</span> <span class="p">-</span><span class="n">-version</span>   <span class="c"># should show 1.93+</span>
+<span class="n">cargo</span> <span class="p">-</span><span class="n">-version</span>
+</code></pre></div>
+
+<p>ARM64: <code>rustup</code> installs <code>aarch64-pc-windows-msvc</code> as the default target automatically.
+The MSVC toolchain is used; the Visual Studio Build Tools are installed by <code>rustup</code>.</p>
+<hr />
+<h2 id="option-a-full-docker-simplest">Option A — Full Docker (simplest)</h2>
+<div class="highlight"><pre><span></span><code><span class="n">git</span> <span class="n">clone</span> <span class="n">https</span><span class="p">://</span><span class="n">github</span><span class="p">.</span><span class="n">com</span><span class="p">/</span><span class="n">waldiez</span><span class="p">/</span><span class="n">agentflow</span>
+<span class="nb">cd </span><span class="n">agentflow</span>
+
+<span class="c"># Copy the example env and set your LLM key</span>
+<span class="nb">copy </span><span class="p">.</span><span class="n">env</span><span class="p">.</span><span class="n">example</span> <span class="p">.</span><span class="n">env</span>
+<span class="n">notepad</span> <span class="p">.</span><span class="n">env</span>   <span class="c"># set LLM_API_KEY at minimum</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">compose</span> <span class="n">up</span> <span class="n">-d</span>
+</code></pre></div>
+
+<p>Open <strong>http://localhost/</strong> — all agents should appear within a few seconds.</p>
+<p>To stop:</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">compose</span> <span class="n">down</span>
+</code></pre></div>
+
+<h3 id="arm64-note-for-option-a">ARM64 note for Option A</h3>
+<p>The default <code>compose.yaml</code> pulls <code>linux/amd64</code> images and runs them via QEMU.
+Performance is acceptable for development. For better performance, build a native image:</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">buildx</span> <span class="n">build</span> <span class="p">-</span><span class="n">-platform</span> <span class="n">linux</span><span class="p">/</span><span class="n">arm64</span> <span class="p">-</span><span class="n">-tag</span> <span class="n">agentflow-server</span><span class="p">:</span><span class="n">local</span> <span class="p">-</span><span class="n">-load</span> <span class="p">.\</span><span class="n">rust</span>
+</code></pre></div>
+
+<p>Then in <code>compose.yaml</code>, change:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">agentflow</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">agentflow-server:local</span><span class="w">   </span><span class="c1"># ← replace the build section with this</span>
+<span class="w">  </span><span class="nt">platform</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">linux/arm64</span>
+</code></pre></div>
+
+<hr />
+<h2 id="option-b-dev-mode-no-rust-build-no-llm-key">Option B — Dev mode (no Rust build, no LLM key)</h2>
+<p>The mock simulator publishes realistic MQTT events so you can develop the frontend
+without a running Rust backend.</p>
+<div class="highlight"><pre><span></span><code><span class="c"># Terminal 1 — MQTT broker + mock agents</span>
+<span class="n">docker</span> <span class="n">compose</span> <span class="o">-f</span> <span class="n">compose</span><span class="p">.</span><span class="n">dev</span><span class="p">.</span><span class="n">yaml</span> <span class="n">up</span> <span class="n">-d</span>
+
+<span class="c"># Terminal 2 — Vite dev server (hot-reload)</span>
+<span class="nb">cd </span><span class="n">frontend</span>
+<span class="n">npm</span> <span class="n">install</span>
+<span class="n">npm</span> <span class="n">run</span> <span class="n">dev</span>
+</code></pre></div>
+
+<p>Open <strong>http://localhost:3000</strong>.</p>
+<p>8 agents appear immediately (main-actor, monitor-agent, io-agent, qa-agent, nautilus,
+udx, weather, news). Chat, heartbeats, alerts, and dynamic spawns are all simulated.</p>
+<p>To stop the mock stack:</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">compose</span> <span class="o">-f</span> <span class="n">compose</span><span class="p">.</span><span class="n">dev</span><span class="p">.</span><span class="n">yaml</span> <span class="n">down</span>
+</code></pre></div>
+
+<hr />
+<h2 id="option-c-native-binary-on-windows">Option C — Native binary on Windows</h2>
+<p>The Rust binary runs directly on Windows. Only Mosquitto runs in Docker.</p>
+<h3 id="1-clone-and-configure">1. Clone and configure</h3>
+<div class="highlight"><pre><span></span><code><span class="n">git</span> <span class="n">clone</span> <span class="n">https</span><span class="p">://</span><span class="n">github</span><span class="p">.</span><span class="n">com</span><span class="p">/</span><span class="n">waldiez</span><span class="p">/</span><span class="n">agentflow</span>
+<span class="nb">cd </span><span class="n">agentflow</span>
+<span class="nb">copy </span><span class="p">.</span><span class="n">env</span><span class="p">.</span><span class="n">example</span> <span class="p">.</span><span class="n">env</span>
+<span class="n">notepad</span> <span class="p">.</span><span class="n">env</span>   <span class="c"># set LLM_API_KEY and MQTT_HOST=localhost</span>
+</code></pre></div>
+
+<h3 id="2-build-the-frontend">2. Build the frontend</h3>
+<div class="highlight"><pre><span></span><code><span class="nb">cd </span><span class="n">frontend</span>
+<span class="n">npm</span> <span class="n">install</span>
+<span class="n">npm</span> <span class="n">run</span> <span class="n">build</span>   <span class="c"># → frontend\dist\</span>
+<span class="nb">cd </span><span class="p">..</span>
+</code></pre></div>
+
+<h3 id="3-build-the-rust-binary">3. Build the Rust binary</h3>
+<div class="highlight"><pre><span></span><code><span class="nb">cd </span><span class="n">rust</span>
+<span class="n">cargo</span> <span class="n">build</span> <span class="p">-</span><span class="n">-release</span> <span class="p">-</span><span class="n">-bin</span> <span class="n">agentflow</span>
+<span class="nb">cd </span><span class="p">..</span>
+</code></pre></div>
+
+<p>The binary is at <code>rust\target\release\agentflow.exe</code>.</p>
+<p><strong>ARM64</strong>: <code>cargo build</code> uses the native <code>aarch64-pc-windows-msvc</code> target by default —
+no cross-compilation flags needed. First build takes ~5-8 min (downloading + compiling
+dependencies); subsequent builds are ~30 s.</p>
+<h3 id="4-start-mosquitto">4. Start Mosquitto</h3>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">compose</span> <span class="o">-f</span> <span class="n">compose</span><span class="p">.</span><span class="n">native</span><span class="p">.</span><span class="n">yaml</span> <span class="n">up</span> <span class="n">-d</span> <span class="n">mosquitto</span>
+</code></pre></div>
+
+<h3 id="5-serve-the-frontend">5. Serve the frontend</h3>
+<p><strong>Option 5a — Use Docker nginx</strong> (simplest):</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">compose</span> <span class="o">-f</span> <span class="n">compose</span><span class="p">.</span><span class="n">native</span><span class="p">.</span><span class="n">yaml</span> <span class="n">up</span> <span class="n">-d</span>
+</code></pre></div>
+
+<p><strong>Option 5b — Use a simple static server</strong> (no Docker nginx):</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd </span><span class="n">frontend</span>
+<span class="n">npx</span> <span class="n">serve</span> <span class="n">dist</span> <span class="n">-p</span> <span class="n">80</span>
+</code></pre></div>
+
+<p>Or install nginx for Windows and point <code>root</code> to <code>frontend\dist\</code>.</p>
+<h3 id="6-start-agentflow">6. Start agentflow</h3>
+<p>In PowerShell:</p>
+<div class="highlight"><pre><span></span><code><span class="c"># Load .env variables into the current session</span>
+<span class="nb">Get-Content</span> <span class="p">.\.</span><span class="n">env</span> <span class="p">|</span> <span class="nb">Where-Object</span> <span class="p">{</span> <span class="nv">$_</span> <span class="o">-match</span> <span class="s1">&#39;^\s*[^#]&#39;</span> <span class="p">}</span> <span class="p">|</span> <span class="k">ForEach</span><span class="n">-Object</span> <span class="p">{</span>
+    <span class="nv">$parts</span> <span class="p">=</span> <span class="nv">$_</span> <span class="n">-split</span> <span class="s1">&#39;=&#39;</span><span class="p">,</span> <span class="n">2</span>
+    <span class="k">if</span> <span class="p">(</span><span class="nv">$parts</span><span class="p">.</span><span class="n">Count</span> <span class="o">-eq</span> <span class="n">2</span><span class="p">)</span> <span class="p">{</span> <span class="no">[System.Environment]</span><span class="p">::</span><span class="n">SetEnvironmentVariable</span><span class="p">(</span><span class="nv">$parts</span><span class="p">[</span><span class="n">0</span><span class="p">].</span><span class="n">Trim</span><span class="p">(),</span> <span class="nv">$parts</span><span class="p">[</span><span class="n">1</span><span class="p">].</span><span class="n">Trim</span><span class="p">(),</span> <span class="s2">&quot;Process&quot;</span><span class="p">)</span> <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="p">.\</span><span class="n">rust</span><span class="p">\</span><span class="n">target</span><span class="p">\</span><span class="n">release</span><span class="p">\</span><span class="n">agentflow</span><span class="p">.</span><span class="n">exe</span> <span class="p">-</span><span class="n">-no-cli</span>
+</code></pre></div>
+
+<p>Or in Git Bash:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span>.env<span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+./rust/target/release/agentflow.exe<span class="w"> </span>--no-cli
+</code></pre></div>
+
+<p>Open <strong>http://localhost/</strong> (nginx) or <strong>http://localhost:3000</strong> (Vite dev server).</p>
+<hr />
+<h2 id="cross-compiling-for-linux-deployment">Cross-compiling for Linux deployment</h2>
+<p>If you develop on Windows but deploy to a Linux server, you need a Linux binary.</p>
+<h3 id="option-x1-docker-buildx-easiest-works-on-all-windows">Option X1 — Docker buildx (easiest, works on all Windows)</h3>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">buildx</span> <span class="n">build</span> <span class="p">-</span><span class="n">-platform</span> <span class="n">linux</span><span class="p">/</span><span class="n">amd64</span> <span class="p">-</span><span class="n">-tag</span> <span class="n">agentflow</span><span class="p">:</span><span class="n">linux</span> <span class="p">-</span><span class="n">-load</span> <span class="p">.\</span><span class="n">rust</span>
+</code></pre></div>
+
+<p>Extract the binary from the image:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">$id</span> <span class="p">=</span> <span class="n">docker</span> <span class="n">create</span> <span class="p">-</span><span class="n">-platform</span> <span class="n">linux</span><span class="p">/</span><span class="n">amd64</span> <span class="n">agentflow</span><span class="p">:</span><span class="n">linux</span>
+<span class="n">docker</span> <span class="nb">cp </span><span class="s2">&quot;${id}:/app/agentflow&quot;</span> <span class="p">.\</span><span class="n">agentflow-linux-amd64</span>
+<span class="n">docker</span> <span class="nb">rm </span><span class="nv">$id</span>
+</code></pre></div>
+
+<h3 id="option-x2-wsl2-fastest-compilation-native-linux-toolchain">Option X2 — WSL2 (fastest compilation, native Linux toolchain)</h3>
+<div class="highlight"><pre><span></span><code><span class="c"># Install WSL2 with Ubuntu</span>
+<span class="n">wsl</span> <span class="p">-</span><span class="n">-install</span>
+
+<span class="c"># Inside WSL2:</span>
+<span class="nb">curl </span><span class="p">-</span><span class="n">-proto</span> <span class="s1">&#39;=https&#39;</span> <span class="p">-</span><span class="n">-tlsv1</span><span class="p">.</span><span class="n">2</span> <span class="n">-sSf</span> <span class="n">https</span><span class="p">://</span><span class="n">sh</span><span class="p">.</span><span class="n">rustup</span><span class="p">.</span><span class="n">rs</span> <span class="p">|</span> <span class="n">sh</span> <span class="n">-s</span> <span class="p">--</span> <span class="n">-y</span>
+<span class="n">source</span> <span class="p">~/.</span><span class="n">cargo</span><span class="p">/</span><span class="n">env</span>
+<span class="nb">cd </span><span class="p">/</span><span class="n">mnt</span><span class="p">/</span><span class="n">c</span><span class="p">/</span><span class="n">Users</span><span class="p">/&lt;</span><span class="n">your-name</span><span class="p">&gt;/</span><span class="n">agentflow</span><span class="p">/</span><span class="n">rust</span>
+<span class="n">cargo</span> <span class="n">build</span> <span class="p">-</span><span class="n">-release</span> <span class="p">-</span><span class="n">-bin</span> <span class="n">agentflow</span>
+<span class="c"># → target/release/agentflow  (native linux/amd64 binary)</span>
+</code></pre></div>
+
+<h3 id="option-x3-cross-compile-to-linuxarm64-for-arm64-server-targets">Option X3 — Cross-compile to linux/arm64 (for ARM64 server targets)</h3>
+<div class="highlight"><pre><span></span><code><span class="n">rustup</span> <span class="n">target</span> <span class="n">add</span> <span class="n">aarch64-unknown-linux-gnu</span>
+<span class="c"># Install a cross-linker via the &#39;cross&#39; tool:</span>
+<span class="n">cargo</span> <span class="n">install</span> <span class="n">cross</span>
+<span class="n">cross</span> <span class="n">build</span> <span class="p">-</span><span class="n">-release</span> <span class="p">-</span><span class="n">-bin</span> <span class="n">agentflow</span> <span class="p">-</span><span class="n">-target</span> <span class="n">aarch64-unknown-linux-gnu</span>
+</code></pre></div>
+
+<hr />
+<h2 id="running-bash-scripts-deploysh-package-nativesh-etc">Running bash scripts (<code>deploy.sh</code>, <code>package-native.sh</code>, etc.)</h2>
+<p>The <code>scripts/</code> directory contains bash (<code>.sh</code>) scripts. On Windows, run them via:</p>
+<h3 id="git-bash-simplest">Git Bash (simplest)</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Open Git Bash terminal, then:</span>
+<span class="nb">cd</span><span class="w"> </span>/c/Users/&lt;your-name&gt;/agentflow
+bash<span class="w"> </span>scripts/deploy.sh
+</code></pre></div>
+
+<h3 id="wsl2-best-compatibility">WSL2 (best compatibility)</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Inside WSL2 Ubuntu:</span>
+<span class="nb">cd</span><span class="w"> </span>/mnt/c/Users/&lt;your-name&gt;/agentflow
+bash<span class="w"> </span>scripts/deploy.sh
+</code></pre></div>
+
+<h3 id="powershell-equivalent-no-bash-needed">PowerShell equivalent (no bash needed)</h3>
+<p>The three most common script tasks can be done directly in PowerShell:</p>
+<div class="highlight"><pre><span></span><code><span class="c"># Build frontend</span>
+<span class="nb">cd </span><span class="n">frontend</span><span class="p">;</span> <span class="n">npm</span> <span class="n">run</span> <span class="n">build</span><span class="p">;</span> <span class="nb">cd </span><span class="p">..</span>
+
+<span class="c"># Build Rust binary</span>
+<span class="nb">cd </span><span class="n">rust</span><span class="p">;</span> <span class="n">cargo</span> <span class="n">build</span> <span class="p">-</span><span class="n">-release</span> <span class="p">-</span><span class="n">-bin</span> <span class="n">agentflow</span><span class="p">;</span> <span class="nb">cd </span><span class="p">..</span>
+
+<span class="c"># rsync to remote (requires OpenSSH + rsync; easiest via Git Bash or WSL2)</span>
+<span class="c"># PowerShell alternative: use SCP</span>
+<span class="n">scp</span> <span class="n">-r</span> <span class="p">.\</span><span class="n">frontend</span><span class="p">\</span><span class="n">dist</span><span class="p">\</span> <span class="n">user</span><span class="nv">@host</span><span class="p">:/</span><span class="n">opt</span><span class="p">/</span><span class="n">agentflow</span><span class="p">/</span><span class="n">frontend</span><span class="p">/</span>
+<span class="n">scp</span> <span class="p">.\</span><span class="n">rust</span><span class="p">\</span><span class="n">target</span><span class="p">\</span><span class="n">release</span><span class="p">\</span><span class="n">agentflow</span> <span class="n">user</span><span class="nv">@host</span><span class="p">:/</span><span class="n">opt</span><span class="p">/</span><span class="n">agentflow</span><span class="p">/</span><span class="n">agentflow</span>
+</code></pre></div>
+
+<hr />
+<h2 id="ssh-keys-nautilusagent-deploy">SSH keys (NautilusAgent + deploy)</h2>
+<p>Windows 10/11 includes OpenSSH Client. Generate a deploy key:</p>
+<div class="highlight"><pre><span></span><code><span class="n">ssh-keygen</span> <span class="n">-t</span> <span class="n">ed25519</span> <span class="n">-C</span> <span class="s2">&quot;agentflow-deploy&quot;</span> <span class="o">-f</span> <span class="s2">&quot;$env:USERPROFILE\.ssh\agentflow_deploy&quot;</span> <span class="n">-N</span> <span class="s1">&#39;&quot;&quot;&#39;</span>
+</code></pre></div>
+
+<p>Copy the public key to the remote host:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">type </span><span class="s2">&quot;$env:USERPROFILE\.ssh\agentflow_deploy.pub&quot;</span> <span class="p">|</span> <span class="n">ssh</span> <span class="n">user</span><span class="nv">@host</span> <span class="s2">&quot;mkdir -p ~/.ssh &amp;&amp; cat &gt;&gt; ~/.ssh/authorized_keys&quot;</span>
+</code></pre></div>
+
+<p>Set in <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code>NAUTILUS_SSH_KEY=~/.ssh/agentflow_deploy
+</code></pre></div>
+
+<p><strong>NautilusAgent <code>rsync</code> command</strong>: <code>rsync</code> is not available natively on Windows.
+Options:
+- Use WSL2 (rsync is installed by default)
+- Install <code>rsync</code> via Chocolatey: <code>choco install rsync</code>
+- Use Git for Windows rsync: <code>C:\Program Files\Git\usr\bin\rsync.exe</code></p>
+<p>For the last option, ensure Git Bash's <code>bin</code> is on <code>PATH</code> or point <code>NAUTILUS_RSYNC_PATH</code>
+to the binary.</p>
+<hr />
+<h2 id="arm64-windows-summary">ARM64 Windows — summary</h2>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>docker compose up -d</code></td>
+<td>✅</td>
+<td>Runs linux/amd64 via QEMU; native arm64 with custom build</td>
+</tr>
+<tr>
+<td><code>npm install &amp;&amp; npm run dev</code></td>
+<td>✅</td>
+<td>Node.js has native ARM64 Windows builds</td>
+</tr>
+<tr>
+<td><code>cargo build --release</code></td>
+<td>✅</td>
+<td>Produces native <code>aarch64-pc-windows-msvc</code> <code>.exe</code></td>
+</tr>
+<tr>
+<td>Cross-compile to linux/amd64</td>
+<td>✅ slow</td>
+<td>Docker buildx uses QEMU (~10-15 min first build)</td>
+</tr>
+<tr>
+<td>Cross-compile to linux/arm64</td>
+<td>✅ fast</td>
+<td><code>cross</code> + <code>aarch64-unknown-linux-gnu</code> target</td>
+</tr>
+<tr>
+<td><code>bash scripts/deploy.sh</code></td>
+<td>via WSL2</td>
+<td>Or Git Bash</td>
+</tr>
+<tr>
+<td>NautilusAgent ssh</td>
+<td>✅</td>
+<td>Windows OpenSSH Client included</td>
+</tr>
+<tr>
+<td>NautilusAgent rsync</td>
+<td>via WSL2</td>
+<td>Or Chocolatey <code>rsync</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="environment-variable-gotchas">Environment variable gotchas</h2>
+<p><strong><code>.env</code> file encoding</strong>: save as <strong>UTF-8 without BOM</strong>. Notepad on Windows 11 defaults
+to UTF-8; older Notepad may default to ANSI. Use VS Code or Notepad++ if unsure.</p>
+<p><strong>Path separators</strong>: in <code>.env</code>, always use forward slashes or escaped backslashes:</p>
+<div class="highlight"><pre><span></span><code><span class="gh">#</span> ✅ Works on all platforms
+NAUTILUS_SSH_KEY=~/.ssh/agentflow_deploy
+
+<span class="gh">#</span> ✅ Also works
+NAUTILUS_SSH_KEY=C:/Users/alice/.ssh/agentflow_deploy
+
+<span class="gh">#</span> ❌ Will fail — backslash is escape character in some parsers
+NAUTILUS_SSH_KEY=C:\Users\alice\.ssh\agentflow_deploy
+</code></pre></div>
+
+<p><strong>Line endings</strong>: the <code>.env</code> file should use LF (Unix) endings. If you edit with
+Notepad, it may add CRLF (<code>\r\n</code>) which can break the parser. In VS Code:
+click the <code>CRLF</code> indicator in the bottom-right status bar → change to <code>LF</code>.</p>
+<hr />
+<h2 id="troubleshooting">Troubleshooting</h2>
+<h3 id="docker-command-not-found-in-git-bash"><code>docker: command not found</code> in Git Bash</h3>
+<p>Docker Desktop adds itself to PATH for PowerShell and CMD but not always Git Bash.
+Run Docker commands in PowerShell, or add Docker to Git Bash's PATH:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$PATH</span><span class="s2">:/c/Program Files/Docker/Docker/resources/bin&quot;</span>
+</code></pre></div>
+
+<h3 id="cargo-build-fails-linkexe-not-found"><code>cargo build</code> fails: <code>link.exe not found</code></h3>
+<p>The MSVC linker is missing. Install Visual Studio Build Tools:</p>
+<div class="highlight"><pre><span></span><code><span class="n">winget</span> <span class="n">install</span> <span class="n">Microsoft</span><span class="p">.</span><span class="n">VisualStudio</span><span class="p">.</span><span class="n">2022</span><span class="p">.</span><span class="n">BuildTools</span>
+</code></pre></div>
+
+<p>During install, select <strong>"Desktop development with C++"</strong> workload.</p>
+<h3 id="port-80-already-in-use">Port 80 already in use</h3>
+<p>IIS (Internet Information Services) often occupies port 80 on Windows.
+Either stop IIS or change the port in <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code>DASHBOARD_EXTERNAL_PORT=8080
+</code></pre></div>
+
+<p>Then open <strong>http://localhost:8080/</strong>.</p>
+<p>To stop IIS temporarily:</p>
+<div class="highlight"><pre><span></span><code><span class="n">net</span> <span class="n">stop</span> <span class="n">w3svc</span>
+</code></pre></div>
+
+<h3 id="mqtt_host-connection-refused"><code>MQTT_HOST</code> connection refused</h3>
+<p>Ensure Mosquitto is running:</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">compose</span> <span class="o">-f</span> <span class="n">compose</span><span class="p">.</span><span class="n">native</span><span class="p">.</span><span class="n">yaml</span> <span class="nb">ps</span>
+</code></pre></div>
+
+<p>For native binary mode, set <code>MQTT_HOST=localhost</code> in <code>.env</code> (not <code>mosquitto</code>).</p>
+<h3 id="arm64-docker-image-exec-format-error">ARM64: Docker image <code>exec format error</code></h3>
+<p>The pulled image is <code>linux/amd64</code>; you need to enable QEMU emulation in Docker Desktop:
+Settings → Docker Engine → add <code>"experimental": true</code>.
+Or build a native <code>linux/arm64</code> image:</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">buildx</span> <span class="n">build</span> <span class="p">-</span><span class="n">-platform</span> <span class="n">linux</span><span class="p">/</span><span class="n">arm64</span> <span class="p">-</span><span class="n">-tag</span> <span class="n">agentflow-server</span><span class="p">:</span><span class="n">arm64</span> <span class="p">-</span><span class="n">-load</span> <span class="p">.\</span><span class="n">rust</span>
+</code></pre></div>
+
+<p>Then update <code>compose.yaml</code> to use <code>image: agentflow-server:arm64</code> and <code>platform: linux/arm64</code>.</p>
+<h3 id="rsync-command-not-found-nautilusagent"><code>rsync: command not found</code> (NautilusAgent)</h3>
+<p>Install via Chocolatey:</p>
+<div class="highlight"><pre><span></span><code><span class="c"># Install Chocolatey first if needed:</span>
+<span class="nb">Set-ExecutionPolicy</span> <span class="n">Bypass</span> <span class="n">-Scope</span> <span class="k">Process</span> <span class="n">-Force</span>
+<span class="no">[System.Net.ServicePointManager]</span><span class="p">::</span><span class="n">SecurityProtocol</span> <span class="p">=</span> <span class="no">[System.Net.ServicePointManager]</span><span class="p">::</span><span class="n">SecurityProtocol</span> <span class="o">-bor</span> <span class="n">3072</span>
+<span class="nb">iex </span><span class="p">((</span><span class="nb">New-Object</span> <span class="n">System</span><span class="p">.</span><span class="n">Net</span><span class="p">.</span><span class="n">WebClient</span><span class="p">).</span><span class="n">DownloadString</span><span class="p">(</span><span class="s1">&#39;https://community.chocolatey.org/install.ps1&#39;</span><span class="p">))</span>
+
+<span class="c"># Then install rsync:</span>
+<span class="n">choco</span> <span class="n">install</span> <span class="n">rsync</span>
+</code></pre></div>
+
+<p>Or use WSL2 where rsync comes pre-installed.</p>
+<hr />
+<h2 id="recommended-setup-for-arm64-windows-copilot-snapdragon-x">Recommended setup for ARM64 Windows (Copilot+ / Snapdragon X)</h2>
+<div class="highlight"><pre><span></span><code><span class="c"># 1. Install prerequisites</span>
+<span class="n">winget</span> <span class="n">install</span> <span class="n">Git</span><span class="p">.</span><span class="n">Git</span> <span class="n">Microsoft</span><span class="p">.</span><span class="n">WindowsTerminal</span> <span class="n">OpenJS</span><span class="p">.</span><span class="n">NodeJS</span><span class="p">.</span><span class="n">LTS</span> <span class="n">Rustlang</span><span class="p">.</span><span class="n">Rustup</span> <span class="n">Docker</span><span class="p">.</span><span class="n">DockerDesktop</span>
+
+<span class="c"># 2. Enable WSL2 (for bash scripts and rsync)</span>
+<span class="n">wsl</span> <span class="p">-</span><span class="n">-install</span>   <span class="c"># installs Ubuntu by default; reboot when prompted</span>
+
+<span class="c"># 3. Clone the repo</span>
+<span class="n">git</span> <span class="n">clone</span> <span class="n">https</span><span class="p">://</span><span class="n">github</span><span class="p">.</span><span class="n">com</span><span class="p">/</span><span class="n">waldiez</span><span class="p">/</span><span class="n">agentflow</span>
+<span class="nb">cd </span><span class="n">agentflow</span>
+<span class="nb">copy </span><span class="p">.</span><span class="n">env</span><span class="p">.</span><span class="n">example</span> <span class="p">.</span><span class="n">env</span>
+<span class="n">notepad</span> <span class="p">.</span><span class="n">env</span>   <span class="c"># set LLM_API_KEY</span>
+
+<span class="c"># 4. Start the mock dev stack (no Rust build needed)</span>
+<span class="n">docker</span> <span class="n">compose</span> <span class="o">-f</span> <span class="n">compose</span><span class="p">.</span><span class="n">dev</span><span class="p">.</span><span class="n">yaml</span> <span class="n">up</span> <span class="n">-d</span>
+<span class="nb">cd </span><span class="n">frontend</span> <span class="p">&amp;&amp;</span> <span class="n">npm</span> <span class="n">install</span> <span class="p">&amp;&amp;</span> <span class="n">npm</span> <span class="n">run</span> <span class="n">dev</span>
+
+<span class="c"># → http://localhost:3000  ✓</span>
+</code></pre></div>
+
+<p>To move to a full stack later, build in WSL2 (faster than QEMU cross-compile):</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># In WSL2:</span>
+<span class="nb">cd</span><span class="w"> </span>/mnt/c/Users/&lt;you&gt;/agentflow/rust
+cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--bin<span class="w"> </span>agentflow
+<span class="c1"># Produces native linux/amd64 binary for deployment</span>
+</code></pre></div>
+  </main>
+</div>
+
+<footer>
+  <span>AgentFlow &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/agentflow">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/agentflow/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

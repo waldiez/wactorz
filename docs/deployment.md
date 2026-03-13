@@ -93,7 +93,7 @@ The wizard will:
 1. Check / generate an SSH key (`~/.ssh/agentflow_deploy`)
 2. Build the frontend (`npm run build`)
 3. Build the binary via `cargo build --release` or Docker buildx
-4. rsync `frontend/dist/` and the binary to the remote host
+4. rsync `static/app/` and the binary to the remote host
 5. Create `.env` from `.env.example` on the remote (preserves existing)
 6. Start Mosquitto via Docker + configure nginx (see modes below)
 7. Install + start the `agentflow` systemd service
@@ -135,7 +135,7 @@ Once the system is running, use **NautilusAgent** from the IO bar:
 
 ```
 # Frontend only (fastest — no binary rebuild needed)
-@nautilus-agent push ./frontend/dist/ deploy@host:/opt/agentflow/frontend/dist/
+@nautilus-agent push ./static/app/ deploy@host:/opt/agentflow/static/app/
 @nautilus-agent exec deploy@host sudo systemctl restart agentflow
 
 # Binary + frontend

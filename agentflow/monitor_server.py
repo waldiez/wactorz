@@ -682,12 +682,9 @@ def _find_dir(*rel: str) -> Path:
             return p
     return _pkg.joinpath(*rel)
 
-FRONTEND_DIST   = _find_dir("frontend", "dist")
+FRONTEND_DIST   = _find_dir("static", "app")
 FRONTEND_PUBLIC = _find_dir("frontend", "public")
-DOCS_SITE       = next(
-    (p for p in (_pkg / "docs_site", _root / "docs_site", _root / "site") if p.is_dir()),
-    _pkg / "docs_site",
-)
+DOCS_SITE       = _find_dir("static", "docs")
 
 
 async def index_handler(request):

@@ -1,0 +1,27 @@
+{
+  "name": "AgentFlow Dashboard",
+  "short_name": "AgentFlow",
+  "description": "Real-time multi-agent orchestration dashboard. Monitor and control AI agents via an immersive 3D network visualization.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#050818",
+  "theme_color": "#050818",
+  "lang": "en",
+  "categories": ["productivity", "developer"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

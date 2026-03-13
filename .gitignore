@@ -155,7 +155,7 @@ rust/**/target/
 **.log
 
 # Frontend build output (generated, not committed)
-frontend/dist/
+!frontend/dist/
 frontend/node_modules/
 
 # HA secrets — never commit real credentials

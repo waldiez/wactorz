@@ -187,6 +187,8 @@ infra/homeassistant/.storage/frontend.user_data_*
 infra/homeassistant/.storage/trace.*
 infra/homeassistant/.storage/core.restore_state
 infra/homeassistant/.storage/core.entity_registry
-agentflow
+agentflow/__pycache__/
+agentflow/**/__pycache__/
+agentflow/**/*.pyc
 
 myenv/

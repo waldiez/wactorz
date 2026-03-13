@@ -1,0 +1,96 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'agentflow/**'
+      - 'rust/**'
+      - 'frontend/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed for mike versioning
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python deps
+        run: |
+          pip install -e ".[all]"
+          pip install mkdocs-material mkdocstrings[python] mike
+
+      # ── Rust docs ─────────────────────────────────────────────────────
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Build Rust docs
+        working-directory: rust
+        run: cargo doc --no-deps --workspace --target-dir ../docs_build/rust_target
+        continue-on-error: true
+
+      - name: Copy Rust docs
+        run: |
+          mkdir -p docs/api/rust
+          if [ -d docs_build/rust_target/doc ]; then
+            cp -r docs_build/rust_target/doc/. docs/api/rust/
+          else
+            echo "<html><body><p>Rust docs not available in this build.</p></body></html>" > docs/api/rust/index.html
+          fi
+
+      # ── Frontend / TS docs (typedoc) ──────────────────────────────────
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build TypeScript docs
+        working-directory: frontend
+        run: |
+          bun install
+          bunx typedoc --out ../docs/api/js src/index.ts \
+            --name "AgentFlow JS" \
+            --readme none \
+            --navigationLinks '{"GitHub":"https://github.com/waldiez/agentflow"}' \
+            || echo "TypeDoc not configured, skipping"
+        continue-on-error: true
+
+      # ── MkDocs ────────────────────────────────────────────────────────
+      - name: Build MkDocs site (guide/ section)
+        run: mkdocs build --site-dir site/guide
+
+      # ── Assemble final site ───────────────────────────────────────────
+      - name: Assemble docs site
+        run: |
+          mkdir -p site
+          # Landing page at root
+          cp docs/index.html site/index.html
+          # MkDocs guide already at site/guide/
+          # Rust docs
+          mkdir -p site/api/rust
+          cp -r docs/api/rust/. site/api/rust/ 2>/dev/null || true
+          # JS docs
+          mkdir -p site/api/js
+          cp -r docs/api/js/. site/api/js/ 2>/dev/null || true
+          # Python API placeholder (mkdocstrings serves inline in guide)
+          mkdir -p site/api/python
+          echo '<meta http-equiv="refresh" content="0; url=../guide/api/">' > site/api/python/index.html
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
+          force_orphan: false

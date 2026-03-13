@@ -305,18 +305,16 @@ def build(site_dir: Path = SITE) -> None:
     # index.html redirect for each subdir → first page
     for subdir, first_md in first_per_subdir.items():
         idx = site_dir / subdir / "index.html"
-        if not idx.exists():
-            first_html = _md_to_html_path(first_md)
-            idx.write_text(_redirect(f"./{first_html}"))
-            print(f"  index    → site/{subdir}/index.html → {first_html}")
+        first_html = _md_to_html_path(first_md)
+        idx.write_text(_redirect(f"./{first_html}"))
+        print(f"  index    → site/{subdir}/index.html → {first_html}")
 
     # Compat redirect: landing page links to ./api/python/
     py_api_compat = site_dir / "api" / "python"
     py_api_compat.mkdir(parents=True, exist_ok=True)
     compat_idx = py_api_compat / "index.html"
-    if not compat_idx.exists():
-        compat_idx.write_text(_redirect("../../reference/python-api.html"))
-        print(f"  compat   → site/api/python/ → /reference/python-api.html")
+    compat_idx.write_text(_redirect("../../reference/python-api.html"))
+    print(f"  compat   → site/api/python/ → ../../reference/python-api.html")
 
     print(f"\n✓  site built → {site_dir}")
 

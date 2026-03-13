@@ -50,7 +50,7 @@ AgentFlow was born out of the need for a framework that could operate on real-wo
 
 Each agent is an Actor: an independent unit with its own async message loop, mailbox (`asyncio.Queue`), and lifecycle (`CREATED → RUNNING → PAUSED → STOPPED / FAILED`). Actors never share memory. They communicate by sending typed `Message` objects to each other via the `ActorRegistry`, which maps actor IDs to actor instances.
 
-```
+```text
 Message flow:
 
   Actor A                Registry              Actor B
@@ -66,7 +66,7 @@ Message flow:
 ### Core Components
 
 | File | Layer | Role |
-|------|-------|------|
+| ---- | ----- | ---- |
 | `core/actor.py` | Core | Base Actor class — mailbox, lifecycle, heartbeat, spawn, send, persist/recall |
 | `core/registry.py` | Core | ActorSystem & ActorRegistry — actor registration, message routing, broadcast |
 | `agents/main_actor.py` | Agent | The LLM orchestrator — processes user input, spawns agents, routes requests |
@@ -92,7 +92,7 @@ All LLM-backed agents inherit from `LLMAgent`, which inherits from `Actor`. It m
 **Supported LLM providers:**
 
 | Provider | Key | Notes |
-|----------|-----|-------|
+| -------- | --- | ----- |
 | Anthropic Claude | `ANTHROPIC_API_KEY` | Default |
 | OpenAI | `OPENAI_API_KEY` | `--llm openai` |
 | Ollama | *(none)* | Local models, `--llm ollama --ollama-model llama3` |
@@ -121,7 +121,7 @@ async def handle_task(agent, payload):
 **The `agent` API (available inside all three functions):**
 
 | Method | Description |
-|--------|-------------|
+| ------ | ----------- |
 | `agent.log(msg)` | Publish a log event |
 | `agent.publish(topic, data)` | Publish to an MQTT topic |
 | `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state |
@@ -155,7 +155,7 @@ Spawned on-demand when a task is too complex for a single agent. Its pipeline:
 
 **Trigger the planner explicitly or automatically:**
 
-```
+```text
 coordinate: get the weather in Athens and search for AI news, then combine them
 plan: load the Philips manual and answer the cleaning question
 @planner   any complex multi-step task
@@ -197,7 +197,7 @@ Simply describe what you want in the chat. The LLM will write the code and wrap 
 ### Spawn Options
 
 | Field | Description |
-|-------|-------------|
+| ----- | ----------- |
 | `name` | Unique agent name. Use `"replace": true` to hot-swap a running agent |
 | `type` | `"dynamic"` (runtime code), `"llm"` (pure conversation), `"manual"` (PDF search) |
 | `node` | Remote node name to spawn on (e.g. `"rpi-kitchen"`). Omit to run locally |
@@ -236,7 +236,7 @@ async def handle_task(agent, payload):
 
 ### Addressing Agents in Chat
 
-```
+```text
 @agent-name  your message here    — route directly to that agent
 @main        your message here    — route to the main orchestrator
 @planner     your complex task    — explicitly trigger the planner
@@ -257,7 +257,7 @@ Every error site (`compile`, `setup`, `process`, `handle_task`) publishes a stru
 The monitor subscribes to error events from all agents and maintains an error registry. Recovery decisions:
 
 | Severity | Action |
-|----------|--------|
+| -------- | ------ |
 | `warning` | Log it, let the agent recover on its own |
 | `critical` / `degraded` | Attempt restart (up to 3 times) |
 | `fatal` (compile/setup) | Do NOT restart — the code is broken. Notify user to fix it |
@@ -321,7 +321,7 @@ python -m agentflow --llm nim --nim-model meta/llama-3.3-70b-instruct
 **CLI commands:**
 
 | Command | Description |
-|---------|-------------|
+| ------- | ----------- |
 | `/agents` | List all running agents with type and status |
 | `/nodes` | List remote nodes with online/offline status and their agents |
 | `/deploy <node-name>` | Bootstrap a new remote node via SSH (discovers Pi automatically) |
@@ -344,16 +344,19 @@ Set `DISCORD_TOKEN` or `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_WHAT
 ### Live Dashboard
 
 **Via Vite dev server (development):**
+
 ```bash
 cd frontend && npm run dev   # → http://localhost:5173
 ```
 
 **Via `monitor_server.py` (zero-nginx option):**
+
 ```bash
 cd frontend && npm run build   # produces frontend/dist/
 python monitor_server.py       # → http://localhost:8888
 # Optionally: --mqtt-ws-port 9001 (default) if Mosquitto WS is on a different port
 ```
+
 `monitor_server.py` serves the built SPA at `/`, proxies MQTT WebSocket at `/mqtt`, and the legacy `monitor.html` dashboard remains accessible via the `/ws` endpoint it exposes.
 
 **Production** — nginx is the recommended entry point; see the Docker compose files.
@@ -363,7 +366,7 @@ python monitor_server.py       # → http://localhost:8888
 ## 10. MQTT Topic Reference
 
 | Topic | Description |
-|-------|-------------|
+| ----- | ----------- |
 | `agents/{id}/heartbeat` | Liveness pulse every 10s — name, state, metrics |
 | `agents/{id}/logs` | Log events, spawn notifications, user interactions |
 | `agents/{id}/errors` | Structured error events with phase, severity, traceback |
@@ -398,7 +401,7 @@ PDF content is extracted in memory (`pdfplumber` → `pymupdf` fallback) and sto
 Connects to your Home Assistant instance (set `HA_URL` and `HA_TOKEN`) and handles five intents, classified by a cheap single-token LLM call:
 
 | Intent | Description |
-|--------|-------------|
+| ------ | ----------- |
 | `recommend_hardware` | Suggests devices and entities for an automation request |
 | `create_automation` | Generates and inserts a new automation via the HA REST API |
 | `edit_automation` | Identifies which automation to change and applies the update |
@@ -419,7 +422,7 @@ AgentFlow can run agents on any machine on your network — Raspberry Pi, VM, cl
 
 ### How It Works
 
-```
+```text
 [Main machine]                        [Raspberry Pi / Edge node]
 main_actor ──MQTT──► nodes/{name}/spawn ──► remote_runner.py
                                                │  compiles + runs agent
@@ -445,11 +448,12 @@ The installer agent handles SSH deployment — no manual file copying needed.
 
 **From the CLI:**
 
-```
+```text
 /deploy rpi-kitchen
 ```
 
 This will:
+
 1. Discover the Pi on your LAN (mDNS first, then port-22 scan)
 2. Prompt for SSH user, password, and your MQTT broker IP
 3. Upload `remote_runner.py` via SFTP
@@ -459,7 +463,7 @@ This will:
 
 **From the chat:**
 
-```
+```text
 set up my Raspberry Pi at 192.168.1.50 as a node called rpi-kitchen
 ```
 
@@ -496,7 +500,7 @@ Or just ask in chat: *"spawn a temperature sensor agent on rpi-kitchen"*
 
 Before spawning an agent that needs hardware libraries:
 
-```
+```text
 /deploy-pkg 192.168.1.50 adafruit-circuitpython-dht RPi.GPIO
 ```
 
@@ -506,7 +510,7 @@ Or include `"install"` in the spawn block — the remote runner will pip-install
 
 Move a running agent to a different machine without stopping it manually:
 
-```
+```text
 /migrate temp-sensor rpi-bedroom
 ```
 
@@ -516,12 +520,13 @@ The system stops the agent on its current node, starts it fresh on the target, a
 
 ### Viewing Connected Nodes
 
-```
+```text
 /nodes
 ```
 
 Output:
-```
+
+```text
   local                online   @main @monitor @installer @home-assistant-agent
   rpi-kitchen          online   @temp-sensor
   rpi-bedroom          OFFLINE  (no agents)
@@ -534,7 +539,7 @@ A node is considered online if it sent a heartbeat in the last 30 seconds.
 Remote agents have the same `agent.*` API as local agents, with one addition and one limitation:
 
 | Feature | Local | Remote |
-|---------|-------|--------|
+| ------- | ----- | ------ |
 | `agent.publish(topic, data)` | ✅ | ✅ |
 | `agent.log(msg)` / `agent.alert(msg)` | ✅ | ✅ |
 | `agent.persist(key, val)` / `agent.recall(key)` | ✅ | ✅ (JSON file on the Pi) |
@@ -549,7 +554,7 @@ For LLM reasoning from a remote agent, use `agent.send_to('main', {'text': promp
 The installer agent gained three new actions for node management:
 
 | Action | Description |
-|--------|-------------|
+| ------ | ----------- |
 | `node_deploy` | Full bootstrap: upload runner + install aiomqtt + start process |
 | `node_install` | Install pip packages on a running node via SSH |
 | `node_run` | Run any shell command on a remote node via SSH |
@@ -602,7 +607,7 @@ By default AgentFlow connects to `localhost:1883`. Override with `--mqtt-host` a
 ### Environment Variables
 
 | Variable | Description |
-|----------|-------------|
+| -------- | ----------- |
 | `ANTHROPIC_API_KEY` | Claude API key (primary LLM) |
 | `OPENAI_API_KEY` | OpenAI key (alternative LLM) |
 | `NIM_API_KEY` | NVIDIA NIM key (free tier — get at build.nvidia.com) |
@@ -639,7 +644,7 @@ The monitor uses two liveness signals: `STATUS_RESPONSE` messages (from the 15-s
 
 ## Appendix: File Structure
 
-```
+```text
 agentflow/
 ├── main.py                        Entry point — CLI args, actor system setup, supervision tree
 ├── remote_runner.py               Self-contained edge node runner — deploy to any Pi or machine

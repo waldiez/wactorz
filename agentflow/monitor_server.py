@@ -485,27 +485,34 @@ async def mqtt_proxy_handler(request):
     return client_ws
 
 
-async def actors_handler(request):
-    """REST endpoint: GET /api/actors — returns current agent list.
+def _actor_payload(ag: dict) -> dict:
+    return {
+        "id":                ag.get("agent_id", ""),
+        "name":              ag.get("name", ""),
+        "state":             ag.get("state", "unknown"),
+        "protected":         ag.get("protected", False),
+        "cpu":               ag.get("cpu"),
+        "mem":               ag.get("mem"),
+        "task":              ag.get("task"),
+        "messagesProcessed": ag.get("messages_processed"),
+        "costUsd":           ag.get("cost_usd"),
+    }
 
-    Maps the in-memory MQTT-derived state to the AgentInfo shape the
-    frontend expects (``id`` instead of ``agent_id``, camelCase fields).
-    """
+
+async def actors_handler(request):
+    """REST endpoint: GET /api/actors — returns current agent list."""
     from aiohttp import web
-    agents = []
-    for ag in state["agents"].values():
-        agents.append({
-            "id":       ag.get("agent_id", ""),
-            "name":     ag.get("name", ""),
-            "state":    ag.get("state", "unknown"),
-            "protected": ag.get("protected", False),
-            "cpu":      ag.get("cpu"),
-            "mem":      ag.get("mem"),
-            "task":     ag.get("task"),
-            "messagesProcessed": ag.get("messages_processed"),
-            "costUsd":  ag.get("cost_usd"),
-        })
-    return web.json_response(agents)
+    return web.json_response([_actor_payload(ag) for ag in state["agents"].values()])
+
+
+async def actor_handler(request):
+    """REST endpoint: GET /api/actors/{actor_id} — returns a single actor."""
+    from aiohttp import web
+    actor_id = request.match_info["actor_id"]
+    ag = state["agents"].get(actor_id)
+    if ag is None:
+        return web.json_response({"error": "actor not found"}, status=404)
+    return web.json_response(_actor_payload(ag))
 
 
 async def main():
@@ -514,7 +521,8 @@ async def main():
     app.router.add_get("/",             index_handler)
     app.router.add_get("/ws",           ws_handler)
     app.router.add_get("/mqtt",         mqtt_proxy_handler)
-    app.router.add_get("/api/actors",   actors_handler)
+    app.router.add_get("/api/actors",            actors_handler)
+    app.router.add_get("/api/actors/{actor_id}", actor_handler)
     app.router.add_get("/docs",         lambda r: __import__("aiohttp").web.HTTPFound("/docs/"))
     app.router.add_get("/docs/",        docs_handler)
     app.router.add_get("/docs/{path:.+}", docs_handler)

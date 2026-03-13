@@ -71,8 +71,14 @@ export class IOBar {
 
     this.sendBtn.addEventListener("click", () => void this.send());
 
-    // Mic toggle
-    this.micBtn.addEventListener("click", () => void this.toggleMic());
+    // Push-to-talk: hold to record, release (or VAD silence) to send
+    this.micBtn.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); // suppress context-menu on mobile long-press
+      this.micBtn.setPointerCapture(e.pointerId);
+      void this.startMic();
+    });
+    this.micBtn.addEventListener("pointerup",     () => this.stopMic());
+    this.micBtn.addEventListener("pointercancel", () => this.stopMic());
 
     // Update placeholder + activeAgent when chat panel opens/closes
     document.addEventListener("panel-opened", (e) => {
@@ -95,7 +101,7 @@ export class IOBar {
     // Sync mic button state when recognition ends for any reason
     this.voiceInput.onStop = () => {
       this.micBtn.classList.remove("recording");
-      this.micBtn.title = "Voice input";
+      this.micBtn.title = "Hold to speak";
     };
 
     this.voiceInput.onError = (message) => {
@@ -166,17 +172,18 @@ export class IOBar {
     }
   }
 
-  private async toggleMic(): Promise<void> {
-    if (this.voiceInput.isRecording) {
-      this.voiceInput.stop();
-      this.micBtn.classList.remove("recording");
-      this.micBtn.title = "Voice input";
-    } else {
-      const started = await this.voiceInput.start();
-      if (started) {
-        this.micBtn.classList.add("recording");
-        this.micBtn.title = "Stop recording";
-      }
+  private async startMic(): Promise<void> {
+    if (this.voiceInput.isRecording) return;
+    const started = await this.voiceInput.start();
+    if (started) {
+      this.micBtn.classList.add("recording");
+      this.micBtn.title = "Release to send";
     }
+  }
+
+  private stopMic(): void {
+    if (!this.voiceInput.isRecording) return;
+    this.voiceInput.stop();
+    // Button state is cleaned up by voiceInput.onStop
   }
 }

@@ -78,7 +78,7 @@ export class VoiceInput {
     }
 
     this.recognition = new API();
-    this.recognition.continuous = false;
+    this.recognition.continuous = false;  // browser VAD: auto-stops on silence
     this.recognition.interimResults = true;
     this.recognition.lang = "en-US";
 

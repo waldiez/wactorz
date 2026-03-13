@@ -24,6 +24,7 @@ export default defineConfig({
       },
     },
   },
+  base: "./",
   build: {
     outDir: "../static/app",
     sourcemap: true,

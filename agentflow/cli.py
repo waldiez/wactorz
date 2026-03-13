@@ -72,6 +72,8 @@ async def _start_web_ui(port: int, mqtt_broker: str, mqtt_port: int) -> None:
 
     asyncio.create_task(_ms.main())
     logger.info("Web UI →  http://localhost:%d", port)
+    if _ms.DOCS_SITE.is_dir():
+        logger.info("Docs   →  http://localhost:%d/docs/", port)
 
 
 async def build_system(args: argparse.Namespace):

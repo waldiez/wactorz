@@ -315,7 +315,7 @@ def build(site_dir: Path = SITE) -> None:
     py_api_compat.mkdir(parents=True, exist_ok=True)
     compat_idx = py_api_compat / "index.html"
     if not compat_idx.exists():
-        compat_idx.write_text(_redirect("/reference/python-api.html"))
+        compat_idx.write_text(_redirect("../../reference/python-api.html"))
         print(f"  compat   → site/api/python/ → /reference/python-api.html")
 
     print(f"\n✓  site built → {site_dir}")

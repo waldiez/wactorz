@@ -4,13 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentflow"
-version = "0.1.0"
+version = "0.2.0"
 description = "Actor-model multi-agent framework — spawn, coordinate and monitor AI agents at runtime"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 authors = [{ name = "AgentFlow Contributors" }]
 keywords = ["agents", "llm", "actor-model", "mqtt", "multi-agent", "orchestration"]
+# "Development Status :: 4 - Beta",
+# "Framework :: Pydantic :: 2",
+# "Typing :: Typed",
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -21,8 +24,14 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Software Development :: Code Generators",
 ]
 
 # Core runtime — always required
@@ -55,24 +64,29 @@ all = [
 ]
 
 [project.scripts]
-agentflow         = "agentflow.main:cli_main"
+agentflow         = "agentflow.cli:main"
 agentflow-monitor = "agentflow.monitor_server:cli_main"
 
 [project.urls]
 Repository = "https://github.com/waldiez/agentflow"
 
 [tool.hatch.build.targets.wheel]
-# pyproject.toml lives inside the package root (has __init__.py here).
-# "." tells hatchling to treat the project directory itself as the package;
-# the installed name comes from [project] name = "agentflow".
-packages = ["."]
+packages = ["agentflow", "agentflow.*"]
 exclude = [
-    "frontend",
     "rust",
     "node_modules",
     "persist",
     "__pycache__",
     "*.log",
-    "*.md",
     ".env*",
+    "frontend/src",
+    "frontend/node_modules",
 ]
+
+# Bundle the pre-built Vite frontend and standalone monitor inside the package.
+# After `pip install`, these land at  {site-packages}/agentflow/frontend/dist/
+# and {site-packages}/agentflow/monitor.html — exactly where monitor_server.py
+# expects them.
+[tool.hatch.build.targets.wheel.force-include]
+"frontend/dist"  = "agentflow/frontend/dist"
+"monitor.html"   = "agentflow/monitor.html"

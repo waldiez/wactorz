@@ -22,8 +22,7 @@ use agentflow_agents::{
     WifAgent, WikAgent, WisAgent, WmeAgent,
 };
 use agentflow_core::{ActorConfig, ActorSystem, EventPublisher, Supervisor, SupervisorStrategy};
-use agentflow_interfaces::ws::WsEnvelope;
-use agentflow_interfaces::{RestServer, WsBridge};
+use agentflow_interfaces::{RestServer, WsBridge, WsEnvelope};
 use agentflow_mqtt::{MqttClient, MqttConfig};
 
 /// AgentFlow: async multi-agent orchestration framework
@@ -62,6 +61,12 @@ pub struct Args {
     /// Implies --llm-provider nim when set.
     #[arg(long, env = "NIM_MODEL")]
     pub nim_model: Option<String>,
+
+    /// Mosquitto WebSocket listener port (used by the /mqtt proxy route).
+    /// Set to 0 to disable the proxy (e.g. when Mosquitto has no WS listener).
+    /// The frontend connects via ws[s]://host/mqtt which the bridge proxies here.
+    #[arg(long, default_value_t = 9001, env = "MQTT_WS_PORT")]
+    pub mqtt_ws_port: u16,
 
     /// Disable interactive CLI (useful for container deployments)
     #[arg(long, default_value_t = false, env = "NO_CLI")]
@@ -222,17 +227,10 @@ async fn main() -> Result<()> {
     });
 
     // Subscribe to all agent and system topics, plus the IO gateway topic
-    if let Err(e) = mqtt_client.subscribe("agents/#").await {
-        tracing::warn!("MQTT subscribe failed (broker may not be running): {e}");
-    }
-    if let Err(e) = mqtt_client.subscribe("system/#").await {
-        tracing::warn!("MQTT subscribe failed (broker may not be running): {e}");
-    }
-    if let Err(e) = mqtt_client.subscribe(agentflow_mqtt::topics::IO_CHAT).await {
-        tracing::warn!("MQTT subscribe io/chat failed: {e}");
-    }
-    if let Err(e) = mqtt_client.subscribe("system/llm/#").await {
-        tracing::warn!("MQTT subscribe system/llm/# failed: {e}");
+    for topic in &["agents/#", "nodes/#", "system/#", "system/llm/#", agentflow_mqtt::topics::IO_CHAT] {
+        if let Err(e) = mqtt_client.subscribe(topic).await {
+            tracing::warn!("MQTT subscribe {topic} failed (broker may not be running): {e}");
+        }
     }
 
     // Publisher bridge task: drain pub_rx → MQTT
@@ -537,7 +535,13 @@ async fn main() -> Result<()> {
 
     // ── WebSocket bridge ──────────────────────────────────────────────────────
     let ws_addr: SocketAddr = args.ws_addr;
-    let ws_bridge = WsBridge::new(ws_tx);
+    let ws_bridge = WsBridge::new(
+        ws_tx,
+        Arc::clone(&mqtt_client),
+        args.mqtt_host.clone(),
+        args.mqtt_ws_port,
+    );
+    ws_bridge.spawn_monitor_task();
     tokio::spawn(async move {
         let router = ws_bridge.router();
         match tokio::net::TcpListener::bind(ws_addr).await {

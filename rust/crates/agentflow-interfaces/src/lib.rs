@@ -11,4 +11,4 @@ pub mod rest;
 pub mod ws;
 
 pub use rest::RestServer;
-pub use ws::WsBridge;
+pub use ws::{WsBridge, WsEnvelope};

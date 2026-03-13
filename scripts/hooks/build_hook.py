@@ -107,7 +107,7 @@ class CustomBuildHook(BuildHookInterface):
 
         self.app.display_info("[build-hook] building docs …")
         result = subprocess.run(
-            [sys.executable, str(build_script)],
+            [sys.executable, str(build_script), "--full"],
             cwd=root, check=False,
         )
         if result.returncode != 0:

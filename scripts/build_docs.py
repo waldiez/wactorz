@@ -319,10 +319,54 @@ def build(site_dir: Path = SITE) -> None:
     print(f"\n✓  site built → {site_dir}")
 
 
+# ── Rust + JS/TS docs ──────────────────────────────────────────────────────────
+
+def build_rust(site_dir: Path = SITE) -> None:
+    rust_dir = ROOT / "rust"
+    out_dir = site_dir / "api" / "rust"
+    if not rust_dir.is_dir():
+        print("  [skip] rust/ not found")
+        return
+    print("  building rustdoc …")
+    r = subprocess.run(["cargo", "doc", "--no-deps", "--workspace"], cwd=rust_dir, check=False)
+    if r.returncode != 0:
+        print("  [warn] cargo doc failed")
+        return
+    doc_src = rust_dir / "target" / "doc"
+    if doc_src.is_dir():
+        shutil.copytree(doc_src, out_dir, dirs_exist_ok=True)
+        print(f"  rustdoc  → site/api/rust/")
+    index_script = ROOT / "scripts" / "rustdoc_index.py"
+    if index_script.exists():
+        subprocess.run([sys.executable, str(index_script), str(out_dir)], check=False)
+
+
+def build_jsdocs(site_dir: Path = SITE) -> None:
+    frontend_dir = ROOT / "frontend"
+    out_dir = site_dir / "api" / "js"
+    if not frontend_dir.is_dir():
+        print("  [skip] frontend/ not found")
+        return
+    print("  building typedoc …")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run(
+        ["bun", "run", "docs"],
+        cwd=frontend_dir, check=False,
+        env={**os.environ, "FORCE_COLOR": "0"},
+    )
+    if r.returncode != 0:
+        print("  [warn] typedoc failed")
+    else:
+        print(f"  typedoc  → site/api/js/")
+
+
 # ── Serve ──────────────────────────────────────────────────────────────────────
 
-def serve(port: int = 8001) -> None:
+def serve(port: int = 8001, full: bool = False) -> None:
     build()
+    if full:
+        build_rust()
+        build_jsdocs()
 
     os.chdir(SITE)
     handler = http.server.SimpleHTTPRequestHandler
@@ -366,9 +410,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AgentFlow docs builder")
     parser.add_argument("--serve", nargs="?", const=8001, type=int, metavar="PORT",
                         help="serve after building (default port 8001)")
+    parser.add_argument("--full", action="store_true",
+                        help="also build rustdoc and typedoc")
     args = parser.parse_args()
 
     if args.serve is not None:
-        serve(args.serve)
+        serve(args.serve, full=args.full)
     else:
         build()
+        if args.full:
+            build_rust()
+            build_jsdocs()

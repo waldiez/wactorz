@@ -29,11 +29,6 @@ jobs:
       - name: Install Python deps
         run: pip install -e ".[all,docs]"
 
-      # ── Markdown → HTML (custom builder) ──────────────────────────────────
-      - name: Build docs (markdown → HTML)
-        run: python3 scripts/build_docs.py
-
-      # ── Rust docs ─────────────────────────────────────────────────────────
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -42,28 +37,14 @@ jobs:
         with:
           workspaces: rust
 
-      - name: Build Rust docs
-        working-directory: rust
-        run: cargo doc --no-deps --workspace
-        continue-on-error: true
-
-      - name: Inject Rust docs
-        run: |
-          mkdir -p site/api/rust
-          if [ -d rust/target/doc ]; then
-            cp -r rust/target/doc/. site/api/rust/
-          fi
-          python3 scripts/rustdoc_index.py site/api/rust
-
-      # ── Frontend / TS docs (typedoc) ──────────────────────────────────────
       - uses: oven-sh/setup-bun@v2
 
-      - name: Build TypeScript docs
+      - name: Install frontend deps
         working-directory: frontend
-        run: |
-          bun install
-          bun run docs
-        continue-on-error: true
+        run: bun install
+
+      - name: Build all docs
+        run: python3 scripts/build_docs.py --full
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4

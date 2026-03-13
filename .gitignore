@@ -115,8 +115,6 @@ venv.bak/
 # Rope project settings
 .ropeproject
 
-# mkdocs documentation
-/site
 
 # mypy
 .mypy_cache/
@@ -154,8 +152,9 @@ __pycache__/
 rust/**/target/
 **.log
 
-# Frontend build output (generated, not committed)
+# Pre-built assets committed to the repo (bundled into the wheel by the build hook)
 !frontend/dist/
+!site/
 frontend/node_modules/
 
 # HA secrets — never commit real credentials
@@ -192,4 +191,3 @@ agentflow/**/__pycache__/
 agentflow/**/*.pyc
 
 myenv/
-site/

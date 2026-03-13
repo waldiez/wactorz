@@ -51,25 +51,25 @@ def _is_stale(dist_index: Path) -> bool:
 
 
 class CustomBuildHook(BuildHookInterface):
-    """Ensure the Vite frontend is built before the wheel is assembled."""
+    """Ensure the Vite frontend and docs site are built before the wheel is assembled."""
 
     PLUGIN_NAME = "custom"
 
     def initialize(self, version: str, build_data: dict) -> None:
-        root       = Path(self.root)
+        root = Path(self.root)
+        self._build_frontend(root)
+        self._build_docs(root)
+
+    def _build_frontend(self, root: Path) -> None:
         frontend   = root / "frontend"
-        dist_index = root / "frontend" / "dist" / "index.html"
+        dist_index = frontend / "dist" / "index.html"
 
         if not _is_stale(dist_index):
-            self.app.display_info(
-                f"[build-hook] frontend/dist is fresh — skipping rebuild"
-            )
+            self.app.display_info("[build-hook] frontend/dist is fresh — skipping rebuild")
             return
 
         if not frontend.is_dir():
-            self.app.display_warning(
-                "[build-hook] frontend/ directory not found — skipping build"
-            )
+            self.app.display_warning("[build-hook] frontend/ not found — skipping")
             return
 
         pm = _pkg_manager(frontend)
@@ -84,11 +84,58 @@ class CustomBuildHook(BuildHookInterface):
                 )
 
         try:
-            _run(pm + ["install", "--frozen-lockfile"] if pm[0] != "npm"
-                 else pm + ["ci"])
+            _run(pm + ["install", "--frozen-lockfile"] if pm[0] != "npm" else pm + ["ci"])
             _run(pm + ["run", "build"])
         except RuntimeError as exc:
             self.app.display_error(str(exc))
             sys.exit(1)
 
         self.app.display_info("[build-hook] frontend build complete ✓")
+
+    def _build_docs(self, root: Path) -> None:
+        site_index = root / "site" / "index.html"
+
+        if not _is_stale(site_index):
+            self.app.display_info("[build-hook] site/ is fresh — skipping docs rebuild")
+            return
+
+        # mkdocs is optional — skip silently if not installed
+        try:
+            import mkdocs  # noqa: F401
+        except ImportError:
+            self.app.display_info(
+                "[build-hook] mkdocs not installed — skipping docs build "
+                "(install with: pip install agentflow[docs])"
+            )
+            self._ensure_docs_placeholder(root)
+            return
+
+        self.app.display_info("[build-hook] building docs with mkdocs …")
+        result = subprocess.run(
+            [sys.executable, "-m", "mkdocs", "build"],
+            cwd=root, check=False,
+        )
+        if result.returncode != 0:
+            self.app.display_warning("[build-hook] mkdocs build failed — using placeholder")
+            self._ensure_docs_placeholder(root)
+            return
+
+        # Overlay the custom landing page
+        custom_index = root / "docs" / "index.html"
+        if custom_index.exists():
+            import shutil
+            shutil.copy(custom_index, root / "site" / "index.html")
+
+        self.app.display_info("[build-hook] docs build complete ✓")
+
+    @staticmethod
+    def _ensure_docs_placeholder(root: Path) -> None:
+        """Create a minimal site/ so force-include doesn't fail."""
+        site = root / "site"
+        site.mkdir(exist_ok=True)
+        placeholder = site / "index.html"
+        if not placeholder.exists():
+            placeholder.write_text(
+                '<meta http-equiv="refresh" content="0; '
+                'url=https://waldiez.github.io/agentflow/">\n'
+            )

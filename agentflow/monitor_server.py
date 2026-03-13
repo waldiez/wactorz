@@ -336,6 +336,7 @@ def _find_dir(*rel: str) -> Path:
 
 FRONTEND_DIST   = _find_dir("frontend", "dist")
 FRONTEND_PUBLIC = _find_dir("frontend", "public")
+DOCS_SITE       = _find_dir("docs_site")
 
 
 async def index_handler(request):
@@ -364,6 +365,23 @@ async def static_handler(request):
                 return web.FileResponse(candidate)
         except Exception:
             pass
+    raise web.HTTPNotFound()
+
+
+async def docs_handler(request):
+    """Serve the built docs site from /docs/."""
+    from aiohttp import web
+    if not DOCS_SITE.is_dir():
+        raise web.HTTPNotFound(reason="Docs not built — run: make docs-build")
+    rel = request.match_info.get("path", "") or "index.html"
+    if not rel or rel.endswith("/"):
+        rel = rel + "index.html"
+    candidate = (DOCS_SITE / rel).resolve()
+    try:
+        if candidate.is_file() and str(candidate).startswith(str(DOCS_SITE.resolve())):
+            return web.FileResponse(candidate)
+    except Exception:
+        pass
     raise web.HTTPNotFound()
 
 
@@ -482,12 +500,16 @@ async def main():
     app.router.add_get("/ws",           ws_handler)
     app.router.add_get("/mqtt",         mqtt_proxy_handler)
     app.router.add_get("/api/actors",   actors_handler)
+    app.router.add_get("/docs",         lambda r: __import__("aiohttp").web.HTTPFound("/docs/"))
+    app.router.add_get("/docs/",        docs_handler)
+    app.router.add_get("/docs/{path:.+}", docs_handler)
     app.router.add_get("/{path:.+}",    static_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WS_PORT)
     await site.start()
-    logger.info(f"Monitor running -> http://localhost:{WS_PORT}")
+    docs_note = f"  docs  → http://localhost:{WS_PORT}/docs/" if DOCS_SITE.is_dir() else ""
+    logger.info(f"Monitor  → http://localhost:{WS_PORT}/{docs_note}")
     await mqtt_listener()
 
 def cli_main() -> None:

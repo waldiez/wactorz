@@ -48,6 +48,8 @@ docs      = [
     "pygments>=2.17",
     "watchdog>=5.0.0",
 ]
+# Note: docs extras are only needed to *rebuild* site/ (run build_docs.py).
+# The pre-built site/ is committed to the repo and bundled into the wheel as-is.
 dev       = [
     "agentflow[docs]",
     "pre-commit>=3.0.0",

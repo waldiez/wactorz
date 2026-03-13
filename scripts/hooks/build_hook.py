@@ -1,9 +1,9 @@
 """
 Hatchling pre-build hook — ensures the Vite frontend is built before packaging.
 
-If ``frontend/dist/index.html`` is missing or older than STALE_AFTER seconds
-the hook runs ``npm ci && npm run build`` (or ``bun`` / ``yarn`` / ``pnpm``
-if the project is configured for them) before hatchling assembles the wheel.
+Both ``frontend/dist/`` and ``site/`` are committed to the repository and
+bundled into the wheel as-is (no build tools required at install time).
+The hook only rebuilds ``frontend/dist/`` if it is missing or stale.
 
 Configure in pyproject.toml:
 
@@ -51,14 +51,12 @@ def _is_stale(dist_index: Path) -> bool:
 
 
 class CustomBuildHook(BuildHookInterface):
-    """Ensure the Vite frontend and docs site are built before the wheel is assembled."""
+    """Ensure the Vite frontend is built before the wheel is assembled."""
 
     PLUGIN_NAME = "custom"
 
     def initialize(self, version: str, build_data: dict) -> None:
-        root = Path(self.root)
-        self._build_frontend(root)
-        self._build_docs(root)
+        self._build_frontend(Path(self.root))
 
     def _build_frontend(self, root: Path) -> None:
         frontend   = root / "frontend"
@@ -91,40 +89,3 @@ class CustomBuildHook(BuildHookInterface):
             sys.exit(1)
 
         self.app.display_info("[build-hook] frontend build complete ✓")
-
-    def _build_docs(self, root: Path) -> None:
-        site_index = root / "site" / "index.html"
-
-        if not _is_stale(site_index):
-            self.app.display_info("[build-hook] site/ is fresh — skipping docs rebuild")
-            return
-
-        build_script = root / "scripts" / "build_docs.py"
-        if not build_script.exists():
-            self.app.display_warning("[build-hook] scripts/build_docs.py not found — using placeholder")
-            self._ensure_docs_placeholder(root)
-            return
-
-        self.app.display_info("[build-hook] building docs …")
-        result = subprocess.run(
-            [sys.executable, str(build_script)],
-            cwd=root, check=False,
-        )
-        if result.returncode != 0:
-            self.app.display_warning("[build-hook] docs build failed — using placeholder")
-            self._ensure_docs_placeholder(root)
-            return
-
-        self.app.display_info("[build-hook] docs build complete ✓")
-
-    @staticmethod
-    def _ensure_docs_placeholder(root: Path) -> None:
-        """Create a minimal site/ so force-include doesn't fail."""
-        site = root / "site"
-        site.mkdir(exist_ok=True)
-        placeholder = site / "index.html"
-        if not placeholder.exists():
-            placeholder.write_text(
-                '<meta http-equiv="refresh" content="0; '
-                'url=https://waldiez.github.io/agentflow/">\n'
-            )

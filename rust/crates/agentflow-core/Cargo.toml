@@ -2,6 +2,7 @@
 name = "agentflow-core"
 description = "Core actor model primitives: Actor trait, Message, ActorState, Registry"
 version.workspace = true
+publish = false
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

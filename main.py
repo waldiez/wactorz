@@ -205,5 +205,10 @@ async def main():
         await asyncio.gather(iface.run(), system.run_forever())
 
 
-if __name__ == "__main__":
+def cli_main() -> None:
+    """Entry point for the `agentflow` console script."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    cli_main()

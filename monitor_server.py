@@ -433,4 +433,9 @@ if __name__ == "__main__":
     thismodule.MQTT_WS_PORT = args.mqtt_ws_port
     thismodule.WS_PORT      = args.ws_port
 
+    cli_main()
+
+
+def cli_main() -> None:
+    """Entry point for the `agentflow-monitor` console script."""
     asyncio.run(main())

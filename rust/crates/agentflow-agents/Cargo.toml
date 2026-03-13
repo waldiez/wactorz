@@ -2,6 +2,7 @@
 name = "agentflow-agents"
 description = "Agent implementations: LLM, orchestrator, dynamic, monitor, ML"
 version.workspace = true
+publish = false
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

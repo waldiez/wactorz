@@ -2,6 +2,7 @@
 name = "agentflow-server"
 description = "AgentFlow server binary entry point"
 version.workspace = true
+publish = false
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

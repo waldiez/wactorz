@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
-      - 'mkdocs.yml'
+      - 'scripts/build_docs.py'
       - 'agentflow/**'
       - 'rust/**'
       - 'frontend/**'
@@ -21,8 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # needed for mike versioning
 
       - uses: actions/setup-python@v5
         with:
@@ -31,7 +29,11 @@ jobs:
       - name: Install Python deps
         run: pip install -e ".[all,docs]"
 
-      # ── Rust docs ─────────────────────────────────────────────────────
+      # ── Markdown → HTML (custom builder) ──────────────────────────────────
+      - name: Build docs (markdown → HTML)
+        run: python3 scripts/build_docs.py
+
+      # ── Rust docs ─────────────────────────────────────────────────────────
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -45,27 +47,6 @@ jobs:
         run: cargo doc --no-deps --workspace
         continue-on-error: true
 
-      # ── Frontend / TS docs (typedoc) ──────────────────────────────────
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Build TypeScript docs
-        working-directory: frontend
-        run: |
-          bun install
-          bunx typedoc \
-            --out ../site/api/js \
-            --entryPointStrategy expand \
-            src \
-            --name "AgentFlow JS" \
-            --readme none \
-            --hideGenerator
-        continue-on-error: true
-
-      # ── MkDocs — builds to site/ ──────────────────────────────────────
-      - name: Build MkDocs
-        run: mkdocs build
-
-      # ── Inject external API docs into the MkDocs site ─────────────────
       - name: Inject Rust docs
         run: |
           mkdir -p site/api/rust
@@ -74,9 +55,15 @@ jobs:
           fi
           python3 scripts/rustdoc_index.py site/api/rust
 
-      # Replace MkDocs-generated home with the custom landing page
-      - name: Inject custom landing page
-        run: cp docs/_landing.html site/index.html
+      # ── Frontend / TS docs (typedoc) ──────────────────────────────────────
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build TypeScript docs
+        working-directory: frontend
+        run: |
+          bun install
+          bun run docs
+        continue-on-error: true
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4

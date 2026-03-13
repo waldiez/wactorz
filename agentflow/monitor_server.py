@@ -336,7 +336,10 @@ def _find_dir(*rel: str) -> Path:
 
 FRONTEND_DIST   = _find_dir("frontend", "dist")
 FRONTEND_PUBLIC = _find_dir("frontend", "public")
-DOCS_SITE       = _find_dir("docs_site")
+DOCS_SITE       = next(
+    (p for p in (_pkg / "docs_site", _root / "docs_site", _root / "site") if p.is_dir()),
+    _pkg / "docs_site",  # canonical installed path (may not exist yet)
+)
 
 
 async def index_handler(request):
@@ -520,8 +523,9 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WS_PORT)
     await site.start()
-    docs_note = f"  docs  → http://localhost:{WS_PORT}/docs/" if DOCS_SITE.is_dir() else ""
-    logger.info(f"Monitor  → http://localhost:{WS_PORT}/{docs_note}")
+    logger.info(f"Monitor  → http://localhost:{WS_PORT}/")
+    if DOCS_SITE.is_dir():
+        logger.info(f"Docs     → http://localhost:{WS_PORT}/docs/")
     await mqtt_listener()
 
 def cli_main() -> None:

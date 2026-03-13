@@ -99,32 +99,21 @@ class CustomBuildHook(BuildHookInterface):
             self.app.display_info("[build-hook] site/ is fresh — skipping docs rebuild")
             return
 
-        # mkdocs is optional — skip silently if not installed
-        try:
-            import mkdocs  # noqa: F401
-        except ImportError:
-            self.app.display_info(
-                "[build-hook] mkdocs not installed — skipping docs build "
-                "(install with: pip install agentflow[docs])"
-            )
+        build_script = root / "scripts" / "build_docs.py"
+        if not build_script.exists():
+            self.app.display_warning("[build-hook] scripts/build_docs.py not found — using placeholder")
             self._ensure_docs_placeholder(root)
             return
 
-        self.app.display_info("[build-hook] building docs with mkdocs …")
+        self.app.display_info("[build-hook] building docs …")
         result = subprocess.run(
-            [sys.executable, "-m", "mkdocs", "build"],
+            [sys.executable, str(build_script)],
             cwd=root, check=False,
         )
         if result.returncode != 0:
-            self.app.display_warning("[build-hook] mkdocs build failed — using placeholder")
+            self.app.display_warning("[build-hook] docs build failed — using placeholder")
             self._ensure_docs_placeholder(root)
             return
-
-        # Overlay the custom landing page
-        custom_index = root / "docs" / "_landing.html"
-        if custom_index.exists():
-            import shutil
-            shutil.copy(custom_index, root / "site" / "index.html")
 
         self.app.display_info("[build-hook] docs build complete ✓")
 

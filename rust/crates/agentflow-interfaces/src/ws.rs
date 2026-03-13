@@ -3,12 +3,12 @@
 //! Two routes are mounted under the same axum `Router`:
 //!
 //! - `/ws`   — Python-compatible aggregated-state bridge.
-//!             Compatible with `monitor.html` (and any client expecting
-//!             `full_snapshot` / `patch` / `delete_agent` JSON messages).
+//!   Compatible with `monitor.html` (and any client expecting
+//!   `full_snapshot` / `patch` / `delete_agent` JSON messages).
 //!
 //! - `/mqtt` — Transparent WebSocket proxy to the Mosquitto broker's WS
-//!             listener (configurable host/port, default `localhost:9001`).
-//!             Compatible with `mqtt.js` / `frontend/dist/index.html`.
+//!   listener (configurable host/port, default `localhost:9001`).
+//!   Compatible with `mqtt.js` / `frontend/dist/index.html`.
 //!
 //! Together these two routes ensure **any combination** of
 //! `python|rust` backend × `monitor.html|frontend/dist/index.html` frontend
@@ -159,13 +159,11 @@ impl MonitorState {
             match metric {
                 "status" => {
                     self.update_agent(agent_id, "status", payload.clone());
-                    if let Some(obj) = payload.as_object() {
-                        if let Some(entry) = self.agents.get_mut(agent_id) {
-                            if let Some(e) = entry.as_object_mut() {
-                                if let Some(n) = obj.get("name")  { e.insert("name".into(),  n.clone()); }
-                                if let Some(s) = obj.get("state") { e.insert("state".into(), s.clone()); }
-                            }
-                        }
+                    if let Some(obj) = payload.as_object()
+                        && let Some(entry) = self.agents.get_mut(agent_id)
+                        && let Some(e) = entry.as_object_mut() {
+                            if let Some(n) = obj.get("name")  { e.insert("name".into(),  n.clone()); }
+                            if let Some(s) = obj.get("state") { e.insert("state".into(), s.clone()); }
                     }
                     self.add_log(json!({
                         "type":      "status",
@@ -179,15 +177,14 @@ impl MonitorState {
                     if let Some(obj) = payload.as_object() {
                         let short = &agent_id[..agent_id.len().min(8)];
                         let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or(short);
-                        if let Some(entry) = self.agents.get_mut(agent_id) {
-                            if let Some(e) = entry.as_object_mut() {
+                        if let Some(entry) = self.agents.get_mut(agent_id)
+                            && let Some(e) = entry.as_object_mut() {
                                 e.insert("name".into(), json!(name));
                                 for k in &["cpu", "state"] {
                                     if let Some(v) = obj.get(*k) { e.insert(k.to_string(), v.clone()); }
                                 }
                                 if let Some(v) = obj.get("memory_mb") { e.insert("mem".into(), v.clone()); }
                                 if let Some(v) = obj.get("task")      { e.insert("task".into(), v.clone()); }
-                            }
                         }
                     }
                     // heartbeat → broadcast state update but suppress from log_feed
@@ -200,14 +197,12 @@ impl MonitorState {
                 }
                 "metrics" => {
                     self.update_agent(agent_id, "metrics", payload.clone());
-                    if let Some(obj) = payload.as_object() {
-                        if let Some(entry) = self.agents.get_mut(agent_id) {
-                            if let Some(e) = entry.as_object_mut() {
-                                for k in &["messages_processed", "cost_usd", "input_tokens", "output_tokens"] {
-                                    if let Some(v) = obj.get(*k) { e.insert(k.to_string(), v.clone()); }
-                                }
+                    if let Some(obj) = payload.as_object()
+                        && let Some(entry) = self.agents.get_mut(agent_id)
+                        && let Some(e) = entry.as_object_mut() {
+                            for k in &["messages_processed", "cost_usd", "input_tokens", "output_tokens"] {
+                                if let Some(v) = obj.get(*k) { e.insert(k.to_string(), v.clone()); }
                             }
-                        }
                     }
                 }
                 "logs" => {
@@ -247,7 +242,7 @@ impl MonitorState {
                         .and_then(|v| v.as_str())
                         .unwrap_or(short)
                         .to_string();
-                    let mut enriched = if let Some(obj) = payload.as_object() {
+                    let enriched = if let Some(obj) = payload.as_object() {
                         let mut e = obj.clone();
                         e.insert("agent_id".into(), json!(agent_id));
                         e.entry("name".to_string()).or_insert_with(|| json!(&known_name));
@@ -475,8 +470,8 @@ async fn handle_browser_command(text: &str, state: &BridgeState) {
                 "state":    snap,
             })).unwrap_or_default()
         } else {
-            if let Some(entry) = st.agents.get_mut(agent_id) {
-                if let Some(e) = entry.as_object_mut() {
+            if let Some(entry) = st.agents.get_mut(agent_id)
+                && let Some(e) = entry.as_object_mut() {
                     let new_state = match command {
                         "stop"   => "stopped",
                         "pause"  => "paused",
@@ -484,7 +479,6 @@ async fn handle_browser_command(text: &str, state: &BridgeState) {
                         _        => return,
                     };
                     e.insert("state".into(), json!(new_state));
-                }
             }
             let snap = st.snapshot();
             serde_json::to_string(&json!({

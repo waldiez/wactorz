@@ -148,14 +148,14 @@ TEMPLATE = """\
 </head>
 <body>
 <header class="topbar">
-  <a href="/" class="topbar-logo">
+  <a href="{root}index.html" class="topbar-logo">
     <div class="logo-mark"></div>AgentFlow
   </a>
   <nav class="topbar-links">
     <a href="https://github.com/waldiez/agentflow" target="_blank" rel="noopener">GitHub</a>
     <a href="https://pypi.org/project/agentflow/" target="_blank" rel="noopener">PyPI</a>
-    <a href="/api/rust/" target="_blank">Rust Docs</a>
-    <a href="/api/js/" target="_blank">JS Docs</a>
+    <a href="{root}api/rust/" target="_blank">Rust Docs</a>
+    <a href="{root}api/js/" target="_blank">JS Docs</a>
   </nav>
 </header>
 
@@ -211,21 +211,19 @@ def _md_to_html_path(md_file: str) -> str:
     return re.sub(r"\.md$", ".html", md_file)
 
 
-def build_sidebar(active_md: str, active_subdir: str) -> str:
+def build_sidebar(active_md: str, active_subdir: str, root: str = "../") -> str:
     lines = []
     for item in NAV:
         label = item[0]
         if len(item) == 2:
-            # external link
             url = item[1]
             lines.append(f'    <a href="{url}" class="external" target="_blank" rel="noopener">{label}</a>')
         else:
-            # (label, subdir, children)
             subdir, children = item[1], item[2]
             lines.append('    <div class="sidebar-group">')
             lines.append(f'      <div class="sidebar-label">{label}</div>')
             for child_label, child_md in children:
-                href = f"/{subdir}/{_md_to_html_path(child_md)}"
+                href = f"{root}{subdir}/{_md_to_html_path(child_md)}"
                 cls = "active" if child_md == active_md and subdir == active_subdir else ""
                 lines.append(f'      <a href="{href}" class="{cls}">{child_label}</a>')
             lines.append("    </div>")
@@ -295,9 +293,10 @@ def build(site_dir: Path = SITE) -> None:
         text = md_path.read_text(encoding="utf-8")
         title = extract_title(text, md_name.replace(".md", "").replace("-", " ").title())
         body = render_md(text)
-        sidebar = build_sidebar(md_name, subdir)
+        root = "../"  # all content pages are exactly one level deep
+        sidebar = build_sidebar(md_name, subdir, root)
 
-        html = TEMPLATE.format(title=title, sidebar=sidebar, body=body)
+        html = TEMPLATE.format(title=title, sidebar=sidebar, body=body, root=root)
         out = out_dir / _md_to_html_path(md_name)
         out.write_text(html, encoding="utf-8")
         print(f"  {md_name:<30} → site/{subdir}/{out.name}")

@@ -376,10 +376,22 @@ async def docs_handler(request):
     rel = request.match_info.get("path", "") or "index.html"
     if not rel or rel.endswith("/"):
         rel = rel + "index.html"
+    root = DOCS_SITE.resolve()
     candidate = (DOCS_SITE / rel).resolve()
     try:
-        if candidate.is_file() and str(candidate).startswith(str(DOCS_SITE.resolve())):
+        if candidate.is_file() and str(candidate).startswith(str(root)):
             return web.FileResponse(candidate)
+        # If index.html is missing (e.g. rustdoc root), try generating one on-the-fly
+        if rel.endswith("index.html") and not candidate.exists():
+            parent = candidate.parent
+            if parent.is_dir():
+                # redirect to first sub-index found
+                for sub in sorted(parent.iterdir()):
+                    if sub.is_dir() and (sub / "index.html").exists():
+                        location = request.path.rstrip("/") + f"/{sub.name}/index.html"
+                        raise web.HTTPFound(location)
+    except web.HTTPFound:
+        raise
     except Exception:
         pass
     raise web.HTTPNotFound()

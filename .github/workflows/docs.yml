@@ -71,19 +71,8 @@ jobs:
           mkdir -p site/api/rust
           if [ -d rust/target/doc ]; then
             cp -r rust/target/doc/. site/api/rust/
-            # rustdoc uses a search-index redirect; ensure index.html exists
-            if [ ! -f site/api/rust/index.html ]; then
-              # link to the first crate
-              FIRST=$(ls site/api/rust | grep -v '^[^a-z]' | head -1)
-              echo "<meta http-equiv=\"refresh\" content=\"0; url=${FIRST}/index.html\">" \
-                > site/api/rust/index.html
-            fi
-          else
-            echo "<html><body style='font-family:monospace;background:#05080e;color:#dde3f0;padding:2rem'>
-              <h2>Rust docs unavailable in this build</h2>
-              <p><a href='https://github.com/waldiez/agentflow/tree/main/rust' style='color:#4f8ef7'>Browse source on GitHub</a></p>
-            </body></html>" > site/api/rust/index.html
           fi
+          python3 scripts/rustdoc_index.py site/api/rust
 
       # Replace MkDocs-generated home with the custom landing page
       - name: Inject custom landing page

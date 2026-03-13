@@ -155,6 +155,7 @@ docs-build: ## Build full docs site (MkDocs + rustdoc) into site/
 	mkdir -p site/api/rust
 	cd $(RUST_DIR) && cargo doc --no-deps --workspace && \
 	  cp -r target/doc/. ../site/api/rust/ 2>/dev/null || true
+	@python3 scripts/rustdoc_index.py site/api/rust || true
 
 publish: ## Build wheel + sdist and upload to PyPI (requires twine + API token)
 	python scripts/build.py --upload

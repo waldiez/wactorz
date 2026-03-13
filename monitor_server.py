@@ -26,10 +26,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-MQTT_BROKER = "localhost"
-MQTT_PORT   = 1883
-WS_PORT     = 8888
-MQTT_TOPICS = ["agents/#", "system/#", "nodes/#"]
+MQTT_BROKER    = "localhost"
+MQTT_PORT      = 1883
+MQTT_WS_PORT   = 9001   # Mosquitto WebSocket listener (proxied at /mqtt)
+WS_PORT        = 8888
+MQTT_TOPICS    = ["agents/#", "system/#", "nodes/#"]
 
 state = {
     "agents":        {},
@@ -320,17 +321,84 @@ async def ws_handler(request):
     return ws
 
 
+FRONTEND_DIST   = Path(__file__).parent / "frontend" / "dist"
+FRONTEND_PUBLIC = Path(__file__).parent / "frontend" / "public"
+
+
 async def index_handler(request):
     from aiohttp import web
-    html_path = Path(__file__).parent / "frontend" / "index.html"
-    return web.FileResponse(html_path)
+    # Prefer the Vite-built output; fall back to the raw source file.
+    for candidate in [
+        FRONTEND_DIST / "index.html",
+        Path(__file__).parent / "frontend" / "index.html",
+    ]:
+        if candidate.exists():
+            return web.FileResponse(candidate)
+    raise web.HTTPNotFound()
+
+
+async def static_handler(request):
+    """Serve files from frontend/dist/ then frontend/public/ as fallback."""
+    from aiohttp import web
+    rel = request.match_info["path"]
+    for base in [FRONTEND_DIST, FRONTEND_PUBLIC]:
+        candidate = base / rel
+        try:
+            candidate = candidate.resolve()
+            if candidate.is_file() and str(candidate).startswith(str(base.resolve())):
+                return web.FileResponse(candidate)
+        except Exception:
+            pass
+    raise web.HTTPNotFound()
+
+
+async def mqtt_proxy_handler(request):
+    """Proxy /mqtt WebSocket connections to Mosquitto's WebSocket port."""
+    import aiohttp
+    from aiohttp import web, WSMsgType
+
+    upstream_url = f"ws://{MQTT_BROKER}:{MQTT_WS_PORT}/"
+
+    # Preserve MQTT sub-protocol negotiation so mqtt.js works correctly.
+    raw_proto = request.headers.get("Sec-WebSocket-Protocol", "")
+    protocols = [p.strip() for p in raw_proto.split(",") if p.strip()]
+
+    client_ws = web.WebSocketResponse(protocols=protocols)
+    await client_ws.prepare(request)
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.ws_connect(
+                upstream_url,
+                protocols=protocols,
+                headers={"Sec-WebSocket-Protocol": ",".join(protocols)} if protocols else {},
+            ) as upstream_ws:
+                async def forward(src, dst):
+                    async for msg in src:
+                        if msg.type == WSMsgType.BINARY:
+                            await dst.send_bytes(msg.data)
+                        elif msg.type == WSMsgType.TEXT:
+                            await dst.send_str(msg.data)
+                        elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
+                            break
+
+                await asyncio.gather(
+                    forward(client_ws, upstream_ws),
+                    forward(upstream_ws, client_ws),
+                )
+        except Exception as exc:
+            logger.warning("MQTT proxy error: %s", exc)
+
+    return client_ws
 
 
 async def main():
     from aiohttp import web
     app = web.Application()
-    app.router.add_get("/",   index_handler)
-    app.router.add_get("/ws", ws_handler)
+    app.router.add_get("/",          index_handler)
+    app.router.add_get("/ws",        ws_handler)
+    app.router.add_get("/mqtt",      mqtt_proxy_handler)
+    app.router.add_get("/{path:.+}", static_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WS_PORT)
@@ -344,20 +412,25 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AgentFlow Monitor Server")
     parser.add_argument("--broker",    default=os.getenv("AGENTFLOW_BROKER", "localhost"),
                         help="MQTT broker host (default: localhost or $AGENTFLOW_BROKER)")
-    parser.add_argument("--mqtt-port", type=int, default=1883)
-    parser.add_argument("--ws-port",   type=int, default=8888)
+    parser.add_argument("--mqtt-port",    type=int, default=1883)
+    parser.add_argument("--mqtt-ws-port", type=int,
+                        default=int(os.getenv("MQTT_WS_PORT", "9001")),
+                        help="Mosquitto WebSocket port (default: 9001 or $MQTT_WS_PORT)")
+    parser.add_argument("--ws-port",      type=int, default=8888)
     args = parser.parse_args()
 
     # Override module-level config before asyncio.run so mqtt_listener picks them up
-    MQTT_BROKER = args.broker
-    MQTT_PORT   = args.mqtt_port
-    WS_PORT     = args.ws_port
+    MQTT_BROKER  = args.broker
+    MQTT_PORT    = args.mqtt_port
+    MQTT_WS_PORT = args.mqtt_ws_port
+    WS_PORT      = args.ws_port
 
     import sys
     # Patch the module globals directly so all functions see the updated values
     thismodule = sys.modules[__name__]
-    thismodule.MQTT_BROKER = args.broker
-    thismodule.MQTT_PORT   = args.mqtt_port
-    thismodule.WS_PORT     = args.ws_port
+    thismodule.MQTT_BROKER  = args.broker
+    thismodule.MQTT_PORT    = args.mqtt_port
+    thismodule.MQTT_WS_PORT = args.mqtt_ws_port
+    thismodule.WS_PORT      = args.ws_port
 
     asyncio.run(main())

@@ -195,15 +195,17 @@ export class SceneManager {
     }
 
     const existing = this.agents.get(agent.id);
-    this.agents.set(agent.id, agent);
+    // Merge: keep existing metric fields if the incoming update doesn't include them.
+    const merged: AgentInfo = existing ? { ...existing, ...agent } : agent;
+    this.agents.set(agent.id, merged);
     if (this.cardDashboard) {
-      existing ? this.cardDashboard.updateAgent(agent) : this.cardDashboard.addAgent(agent);
+      existing ? this.cardDashboard.updateAgent(merged) : this.cardDashboard.addAgent(merged);
     } else if (this.socialDashboard) {
-      existing ? this.socialDashboard.updateAgent(agent) : this.socialDashboard.addAgent(agent);
+      existing ? this.socialDashboard.updateAgent(merged) : this.socialDashboard.addAgent(merged);
     } else if (this.finDashboard) {
-      existing ? this.finDashboard.updateAgent(agent) : this.finDashboard.addAgent(agent);
+      existing ? this.finDashboard.updateAgent(merged) : this.finDashboard.addAgent(merged);
     } else {
-      existing ? this.activeTheme.updateAgent(agent) : this.activeTheme.addAgent(agent);
+      existing ? this.activeTheme.updateAgent(merged) : this.activeTheme.addAgent(merged);
     }
   }
 
@@ -220,6 +222,9 @@ export class SceneManager {
     if (agent) {
       agent.state = payload.state;
       agent.lastHeartbeatAt = new Date(payload.timestampMs).toISOString();
+      if (payload.cpu !== undefined)       agent.cpu = payload.cpu;
+      if (payload.memory_mb !== undefined) agent.mem = payload.memory_mb;
+      if (payload.task !== undefined)      agent.task = payload.task;
       if (this.cardDashboard)        this.cardDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
       else if (this.socialDashboard) this.socialDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
       else if (this.finDashboard)    this.finDashboard.onHeartbeat(payload.agentId, payload.timestampMs);

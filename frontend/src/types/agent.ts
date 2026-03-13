@@ -20,6 +20,13 @@ export interface AgentInfo {
   agentType?: string;
   /** ISO timestamp of last heartbeat. */
   lastHeartbeatAt?: string;
+  /** Runtime metrics — populated from heartbeat or metrics topic. */
+  cpu?: number;
+  mem?: number;
+  task?: string;
+  messagesProcessed?: number;
+  costUsd?: number;
+  uptime?: number;
 }
 
 // ── MQTT payloads ─────────────────────────────────────────────────────────────
@@ -31,6 +38,44 @@ export interface HeartbeatPayload {
   state: AgentState;
   sequence: number;
   timestampMs: number;
+  /** Optional runtime metrics (Python backend includes these). */
+  cpu?: number;
+  memory_mb?: number;
+  task?: string;
+}
+
+/** Metrics payload — LLM cost, token counts, message counts. */
+export interface MetricsPayload {
+  agentId: string;
+  agentName: string;
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  messagesProcessed?: number;
+  uptime?: number;
+}
+
+/** Log entry from an agent. */
+export interface LogPayload {
+  agentId: string;
+  agentName: string;
+  message?: string;
+  text?: string;
+}
+
+/** Node heartbeat — a remote AgentFlow node phoning home. */
+export interface NodeHeartbeatPayload {
+  node: string;
+  agents: string[];
+  nodeId?: string;
+}
+
+/** WizAgent coin economy event. */
+export interface CoinPayload {
+  balance: number;
+  event?: string;
+  amount?: number;
+  reason?: string;
 }
 
 /** Status update payload. */

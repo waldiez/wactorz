@@ -110,10 +110,14 @@ export class VoiceInput {
     };
 
     this.recognition.onerror = (event: { error: string }) => {
+      // Permanent failures: null out recognition so isAvailable → false
+      // and the mic button hides itself.
+      const permanent = new Set(["service-not-allowed", "not-allowed", "audio-capture"]);
       const userMessages: Record<string, string> = {
-        "not-allowed": "Microphone access denied. Check your browser/OS permissions.",
-        "audio-capture": "No microphone detected.",
-        "network": "Network error during speech recognition.",
+        "not-allowed":        "Microphone access denied. Check your browser/OS permissions.",
+        "service-not-allowed": "Speech recognition requires HTTPS. Mic unavailable over HTTP.",
+        "audio-capture":      "No microphone detected.",
+        "network":            "Network error during speech recognition.",
       };
       const msg = userMessages[event.error];
       if (msg) {
@@ -122,6 +126,9 @@ export class VoiceInput {
         console.warn("[VoiceInput] Recognition error:", event.error);
       }
       this._isRecording = false;
+      if (permanent.has(event.error)) {
+        this.recognition = null;  // disables isAvailable; IOBar will hide the button
+      }
       this.onStop?.();
     };
   }

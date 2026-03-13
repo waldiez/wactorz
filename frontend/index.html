@@ -116,6 +116,23 @@
         50% { opacity: 0.4; transform: scale(0.7); }
       }
 
+      /* ── HUD stats breakdown ────────────────────────────────────────────── */
+      #hud-stats {
+        display: flex; flex-wrap: wrap; gap: 3px;
+        margin-top: 6px;
+      }
+      .hud-stat {
+        font-size: 9px; padding: 1px 5px; border-radius: 3px;
+        font-family: 'JetBrains Mono', monospace; letter-spacing: 0.04em;
+      }
+      .hud-stat-run   { background: rgba(52,211,153,0.12);  color: #34d399; }
+      .hud-stat-pause { background: rgba(251,191,36,0.12);  color: #fbbf24; }
+      .hud-stat-stop  { background: rgba(100,116,139,0.15); color: #94a3b8; }
+      .hud-stat-fail  { background: rgba(251,113,133,0.12); color: #fb7185; }
+      .hud-stat-alert { background: rgba(251,113,133,0.12); color: #fb7185; }
+      .hud-stat-msgs  { background: rgba(99,102,241,0.12);  color: #a5b4fc; }
+      .hud-stat-cost  { background: rgba(52,211,153,0.12);  color: #34d399; }
+
       /* ── Theme switcher (top-right) ─────────────────────────────────────── */
       #theme-switcher {
         position: fixed;
@@ -791,6 +808,23 @@
       .sd-stat strong { font-size: 16px; font-weight: 700; color: #cbd5e1; }
       .sd-stat span   { font-size: 10px; color: #475569; }
 
+      .sd-metrics-row {
+        display: flex; flex-wrap: wrap; gap: 4px;
+        padding: 4px 0;
+      }
+      .sd-metric-task {
+        width: 100%; font-size: 10px; color: #94a3b8; font-style: italic;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .sd-metric-chip {
+        font-size: 9px; padding: 1px 5px; border-radius: 3px;
+        background: rgba(99,102,241,0.12); color: #a5b4fc;
+      }
+      .sd-metric-cost {
+        font-size: 9px; padding: 1px 5px; border-radius: 3px;
+        background: rgba(34,197,94,0.12); color: #4ade80;
+      }
+
       .sd-footer {
         display: flex; flex-direction: column; gap: 6px; margin-top: auto;
       }
@@ -1248,6 +1282,7 @@
       <div class="hud-count" id="hud-count">0</div>
       <div class="hud-label">Active Agents</div>
       <div class="hud-badge healthy" id="hud-health">System Healthy</div>
+      <div id="hud-stats"></div>
       <nav class="hud-links">
         <a href="/fuseki/" target="_blank" rel="noopener" class="hud-link">⬡ Fuseki</a>
         <a id="ha-link" href="#" target="_blank" rel="noopener" class="hud-link">⌂ Home Assistant</a>
@@ -1258,9 +1293,7 @@
     <div id="theme-switcher" class="glass" style="display:none">
       <!--<button id="btn-graph">Graph</button>
       <button id="btn-galaxy">Galaxy</button>
-      <button id="btn-cards">Cards</button>
-      <button id="btn-grave">☠ Papadeath</button>
-      <button id="btn-fin">💹 WIF</button>-->
+      <button id="btn-cards">Cards</button>-->
       <button id="btn-social" class="active">🌐 Social</button>
     </div>
 

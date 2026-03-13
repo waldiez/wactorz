@@ -86,6 +86,7 @@ mqtt.on("heartbeat", (payload) => {
 mqtt.on("spawn", (payload) => {
   scene.onSpawn(payload);
   hud.setAgentCount(scene.getAgents().length);
+  refreshStats();
   feed.push({
     type: "spawn",
     label: `spawned (${payload.agentType ?? "agent"})`,
@@ -95,8 +96,10 @@ mqtt.on("spawn", (payload) => {
 });
 
 mqtt.on("alert", (payload) => {
+  alertCount++;
   scene.onAlert(payload);
   hud.flashAlert(payload.severity);
+  refreshStats();
   feed.push({
     type: payload.severity === "error" ? "alert-error" : "alert-warning",
     label: payload.message,
@@ -134,8 +137,17 @@ mqtt.on("status", (payload) => {
     });
   }
   hud.setAgentCount(scene.getAgents().length);
+  refreshStats();
   chatPanel.updateAgentStatus(payload.agentId, String(payload.state));
 });
+
+// ── Stats helpers ─────────────────────────────────────────────────────────────
+
+let alertCount = 0;
+
+function refreshStats(): void {
+  hud.setStats(scene.getAgents(), alertCount);
+}
 
 // Seed only once — MQTT reconnects must not re-add already-known agents.
 let seeded = false;
@@ -154,6 +166,7 @@ mqtt.on("connected", () => {
     .then((actors: AgentInfo[]) => {
       actors.forEach((a) => scene.addOrUpdateAgent(a));
       hud.setAgentCount(scene.getAgents().length);
+      refreshStats();
       console.info(`[Dashboard] seeded ${actors.length} actors from REST`);
     })
     .catch(() => {
@@ -167,6 +180,64 @@ mqtt.on("qa-flag", (payload) => {
     label: `[${payload.category}] ${payload.excerpt}`,
     agentName: `qa-agent ← ${payload.from}`,
     timestamp: payload.timestampMs,
+  });
+});
+
+mqtt.on("metrics", (payload) => {
+  // Merge cost/message metrics into the agent record so dashboards can display them.
+  const existing = scene.getAgents().find((a) => a.id === payload.agentId);
+  const update: AgentInfo = {
+    id: payload.agentId,
+    name: payload.agentName,
+    state: existing?.state ?? "running",
+    protected: existing?.protected ?? false,
+  };
+  if (payload.messagesProcessed !== undefined) update.messagesProcessed = payload.messagesProcessed;
+  if (payload.costUsd !== undefined)           update.costUsd = payload.costUsd;
+  if (payload.uptime !== undefined)            update.uptime = payload.uptime;
+  scene.addOrUpdateAgent(update);
+  refreshStats();
+});
+
+mqtt.on("logs", (payload) => {
+  const msg = payload.message ?? payload.text ?? "";
+  if (!msg) return;
+  feed.push({
+    type: "chat",
+    label: msg.slice(0, 80),
+    agentName: payload.agentName,
+    timestamp: Date.now(),
+  });
+});
+
+mqtt.on("completed", (payload) => {
+  feed.push({
+    type: "spawn",
+    label: "task completed",
+    agentName: payload.agentName,
+    timestamp: Date.now(),
+  });
+});
+
+mqtt.on("node-heartbeat", (payload) => {
+  feed.push({
+    type: "health",
+    label: `node online · ${payload.agents.length} agent${payload.agents.length !== 1 ? "s" : ""}`,
+    agentName: payload.node,
+    timestamp: Date.now(),
+  });
+});
+
+mqtt.on("system-health", () => {
+  hud.setSystemHealth(true);
+});
+
+mqtt.on("coin", (payload) => {
+  feed.push({
+    type: "qa-flag",
+    label: `balance ${payload.balance}${payload.reason ? " · " + payload.reason : ""}`,
+    agentName: "wiz-agent",
+    timestamp: Date.now(),
   });
 });
 

@@ -101,10 +101,13 @@ export class IOBar {
     this.voiceInput.onError = (message) => {
       this.micBtn.classList.remove("recording");
       this.micBtn.title = message;
-      // Reset title after a few seconds so it doesn't linger
-      setTimeout(() => {
-        this.micBtn.title = "Voice input";
-      }, 5000);
+      // If voice is now permanently unavailable (e.g. HTTP / service-not-allowed),
+      // hide the mic button entirely so it stops cluttering the UI.
+      if (!this.voiceInput.isAvailable) {
+        this.micBtn.style.display = "none";
+      } else {
+        setTimeout(() => { this.micBtn.title = "Voice input"; }, 5000);
+      }
     };
   }
 

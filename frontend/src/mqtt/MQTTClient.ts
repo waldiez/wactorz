@@ -15,7 +15,11 @@ import mqtt, { type MqttClient } from "mqtt";
 import type {
   AlertPayload,
   ChatMessage,
+  CoinPayload,
   HeartbeatPayload,
+  LogPayload,
+  MetricsPayload,
+  NodeHeartbeatPayload,
   SpawnPayload,
   StatusPayload,
 } from "../types/agent";
@@ -44,6 +48,18 @@ export interface MQTTEvents {
   spawn: SpawnPayload;
   chat: ChatMessage;
   "qa-flag": QaFlagPayload;
+  /** LLM cost + token + message count metrics from an agent. */
+  metrics: MetricsPayload;
+  /** Log/text output from an agent. */
+  logs: LogPayload;
+  /** Agent completed a task. */
+  completed: { agentId: string; agentName: string };
+  /** Remote AgentFlow node phoned home. */
+  "node-heartbeat": NodeHeartbeatPayload;
+  /** system/health snapshot from MonitorAgent. */
+  "system-health": unknown;
+  /** WizAgent coin economy event. */
+  coin: CoinPayload;
   /** Catch-all for raw messages not matching a known pattern. */
   raw: { topic: string; payload: unknown };
 }
@@ -71,7 +87,7 @@ export class MQTTClient {
 
     this.client.on("connect", () => {
       console.info("[MQTT] Connected to", this.brokerUrl);
-      this.client?.subscribe(["agents/#", "system/health", "system/spawn"], { qos: 1 });
+      this.client?.subscribe(["agents/#", "nodes/#", "system/#"], { qos: 1 });
       this.emit("connected", undefined);
     });
 
@@ -161,15 +177,90 @@ export class MQTTClient {
       this.emit("spawn", payload as SpawnPayload);
       return;
     }
+
+    // system/qa-flag
+    if (topic === "system/qa-flag") {
+      this.emit("qa-flag", payload as QaFlagPayload);
+      return;
+    }
+
     // system/spawn  (legacy / alternate)
     if (topic === "system/spawn") {
       this.emit("spawn", payload as SpawnPayload);
       return;
     }
 
-    // system/qa-flag
-    if (topic === "system/qa-flag") {
-      this.emit("qa-flag", payload as QaFlagPayload);
+    // system/health
+    if (topic === "system/health") {
+      this.emit("system-health", payload);
+      return;
+    }
+
+    // system/coin
+    if (topic === "system/coin") {
+      this.emit("coin", payload as CoinPayload);
+      return;
+    }
+
+    // agents/{id}/metrics  (LLM cost, token counts, message counts)
+    const metricsMatch = topic.match(/^agents\/([^/]+)\/metrics$/);
+    if (metricsMatch?.[1]) {
+      const agentId = metricsMatch[1];
+      const p = payload as Record<string, unknown>;
+      const costUsd = (p["costUsd"] ?? p["cost_usd"]) as number | undefined;
+      const inputTokens = (p["inputTokens"] ?? p["input_tokens"]) as number | undefined;
+      const outputTokens = (p["outputTokens"] ?? p["output_tokens"]) as number | undefined;
+      const messagesProcessed = (p["messagesProcessed"] ?? p["messages_processed"]) as number | undefined;
+      const uptime = p["uptime"] as number | undefined;
+      this.emit("metrics", {
+        agentId,
+        agentName: (p["agentName"] as string) ?? (p["name"] as string) ?? agentId.slice(0, 8),
+        ...(costUsd !== undefined          && { costUsd }),
+        ...(inputTokens !== undefined      && { inputTokens }),
+        ...(outputTokens !== undefined     && { outputTokens }),
+        ...(messagesProcessed !== undefined && { messagesProcessed }),
+        ...(uptime !== undefined           && { uptime }),
+      });
+      return;
+    }
+
+    // agents/{id}/logs
+    const logsMatch = topic.match(/^agents\/([^/]+)\/logs$/);
+    if (logsMatch?.[1]) {
+      const agentId = logsMatch[1];
+      const p = payload as Record<string, unknown>;
+      const message = (p["message"] ?? p["text"]) as string | undefined;
+      this.emit("logs", {
+        agentId,
+        agentName: (p["agentName"] as string) ?? (p["name"] as string) ?? agentId.slice(0, 8),
+        ...(message !== undefined && { message }),
+      });
+      return;
+    }
+
+    // agents/{id}/completed
+    const completedMatch = topic.match(/^agents\/([^/]+)\/completed$/);
+    if (completedMatch?.[1]) {
+      const agentId = completedMatch[1];
+      const p = payload as Record<string, unknown>;
+      this.emit("completed", {
+        agentId,
+        agentName: (p["agentName"] as string) ?? (p["name"] as string) ?? agentId.slice(0, 8),
+      });
+      return;
+    }
+
+    // nodes/{name}/heartbeat
+    const nodeMatch = topic.match(/^nodes\/([^/]+)\/heartbeat$/);
+    if (nodeMatch?.[1]) {
+      const node = nodeMatch[1];
+      const p = payload as Record<string, unknown>;
+      const nodeId = p["node_id"] as string | undefined;
+      this.emit("node-heartbeat", {
+        node,
+        agents: (p["agents"] as string[]) ?? [],
+        ...(nodeId !== undefined && { nodeId }),
+      });
       return;
     }
 

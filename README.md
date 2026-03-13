@@ -78,7 +78,7 @@ Message flow:
 | `agents/manual_agent.py` | Agent | PDF specialist — 3-layer search strategy to find and extract manual content |
 | `agents/home_assistant_agent.py` | Agent | Unified HA agent — hardware recommendations and automation CRUD via HA REST API |
 | `interfaces/chat_interfaces.py` | I/O | CLI (streaming), REST, Discord, WhatsApp — all call `process_user_input[_stream]` |
-| `monitor_server.py` | I/O | Legacy MQTT→WebSocket bridge for the old standalone monitor |
+| `monitor_server.py` | I/O | MQTT→WebSocket bridge + static server + MQTT WS proxy; serves the built frontend at `/` and `monitor.html` at `/ws` |
 | `frontend/` | I/O | Primary dashboard SPA — Babylon.js frontend served as `index.html` |
 
 ---
@@ -343,7 +343,20 @@ Set `DISCORD_TOKEN` or `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_WHAT
 
 ### Live Dashboard
 
-For the primary dashboard, run the SPA in `frontend/` and open `frontend/index.html` through Vite or nginx. `monitor_server.py` + `monitor.html` remain available as a legacy standalone monitor.
+**Via Vite dev server (development):**
+```bash
+cd frontend && npm run dev   # → http://localhost:5173
+```
+
+**Via `monitor_server.py` (zero-nginx option):**
+```bash
+cd frontend && npm run build   # produces frontend/dist/
+python monitor_server.py       # → http://localhost:8888
+# Optionally: --mqtt-ws-port 9001 (default) if Mosquitto WS is on a different port
+```
+`monitor_server.py` serves the built SPA at `/`, proxies MQTT WebSocket at `/mqtt`, and the legacy `monitor.html` dashboard remains accessible via the `/ws` endpoint it exposes.
+
+**Production** — nginx is the recommended entry point; see the Docker compose files.
 
 ---
 
@@ -630,8 +643,8 @@ The monitor uses two liveness signals: `STATUS_RESPONSE` messages (from the 15-s
 agentflow/
 ├── main.py                        Entry point — CLI args, actor system setup, supervision tree
 ├── remote_runner.py               Self-contained edge node runner — deploy to any Pi or machine
-├── monitor_server.py              MQTT → WebSocket bridge for dashboard
-├── monitor.html                   Live web dashboard
+├── monitor_server.py              Serves built frontend + proxies /mqtt to Mosquitto WS + /ws bridge
+├── monitor.html                   Standalone legacy monitor (connects to /ws)
 ├── fix_history.py                 One-time corrupted history cleanup utility
 ├── requirements.txt
 │

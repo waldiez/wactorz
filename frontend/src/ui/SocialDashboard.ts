@@ -14,6 +14,12 @@ import { agentImageGen } from "../io/AgentImageGen";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function fmtUptime(s: number): string {
+  if (s < 60)   return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
+}
+
 function stateStr(state: AgentState): string {
   return typeof state === "object" ? "error" : (state as string);
 }
@@ -168,6 +174,9 @@ export class SocialDashboard {
       this.updateControls(card, agent);
     }
 
+    // Update metrics row (task/cpu/mem may have changed)
+    if (agent) this.refreshMetricsRow(card, agent);
+
     // Pulse avatar ring
     const ring = card.querySelector<HTMLElement>(".sd-avatar");
     if (ring) {
@@ -226,6 +235,7 @@ export class SocialDashboard {
     if (dot)   dot.className   = `sd-state-dot sd-dot-${st}`;
     if (badge) { badge.textContent = st.toUpperCase(); badge.className = `sd-type-badge sd-badge-${st}`; }
     this.updateControls(card, agent);
+    this.refreshMetricsRow(card, agent);
   }
 
   private updateControls(card: HTMLElement, agent: AgentInfo): void {
@@ -284,6 +294,8 @@ export class SocialDashboard {
           </div>
         </div>
 
+        ${this.buildMetricsRow(agent)}
+
         <div class="sd-footer">
           <button class="sd-chat-btn" data-name="${agent.name}">💬 Chat</button>
           <div class="cd-controls">
@@ -331,6 +343,35 @@ export class SocialDashboard {
     if (!card) return;
     card.classList.add("sd-alert-error");
     setTimeout(() => card.classList.remove("sd-alert-error"), 900);
+  }
+
+  private buildMetricsRow(agent: AgentInfo): string {
+    const parts: string[] = [];
+    if (agent.task)                          parts.push(`<span class="sd-metric-task">${agent.task}</span>`);
+    if (agent.cpu != null)                   parts.push(`<span class="sd-metric-chip">${agent.cpu.toFixed(1)}% CPU</span>`);
+    if (agent.mem != null)                   parts.push(`<span class="sd-metric-chip">${agent.mem.toFixed(0)} MB</span>`);
+    if (agent.messagesProcessed != null)     parts.push(`<span class="sd-metric-chip">${agent.messagesProcessed} proc</span>`);
+    if (agent.uptime != null)               parts.push(`<span class="sd-metric-chip">${fmtUptime(agent.uptime)}</span>`);
+    if (agent.costUsd != null && agent.costUsd > 0.0001) {
+      const cost = agent.costUsd < 0.01
+        ? (agent.costUsd * 100).toFixed(2) + "¢"
+        : "$" + agent.costUsd.toFixed(3);
+      parts.push(`<span class="sd-metric-cost">${cost}</span>`);
+    }
+    if (!parts.length) return "";
+    return `<div class="sd-metrics-row">${parts.join("")}</div>`;
+  }
+
+  private refreshMetricsRow(card: HTMLElement, agent: AgentInfo): void {
+    const existing = card.querySelector(".sd-metrics-row");
+    const html = this.buildMetricsRow(agent);
+    if (existing) {
+      if (html) existing.outerHTML = html;
+      else existing.remove();
+    } else if (html) {
+      const footer = card.querySelector(".sd-footer");
+      if (footer) footer.insertAdjacentHTML("beforebegin", html);
+    }
   }
 
   // ── DOM skeleton ───────────────────────────────────────────────────────────

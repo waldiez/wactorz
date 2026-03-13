@@ -21,6 +21,7 @@ import { MentionPopup } from "./ui/MentionPopup";
 import { VoiceInput } from "./io/VoiceInput";
 import { IOManager } from "./io/IOManager";
 import { WSChatClient } from "./io/WSChatClient";
+import { tts } from "./io/TTSManager";
 
 import type { AgentInfo, ThemeChangeEvent } from "./types/agent";
 
@@ -289,6 +290,20 @@ const haLink = document.getElementById("ha-link") as HTMLAnchorElement | null;
 if (haLink) {
   haLink.href = `${window.location.protocol}//${window.location.hostname}:8123`;
 }
+
+// ── Sound / TTS toggles ───────────────────────────────────────────────────────
+
+const btnBeep = document.getElementById("btn-beep");
+const btnTTS  = document.getElementById("btn-tts");
+
+function syncSoundButtons(): void {
+  btnBeep?.classList.toggle("active", tts.beepEnabled);
+  btnTTS?.classList.toggle("active",  tts.ttsEnabled);
+}
+syncSoundButtons();
+
+btnBeep?.addEventListener("click", () => { tts.toggleBeep(); syncSoundButtons(); });
+btnTTS?.addEventListener("click",  () => { tts.toggleTTS();  syncSoundButtons(); });
 
 // ── Connect ───────────────────────────────────────────────────────────────────
 

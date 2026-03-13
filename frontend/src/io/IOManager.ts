@@ -16,6 +16,7 @@ import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { MQTTClient } from "../mqtt/MQTTClient";
 import type { ChatPanel } from "../ui/ChatPanel";
 import type { WSChatClient } from "./WSChatClient";
+import { tts } from "./TTSManager";
 
 const _widGen = new HLCWidGen({ node: "browser", W: 4 });
 
@@ -40,6 +41,9 @@ export class IOManager {
     ws.onStreamEnd(() => {
       this.chatPanel.hideTyping(this._lastTypingKey);
       this.chatPanel.finalizeStream();
+      // Notify after finalizeStream so _streamText is still accessible via the stored msg
+      const thread = this.chatPanel.lastStreamedText;
+      if (thread) tts.notify(thread);
     });
   }
 
@@ -120,8 +124,9 @@ export class IOManager {
 
   /** Route an incoming agent→user chat message to the panel. */
   receiveAgentMessage(msg: ChatMessage): void {
-    // Ignore agent↔agent background chatter — only handle user-directed replies
-    if (msg.to !== "user") return;
+    // Ignore agent↔agent background chatter — only handle user-directed replies.
+    // Allow empty/missing `to` (older agents omit it) but drop explicit non-user targets.
+    if (msg.to && msg.to !== "user") return;
 
     // Clear typing indicators: by responder name AND by the key we showed
     // (they differ when Python's io-agent replies to a "main-actor" request)
@@ -130,5 +135,6 @@ export class IOManager {
       this.chatPanel.hideTyping(this._lastTypingKey);
     }
     this.chatPanel.appendMessage(msg);
+    tts.notify(msg.content, msg.from);
   }
 }

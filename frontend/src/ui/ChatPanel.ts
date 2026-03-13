@@ -42,10 +42,11 @@ export class ChatPanel {
   private typingTimeouts: Map<string, ReturnType<typeof setTimeout>>  = new Map();
 
   /** Streaming state — one active stream at a time. */
-  private _streamRow:    HTMLElement | null = null;
-  private _streamBody:   HTMLElement | null = null;
-  private _streamFrom:   string | null      = null;
-  private _streamText:   string             = "";
+  private _streamRow:         HTMLElement | null = null;
+  private _streamBody:        HTMLElement | null = null;
+  private _streamFrom:        string | null      = null;
+  private _streamText:        string             = "";
+  private _lastStreamedText:  string             = "";
 
   constructor() {
     this.panel         = document.getElementById("chat-panel")!;
@@ -158,6 +159,8 @@ export class ChatPanel {
   }
 
   get activeAgent(): AgentInfo | null { return this.selectedAgent; }
+  /** The full text of the most recently finalized stream (cleared after read). */
+  get lastStreamedText(): string { const t = this._lastStreamedText; this._lastStreamedText = ""; return t; }
 
   // ── Streaming ───────────────────────────────────────────────────────────────
 
@@ -233,6 +236,7 @@ export class ChatPanel {
     this.threads.get(key)!.push(msg);
 
     // Reset streaming state
+    this._lastStreamedText = this._streamText;
     this._streamRow  = null;
     this._streamBody = null;
     this._streamFrom = null;

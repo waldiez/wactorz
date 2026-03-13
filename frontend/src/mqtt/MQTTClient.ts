@@ -312,7 +312,7 @@ function normaliseChat(p: unknown): ChatMessage {
     ...(o as unknown as ChatMessage),
     id:          str(o["id"]) || `chat-${timestampMs}`,
     from:        str(o["from"] ?? o["agentName"] ?? o["name"]),
-    to:          str(o["to"]),
+    to:          str(o["to"]) || "user",  // default to "user" when field absent
     content:     str(o["content"]),
     timestampMs,
   };

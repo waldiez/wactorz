@@ -688,6 +688,15 @@
         color: #7aabdf; border-color: rgba(122,171,223,0.4);
         background: rgba(122,171,223,0.1);
       }
+      .hud-sound-row { display: flex; gap: 4px; margin-top: 4px; }
+      .hud-sound-btn {
+        flex: 1; font-size: 11px; color: #4a6fa8; cursor: pointer;
+        padding: 3px 6px; border-radius: 6px; text-align: center;
+        border: 1px solid rgba(74,111,168,0.2); background: rgba(74,111,168,0.05);
+        transition: all 0.15s;
+      }
+      .hud-sound-btn:hover { color: #7aabdf; border-color: rgba(122,171,223,0.4); background: rgba(122,171,223,0.1); }
+      .hud-sound-btn.active { color: #a5c8f0; border-color: rgba(122,171,223,0.5); background: rgba(122,171,223,0.15); }
 
       /* ── Papadeath (grave) theme button ─────────────────────────────────── */
       #theme-switcher #btn-grave.active {
@@ -1287,6 +1296,10 @@
         <a href="/fuseki/" target="_blank" rel="noopener" class="hud-link">⬡ Fuseki</a>
         <a id="ha-link" href="#" target="_blank" rel="noopener" class="hud-link">⌂ Home Assistant</a>
       </nav>
+      <div class="hud-sound-row">
+        <button id="btn-beep" class="hud-sound-btn active" title="Toggle notification sound">🔔 Sound</button>
+        <button id="btn-tts"  class="hud-sound-btn"       title="Toggle text-to-speech">🗣 TTS</button>
+      </div>
     </div>
 
     <!-- Theme switcher pill (hidden until multiple themes are re-enabled) -->

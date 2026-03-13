@@ -4,19 +4,18 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentflow"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Actor-model multi-agent framework — spawn, coordinate and monitor AI agents at runtime"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 authors = [{ name = "AgentFlow Contributors" }]
 keywords = ["agents", "llm", "actor-model", "mqtt", "multi-agent", "orchestration"]
-# "Development Status :: 4 - Beta",
-# "Framework :: Pydantic :: 2",
-# "Typing :: Typed",
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -25,13 +24,8 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
-    "Intended Audience :: Science/Research",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Education",
-    "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
-    "Topic :: Software Development :: Code Generators",
 ]
 
 # Core runtime — always required
@@ -44,18 +38,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# LLM providers
 anthropic = ["anthropic>=0.25.0"]
 openai    = ["openai>=1.0.0"]
-
-# Chat interfaces
 discord   = ["discord.py>=2.3.0"]
 whatsapp  = ["twilio>=8.0.0"]
+ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
 
-# ML / computer vision
-ml = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
-
-# All extras bundled
+# Everything except ML (heavy torch dep) — suitable for `pip install agentflow[all]`
 all = [
     "agentflow[anthropic]",
     "agentflow[openai]",
@@ -69,7 +58,17 @@ agentflow-monitor = "agentflow.monitor_server:cli_main"
 
 [project.urls]
 Repository = "https://github.com/waldiez/agentflow"
+"Bug Tracker" = "https://github.com/waldiez/agentflow/issues"
 
+# ── Version ────────────────────────────────────────────────────────────────────
+[tool.hatch.version]
+path = "agentflow/_version.py"
+
+# ── Build hook — auto-builds frontend if dist is stale ────────────────────────
+[tool.hatch.build.hooks.custom]
+path = "scripts/hooks/build_hook.py"
+
+# ── Wheel ──────────────────────────────────────────────────────────────────────
 [tool.hatch.build.targets.wheel]
 packages = ["agentflow", "agentflow.*"]
 exclude = [
@@ -88,5 +87,18 @@ exclude = [
 # and {site-packages}/agentflow/monitor.html — exactly where monitor_server.py
 # expects them.
 [tool.hatch.build.targets.wheel.force-include]
-"frontend/dist"  = "agentflow/frontend/dist"
-"monitor.html"   = "agentflow/monitor.html"
+"frontend/dist" = "agentflow/frontend/dist"
+"monitor.html"  = "agentflow/monitor.html"
+
+# ── sdist (source distribution for PyPI) ──────────────────────────────────────
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "rust",
+    "node_modules",
+    "persist",
+    "__pycache__",
+    "*.log",
+    ".env*",
+    "frontend/node_modules",
+    ".git",
+]

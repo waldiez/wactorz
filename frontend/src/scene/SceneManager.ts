@@ -235,7 +235,7 @@ export class SceneManager {
         name: payload.agentName,
         state: payload.state,
         protected: false,
-        lastHeartbeatAt: new Date(payload.timestampMs).toISOString(),
+        lastHeartbeatAt: new Date(Number.isFinite(payload.timestampMs) ? payload.timestampMs : Date.now()).toISOString(),
       });
     }
   }

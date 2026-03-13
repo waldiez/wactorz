@@ -19,6 +19,9 @@ import type { ChatPanel } from "../ui/ChatPanel";
 const _widGen = new HLCWidGen({ node: "browser", W: 4 });
 
 export class IOManager {
+  /** Tracks the last typing key so we can clear it when any reply arrives. */
+  private _lastTypingKey = "";
+
   constructor(
     private readonly mqtt: MQTTClient,
     private readonly chatPanel: ChatPanel,
@@ -52,8 +55,9 @@ export class IOManager {
     // Show message immediately
     this.chatPanel.appendMessage(msg);
 
-    // Show typing indicator keyed by agent name (matches msg.from on response)
+    // Show typing indicator and remember the key so we can clear it on reply
     const typingKey = agent?.name ?? "main-actor";
+    this._lastTypingKey = typingKey;
     this.chatPanel.showTyping(typingKey, typingKey);
 
     // Publish to io/chat gateway topic
@@ -89,8 +93,11 @@ export class IOManager {
     // Ignore agent↔agent background chatter — only handle user-directed replies
     if (msg.to !== "user") return;
 
-    if (msg.from) {
-      this.chatPanel.hideTyping(msg.from);
+    // Clear typing indicators: by responder name AND by the key we showed
+    // (they differ when Python's io-agent replies to a "main-actor" request)
+    if (msg.from) this.chatPanel.hideTyping(msg.from);
+    if (this._lastTypingKey && this._lastTypingKey !== msg.from) {
+      this.chatPanel.hideTyping(this._lastTypingKey);
     }
     this.chatPanel.appendMessage(msg);
   }

@@ -139,7 +139,11 @@ export class MQTTClient {
 
   private emit<K extends keyof MQTTEvents>(event: K, data: MQTTEvents[K]): void {
     const arr = this.listeners[event] as Array<Listener<MQTTEvents[K]>> | undefined;
-    arr?.forEach((fn) => fn(data));
+    arr?.forEach((fn) => {
+      try { fn(data); } catch (err) {
+        console.error(`[MQTT] listener error on "${event}":`, err);
+      }
+    });
   }
 
   // ── Message routing ─────────────────────────────────────────────────────────
@@ -154,12 +158,12 @@ export class MQTTClient {
 
     // agents/{id}/heartbeat
     if (/^agents\/[^/]+\/heartbeat$/.test(topic)) {
-      this.emit("heartbeat", payload as HeartbeatPayload);
+      this.emit("heartbeat", normaliseHeartbeat(payload));
       return;
     }
     // agents/{id}/status
     if (/^agents\/[^/]+\/status$/.test(topic)) {
-      this.emit("status", payload as StatusPayload);
+      this.emit("status", normaliseStatus(payload));
       return;
     }
     // agents/{id}/alert
@@ -169,7 +173,7 @@ export class MQTTClient {
     }
     // agents/{id}/chat
     if (/^agents\/[^/]+\/chat$/.test(topic)) {
-      this.emit("chat", payload as ChatMessage);
+      this.emit("chat", normaliseChat(payload));
       return;
     }
     // agents/{id}/spawn  (real backend + mock both use this topic)
@@ -266,4 +270,61 @@ export class MQTTClient {
 
     this.emit("raw", { topic, payload });
   }
+}
+
+// ── Payload normalisers ───────────────────────────────────────────────────────
+// Python publishes snake_case keys and timestamp in seconds (time.time()).
+// Rust  publishes camelCase keys and timestampMs in milliseconds.
+// These helpers accept either form and return the canonical TypeScript shape.
+
+type RawObj = Record<string, unknown>;
+
+/** Convert a raw epoch value to milliseconds.
+ *  Python's time.time() returns seconds (< 1e10); JS Date.now() returns ms. */
+function toMs(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return Date.now();
+  return n < 1e10 ? n * 1000 : n;
+}
+
+function str(v: unknown, fallback = ""): string {
+  return typeof v === "string" ? v : fallback;
+}
+
+function normaliseHeartbeat(p: unknown): HeartbeatPayload {
+  const o = (p ?? {}) as RawObj;
+  const agentId   = str(o["agentId"]   ?? o["actor_id"]  ?? o["agent_id"]);
+  const agentName = str(o["agentName"] ?? o["name"]       ?? agentId.slice(0, 8));
+  const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
+  return {
+    ...(o as unknown as HeartbeatPayload),
+    agentId,
+    agentName,
+    timestampMs,
+    sequence: (o["sequence"] as number) ?? 0,
+  };
+}
+
+function normaliseChat(p: unknown): ChatMessage {
+  const o = (p ?? {}) as RawObj;
+  const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
+  return {
+    ...(o as unknown as ChatMessage),
+    id:          str(o["id"]) || `chat-${timestampMs}`,
+    from:        str(o["from"] ?? o["agentName"] ?? o["name"]),
+    to:          str(o["to"]),
+    content:     str(o["content"]),
+    timestampMs,
+  };
+}
+
+function normaliseStatus(p: unknown): StatusPayload {
+  const o = (p ?? {}) as RawObj;
+  const agentId   = str(o["agentId"]   ?? o["actor_id"]  ?? o["agent_id"]);
+  const agentName = str(o["agentName"] ?? o["name"]       ?? agentId.slice(0, 8));
+  return {
+    ...(o as unknown as StatusPayload),
+    agentId,
+    agentName,
+  };
 }

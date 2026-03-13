@@ -1,7 +1,7 @@
 import types
 import unittest
 
-from interfaces.chat_interfaces import RESTInterface
+from agentflow.interfaces.chat_interfaces import RESTInterface
 
 
 class _FakeMetrics:

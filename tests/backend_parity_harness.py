@@ -19,20 +19,6 @@ def _stub(name: str) -> None:
 for _module in [
     "aiomqtt",
     "psutil",
-    "anthropic",
-    "openai",
-    "aiohttp",
-    "discord",
-    "twilio",
-    "pdfplumber",
-    "fitz",
-    "ultralytics",
-    "torch",
-    "numpy",
-    "asyncssh",
-    "agentflow.core.integrations",
-    "agentflow.core.integrations.home_assistant",
-    "agentflow.core.integrations.home_assistant.ha_helper",
 ]:
     _stub(_module)
 
@@ -50,12 +36,6 @@ class _FakeProc:
 
 _psutil.Process = lambda: _FakeProc()
 
-_af = types.ModuleType("agentflow")
-_af_core = types.ModuleType("agentflow.core")
-sys.modules["agentflow"] = _af
-sys.modules["agentflow.core"] = _af_core
-
-
 def _load(name: str, path: pathlib.Path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -65,8 +45,8 @@ def _load(name: str, path: pathlib.Path):
     return module
 
 
-_load("agentflow.core.actor", ROOT / "core" / "actor.py")
-_load("agentflow.core.registry", ROOT / "core" / "registry.py")
+_load("agentflow.core.actor", ROOT / "agentflow" / "core" / "actor.py")
+_load("agentflow.core.registry", ROOT / "agentflow" / "core" / "registry.py")
 
 from agentflow.core.actor import Actor, ActorState, Message, SupervisorStrategy
 from agentflow.core.registry import ActorSystem, Supervisor

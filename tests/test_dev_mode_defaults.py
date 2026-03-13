@@ -10,13 +10,13 @@ class DevModeDefaultsTest(unittest.TestCase):
             os.environ.pop("INTERFACE", None)
             os.environ.pop("PORT", None)
             os.environ["AGENTFLOW_DEV_MODE"] = "1"
-            import config
+            import agentflow.config as config
             importlib.reload(config)
             self.assertEqual(config.CONFIG.interface, "rest")
             self.assertEqual(config.CONFIG.port, 8080)
         finally:
             os.environ.clear()
             os.environ.update(original)
-            import config
+            import agentflow.config as config
             importlib.reload(config)
 

@@ -19,8 +19,8 @@ pip install agentflow[all]
 - **[REST & WebSocket API](api.md)** — HTTP endpoints and WebSocket protocol
 - **[MQTT Topics](mqtt_topics.md)** — Full topic reference with payload schemas
 - **[Python API](python-api.md)** — Auto-generated Python class reference
-- **[Rust Docs](../api/rust/)** — Rustdoc for agentflow-core and agentflow-interfaces
-- **[JS/TS Docs](../api/js/)** — TypeDoc for the Babylon.js frontend
+- **[Rust Docs](https://waldiez.github.io/agentflow/api/rust/)** — Rustdoc for agentflow-core and agentflow-interfaces
+- **[JS/TS Docs](https://waldiez.github.io/agentflow/api/js/)** — TypeDoc for the Babylon.js frontend
 
 ## Links
 

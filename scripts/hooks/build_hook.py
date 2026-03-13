@@ -121,7 +121,7 @@ class CustomBuildHook(BuildHookInterface):
             return
 
         # Overlay the custom landing page
-        custom_index = root / "docs" / "index.html"
+        custom_index = root / "docs" / "_landing.html"
         if custom_index.exists():
             import shutil
             shutil.copy(custom_index, root / "site" / "index.html")

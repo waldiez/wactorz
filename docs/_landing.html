@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgentFlow — Actor-model multi-agent AI framework</title>
+  <meta name="description" content="Spawn, coordinate and monitor AI agents at runtime. Python · Rust · MQTT." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #05080e;
+      --bg-2:      #080d1a;
+      --bg-3:      #0d1426;
+      --border:    #1a2140;
+      --border-hi: #2a3560;
+      --blue:      #4f8ef7;
+      --blue-dim:  #3a6fd4;
+      --cyan:      #00d4ff;
+      --cyan-dim:  #00a8cc;
+      --text:      #dde3f0;
+      --muted:     #5a6890;
+      --muted-hi:  #8899bb;
+      --card-bg:   rgba(13, 20, 38, 0.7);
+      --mono:      'JetBrains Mono', monospace;
+      --display:   'Chakra Petch', sans-serif;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--display);
+      font-weight: 300;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+
+    /* ── Nav ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 2rem;
+      height: 56px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(5, 8, 14, 0.85);
+      backdrop-filter: blur(12px);
+    }
+
+    .nav-logo {
+      font-family: var(--display);
+      font-weight: 600;
+      font-size: 1rem;
+      letter-spacing: 0.08em;
+      color: var(--text);
+      text-decoration: none;
+      display: flex; align-items: center; gap: 0.6rem;
+    }
+
+    .nav-logo-mark {
+      width: 22px; height: 22px;
+      border: 1.5px solid var(--blue);
+      border-radius: 4px;
+      display: grid; place-items: center;
+      position: relative;
+    }
+    .nav-logo-mark::before {
+      content: '';
+      width: 6px; height: 6px;
+      background: var(--blue);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--blue);
+    }
+
+    .nav-links {
+      display: flex; align-items: center; gap: 0.25rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      font-weight: 400;
+      color: var(--muted-hi);
+      text-decoration: none;
+      padding: 0.35rem 0.75rem;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      transition: color 0.2s, border-color 0.2s, background 0.2s;
+      letter-spacing: 0.02em;
+    }
+    .nav-links a:hover {
+      color: var(--text);
+      border-color: var(--border-hi);
+      background: rgba(79, 142, 247, 0.06);
+    }
+    .nav-links a.nav-gh {
+      color: var(--muted);
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+
+    /* ── Hero ── */
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 8rem 2rem 6rem;
+      overflow: hidden;
+    }
+
+    #hero-canvas {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      opacity: 0.55;
+    }
+
+    .hero-content {
+      position: relative; z-index: 2;
+      text-align: center;
+      max-width: 860px;
+    }
+
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      color: var(--cyan);
+      border: 1px solid rgba(0, 212, 255, 0.25);
+      background: rgba(0, 212, 255, 0.06);
+      padding: 0.3rem 0.85rem;
+      border-radius: 2px;
+      margin-bottom: 2rem;
+      text-transform: uppercase;
+    }
+    .hero-badge::before {
+      content: '';
+      width: 5px; height: 5px;
+      background: var(--cyan);
+      border-radius: 50%;
+      box-shadow: 0 0 6px var(--cyan);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.4; transform: scale(0.7); }
+    }
+
+    h1 {
+      font-family: var(--display);
+      font-size: clamp(3.5rem, 9vw, 7rem);
+      font-weight: 700;
+      line-height: 0.95;
+      letter-spacing: -0.02em;
+      color: #fff;
+      margin-bottom: 1.5rem;
+    }
+
+    h1 span {
+      background: linear-gradient(135deg, var(--blue) 0%, var(--cyan) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-tagline {
+      font-family: var(--mono);
+      font-size: clamp(0.85rem, 2vw, 1rem);
+      font-weight: 300;
+      color: var(--muted-hi);
+      letter-spacing: 0.06em;
+      margin-bottom: 3rem;
+    }
+    .hero-tagline em { color: var(--blue); font-style: normal; }
+
+    .hero-ctas {
+      display: flex; align-items: center; justify-content: center;
+      gap: 1rem; flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      font-family: var(--display);
+      font-size: 0.9rem;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      color: #fff;
+      background: var(--blue);
+      padding: 0.7rem 1.75rem;
+      border-radius: 3px;
+      text-decoration: none;
+      transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+      box-shadow: 0 0 20px rgba(79, 142, 247, 0.35);
+    }
+    .btn-primary:hover {
+      background: #5f9dff;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 28px rgba(79, 142, 247, 0.5);
+    }
+
+    .btn-ghost {
+      font-family: var(--display);
+      font-size: 0.9rem;
+      font-weight: 400;
+      letter-spacing: 0.06em;
+      color: var(--muted-hi);
+      border: 1px solid var(--border-hi);
+      padding: 0.7rem 1.75rem;
+      border-radius: 3px;
+      text-decoration: none;
+      transition: color 0.2s, border-color 0.2s, background 0.2s;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .btn-ghost:hover {
+      color: var(--text);
+      border-color: var(--blue);
+      background: rgba(79, 142, 247, 0.07);
+    }
+
+    /* ── Install strip ── */
+    .install-strip {
+      position: relative; z-index: 2;
+      margin-top: 4rem;
+    }
+
+    .install-box {
+      display: inline-flex; align-items: center; gap: 1rem;
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.6rem 0.75rem 0.6rem 1.1rem;
+      font-family: var(--mono);
+      font-size: 0.88rem;
+    }
+
+    .install-box .prompt { color: var(--muted); user-select: none; }
+    .install-box .cmd { color: var(--cyan); }
+
+    .copy-btn {
+      background: none; border: 1px solid var(--border);
+      color: var(--muted); cursor: pointer;
+      padding: 0.25rem 0.6rem;
+      border-radius: 3px;
+      font-family: var(--mono); font-size: 0.72rem;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .copy-btn:hover { color: var(--text); border-color: var(--blue); }
+    .copy-btn.copied { color: var(--cyan); border-color: var(--cyan); }
+
+    /* ── Section shared ── */
+    section { padding: 6rem 2rem; }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .section-label {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: 1rem;
+    }
+
+    .section-title {
+      font-family: var(--display);
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: #fff;
+      margin-bottom: 1rem;
+      line-height: 1.15;
+    }
+
+    .section-sub {
+      font-family: var(--mono);
+      font-size: 0.9rem;
+      color: var(--muted-hi);
+      max-width: 560px;
+      line-height: 1.75;
+    }
+
+    /* ── Features grid ── */
+    .features { background: var(--bg-2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+
+    .features-header { margin-bottom: 3.5rem; }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .feature-card {
+      background: var(--card-bg);
+      padding: 2rem;
+      transition: background 0.2s;
+      position: relative;
+    }
+    .feature-card:hover { background: rgba(18, 28, 56, 0.9); }
+    .feature-card:hover .feature-icon { color: var(--blue); }
+
+    .feature-icon {
+      font-size: 1.4rem;
+      margin-bottom: 1.25rem;
+      color: var(--muted-hi);
+      transition: color 0.2s;
+      line-height: 1;
+    }
+
+    .feature-title {
+      font-family: var(--display);
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: #fff;
+      margin-bottom: 0.65rem;
+    }
+
+    .feature-desc {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--muted-hi);
+      line-height: 1.7;
+    }
+
+    .feature-tag {
+      display: inline-block;
+      margin-top: 1.25rem;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--cyan-dim);
+      border: 1px solid rgba(0, 172, 204, 0.3);
+      background: rgba(0, 172, 204, 0.06);
+      padding: 0.15rem 0.5rem;
+      border-radius: 2px;
+    }
+
+    /* ── Code example ── */
+    .code-section { background: var(--bg); }
+
+    .code-block {
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 2.5rem;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.75;
+    }
+
+    .code-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.6rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    .code-bar-dots { display: flex; gap: 0.4rem; }
+    .code-bar-dots span {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--border-hi);
+    }
+    .code-bar-label { font-size: 0.72rem; color: var(--muted); letter-spacing: 0.06em; }
+
+    .code-body { padding: 1.5rem; overflow-x: auto; }
+    .code-body pre { white-space: pre; }
+
+    .kw  { color: #c792ea; }
+    .fn  { color: #82aaff; }
+    .str { color: #c3e88d; }
+    .cm  { color: #546e7a; font-style: italic; }
+    .num { color: #f78c6c; }
+    .cls { color: var(--cyan); }
+    .pn  { color: var(--text); }
+
+    /* ── Docs links ── */
+    .docs-section { border-top: 1px solid var(--border); }
+
+    .docs-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+      margin-top: 3rem;
+    }
+
+    .docs-card {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1.75rem;
+      text-decoration: none;
+      display: block;
+      transition: border-color 0.2s, background 0.2s, transform 0.15s;
+      background: var(--card-bg);
+      position: relative;
+      overflow: hidden;
+    }
+    .docs-card::after {
+      content: '';
+      position: absolute; inset: 0;
+      background: linear-gradient(135deg, rgba(79,142,247,0.04) 0%, transparent 60%);
+      opacity: 0; transition: opacity 0.2s;
+    }
+    .docs-card:hover { border-color: var(--blue); transform: translateY(-2px); }
+    .docs-card:hover::after { opacity: 1; }
+    .docs-card:hover .docs-arrow { color: var(--blue); transform: translate(2px,-2px); }
+
+    .docs-card-icon {
+      font-size: 1.5rem; margin-bottom: 1rem; line-height: 1;
+    }
+    .docs-card-title {
+      font-family: var(--display);
+      font-size: 1.05rem; font-weight: 600;
+      color: #fff; margin-bottom: 0.5rem;
+    }
+    .docs-card-desc {
+      font-family: var(--mono);
+      font-size: 0.78rem; color: var(--muted-hi);
+      line-height: 1.65;
+    }
+    .docs-arrow {
+      position: absolute; top: 1.5rem; right: 1.5rem;
+      color: var(--muted); font-size: 1.1rem;
+      transition: color 0.2s, transform 0.2s;
+    }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2.5rem 2rem;
+      background: var(--bg);
+    }
+
+    .footer-inner {
+      max-width: 1100px; margin: 0 auto;
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 1rem;
+    }
+
+    .footer-left {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .footer-left strong { color: var(--muted-hi); }
+
+    .footer-links {
+      display: flex; gap: 1.5rem; list-style: none; flex-wrap: wrap;
+    }
+    .footer-links a {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--muted);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .footer-links a:hover { color: var(--text); }
+
+    /* ── Divider line with gradient ── */
+    .gradient-line {
+      height: 1px;
+      background: linear-gradient(90deg, transparent 0%, var(--blue) 40%, var(--cyan) 60%, transparent 100%);
+      opacity: 0.4;
+      margin: 0;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 640px) {
+      nav { padding: 0 1rem; }
+      .nav-links { gap: 0; }
+      .nav-links a { padding: 0.3rem 0.5rem; font-size: 0.72rem; }
+      section { padding: 4rem 1.25rem; }
+      .hero { padding: 7rem 1.25rem 4rem; }
+      .install-box { flex-wrap: wrap; justify-content: center; }
+    }
+
+    /* ── Fade-in on load ── */
+    .hero-content, .install-strip {
+      animation: fadeUp 0.8s ease both;
+    }
+    .install-strip { animation-delay: 0.2s; }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Nav ────────────────────────────────────────────────────────────── -->
+<nav>
+  <a href="." class="nav-logo">
+    <div class="nav-logo-mark"></div>
+    AgentFlow
+  </a>
+  <ul class="nav-links">
+    <li><a href="./guide/">Guide</a></li>
+    <li><a href="./api/python/">Python API</a></li>
+    <li><a href="./api/rust/">Rust Docs</a></li>
+    <li>
+      <a href="https://github.com/waldiez/agentflow" class="nav-gh" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+        GitHub
+      </a>
+    </li>
+  </ul>
+</nav>
+
+<!-- ── Hero ───────────────────────────────────────────────────────────── -->
+<section class="hero">
+  <canvas id="hero-canvas"></canvas>
+
+  <div class="hero-content">
+    <div class="hero-badge">v0.2.0 · Alpha</div>
+
+    <h1>Agent<span>Flow</span></h1>
+
+    <p class="hero-tagline">
+      Actor-model multi-agent AI framework —
+      <em>Python</em> · <em>Rust</em> · <em>MQTT</em>
+    </p>
+
+    <div class="hero-ctas">
+      <a href="./guide/" class="btn-primary">Get Started →</a>
+      <a href="https://github.com/waldiez/agentflow" class="btn-ghost" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+        GitHub
+      </a>
+      <a href="https://pypi.org/project/agentflow/" class="btn-ghost" target="_blank" rel="noopener">
+        <svg width="16" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12.001 0C5.929 0 6.291 2.698 6.291 2.698l.007 2.794h5.813v.838H3.924S0 5.87 0 12.001c0 6.13 3.389 5.911 3.389 5.911h2.025v-2.843s-.109-3.389 3.333-3.389h5.748s3.224.052 3.224-3.117V3.215S18.271 0 12.001 0zm-3.196 1.854a1.038 1.038 0 1 1 0 2.076 1.038 1.038 0 0 1 0-2.076zM17.71 5.531v2.765s.109 3.389-3.333 3.389H8.629s-3.224-.053-3.224 3.116v5.349s-.489 3.117 5.781 3.117c6.271 0 6.271-2.698 6.271-2.698l-.007-2.794h-5.813v-.838h8.187s3.924.459 3.924-5.673c0-6.13-3.389-5.911-3.389-5.911H17.71zm-3.173 15.615a1.038 1.038 0 1 1 0-2.076 1.038 1.038 0 0 1 0 2.076z"/></svg>
+        PyPI
+      </a>
+    </div>
+  </div>
+
+  <div class="install-strip">
+    <div class="install-box">
+      <span class="prompt">$</span>
+      <span class="cmd">pip install agentflow[all]</span>
+      <button class="copy-btn" onclick="copyInstall(this)">copy</button>
+    </div>
+  </div>
+</section>
+
+<div class="gradient-line"></div>
+
+<!-- ── Features ───────────────────────────────────────────────────────── -->
+<section class="features">
+  <div class="container">
+    <div class="features-header">
+      <p class="section-label">// capabilities</p>
+      <h2 class="section-title">Built for production<br/>multi-agent systems</h2>
+      <p class="section-sub">Erlang/OTP-style supervision, real-time MQTT telemetry, and a live 3D web dashboard — out of the box.</p>
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">⬡</div>
+        <div class="feature-title">Actor Supervision</div>
+        <p class="feature-desc">ONE_FOR_ONE, ONE_FOR_ALL, REST_FOR_ONE restart strategies with configurable budgets. Agents crash-restart automatically.</p>
+        <span class="feature-tag">Erlang/OTP model</span>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">◈</div>
+        <div class="feature-title">Multi-LLM Backends</div>
+        <p class="feature-desc">Plug in Anthropic, OpenAI, Ollama, or NVIDIA NIM. Swap providers without touching agent logic.</p>
+        <span class="feature-tag">Provider-agnostic</span>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">⇆</div>
+        <div class="feature-title">MQTT Pub/Sub</div>
+        <p class="feature-desc">Every agent heartbeat, metric, alert and chat message flows over typed MQTT topics. Introspect or integrate anything.</p>
+        <span class="feature-tag">Real-time telemetry</span>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">◉</div>
+        <div class="feature-title">Live 3D Dashboard</div>
+        <p class="feature-desc">Babylon.js web UI renders agent graphs, galaxy views, and card layouts. Chat, monitor and command agents in-browser.</p>
+        <span class="feature-tag">Babylon.js · MQTT WS</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="gradient-line"></div>
+
+<!-- ── Code snippet ───────────────────────────────────────────────────── -->
+<section class="code-section">
+  <div class="container">
+    <p class="section-label">// quickstart</p>
+    <h2 class="section-title">Up in three steps</h2>
+
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-bar-dots"><span></span><span></span><span></span></div>
+        <span class="code-bar-label">main.py</span>
+      </div>
+      <div class="code-body"><pre><span class="cm"># 1. Install</span>
+<span class="cm">#    pip install agentflow[all]</span>
+
+<span class="kw">from</span> <span class="cls">agentflow</span> <span class="kw">import</span> <span class="fn">ActorSystem</span>, <span class="fn">Actor</span>, <span class="fn">Message</span>
+<span class="kw">from</span> <span class="cls">agentflow.agents.llm_agent</span> <span class="kw">import</span> <span class="fn">AnthropicProvider</span>, <span class="fn">LLMAgent</span>
+<span class="kw">import</span> <span class="cls">asyncio</span>
+
+<span class="cm"># 2. Build your system</span>
+<span class="kw">async def</span> <span class="fn">main</span>():
+    system = <span class="fn">ActorSystem</span>(mqtt_broker=<span class="str">"localhost"</span>, mqtt_port=<span class="num">1883</span>)
+    provider = <span class="fn">AnthropicProvider</span>(model=<span class="str">"claude-sonnet-4-6"</span>)
+
+    <span class="cm"># Register agents under the supervisor</span>
+    (system.supervisor
+        .<span class="fn">supervise</span>(<span class="str">"researcher"</span>, <span class="kw">lambda</span>: <span class="fn">LLMAgent</span>(
+            name=<span class="str">"researcher"</span>, llm_provider=provider,
+            system_prompt=<span class="str">"You are a research agent."</span>,
+        ), max_restarts=<span class="num">5</span>)
+    )
+
+    <span class="cm"># 3. Run — dashboard at http://localhost:8888</span>
+    <span class="kw">await</span> system.supervisor.<span class="fn">start</span>()
+    <span class="kw">await</span> system.<span class="fn">run_forever</span>()
+
+<span class="cls">asyncio</span>.<span class="fn">run</span>(<span class="fn">main</span>())
+</pre></div>
+    </div>
+  </div>
+</section>
+
+<div class="gradient-line"></div>
+
+<!-- ── Docs links ──────────────────────────────────────────────────────── -->
+<section class="docs-section">
+  <div class="container">
+    <p class="section-label">// documentation</p>
+    <h2 class="section-title">Everything you need</h2>
+
+    <div class="docs-grid">
+      <a href="./guide/" class="docs-card">
+        <span class="docs-arrow">↗</span>
+        <div class="docs-card-icon">📖</div>
+        <div class="docs-card-title">Guide</div>
+        <p class="docs-card-desc">Installation, configuration, actor model concepts, deployment modes, and integration examples.</p>
+      </a>
+
+      <a href="./api/python/" class="docs-card">
+        <span class="docs-arrow">↗</span>
+        <div class="docs-card-icon">🐍</div>
+        <div class="docs-card-title">Python API Reference</div>
+        <p class="docs-card-desc">Auto-generated API docs for all agents, core actors, registry, config, and interfaces.</p>
+      </a>
+
+      <a href="./api/rust/" class="docs-card">
+        <span class="docs-arrow">↗</span>
+        <div class="docs-card-icon">⚙️</div>
+        <div class="docs-card-title">Rust Crate Docs</div>
+        <p class="docs-card-desc">Rustdoc for agentflow-core, agentflow-interfaces, and the axum WS bridge crates.</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ─────────────────────────────────────────────────────────── -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-left">
+      <strong>AgentFlow</strong> — Apache-2.0 License<br/>
+      Built by <a href="https://waldiez.io" style="color:var(--muted-hi);text-decoration:none;">Waldiez</a> and contributors.
+    </div>
+    <ul class="footer-links">
+      <li><a href="./guide/">Guide</a></li>
+      <li><a href="./api/python/">Python API</a></li>
+      <li><a href="./api/rust/">Rust Docs</a></li>
+      <li><a href="https://github.com/waldiez/agentflow" target="_blank" rel="noopener">GitHub</a></li>
+      <li><a href="https://pypi.org/project/agentflow/" target="_blank" rel="noopener">PyPI</a></li>
+      <li><a href="./guide/#changelog">Changelog</a></li>
+    </ul>
+  </div>
+</footer>
+
+<script>
+// ── Canvas network animation ──────────────────────────────────────────────────
+(function () {
+  const canvas = document.getElementById('hero-canvas');
+  const ctx = canvas.getContext('2d');
+  let W, H, nodes, animId;
+
+  const BLUE  = '#4f8ef7';
+  const CYAN  = '#00d4ff';
+  const MUTED = '#1a2140';
+
+  function resize() {
+    W = canvas.width  = canvas.offsetWidth;
+    H = canvas.height = canvas.offsetHeight;
+  }
+
+  function mkNode() {
+    const roles = ['main', 'io', 'monitor', 'llm', 'code', 'worker', 'sensor', 'hub'];
+    return {
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: (Math.random() - 0.5) * 0.35,
+      vy: (Math.random() - 0.5) * 0.35,
+      r: Math.random() * 2.5 + 2,
+      pulse: Math.random() * Math.PI * 2,
+      pulseSpeed: 0.015 + Math.random() * 0.02,
+      color: Math.random() > 0.35 ? BLUE : CYAN,
+      label: roles[Math.floor(Math.random() * roles.length)],
+    };
+  }
+
+  function init() {
+    resize();
+    const count = Math.min(Math.max(Math.floor((W * H) / 22000), 14), 40);
+    nodes = Array.from({ length: count }, mkNode);
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    // Edges
+    const maxDist = Math.min(W, H) * 0.32;
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const dx = nodes[j].x - nodes[i].x;
+        const dy = nodes[j].y - nodes[i].y;
+        const d  = Math.sqrt(dx * dx + dy * dy);
+        if (d > maxDist) continue;
+        const alpha = (1 - d / maxDist) * 0.45;
+        ctx.beginPath();
+        ctx.moveTo(nodes[i].x, nodes[i].y);
+        ctx.lineTo(nodes[j].x, nodes[j].y);
+        ctx.strokeStyle = `rgba(79,142,247,${alpha})`;
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+      }
+    }
+
+    // Nodes
+    for (const n of nodes) {
+      n.pulse += n.pulseSpeed;
+      const glow = (Math.sin(n.pulse) + 1) * 0.5; // 0–1
+
+      // Outer glow ring
+      const grad = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.r * (5 + glow * 4));
+      const isBlue = n.color === BLUE;
+      grad.addColorStop(0, isBlue ? `rgba(79,142,247,${0.18 + glow * 0.25})` : `rgba(0,212,255,${0.18 + glow * 0.25})`);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r * (5 + glow * 4), 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // Core dot
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fillStyle = n.color;
+      ctx.fill();
+
+      // Move
+      n.x += n.vx;
+      n.y += n.vy;
+      if (n.x < -40) n.x = W + 40;
+      if (n.x > W + 40) n.x = -40;
+      if (n.y < -40) n.y = H + 40;
+      if (n.y > H + 40) n.y = -40;
+    }
+
+    animId = requestAnimationFrame(draw);
+  }
+
+  window.addEventListener('resize', () => { resize(); });
+  init();
+  draw();
+})();
+
+// ── Copy button ───────────────────────────────────────────────────────────────
+function copyInstall(btn) {
+  navigator.clipboard.writeText('pip install agentflow[all]').then(() => {
+    btn.textContent = 'copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+</script>
+</body>
+</html>

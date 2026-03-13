@@ -76,7 +76,7 @@ jobs:
 
       # Replace MkDocs-generated home with the custom landing page
       - name: Inject custom landing page
-        run: cp docs/index.html site/index.html
+        run: cp docs/_landing.html site/index.html
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4

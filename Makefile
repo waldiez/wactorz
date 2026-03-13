@@ -151,7 +151,7 @@ docs-serve: ## Serve MkDocs guide locally with live reload (http://localhost:800
 
 docs-build: ## Build full docs site (MkDocs + rustdoc) into site/
 	mkdocs build
-	cp docs/index.html site/index.html
+	cp docs/_landing.html site/index.html
 	mkdir -p site/api/rust
 	cd $(RUST_DIR) && cargo doc --no-deps --workspace && \
 	  cp -r target/doc/. ../site/api/rust/ 2>/dev/null || true

@@ -56,17 +56,19 @@ def get_args():
 	return args
 
 
-async def _start_web_ui(port: int, mqtt_broker: str, mqtt_port: int) -> None:
+async def _start_web_ui(port: int, mqtt_broker: str, mqtt_port: int, actor_registry=None) -> None:
     """Start the monitor web server as a quiet background asyncio task."""
     import logging as _log
     import agentflow.monitor_server as _ms
 
-    # Point the monitor server at the same broker the main system uses
     _ms.MQTT_BROKER  = mqtt_broker
     _ms.MQTT_PORT    = mqtt_port
     _ms.WS_PORT      = port
 
-    # Silence its own logger and aiohttp access logs — no noise by default
+    # Wire the registry in so chat is routed directly — no IOAgent needed
+    if actor_registry is not None:
+        _ms.registry = actor_registry
+
     for _name in ("agentflow.monitor_server", "aiohttp.access", "aiohttp.server"):
         _log.getLogger(_name).setLevel(_log.WARNING)
 
@@ -218,6 +220,7 @@ async def app():
 	        port=args.monitor_port,
 	        mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
 	        mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
+	        actor_registry=system.registry,
 	    )
 
 	from agentflow.interfaces.chat_interfaces import (

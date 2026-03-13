@@ -15,17 +15,33 @@ import { HLCWidGen } from "@waldiez/wid";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { MQTTClient } from "../mqtt/MQTTClient";
 import type { ChatPanel } from "../ui/ChatPanel";
+import type { WSChatClient } from "./WSChatClient";
 
 const _widGen = new HLCWidGen({ node: "browser", W: 4 });
 
 export class IOManager {
   /** Tracks the last typing key so we can clear it when any reply arrives. */
   private _lastTypingKey = "";
+  private _ws: WSChatClient | null = null;
 
   constructor(
     private readonly mqtt: MQTTClient,
     private readonly chatPanel: ChatPanel,
   ) {}
+
+  /** Wire in a WSChatClient so send() can use direct WebSocket when available. */
+  setWSClient(ws: WSChatClient): void {
+    this._ws = ws;
+
+    ws.onStreamChunk((chunk, from) => {
+      this.chatPanel.streamChunk(chunk, from);
+    });
+
+    ws.onStreamEnd(() => {
+      this.chatPanel.hideTyping(this._lastTypingKey);
+      this.chatPanel.finalizeStream();
+    });
+  }
 
   /**
    * Send `text` to the appropriate agent via `io/chat`.
@@ -60,7 +76,26 @@ export class IOManager {
     this._lastTypingKey = typingKey;
     this.chatPanel.showTyping(typingKey, typingKey);
 
-    // Publish to io/chat gateway topic
+    // direct_ws mode: send over WebSocket only — never fall back to MQTT.
+    // Falling back would let IOAgent pick up the message and double-handle it.
+    if (this._ws?.chatMode === "direct_ws") {
+      const sent = this._ws.send(content);
+      if (!sent) {
+        setTimeout(() => {
+          this.chatPanel.hideTyping(typingKey);
+          this.chatPanel.appendMessage({
+            id: _widGen.next(),
+            from: "system",
+            to: "user",
+            content: "⚠ WebSocket disconnected — reconnecting, please retry.",
+            timestampMs: Date.now(),
+          });
+        }, 300);
+      }
+      return;
+    }
+
+    // mqtt mode (legacy / no registry): publish to io/chat.
     const published = this.mqtt.publish("io/chat", {
       id: msg.id,
       from: "user",
@@ -69,21 +104,16 @@ export class IOManager {
       timestampMs: msg.timestampMs,
     });
 
-    // Dev-mode fallback: if MQTT is not connected, show an informative message
-    // instead of leaving the typing indicator spinning forever.
     if (!published) {
       setTimeout(() => {
         this.chatPanel.hideTyping(typingKey);
-        const errorMsg: ChatMessage = {
+        this.chatPanel.appendMessage({
           id: _widGen.next(),
           from: "system",
           to: "user",
-          content:
-            "⚠ MQTT not connected — start the dev stack:\n" +
-            "docker compose -f compose.dev.yaml up -d",
+          content: "⚠ Not connected — start the backend:\n  docker compose up -d  &&  agentflow",
           timestampMs: Date.now(),
-        };
-        this.chatPanel.appendMessage(errorMsg);
+        });
       }, 800);
     }
   }

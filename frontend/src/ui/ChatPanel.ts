@@ -41,6 +41,12 @@ export class ChatPanel {
   private typingBubbles:  Map<string, HTMLElement>                    = new Map();
   private typingTimeouts: Map<string, ReturnType<typeof setTimeout>>  = new Map();
 
+  /** Streaming state — one active stream at a time. */
+  private _streamRow:    HTMLElement | null = null;
+  private _streamBody:   HTMLElement | null = null;
+  private _streamFrom:   string | null      = null;
+  private _streamText:   string             = "";
+
   constructor() {
     this.panel         = document.getElementById("chat-panel")!;
     this.agentNameEl   = document.getElementById("panel-agent-name")!;
@@ -121,9 +127,10 @@ export class ChatPanel {
 
   /** Route and display a chat message in the correct thread. */
   appendMessage(msg: ChatMessage): void {
-    // User / system messages belong to the currently active thread
+    // User / system messages — and io-gateway proxy replies — belong to the
+    // active thread. io-gateway is a transparent routing layer, not a real agent.
     const key =
-      msg.from === "user" || msg.from === "system"
+      msg.from === "user" || msg.from === "system" || msg.from === "io-gateway"
         ? (this.activeAgentName ?? "main-actor")
         : msg.from;
 
@@ -151,6 +158,86 @@ export class ChatPanel {
   }
 
   get activeAgent(): AgentInfo | null { return this.selectedAgent; }
+
+  // ── Streaming ───────────────────────────────────────────────────────────────
+
+  /**
+   * Append a chunk to the in-progress streaming bubble.
+   * Creates the bubble on the first chunk.
+   */
+  streamChunk(chunk: string, from: string): void {
+    if (!this._streamRow) {
+      // First chunk — create the bubble
+      this._streamFrom = from;
+      this._streamText = "";
+
+      const row = document.createElement("div");
+      row.className = "msg-row streaming";
+
+      const avatar = document.createElement("img");
+      avatar.className = "msg-avatar";
+      avatar.src       = dicebearFor(from);
+      avatar.alt       = from;
+      avatar.loading   = "lazy";
+
+      const bubble = document.createElement("div");
+      bubble.className = "msg agent";
+
+      const meta = document.createElement("div");
+      meta.className   = "msg-meta";
+      meta.textContent = `${from} · ${new Date().toLocaleTimeString()}`;
+
+      const body = document.createElement("div");
+      body.className = "stream-body";
+
+      bubble.appendChild(meta);
+      bubble.appendChild(body);
+      row.appendChild(avatar);
+      row.appendChild(bubble);
+
+      // Attach to the active thread in the DOM
+      if (this.panel.classList.contains("open")) {
+        this.messagesEl.appendChild(row);
+      }
+
+      this._streamRow  = row;
+      this._streamBody = body;
+    }
+
+    this._streamText += chunk;
+    if (this._streamBody) {
+      // Show plain text while streaming (fast, no XSS risk)
+      this._streamBody.textContent = this._streamText;
+    }
+    this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+  }
+
+  /** Finalize the streaming bubble: render markdown, store in thread history. */
+  finalizeStream(): void {
+    if (!this._streamBody || !this._streamFrom || !this._streamRow) return;
+
+    // Render markdown on the completed text
+    this._streamBody.innerHTML = renderMarkdown(this._streamText);
+    this.messagesEl.scrollTop  = this.messagesEl.scrollHeight;
+
+    // Store in thread history
+    const key = this.activeAgentName ?? "main-actor";
+    const msg: ChatMessage = {
+      id:          `stream-${Date.now()}`,
+      from:        this._streamFrom,
+      to:          "user",
+      content:     this._streamText,
+      timestampMs: Date.now(),
+    };
+    if (!this.threads.has(key)) this.threads.set(key, []);
+    this.threads.get(key)!.push(msg);
+
+    // Reset streaming state
+    this._streamRow  = null;
+    this._streamBody = null;
+    this._streamFrom = null;
+    this._streamText = "";
+  }
 
   // ── Typing indicator ────────────────────────────────────────────────────────
 

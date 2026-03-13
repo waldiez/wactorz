@@ -165,13 +165,6 @@ async def build_system(args: argparse.Namespace):
     return system, main_actor
 
 
-
-# def cli_main() -> None:
-#     """Entry point for the `agentflow` console script."""
-#     from agentflow.cli import get_parser
-#     asyncio.run(main())
-
-
 if __name__ == "__main__":
     from agentflow.cli import app
     asyncio.run(app())

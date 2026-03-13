@@ -20,6 +20,7 @@ import { ActivityFeed } from "./ui/ActivityFeed";
 import { MentionPopup } from "./ui/MentionPopup";
 import { VoiceInput } from "./io/VoiceInput";
 import { IOManager } from "./io/IOManager";
+import { WSChatClient } from "./io/WSChatClient";
 
 import type { AgentInfo, ThemeChangeEvent } from "./types/agent";
 
@@ -44,7 +45,23 @@ const chatPanel = new ChatPanel();
 const voice = new VoiceInput();
 const ioManager = new IOManager(mqtt, chatPanel);
 const ioBar = new IOBar(voice, ioManager);
+
 const feed = new ActivityFeed();
+
+// ── Direct WebSocket chat (bypasses MQTT/IOAgent when server has registry) ────
+
+const wsChat = new WSChatClient();
+
+// Non-streaming replies (slash commands, errors, one-shot agent replies)
+wsChat.onChat((content, from, timestampMs) => {
+  ioManager.receiveAgentMessage({ id: `ws-${timestampMs}`, from, to: "user", content, timestampMs });
+  scene.onChat(from, "user");
+  feed.push({ type: "chat", label: content.slice(0, 60), agentName: from, timestamp: timestampMs });
+});
+
+// Streaming replies — onStreamChunk / onStreamEnd are wired inside setWSClient
+ioManager.setWSClient(wsChat);
+wsChat.connect(`${_wsProto}//${window.location.host}/ws`);
 
 // MentionPopup needs the textarea and the agent list from SceneManager
 const textInput = document.getElementById("text-input") as HTMLTextAreaElement;
@@ -281,5 +298,6 @@ mqtt.connect();
 
 window.addEventListener("beforeunload", () => {
   mqtt.disconnect();
+  wsChat.disconnect();
   scene.dispose();
 });

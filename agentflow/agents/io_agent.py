@@ -114,6 +114,37 @@ class IOAgent(Actor):
                 return
 
         logger.info(f"[{self.name}] routing from '{from_id}' → '{target.name}': {text[:60]!r}")
+
+        # Call streaming methods directly (same as CLI) if available — gives
+        # chunk-by-chunk responses instead of waiting for the full reply.
+        if target_name in ("main-actor", "main") and hasattr(target, "process_user_input_stream"):
+            buf = []
+            async for chunk in target.process_user_input_stream(text):
+                if isinstance(chunk, dict):
+                    continue  # system metadata, skip
+                buf.append(str(chunk))
+                # flush every ~80 chars so the UI feels live
+                if sum(len(c) for c in buf) >= 80:
+                    await self._reply("".join(buf))
+                    buf.clear()
+            if buf:
+                await self._reply("".join(buf))
+            return
+
+        if hasattr(target, "chat_stream"):
+            buf = []
+            async for chunk in target.chat_stream(text):
+                if isinstance(chunk, dict):
+                    continue
+                buf.append(str(chunk))
+                if sum(len(c) for c in buf) >= 80:
+                    await self._reply("".join(buf))
+                    buf.clear()
+            if buf:
+                await self._reply("".join(buf))
+            return
+
+        # Fallback: actor message passing (no streaming)
         msg = Message(
             type=MessageType.TASK,
             sender_id=self.actor_id,

@@ -1,20 +1,8 @@
 """
 AgentFlow - Entry Point
 """
-import logging
-import argparse
-import os
 import sys
 import asyncio
-
-from pathlib import Path
-
-try:
-    from agentflow.config import CONFIG
-except ImportError:
-    sys.path.insert(0, str(Path(__file__).parent))
-    from agentflow.config import CONFIG
-
 
 # Windows: MUST be set before any async library is imported or started
 if sys.platform == "win32":
@@ -24,6 +12,9 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+import logging
+import argparse
+import os
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,8 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def build_system(args: argparse.Namespace):
-    # CONFIG = get_config()
+async def build_system(args):
     from agentflow.core.registry import ActorSystem
     from agentflow.core.actor import SupervisorStrategy
     from agentflow.agents.main_actor import MainActor
@@ -46,26 +36,20 @@ async def build_system(args: argparse.Namespace):
     from agentflow.agents.ml_agent import AnomalyDetectorAgent
     from agentflow.agents.installer_agent import InstallerAgent
     from agentflow.agents.manual_agent import ManualAgent
+    from agentflow.agents.catalog_agent import CatalogAgent
     from agentflow.agents.llm_agent import AnthropicProvider, OpenAIProvider, OllamaProvider, NIMProvider
     from agentflow.agents.home_assistant_agent import HomeAssistantAgent
-    from agentflow.agents.home_assistant_map_agent import HomeAssistantMapAgent
-    from agentflow.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
 
-    llm = args.llm or CONFIG.llm_provider
-    if llm == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY") or CONFIG.llm_api_key
-        provider = AnthropicProvider(model=CONFIG.llm_model, api_key=api_key)
-    elif llm == "openai":
-        api_key = os.getenv("OPENAI_API_KEY") or CONFIG.llm_api_key
-        provider = OpenAIProvider(model=CONFIG.llm_model, api_key=api_key)
-    elif llm == "ollama":
-        ollama_model = args.ollama_model or CONFIG.llm_model
-        provider = OllamaProvider(model=ollama_model, base_url=CONFIG.ollama_url)
-    elif llm == "nim":
-        nim_model = args.nim_model or CONFIG.llm_model
+    if args.llm == "anthropic":
+        provider = AnthropicProvider(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    elif args.llm == "openai":
+        provider = OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
+    elif args.llm == "ollama":
+        provider = OllamaProvider(model=args.ollama_model)
+    elif args.llm == "nim":
         provider = NIMProvider(
-            model=nim_model,
-            api_key=CONFIG.nim_api_key or CONFIG.nvidia_api_key,
+            model=args.nim_model,
+            api_key=os.getenv("NIM_API_KEY") or os.getenv("NVIDIA_API_KEY"),
         )
     else:
         provider = None
@@ -73,13 +57,13 @@ async def build_system(args: argparse.Namespace):
 
     # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
     system = ActorSystem(
-        mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
-        mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
+        mqtt_broker=args.mqtt_broker,
+        mqtt_port=args.mqtt_port,
     )
     # MQTT client must exist before factories run so injected actors can publish
     system._mqtt_client = await __import__(
         "agentflow.core.registry", fromlist=["_MQTTPublisher"]
-    )._MQTTPublisher.create(args.mqtt_broker or CONFIG.mqtt_host, args.mqtt_port or CONFIG.mqtt_port)
+    )._MQTTPublisher.create(args.mqtt_broker, args.mqtt_port)
 
     # ── Factory helpers (called fresh on each (re)start by the Supervisor) ────
     def make_provider():
@@ -109,21 +93,12 @@ async def build_system(args: argparse.Namespace):
                                   name="home-assistant-agent",
                                   persistence_dir="./state")
 
-    def make_ha_map_agent():
-        return HomeAssistantMapAgent(
-            name="home-assistant-map-agent",
-            persistence_dir="./state",
-        )
-
-    def make_ha_state_bridge():
-        return HomeAssistantStateBridgeAgent(
-            name="home-assistant-state-bridge",
-            persistence_dir="./state",
-        )
-
     def make_anomaly_agent():
         return AnomalyDetectorAgent(name="anomaly-detector", continuous=False,
                                     persistence_dir="./state")
+
+    def make_catalog():
+        return CatalogAgent(name="catalog", persistence_dir="./state")
 
     # ── Register critical actors under the Supervisor ─────────────────────────
     #
@@ -150,9 +125,8 @@ async def build_system(args: argparse.Namespace):
         .supervise("code-agent",            make_code_agent,    strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("manual-agent",          make_manual_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-agent",  make_ha_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
-        .supervise("home-assistant-map-agent", make_ha_map_agent, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
-        .supervise("home-assistant-state-bridge", make_ha_state_bridge, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
         .supervise("anomaly-detector",      make_anomaly_agent, strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
+        .supervise("catalog",               make_catalog,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
     )
 
     # Supervisor.start() spawns all actors via their factories and starts the watch loop
@@ -165,6 +139,47 @@ async def build_system(args: argparse.Namespace):
     return system, main_actor
 
 
+async def main():
+    parser = argparse.ArgumentParser(description="AgentFlow - Multi-Agent Framework")
+    parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp"], default="cli")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--llm", choices=["anthropic", "openai", "ollama", "nim", "none"], default="anthropic")
+    parser.add_argument("--ollama-model", default="llama3")
+    parser.add_argument("--nim-model", default="meta/llama-3.3-70b-instruct",
+                        help="NVIDIA NIM model, e.g. meta/llama-3.3-70b-instruct or deepseek-ai/deepseek-r1")
+    parser.add_argument("--discord-token", default=os.getenv("DISCORD_BOT_TOKEN", ""))
+    parser.add_argument("--mqtt-broker", default="localhost")
+    parser.add_argument("--mqtt-port", type=int, default=1883)
+    args = parser.parse_args()
+
+    system, main_actor = await build_system(args)
+
+    from agentflow.interfaces.chat_interfaces import (
+        CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface
+    )
+
+    if args.interface == "cli":
+        iface = CLIInterface(main_actor)
+        await asyncio.gather(iface.run(), system.run_forever())
+    elif args.interface == "rest":
+        iface = RESTInterface(main_actor, port=args.port, api_key=os.getenv("API_KEY"))
+        await asyncio.gather(iface.run(), system.run_forever())
+    elif args.interface == "discord":
+        if not args.discord_token:
+            logger.error("DISCORD_BOT_TOKEN not set.")
+            sys.exit(1)
+        iface = DiscordInterface(main_actor, token=args.discord_token)
+        await asyncio.gather(iface.run(), system.run_forever())
+    elif args.interface == "whatsapp":
+        iface = WhatsAppInterface(
+            main_actor,
+            account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
+            auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
+            from_number=os.getenv("TWILIO_WHATSAPP_NUMBER", ""),
+            port=args.port,
+        )
+        await asyncio.gather(iface.run(), system.run_forever())
+
+
 if __name__ == "__main__":
-    from agentflow.cli import app
-    asyncio.run(app())
+    asyncio.run(main())

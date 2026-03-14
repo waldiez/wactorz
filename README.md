@@ -18,10 +18,11 @@
 9. [Interfaces](#9-interfaces)
 10. [MQTT Topic Reference](#10-mqtt-topic-reference)
 11. [Built-in Specialist Agents](#11-built-in-specialist-agents)
-12. [Remote Nodes & Edge Deployment](#12-remote-nodes--edge-deployment)
-13. [Installation & Configuration](#13-installation--configuration)
-14. [Troubleshooting](#14-troubleshooting)
-15. [File Structure](#appendix-file-structure)
+12. [Catalog Agent — Pre-built Recipe Library](#12-catalog-agent--pre-built-recipe-library)
+13. [Remote Nodes & Edge Deployment](#13-remote-nodes--edge-deployment)
+14. [Installation & Configuration](#14-installation--configuration)
+15. [Troubleshooting](#15-troubleshooting)
+16. [File Structure](#appendix-file-structure)
 
 ---
 
@@ -50,7 +51,7 @@ AgentFlow was born out of the need for a framework that could operate on real-wo
 
 Each agent is an Actor: an independent unit with its own async message loop, mailbox (`asyncio.Queue`), and lifecycle (`CREATED → RUNNING → PAUSED → STOPPED / FAILED`). Actors never share memory. They communicate by sending typed `Message` objects to each other via the `ActorRegistry`, which maps actor IDs to actor instances.
 
-```text
+```
 Message flow:
 
   Actor A                Registry              Actor B
@@ -66,7 +67,7 @@ Message flow:
 ### Core Components
 
 | File | Layer | Role |
-| ---- | ----- | ---- |
+|------|-------|------|
 | `core/actor.py` | Core | Base Actor class — mailbox, lifecycle, heartbeat, spawn, send, persist/recall |
 | `core/registry.py` | Core | ActorSystem & ActorRegistry — actor registration, message routing, broadcast |
 | `agents/main_actor.py` | Agent | The LLM orchestrator — processes user input, spawns agents, routes requests |
@@ -75,11 +76,12 @@ Message flow:
 | `agents/dynamic_agent.py` | Agent | Runtime-generated agents — executes LLM-written Python code in a sandboxed namespace |
 | `agents/planner_agent.py` | Agent | Multi-step task planner — decomposes tasks, fans out to workers, synthesizes results |
 | `agents/installer_agent.py` | Agent | Package manager — installs pip packages locally and on remote nodes via SSH |
+| `agents/catalog_agent.py` | Agent | Recipe library — holds pre-built agent configs and spawns them on request without requiring code |
 | `agents/manual_agent.py` | Agent | PDF specialist — 3-layer search strategy to find and extract manual content |
 | `agents/home_assistant_agent.py` | Agent | Unified HA agent — hardware recommendations and automation CRUD via HA REST API |
 | `interfaces/chat_interfaces.py` | I/O | CLI (streaming), REST, Discord, WhatsApp — all call `process_user_input[_stream]` |
-| `monitor_server.py` | I/O | MQTT→WebSocket bridge + static server + MQTT WS proxy; serves the built frontend at `/` and `monitor.html` at `/ws` |
-| `frontend/` | I/O | Primary dashboard SPA — Babylon.js frontend served as `index.html` |
+| `monitor_server.py` | I/O | MQTT→WebSocket bridge that feeds the live dashboard |
+| `monitor.html` | I/O | Real-time web dashboard — agent cards, logs, cost meters, error alerts |
 
 ---
 
@@ -92,7 +94,7 @@ All LLM-backed agents inherit from `LLMAgent`, which inherits from `Actor`. It m
 **Supported LLM providers:**
 
 | Provider | Key | Notes |
-| -------- | --- | ----- |
+|----------|-----|-------|
 | Anthropic Claude | `ANTHROPIC_API_KEY` | Default |
 | OpenAI | `OPENAI_API_KEY` | `--llm openai` |
 | Ollama | *(none)* | Local models, `--llm ollama --ollama-model llama3` |
@@ -121,7 +123,7 @@ async def handle_task(agent, payload):
 **The `agent` API (available inside all three functions):**
 
 | Method | Description |
-| ------ | ----------- |
+|--------|-------------|
 | `agent.log(msg)` | Publish a log event |
 | `agent.publish(topic, data)` | Publish to an MQTT topic |
 | `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state |
@@ -155,7 +157,7 @@ Spawned on-demand when a task is too complex for a single agent. Its pipeline:
 
 **Trigger the planner explicitly or automatically:**
 
-```text
+```
 coordinate: get the weather in Athens and search for AI news, then combine them
 plan: load the Philips manual and answer the cleaning question
 @planner   any complex multi-step task
@@ -197,7 +199,7 @@ Simply describe what you want in the chat. The LLM will write the code and wrap 
 ### Spawn Options
 
 | Field | Description |
-| ----- | ----------- |
+|-------|-------------|
 | `name` | Unique agent name. Use `"replace": true` to hot-swap a running agent |
 | `type` | `"dynamic"` (runtime code), `"llm"` (pure conversation), `"manual"` (PDF search) |
 | `node` | Remote node name to spawn on (e.g. `"rpi-kitchen"`). Omit to run locally |
@@ -236,7 +238,7 @@ async def handle_task(agent, payload):
 
 ### Addressing Agents in Chat
 
-```text
+```
 @agent-name  your message here    — route directly to that agent
 @main        your message here    — route to the main orchestrator
 @planner     your complex task    — explicitly trigger the planner
@@ -257,7 +259,7 @@ Every error site (`compile`, `setup`, `process`, `handle_task`) publishes a stru
 The monitor subscribes to error events from all agents and maintains an error registry. Recovery decisions:
 
 | Severity | Action |
-| -------- | ------ |
+|----------|--------|
 | `warning` | Log it, let the agent recover on its own |
 | `critical` / `degraded` | Attempt restart (up to 3 times) |
 | `fatal` (compile/setup) | Do NOT restart — the code is broken. Notify user to fix it |
@@ -321,7 +323,7 @@ python -m agentflow --llm nim --nim-model meta/llama-3.3-70b-instruct
 **CLI commands:**
 
 | Command | Description |
-| ------- | ----------- |
+|---------|-------------|
 | `/agents` | List all running agents with type and status |
 | `/nodes` | List remote nodes with online/offline status and their agents |
 | `/deploy <node-name>` | Bootstrap a new remote node via SSH (discovers Pi automatically) |
@@ -343,30 +345,14 @@ Set `DISCORD_TOKEN` or `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_WHAT
 
 ### Live Dashboard
 
-**Via Vite dev server (development):**
-
-```bash
-cd frontend && npm run dev   # → http://localhost:5173
-```
-
-**Via `monitor_server.py` (zero-nginx option):**
-
-```bash
-cd frontend && npm run build   # produces static/app/
-python monitor_server.py       # → http://localhost:8888
-# Optionally: --mqtt-ws-port 9001 (default) if Mosquitto WS is on a different port
-```
-
-`monitor_server.py` serves the built SPA at `/`, proxies MQTT WebSocket at `/mqtt`, and the legacy `monitor.html` dashboard remains accessible via the `/ws` endpoint it exposes.
-
-**Production** — nginx is the recommended entry point; see the Docker compose files.
+Start `monitor_server.py` alongside agentflow. Open `monitor.html` in a browser. The dashboard shows real-time agent cards, log streams, token cost meters, spawn/stop controls, and error alerts — all fed via MQTT over WebSocket.
 
 ---
 
 ## 10. MQTT Topic Reference
 
 | Topic | Description |
-| ----- | ----------- |
+|-------|-------------|
 | `agents/{id}/heartbeat` | Liveness pulse every 10s — name, state, metrics |
 | `agents/{id}/logs` | Log events, spawn notifications, user interactions |
 | `agents/{id}/errors` | Structured error events with phase, severity, traceback |
@@ -401,7 +387,7 @@ PDF content is extracted in memory (`pdfplumber` → `pymupdf` fallback) and sto
 Connects to your Home Assistant instance (set `HA_URL` and `HA_TOKEN`) and handles five intents, classified by a cheap single-token LLM call:
 
 | Intent | Description |
-| ------ | ----------- |
+|--------|-------------|
 | `recommend_hardware` | Suggests devices and entities for an automation request |
 | `create_automation` | Generates and inserts a new automation via the HA REST API |
 | `edit_automation` | Identifies which automation to change and applies the update |
@@ -416,13 +402,128 @@ Pre-built agents for code execution and ML inference. `CodeAgent` runs arbitrary
 
 ---
 
-## 12. Remote Nodes & Edge Deployment
+## 12. Catalog Agent — Pre-built Recipe Library
+
+The `CatalogAgent` is a built-in agent that starts with the system and holds a library of ready-made agent recipes. Instead of writing spawn code from scratch, you ask the catalog to spawn a named agent for you — it handles everything including injecting the code, schemas, and capabilities into main's existing spawn pipeline.
+
+### Why It Exists
+
+Some agents are too useful to re-invent every session but too specific to hardcode into `cli.py` as permanent agents. The catalog is the middle ground: recipes live in the `catalogue_agents/` folder as plain Python files, the catalog loads them at startup, and any agent — main, planner, or the user directly — can request a spawn by name.
+
+### Usage
+
+**Direct (from CLI):**
+```text
+@catalog spawn image-gen-agent
+@catalog spawn doc-to-pptx-agent
+@catalog list
+@catalog info doc-to-pptx-agent
+```
+
+**Natural language via main:**
+```text
+"spawn the image generation agent"
+"what agents can you spawn for me?"
+"I need to convert a PDF to PowerPoint"
+```
+Main discovers the catalog via `/capabilities` and routes through it automatically.
+
+### Available Actions
+
+| Action | Payload | Description |
+| ------ | ------- | ----------- |
+| `list` | `{"action": "list"}` | Returns all available recipes with name, description, and capabilities |
+| `info` | `{"action": "info", "agent": "name"}` | Returns full recipe metadata (without the code string) |
+| `spawn` | `{"action": "spawn", "agent": "name"}` | Spawns the named agent via main's spawn pipeline; saves to spawn registry |
+
+Spawned agents are registered in main's spawn registry — they survive restarts just like any manually spawned agent.
+
+### Built-in Recipes
+
+| Recipe | Description | Key Dependencies |
+| ------ | ----------- | ---------------- |
+| `image-gen-agent` | Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns absolute PNG path. | `requests`, NIM API key |
+| `doc-to-pptx-agent` | Converts PDF or TXT documents into PowerPoint presentations. Extracts real embedded images from the PDF first; falls back to NIM FLUX generation for slides without images. | `pymupdf`, `pdfplumber`, `pptxgenjs` (Node.js) |
+
+### Adding New Recipes
+
+Drop a Python file into `catalogue_agents/` with an `AGENT_CODE` string (the same format as any dynamic agent), then add its entry to `catalog_agent.py`:
+
+```python
+# In catalog_agent.py — _build_catalog()
+code = _load_recipe("my_new_agent.py")
+if code:
+    catalog["my-new-agent"] = {
+        "name":         "my-new-agent",
+        "type":         "dynamic",
+        "description":  "What this agent does",
+        "capabilities": ["keyword1", "keyword2"],
+        "input_schema":  { "param": "str — description" },
+        "output_schema": { "result": "str" },
+        "poll_interval": 3600,
+        "code":          code,
+    }
+```
+
+No changes to `cli.py` or any other file needed. On next restart the recipe is available system-wide.
+
+### image-gen-agent
+
+Generates images from text prompts via NVIDIA NIM FLUX.1-dev and saves them as PNG files. Requires a free NIM API key (1000 credits/month at [build.nvidia.com](https://build.nvidia.com)).
+
+**Setup:**
+```text
+@main remember nim_api_key = nvapi-xxxxxxxxxxxxxxxx
+```
+
+**Task payload:**
+```json
+{
+  "prompt":      "minimalist flat illustration of renewable energy",
+  "output_path": "C:/Users/you/Documents/slide.png",
+  "width":       1024,
+  "height":      576,
+  "steps":       20
+}
+```
+
+**Result:** `{ "image_path": "...", "width": 1024, "height": 576, "size_kb": 312, "error": null }`
+
+### doc-to-pptx-agent
+
+Converts a PDF or TXT document into a polished PowerPoint presentation in four steps:
+
+1. **Read** — extracts text via `pdfplumber` (PDF) or plain read (TXT)
+2. **Extract images** — pulls real embedded images from the PDF using PyMuPDF; filters out small decorations (configurable minimum size); assigns images to slides by source-page proximity
+3. **LLM outline** — calls the LLM to produce a structured JSON outline: slide titles, bullets, theme colors, and per-slide image prompts
+4. **Build** — generates and runs a `pptxgenjs` Node.js script that assembles the final `.pptx` with two-column layouts (text left, image right) for content slides
+
+Slides that received a real PDF image skip NIM generation. Slides without one fall back to `image-gen-agent` (if running) or remain text-only.
+
+**Task payload:**
+```json
+{
+  "file_path":      "C:/Users/you/Documents/report.pdf",
+  "output_path":    "C:/Users/you/Documents/report.pptx",
+  "slide_count":    8,
+  "theme":          "dark executive",
+  "nim_fallback":   true,
+  "min_img_width":  200,
+  "min_img_height": 150
+}
+```
+
+**Result:** `{ "pptx_path": "...", "slide_count": 8, "title": "...", "images_extracted": 5, "images_generated": 3, "error": null }`
+
+---
+
+## 13. Remote Nodes & Edge Deployment
 
 AgentFlow can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. The edge node only needs a single file and one pip package.
 
 ### How It Works
 
-```text
+```
 [Main machine]                        [Raspberry Pi / Edge node]
 main_actor ──MQTT──► nodes/{name}/spawn ──► remote_runner.py
                                                │  compiles + runs agent
@@ -448,12 +549,11 @@ The installer agent handles SSH deployment — no manual file copying needed.
 
 **From the CLI:**
 
-```text
+```
 /deploy rpi-kitchen
 ```
 
 This will:
-
 1. Discover the Pi on your LAN (mDNS first, then port-22 scan)
 2. Prompt for SSH user, password, and your MQTT broker IP
 3. Upload `remote_runner.py` via SFTP
@@ -463,7 +563,7 @@ This will:
 
 **From the chat:**
 
-```text
+```
 set up my Raspberry Pi at 192.168.1.50 as a node called rpi-kitchen
 ```
 
@@ -500,7 +600,7 @@ Or just ask in chat: *"spawn a temperature sensor agent on rpi-kitchen"*
 
 Before spawning an agent that needs hardware libraries:
 
-```text
+```
 /deploy-pkg 192.168.1.50 adafruit-circuitpython-dht RPi.GPIO
 ```
 
@@ -510,7 +610,7 @@ Or include `"install"` in the spawn block — the remote runner will pip-install
 
 Move a running agent to a different machine without stopping it manually:
 
-```text
+```
 /migrate temp-sensor rpi-bedroom
 ```
 
@@ -520,13 +620,12 @@ The system stops the agent on its current node, starts it fresh on the target, a
 
 ### Viewing Connected Nodes
 
-```text
+```
 /nodes
 ```
 
 Output:
-
-```text
+```
   local                online   @main @monitor @installer @home-assistant-agent
   rpi-kitchen          online   @temp-sensor
   rpi-bedroom          OFFLINE  (no agents)
@@ -539,7 +638,7 @@ A node is considered online if it sent a heartbeat in the last 30 seconds.
 Remote agents have the same `agent.*` API as local agents, with one addition and one limitation:
 
 | Feature | Local | Remote |
-| ------- | ----- | ------ |
+|---------|-------|--------|
 | `agent.publish(topic, data)` | ✅ | ✅ |
 | `agent.log(msg)` / `agent.alert(msg)` | ✅ | ✅ |
 | `agent.persist(key, val)` / `agent.recall(key)` | ✅ | ✅ (JSON file on the Pi) |
@@ -554,7 +653,7 @@ For LLM reasoning from a remote agent, use `agent.send_to('main', {'text': promp
 The installer agent gained three new actions for node management:
 
 | Action | Description |
-| ------ | ----------- |
+|--------|-------------|
 | `node_deploy` | Full bootstrap: upload runner + install aiomqtt + start process |
 | `node_install` | Install pip packages on a running node via SSH |
 | `node_run` | Run any shell command on a remote node via SSH |
@@ -563,7 +662,7 @@ All three accept `host`, `user`, and either `password` or `key_path` for SSH aut
 
 ---
 
-## 13. Installation & Configuration
+## 14. Installation & Configuration
 
 ### Quick Start
 
@@ -607,7 +706,7 @@ By default AgentFlow connects to `localhost:1883`. Override with `--mqtt-host` a
 ### Environment Variables
 
 | Variable | Description |
-| -------- | ----------- |
+|----------|-------------|
 | `ANTHROPIC_API_KEY` | Claude API key (primary LLM) |
 | `OPENAI_API_KEY` | OpenAI key (alternative LLM) |
 | `NIM_API_KEY` | NVIDIA NIM key (free tier — get at build.nvidia.com) |
@@ -620,7 +719,7 @@ By default AgentFlow connects to `localhost:1883`. Override with `--mqtt-host` a
 
 ---
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 ### Conversation history corruption (400 Bad Request loop)
 
@@ -644,12 +743,12 @@ The monitor uses two liveness signals: `STATUS_RESPONSE` messages (from the 15-s
 
 ## Appendix: File Structure
 
-```text
+```
 agentflow/
 ├── main.py                        Entry point — CLI args, actor system setup, supervision tree
 ├── remote_runner.py               Self-contained edge node runner — deploy to any Pi or machine
-├── monitor_server.py              Serves built frontend + proxies /mqtt to Mosquitto WS + /ws bridge
-├── monitor.html                   Standalone legacy monitor (connects to /ws)
+├── monitor_server.py              MQTT → WebSocket bridge for dashboard
+├── monitor.html                   Live web dashboard
 ├── fix_history.py                 One-time corrupted history cleanup utility
 ├── requirements.txt
 │
@@ -664,6 +763,7 @@ agentflow/
 │   ├── planner_agent.py           PlannerAgent — plan cache, decompose, fan-out, synthesize
 │   ├── monitor_agent.py           MonitorAgent — heartbeat, error registry, recovery
 │   ├── installer_agent.py         InstallerAgent — pip install locally + SSH deploy to remote nodes
+│   ├── catalog_agent.py           CatalogAgent — pre-built recipe library, spawns agents by name
 │   ├── manual_agent.py            ManualAgent — 3-layer PDF search and extraction
 │   ├── home_assistant_agent.py    HomeAssistantAgent — HA automation CRUD
 │   ├── code_agent.py              CodeAgent — sandboxed Python execution
@@ -671,42 +771,13 @@ agentflow/
 │
 └── interfaces/
     └── chat_interfaces.py         CLI (with /deploy, /migrate, /nodes), REST, Discord, WhatsApp
+
+catalogue_agents/                  Pre-built agent recipe files (loaded by CatalogAgent at startup)
+├── __init__.py
+├── image_gen_agent.py             NIM FLUX.1-dev image generation
+└── doc_to_pptx_agent.py          PDF/TXT → PowerPoint conversion with real image extraction
 ```
 
 ---
 
-## 16. Rust Backend & Dashboard
-
-AgentFlow now includes a high-performance **Rust** backend and a **Babylon.js** interactive dashboard, running alongside the Python foundation.
-
-### Unified Entry Point
-
-Use `run.sh` to select your backend. It respects `AGENTFLOW_BACKEND`, and in `AGENTFLOW_DEV_MODE=1` it defaults to the Python backend so local frontend development targets the Python-first path by default.
-
-```bash
-# Start with the Rust Performance Core (Default)
-./run.sh
-
-# Start with the Python Foundation (Legacy/Specialist)
-AGENTFLOW_BACKEND=python ./run.sh
-
-# Local development defaults: Python backend + REST on :8080
-AGENTFLOW_DEV_MODE=1 ./run.sh
-```
-
-### Interactive Dashboard
-
-The dashboard visualizes your agent network in real-time with:
-
-- **3D Graph View:** Glowing Bezier arcs showing message flow.
-- **Galaxy View:** Orbital representation of the agent system.
-- **Agent HUD:** Real-time token cost, status, and chat.
-
-To build and run the full stack:
-
-```bash
-make build
-make up
-```
-
-*AgentFlow — built conversation by conversation.*  
+*AgentFlow — built conversation by conversation.*

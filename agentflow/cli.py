@@ -1,4 +1,3 @@
-
 import asyncio
 import argparse
 import logging
@@ -157,6 +156,7 @@ async def build_system(args: argparse.Namespace):
     from agentflow.agents.installer_agent import InstallerAgent
     from agentflow.agents.io_agent import IOAgent
     from agentflow.agents.manual_agent import ManualAgent
+    from agentflow.agents.catalog_agent import CatalogAgent
     from agentflow.agents.llm_agent import AnthropicProvider, OpenAIProvider, OllamaProvider, NIMProvider
     from agentflow.agents.home_assistant_agent import HomeAssistantAgent
     from agentflow.agents.home_assistant_map_agent import HomeAssistantMapAgent
@@ -239,6 +239,9 @@ async def build_system(args: argparse.Namespace):
         return AnomalyDetectorAgent(name="anomaly-detector", continuous=False,
                                     persistence_dir="./state")
 
+    def make_catalog():
+        return CatalogAgent(name="catalog", persistence_dir="./state")
+
     # ── Register critical actors under the Supervisor ─────────────────────────
     #
     # Strategy guide used here:
@@ -256,6 +259,8 @@ async def build_system(args: argparse.Namespace):
     #
     #   anomaly-detector — ONE_FOR_ONE: sensor pipeline, restart alone.
     #
+    #   catalog — ONE_FOR_ONE: recipe library, must always be available.
+    #
     (
         system.supervisor
         .supervise("main",                  make_main,          strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
@@ -268,6 +273,7 @@ async def build_system(args: argparse.Namespace):
         .supervise("home-assistant-map-agent", make_ha_map_agent, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
         .supervise("home-assistant-state-bridge", make_ha_state_bridge, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
         .supervise("anomaly-detector",      make_anomaly_agent, strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
+        .supervise("catalog",               make_catalog,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
     )
 
     # Supervisor.start() spawns all actors via their factories and starts the watch loop

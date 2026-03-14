@@ -23,8 +23,8 @@ PACKAGE_TO_IMPORT = {
     "beautifulsoup4":    "bs4",
     "pymupdf":           "fitz",
     "python-docx":       "docx",
+    "python-pptx":       "pptx",
     "pdfplumber":        "pdfplumber",
-    "pymupdf":           "fitz",
     "httpx":             "httpx",
     "requests":          "requests",
     "numpy":             "numpy",
@@ -50,8 +50,8 @@ IMPORT_TO_PACKAGE = {
     "bs4":               "beautifulsoup4",
     "fitz":              "pymupdf",
     "docx":              "python-docx",
+    "pptx":              "python-pptx",
     "pdfplumber":        "pdfplumber",
-    "pymupdf":           "fitz",
     "httpx":             "httpx",
     "requests":          "requests",
     "numpy":             "numpy",
@@ -230,32 +230,47 @@ class InstallerAgent(Actor):
 
         sys.executable inside a venv points to  venv/Scripts/python.exe  (Windows)
         or  venv/bin/python  (Linux/Mac), so packages always land in the right place.
-        --break-system-packages is Linux-only and skipped on Windows.
+
+        Uses subprocess.run() in a thread executor instead of asyncio.create_subprocess_exec()
+        because asyncio subprocesses are unreliable on Windows with SelectorEventLoop
+        (the default in some Python versions / environments). subprocess.run() works
+        correctly on all platforms.
         """
-        cmd = [sys.executable, "-m", "pip", "install", package]
+        import subprocess
+
+        cmd = [sys.executable, "-m", "pip", "install", package, "--quiet"]
         if sys.platform != "win32":
             cmd.append("--break-system-packages")
 
+        def _run_pip() -> tuple[bool, str]:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=180,
+                )
+                output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
+                return result.returncode == 0, output
+            except subprocess.TimeoutExpired:
+                return False, "pip timed out after 180s"
+            except FileNotFoundError:
+                return False, f"Python executable not found: {sys.executable}"
+            except Exception as e:
+                return False, f"{type(e).__name__}: {e}"
+
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
-            output = (stdout + stderr).decode("utf-8", errors="replace")
+            loop    = asyncio.get_event_loop()
+            success, output = await loop.run_in_executor(None, _run_pip)
 
-            if proc.returncode != 0:
-                return False, output
+            if success:
+                # Refresh import machinery so the new package is visible immediately
+                importlib.invalidate_caches()
 
-            # Refresh import machinery so the new package is visible immediately
-            importlib.invalidate_caches()
-            return True, output
+            return success, output
 
-        except asyncio.TimeoutError:
-            return False, "Timed out after 180s"
         except Exception as e:
-            return False, str(e)
+            return False, f"Executor error: {type(e).__name__}: {e}"
 
     def _is_installed(self, import_name: str) -> bool:
         """Check importability, always refreshing the import cache first."""

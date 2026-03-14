@@ -188,11 +188,11 @@ class CatalogAgent(Actor):
         if msg.type != MessageType.TASK:
             return
 
-        payload = msg.payload if isinstance(msg.payload, dict) else {}
+        payload = msg.payload if msg.payload is not None else {}
         result  = await self._handle(payload)
 
         # Echo task_id so caller futures resolve
-        task_id = payload.get("task") or payload.get("_task_id")
+        task_id = payload.get("task") or payload.get("_task_id") if isinstance(payload, dict) else None
         if task_id:
             result["task"]     = task_id
             result["_task_id"] = task_id
@@ -201,30 +201,53 @@ class CatalogAgent(Actor):
         if target:
             await self.send(target, MessageType.RESULT, result)
 
-    async def _handle(self, payload: dict) -> dict:
-        # Support both {"action": "spawn", "agent": "x"} and {"spawn": "x"}
-        action = payload.get("action", "").lower().strip()
+    async def _handle(self, payload) -> dict:
+        # Normalise to text first, then parse.
+        # Payloads arrive in three forms:
+        #   "spawn doc-to-pptx-agent"           ← raw string
+        #   {"text": "spawn doc-to-pptx-agent"} ← delegate_task() wrapping
+        #   {"action": "spawn", "agent": "..."}  ← structured dict
 
-        # Convenience shortcuts: {"spawn": "name"} or just {"agent": "name"}
-        if not action:
-            if "spawn" in payload:
-                action = "spawn"
-                payload = {**payload, "agent": payload["spawn"]}
-            elif "list" in payload or payload.get("agent") is None:
-                action = "list"
-            else:
-                action = "spawn"
+        # ── Structured dict with explicit action key ───────────────────────
+        if isinstance(payload, dict) and payload.get("action"):
+            action = payload["action"].lower().strip()
+            if action == "list":
+                return self._action_list()
+            if action == "info":
+                return self._action_info(payload.get("agent", ""))
+            if action == "spawn":
+                return await self._action_spawn(payload.get("agent", ""), payload)
+            return {"ok": False, "message": f"Unknown action '{action}'. Use: spawn | list | info"}
 
-        if action == "list":
-            return self._action_list()
+        # ── Convenience dict shortcuts ─────────────────────────────────────
+        if isinstance(payload, dict) and "spawn" in payload and isinstance(payload["spawn"], str):
+            return await self._action_spawn(payload["spawn"], payload)
 
-        if action == "info":
-            return self._action_info(payload.get("agent", ""))
+        # ── Extract text from any remaining form ───────────────────────────
+        if isinstance(payload, str):
+            text = payload.strip()
+        elif isinstance(payload, dict):
+            text = (payload.get("text") or payload.get("message") or payload.get("query") or "").strip()
+        else:
+            text = ""
 
-        if action == "spawn":
-            return await self._action_spawn(payload.get("agent", ""), payload)
+        # ── Parse "verb agent-name" ────────────────────────────────────────
+        if text:
+            parts = text.split(None, 1)
+            cmd   = parts[0].lower()
+            arg   = parts[1].strip() if len(parts) > 1 else ""
+            if cmd == "list":
+                return self._action_list()
+            if cmd == "info":
+                return self._action_info(arg)
+            if cmd == "spawn":
+                return await self._action_spawn(arg, {})
+            # Bare agent name with no verb → treat as spawn
+            if cmd in self._catalog:
+                return await self._action_spawn(cmd, {})
 
-        return {"ok": False, "message": f"Unknown action '{action}'. Use: spawn | list | info"}
+        # ── Nothing parseable → helpful default ───────────────────────────
+        return self._action_list()
 
     # ── Actions ────────────────────────────────────────────────────────────────
 
@@ -260,49 +283,47 @@ class CatalogAgent(Actor):
         recipe = self._catalog.get(name)
         if not recipe:
             available = list(self._catalog.keys())
-            return {
-                "ok":      False,
-                "message": f"'{name}' not in catalog. Available: {available}",
-            }
+            return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
 
-        # Find main actor — it owns the spawn pipeline and registry
-        main = self._registry.find_by_name("main") if self._registry else None
-        if not main:
-            return {"ok": False, "message": "main actor not found — cannot spawn"}
+        if not self._registry:
+            return {"ok": False, "message": "No registry available — cannot spawn"}
 
-        logger.info(f"[{self.name}] Spawning '{name}' via main...")
+        # If already running, return success immediately
+        existing = self._registry.find_by_name(name)
+        if existing:
+            return {"ok": True, "message": f"'{name}' is already running"}
+
+        logger.info(f"[{self.name}] Spawning '{name}'...")
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {"type": "log", "message": f"Spawning '{name}'...", "timestamp": time.time()},
         )
 
         try:
-            # Send the full spawn config to main — it handles DynamicAgent creation,
-            # registry, persistence, installer, etc. via its existing _handle_spawn path.
-            import uuid
-            task_id = f"catalog_spawn_{uuid.uuid4().hex[:8]}"
-            future  = asyncio.get_event_loop().create_future()
+            from .dynamic_agent import DynamicAgent
 
-            # Store future in main's result registry
-            main._result_futures[task_id] = future
+            # Find main to get its llm_provider and persistence_dir
+            main = self._registry.find_by_name("main")
+            llm_provider    = getattr(main, "llm", None) if main else None
+            persistence_dir = str(getattr(main, "_persistence_dir", "./state/main").parent) if main else "./state"
 
-            spawn_payload = {
-                **recipe,              # full config: name, type, code, schemas…
-                "action":   "spawn",
-                "task":     task_id,
-                "_task_id": task_id,
-            }
-            await self.send(main.actor_id, MessageType.TASK, spawn_payload)
+            actor = await self.spawn(
+                DynamicAgent,
+                name            = name,
+                code            = recipe["code"],
+                poll_interval   = float(recipe.get("poll_interval", 3600)),
+                description     = recipe.get("description", ""),
+                input_schema    = recipe.get("input_schema", {}),
+                output_schema   = recipe.get("output_schema", {}),
+                llm_provider    = llm_provider,
+                persistence_dir = persistence_dir,
+            )
 
-            # Wait up to 30s for main to confirm spawn
-            try:
-                await asyncio.wait_for(future, timeout=30.0)
-            except asyncio.TimeoutError:
-                pass   # Agent may still have spawned; timeout just means no ack
+            if actor:
+                # Save to main's spawn registry so it survives restarts
+                if main and hasattr(main, "_save_to_spawn_registry"):
+                    main._save_to_spawn_registry(recipe)
 
-            # Verify agent is actually running
-            running = self._registry.find_by_name(name) if self._registry else None
-            if running:
                 msg = f"'{name}' spawned and running"
                 logger.info(f"[{self.name}] {msg}")
                 await self._mqtt_publish(
@@ -311,10 +332,7 @@ class CatalogAgent(Actor):
                 )
                 return {"ok": True, "message": msg, "agent": name}
             else:
-                return {
-                    "ok":      False,
-                    "message": f"Spawn sent for '{name}' but agent not found in registry yet — check logs",
-                }
+                return {"ok": False, "message": f"Spawn returned no actor for '{name}'"}
 
         except Exception as e:
             msg = f"Failed to spawn '{name}': {e}"

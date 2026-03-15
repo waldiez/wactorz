@@ -71,6 +71,7 @@ def _build_catalog() -> dict:
             "type":         "dynamic",
             "description":  "Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns absolute PNG path.",
             "capabilities": ["image_generation", "text_to_image", "nvidia_nim", "flux"],
+            "install":      ["requests"],
             "input_schema": {
                 "prompt":      "str  — what to generate",
                 "output_path": "str  — absolute path to save PNG",
@@ -98,6 +99,7 @@ def _build_catalog() -> dict:
             "type":         "dynamic",
             "description":  "Converts PDF or TXT documents into PowerPoint presentations. Extracts real embedded images from PDF; falls back to NIM FLUX for slides without images.",
             "capabilities": ["document_to_pptx", "pdf_to_presentation", "pptx_generation", "document_conversion"],
+            "install":      ["pymupdf", "pdfplumber", "pillow"],
             "input_schema": {
                 "file_path":      "str  — absolute path to source PDF or TXT",
                 "output_path":    "str  — where to save the .pptx",
@@ -156,28 +158,52 @@ class CatalogAgent(Actor):
              "message": f"Catalog ready: {', '.join(names)}",
              "timestamp": time.time()},
         )
+
+        # Publish one manifest for the catalog agent itself
         await self.publish_manifest(
             description=(
                 "Pre-built agent recipe library. "
                 "Spawns ready-made agents by name without requiring code. "
                 f"Available: {', '.join(names)}"
             ),
-            capabilities=[
-                "spawn_catalog_agent",
-                "list_catalog_agents",
-                "agent_catalog",
-            ],
-            input_schema={
-                "action": "str — 'spawn' | 'list' | 'info'",
-                "agent":  "str — agent name for spawn/info actions",
-            },
-            output_schema={
-                "ok":        "bool",
-                "message":   "str",
-                "agents":    "list — for 'list' action",
-                "recipe":    "dict — for 'info' action (without code)",
-            },
+            capabilities=["spawn_catalog_agent", "list_catalog_agents", "agent_catalog"],
+            input_schema={"action": "str — 'spawn' | 'list' | 'info'",
+                          "agent":  "str — agent name for spawn/info actions"},
+            output_schema={"ok": "bool", "message": "str",
+                           "agents": "list", "recipe": "dict"},
         )
+
+        # Inject recipe manifests directly into main's _agent_manifests dict.
+        # Retry briefly since catalog and main start concurrently.
+        import time as _t
+
+        # Wait for main to be ready (up to 10s)
+        main = None
+        for _ in range(20):
+            main = self._registry.find_by_name("main") if self._registry else None
+            if main and hasattr(main, "_agent_manifests"):
+                break
+            await asyncio.sleep(0.5)
+
+        for name, recipe in self._catalog.items():
+            manifest = {
+                "name":          name,
+                "actor_id":      f"catalog.{name}",
+                "description":   recipe.get("description", ""),
+                "capabilities":  recipe.get("capabilities", []),
+                "input_schema":  recipe.get("input_schema",  {}),
+                "output_schema": recipe.get("output_schema", {}),
+                "publishes":     [],
+                "spawnable":     True,
+                "catalog":       self.name,
+                "timestamp":     _t.time(),
+            }
+
+            if main and hasattr(main, "_agent_manifests"):
+                main._agent_manifests[name] = manifest
+                logger.info(f"[{self.name}] Injected manifest for '{name}' into main")
+            else:
+                logger.warning(f"[{self.name}] main not ready — could not inject manifest for '{name}'")
 
     def _current_task_description(self) -> str:
         return f"catalog ({len(self._catalog)} recipes)"
@@ -301,6 +327,34 @@ class CatalogAgent(Actor):
 
         try:
             from .dynamic_agent import DynamicAgent
+
+            # ── Auto-install Python dependencies ───────────────────────────
+            install = recipe.get("install", [])
+            if install:
+                installer = self._registry.find_by_name("installer") if self._registry else None
+                if installer:
+                    await agent.log(f"Installing deps for '{name}': {install}") if False else None
+                    logger.info(f"[{self.name}] Installing deps for '{name}': {install}")
+                    import uuid as _uuid
+                    task_id = f"cat_install_{_uuid.uuid4().hex[:8]}"
+                    future  = asyncio.get_event_loop().create_future()
+                    installer._result_futures = getattr(installer, "_result_futures", {})
+                    # Use main's result futures since installer replies there
+                    main = self._registry.find_by_name("main") if self._registry else None
+                    if main:
+                        main._result_futures[task_id] = future
+                    await self.send(installer.actor_id, MessageType.TASK, {
+                        "action":   "install",
+                        "packages": install,
+                        "task":     task_id,
+                        "_task_id": task_id,
+                    })
+                    try:
+                        await asyncio.wait_for(future, timeout=120.0)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"[{self.name}] Install timeout for '{name}' — proceeding anyway")
+                else:
+                    logger.warning(f"[{self.name}] installer agent not found — skipping dep install for '{name}'")
 
             # Find main to get its llm_provider and persistence_dir
             main = self._registry.find_by_name("main")

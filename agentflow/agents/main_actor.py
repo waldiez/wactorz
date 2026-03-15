@@ -27,11 +27,55 @@ NODE_REGISTRY_KEY  = "_known_nodes"       # tracks online remote nodes
 
 ORCHESTRATOR_PROMPT = """You are the main orchestrator in a multi-agent system.
 
-You can spawn new agents on demand. When the user asks for an agent, you:
-1. Write the Python code for its core logic
-2. Wrap it in a <spawn> block
+You can spawn new agents on demand. BUT BEFORE writing any new agent code, you MUST
+follow this decision process:
+
+== DECISION PROCESS — ALWAYS FOLLOW IN ORDER ==
+
+STEP 1 — CHECK WHAT ALREADY EXISTS
+Call agent.capabilities() with NO keyword to get the full list, then scan it yourself.
+Do NOT pass a keyword — filtering may miss matches due to synonym differences.
+Each entry has "running" (bool) and "spawnable" (bool) fields:
+  - "running": true  → agent is live RIGHT NOW. Delegate to it directly.
+  - "running": false, "spawnable": true → agent exists as a catalog recipe.
+    You MUST execute the task yourself by delegating to it — do NOT tell the user to run it.
+    Use agent.send_to(name, payload) or mention @agent-name in your response to trigger it.
+    The system will auto-spawn it before routing.
+  - neither → agent doesn't exist yet. Proceed to STEP 2.
+
+CRITICAL ORCHESTRATOR RULE: You are an orchestrator — you DO things, you don't instruct
+users how to do things themselves. When you find a suitable agent (running or spawnable):
+  ✅ CORRECT: collect any missing info from the user (e.g. file path), then delegate the task
+  ❌ WRONG:   tell the user "you can use @agent-name to do this"
+
+If required parameters are missing (e.g. file path for a conversion task), ask the user
+for them FIRST, then execute once you have them. Never ask AND execute in the same turn.
+
+STEP 2 — ONLY THEN WRITE NEW CODE
+If and only if no suitable agent exists (running or spawnable), write a new spawn block.
+
+EXAMPLES:
+  User: "convert my PDF to a presentation"
+  → agent.capabilities() finds doc-to-pptx-agent (spawnable=true)
+  → file path is missing → ask: "What is the path to your PDF file?"
+  → user provides path → delegate: agent.send_to("doc-to-pptx-agent", {"file_path": "...", "output_path": "..."})
+  → report the result back to the user
+  → DO NOT tell the user to run @doc-to-pptx-agent themselves
+
+  User: "convert C:/docs/report.pdf to a presentation"
+  → agent.capabilities() finds doc-to-pptx-agent (spawnable=true)
+  → file path is present → delegate immediately
+  → report the result
+
+  User: "monitor my CPU temperature"
+  → agent.capabilities() finds nothing suitable
+  → write a new dynamic agent for it
+
+CRITICAL: Spawning a new agent when a catalog recipe exists wastes tokens, creates
+duplicate agents, and ignores pre-built tested code. Always check first.
 
 == SPAWN FORMAT ==
+Only use spawn blocks when STEP 1 confirms no suitable agent exists.
 There are TWO types of agents you can spawn:
 
 --- TYPE 0: Manual Agent (for finding device manuals and answering questions from them) ---
@@ -151,9 +195,12 @@ Inside your code, the `agent` object provides:
                                         Returns: [{"topic": str, "agents": [{"name", "node"}]}, ...]
                                         USE THIS to discover what data is available before subscribing
   agent.capabilities(keyword="")      — list all known agents with their full capability profile
-                                        Returns: [{"name", "description", "capabilities", "input_schema", "output_schema"}, ...]
+                                        Returns: [{"name", "description", "capabilities", "input_schema", "output_schema", "running", "spawnable"}, ...]
                                         Example: agent.capabilities("weather") → agents that handle weather
                                         USE THIS before delegating to another agent to know exact input/output format
+                                        "running": true  → agent is live right now, delegate directly
+                                        "running": false, "spawnable": true → catalog recipe, will be
+                                          auto-spawned the first time you route a task to it with @agent-name
 
   agent.llm                           — pre-configured LLM (same as main, already authenticated)
   agent.llm.chat(prompt, system="")   — single-turn LLM call, returns string
@@ -790,6 +837,26 @@ class MainActor(LLMAgent):
 
             # Try local registry first
             local_target = self._registry.find_by_name(target_name) if self._registry else None
+            if not local_target:
+                # Not running — check if it's a spawnable catalog recipe
+                manifest = self._agent_manifests.get(target_name, {})
+                if manifest.get("spawnable") and manifest.get("catalog"):
+                    catalog_name  = manifest["catalog"]
+                    catalog_actor = self._registry.find_by_name(catalog_name) if self._registry else None
+                    if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
+                        logger.info(f"[main] '{target_name}' not running — auto-spawning via {catalog_name}...")
+                        try:
+                            spawn_result = await catalog_actor._action_spawn(target_name, {})
+                            if spawn_result and spawn_result.get("ok"):
+                                await asyncio.sleep(0.5)
+                                local_target = self._registry.find_by_name(target_name) if self._registry else None
+                                logger.info(f"[main] '{target_name}' spawned, routing task...")
+                            else:
+                                err = spawn_result.get("message", "unknown error") if spawn_result else "no response"
+                                return note_prefix + f"Could not spawn '{target_name}': {err}"
+                        except Exception as e:
+                            return note_prefix + f"Could not spawn '{target_name}': {e}"
+
             if local_target:
                 result = await self.delegate_task(target_name, message, timeout=60.0)
                 if result:
@@ -885,6 +952,9 @@ class MainActor(LLMAgent):
 
         clean, spawned = await self._process_spawn_commands(response)
 
+        # Execute any @agent-name {payload} delegation patterns the LLM produced
+        clean = await self._execute_llm_delegations(clean)
+
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {"type": "user_interaction", "input": text[:100], "response": clean[:200]},
@@ -951,6 +1021,17 @@ class MainActor(LLMAgent):
 
         # Process any <spawn> blocks in the completed response
         _, spawned = await self._process_spawn_commands(full_response)
+
+        # Execute any @agent-name {payload} delegation patterns the LLM produced
+        # If delegations ran, yield the results as an additional chunk
+        delegated = await self._execute_llm_delegations(full_response)
+        if delegated != full_response:
+            # Find what changed and yield just the new parts
+            import re as _re
+            results = _re.findall(r'[✅❌]\s+\S+.*', delegated)
+            if results:
+                yield "\n" + "\n".join(results)
+        full_response = delegated
 
         system_msg = ""
         if spawned:
@@ -1061,6 +1142,102 @@ class MainActor(LLMAgent):
             self._result_futures.pop(task_id, None)
 
         # ── Spawn ──────────────────────────────────────────────────────────────
+
+    async def _execute_llm_delegations(self, response: str) -> str:
+        """
+        Scan the LLM response for @agent-name {json} delegation patterns and execute them.
+        Replaces the pattern in the response with the actual result.
+
+        Matches lines like:
+            @doc-to-pptx-agent {"file_path": "...", "output_path": "..."}
+            @weather-agent {"city": "Athens"}
+        """
+        import re
+
+        # Find @agent-name then scan for the matching { } block manually
+        # (regex alone can't handle } inside string values reliably)
+        delegations = []   # list of (full_match_str, agent_name, payload_dict)
+
+        for m in re.finditer(r'@([\w][\w\-]*)\s+(\{)', response):
+            agent_name = m.group(1)
+            if agent_name == self.name:
+                continue
+            start = m.start(2)   # position of opening {
+            depth = 0
+            end   = start
+            for i, ch in enumerate(response[start:], start):
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            if depth != 0:
+                continue   # unmatched braces — skip
+            json_str = response[start:end]
+            try:
+                payload = json.loads(json_str)
+            except json.JSONDecodeError:
+                continue
+            delegations.append((response[m.start():end], agent_name, payload))
+
+        replacements = []
+        for full_match, agent_name, payload in delegations:
+            # Check if agent is running, if not auto-spawn via catalog
+            target = self._registry.find_by_name(agent_name) if self._registry else None
+            if not target:
+                manifest = self._agent_manifests.get(agent_name, {})
+                if manifest.get("spawnable") and manifest.get("catalog"):
+                    catalog_actor = self._registry.find_by_name(manifest["catalog"]) if self._registry else None
+                    if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
+                        logger.info(f"[{self.name}] Auto-spawning '{agent_name}' via catalog...")
+                        try:
+                            spawn_result = await catalog_actor._action_spawn(agent_name, {})
+                            if spawn_result and spawn_result.get("ok"):
+                                await asyncio.sleep(0.5)
+                                target = self._registry.find_by_name(agent_name) if self._registry else None
+                                logger.info(f"[{self.name}] '{agent_name}' spawned successfully")
+                            else:
+                                err = spawn_result.get("message", "unknown") if spawn_result else "no response"
+                                logger.warning(f"[{self.name}] Spawn failed for '{agent_name}': {err}")
+                        except Exception as e:
+                            logger.error(f"[{self.name}] Spawn error for '{agent_name}': {e}")
+
+            if not target:
+                replacements.append((full_match, f"[Could not reach {agent_name}]"))
+                continue
+
+            json_str = json.dumps(payload)
+            logger.info(f"[{self.name}] Executing LLM delegation → @{agent_name} {json_str[:80]}")
+            try:
+                result = await self.delegate_task(agent_name, json_str, timeout=300.0)
+                if result:
+                    if isinstance(result, dict):
+                        error = result.get("error")
+                        if error:
+                            result_str = f"❌ {agent_name} failed: {error}"
+                        else:
+                            for key in ("pptx_path", "image_path", "result", "message", "output", "text"):
+                                if result.get(key):
+                                    result_str = f"✅ {agent_name} completed: {key}={result[key]}"
+                                    break
+                            else:
+                                result_str = f"✅ {agent_name} completed: {result}"
+                    else:
+                        result_str = f"✅ {agent_name}: {result}"
+                else:
+                    result_str = f"[{agent_name} did not respond]"
+            except Exception as e:
+                result_str = f"[{agent_name} error: {e}]"
+
+            replacements.append((full_match, result_str))
+
+        # Apply replacements
+        for original, replacement in replacements:
+            response = response.replace(original, replacement)
+
+        return response
 
     @staticmethod
     def _parse_spawn_config(raw: str) -> dict:
@@ -1464,14 +1641,16 @@ class MainActor(LLMAgent):
             list_capabilities("weather")   → agents with "weather" in description/capabilities
         """
         results = []
-        kw = keyword.lower()
+        kw = keyword.lower().strip()
+        # Support multi-word keywords — match if ANY word appears in the haystack
+        kw_words = kw.split() if kw else []
         for name, manifest in self._agent_manifests.items():
             desc  = manifest.get("description", "")
             caps  = manifest.get("capabilities", [])
-            # Filter by keyword across description and capabilities
-            if kw:
+            # Filter by keyword across description, capabilities, and name
+            if kw_words:
                 haystack = desc.lower() + " " + " ".join(caps).lower() + " " + name.lower()
-                if kw not in haystack:
+                if not any(w in haystack for w in kw_words):
                     continue
             results.append({
                 "name":          name,
@@ -1480,6 +1659,8 @@ class MainActor(LLMAgent):
                 "capabilities":  caps,
                 "input_schema":  manifest.get("input_schema",  {}),
                 "output_schema": manifest.get("output_schema", {}),
+                "spawnable":     manifest.get("spawnable", False),
+                "running":       bool(self._registry and self._registry.find_by_name(name)),
             })
         return sorted(results, key=lambda x: x["name"])
 

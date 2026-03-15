@@ -68,6 +68,7 @@ Full:
 AGENT_CODE = r'''
 import asyncio
 import base64
+import json
 import os
 import time
 
@@ -82,6 +83,22 @@ async def setup(agent):
 
 async def handle_task(agent, payload):
     import requests
+
+    # Normalise payload — CLI wraps messages as {"text": "..."}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            pass
+    if isinstance(payload, dict):
+        for key in ("text", "message", "query"):
+            raw = payload.get(key, "")
+            if isinstance(raw, str) and raw.strip().startswith("{"):
+                try:
+                    payload = json.loads(raw)
+                    break
+                except Exception:
+                    pass
 
     prompt      = payload.get("prompt", "").strip()
     output_path = payload.get("output_path", f"/tmp/nim_img_{int(time.time())}.png")

@@ -522,21 +522,38 @@ async def setup(agent):
         except ImportError:
             errors.append(f"pip install {pkg}")
 
-    # Check pptxgenjs
-    r = subprocess.run(["node", "-e", "require('pptxgenjs')"],
-                       capture_output=True, text=True)
+    # Check node is available (pptxgenjs is installed locally at runtime if needed)
+    r = subprocess.run(["node", "--version"], capture_output=True, text=True,
+                       shell=(os.name == "nt"))
     if r.returncode != 0:
-        errors.append("npm install -g pptxgenjs")
+        errors.append("Node.js not found — install from nodejs.org")
 
     if errors:
         await agent.alert(
-            f"doc-to-pptx-agent: missing deps — run: {'; '.join(errors)}", "warning"
+            f"doc-to-pptx-agent: missing deps — {'; '.join(errors)}", "warning"
         )
     else:
-        await agent.log("doc-to-pptx-agent ready (PyMuPDF + pdfplumber + pptxgenjs)")
+        await agent.log("doc-to-pptx-agent ready (PyMuPDF + pdfplumber + Node.js)")
 
 
 async def handle_task(agent, payload):
+    # Normalise payload — the CLI wraps the user's message as {"text": "..."}
+    # so if the payload is a string or contains a JSON string in "text", parse it.
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            pass
+    if isinstance(payload, dict):
+        for key in ("text", "message", "query"):
+            raw = payload.get(key, "")
+            if isinstance(raw, str) and raw.strip().startswith("{"):
+                try:
+                    payload = json.loads(raw)
+                    break
+                except Exception:
+                    pass
+
     file_path    = payload.get("file_path", "")
     output_path  = payload.get("output_path", "/tmp/presentation.pptx")
     slide_count  = int(payload.get("slide_count", 8))
@@ -627,9 +644,26 @@ async def handle_task(agent, payload):
         with open(js_path, "w", encoding="utf-8") as f:
             f.write(js_script)
 
+        # Ensure pptxgenjs is available in the work dir.
+        # Global npm installs are not always on NODE_PATH so we install locally.
+        node_modules = os.path.join(work_dir, "node_modules", "pptxgenjs")
+        if not os.path.exists(node_modules):
+            await agent.log("Installing pptxgenjs locally...")
+            npm = subprocess.run(
+                ["npm", "install", "pptxgenjs", "--prefer-offline"],
+                capture_output=True, text=True, cwd=work_dir, timeout=120,
+                shell=(os.name == "nt"),
+            )
+            if npm.returncode != 0:
+                err = (npm.stderr or npm.stdout or "npm failed").strip()
+                return {"pptx_path": None, "slide_count": len(slides), "title": title,
+                        "images_extracted": n_extracted, "images_generated": n_generated,
+                        "error": f"npm install pptxgenjs failed: {err[:300]}"}
+
         result = subprocess.run(
             ["node", js_path],
-            capture_output=True, text=True, cwd=work_dir, timeout=60
+            capture_output=True, text=True, cwd=work_dir, timeout=60,
+            shell=(os.name == "nt"),
         )
         if result.returncode != 0 or not os.path.exists(output_path):
             err = (result.stderr or result.stdout or "Unknown error").strip()

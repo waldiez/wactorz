@@ -106,7 +106,7 @@ class OpenAIProvider(LLMProvider):
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=full_messages,
-            max_tokens=kwargs.get("max_tokens", 4096),
+            max_completion_tokens=kwargs.get("max_tokens", 4096),
         )
         text = response.choices[0].message.content
         usage = {
@@ -125,7 +125,7 @@ class OpenAIProvider(LLMProvider):
         async with await self.client.chat.completions.create(
             model=self.model,
             messages=full_messages,
-            max_tokens=kwargs.get("max_tokens", 4096),
+            max_completion_tokens=kwargs.get("max_tokens", 4096),
             stream=True,
             stream_options={"include_usage": True},
         ) as s:

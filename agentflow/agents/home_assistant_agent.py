@@ -7,6 +7,10 @@ Handles all HA operations in a single agent:
   - delete_automation     : remove an existing automation
   - edit_automation       : update an existing automation
   - list_automations      : enumerate all automations
+  - list_areas            : enumerate Home Assistant areas
+  - list_devices          : enumerate Home Assistant devices
+  - list_entities         : enumerate Home Assistant entities
+
 
 Intent is classified with a cheap single-word LLM call, then the
 appropriate code path runs.  Complex operations (create, edit) use up
@@ -23,12 +27,17 @@ import re
 import time
 from typing import Any
 
+from agentflow.config import CONFIG
+
 from ..core.actor import Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import (
     create_automation_via_rest,
     delete_automation,
     fetch_devices_entities_with_location,
+    get_areas,
     get_automations,
+    get_devices,
+    get_entities,
     update_automation,
 )
 from .llm_agent import LLMAgent, LLMProvider
@@ -47,6 +56,10 @@ create_automation
 delete_automation
 edit_automation
 list_automations
+list_areas
+list_devices
+list_entities
+unknown
 
 Guidelines:
 - recommend_hardware  → user wants hardware/device suggestions or compatibility info
@@ -54,6 +67,10 @@ Guidelines:
 - delete_automation   → user wants to delete/remove/disable an existing automation
 - edit_automation     → user wants to update/change/rename/modify an existing automation
 - list_automations    → user wants to see/list/show existing automations
+- list_areas          → user wants to see/list/show areas
+- list_devices        → user wants to see/list/show devices
+- list_entities       → user wants to see/list/show entities
+- unknown             → request is unclear or not one of the supported Home Assistant operations
 """
 
 HARDWARE_SELECTION_PROMPT = """You are a Home Assistant hardware selection specialist.
@@ -249,8 +266,8 @@ class HomeAssistantAgent(LLMAgent):
         kwargs.setdefault("name", "home-assistant-agent")
         kwargs.setdefault("system_prompt", AUTOMATION_CREATION_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
-        self.ha_url = (os.getenv("HOME_ASSISTANT_URL") or os.getenv("HA_URL") or "").rstrip("/")
-        self.ha_token = (os.getenv("HOME_ASSISTANT_TOKEN") or os.getenv("HA_TOKEN") or "").strip()
+        self.ha_url = (CONFIG.ha_url).rstrip("/")
+        self.ha_token = (CONFIG.ha_token).strip()
         self._device_cache: dict[str, Any] = {"timestamp": 0.0, "data": None}
         self._device_cache_ttl = 30.0
         self._automation_cache: dict[str, Any] = {"timestamp": 0.0, "data": None}
@@ -272,6 +289,15 @@ class HomeAssistantAgent(LLMAgent):
         """Direct entry point used by CLI when addressing this agent."""
         result = await self._process(user_message)
         return str(result.get("result", ""))
+    
+    async def chat_stream(self, user_message: str):
+        """
+        Override LLMAgent streaming path so direct @home-assistant-agent calls
+        still use Home Assistant intent routing instead of generic LLM chat.
+        """
+        response = await self.chat(user_message)
+        yield response
+        yield {}
 
     async def handle_message(self, msg: Message) -> None:
         if msg.type != MessageType.TASK:
@@ -298,7 +324,15 @@ class HomeAssistantAgent(LLMAgent):
     async def _process(self, text: str) -> dict[str, Any]:
         """Classify intent then route to the appropriate handler."""
         action = await self._classify_action(text)
-        logger.debug("[%s] action=%r for %r", self.name, action, text[:80])
+
+        if action == "list_areas":
+            return await self._list_areas()
+
+        if action == "list_devices":
+            return await self._list_devices()
+
+        if action == "list_entities":
+            return await self._list_entities()
 
         if action == "list_automations":
             automations = await self._get_automations_brief()
@@ -317,20 +351,33 @@ class HomeAssistantAgent(LLMAgent):
             devices = await self._get_devices()
             return await self._recommend_hardware(text, devices)
 
-        # Default: create_automation — hardware selection then automation generation.
-        devices = await self._get_devices()
-        hardware_result = await self._select_hardware(text, devices)
-        if not hardware_result.get("can_fulfill"):
-            return hardware_result
+        if action == "create_automation":
+            # Create flow: hardware selection then automation generation.
+            devices = await self._get_devices()
+            hardware_result = await self._select_hardware(text, devices)
+            if not hardware_result.get("can_fulfill"):
+                return hardware_result
 
-        entities = self._extract_entity_ids_from_hardware(hardware_result)
-        return await self._create_automation(text, entities, hardware_result.get("hardware", []))
+            entities = self._extract_entity_ids_from_hardware(hardware_result)
+            return await self._create_automation(text, entities, hardware_result.get("hardware", []))
+
+        return self._unsupported_action_response(text)
 
     # ── Intent classification ────────────────────────────────────────────────
 
     async def _classify_action(self, text: str) -> str:
-        """Return one of the 5 action strings via a cheap single-word LLM call."""
-        valid = {"recommend_hardware", "create_automation", "delete_automation", "edit_automation", "list_automations"}
+        """Return one action string via a cheap single-word LLM call."""
+        valid = {
+            "recommend_hardware",
+            "create_automation",
+            "delete_automation",
+            "edit_automation",
+            "list_automations",
+            "list_areas",
+            "list_devices",
+            "list_entities",
+            "unknown",
+        }
 
         if self.llm is None:
             return self._classify_action_heuristic(text)
@@ -339,7 +386,7 @@ class HomeAssistantAgent(LLMAgent):
             response, usage = await self.llm.complete(
                 messages=[{"role": "user", "content": text}],
                 system=HA_ACTION_CLASSIFICATION_PROMPT,
-                max_tokens=20,
+                max_completion_tokens=20,
             )
             self._accumulate_usage(usage)
             word = (response or "").strip().lower().split()[0] if (response or "").strip() else ""
@@ -353,6 +400,12 @@ class HomeAssistantAgent(LLMAgent):
     @staticmethod
     def _classify_action_heuristic(text: str) -> str:
         lower = text.lower()
+        if any(w in lower for w in ("list areas", "show areas", "show me areas", "what areas")):
+            return "list_areas"
+        if any(w in lower for w in ("list devices", "show devices", "show me devices", "what devices")):
+            return "list_devices"
+        if any(w in lower for w in ("list entities", "show entities", "show me entities", "what entities")):
+            return "list_entities"
         if any(w in lower for w in ("list", "show me", "show all", "what automations", "what are my automations")):
             return "list_automations"
         if any(w in lower for w in ("delete", "remove automation", "disable automation")):
@@ -361,7 +414,19 @@ class HomeAssistantAgent(LLMAgent):
             return "edit_automation"
         if any(w in lower for w in ("hardware", "what device", "what sensor", "what do i need", "compatible with")):
             return "recommend_hardware"
-        return "create_automation"
+        if any(w in lower for w in ("create", "add automation", "new automation", "build automation", "make automation")):
+            return "create_automation"
+        return "unknown"
+
+    @staticmethod
+    def _unsupported_action_response(text: str) -> dict[str, Any]:
+        return {
+            "task": text,
+            "result": (
+                "I can help with Home Assistant hardware recommendations and automations: "
+                "create, edit, delete, list automations, list areas, list devices, and list entities."
+            ),
+        }
 
     # ── Device discovery ─────────────────────────────────────────────────────
 
@@ -475,11 +540,11 @@ class HomeAssistantAgent(LLMAgent):
                         "or set can_fulfill=false."
                     ),
                 }
-                retry, retry_usage = await self.llm.complete(
+                retry, usage = await self.llm.complete(
                     messages=[user_msg, {"role": "assistant", "content": response}, correction],
                     system=HARDWARE_SELECTION_PROMPT,
                 )
-                self._accumulate_usage(retry_usage)
+                self._accumulate_usage(usage)
                 retry_data = json.loads(self._strip_fences(retry))
                 if isinstance(retry_data, dict):
                     selected = retry_data.get("hardware") or []
@@ -679,6 +744,89 @@ class HomeAssistantAgent(LLMAgent):
 
         return {"result": "\n".join(lines), "automations": automations}
 
+    async def _fetch_registry_items(self, fetcher: Any) -> tuple[list[dict[str, Any]], str | None]:
+        """Fetch HA registry data with common config and error handling."""
+        if not self.ha_url or not self.ha_token:
+            return [], "HA_URL or HA_TOKEN not configured."
+        try:
+            items = await fetcher(self.ha_url, self.ha_token)
+            if not isinstance(items, list):
+                items = []
+            return items, None
+        except Exception as exc:
+            logger.warning("[%s] Could not fetch Home Assistant registry data: %s", self.name, exc)
+            return [], f"Could not fetch data from Home Assistant: {exc}"
+
+    async def _list_areas(self) -> dict[str, Any]:
+        areas, error = await self._fetch_registry_items(get_areas)
+        if error:
+            return {"result": error, "areas": []}
+        if not areas:
+            return {"result": "No areas found in Home Assistant.", "areas": []}
+
+        area_rows = [
+            {
+                "area_id": str(a.get("area_id", "")),
+                "name": str(a.get("name") or "(unnamed)"),
+            }
+            for a in areas
+            if isinstance(a, dict)
+        ]
+        lines = [f"Found {len(area_rows)} area(s) in Home Assistant:"]
+        for idx, row in enumerate(area_rows, 1):
+            lines.append(f"{idx}. {row['name']} ({row['area_id']})")
+        return {"result": "\n".join(lines), "areas": area_rows}
+
+    async def _list_devices(self) -> dict[str, Any]:
+        devices, error = await self._fetch_registry_items(get_devices)
+        if error:
+            return {"result": error, "devices": []}
+        if not devices:
+            return {"result": "No devices found in Home Assistant.", "devices": []}
+
+        device_rows = [
+            {
+                "device_id": str(d.get("id", "")),
+                "name": str(d.get("name_by_user") or d.get("name") or "(unnamed)"),
+                "manufacturer": str(d.get("manufacturer") or ""),
+                "model": str(d.get("model") or ""),
+            }
+            for d in devices
+            if isinstance(d, dict)
+        ]
+        lines = [f"Found {len(device_rows)} device(s) in Home Assistant:"]
+        for idx, row in enumerate(device_rows, 1):
+            details = " ".join(p for p in (row["manufacturer"], row["model"]) if p).strip()
+            if details:
+                lines.append(f"{idx}. {row['name']} ({details})")
+            else:
+                lines.append(f"{idx}. {row['name']}")
+        return {"result": "\n".join(lines), "devices": device_rows}
+
+    async def _list_entities(self) -> dict[str, Any]:
+        entities, error = await self._fetch_registry_items(get_entities)
+        if error:
+            return {"result": error, "entities": []}
+        if not entities:
+            return {"result": "No entities found in Home Assistant.", "entities": []}
+
+        entity_rows = [
+            {
+                "entity_id": str(e.get("entity_id", "")),
+                "name": str(e.get("name") or e.get("original_name") or "(unnamed)"),
+                "platform": str(e.get("platform") or ""),
+            }
+            for e in entities
+            if isinstance(e, dict)
+        ]
+        lines = [f"Found {len(entity_rows)} entities in Home Assistant:"]
+        for idx, row in enumerate(entity_rows, 1):
+            if row["platform"]:
+                lines.append(f"{idx}. {row['entity_id']} ({row['platform']})")
+            else:
+                lines.append(f"{idx}. {row['entity_id']}")
+        return {"result": "\n".join(lines), "entities": entity_rows}
+
     # ── Automation deletion ───────────────────────────────────────────────────
 
     async def _delete_automation(
@@ -749,11 +897,11 @@ class HomeAssistantAgent(LLMAgent):
         # Step 1 — identify which automation the user wants to edit
         ident_payload = {"user_request": text, "automations": automations}
         try:
-            ident_response, ident_usage = await self.llm.complete(
+            ident_response, usage = await self.llm.complete(
                 messages=[{"role": "user", "content": json.dumps(ident_payload)}],
                 system=HA_IDENTIFY_AUTOMATION_PROMPT,
             )
-            self._accumulate_usage(ident_usage)
+            self._accumulate_usage(usage)
             ident_data = json.loads(self._strip_fences(ident_response))
         except Exception as exc:
             return {"result": f"Could not identify automation to edit: {exc}", "edited": False}
@@ -803,11 +951,11 @@ class HomeAssistantAgent(LLMAgent):
             "available_entities": entity_ids[:100],
         }
         try:
-            edit_response, edit_usage = await self.llm.complete(
+            edit_response, usage = await self.llm.complete(
                 messages=[{"role": "user", "content": json.dumps(edit_payload)}],
                 system=HA_EDIT_AUTOMATION_PROMPT,
             )
-            self._accumulate_usage(edit_usage)
+            self._accumulate_usage(usage)
             edit_data = json.loads(self._strip_fences(edit_response))
         except Exception as exc:
             return {"result": f"LLM could not generate updated automation: {exc}", "edited": False}

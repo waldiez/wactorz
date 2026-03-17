@@ -1,0 +1,71 @@
+# Wactorz systemd service unit
+#
+# Install:
+#   sudo cp wactorz.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wactorz
+#
+# Logs:
+#   journalctl -u wactorz -f
+#
+# The binary reads all config from environment variables (see .env.example).
+# EnvironmentFile below loads them automatically on service start.
+#
+# NautilusAgent SSH note:
+#   If you use NautilusAgent's ssh/rsync commands, the service user needs
+#   access to SSH keys.  Two options:
+#     A) Run as your own user (User= below) — ~/.ssh/ is used automatically.
+#     B) Create a dedicated 'wactorz' user, add SSH keys to ~wactorz/.ssh/.
+#
+#   Option A is simplest for personal/lab deployments.
+#   Option B with ReadOnlyPaths/InaccessiblePaths is better for hardened servers.
+
+[Unit]
+Description=Wactorz multi-agent orchestration server
+Documentation=https://github.com/waldiez/wactorz
+After=network-online.target
+Wants=network-online.target
+# If mosquitto runs as a systemd service (non-Docker), add:
+# After=mosquitto.service
+# Requires=mosquitto.service
+
+[Service]
+Type=simple
+
+# ── Identity ─────────────────────────────────────────────────────────────────
+# Option A: run as the user who deployed wactorz (has ~/.ssh/ access)
+User=%i
+# Option B: dedicated system user (create with: useradd -r -s /sbin/nologin wactorz)
+# User=wactorz
+# Group=wactorz
+
+# ── Working directory & environment ──────────────────────────────────────────
+# Adjust to wherever you extracted/installed the archive.
+WorkingDirectory=/opt/wactorz
+EnvironmentFile=/opt/wactorz/.env
+
+# ── Binary ───────────────────────────────────────────────────────────────────
+ExecStart=/opt/wactorz/wactorz --no-cli
+
+# ── Restart policy ───────────────────────────────────────────────────────────
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wactorz
+
+# ── Minimal hardening ────────────────────────────────────────────────────────
+# These are safe defaults that don't interfere with NautilusAgent.
+NoNewPrivileges=true
+PrivateTmp=true
+# Uncomment if you do NOT use NautilusAgent's ssh/rsync (prevents ~/. access):
+# ProtectHome=true
+# ProtectSystem=strict
+# ReadWritePaths=/opt/wactorz
+
+[Install]
+WantedBy=multi-user.target

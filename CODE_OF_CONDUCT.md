@@ -2,7 +2,7 @@
 
 ## Our Pledge
 
-We are committed to making participation in AgentFlow a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity, level of experience, nationality, appearance, race, religion, or sexual identity and orientation.
+We are committed to making participation in Wactorz a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity, level of experience, nationality, appearance, race, religion, or sexual identity and orientation.
 
 ## Our Standards
 

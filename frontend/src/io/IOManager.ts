@@ -118,7 +118,7 @@ export class IOManager {
           id: _widGen.next(),
           from: "system",
           to: "user",
-          content: "⚠ Not connected — start the backend:\n  docker compose up -d  &&  agentflow",
+          content: "⚠ Not connected — start the backend:\n  docker compose up -d  &&  wactorz",
           timestampMs: Date.now(),
         });
       }, 800);

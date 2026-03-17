@@ -1,4 +1,4 @@
-# AgentFlow
+# Wactorz
 
 **Actor-Model Multi-Agent Framework**  
 *Technical Reference & Developer Guide*
@@ -7,7 +7,7 @@
 
 ## Table of Contents
 
-1. [What is AgentFlow?](#1-what-is-agentflow)
+1. [What is Wactorz?](#1-what-is-wactorz)
 2. [Architecture](#2-architecture)
 3. [Agent Types](#3-agent-types)
 4. [Spawning Agents at Runtime](#4-spawning-agents-at-runtime)
@@ -26,13 +26,13 @@
 
 ---
 
-## 1. What is AgentFlow?
+## 1. What is Wactorz?
 
-AgentFlow is an asynchronous, actor-model multi-agent framework built from scratch in Python. It allows an LLM orchestrator ("main") to spawn, coordinate, monitor, and retire live software agents at runtime — without any code restart or predefined agent types.
+Wactorz is an asynchronous, actor-model multi-agent framework built from scratch in Python. It allows an LLM orchestrator ("main") to spawn, coordinate, monitor, and retire live software agents at runtime — without any code restart or predefined agent types.
 
 The core idea is simple: you talk to the system in natural language. The LLM writes Python code, wraps it in a `<spawn>` block, and a new agent appears — running in its own async actor, connected to all other agents via MQTT and direct actor messaging, and persisting its state to disk automatically.
 
-AgentFlow was born out of the need for a framework that could operate on real-world IoT data streams at the edge — something existing agent frameworks (LangGraph, CrewAI, AutoGen) were not designed for. It is lightweight enough to run on modest hardware, offline-capable, and fully async.
+Wactorz was born out of the need for a framework that could operate on real-world IoT data streams at the edge — something existing agent frameworks (LangGraph, CrewAI, AutoGen) were not designed for. It is lightweight enough to run on modest hardware, offline-capable, and fully async.
 
 ### Design Principles
 
@@ -102,7 +102,7 @@ All LLM-backed agents inherit from `LLMAgent`, which inherits from `Actor`. It m
 
 ### DynamicAgent
 
-The heart of AgentFlow. When the LLM writes a spawn block, a `DynamicAgent` is created with that code compiled into its namespace. Three optional async functions can be defined:
+The heart of Wactorz. When the LLM writes a spawn block, a `DynamicAgent` is created with that code compiled into its namespace. Three optional async functions can be defined:
 
 ```python
 async def setup(agent):
@@ -248,7 +248,7 @@ async def handle_task(agent, payload):
 
 ## 6. Health Monitoring & Error Recovery
 
-AgentFlow has a four-layer error handling system. Errors are first-class events, not just log lines.
+Wactorz has a four-layer error handling system. Errors are first-class events, not just log lines.
 
 ### Layer 1 — DynamicAgent: Structured Error Events
 
@@ -314,10 +314,10 @@ Cost is tracked for all four providers (Anthropic, OpenAI, Ollama free, NIM free
 ### CLI (Streaming)
 
 ```bash
-python -m agentflow                                              # Anthropic Claude (default)
-python -m agentflow --llm openai
-python -m agentflow --llm ollama --ollama-model llama3
-python -m agentflow --llm nim --nim-model meta/llama-3.3-70b-instruct
+python -m wactorz                                              # Anthropic Claude (default)
+python -m wactorz --llm openai
+python -m wactorz --llm ollama --ollama-model llama3
+python -m wactorz --llm nim --nim-model meta/llama-3.3-70b-instruct
 ```
 
 **CLI commands:**
@@ -345,7 +345,7 @@ Set `DISCORD_TOKEN` or `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_WHAT
 
 ### Live Dashboard
 
-Start `monitor_server.py` alongside agentflow. Open `monitor.html` in a browser. The dashboard shows real-time agent cards, log streams, token cost meters, spawn/stop controls, and error alerts — all fed via MQTT over WebSocket.
+Start `monitor_server.py` alongside wactorz. Open `monitor.html` in a browser. The dashboard shows real-time agent cards, log streams, token cost meters, spawn/stop controls, and error alerts — all fed via MQTT over WebSocket.
 
 ---
 
@@ -519,7 +519,7 @@ Slides that received a real PDF image skip NIM generation. Slides without one fa
 
 ## 13. Remote Nodes & Edge Deployment
 
-AgentFlow can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. The edge node only needs a single file and one pip package.
+Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. The edge node only needs a single file and one pip package.
 
 ### How It Works
 
@@ -531,7 +531,7 @@ main_actor ──MQTT──► nodes/{name}/spawn ──► remote_runner.py
 dashboard  ◄──MQTT── agents/{id}/heartbeat ◄───┘
 ```
 
-The `remote_runner.py` is fully self-contained — it reimplements the DynamicAgent contract inline without importing anything from the agentflow package. Remote agents appear in the dashboard and respond to MQTT commands exactly like local agents.
+The `remote_runner.py` is fully self-contained — it reimplements the DynamicAgent contract inline without importing anything from the wactorz package. Remote agents appear in the dashboard and respond to MQTT commands exactly like local agents.
 
 ### Edge Node Requirements
 
@@ -667,8 +667,8 @@ All three accept `host`, `user`, and either `password` or `key_path` for SSH aut
 ### Quick Start
 
 ```bash
-git clone https://github.com/your-org/agentflow
-cd agentflow
+git clone https://github.com/your-org/wactorz
+cd wactorz
 python -m venv myenv
 
 # Windows
@@ -686,12 +686,12 @@ export HA_URL=http://homeassistant.local:8123
 export HA_TOKEN=your_long_lived_token
 
 # Start
-python -m agentflow
+python -m wactorz
 ```
 
 ### MQTT Broker
 
-AgentFlow requires an MQTT broker. The simplest option is Mosquitto running locally:
+Wactorz requires an MQTT broker. The simplest option is Mosquitto running locally:
 
 ```bash
 # Windows (after installing Mosquitto)
@@ -701,7 +701,7 @@ mosquitto -v
 docker run -it -p 1883:1883 eclipse-mosquitto
 ```
 
-By default AgentFlow connects to `localhost:1883`. Override with `--mqtt-host` and `--mqtt-port`.
+By default Wactorz connects to `localhost:1883`. Override with `--mqtt-host` and `--mqtt-port`.
 
 ### Environment Variables
 
@@ -729,11 +729,11 @@ If you see repeated `400` errors from the Anthropic API with `"Input should be a
 python fix_history.py
 ```
 
-Then restart AgentFlow. The LLM agent also sanitizes history on every load and before every API call as a belt-and-suspenders guard.
+Then restart Wactorz. The LLM agent also sanitizes history on every load and before every API call as a belt-and-suspenders guard.
 
 ### Spawned agent takes too long to appear
 
-AgentFlow checks whether required packages are already importable before calling the installer. If a package is already installed, the agent spawns instantly. If the installer is called, it now echoes the `task_id` back in its reply so the waiting future resolves immediately rather than sitting at the 120-second timeout.
+Wactorz checks whether required packages are already importable before calling the installer. If a package is already installed, the agent spawns instantly. If the installer is called, it now echoes the `task_id` back in its reply so the waiting future resolves immediately rather than sitting at the 120-second timeout.
 
 ### False "unresponsive" alerts for healthy agents
 
@@ -744,7 +744,7 @@ The monitor uses two liveness signals: `STATUS_RESPONSE` messages (from the 15-s
 ## Appendix: File Structure
 
 ```
-agentflow/
+wactorz/
 ├── main.py                        Entry point — CLI args, actor system setup, supervision tree
 ├── remote_runner.py               Self-contained edge node runner — deploy to any Pi or machine
 ├── monitor_server.py              MQTT → WebSocket bridge for dashboard
@@ -780,4 +780,4 @@ catalogue_agents/                  Pre-built agent recipe files (loaded by Catal
 
 ---
 
-*AgentFlow — built conversation by conversation.*
+*Wactorz — built conversation by conversation.*

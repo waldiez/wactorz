@@ -8,7 +8,7 @@ repos:
         pass_filenames: false
       - id: rust-core-parity-test
         name: rust core parity test
-        entry: bash -lc 'cd rust && cargo test -p agentflow-core backend_supervisor_contract_matches_fixture'
+        entry: bash -lc 'cd rust && cargo test -p wactorz-core backend_supervisor_contract_matches_fixture'
         language: system
         pass_filenames: false
       - id: backend-parity

@@ -1,10 +1,10 @@
 """
-One-time script to clear corrupted conversation_history from AgentFlow persistence.
-Run this ONCE from your agentflow directory before restarting:
+One-time script to clear corrupted conversation_history from Wactorz persistence.
+Run this ONCE from your wactorz directory before restarting:
 
     python fix_history.py
 
-Then restart AgentFlow normally.
+Then restart Wactorz normally.
 """
 import json
 import pathlib
@@ -12,7 +12,7 @@ import sys
 
 persist_dir = pathlib.Path("persist")
 if not persist_dir.exists():
-    persist_dir = pathlib.Path(".agentflow_persist")
+    persist_dir = pathlib.Path(".wactorz_persist")
 if not persist_dir.exists():
     print("No persist directory found — nothing to clean.")
     sys.exit(0)
@@ -49,4 +49,4 @@ for f in persist_dir.glob("*.json"):
     except Exception as e:
         print(f"  ERROR {f.name}: {e}")
 
-print(f"\nDone. Fixed {fixed} file(s). You can now restart AgentFlow.")
+print(f"\nDone. Fixed {fixed} file(s). You can now restart Wactorz.")

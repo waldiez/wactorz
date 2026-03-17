@@ -1,11 +1,11 @@
-# Home Assistant configuration for AgentFlow integration
+# Home Assistant configuration for Wactorz integration
 #
 # After first run, HA will populate this directory with additional files.
 # Edit via the UI at http://<host>:8123 or directly in this directory.
 
 # ── Core ──────────────────────────────────────────────────────────────────────
 homeassistant:
-  name: "AgentFlow Home"
+  name: "Wactorz Home"
   latitude: !secret latitude
   longitude: !secret longitude
   elevation: 0
@@ -45,16 +45,16 @@ scene: !include scenes.yaml
 # MQTT entity declarations still work here:
 mqtt:
   sensor:
-    - name: "AgentFlow Active Agents"
-      unique_id: agentflow_active_agents
+    - name: "Wactorz Active Agents"
+      unique_id: wactorz_active_agents
       state_topic: "system/health"
       value_template: "{{ value_json.active_agents | default(0) | int }}"
       unit_of_measurement: agents
       icon: mdi:robot
       expire_after: 120     # mark unavailable if no update for 2 min
 
-    - name: "AgentFlow Stale Agents"
-      unique_id: agentflow_stale_agents
+    - name: "Wactorz Stale Agents"
+      unique_id: wactorz_stale_agents
       state_topic: "system/health"
       value_template: "{{ value_json.stale_count | default(0) | int }}"
       unit_of_measurement: agents
@@ -62,17 +62,17 @@ mqtt:
       expire_after: 120
 
 # ── REST command integration ───────────────────────────────────────────────────
-# HA is on the Docker network; reach agentflow directly by its service name.
+# HA is on the Docker network; reach wactorz directly by its service name.
 rest_command:
-  agentflow_chat:
-    url: "http://agentflow:8080/chat"
+  wactorz_chat:
+    url: "http://wactorz:8080/chat"
     method: POST
     content_type: "application/json"
     # Use '' to escape a literal single-quote inside a YAML single-quoted string
     payload: '{"message": "{{ message }}", "agent_name": "{{ agent_name | default(''main-actor'') }}"}'
 
-  agentflow_stop_agent:
-    url: "http://agentflow:8080/actors/{{ actor_id }}"
+  wactorz_stop_agent:
+    url: "http://wactorz:8080/actors/{{ actor_id }}"
     method: DELETE
 
 # ── Logger ────────────────────────────────────────────────────────────────────

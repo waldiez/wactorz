@@ -80,7 +80,7 @@ fi
 # ── 3. Exec server ────────────────────────────────────────────────────────────
 # CMD (or compose `command:` override) is the full server invocation.
 # e.g. default:  /jena-fuseki/fuseki-server
-#      override: /jena-fuseki/fuseki-server --update --mem /agentflow
+#      override: /jena-fuseki/fuseki-server --update --mem /wactorz
 # Fuseki's shell wrapper picks up JVM_ARGS for extra JVM flags
 export JVM_ARGS
 # Also set JAVA_TOOL_OPTIONS as a fallback (picked up by the JVM directly)

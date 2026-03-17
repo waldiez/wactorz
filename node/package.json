@@ -1,7 +1,7 @@
 {
-  "name": "@waldiez/agentflow-node",
+  "name": "@waldiez/wactorz-node",
   "version": "0.1.0",
-  "description": "AgentFlow Node.js/TypeScript runtime — actor-model multi-agent system",
+  "description": "Wactorz Node.js/TypeScript runtime — actor-model multi-agent system",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {

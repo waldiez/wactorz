@@ -1,5 +1,5 @@
 /**
- * Abstract base for AgentFlow visual themes.
+ * Abstract base for Wactorz visual themes.
  *
  * Each theme is responsible for:
  * - Building its scene environment (skybox, lights, particles)

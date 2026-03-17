@@ -1,6 +1,6 @@
 /**
- * ActorRegistry + ActorSystem for the AgentFlow Node.js runtime.
- * Mirrors Python core/registry.py and Rust agentflow-core.
+ * ActorRegistry + ActorSystem for the Wactorz Node.js runtime.
+ * Mirrors Python core/registry.py and Rust wactorz-core.
  */
 
 import mqtt from "mqtt";
@@ -76,7 +76,7 @@ export class ActorSystem {
   /** Connect to MQTT and wire up the pub/sub bridge. */
   async connect(): Promise<void> {
     const client = mqtt.connect(this._config.mqttUrl, {
-      clientId: this._config.clientId ?? `agentflow-node-${uuidv4().slice(0, 8)}`,
+      clientId: this._config.clientId ?? `wactorz-node-${uuidv4().slice(0, 8)}`,
       clean: true,
     });
 

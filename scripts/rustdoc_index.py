@@ -11,11 +11,11 @@ import sys
 from pathlib import Path
 
 CRATE_ORDER = [
-    "agentflow",
-    "agentflow_core",
-    "agentflow_agents",
-    "agentflow_interfaces",
-    "agentflow_mqtt",
+    "wactorz",
+    "wactorz_core",
+    "wactorz_agents",
+    "wactorz_interfaces",
+    "wactorz_mqtt",
 ]
 
 
@@ -53,7 +53,7 @@ def main(out_dir: Path) -> None:
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="refresh" content="0; url={primary}/index.html">
-  <title>AgentFlow Rust API</title>
+  <title>Wactorz Rust API</title>
   <style>
     body {{ font-family: monospace; background: #05080e; color: #dde3f0; padding: 3rem 2rem; }}
     h1   {{ color: #4f8ef7; font-size: 1.4rem; margin-bottom: 1.5rem; }}
@@ -65,7 +65,7 @@ def main(out_dir: Path) -> None:
   </style>
 </head>
 <body>
-  <h1>AgentFlow — Rust API Reference</h1>
+  <h1>Wactorz — Rust API Reference</h1>
   <p>Redirecting to <code>{primary}</code> …</p>
   <ul>
 {rows}

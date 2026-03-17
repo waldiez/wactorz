@@ -382,7 +382,7 @@ export class SocialDashboard {
     el.className = "sd-root";
     el.innerHTML = `
       <div class="sd-topbar" style="display:none">
-        <span class="sd-logo">🌐 AgentFlow Social</span>
+        <span class="sd-logo">🌐 Wactorz Social</span>
         <span class="sd-tagline">Live multi-agent network</span>
         <button class="sd-3d-btn" title="Switch to 3D view">⬡ 3D</button>
       </div>

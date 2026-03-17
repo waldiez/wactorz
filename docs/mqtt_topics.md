@@ -1,4 +1,4 @@
-# AgentFlow MQTT Topics Reference
+# Wactorz MQTT Topics Reference
 
 All topics use `localhost:1883` by default (configurable via `--mqtt-broker` and `--mqtt-port`).
 

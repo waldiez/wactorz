@@ -45,14 +45,14 @@ keeping the same frontend-facing API contract as Rust.
 docker compose -f compose.dev.yaml up -d mosquitto
 
 # Terminal 2 — Python backend, REST on :8080
-AGENTFLOW_DEV_MODE=1 ./run.sh
+WACTORZ_DEV_MODE=1 ./run.sh
 
 # Terminal 3 — frontend SPA
 cd frontend && npm install && npm run dev
 ```
 
 In this mode:
-- `run.sh` defaults to the Python backend unless `AGENTFLOW_BACKEND` overrides it.
+- `run.sh` defaults to the Python backend unless `WACTORZ_BACKEND` overrides it.
 - The Python backend defaults to `INTERFACE=rest` and `PORT=8080`.
 - The primary frontend is `frontend/index.html`, not the legacy `monitor.html`.
 
@@ -72,7 +72,7 @@ docker compose up -d mosquitto dashboard   # or 'docker compose up -d'
 
 # Terminal 2 — Rust backend
 cd rust
-RUST_LOG=agentflow=debug cargo run --bin agentflow -- \
+RUST_LOG=wactorz=debug cargo run --bin wactorz -- \
     --mqtt-host localhost \
     --llm-provider anthropic \
     --llm-api-key "$LLM_API_KEY"
@@ -86,16 +86,16 @@ cd frontend && npm run dev
 ## Project structure
 
 ```
-agentflow/
+wactorz/
 ├── rust/                          Rust workspace
 │   ├── Cargo.toml                 workspace manifest
 │   ├── Dockerfile                 multi-stage: builder → runtime
 │   └── crates/
-│       ├── agentflow-core/        Actor trait, registry, messages
-│       ├── agentflow-agents/      All concrete agents
-│       ├── agentflow-mqtt/        MQTT client + topic helpers
-│       ├── agentflow-interfaces/  REST, WebSocket, CLI
-│       └── agentflow-server/      Binary entry point
+│       ├── wactorz-core/        Actor trait, registry, messages
+│       ├── wactorz-agents/      All concrete agents
+│       ├── wactorz-mqtt/        MQTT client + topic helpers
+│       ├── wactorz-interfaces/  REST, WebSocket, CLI
+│       └── wactorz-server/      Binary entry point
 │
 ├── frontend/                      Vite + TypeScript + Babylon.js SPA
 │   ├── src/
@@ -146,7 +146,7 @@ agentflow/
 │   ├── package-native.sh          Build native binary tar.gz
 │   └── build-native.sh            Build binary on the target host
 │
-├── systemd/agentflow.service      systemd unit template
+├── systemd/wactorz.service      systemd unit template
 ├── compose.yaml                   Full Docker stack
 ├── compose.dev.yaml               Dev stack (mosquitto + mock only)
 ├── compose.native.yaml            Native binary stack
@@ -165,13 +165,13 @@ cd rust
 cargo check
 
 # Build debug
-cargo build --bin agentflow
+cargo build --bin wactorz
 
 # Build release
-cargo build --release --bin agentflow
+cargo build --release --bin wactorz
 
 # Run with debug logging
-RUST_LOG=agentflow=debug cargo run --bin agentflow
+RUST_LOG=wactorz=debug cargo run --bin wactorz
 
 # Lint
 cargo clippy -- -D warnings
@@ -226,13 +226,13 @@ brew install FiloSottile/musl-cross/musl-cross
 
 # Build
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-musl-gcc \
-cargo build --release --target x86_64-unknown-linux-gnu --bin agentflow
+cargo build --release --target x86_64-unknown-linux-gnu --bin wactorz
 ```
 
 Alternatively, use Docker buildx (no linker needed):
 
 ```bash
-docker buildx build --platform linux/amd64 --tag agentflow:local --load ./rust
+docker buildx build --platform linux/amd64 --tag wactorz:local --load ./rust
 ```
 
 ---
@@ -299,7 +299,7 @@ docker compose -f compose.dev.yaml logs mock-agents
 ### Rust actor not responding
 
 ```bash
-RUST_LOG=agentflow=debug cargo run --bin agentflow
+RUST_LOG=wactorz=debug cargo run --bin wactorz
 # Look for: "[agent-name] handle_message" or heartbeat logs
 ```
 

@@ -1,4 +1,4 @@
-# AgentFlow on Windows
+# Wactorz on Windows
 
 Covers x86-64 (Intel/AMD) and **ARM64** (Snapdragon X, Surface Pro X, Copilot+ PCs).
 
@@ -44,7 +44,7 @@ After install, open Docker Desktop and wait for the engine to start.
 
 **ARM64 note:** Docker Desktop on ARM64 Windows (Snapdragon X, Surface Pro) runs
 `linux/arm64` containers natively and `linux/amd64` via QEMU emulation.
-The pre-built AgentFlow images are `linux/amd64`; they run fine on ARM64 via emulation,
+The pre-built Wactorz images are `linux/amd64`; they run fine on ARM64 via emulation,
 or you can build a native `linux/arm64` image yourself (see below).
 
 ### Install Node.js (needed for Options B and C)
@@ -76,8 +76,8 @@ The MSVC toolchain is used; the Visual Studio Build Tools are installed by `rust
 ## Option A — Full Docker (simplest)
 
 ```powershell
-git clone https://github.com/waldiez/agentflow
-cd agentflow
+git clone https://github.com/waldiez/wactorz
+cd wactorz
 
 # Copy the example env and set your LLM key
 copy .env.example .env
@@ -102,14 +102,14 @@ The default `compose.yaml` pulls `linux/amd64` images and runs them via QEMU.
 Performance is acceptable for development. For better performance, build a native image:
 
 ```powershell
-docker buildx build --platform linux/arm64 --tag agentflow-server:local --load .\rust
+docker buildx build --platform linux/arm64 --tag wactorz-server:local --load .\rust
 ```
 
 Then in `compose.yaml`, change:
 
 ```yaml
-agentflow:
-  image: agentflow-server:local   # ← replace the build section with this
+wactorz:
+  image: wactorz-server:local   # ← replace the build section with this
   platform: linux/arm64
 ```
 
@@ -150,8 +150,8 @@ The Rust binary runs directly on Windows. Only Mosquitto runs in Docker.
 ### 1. Clone and configure
 
 ```powershell
-git clone https://github.com/waldiez/agentflow
-cd agentflow
+git clone https://github.com/waldiez/wactorz
+cd wactorz
 copy .env.example .env
 notepad .env   # set LLM_API_KEY and MQTT_HOST=localhost
 ```
@@ -169,11 +169,11 @@ cd ..
 
 ```powershell
 cd rust
-cargo build --release --bin agentflow
+cargo build --release --bin wactorz
 cd ..
 ```
 
-The binary is at `rust\target\release\agentflow.exe`.
+The binary is at `rust\target\release\wactorz.exe`.
 
 **ARM64**: `cargo build` uses the native `aarch64-pc-windows-msvc` target by default —
 no cross-compilation flags needed. First build takes ~5-8 min (downloading + compiling
@@ -202,7 +202,7 @@ npx serve dist -p 80
 
 Or install nginx for Windows and point `root` to `frontend\dist\`.
 
-### 6. Start agentflow
+### 6. Start wactorz
 
 In PowerShell:
 
@@ -213,14 +213,14 @@ Get-Content .\.env | Where-Object { $_ -match '^\s*[^#]' } | ForEach-Object {
     if ($parts.Count -eq 2) { [System.Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), "Process") }
 }
 
-.\rust\target\release\agentflow.exe --no-cli
+.\rust\target\release\wactorz.exe --no-cli
 ```
 
 Or in Git Bash:
 
 ```bash
 source .env 2>/dev/null || true
-./rust/target/release/agentflow.exe --no-cli
+./rust/target/release/wactorz.exe --no-cli
 ```
 
 Open **http://localhost/** (nginx) or **http://localhost:3000** (Vite dev server).
@@ -234,14 +234,14 @@ If you develop on Windows but deploy to a Linux server, you need a Linux binary.
 ### Option X1 — Docker buildx (easiest, works on all Windows)
 
 ```powershell
-docker buildx build --platform linux/amd64 --tag agentflow:linux --load .\rust
+docker buildx build --platform linux/amd64 --tag wactorz:linux --load .\rust
 ```
 
 Extract the binary from the image:
 
 ```powershell
-$id = docker create --platform linux/amd64 agentflow:linux
-docker cp "${id}:/app/agentflow" .\agentflow-linux-amd64
+$id = docker create --platform linux/amd64 wactorz:linux
+docker cp "${id}:/app/wactorz" .\wactorz-linux-amd64
 docker rm $id
 ```
 
@@ -254,9 +254,9 @@ wsl --install
 # Inside WSL2:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source ~/.cargo/env
-cd /mnt/c/Users/<your-name>/agentflow/rust
-cargo build --release --bin agentflow
-# → target/release/agentflow  (native linux/amd64 binary)
+cd /mnt/c/Users/<your-name>/wactorz/rust
+cargo build --release --bin wactorz
+# → target/release/wactorz  (native linux/amd64 binary)
 ```
 
 ### Option X3 — Cross-compile to linux/arm64 (for ARM64 server targets)
@@ -265,7 +265,7 @@ cargo build --release --bin agentflow
 rustup target add aarch64-unknown-linux-gnu
 # Install a cross-linker via the 'cross' tool:
 cargo install cross
-cross build --release --bin agentflow --target aarch64-unknown-linux-gnu
+cross build --release --bin wactorz --target aarch64-unknown-linux-gnu
 ```
 
 ---
@@ -278,7 +278,7 @@ The `scripts/` directory contains bash (`.sh`) scripts. On Windows, run them via
 
 ```bash
 # Open Git Bash terminal, then:
-cd /c/Users/<your-name>/agentflow
+cd /c/Users/<your-name>/wactorz
 bash scripts/deploy.sh
 ```
 
@@ -286,7 +286,7 @@ bash scripts/deploy.sh
 
 ```bash
 # Inside WSL2 Ubuntu:
-cd /mnt/c/Users/<your-name>/agentflow
+cd /mnt/c/Users/<your-name>/wactorz
 bash scripts/deploy.sh
 ```
 
@@ -299,12 +299,12 @@ The three most common script tasks can be done directly in PowerShell:
 cd frontend; npm run build; cd ..
 
 # Build Rust binary
-cd rust; cargo build --release --bin agentflow; cd ..
+cd rust; cargo build --release --bin wactorz; cd ..
 
 # rsync to remote (requires OpenSSH + rsync; easiest via Git Bash or WSL2)
 # PowerShell alternative: use SCP
-scp -r .\frontend\dist\ user@host:/opt/agentflow/frontend/
-scp .\rust\target\release\agentflow user@host:/opt/agentflow/agentflow
+scp -r .\frontend\dist\ user@host:/opt/wactorz/frontend/
+scp .\rust\target\release\wactorz user@host:/opt/wactorz/wactorz
 ```
 
 ---
@@ -314,19 +314,19 @@ scp .\rust\target\release\agentflow user@host:/opt/agentflow/agentflow
 Windows 10/11 includes OpenSSH Client. Generate a deploy key:
 
 ```powershell
-ssh-keygen -t ed25519 -C "agentflow-deploy" -f "$env:USERPROFILE\.ssh\agentflow_deploy" -N '""'
+ssh-keygen -t ed25519 -C "wactorz-deploy" -f "$env:USERPROFILE\.ssh\wactorz_deploy" -N '""'
 ```
 
 Copy the public key to the remote host:
 
 ```powershell
-type "$env:USERPROFILE\.ssh\agentflow_deploy.pub" | ssh user@host "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+type "$env:USERPROFILE\.ssh\wactorz_deploy.pub" | ssh user@host "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
 ```
 
 Set in `.env`:
 
 ```env
-NAUTILUS_SSH_KEY=~/.ssh/agentflow_deploy
+NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy
 ```
 
 **NautilusAgent `rsync` command**: `rsync` is not available natively on Windows.
@@ -364,13 +364,13 @@ to UTF-8; older Notepad may default to ANSI. Use VS Code or Notepad++ if unsure.
 
 ```env
 # ✅ Works on all platforms
-NAUTILUS_SSH_KEY=~/.ssh/agentflow_deploy
+NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy
 
 # ✅ Also works
-NAUTILUS_SSH_KEY=C:/Users/alice/.ssh/agentflow_deploy
+NAUTILUS_SSH_KEY=C:/Users/alice/.ssh/wactorz_deploy
 
 # ❌ Will fail — backslash is escape character in some parsers
-NAUTILUS_SSH_KEY=C:\Users\alice\.ssh\agentflow_deploy
+NAUTILUS_SSH_KEY=C:\Users\alice\.ssh\wactorz_deploy
 ```
 
 **Line endings**: the `.env` file should use LF (Unix) endings. If you edit with
@@ -434,10 +434,10 @@ Settings → Docker Engine → add `"experimental": true`.
 Or build a native `linux/arm64` image:
 
 ```powershell
-docker buildx build --platform linux/arm64 --tag agentflow-server:arm64 --load .\rust
+docker buildx build --platform linux/arm64 --tag wactorz-server:arm64 --load .\rust
 ```
 
-Then update `compose.yaml` to use `image: agentflow-server:arm64` and `platform: linux/arm64`.
+Then update `compose.yaml` to use `image: wactorz-server:arm64` and `platform: linux/arm64`.
 
 ### `rsync: command not found` (NautilusAgent)
 
@@ -467,8 +467,8 @@ winget install Git.Git Microsoft.WindowsTerminal OpenJS.NodeJS.LTS Rustlang.Rust
 wsl --install   # installs Ubuntu by default; reboot when prompted
 
 # 3. Clone the repo
-git clone https://github.com/waldiez/agentflow
-cd agentflow
+git clone https://github.com/waldiez/wactorz
+cd wactorz
 copy .env.example .env
 notepad .env   # set LLM_API_KEY
 
@@ -483,7 +483,7 @@ To move to a full stack later, build in WSL2 (faster than QEMU cross-compile):
 
 ```bash
 # In WSL2:
-cd /mnt/c/Users/<you>/agentflow/rust
-cargo build --release --bin agentflow
+cd /mnt/c/Users/<you>/wactorz/rust
+cargo build --release --bin wactorz
 # Produces native linux/amd64 binary for deployment
 ```

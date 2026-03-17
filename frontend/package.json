@@ -1,7 +1,7 @@
 {
-  "name": "agentflow-dashboard",
+  "name": "wactorz-dashboard",
   "version": "0.1.0",
-  "description": "AgentFlow 3D live dashboard — Babylon.js + MQTT",
+  "description": "Wactorz 3D live dashboard — Babylon.js + MQTT",
   "private": true,
   "packageManager": "bun@1.3.10",
   "type": "module",
@@ -10,7 +10,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "docs": "typedoc --out ../site/api/js --entryPointStrategy expand src --name \"AgentFlow JS\" --readme none --hideGenerator"
+    "docs": "typedoc --out ../site/api/js --entryPointStrategy expand src --name \"Wactorz JS\" --readme none --hideGenerator"
   },
   "dependencies": {
     "@babylonjs/core": "^8.55.1",

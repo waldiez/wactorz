@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# AgentFlow — deploy.sh
+# Wactorz — deploy.sh
 #
 # Full bootstrap deploy AND incremental redeploy in one script.
 #
@@ -13,18 +13,18 @@
 #   6.  Patch & install systemd unit — enable + start on first run,
 #       restart on subsequent runs
 #
-# After the first deploy you can redeploy directly from the AgentFlow
+# After the first deploy you can redeploy directly from the Wactorz
 # dashboard using NautilusAgent:
 #
-#   @nautilus-agent push ./static/app/ user@host:/opt/agentflow/static/app/
-#   @nautilus-agent exec user@host sudo systemctl restart agentflow
+#   @nautilus-agent push ./static/app/ user@host:/opt/wactorz/static/app/
+#   @nautilus-agent exec user@host sudo systemctl restart wactorz
 #
 # ── Configuration (read from .env or environment) ─────────────────────────────
 #
 #   DEPLOY_HOST              user@hostname of the target (required)
-#   DEPLOY_PATH              remote base directory    (default: /opt/agentflow)
+#   DEPLOY_PATH              remote base directory    (default: /opt/wactorz)
 #   DEPLOY_SSH_PORT          SSH port                 (default: 22)
-#   DEPLOY_RESTART_CMD       remote restart command   (default: systemctl restart agentflow)
+#   DEPLOY_RESTART_CMD       remote restart command   (default: systemctl restart wactorz)
 #   DEPLOY_SKIP_BINARY       set to 1 to skip binary build/deploy (frontend-only redeploy)
 #   CARGO_BUILD_TARGET       cross-compile target     (e.g. x86_64-unknown-linux-gnu)
 #   DEPLOY_NGINX_MODE        docker   = start the Docker nginx container (default)
@@ -42,7 +42,7 @@
 #
 # ── Prerequisites (remote host) ───────────────────────────────────────────────
 #   • Docker + Compose plugin  (for Mosquitto + nginx support services)
-#   • systemd                  (for the agentflow service unit)
+#   • systemd                  (for the wactorz service unit)
 #   • sudo access              (to install the unit and restart the service)
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -60,7 +60,7 @@ die()    { echo "   ${RED}✗  $*${RESET}"; exit 1; }
 
 echo ""
 echo "${BOLD}╔══════════════════════════════════════════════╗"
-echo "║   AgentFlow — Deploy Wizard                  ║"
+echo "║   Wactorz — Deploy Wizard                  ║"
 echo "╚══════════════════════════════════════════════╝${RESET}"
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
@@ -82,14 +82,14 @@ if [ -z "$DEPLOY_HOST" ]; then
     [ -z "$DEPLOY_HOST" ] && die "DEPLOY_HOST is required. Set it in .env or pass it as an env var."
 fi
 
-DEPLOY_PATH="${DEPLOY_PATH:-/opt/agentflow}"
+DEPLOY_PATH="${DEPLOY_PATH:-/opt/wactorz}"
 DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
-DEPLOY_RESTART_CMD="${DEPLOY_RESTART_CMD:-systemctl restart agentflow}"
+DEPLOY_RESTART_CMD="${DEPLOY_RESTART_CMD:-systemctl restart wactorz}"
 DEPLOY_SKIP_BINARY="${DEPLOY_SKIP_BINARY:-0}"
 DEPLOY_NGINX_MODE="${DEPLOY_NGINX_MODE:-docker}"
 # Path on the remote where the snippet will be dropped (existing nginx mode).
 # Adjust to match your nginx include pattern.
-DEPLOY_NGINX_CONF="${DEPLOY_NGINX_CONF:-/etc/nginx/conf.d/agentflow.conf}"
+DEPLOY_NGINX_CONF="${DEPLOY_NGINX_CONF:-/etc/nginx/conf.d/wactorz.conf}"
 NAUTILUS_STRICT_HOST_KEYS="${NAUTILUS_STRICT_HOST_KEYS:-0}"
 NAUTILUS_CONNECT_TIMEOUT="${NAUTILUS_CONNECT_TIMEOUT:-10}"
 
@@ -99,7 +99,7 @@ info "nginx   : ${DEPLOY_NGINX_MODE}"
 
 # ── SSH key setup ─────────────────────────────────────────────────────────────
 banner "SSH key"
-DEFAULT_KEY_PATH="$HOME/.ssh/agentflow_deploy"
+DEFAULT_KEY_PATH="$HOME/.ssh/wactorz_deploy"
 DEPLOY_KEY="${NAUTILUS_SSH_KEY:-}"
 
 if [ -z "$DEPLOY_KEY" ]; then
@@ -118,7 +118,7 @@ if [ -z "$DEPLOY_KEY" ]; then
 
         case "$KEY_CHOICE" in
             1)
-                ssh-keygen -t ed25519 -C "agentflow-deploy-$(date +%Y%m%d)" \
+                ssh-keygen -t ed25519 -C "wactorz-deploy-$(date +%Y%m%d)" \
                     -f "$DEFAULT_KEY_PATH" -N ""
                 DEPLOY_KEY="$DEFAULT_KEY_PATH"
                 ok "Generated: ${DEFAULT_KEY_PATH}  (${DEFAULT_KEY_PATH}.pub)"
@@ -183,14 +183,14 @@ if [ "${DEPLOY_SKIP_BINARY}" != "1" ]; then
 
     if command -v cargo >/dev/null 2>&1; then
         if [ -n "$TARGET" ]; then
-            cargo build --release --bin agentflow \
+            cargo build --release --bin wactorz \
                 --target "$TARGET" \
                 --manifest-path rust/Cargo.toml
-            BINARY_SRC="rust/target/${TARGET}/release/agentflow"
+            BINARY_SRC="rust/target/${TARGET}/release/wactorz"
         else
-            cargo build --release --bin agentflow \
+            cargo build --release --bin wactorz \
                 --manifest-path rust/Cargo.toml
-            BINARY_SRC="rust/target/release/agentflow"
+            BINARY_SRC="rust/target/release/wactorz"
         fi
         ok "Binary: ${BINARY_SRC}"
 
@@ -199,13 +199,13 @@ if [ "${DEPLOY_SKIP_BINARY}" != "1" ]; then
         warn "This takes ~5–8 min on Apple Silicon."
         docker buildx build \
             --platform linux/amd64 \
-            --tag agentflow-deploy-extract:tmp \
+            --tag wactorz-deploy-extract:tmp \
             --load ./rust
-        CTNR=$(docker create --platform linux/amd64 agentflow-deploy-extract:tmp)
-        docker cp "${CTNR}:/app/agentflow" /tmp/agentflow-deploy-bin
+        CTNR=$(docker create --platform linux/amd64 wactorz-deploy-extract:tmp)
+        docker cp "${CTNR}:/app/wactorz" /tmp/wactorz-deploy-bin
         docker rm "$CTNR" >/dev/null
-        docker rmi agentflow-deploy-extract:tmp --force >/dev/null 2>&1 || true
-        BINARY_SRC="/tmp/agentflow-deploy-bin"
+        docker rmi wactorz-deploy-extract:tmp --force >/dev/null 2>&1 || true
+        BINARY_SRC="/tmp/wactorz-deploy-bin"
         ok "Binary extracted (linux/amd64): ${BINARY_SRC}"
 
     else
@@ -232,12 +232,12 @@ ok "Frontend synced"
 
 # ── Deploy binary ─────────────────────────────────────────────────────────────
 if [ -n "$BINARY_SRC" ] && [ -f "$BINARY_SRC" ]; then
-    banner "Deploying binary → ${DEPLOY_HOST}:${DEPLOY_PATH}/agentflow"
+    banner "Deploying binary → ${DEPLOY_HOST}:${DEPLOY_PATH}/wactorz"
     rsync -az \
         -e "${RSYNC_SSH_E}" \
         "$BINARY_SRC" \
-        "${DEPLOY_HOST}:${DEPLOY_PATH}/agentflow"
-    ssh_run "chmod +x ${DEPLOY_PATH}/agentflow"
+        "${DEPLOY_HOST}:${DEPLOY_PATH}/wactorz"
+    ssh_run "chmod +x ${DEPLOY_PATH}/wactorz"
     ok "Binary deployed"
 fi
 
@@ -295,18 +295,18 @@ if [ "${DEPLOY_NGINX_MODE}" = "existing" ]; then
 
     # Build a ready-to-include conf file from the snippet, substituting the
     # actual DEPLOY_PATH for the frontend root
-    PATCHED_SNIPPET="/tmp/agentflow-nginx-snippet.tmp"
-    sed "s|/opt/agentflow|${DEPLOY_PATH}|g" \
-        infra/nginx/agentflow-snippet.conf > "$PATCHED_SNIPPET"
+    PATCHED_SNIPPET="/tmp/wactorz-nginx-snippet.tmp"
+    sed "s|/opt/wactorz|${DEPLOY_PATH}|g" \
+        infra/nginx/wactorz-snippet.conf > "$PATCHED_SNIPPET"
 
     # Upload to home dir, then sudo-move to the nginx conf path
     rsync -az \
         -e "${RSYNC_SSH_E}" \
         "$PATCHED_SNIPPET" \
-        "${DEPLOY_HOST}:~/agentflow-nginx-snippet.tmp"
+        "${DEPLOY_HOST}:~/wactorz-nginx-snippet.tmp"
     rm -f "$PATCHED_SNIPPET"
 
-    ssh_run "sudo mv ~/agentflow-nginx-snippet.tmp ${DEPLOY_NGINX_CONF}"
+    ssh_run "sudo mv ~/wactorz-nginx-snippet.tmp ${DEPLOY_NGINX_CONF}"
     ok "Snippet deployed to ${DEPLOY_NGINX_CONF}"
 
     echo ""
@@ -330,45 +330,45 @@ banner "Setting up systemd service…"
 
 if ssh_run "command -v systemctl >/dev/null 2>&1"; then
     # Patch the unit file locally, upload to a temp location, then sudo-move it
-    PATCHED_UNIT="/tmp/agentflow-deploy.service"
+    PATCHED_UNIT="/tmp/wactorz-deploy.service"
     sed \
         -e "s|WorkingDirectory=.*|WorkingDirectory=${DEPLOY_PATH}|" \
         -e "s|EnvironmentFile=.*|EnvironmentFile=${DEPLOY_PATH}/.env|" \
-        -e "s|ExecStart=.*|ExecStart=${DEPLOY_PATH}/agentflow --no-cli|" \
+        -e "s|ExecStart=.*|ExecStart=${DEPLOY_PATH}/wactorz --no-cli|" \
         -e "s|User=%i|User=${REMOTE_USER}|" \
-        systemd/agentflow.service > "$PATCHED_UNIT"
+        systemd/wactorz.service > "$PATCHED_UNIT"
 
     # Upload to home dir first (no sudo needed for rsync)
     rsync -az \
         -e "${RSYNC_SSH_E}" \
         "$PATCHED_UNIT" \
-        "${DEPLOY_HOST}:~/agentflow.service.tmp"
+        "${DEPLOY_HOST}:~/wactorz.service.tmp"
     rm -f "$PATCHED_UNIT"
 
     # Move to systemd directory and reload
-    ssh_run "sudo mv ~/agentflow.service.tmp /etc/systemd/system/agentflow.service && \
+    ssh_run "sudo mv ~/wactorz.service.tmp /etc/systemd/system/wactorz.service && \
              sudo systemctl daemon-reload"
-    ok "Unit installed: /etc/systemd/system/agentflow.service"
+    ok "Unit installed: /etc/systemd/system/wactorz.service"
 
     # Enable + start (first run) or restart (update)
-    if ssh_run "systemctl is-active --quiet agentflow 2>/dev/null"; then
-        ssh_run "sudo systemctl restart agentflow"
+    if ssh_run "systemctl is-active --quiet wactorz 2>/dev/null"; then
+        ssh_run "sudo systemctl restart wactorz"
         ok "Service restarted"
     else
-        ssh_run "sudo systemctl enable --now agentflow"
+        ssh_run "sudo systemctl enable --now wactorz"
         ok "Service enabled and started"
     fi
 
     # Brief wait then show status
     sleep 2
-    ssh_run "systemctl is-active agentflow && \
-             echo '   agentflow is running' || \
-             echo '   agentflow failed to start — check: journalctl -u agentflow -n 30'"
+    ssh_run "systemctl is-active wactorz && \
+             echo '   wactorz is running' || \
+             echo '   wactorz failed to start — check: journalctl -u wactorz -n 30'"
 else
     warn "systemctl not found on remote — running binary in the foreground instead."
     warn "Open a second terminal and run:"
     info "  ssh${DEPLOY_KEY:+ -i $DEPLOY_KEY} -p ${DEPLOY_SSH_PORT} ${DEPLOY_HOST}"
-    info "  cd ${DEPLOY_PATH} && source .env && ./agentflow --no-cli"
+    info "  cd ${DEPLOY_PATH} && source .env && ./wactorz --no-cli"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
@@ -377,12 +377,12 @@ DASH_PORT="${DASHBOARD_EXTERNAL_PORT:-80}"
 echo ""
 echo "${BOLD}${GREEN}╔══════════════════════════════════════════════════════╗"
 printf  "║  ✓  Dashboard   http://%-28s║\n" "${HOST_DISPLAY}:${DASH_PORT}/"
-printf  "║     Logs        journalctl -u agentflow -f%-9s║\n" ""
+printf  "║     Logs        journalctl -u wactorz -f%-9s║\n" ""
 echo    "╠══════════════════════════════════════════════════════╣"
-echo    "║  Future redeploys — from the AgentFlow dashboard:   ║"
+echo    "║  Future redeploys — from the Wactorz dashboard:   ║"
 echo    "║                                                      ║"
 printf  "║  ${DIM}@nautilus-agent push ./static/app/ \\%-12s${RESET}${BOLD}${GREEN}║\n" ""
 printf  "║  ${DIM}  %s:${DEPLOY_PATH}/static/app/%-2s${RESET}${BOLD}${GREEN}║\n" "${DEPLOY_HOST}" ""
 printf  "║  ${DIM}@nautilus-agent exec %s \\%-15s${RESET}${BOLD}${GREEN}║\n" "${DEPLOY_HOST}" ""
-printf  "║  ${DIM}  sudo systemctl restart agentflow%-18s${RESET}${BOLD}${GREEN}║\n" ""
+printf  "║  ${DIM}  sudo systemctl restart wactorz%-18s${RESET}${BOLD}${GREEN}║\n" ""
 echo    "╚══════════════════════════════════════════════════════╝${RESET}"

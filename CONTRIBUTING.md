@@ -1,11 +1,11 @@
-# Contributing to AgentFlow
+# Contributing to Wactorz
 
-First off — thank you. AgentFlow is built in the open and every contribution matters.
+First off — thank you. Wactorz is built in the open and every contribution matters.
 
 ## Ways to Contribute
 
-- **Bug reports** — open a [GitHub issue](https://github.com/waldiez/agentflow/issues/new?template=bug_report.yml)
-- **Feature requests** — open a [feature issue](https://github.com/waldiez/agentflow/issues/new?template=feature_request.yml)
+- **Bug reports** — open a [GitHub issue](https://github.com/waldiez/wactorz/issues/new?template=bug_report.yml)
+- **Feature requests** — open a [feature issue](https://github.com/waldiez/wactorz/issues/new?template=feature_request.yml)
 - **Code** — fork → branch → PR
 - **Docs** — the `docs/` directory is MkDocs Markdown; PRs welcome
 - **Testing** — add test cases in `tests/`
@@ -13,8 +13,8 @@ First off — thank you. AgentFlow is built in the open and every contribution m
 ## Development Setup
 
 ```bash
-git clone https://github.com/waldiez/agentflow
-cd agentflow
+git clone https://github.com/waldiez/wactorz
+cd wactorz
 
 # Python (editable install with all extras)
 pip install -e ".[all]"
@@ -66,7 +66,7 @@ docs: update MQTT topics reference for 0.2.0
 ## Project Layout
 
 ```
-agentflow/          Python package source
+wactorz/          Python package source
 ├── agents/         Built-in agent implementations
 ├── core/           Actor base, registry, supervisor
 └── interfaces/     CLI, REST, Discord, WhatsApp interfaces
@@ -79,11 +79,11 @@ tests/              Python test suite
 
 ## Adding a New Agent
 
-1. Create `agentflow/agents/my_agent.py` — extend `Actor` or `LLMAgent`
-2. Register it in `agentflow/cli.py` via `system.supervisor.supervise(...)`
+1. Create `wactorz/agents/my_agent.py` — extend `Actor` or `LLMAgent`
+2. Register it in `wactorz/cli.py` via `system.supervisor.supervise(...)`
 3. Add docs in `docs/agents.md`
 4. Add a test if the agent has non-trivial logic
 
 ## Questions?
 
-Open a [Discussion](https://github.com/waldiez/agentflow/discussions) or reach us at development@waldiez.io.
+Open a [Discussion](https://github.com/waldiez/wactorz/discussions) or reach us at development@waldiez.io.

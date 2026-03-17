@@ -1,6 +1,6 @@
 # API Reference
 
-AgentFlow exposes three interfaces: a REST API, a WebSocket bridge, and MQTT pub/sub.
+Wactorz exposes three interfaces: a REST API, a WebSocket bridge, and MQTT pub/sub.
 
 ---
 

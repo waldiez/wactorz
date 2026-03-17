@@ -6,7 +6,7 @@ on:
     paths:
       - 'docs/**'
       - 'scripts/build_docs.py'
-      - 'agentflow/**'
+      - 'wactorz/**'
       - 'rust/**'
       - 'frontend/**'
   workflow_dispatch:

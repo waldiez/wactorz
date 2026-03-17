@@ -2,7 +2,7 @@
  * MQTT WebSocket client.
  *
  * Connects to the Mosquitto broker's WebSocket listener (default: ws://localhost:9001)
- * and emits typed events for each topic pattern AgentFlow uses.
+ * and emits typed events for each topic pattern Wactorz uses.
  *
  * Usage:
  * ```ts
@@ -54,7 +54,7 @@ export interface MQTTEvents {
   logs: LogPayload;
   /** Agent completed a task. */
   completed: { agentId: string; agentName: string };
-  /** Remote AgentFlow node phoned home. */
+  /** Remote Wactorz node phoned home. */
   "node-heartbeat": NodeHeartbeatPayload;
   /** system/health snapshot from MonitorAgent. */
   "system-health": unknown;
@@ -80,7 +80,7 @@ export class MQTTClient {
   /** Connect and subscribe to all agent topics. */
   connect(): void {
     this.client = mqtt.connect(this.brokerUrl, {
-      clientId: `agentflow-dashboard-${Math.random().toString(16).slice(2, 8)}`,
+      clientId: `wactorz-dashboard-${Math.random().toString(16).slice(2, 8)}`,
       keepalive: 30,
       reconnectPeriod: 2000,
     });

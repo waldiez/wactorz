@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "agentflow-dashboard",
+      "name": "wactorz-dashboard",
       "dependencies": {
         "@babylonjs/core": "^8.55.1",
         "@babylonjs/gui": "^8.55.1",

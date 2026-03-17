@@ -15,17 +15,17 @@ help: ## Show this help
 
 # ── Runtime ─────────────────────────────────────────────────────────────────
 
-run: ## Start the backend via run.sh (respects AGENTFLOW_BACKEND)
+run: ## Start the backend via run.sh (respects WACTORZ_BACKEND)
 	./run.sh
 
 run-py: ## Explicitly start the Python backend
-	AGENTFLOW_BACKEND=python ./run.sh
+	WACTORZ_BACKEND=python ./run.sh
 
 dev-backend: ## Start the backend in dev mode (defaults to Python REST on :8080)
-	AGENTFLOW_DEV_MODE=1 ./run.sh
+	WACTORZ_DEV_MODE=1 ./run.sh
 
 dev-backend-rust: ## Start the Rust backend while keeping dev-mode defaults elsewhere
-	AGENTFLOW_DEV_MODE=1 AGENTFLOW_BACKEND=rust ./run.sh
+	WACTORZ_DEV_MODE=1 WACTORZ_BACKEND=rust ./run.sh
 
 # ── Development ─────────────────────────────────────────────────────────────
 
@@ -36,7 +36,7 @@ dev-down: ## Stop mock stack
 	$(COMPOSE_DEV) down
 
 dev-full: ## Start full stack in dev mode (Python + mock agents + Vite)
-	$(COMPOSE_DEV) up -d && AGENTFLOW_DEV_MODE=1 ./run.sh &
+	$(COMPOSE_DEV) up -d && WACTORZ_DEV_MODE=1 ./run.sh &
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run dev
 
 dev-ui: ## Start Vite dev server only (needs mosquitto running)
@@ -74,13 +74,13 @@ down: ## Stop full stack
 logs: ## Follow full stack logs
 	$(COMPOSE) logs -f
 
-logs-%: ## Follow logs for a specific service, e.g. make logs-agentflow
+logs-%: ## Follow logs for a specific service, e.g. make logs-wactorz
 	$(COMPOSE) logs -f $*
 
-shell: ## Open a shell in the agentflow container
-	$(COMPOSE) exec agentflow sh
+shell: ## Open a shell in the wactorz container
+	$(COMPOSE) exec wactorz sh
 
-shell-%: ## Open a shell in a running container, e.g. make shell-agentflow
+shell-%: ## Open a shell in a running container, e.g. make shell-wactorz
 	$(COMPOSE) exec $* sh
 
 # ── Release packaging ───────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ import { Actor, MqttPublisher } from "../core/actor";
 import { ActorRegistry } from "../core/registry";
 import { Message, MessageType } from "../core/types";
 
-const VERSION = "AgentFlow v0.1.0 — Node.js runtime";
+const VERSION = "Wactorz v0.1.0 — Node.js runtime";
 
 const KB: Record<string, string> = {
   architecture:
@@ -66,7 +66,7 @@ const TOPICS = Object.keys(KB).sort().join(", ");
 
 const OVERVIEW = `**udx-agent — User and Developer Xpert**
 
-Built-in, zero-LLM knowledge base for AgentFlow.
+Built-in, zero-LLM knowledge base for Wactorz.
 
 **Commands:**
 - \`@udx-agent help\` — this message
@@ -75,7 +75,7 @@ Built-in, zero-LLM knowledge base for AgentFlow.
 - \`@udx-agent explain <concept>\` — explain an architecture concept
 - \`@udx-agent agents\` — list all registered agents
 - \`@udx-agent status\` — system summary (agent counts by state)
-- \`@udx-agent version\` — AgentFlow version
+- \`@udx-agent version\` — Wactorz version
 
 **Available topics:** ${TOPICS}
 

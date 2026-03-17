@@ -1,7 +1,7 @@
 /**
- * Base Actor class for AgentFlow Node.js runtime.
+ * Base Actor class for Wactorz Node.js runtime.
  *
- * Mirrors Python core/actor.py and Rust agentflow-core Actor trait.
+ * Mirrors Python core/actor.py and Rust wactorz-core Actor trait.
  * Each actor has:
  *   - Async message queue (via EventEmitter + Promise queue)
  *   - MQTT publish via shared MqttBroker reference

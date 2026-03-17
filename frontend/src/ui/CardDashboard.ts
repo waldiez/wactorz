@@ -377,7 +377,7 @@ export class CardDashboard {
     el.className = "cd-root";
     el.innerHTML = `
       <div class="cd-topbar">
-        <span class="cd-title">AgentFlow — Live Agents</span>
+        <span class="cd-title">Wactorz — Live Agents</span>
         <span class="cd-subtitle">Cards view</span>
         <button class="cd-3d-btn" title="Switch to Babylon.js 3D card grid">⬡ 3D</button>
       </div>

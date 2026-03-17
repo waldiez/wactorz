@@ -1,6 +1,6 @@
-# How to run AgentFlow on Windows
+# How to run Wactorz on Windows
 
-Scripts for setting up and running AgentFlow on Windows. Handles cloning or updating the repo, checking the API key, starting the MQTT broker, and launching the application.
+Scripts for setting up and running Wactorz on Windows. Handles cloning or updating the repo, checking the API key, starting the MQTT broker, and launching the application.
 
 ---
 
@@ -20,7 +20,7 @@ Open **Windows Terminal** or the black window (`cmd`).
 
 ### Option A — you already have the repo
 
-If you cloned AgentFlow already, just go into that folder and run:
+If you cloned Wactorz already, just go into that folder and run:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\start.ps1
@@ -35,20 +35,20 @@ Or double-click `scripts\start.bat`.
 Paste this into the terminal and press Enter. It downloads and runs the script in one shot:
 
 ```
-powershell -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/waldiez/agentflow/main/scripts/start.ps1' -OutFile '%TEMP%\agentflow-start.ps1'; & '%TEMP%\agentflow-start.ps1'"
+powershell -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/waldiez/wactorz/main/scripts/start.ps1' -OutFile '%TEMP%\wactorz-start.ps1'; & '%TEMP%\wactorz-start.ps1'"
 ```
 
 ---
 
 The script will automatically:
 
-- Detect if you are already inside an agentflow folder — and use it
-- Otherwise look for `C:\waldiez\agentflow` — and use it
-- Otherwise clone the repo fresh into `C:\waldiez\agentflow`
+- Detect if you are already inside an wactorz folder — and use it
+- Otherwise look for `C:\waldiez\wactorz` — and use it
+- Otherwise clone the repo fresh into `C:\waldiez\wactorz`
 - Open your `.env` file in Notepad if your API key is missing
 - Start the mosquitto MQTT broker in Docker
 - Install the Python package
-- Launch AgentFlow
+- Launch Wactorz
 
 When it's running, open your browser at **http://localhost:8080**
 
@@ -68,7 +68,7 @@ Paste your key after the `=`, save, close Notepad, then press Enter in the termi
 
 ---
 
-## Updating AgentFlow
+## Updating Wactorz
 
 Just run the script again. It does `git pull` and reinstalls automatically.
 
@@ -89,4 +89,4 @@ powershell -ExecutionPolicy Bypass -File scripts\start.ps1
 
 **Agents can't talk to each other** — mosquitto is not running. Run `docker start mosquitto`.
 
-**Window closes immediately after launch** — something crashed. Run `agentflow` from the terminal directly so you can read the error.
+**Window closes immediately after launch** — something crashed. Run `wactorz` from the terminal directly so you can read the error.

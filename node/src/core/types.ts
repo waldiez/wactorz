@@ -1,6 +1,6 @@
 /**
- * Core type definitions for the AgentFlow Node.js runtime.
- * Mirrors Python core/actor.py + Rust agentflow-core.
+ * Core type definitions for the Wactorz Node.js runtime.
+ * Mirrors Python core/actor.py + Rust wactorz-core.
  */
 
 export enum ActorState {

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# AgentFlow — source package builder
+# Wactorz — source package builder
 #
-# Produces:  agentflow-src-<YYYYMMDD>.tar.gz  (~2-4 MB)
+# Produces:  wactorz-src-<YYYYMMDD>.tar.gz  (~2-4 MB)
 #
 # Contents (NO pre-built binary — the target host builds it from source):
 #   rust/                   Rust workspace (full source)
@@ -27,21 +27,21 @@
 #
 # Usage:
 #   bash scripts/package-source.sh
-#   scp agentflow-src-*.tar.gz user@host:~/
-#   ssh user@host 'tar xzf agentflow-src-*.tar.gz && cd agentflow-src-*/ && bash setup.sh'
+#   scp wactorz-src-*.tar.gz user@host:~/
+#   ssh user@host 'tar xzf wactorz-src-*.tar.gz && cd wactorz-src-*/ && bash setup.sh'
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 cd "$(dirname "$0")/.."   # always run from repo root
 
 DATE=$(date +%Y%m%d)
-RELEASE_NAME="agentflow-src-${DATE}"
+RELEASE_NAME="wactorz-src-${DATE}"
 WORK_DIR="/tmp/${RELEASE_NAME}"
 OUT_FILE="${RELEASE_NAME}.tar.gz"
 
 BOLD=$'\e[1m'; RESET=$'\e[0m'; GREEN=$'\e[32m'; CYAN=$'\e[36m'; DIM=$'\e[2m'
 echo ""
 echo "${BOLD}══════════════════════════════════════════════════════"
-echo "  AgentFlow — Source Packager"
+echo "  Wactorz — Source Packager"
 echo "  Output: ${OUT_FILE}"
 echo "══════════════════════════════════════════════════════${RESET}"
 
@@ -72,12 +72,12 @@ cp -r static/app "${WORK_DIR}/static/app"
 
 # Infrastructure
 cp infra/nginx/nginx-native.conf      "${WORK_DIR}/infra/nginx/nginx-native.conf"
-cp infra/nginx/agentflow-snippet.conf "${WORK_DIR}/infra/nginx/agentflow-snippet.conf"
+cp infra/nginx/wactorz-snippet.conf "${WORK_DIR}/infra/nginx/wactorz-snippet.conf"
 cp infra/mosquitto/mosquitto.conf      "${WORK_DIR}/infra/mosquitto/mosquitto.conf"
 
 # Compose, systemd, env template, helpers
 cp compose.native.yaml                "${WORK_DIR}/compose.native.yaml"
-cp systemd/agentflow.service          "${WORK_DIR}/systemd/agentflow.service"
+cp systemd/wactorz.service          "${WORK_DIR}/systemd/wactorz.service"
 cp .env.example                       "${WORK_DIR}/.env.example"
 cp scripts/build-native.sh            "${WORK_DIR}/scripts/build-native.sh"
 cp scripts/mock-agents.mjs            "${WORK_DIR}/scripts/mock-agents.mjs"
@@ -86,7 +86,7 @@ chmod +x "${WORK_DIR}/scripts/build-native.sh"
 # ── 3. Write setup.sh ─────────────────────────────────────────────────────────
 cat > "${WORK_DIR}/setup.sh" << 'SETUP'
 #!/usr/bin/env bash
-# AgentFlow — one-shot build + deploy script
+# Wactorz — one-shot build + deploy script
 # Run on the target host after extracting the archive.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -101,7 +101,7 @@ die()    { echo "  ${RED}✗  $*${RESET}"; exit 1; }
 
 echo ""
 echo "${BOLD}╔══════════════════════════════════════════════════════╗"
-echo "║   AgentFlow — Setup Wizard                          ║"
+echo "║   Wactorz — Setup Wizard                          ║"
 echo "╚══════════════════════════════════════════════════════╝${RESET}"
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
@@ -180,14 +180,14 @@ else
 fi
 
 # ── Build binary ──────────────────────────────────────────────────────────────
-banner "Building agentflow binary from source…"
+banner "Building wactorz binary from source…"
 info "This takes ~3-5 min on first build (Rust + deps), ~30s on rebuilds."
 cd rust
-cargo build --release --bin agentflow
+cargo build --release --bin wactorz
 cd ..
-cp rust/target/release/agentflow ./agentflow
-chmod +x ./agentflow
-ok "Binary ready: ./agentflow  ($(du -sh agentflow | cut -f1))"
+cp rust/target/release/wactorz ./wactorz
+chmod +x ./wactorz
+ok "Binary ready: ./wactorz  ($(du -sh wactorz | cut -f1))"
 
 # ── Start Mosquitto ───────────────────────────────────────────────────────────
 if [ "${HAVE_DOCKER}" = "1" ] && [ -n "${COMPOSE_CMD}" ]; then
@@ -200,16 +200,16 @@ else
 fi
 
 # ── nginx configuration ───────────────────────────────────────────────────────
-NGINX_CONF_PATH="/etc/nginx/conf.d/agentflow.conf"
+NGINX_CONF_PATH="/etc/nginx/conf.d/wactorz.conf"
 NGINX_CONF_PATH=$(get_env DEPLOY_NGINX_CONF 2>/dev/null || echo "${NGINX_CONF_PATH}")
-NGINX_CONF_PATH="${NGINX_CONF_PATH:-/etc/nginx/conf.d/agentflow.conf}"
+NGINX_CONF_PATH="${NGINX_CONF_PATH:-/etc/nginx/conf.d/wactorz.conf}"
 
 if [ "${NGINX_MODE}" = "1" ]; then
     banner "Configuring existing nginx…"
     # Patch the snippet's root path to match the install directory
-    sed "s|/opt/agentflow|${INSTALL_DIR}|g" \
-        infra/nginx/agentflow-snippet.conf > /tmp/agentflow-nginx-snippet.tmp
-    sudo mv /tmp/agentflow-nginx-snippet.tmp "${NGINX_CONF_PATH}"
+    sed "s|/opt/wactorz|${INSTALL_DIR}|g" \
+        infra/nginx/wactorz-snippet.conf > /tmp/wactorz-nginx-snippet.tmp
+    sudo mv /tmp/wactorz-nginx-snippet.tmp "${NGINX_CONF_PATH}"
     ok "Snippet deployed: ${NGINX_CONF_PATH}"
     echo ""
     warn "Add the following to your SSL server block (once, if not already there):"
@@ -242,31 +242,31 @@ SVC_MODE="${SVC_MODE:-1}"
 CURRENT_USER="$(whoami)"
 
 if [ "${SVC_MODE}" = "1" ] && command -v systemctl >/dev/null 2>&1; then
-    PATCHED="/tmp/agentflow.service.setup"
+    PATCHED="/tmp/wactorz.service.setup"
     sed \
         -e "s|WorkingDirectory=.*|WorkingDirectory=${INSTALL_DIR}|" \
         -e "s|EnvironmentFile=.*|EnvironmentFile=${INSTALL_DIR}/.env|" \
-        -e "s|ExecStart=.*|ExecStart=${INSTALL_DIR}/agentflow --no-cli|" \
+        -e "s|ExecStart=.*|ExecStart=${INSTALL_DIR}/wactorz --no-cli|" \
         -e "s|User=%i|User=${CURRENT_USER}|" \
-        systemd/agentflow.service > "${PATCHED}"
-    sudo cp "${PATCHED}" /etc/systemd/system/agentflow.service
+        systemd/wactorz.service > "${PATCHED}"
+    sudo cp "${PATCHED}" /etc/systemd/system/wactorz.service
     rm -f "${PATCHED}"
     sudo systemctl daemon-reload
-    if systemctl is-active --quiet agentflow 2>/dev/null; then
-        sudo systemctl restart agentflow
+    if systemctl is-active --quiet wactorz 2>/dev/null; then
+        sudo systemctl restart wactorz
         ok "Service restarted"
     else
-        sudo systemctl enable --now agentflow
+        sudo systemctl enable --now wactorz
         ok "Service enabled and started"
     fi
     sleep 2
-    if systemctl is-active --quiet agentflow; then
-        ok "agentflow is running"
+    if systemctl is-active --quiet wactorz; then
+        ok "wactorz is running"
     else
-        warn "agentflow didn't start cleanly — check: journalctl -u agentflow -n 30"
+        warn "wactorz didn't start cleanly — check: journalctl -u wactorz -n 30"
     fi
 else
-    banner "Running agentflow in the foreground…"
+    banner "Running wactorz in the foreground…"
     set -a; source .env; set +a
     HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
     echo ""
@@ -274,7 +274,7 @@ else
     printf  "║  Dashboard  http://%-32s║\n" "${HOST_IP}/"
     echo    "║  Ctrl-C to stop                                      ║"
     echo    "╚══════════════════════════════════════════════════════╝${RESET}"
-    exec ./agentflow --no-cli
+    exec ./wactorz --no-cli
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
@@ -283,8 +283,8 @@ echo ""
 echo "${BOLD}${GREEN}╔══════════════════════════════════════════════════════╗"
 printf  "║  ✓  Dashboard  http://%-30s║\n" "${HOST_IP}/"
 echo    "╠══════════════════════════════════════════════════════╣"
-printf  "║  ${DIM}journalctl -u agentflow -f${RESET}${BOLD}${GREEN}                        ║\n"
-printf  "║  ${DIM}systemctl status agentflow${RESET}${BOLD}${GREEN}                        ║\n"
+printf  "║  ${DIM}journalctl -u wactorz -f${RESET}${BOLD}${GREEN}                        ║\n"
+printf  "║  ${DIM}systemctl status wactorz${RESET}${BOLD}${GREEN}                        ║\n"
 echo    "╚══════════════════════════════════════════════════════╝${RESET}"
 SETUP
 
@@ -292,21 +292,21 @@ chmod +x "${WORK_DIR}/setup.sh"
 
 # ── 4. Write a quick README ───────────────────────────────────────────────────
 cat > "${WORK_DIR}/README.md" << 'README'
-# AgentFlow — Source Package
+# Wactorz — Source Package
 
 Build + deploy on the target host.  No pre-built binary — Rust compiles natively.
 
 ## Quick start
 
 ```bash
-tar xzf agentflow-src-*.tar.gz
-cd agentflow-src-*/
+tar xzf wactorz-src-*.tar.gz
+cd wactorz-src-*/
 bash setup.sh
 ```
 
 The wizard will:
 1. Install Rust (via rustup) if not present
-2. Build the agentflow binary with `cargo build --release`
+2. Build the wactorz binary with `cargo build --release`
 3. Ask about nginx mode (existing SSL or fresh Docker nginx)
 4. Start Mosquitto via Docker
 5. Install + start the systemd service
@@ -327,24 +327,24 @@ cp .env.example .env
 nano .env   # set LLM_API_KEY; MQTT_HOST must be 'localhost'
 
 # 2. Build
-cd rust && cargo build --release --bin agentflow && cd ..
-cp rust/target/release/agentflow .
+cd rust && cargo build --release --bin wactorz && cd ..
+cp rust/target/release/wactorz .
 
 # 3. Start Mosquitto
 docker compose -f compose.native.yaml up -d mosquitto
 
 # 4. Configure nginx
 #   Existing nginx (certbot/SSL):
-sudo cp infra/nginx/agentflow-snippet.conf /etc/nginx/conf.d/agentflow.conf
-# then add:  include /etc/nginx/conf.d/agentflow.conf;  to your server block
+sudo cp infra/nginx/wactorz-snippet.conf /etc/nginx/conf.d/wactorz.conf
+# then add:  include /etc/nginx/conf.d/wactorz.conf;  to your server block
 sudo nginx -t && sudo systemctl reload nginx
 
 #   Fresh Docker nginx (port 80):
 docker compose -f compose.native.yaml up -d
 
-# 5. Start agentflow
-source .env && ./agentflow --no-cli
-# or install systemd service — see systemd/agentflow.service
+# 5. Start wactorz
+source .env && ./wactorz --no-cli
+# or install systemd service — see systemd/wactorz.service
 ```
 
 ## Updating
@@ -354,9 +354,9 @@ source .env && ./agentflow --no-cli
 # To rebuild from new source, clone the repo and re-package.
 
 # Update binary only (if Rust is already installed):
-cd rust && cargo build --release --bin agentflow && cd ..
-cp rust/target/release/agentflow .
-sudo systemctl restart agentflow
+cd rust && cargo build --release --bin wactorz && cd ..
+cp rust/target/release/wactorz .
+sudo systemctl restart wactorz
 ```
 
 ## MQTT_HOST reminder

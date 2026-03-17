@@ -1,5 +1,5 @@
 """
-test_supervisor.py — Logical tests for the AgentFlow supervision tree.
+test_supervisor.py — Logical tests for the Wactorz supervision tree.
 
 Tests run fully in-process. No MQTT broker required, no real LLM calls,
 no network. Each test creates a minimal ActorSystem, registers actors under
@@ -19,8 +19,8 @@ import argparse
 from dataclasses import dataclass, field
 from typing import Optional
 
-# ── Import core modules directly — no full agentflow install needed ───────────
-# We stub every third-party dep and bypass agentflow's __init__.py so this test
+# ── Import core modules directly — no full wactorz install needed ───────────
+# We stub every third-party dep and bypass wactorz's __init__.py so this test
 # runs standalone: no MQTT broker, no LLM keys, no HA server.
 
 import types, importlib.util, pathlib
@@ -31,9 +31,9 @@ def _stub(name):
 for _m in ["aiomqtt", "psutil", "anthropic", "openai", "aiohttp",
            "discord", "twilio", "pdfplumber", "fitz", "ultralytics",
            "torch", "numpy", "asyncssh",
-           "agentflow.core.integrations",
-           "agentflow.core.integrations.home_assistant",
-           "agentflow.core.integrations.home_assistant.ha_helper"]:
+           "wactorz.core.integrations",
+           "wactorz.core.integrations.home_assistant",
+           "wactorz.core.integrations.home_assistant.ha_helper"]:
     _stub(_m)
 
 # psutil.Process stub
@@ -43,12 +43,12 @@ class _FakeProc:
     def memory_info(self): return type("m", (), {"rss": 0})()
 _psutil.Process = lambda: _FakeProc()
 
-# Stub the agentflow package so its __init__.py is never executed
-_af      = types.ModuleType("agentflow");      sys.modules["agentflow"]      = _af
-_af_core = types.ModuleType("agentflow.core"); sys.modules["agentflow.core"] = _af_core
+# Stub the wactorz package so its __init__.py is never executed
+_af      = types.ModuleType("wactorz");      sys.modules["wactorz"]      = _af
+_af_core = types.ModuleType("wactorz.core"); sys.modules["wactorz.core"] = _af_core
 
-# Load the real core files
-_BASE = pathlib.Path(__file__).parent / "core"
+# Load the real core files from the package directory.
+_BASE = pathlib.Path(__file__).parent / "wactorz" / "core"
 
 def _load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -57,11 +57,11 @@ def _load(name, path):
     spec.loader.exec_module(mod)
     return mod
 
-_actor_mod    = _load("agentflow.core.actor",    _BASE / "actor.py")
-_registry_mod = _load("agentflow.core.registry", _BASE / "registry.py")
+_actor_mod    = _load("wactorz.core.actor",    _BASE / "actor.py")
+_registry_mod = _load("wactorz.core.registry", _BASE / "registry.py")
 
-from agentflow.core.actor    import Actor, Message, MessageType, ActorState, SupervisorStrategy
-from agentflow.core.registry import ActorRegistry, ActorSystem, Supervisor, SupervisedSpec
+from wactorz.core.actor    import Actor, Message, MessageType, ActorState, SupervisorStrategy
+from wactorz.core.registry import ActorRegistry, ActorSystem, Supervisor, SupervisedSpec
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ def make_system(poll_interval: float = 0.05):
     """Create a minimal ActorSystem with a no-op MQTT client.
     poll_interval sets how fast the supervisor watch loop fires (default 50ms for tests).
     """
-    from agentflow.core.registry import Supervisor
+    from wactorz.core.registry import Supervisor
     system = ActorSystem()
     # Inject a no-op MQTT so actors don't need a broker
     class _NoOpMQTT:

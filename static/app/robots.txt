@@ -3,6 +3,6 @@ Disallow: /api/
 Disallow: /ws
 Disallow: /mqtt
 
-# AgentFlow Dashboard — self-hosted deployment
+# Wactorz Dashboard — self-hosted deployment
 # Public dashboard is intentionally accessible if exposed
 Allow: /

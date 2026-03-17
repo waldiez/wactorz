@@ -6,38 +6,38 @@ Auto-generated from source docstrings via [mkdocstrings](https://mkdocstrings.gi
 
 ### Actor
 
-::: agentflow.core.actor.Actor
+::: wactorz.core.actor.Actor
 
 ### ActorSystem
 
-::: agentflow.core.registry.ActorSystem
+::: wactorz.core.registry.ActorSystem
 
 ### Supervisor
 
-::: agentflow.core.registry.Supervisor
+::: wactorz.core.registry.Supervisor
 
 ## Agents
 
 ### LLMAgent
 
-::: agentflow.agents.llm_agent.LLMAgent
+::: wactorz.agents.llm_agent.LLMAgent
 
 ### MainActor
 
-::: agentflow.agents.main_actor.MainActor
+::: wactorz.agents.main_actor.MainActor
 
 ### MonitorActor
 
-::: agentflow.agents.monitor_agent.MonitorActor
+::: wactorz.agents.monitor_agent.MonitorActor
 
 ### IOAgent
 
-::: agentflow.agents.io_agent.IOAgent
+::: wactorz.agents.io_agent.IOAgent
 
 ### CodeAgent
 
-::: agentflow.agents.code_agent.CodeAgent
+::: wactorz.agents.code_agent.CodeAgent
 
 ## Config
 
-::: agentflow.config
+::: wactorz.config

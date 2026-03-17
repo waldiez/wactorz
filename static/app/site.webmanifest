@@ -1,6 +1,6 @@
 {
-  "name": "AgentFlow Dashboard",
-  "short_name": "AgentFlow",
+  "name": "Wactorz Dashboard",
+  "short_name": "Wactorz",
   "description": "Real-time multi-agent orchestration dashboard. Monitor and control AI agents via an immersive 3D network visualization.",
   "start_url": "/",
   "scope": "/",

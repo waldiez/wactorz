@@ -1,5 +1,5 @@
 /**
- * AgentFlow Dashboard — entry point.
+ * Wactorz Dashboard — entry point.
  *
  * Bootstrap order:
  * 1. Create SceneManager (Babylon.js engine + scene + camera)

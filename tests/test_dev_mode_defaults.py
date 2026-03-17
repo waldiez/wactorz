@@ -1,6 +1,7 @@
 import importlib
 import os
 import unittest
+from unittest.mock import patch
 
 
 class DevModeDefaultsTest(unittest.TestCase):
@@ -9,14 +10,15 @@ class DevModeDefaultsTest(unittest.TestCase):
         try:
             os.environ.pop("INTERFACE", None)
             os.environ.pop("PORT", None)
-            os.environ["AGENTFLOW_DEV_MODE"] = "1"
-            import agentflow.config as config
-            importlib.reload(config)
+            os.environ["WACTORZ_DEV_MODE"] = "1"
+            with patch("dotenv.load_dotenv"), patch("dotenv.find_dotenv", return_value=""):
+                import wactorz.config as config
+                importlib.reload(config)
             self.assertEqual(config.CONFIG.interface, "rest")
             self.assertEqual(config.CONFIG.port, 8080)
         finally:
             os.environ.clear()
             os.environ.update(original)
-            import agentflow.config as config
-            importlib.reload(config)
-
+            with patch("dotenv.load_dotenv"), patch("dotenv.find_dotenv", return_value=""):
+                import wactorz.config as config
+                importlib.reload(config)

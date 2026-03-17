@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build script for AgentFlow — produces a PyPI-ready wheel and sdist.
+Build script for Wactorz — produces a PyPI-ready wheel and sdist.
 
 Usage:
     python scripts/build.py           # build only
@@ -8,7 +8,7 @@ Usage:
 
 Environment variables:
     TWINE_USERNAME / TWINE_PASSWORD   — PyPI credentials (or use ~/.pypirc)
-    AGENTFLOW_FRONTEND_STALE=0        — force frontend rebuild (set by this script)
+    WACTORZ_FRONTEND_STALE=0        — force frontend rebuild (set by this script)
 """
 
 import os
@@ -42,7 +42,7 @@ def main() -> None:
          "hatchling", "twine"])
 
     # ── Build wheel + sdist (force fresh frontend via STALE_AFTER=0) ─────────
-    env = {**os.environ, "AGENTFLOW_FRONTEND_STALE": "0"}
+    env = {**os.environ, "WACTORZ_FRONTEND_STALE": "0"}
     run([sys.executable, "-m", "hatchling", "build", "-t", "wheel", "-t", "sdist"],
         cwd=ROOT, env=env)
 

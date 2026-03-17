@@ -1,34 +1,34 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# AgentFlow — release packager
+# Wactorz — release packager
 #
-# Produces:  agentflow-release-<YYYYMMDD>.tar.gz
+# Produces:  wactorz-release-<YYYYMMDD>.tar.gz
 #
 # The archive is self-contained:
 #   • Pre-built Vite SPA  (static/app/)
-#   • Exported Docker image  (agentflow-server.tar.gz inside the archive)
+#   • Exported Docker image  (wactorz-server.tar.gz inside the archive)
 #   • All infra configs  (nginx, mosquitto)
 #   • A deploy.sh wizard  (set env → docker load → docker compose up)
 #
 # Prerequisites (run on the build machine):
-#   • Docker running and agentflow-server:latest already built
+#   • Docker running and wactorz-server:latest already built
 #   • Node.js / npm  (for `npm run build`)
 #   • The current directory must be the repo root
 #
 # Usage:
-#   cd /path/to/agentflow
+#   cd /path/to/wactorz
 #   bash scripts/package-release.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 cd "$(dirname "$0")/.."   # always run from repo root
 
 DATE=$(date +%Y%m%d)
-RELEASE_NAME="agentflow-release-${DATE}"
+RELEASE_NAME="wactorz-release-${DATE}"
 WORK_DIR="/tmp/${RELEASE_NAME}"
 OUT_FILE="${RELEASE_NAME}.tar.gz"
 
 echo "══════════════════════════════════════════════"
-echo " AgentFlow Release Packager"
+echo " Wactorz Release Packager"
 echo " Output: ${OUT_FILE}"
 echo "══════════════════════════════════════════════"
 
@@ -48,15 +48,15 @@ echo "▶ Building Docker image for linux/amd64 (cross-compile via buildx)…"
 echo "  This takes ~5-8 min on Apple Silicon — Rust compiles under QEMU."
 docker buildx build \
   --platform linux/amd64 \
-  --tag agentflow-server:release-amd64 \
+  --tag wactorz-server:release-amd64 \
   --load \
   ./rust
 echo ""
 echo "▶ Exporting linux/amd64 image…"
-docker save agentflow-server:release-amd64 | gzip -9 > /tmp/agentflow-server.tar.gz
+docker save wactorz-server:release-amd64 | gzip -9 > /tmp/wactorz-server.tar.gz
 # Clean up the extra tag
-docker rmi agentflow-server:release-amd64 --force >/dev/null 2>&1 || true
-echo "  ✓ Image saved ($(du -sh /tmp/agentflow-server.tar.gz | cut -f1))"
+docker rmi wactorz-server:release-amd64 --force >/dev/null 2>&1 || true
+echo "  ✓ Image saved ($(du -sh /tmp/wactorz-server.tar.gz | cut -f1))"
 
 # ── 3. Build staging directory ────────────────────────────────────────────────
 echo ""
@@ -82,21 +82,21 @@ cp scripts/mock-agents.mjs "${WORK_DIR}/scripts/mock-agents.mjs"
 cp .env.example "${WORK_DIR}/.env.example"
 
 # Exported image
-mv /tmp/agentflow-server.tar.gz "${WORK_DIR}/agentflow-server.tar.gz"
+mv /tmp/wactorz-server.tar.gz "${WORK_DIR}/wactorz-server.tar.gz"
 
 # ── 4. Write compose.yaml (deploy-mode: no build, image already loaded) ───────
 cat > "${WORK_DIR}/compose.yaml" << 'COMPOSEYAML'
-# AgentFlow — production deploy compose
-# The agentflow-server image is already loaded from agentflow-server.tar.gz.
+# Wactorz — production deploy compose
+# The wactorz-server image is already loaded from wactorz-server.tar.gz.
 # Run:  docker compose up -d
 
-name: agentflow
+name: wactorz
 
 services:
 
   mosquitto:
     image: eclipse-mosquitto:2.0
-    container_name: agentflow-mosquitto
+    container_name: wactorz-mosquitto
     restart: unless-stopped
     hostname: mosquitto
     ports:
@@ -107,17 +107,17 @@ services:
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
     networks:
-      - agentflow-net
+      - wactorz-net
     healthcheck:
       test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "hc", "-W", "3"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  agentflow:
-    image: agentflow-server:latest
+  wactorz:
+    image: wactorz-server:latest
     platform: linux/amd64
-    container_name: agentflow-server
+    container_name: wactorz-server
     restart: unless-stopped
     ports:
       - "${API_EXTERNAL_PORT:-8080}:8080"
@@ -130,10 +130,10 @@ services:
       LLM_PROVIDER: "${LLM_PROVIDER:-anthropic}"
       LLM_MODEL: "${LLM_MODEL:-claude-sonnet-4-6}"
       LLM_API_KEY: "${LLM_API_KEY}"
-      RUST_LOG: "${RUST_LOG:-agentflow=info,tower_http=warn}"
+      RUST_LOG: "${RUST_LOG:-wactorz=info,tower_http=warn}"
       NO_CLI: "true"
     networks:
-      - agentflow-net
+      - wactorz-net
     depends_on:
       mosquitto:
         condition: service_healthy
@@ -145,7 +145,7 @@ services:
 
   dashboard:
     image: nginx:1.27-alpine
-    container_name: agentflow-dashboard
+    container_name: wactorz-dashboard
     restart: unless-stopped
     ports:
       - "${DASHBOARD_EXTERNAL_PORT:-80}:80"
@@ -153,9 +153,9 @@ services:
       - ./static/app:/usr/share/nginx/html:ro
       - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - agentflow-net
+      - wactorz-net
     depends_on:
-      agentflow:
+      wactorz:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/"]
@@ -164,7 +164,7 @@ services:
       retries: 3
 
 networks:
-  agentflow-net:
+  wactorz-net:
 
 volumes:
   mosquitto-data:
@@ -173,16 +173,16 @@ COMPOSEYAML
 
 # ── 5. Write compose.dev.yaml (mock only, no LLM required) ───────────────────
 cat > "${WORK_DIR}/compose.dev.yaml" << 'DEVYAML'
-# AgentFlow — dev/demo mode (mock agents, no LLM required)
+# Wactorz — dev/demo mode (mock agents, no LLM required)
 # Run:  docker compose -f compose.dev.yaml up -d
 # Then open http://localhost:9000 (or serve static/app/ with any static server)
 
-name: agentflow-dev
+name: wactorz-dev
 
 services:
   mosquitto:
     image: eclipse-mosquitto:2.0
-    container_name: agentflow-dev-mosquitto
+    container_name: wactorz-dev-mosquitto
     restart: unless-stopped
     hostname: mosquitto
     ports:
@@ -198,7 +198,7 @@ services:
 
   mock-agents:
     image: node:22-alpine
-    container_name: agentflow-dev-mock
+    container_name: wactorz-dev-mock
     restart: unless-stopped
     working_dir: /app
     volumes:
@@ -213,7 +213,7 @@ services:
 
   dashboard:
     image: nginx:1.27-alpine
-    container_name: agentflow-dev-dashboard
+    container_name: wactorz-dev-dashboard
     restart: unless-stopped
     ports:
       - "9000:80"
@@ -227,7 +227,7 @@ DEVYAML
 # ── 6. Write deploy.sh ────────────────────────────────────────────────────────
 cat > "${WORK_DIR}/deploy.sh" << 'DEPLOYSCRIPT'
 #!/usr/bin/env bash
-# AgentFlow — deployment wizard
+# Wactorz — deployment wizard
 # Run once after extracting the archive on the target host.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -240,7 +240,7 @@ die()    { echo "${RED}  ✗  $*${RESET}"; exit 1; }
 
 echo ""
 echo "${BOLD}══════════════════════════════════════════════"
-echo "  AgentFlow — Deploy Wizard"
+echo "  Wactorz — Deploy Wizard"
 echo "══════════════════════════════════════════════${RESET}"
 
 # ── Dependency checks ─────────────────────────────────────────────────────────
@@ -258,15 +258,15 @@ echo "  Docker:          $(docker --version)"
 echo "  Docker Compose:  $($COMPOSE version --short 2>/dev/null || $COMPOSE version)"
 
 # ── Load Docker image ─────────────────────────────────────────────────────────
-banner "Loading agentflow-server Docker image…"
-if docker image inspect agentflow-server:latest >/dev/null 2>&1; then
+banner "Loading wactorz-server Docker image…"
+if docker image inspect wactorz-server:latest >/dev/null 2>&1; then
     echo "  Image already present — skipping load."
 else
-    [ -f agentflow-server.tar.gz ] || die "agentflow-server.tar.gz not found next to deploy.sh"
-    LOADED=$(docker load < agentflow-server.tar.gz | grep "Loaded image" | awk '{print $NF}')
+    [ -f wactorz-server.tar.gz ] || die "wactorz-server.tar.gz not found next to deploy.sh"
+    LOADED=$(docker load < wactorz-server.tar.gz | grep "Loaded image" | awk '{print $NF}')
     # Normalize tag to :latest regardless of what was saved
-    if [ -n "${LOADED}" ] && [ "${LOADED}" != "agentflow-server:latest" ]; then
-        docker tag "${LOADED}" agentflow-server:latest
+    if [ -n "${LOADED}" ] && [ "${LOADED}" != "wactorz-server:latest" ]; then
+        docker tag "${LOADED}" wactorz-server:latest
     fi
     echo "  ✓ Image loaded."
 fi
@@ -309,15 +309,15 @@ read -rp "  Dashboard port [${DASH_PORT}]: " p
 [ -n "${p}" ] && set_env DASHBOARD_EXTERNAL_PORT "${p}" && DASH_PORT="${p}"
 
 # ── Start stack ───────────────────────────────────────────────────────────────
-banner "Starting AgentFlow stack…"
+banner "Starting Wactorz stack…"
 $COMPOSE up -d
 
 # ── Health check ──────────────────────────────────────────────────────────────
 banner "Waiting for health checks (up to 60s)…"
 TIMEOUT=60; ELAPSED=0
-until docker inspect --format='{{.State.Health.Status}}' agentflow-server 2>/dev/null | grep -q healthy; do
+until docker inspect --format='{{.State.Health.Status}}' wactorz-server 2>/dev/null | grep -q healthy; do
     sleep 3; ELAPSED=$((ELAPSED+3))
-    [ $ELAPSED -ge $TIMEOUT ] && { warn "agentflow-server did not become healthy in ${TIMEOUT}s — check logs: docker logs agentflow-server"; break; }
+    [ $ELAPSED -ge $TIMEOUT ] && { warn "wactorz-server did not become healthy in ${TIMEOUT}s — check logs: docker logs wactorz-server"; break; }
     echo -n "."
 done
 echo ""
@@ -326,13 +326,13 @@ echo ""
 HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
 echo ""
 echo "${BOLD}${GREEN}══════════════════════════════════════════════"
-echo "  ✓  AgentFlow deployed!"
+echo "  ✓  Wactorz deployed!"
 echo ""
 echo "  Dashboard:  http://${HOST_IP}:${DASH_PORT}/"
 echo "  MQTT TCP:   ${HOST_IP}:$(get_env MQTT_EXTERNAL_PORT || echo 1883)"
 echo ""
 echo "  Manage:  docker compose ps"
-echo "  Logs:    docker compose logs -f agentflow"
+echo "  Logs:    docker compose logs -f wactorz"
 echo "  Stop:    docker compose down"
 echo "══════════════════════════════════════════════${RESET}"
 DEPLOYSCRIPT
@@ -341,7 +341,7 @@ chmod +x "${WORK_DIR}/deploy.sh"
 
 # ── 7. Write a quick-start README ─────────────────────────────────────────────
 cat > "${WORK_DIR}/DEPLOY.md" << 'READMEDOC'
-# AgentFlow — Quick Deploy
+# Wactorz — Quick Deploy
 
 ## Requirements
 - Linux host (x86_64)
@@ -353,8 +353,8 @@ cat > "${WORK_DIR}/DEPLOY.md" << 'READMEDOC'
 
 ```bash
 # 1. Extract
-tar xzf agentflow-release-*.tar.gz
-cd agentflow-release-*/
+tar xzf wactorz-release-*.tar.gz
+cd wactorz-release-*/
 
 # 2. Run the wizard (sets env, loads image, starts stack)
 bash deploy.sh
@@ -369,7 +369,7 @@ http://<your-host-ip>/
 cp .env.example .env
 # Edit .env — set LLM_API_KEY at minimum
 
-docker load < agentflow-server.tar.gz
+docker load < wactorz-server.tar.gz
 docker compose up -d
 ```
 
@@ -396,7 +396,7 @@ docker compose -f compose.dev.yaml up -d
 - **Google AI key** (for agent portrait photos): baked into the frontend bundle
   at build time. To change it, rebuild the frontend and re-package.
 - **Home Assistant** and **Fuseki** are optional; start with `--profile full`.
-- **Logs**: `docker compose logs -f agentflow`
+- **Logs**: `docker compose logs -f wactorz`
 - **Upgrade**: run `bash deploy.sh` again with a new archive — existing volumes
   (MQTT data) are preserved.
 READMEDOC

@@ -16,7 +16,7 @@ interface CoinEntry {
 const MAX_HISTORY = 200;
 
 const HELP = `**WIZ — WaldiezCoin Economist** Ƿ
-_In-game economy for the AgentFlow swarm_
+_In-game economy for the Wactorz swarm_
 
 \`\`\`
 balance              current Ƿ balance

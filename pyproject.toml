@@ -3,13 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agentflow"
+name = "wactorz"
 dynamic = ["version"]
 description = "Actor-model multi-agent framework — spawn, coordinate and monitor AI agents at runtime"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
-authors = [{ name = "AgentFlow Contributors" }]
+authors = [{ name = "Wactorz Contributors" }]
 keywords = ["agents", "llm", "actor-model", "mqtt", "multi-agent", "orchestration"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -51,34 +51,34 @@ docs      = [
 # Note: docs extras are only needed to *rebuild* site/ (run build_docs.py).
 # The pre-built site/ is committed to the repo and bundled into the wheel as-is.
 dev       = [
-    "agentflow[docs]",
+    "wactorz[docs]",
     "pre-commit>=3.0.0",
     "coverage>=7.0.0",
     "twine>=5.0.0",
     "watchdog>=5.0.0",
 ]
 
-# Everything except ML (heavy torch dep) — suitable for `pip install agentflow[all]`
+# Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
 all = [
-    "agentflow[anthropic]",
-    "agentflow[openai]",
-    "agentflow[discord]",
-    "agentflow[whatsapp]",
+    "wactorz[anthropic]",
+    "wactorz[openai]",
+    "wactorz[discord]",
+    "wactorz[whatsapp]",
 ]
 
 [project.scripts]
-agentflow         = "agentflow.cli:main"
-agentflow-monitor = "agentflow.monitor_server:cli_main"
+wactorz         = "wactorz.cli:main"
+wactorz-monitor = "wactorz.monitor_server:cli_main"
 
 [project.urls]
-Homepage      = "https://waldiez.github.io/agentflow/"
-Repository    = "https://github.com/waldiez/agentflow"
-Documentation = "https://waldiez.github.io/agentflow/guide/"
-"Bug Tracker" = "https://github.com/waldiez/agentflow/issues"
+Homepage      = "https://waldiez.github.io/wactorz/"
+Repository    = "https://github.com/waldiez/wactorz"
+Documentation = "https://waldiez.github.io/wactorz/guide/"
+"Bug Tracker" = "https://github.com/waldiez/wactorz/issues"
 
 # ── Version ────────────────────────────────────────────────────────────────────
 [tool.hatch.version]
-path = "agentflow/_version.py"
+path = "wactorz/_version.py"
 
 # ── Build hook — auto-builds frontend if dist is stale ────────────────────────
 [tool.hatch.build.hooks.custom]
@@ -86,7 +86,7 @@ path = "scripts/hooks/build_hook.py"
 
 # ── Wheel ──────────────────────────────────────────────────────────────────────
 [tool.hatch.build.targets.wheel]
-packages = ["agentflow", "agentflow.*"]
+packages = ["wactorz", "wactorz.*"]
 exclude = [
     "rust",
     "node_modules",
@@ -101,10 +101,10 @@ exclude = [
 # Bundle the pre-built static assets inside the package.
 # static/app/  → frontend SPA (Vite build output)
 # static/docs/ → documentation site (build_docs.py output)
-# After `pip install` these land at {site-packages}/agentflow/static/.
+# After `pip install` these land at {site-packages}/wactorz/static/.
 [tool.hatch.build.targets.wheel.force-include]
-"static"       = "agentflow/static"
-"monitor.html" = "agentflow/monitor.html"
+"static"       = "wactorz/static"
+"monitor.html" = "wactorz/monitor.html"
 
 # ── sdist (source distribution for PyPI) ──────────────────────────────────────
 [tool.hatch.build.targets.sdist]

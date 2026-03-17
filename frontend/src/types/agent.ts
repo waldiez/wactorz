@@ -63,7 +63,7 @@ export interface LogPayload {
   text?: string;
 }
 
-/** Node heartbeat — a remote AgentFlow node phoning home. */
+/** Node heartbeat — a remote Wactorz node phoning home. */
 export interface NodeHeartbeatPayload {
   node: string;
   agents: string[];

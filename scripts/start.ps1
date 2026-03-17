@@ -1,4 +1,4 @@
-# AgentFlow — Windows launcher
+# Wactorz — Windows launcher
 #
 # How to run:
 #   Right-click → "Run with PowerShell"
@@ -28,39 +28,39 @@ function Write-Banner($msg) {
 # Priority:
 #   a) current working directory  (user is already inside the repo)
 #   b) the folder this script lives in  (script is inside the repo)
-#   c) C:\waldiez\agentflow  (default install location)
+#   c) C:\waldiez\wactorz  (default install location)
 #   d) nowhere yet → clone it there
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $cwd       = (Get-Location).Path
-$default   = "C:\waldiez\agentflow"
+$default   = "C:\waldiez\wactorz"
 
 if (Is-AgentflowRepo $cwd) {
     $repoDir = $cwd
-    Write-Host "Using agentflow repo in current folder: $repoDir"
+    Write-Host "Using wactorz repo in current folder: $repoDir"
     Set-Location $repoDir
     git fetch
     git pull
 } elseif (Is-AgentflowRepo $scriptDir) {
     $repoDir = $scriptDir
-    Write-Host "Using agentflow repo at: $repoDir"
+    Write-Host "Using wactorz repo at: $repoDir"
     Set-Location $repoDir
     git fetch
     git pull
 } elseif (Is-AgentflowRepo $default) {
     $repoDir = $default
-    Write-Host "Found agentflow at: $repoDir"
+    Write-Host "Found wactorz at: $repoDir"
     Set-Location $repoDir
     git fetch
     git pull
 } else {
-    Write-Host "AgentFlow not found. Cloning into C:\waldiez\ ..."
+    Write-Host "Wactorz not found. Cloning into C:\waldiez\ ..."
     $base = "C:\waldiez"
     if (-not (Test-Path $base)) {
         New-Item -ItemType Directory -Path $base | Out-Null
     }
     Set-Location $base
-    git clone https://github.com/waldiez/agentflow
+    git clone https://github.com/waldiez/wactorz
     $repoDir = $default
     Set-Location $repoDir
 }
@@ -101,14 +101,14 @@ if (Test-Path $envFile) {
 Write-Host "Starting mosquitto..."
 docker compose up -d
 
-# ── 5. Install AgentFlow ──────────────────────────────────────────────────────
+# ── 5. Install Wactorz ──────────────────────────────────────────────────────
 
 Write-Host ""
-Write-Host "Installing / updating AgentFlow..."
+Write-Host "Installing / updating Wactorz..."
 pip install --force-reinstall -e ".[all]"
 
 # ── 6. Launch ─────────────────────────────────────────────────────────────────
 
-Write-Banner "AgentFlow is starting — open http://localhost:8080 in your browser"
+Write-Banner "Wactorz is starting — open http://localhost:8080 in your browser"
 
-agentflow
+wactorz

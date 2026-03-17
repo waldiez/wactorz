@@ -83,7 +83,7 @@ export class NewsAgent extends Actor {
     const idsUrl = `${HN_API}/${feed}stories.json`;
     const idsResp = await axios.get<number[]>(idsUrl, {
       timeout: 12_000,
-      headers: { "User-Agent": "AgentFlow-NewsAgent/1.0" },
+      headers: { "User-Agent": "Wactorz-NewsAgent/1.0" },
     });
     const ids = idsResp.data.slice(0, Math.min(count, MAX_COUNT));
 

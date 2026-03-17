@@ -2,7 +2,7 @@
 
 ## Overview
 
-AgentFlow is an async, multi-agent orchestration system built on the **Actor Model** with **MQTT** as the communication backbone.  Every agent is an independent actor with its own message inbox; no shared mutable state exists between actors.
+Wactorz is an async, multi-agent orchestration system built on the **Actor Model** with **MQTT** as the communication backbone.  Every agent is an independent actor with its own message inbox; no shared mutable state exists between actors.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -18,7 +18,7 @@ AgentFlow is an async, multi-agent orchestration system built on the **Actor Mod
           ┌─────────────────────────┼──────────────────────────────┐
           │                         │                              │
           ▼                         ▼                              ▼
-  agentflow (Rust)          Mosquitto (MQTT)              Fuseki (RDF)
+  wactorz (Rust)          Mosquitto (MQTT)              Fuseki (RDF)
   :8080 REST                :1883 TCP / :9001 WS          :3030 SPARQL
   :8081 WS bridge
           │
@@ -36,17 +36,17 @@ AgentFlow is an async, multi-agent orchestration system built on the **Actor Mod
 
 ## Components
 
-### agentflow-server (Rust binary)
+### wactorz-server (Rust binary)
 
-The single `agentflow` binary that runs the entire backend.
+The single `wactorz` binary that runs the entire backend.
 
 | Crate | Role |
 |---|---|
-| `agentflow-core` | `Actor` trait, `ActorRegistry`, message types, `EventPublisher` |
-| `agentflow-agents` | All concrete agent implementations |
-| `agentflow-mqtt` | MQTT client wrapper + topic constants |
-| `agentflow-interfaces` | REST API (axum), WebSocket bridge, interactive CLI |
-| `agentflow-server` | Binary entry point — wires everything together |
+| `wactorz-core` | `Actor` trait, `ActorRegistry`, message types, `EventPublisher` |
+| `wactorz-agents` | All concrete agent implementations |
+| `wactorz-mqtt` | MQTT client wrapper + topic constants |
+| `wactorz-interfaces` | REST API (axum), WebSocket bridge, interactive CLI |
+| `wactorz-server` | Binary entry point — wires everything together |
 
 ### Mosquitto
 
@@ -59,8 +59,8 @@ The single public HTTP entry point.
 | Path | Proxied to |
 |---|---|
 | `/` | `static/app/` (static SPA) |
-| `/api/` | `agentflow:8080` (REST) |
-| `/ws` | `agentflow:8081` (WebSocket bridge) |
+| `/api/` | `wactorz:8080` (REST) |
+| `/ws` | `wactorz:8081` (WebSocket bridge) |
 | `/mqtt` | `mosquitto:9001` (MQTT over WebSocket) |
 | `/fuseki/` | `fuseki:3030` (SPARQL, path-stripped) |
 
@@ -111,7 +111,7 @@ Browser IO bar
   │  publishes  io/chat  { from: "user", content: "@agent-name text" }
   ▼
 Mosquitto
-  │  subscribed by agentflow-server
+  │  subscribed by wactorz-server
   ▼
 MQTT event loop  →  IOAgent mailbox
   │
@@ -154,7 +154,7 @@ Message IDs use simpler **WIDs**.
 
 | Mode | Docker containers | Binary |
 |---|---|---|
-| **Full Docker** (`compose.yaml`) | agentflow + nginx + mosquitto + fuseki + HA | inside container |
+| **Full Docker** (`compose.yaml`) | wactorz + nginx + mosquitto + fuseki + HA | inside container |
 | **Native binary** (`compose.native.yaml`) | nginx + mosquitto only | runs on host OS |
 
 See [deployment.md](deployment.md) for full instructions.

@@ -59,14 +59,14 @@ export class WeatherAgent extends Actor {
     try {
       const resp = await axios.get(url, {
         timeout: 10_000,
-        headers: { "User-Agent": "AgentFlow-WeatherAgent/1.0" },
+        headers: { "User-Agent": "Wactorz-WeatherAgent/1.0" },
         validateStatus: (s) => s < 500,
       });
       if (resp.status !== 200) {
         // fallback: one-line format
         const r2 = await axios.get(`https://wttr.in/${encoded}?format=3`, {
           timeout: 10_000,
-          headers: { "User-Agent": "AgentFlow-WeatherAgent/1.0" },
+          headers: { "User-Agent": "Wactorz-WeatherAgent/1.0" },
         });
         return String(r2.data).trim();
       }

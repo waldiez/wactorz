@@ -29,7 +29,7 @@ def main() -> int:
             "run",
             "-q",
             "-p",
-            "agentflow-core",
+            "wactorz-core",
             "--bin",
             "backend_parity",
             "--",

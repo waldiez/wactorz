@@ -1,5 +1,5 @@
 #!/bin/bash
-# AgentFlow Unified Entry Point
+# Wactorz Unified Entry Point
 # Controls whether to run the Rust or Python backend.
 
 set -e
@@ -10,16 +10,16 @@ if [ -f .env ]; then
 fi
 
 # Default to rust if not set
-if [[ "${AGENTFLOW_DEV_MODE:-0}" =~ ^(1|true|TRUE|yes|YES|on|ON|dev|DEV)$ ]]; then
+if [[ "${WACTORZ_DEV_MODE:-0}" =~ ^(1|true|TRUE|yes|YES|on|ON|dev|DEV)$ ]]; then
     DEFAULT_BACKEND="python"
 else
     DEFAULT_BACKEND="rust"
 fi
 
-BACKEND=${AGENTFLOW_BACKEND:-$DEFAULT_BACKEND}
-RUST_BIN="./rust/target/release/agentflow-server"
+BACKEND=${WACTORZ_BACKEND:-$DEFAULT_BACKEND}
+RUST_BIN="./rust/target/release/wactorz-server"
 
-echo "Starting AgentFlow with ${BACKEND} backend..."
+echo "Starting Wactorz with ${BACKEND} backend..."
 
 if [ "$BACKEND" = "rust" ]; then
     if [ ! -f "$RUST_BIN" ]; then
@@ -33,7 +33,7 @@ elif [ "$BACKEND" = "python" ]; then
     if [ -d ".venv" ]; then
         source .venv/bin/activate
     fi
-    exec python3 main.py "$@"
+    exec python3 -m wactorz "$@"
 else
     echo "Unknown backend: $BACKEND. Use 'rust' or 'python'."
     exit 1

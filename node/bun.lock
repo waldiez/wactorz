@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@waldiez/agentflow-node",
+      "name": "@waldiez/wactorz-node",
       "dependencies": {
         "axios": "^1.6.8",
         "mqtt": "^5.3.4",

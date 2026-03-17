@@ -21,7 +21,7 @@ from pathlib import Path
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 # Rebuild if the dist is older than this (seconds).  Set to 0 in CI.
-STALE_AFTER: int = int(os.getenv("AGENTFLOW_FRONTEND_STALE", "600"))
+STALE_AFTER: int = int(os.getenv("WACTORZ_FRONTEND_STALE", "600"))
 
 
 def _pkg_manager(frontend_dir: Path) -> list[str]:

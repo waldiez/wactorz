@@ -1,11 +1,11 @@
 /**
- * AgentFlow Node.js runtime entry point.
+ * Wactorz Node.js runtime entry point.
  *
  * Starts all agents and connects to MQTT broker.
  *
  * Environment:
  *   MQTT_URL        MQTT broker URL (default: mqtt://localhost:1883)
- *   MQTT_CLIENT_ID  Client ID (default: agentflow-node-<random>)
+ *   MQTT_CLIENT_ID  Client ID (default: wactorz-node-<random>)
  */
 
 import { ActorSystem } from "./core/registry";
@@ -25,7 +25,7 @@ import { HomeAssistantAgent } from "./agents/ha_agent";
 const MQTT_URL = process.env["MQTT_URL"] ?? "mqtt://localhost:1883";
 
 async function main() {
-  console.log("[agentflow-node] Starting...");
+  console.log("[wactorz-node] Starting...");
 
   const system = new ActorSystem({
     mqttUrl: MQTT_URL,
@@ -50,27 +50,27 @@ async function main() {
 
   // Connect to MQTT
   await system.connect();
-  console.log(`[agentflow-node] Connected to MQTT at ${MQTT_URL}`);
+  console.log(`[wactorz-node] Connected to MQTT at ${MQTT_URL}`);
 
   // Spawn all agents
   for (const agent of [io, monitor, udx, weather, news, wif, wiz, qa, nautilus, fuseki, tick, ha]) {
     system.spawnActor(agent);
-    console.log(`[agentflow-node] Spawned ${agent.name}`);
+    console.log(`[wactorz-node] Spawned ${agent.name}`);
   }
 
   // Graceful shutdown
   for (const sig of ["SIGINT", "SIGTERM"]) {
     process.on(sig, async () => {
-      console.log(`\n[agentflow-node] ${sig} received, shutting down...`);
+      console.log(`\n[wactorz-node] ${sig} received, shutting down...`);
       await system.shutdown();
       process.exit(0);
     });
   }
 
-  console.log("[agentflow-node] All agents running. Press Ctrl-C to stop.");
+  console.log("[wactorz-node] All agents running. Press Ctrl-C to stop.");
 }
 
 main().catch((e) => {
-  console.error("[agentflow-node] Fatal:", e);
+  console.error("[wactorz-node] Fatal:", e);
   process.exit(1);
 });

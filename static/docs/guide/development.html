@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Development — AgentFlow</title>
-  <meta name="description" content="AgentFlow — Actor-model multi-agent AI framework"/>
+  <title>Development — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
   <style>
@@ -100,11 +100,11 @@
 <body>
 <header class="topbar">
   <a href="../index.html" class="topbar-logo">
-    <div class="logo-mark"></div>AgentFlow
+    <div class="logo-mark"></div>Wactorz
   </a>
   <nav class="topbar-links">
-    <a href="https://github.com/waldiez/agentflow" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://pypi.org/project/agentflow/" target="_blank" rel="noopener">PyPI</a>
+    <a href="https://github.com/waldiez/wactorz" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/" target="_blank" rel="noopener">PyPI</a>
     <a href="../api/rust/" target="_blank">Rust Docs</a>
     <a href="../api/js/" target="_blank">JS Docs</a>
   </nav>
@@ -126,8 +126,8 @@
       <a href="../reference/mqtt_topics.html" class="">MQTT Topics</a>
       <a href="../reference/python-api.html" class="">Python API</a>
     </div>
-    <a href="https://waldiez.github.io/agentflow/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
-    <a href="https://waldiez.github.io/agentflow/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
+    <a href="https://waldiez.github.io/wactorz/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
+    <a href="https://waldiez.github.io/wactorz/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
   </aside>
   <main class="content">
 <h1 id="development">Development</h1>
@@ -194,14 +194,14 @@ keeping the same frontend-facing API contract as Rust.</p>
 docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>mosquitto
 
 <span class="c1"># Terminal 2 — Python backend, REST on :8080</span>
-<span class="nv">AGENTFLOW_DEV_MODE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./run.sh
+<span class="nv">WACTORZ_DEV_MODE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./run.sh
 
 <span class="c1"># Terminal 3 — frontend SPA</span>
 <span class="nb">cd</span><span class="w"> </span>frontend<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>dev
 </code></pre></div>
 
 <p>In this mode:
-- <code>run.sh</code> defaults to the Python backend unless <code>AGENTFLOW_BACKEND</code> overrides it.
+- <code>run.sh</code> defaults to the Python backend unless <code>WACTORZ_BACKEND</code> overrides it.
 - The Python backend defaults to <code>INTERFACE=rest</code> and <code>PORT=8080</code>.
 - The primary frontend is <code>frontend/index.html</code>, not the legacy <code>monitor.html</code>.</p>
 <h3 id="stop-mock-stack">Stop mock stack</h3>
@@ -215,7 +215,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> 
 
 <span class="c1"># Terminal 2 — Rust backend</span>
 <span class="nb">cd</span><span class="w"> </span>rust
-<span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">agentflow</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>agentflow<span class="w"> </span>--<span class="w"> </span><span class="se">\</span>
+<span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">wactorz</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>wactorz<span class="w"> </span>--<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--mqtt-host<span class="w"> </span>localhost<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--llm-provider<span class="w"> </span>anthropic<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--llm-api-key<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$LLM_API_KEY</span><span class="s2">&quot;</span>
@@ -226,16 +226,16 @@ docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> 
 
 <hr />
 <h2 id="project-structure">Project structure</h2>
-<div class="highlight"><pre><span></span><code><span class="nx">agentflow</span><span class="o">/</span>
+<div class="highlight"><pre><span></span><code><span class="nx">wactorz</span><span class="o">/</span>
 <span class="err">├──</span><span class="w"> </span><span class="nx">rust</span><span class="o">/</span><span class="w">                          </span><span class="nx">Rust</span><span class="w"> </span><span class="nx">workspace</span>
 <span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">Cargo</span><span class="p">.</span><span class="nx">toml</span><span class="w">                 </span><span class="nx">workspace</span><span class="w"> </span><span class="nx">manifest</span>
 <span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">Dockerfile</span><span class="w">                 </span><span class="nx">multi</span><span class="o">-</span><span class="nx">stage</span><span class="p">:</span><span class="w"> </span><span class="nx">builder</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="nx">runtime</span>
 <span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">crates</span><span class="o">/</span>
-<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">agentflow</span><span class="o">-</span><span class="nx">core</span><span class="o">/</span><span class="w">        </span><span class="nx">Actor</span><span class="w"> </span><span class="nx">trait</span><span class="p">,</span><span class="w"> </span><span class="nx">registry</span><span class="p">,</span><span class="w"> </span><span class="nx">messages</span>
-<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">agentflow</span><span class="o">-</span><span class="nx">agents</span><span class="o">/</span><span class="w">      </span><span class="nx">All</span><span class="w"> </span><span class="nx">concrete</span><span class="w"> </span><span class="nx">agents</span>
-<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">agentflow</span><span class="o">-</span><span class="nx">mqtt</span><span class="o">/</span><span class="w">        </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">client</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">topic</span><span class="w"> </span><span class="nx">helpers</span>
-<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">agentflow</span><span class="o">-</span><span class="nx">interfaces</span><span class="o">/</span><span class="w">  </span><span class="nx">REST</span><span class="p">,</span><span class="w"> </span><span class="nx">WebSocket</span><span class="p">,</span><span class="w"> </span><span class="nx">CLI</span>
-<span class="err">│</span><span class="w">       </span><span class="err">└──</span><span class="w"> </span><span class="nx">agentflow</span><span class="o">-</span><span class="nx">server</span><span class="o">/</span><span class="w">      </span><span class="nx">Binary</span><span class="w"> </span><span class="nx">entry</span><span class="w"> </span><span class="nx">point</span>
+<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">core</span><span class="o">/</span><span class="w">        </span><span class="nx">Actor</span><span class="w"> </span><span class="nx">trait</span><span class="p">,</span><span class="w"> </span><span class="nx">registry</span><span class="p">,</span><span class="w"> </span><span class="nx">messages</span>
+<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">agents</span><span class="o">/</span><span class="w">      </span><span class="nx">All</span><span class="w"> </span><span class="nx">concrete</span><span class="w"> </span><span class="nx">agents</span>
+<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">mqtt</span><span class="o">/</span><span class="w">        </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">client</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">topic</span><span class="w"> </span><span class="nx">helpers</span>
+<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">interfaces</span><span class="o">/</span><span class="w">  </span><span class="nx">REST</span><span class="p">,</span><span class="w"> </span><span class="nx">WebSocket</span><span class="p">,</span><span class="w"> </span><span class="nx">CLI</span>
+<span class="err">│</span><span class="w">       </span><span class="err">└──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">server</span><span class="o">/</span><span class="w">      </span><span class="nx">Binary</span><span class="w"> </span><span class="nx">entry</span><span class="w"> </span><span class="nx">point</span>
 <span class="err">│</span>
 <span class="err">├──</span><span class="w"> </span><span class="nx">frontend</span><span class="o">/</span><span class="w">                      </span><span class="nx">Vite</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">TypeScript</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">Babylon</span><span class="p">.</span><span class="nx">js</span><span class="w"> </span><span class="nx">SPA</span>
 <span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">src</span><span class="o">/</span>
@@ -286,7 +286,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> 
 <span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="kn">package</span><span class="o">-</span><span class="nx">native</span><span class="p">.</span><span class="nx">sh</span><span class="w">          </span><span class="nx">Build</span><span class="w"> </span><span class="nx">native</span><span class="w"> </span><span class="nx">binary</span><span class="w"> </span><span class="nx">tar</span><span class="p">.</span><span class="nx">gz</span>
 <span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">build</span><span class="o">-</span><span class="nx">native</span><span class="p">.</span><span class="nx">sh</span><span class="w">            </span><span class="nx">Build</span><span class="w"> </span><span class="nx">binary</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">the</span><span class="w"> </span><span class="nx">target</span><span class="w"> </span><span class="nx">host</span>
 <span class="err">│</span>
-<span class="err">├──</span><span class="w"> </span><span class="nx">systemd</span><span class="o">/</span><span class="nx">agentflow</span><span class="p">.</span><span class="nx">service</span><span class="w">      </span><span class="nx">systemd</span><span class="w"> </span><span class="nx">unit</span><span class="w"> </span><span class="nx">template</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">systemd</span><span class="o">/</span><span class="nx">wactorz</span><span class="p">.</span><span class="nx">service</span><span class="w">      </span><span class="nx">systemd</span><span class="w"> </span><span class="nx">unit</span><span class="w"> </span><span class="nx">template</span>
 <span class="err">├──</span><span class="w"> </span><span class="nx">compose</span><span class="p">.</span><span class="nx">yaml</span><span class="w">                   </span><span class="nx">Full</span><span class="w"> </span><span class="nx">Docker</span><span class="w"> </span><span class="nx">stack</span>
 <span class="err">├──</span><span class="w"> </span><span class="nx">compose</span><span class="p">.</span><span class="nx">dev</span><span class="p">.</span><span class="nx">yaml</span><span class="w">               </span><span class="nx">Dev</span><span class="w"> </span><span class="nx">stack</span><span class="w"> </span><span class="p">(</span><span class="nx">mosquitto</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">mock</span><span class="w"> </span><span class="nx">only</span><span class="p">)</span>
 <span class="err">├──</span><span class="w"> </span><span class="nx">compose</span><span class="p">.</span><span class="nx">native</span><span class="p">.</span><span class="nx">yaml</span><span class="w">            </span><span class="nx">Native</span><span class="w"> </span><span class="nx">binary</span><span class="w"> </span><span class="nx">stack</span>
@@ -302,13 +302,13 @@ docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> 
 cargo<span class="w"> </span>check
 
 <span class="c1"># Build debug</span>
-cargo<span class="w"> </span>build<span class="w"> </span>--bin<span class="w"> </span>agentflow
+cargo<span class="w"> </span>build<span class="w"> </span>--bin<span class="w"> </span>wactorz
 
 <span class="c1"># Build release</span>
-cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--bin<span class="w"> </span>agentflow
+cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--bin<span class="w"> </span>wactorz
 
 <span class="c1"># Run with debug logging</span>
-<span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">agentflow</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>agentflow
+<span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">wactorz</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>wactorz
 
 <span class="c1"># Lint</span>
 cargo<span class="w"> </span>clippy<span class="w"> </span>--<span class="w"> </span>-D<span class="w"> </span>warnings
@@ -354,11 +354,11 @@ brew<span class="w"> </span>install<span class="w"> </span>FiloSottile/musl-cros
 
 <span class="c1"># Build</span>
 <span class="nv">CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER</span><span class="o">=</span>x86_64-linux-musl-gcc<span class="w"> </span><span class="se">\</span>
-cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--target<span class="w"> </span>x86_64-unknown-linux-gnu<span class="w"> </span>--bin<span class="w"> </span>agentflow
+cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--target<span class="w"> </span>x86_64-unknown-linux-gnu<span class="w"> </span>--bin<span class="w"> </span>wactorz
 </code></pre></div>
 
 <p>Alternatively, use Docker buildx (no linker needed):</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>buildx<span class="w"> </span>build<span class="w"> </span>--platform<span class="w"> </span>linux/amd64<span class="w"> </span>--tag<span class="w"> </span>agentflow:local<span class="w"> </span>--load<span class="w"> </span>./rust
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>buildx<span class="w"> </span>build<span class="w"> </span>--platform<span class="w"> </span>linux/amd64<span class="w"> </span>--tag<span class="w"> </span>wactorz:local<span class="w"> </span>--load<span class="w"> </span>./rust
 </code></pre></div>
 
 <hr />
@@ -412,7 +412,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 </code></pre></div>
 
 <h3 id="rust-actor-not-responding">Rust actor not responding</h3>
-<div class="highlight"><pre><span></span><code><span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">agentflow</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>agentflow
+<div class="highlight"><pre><span></span><code><span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">wactorz</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>wactorz
 <span class="c1"># Look for: &quot;[agent-name] handle_message&quot; or heartbeat logs</span>
 </code></pre></div>
 
@@ -426,8 +426,8 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 </div>
 
 <footer>
-  <span>AgentFlow &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/agentflow">GitHub</a></span>
-  <span>Built with <a href="https://github.com/waldiez/agentflow/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
 </footer>
 </body>
 </html>

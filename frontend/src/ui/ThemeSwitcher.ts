@@ -4,7 +4,7 @@
  * Listens to clicks on `#btn-graph`, `#btn-galaxy`, `#btn-cards`,
  * `#btn-grave`, then dispatches a `theme-change` CustomEvent on `document`.
  *
- * Persists the last-chosen theme in localStorage ("agentflow-theme").
+ * Persists the last-chosen theme in localStorage ("wactorz-theme").
  * "cards-3d" maps to the same "Cards" button staying active (sub-mode).
  */
 
@@ -13,7 +13,7 @@ import type { ThemeChangeEvent } from "../types/agent";
 type ThemeName = "graph" | "galaxy" | "cards" | "grave" | "social" | "fin";
 // type ThemeName = "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | 
 // type ThemeName =  "social" | "fin";
-const STORAGE_KEY = "agentflow-theme";
+const STORAGE_KEY = "wactorz-theme";
 
 export class ThemeSwitcher {
   private buttons: Partial<Record<ThemeName, HTMLButtonElement | undefined | null>>;

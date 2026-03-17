@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# AgentFlow — FULL release packager (source + pre-built artifacts)
+# Wactorz — FULL release packager (source + pre-built artifacts)
 #
-# Produces:  agentflow-full-<YYYYMMDD>.zip
+# Produces:  wactorz-full-<YYYYMMDD>.zip
 #
 # The zip contains BOTH:
 #   1. Pre-built Vite SPA           (static/app/)
-#   2. Exported linux/amd64 image   (agentflow-server.tar.gz)
+#   2. Exported linux/amd64 image   (wactorz-server.tar.gz)
 #   3. Full source code             (rust/, frontend/src etc.)
 #
 # On the SFTP/target host you can:
@@ -22,12 +22,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."    # always run from repo root
 
 DATE=$(date +%Y%m%d)
-RELEASE_NAME="agentflow-full-${DATE}"
+RELEASE_NAME="wactorz-full-${DATE}"
 WORK_DIR="/tmp/${RELEASE_NAME}"
 OUT_FILE="${RELEASE_NAME}.zip"
 
 echo "══════════════════════════════════════════════════════"
-echo " AgentFlow Full Release Packager"
+echo " Wactorz Full Release Packager"
 echo " Output: ${OUT_FILE}"
 echo "══════════════════════════════════════════════════════"
 
@@ -43,14 +43,14 @@ echo "▶ Building Docker image for linux/amd64 (cross-compile via buildx)…"
 echo "  ~5-8 min on Apple Silicon."
 docker buildx build \
   --platform linux/amd64 \
-  --tag agentflow-server:release-amd64 \
+  --tag wactorz-server:release-amd64 \
   --load \
   ./rust
 echo ""
 echo "▶ Exporting image…"
-docker save agentflow-server:release-amd64 | gzip -9 > /tmp/agentflow-server.tar.gz
-docker rmi agentflow-server:release-amd64 --force >/dev/null 2>&1 || true
-echo "  ✓ Image saved ($(du -sh /tmp/agentflow-server.tar.gz | cut -f1))"
+docker save wactorz-server:release-amd64 | gzip -9 > /tmp/wactorz-server.tar.gz
+docker rmi wactorz-server:release-amd64 --force >/dev/null 2>&1 || true
+echo "  ✓ Image saved ($(du -sh /tmp/wactorz-server.tar.gz | cut -f1))"
 
 # ── 3. Stage everything ───────────────────────────────────────────────────────
 echo ""
@@ -87,10 +87,10 @@ cp .env.example                     "${WORK_DIR}/.env.example"
 # Native-mode infrastructure
 cp compose.native.yaml                    "${WORK_DIR}/compose.native.yaml"
 cp infra/nginx/nginx-native.conf          "${WORK_DIR}/infra/nginx/nginx-native.conf"
-cp systemd/agentflow.service              "${WORK_DIR}/systemd/agentflow.service"
+cp systemd/wactorz.service              "${WORK_DIR}/systemd/wactorz.service"
 
 # Pre-built image
-mv /tmp/agentflow-server.tar.gz "${WORK_DIR}/agentflow-server.tar.gz"
+mv /tmp/wactorz-server.tar.gz "${WORK_DIR}/wactorz-server.tar.gz"
 
 # ── 4. compose.yaml — BUILD FROM SOURCE (default, for target rebuilds) ───────
 cp compose.yaml     "${WORK_DIR}/compose.yaml"
@@ -98,19 +98,19 @@ cp compose.dev.yaml "${WORK_DIR}/compose.dev.yaml"
 
 # ── 5. compose.release.yaml — USE PRE-BUILT IMAGE (quick deploy, no compile) ─
 cat > "${WORK_DIR}/compose.release.yaml" << 'COMPOSEYAML'
-# AgentFlow — quick deploy (pre-built linux/amd64 image, no Rust compile)
+# Wactorz — quick deploy (pre-built linux/amd64 image, no Rust compile)
 #
-# 1. docker load < agentflow-server.tar.gz
+# 1. docker load < wactorz-server.tar.gz
 # 2. cp .env.example .env  &&  edit .env
 # 3. docker compose -f compose.release.yaml up -d
 #
-name: agentflow
+name: wactorz
 
 services:
 
   mosquitto:
     image: eclipse-mosquitto:2.0
-    container_name: agentflow-mosquitto
+    container_name: wactorz-mosquitto
     restart: unless-stopped
     hostname: mosquitto
     ports:
@@ -121,17 +121,17 @@ services:
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
     networks:
-      - agentflow-net
+      - wactorz-net
     healthcheck:
       test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "hc", "-W", "3"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  agentflow:
-    image: agentflow-server:latest
+  wactorz:
+    image: wactorz-server:latest
     platform: linux/amd64
-    container_name: agentflow-server
+    container_name: wactorz-server
     restart: unless-stopped
     ports:
       - "${API_EXTERNAL_PORT:-8080}:8080"
@@ -144,10 +144,10 @@ services:
       LLM_PROVIDER: "${LLM_PROVIDER:-anthropic}"
       LLM_MODEL: "${LLM_MODEL:-claude-sonnet-4-6}"
       LLM_API_KEY: "${LLM_API_KEY}"
-      RUST_LOG: "${RUST_LOG:-agentflow=info,tower_http=warn}"
+      RUST_LOG: "${RUST_LOG:-wactorz=info,tower_http=warn}"
       NO_CLI: "true"
     networks:
-      - agentflow-net
+      - wactorz-net
     depends_on:
       mosquitto:
         condition: service_healthy
@@ -159,7 +159,7 @@ services:
 
   dashboard:
     image: nginx:1.27-alpine
-    container_name: agentflow-dashboard
+    container_name: wactorz-dashboard
     restart: unless-stopped
     ports:
       - "${DASHBOARD_EXTERNAL_PORT:-80}:80"
@@ -167,9 +167,9 @@ services:
       - ./static/app:/usr/share/nginx/html:ro
       - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - agentflow-net
+      - wactorz-net
     depends_on:
-      agentflow:
+      wactorz:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/"]
@@ -178,7 +178,7 @@ services:
       retries: 3
 
 networks:
-  agentflow-net:
+  wactorz-net:
 
 volumes:
   mosquitto-data:
@@ -188,7 +188,7 @@ COMPOSEYAML
 # ── 6. deploy.sh — interactive wizard ────────────────────────────────────────
 cat > "${WORK_DIR}/deploy.sh" << 'DEPLOYSCRIPT'
 #!/usr/bin/env bash
-# AgentFlow — deployment wizard (source build  OR  pre-built image)
+# Wactorz — deployment wizard (source build  OR  pre-built image)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -203,7 +203,7 @@ prompt()  { read -rp "  ${BOLD}$1${RESET} " "$2"; }
 
 echo ""
 echo "${BOLD}╔══════════════════════════════════════════════╗"
-echo "║   AgentFlow — Deploy Wizard                  ║"
+echo "║   Wactorz — Deploy Wizard                  ║"
 echo "╚══════════════════════════════════════════════╝${RESET}"
 
 # ── Dependency check ──────────────────────────────────────────────────────────
@@ -234,13 +234,13 @@ fi
 # ── Load pre-built image (mode 1) ─────────────────────────────────────────────
 if [ "${MODE}" != "2" ]; then
     banner "Loading pre-built image…"
-    if docker image inspect agentflow-server:latest >/dev/null 2>&1; then
+    if docker image inspect wactorz-server:latest >/dev/null 2>&1; then
         echo "  Image already present — skipping load."
     else
-        [ -f agentflow-server.tar.gz ] || die "agentflow-server.tar.gz not found."
-        LOADED=$(docker load < agentflow-server.tar.gz | grep "Loaded image" | awk '{print $NF}')
-        if [ -n "${LOADED}" ] && [ "${LOADED}" != "agentflow-server:latest" ]; then
-            docker tag "${LOADED}" agentflow-server:latest
+        [ -f wactorz-server.tar.gz ] || die "wactorz-server.tar.gz not found."
+        LOADED=$(docker load < wactorz-server.tar.gz | grep "Loaded image" | awk '{print $NF}')
+        if [ -n "${LOADED}" ] && [ "${LOADED}" != "wactorz-server:latest" ]; then
+            docker tag "${LOADED}" wactorz-server:latest
         fi
         echo "  ✓ Image loaded."
     fi
@@ -280,10 +280,10 @@ fi
 # ── Wait for health ───────────────────────────────────────────────────────────
 banner "Waiting for health checks (up to 90s)…"
 TIMEOUT=90; ELAPSED=0
-until docker inspect --format='{{.State.Health.Status}}' agentflow-server 2>/dev/null | grep -q healthy; do
+until docker inspect --format='{{.State.Health.Status}}' wactorz-server 2>/dev/null | grep -q healthy; do
     sleep 3; ELAPSED=$((ELAPSED+3)); echo -n "."
     [ $ELAPSED -ge $TIMEOUT ] && {
-        warn "Server not healthy after ${TIMEOUT}s — check: docker logs agentflow-server"; break
+        warn "Server not healthy after ${TIMEOUT}s — check: docker logs wactorz-server"; break
     }
 done
 echo ""
@@ -308,15 +308,15 @@ chmod +x "${WORK_DIR}/deploy.sh"
 
 # ── 7. DEPLOY.md ──────────────────────────────────────────────────────────────
 cat > "${WORK_DIR}/DEPLOY.md" << 'MDOC'
-# AgentFlow — Full Release Package
+# Wactorz — Full Release Package
 
 This archive contains both **pre-built artifacts** and **full source code**.
 
 ## Quick start
 
 ```bash
-unzip agentflow-full-*.zip
-cd agentflow-full-*/
+unzip wactorz-full-*.zip
+cd wactorz-full-*/
 bash deploy.sh
 ```
 
@@ -331,7 +331,7 @@ The wizard will ask:
 ### A) Quick deploy (pre-built image)
 
 ```bash
-docker load < agentflow-server.tar.gz
+docker load < wactorz-server.tar.gz
 cp .env.example .env && nano .env     # set LLM_API_KEY
 docker compose -f compose.release.yaml up -d
 ```
@@ -357,7 +357,7 @@ cd frontend
 npm ci
 npm run build
 # nginx picks up static/app/ automatically (volume mount)
-docker exec agentflow-dashboard nginx -s reload
+docker exec wactorz-dashboard nginx -s reload
 ```
 
 ---
@@ -370,9 +370,9 @@ docker exec agentflow-dashboard nginx -s reload
 ├── compose.release.yaml   # pre-built image (fastest deploy)
 ├── compose.dev.yaml       # mock-only, no LLM
 ├── .env.example           # copy to .env and fill secrets
-├── agentflow-server.tar.gz   # linux/amd64 Docker image
+├── wactorz-server.tar.gz   # linux/amd64 Docker image
 ├── deploy.sh              # interactive wizard
-├── rust/                  # Rust source (agentflow-server)
+├── rust/                  # Rust source (wactorz-server)
 │   ├── Dockerfile
 │   ├── Cargo.toml / Cargo.lock
 │   └── crates/

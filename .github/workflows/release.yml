@@ -34,7 +34,7 @@ jobs:
         run: bun install && bun run build
 
       - name: Build wheel + sdist
-        run: AGENTFLOW_FRONTEND_STALE=0 python -m hatchling build
+        run: WACTORZ_FRONTEND_STALE=0 python -m hatchling build
 
       - name: Validate
         run: twine check dist/*

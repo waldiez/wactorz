@@ -1,8 +1,8 @@
-# AgentFlow — Docker Compose stack
+# Wactorz — Docker Compose stack
 #
 # Default (docker compose up -d):
 #   mosquitto only — MQTT broker on :1883 (TCP) and :9001 (WebSocket)
-#   Then run:  agentflow
+#   Then run:  wactorz
 #
 # Profiles:
 #   rust  — also starts the Rust API server + nginx dashboard
@@ -18,14 +18,14 @@
 #
 # Copy .env.example → .env and fill in secrets before running.
 
-name: agentflow
+name: wactorz
 
 services:
 
   # ── MQTT broker ─────────────────────────────────────────────────────────────
   mosquitto:
     image: eclipse-mosquitto:2.0
-    container_name: agentflow-mosquitto
+    container_name: wactorz-mosquitto
     restart: unless-stopped
     hostname: mosquitto
     ports:
@@ -38,7 +38,7 @@ services:
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
     networks:
-      - agentflow-net
+      - wactorz-net
     healthcheck:
       test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "hc", "-W", "3"]
       interval: 10s
@@ -49,8 +49,8 @@ services:
   # Optional — only started with: docker compose --profile full up -d
   fuseki:
     profiles: [full]
-    container_name: agentflow-fuseki
-    image: agentflow-fuseki
+    container_name: wactorz-fuseki
+    image: wactorz-fuseki
     #build:
     #  context: config/fuseki-container
     #  dockerfile: Containerfile
@@ -65,16 +65,16 @@ services:
       - JVM_ARGS=-Xmx2g
       - TBD=2
       - FUSEKI_CREATE_DATASETS=true
-      - FUSEKI_DATASET_1=agentflow
+      - FUSEKI_DATASET_1=wactorz
       - FUSEKI_DATASET_2=synapse
       - FUSEKI_DATASET_3=spatial
     volumes:
       - fuseki-data:/fuseki/databases
       - ./infra/fuseki/ontology:/fuseki/ontology:ro
     networks:
-      - agentflow-net
+      - wactorz-net
     command: >
-      /jena-fuseki/fuseki-server --update --mem /agentflow
+      /jena-fuseki/fuseki-server --update --mem /wactorz
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3030/$/ping"]
       interval: 15s
@@ -87,7 +87,7 @@ services:
   homeassistant:
     profiles: [full]
     image: homeassistant/home-assistant:stable
-    container_name: agentflow-homeassistant
+    container_name: wactorz-homeassistant
     restart: unless-stopped
     privileged: true
     # network_mode: host is NOT used here — it is unreliable on Docker Desktop for Mac
@@ -95,7 +95,7 @@ services:
     # On a bare-metal Linux host you can re-enable it for LAN device discovery:
     #   network_mode: host     # also remove the networks: block below
     networks:
-      - agentflow-net
+      - wactorz-net
     environment:
       TZ: "${TZ:-UTC}"
     volumes:
@@ -112,16 +112,16 @@ services:
       retries: 5
       start_period: 60s
 
-  # ── AgentFlow Rust server ────────────────────────────────────────────────────
+  # ── Wactorz Rust server ────────────────────────────────────────────────────
   # Optional — only started with: docker compose --profile rust up -d
-  agentflow:
+  wactorz:
     profiles: [rust, full]
     build:
       context: ./rust
       dockerfile: Dockerfile
       target: runtime
-    image: agentflow-server:latest
-    container_name: agentflow-server
+    image: wactorz-server:latest
+    container_name: wactorz-server
     restart: unless-stopped
     # Ports 8080/8081 accessible internally; routed via nginx /api/ and /ws.
     # Uncomment to expose directly for debugging:
@@ -136,10 +136,10 @@ services:
       LLM_PROVIDER: "${LLM_PROVIDER:-anthropic}"
       LLM_MODEL: "${LLM_MODEL:-claude-sonnet-4-6}"
       LLM_API_KEY: "${LLM_API_KEY:-LLM_API_KEY_NOT_SET}"
-      RUST_LOG: "${RUST_LOG:-agentflow=info,tower_http=warn}"
+      RUST_LOG: "${RUST_LOG:-wactorz=info,tower_http=warn}"
       NO_CLI: "true"
     networks:
-      - agentflow-net
+      - wactorz-net
     depends_on:
       mosquitto:
         condition: service_healthy
@@ -157,7 +157,7 @@ services:
   dashboard:
     profiles: [rust, full]
     image: nginx:1.27-alpine
-    container_name: agentflow-dashboard
+    container_name: wactorz-dashboard
     restart: unless-stopped
     ports:
       - "${DASHBOARD_EXTERNAL_PORT:-80}:80"    # Main entry point
@@ -166,11 +166,11 @@ services:
       - ./static/app:/usr/share/nginx/html:ro
       - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - agentflow-net
+      - wactorz-net
     depends_on:
       # homeassistant:  # with profile: ["full"] (otherwise "homeassistant" is not known)
       #   condition: service_healthy
-      agentflow:
+      wactorz:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/"]
@@ -179,7 +179,7 @@ services:
       retries: 3
 
 networks:
-  agentflow-net:
+  wactorz-net:
     # driver: bridge
 
 volumes:

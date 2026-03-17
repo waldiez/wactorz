@@ -1,7 +1,7 @@
 /**
  * mock-agents.mjs
  *
- * Simulates a running AgentFlow system by publishing MQTT messages that
+ * Simulates a running Wactorz system by publishing MQTT messages that
  * the Babylon.js frontend subscribes to.  Run via compose.dev.yaml.
  *
  * Topics published:
@@ -106,9 +106,9 @@ const MOCK_RESPONSES = [
 // UDX knowledge-base replies for the mock
 const UDX_RESPONSES = [
   "**UDX** here! Type `help` for a full command list, or try `docs architecture`, `explain mqtt`, `agents`, or `status`.",
-  "**AgentFlow actors** communicate via MQTT topics only — no shared state, no locks. Try `explain actor-model` for details.",
+  "**Wactorz actors** communicate via MQTT topics only — no shared state, no locks. Try `explain actor-model` for details.",
   "**Live agents** in this session: main-actor (orchestrator), monitor-agent (watchdog), io-agent (gateway), nautilus-agent (SSH/rsync), udx-agent (that's me!). Use `agents` for the full list.",
-  "**Deployment tip**: run `bash scripts/package-native.sh` to produce a self-contained `agentflow-native-*.tar.gz` (~12 MB) that runs without Docker. Use `docs deploy` for the full guide.",
+  "**Deployment tip**: run `bash scripts/package-native.sh` to produce a self-contained `wactorz-native-*.tar.gz` (~12 MB) that runs without Docker. Use `docs deploy` for the full guide.",
   "**NautilusAgent** bridges SSH/rsync — try `@nautilus-agent ping user@host`. Arguments are never shell-interpolated, so injection attacks are impossible.",
   "**MQTT topic structure**: `agents/{id}/spawn|heartbeat|status|alert|chat` + `system/health` + `io/chat`. Use `docs mqtt` for the full reference.",
   "**REST API** lives at `/api/`. Quick ref: `GET /api/actors`, `POST /api/actors/:id/pause`, `DELETE /api/actors/:id`. Use `docs api` for all endpoints.",
@@ -125,7 +125,7 @@ const WEATHER_RESPONSES = [
 // News-agent mock replies
 const NEWS_RESPONSES = [
   "**Hacker News — Top Stories** (top 5)\n\n1. **[Show HN: I built a multi-agent system in Rust](https://example.com)** — ⬆ 342 · [HN](https://news.ycombinator.com)\n2. **[The unreasonable effectiveness of LLMs as orchestrators](https://example.com)** — ⬆ 289 · [HN](https://news.ycombinator.com)\n3. **[Ask HN: How do you handle secret management in containers?](https://news.ycombinator.com)** — ⬆ 201 · [HN](https://news.ycombinator.com)\n4. **[Rust 2026 roadmap announced](https://example.com)** — ⬆ 178 · [HN](https://news.ycombinator.com)\n5. **[Babylon.js 8.0 released](https://example.com)** — ⬆ 154 · [HN](https://news.ycombinator.com)",
-  "**Hacker News — Newest Stories** (top 5)\n\n1. **[Actor model vs. CSP: a 2026 comparison](https://example.com)** — ⬆ 12\n2. **[MQTT vs WebSockets for real-time dashboards](https://example.com)** — ⬆ 8\n3. **[Building a zero-dependency Rust HTTP client](https://example.com)** — ⬆ 5\n4. **[Ask HN: Best free weather API?](https://news.ycombinator.com)** — ⬆ 3\n5. **[Show HN: AgentFlow dashboard in Babylon.js](https://example.com)** — ⬆ 2",
+  "**Hacker News — Newest Stories** (top 5)\n\n1. **[Actor model vs. CSP: a 2026 comparison](https://example.com)** — ⬆ 12\n2. **[MQTT vs WebSockets for real-time dashboards](https://example.com)** — ⬆ 8\n3. **[Building a zero-dependency Rust HTTP client](https://example.com)** — ⬆ 5\n4. **[Ask HN: Best free weather API?](https://news.ycombinator.com)** — ⬆ 3\n5. **[Show HN: Wactorz dashboard in Babylon.js](https://example.com)** — ⬆ 2",
   "📰 Fetching top stories from Hacker News… *(in real mode this calls the HN Firebase API — no API key needed)*",
 ];
 
@@ -160,7 +160,7 @@ const NAUTILUS_RESPONSES = [
   "✓ `df -h` on `deploy-host`:\n```\nFilesystem  Size  Used Avail Use%\n/dev/sda1    50G   12G   36G  25%\n```",
   "✗ SSH to `unreachable-host` timed out after 10s.",
   "✓ rsync push `./dist/` → `web@cdn:/var/www/html/` — 18 files synced.",
-  "Remote command `systemctl status agentflow` returned exit 0.",
+  "Remote command `systemctl status wactorz` returned exit 0.",
   "Establishing encrypted tunnel… shell handshake complete.",
   "✓ Key fingerprint accepted. Host added to known_hosts.",
 ];

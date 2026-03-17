@@ -45,11 +45,11 @@ def _load(name: str, path: pathlib.Path):
     return module
 
 
-_load("agentflow.core.actor", ROOT / "agentflow" / "core" / "actor.py")
-_load("agentflow.core.registry", ROOT / "agentflow" / "core" / "registry.py")
+_load("wactorz.core.actor", ROOT / "wactorz" / "core" / "actor.py")
+_load("wactorz.core.registry", ROOT / "wactorz" / "core" / "registry.py")
 
-from agentflow.core.actor import Actor, ActorState, Message, SupervisorStrategy
-from agentflow.core.registry import ActorSystem, Supervisor
+from wactorz.core.actor import Actor, ActorState, Message, SupervisorStrategy
+from wactorz.core.registry import ActorSystem, Supervisor
 
 
 @dataclass
@@ -61,7 +61,7 @@ class ActorTracker:
 
 class ProbeActor(Actor):
     def __init__(self, tracker: ActorTracker, **kwargs):
-        super().__init__(name=tracker.name, persistence_dir="/tmp/agentflow_backend_parity", **kwargs)
+        super().__init__(name=tracker.name, persistence_dir="/tmp/wactorz_backend_parity", **kwargs)
         self._tracker = tracker
 
     async def on_start(self):

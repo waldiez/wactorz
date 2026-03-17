@@ -1,0 +1,102 @@
+# Wactorz ontology — Turtle (TTL) format
+#
+# This file defines the RDF vocabulary for Wactorz agents, messages, and events.
+# Loaded into Fuseki dataset "wactorz" on startup (future: via Fuseki config.ttl).
+#
+# Planned additions:
+#   - SHACL shapes for agent configuration validation
+#   - HSML (Hybrid Sensor Markup Language) terms for IoT/HA sensor data
+#   - OWL axioms for agent type hierarchy
+
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix af:    <https://waldiez.github.io/wactorz/ontology#> .
+
+# ── Ontology declaration ──────────────────────────────────────────────────────
+
+<https://waldiez.github.io/wactorz/ontology>
+    a owl:Ontology ;
+    dcterms:title "Wactorz Ontology" ;
+    dcterms:description "Vocabulary for Wactorz multi-agent actor model" ;
+    owl:versionInfo "0.1.0" .
+
+# ── Agent types ───────────────────────────────────────────────────────────────
+
+af:Agent
+    a owl:Class ;
+    rdfs:label "Agent" ;
+    rdfs:comment "An Wactorz actor (base class)" .
+
+af:MainActor
+    a owl:Class ;
+    rdfs:subClassOf af:Agent ;
+    rdfs:label "MainActor" ;
+    rdfs:comment "The central LLM orchestrator agent" .
+
+af:DynamicAgent
+    a owl:Class ;
+    rdfs:subClassOf af:Agent ;
+    rdfs:label "DynamicAgent" ;
+    rdfs:comment "An agent whose behaviour is defined by a runtime-generated script" .
+
+af:MonitorAgent
+    a owl:Class ;
+    rdfs:subClassOf af:Agent ;
+    rdfs:label "MonitorAgent" ;
+    rdfs:comment "A protected health-monitoring agent" .
+
+af:MlAgent
+    a owl:Class ;
+    rdfs:subClassOf af:Agent ;
+    rdfs:label "MlAgent" ;
+    rdfs:comment "An agent that runs ML inference" .
+
+# ── Agent properties ──────────────────────────────────────────────────────────
+
+af:agentId
+    a owl:DatatypeProperty ;
+    rdfs:domain af:Agent ;
+    rdfs:range xsd:string ;
+    rdfs:label "agent UUID" .
+
+af:agentName
+    a owl:DatatypeProperty ;
+    rdfs:domain af:Agent ;
+    rdfs:range xsd:string ;
+    rdfs:label "human-readable agent name" .
+
+af:agentState
+    a owl:DatatypeProperty ;
+    rdfs:domain af:Agent ;
+    rdfs:range xsd:string ;
+    rdfs:label "lifecycle state (initializing|running|paused|stopped|failed)" .
+
+af:isProtected
+    a owl:DatatypeProperty ;
+    rdfs:domain af:Agent ;
+    rdfs:range xsd:boolean ;
+    rdfs:label "whether the agent is protected from external termination" .
+
+# ── Message types ─────────────────────────────────────────────────────────────
+
+af:Message
+    a owl:Class ;
+    rdfs:label "Message" ;
+    rdfs:comment "A typed message exchanged between agents" .
+
+af:messageId     a owl:DatatypeProperty ; rdfs:domain af:Message ; rdfs:range xsd:string .
+af:fromAgent     a owl:ObjectProperty   ; rdfs:domain af:Message ; rdfs:range af:Agent .
+af:toAgent       a owl:ObjectProperty   ; rdfs:domain af:Message ; rdfs:range af:Agent .
+af:timestampMs   a owl:DatatypeProperty ; rdfs:domain af:Message ; rdfs:range xsd:long .
+af:messageType   a owl:DatatypeProperty ; rdfs:domain af:Message ; rdfs:range xsd:string .
+
+# ── SHACL shapes (planned) ────────────────────────────────────────────────────
+# TODO: add sh:NodeShape for af:Agent, af:Message, af:DynamicAgent (script validation)
+
+# ── HSML / Home Assistant terms (planned) ─────────────────────────────────────
+# TODO: import or align with HSML sensor vocabulary for IoT entity integration
+# See: https://github.com/hsml-standard/hsml

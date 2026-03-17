@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AgentFlow docs builder.
+Wactorz docs builder.
 
 Converts docs/*.md → static/docs/*.html using a custom dark template that matches
 the landing page (Chakra Petch + JetBrains Mono, #05080e background).
@@ -51,8 +51,8 @@ NAV = [
         ("MQTT Topics",          "mqtt_topics.md"),
         ("Python API",           "python-api.md"),
     ]),
-    ("Rust Docs ↗",  "https://waldiez.github.io/agentflow/api/rust/"),
-    ("JS/TS Docs ↗", "https://waldiez.github.io/agentflow/api/js/"),
+    ("Rust Docs ↗",  "https://waldiez.github.io/wactorz/api/rust/"),
+    ("JS/TS Docs ↗", "https://waldiez.github.io/wactorz/api/js/"),
 ]
 
 # ── HTML template ──────────────────────────────────────────────────────────────
@@ -62,8 +62,8 @@ TEMPLATE = """\
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>{title} — AgentFlow</title>
-  <meta name="description" content="AgentFlow — Actor-model multi-agent AI framework"/>
+  <title>{title} — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
   <style>
@@ -159,11 +159,11 @@ TEMPLATE = """\
 <body>
 <header class="topbar">
   <a href="{root}index.html" class="topbar-logo">
-    <div class="logo-mark"></div>AgentFlow
+    <div class="logo-mark"></div>Wactorz
   </a>
   <nav class="topbar-links">
-    <a href="https://github.com/waldiez/agentflow" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://pypi.org/project/agentflow/" target="_blank" rel="noopener">PyPI</a>
+    <a href="https://github.com/waldiez/wactorz" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/" target="_blank" rel="noopener">PyPI</a>
     <a href="{root}api/rust/" target="_blank">Rust Docs</a>
     <a href="{root}api/js/" target="_blank">JS Docs</a>
   </nav>
@@ -179,8 +179,8 @@ TEMPLATE = """\
 </div>
 
 <footer>
-  <span>AgentFlow &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/agentflow">GitHub</a></span>
-  <span>Built with <a href="https://github.com/waldiez/agentflow/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
 </footer>
 </body>
 </html>
@@ -381,7 +381,7 @@ def build_jsdocs(site_dir: Path = SITE) -> None:
 
 WATCH_PATTERNS = {".py", ".md", ".html", ".css", ".json", ".yaml", ".yml"}
 WATCH_IGNORE   = {"__pycache__", ".git", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
-WATCH_DIRS     = [DOCS, ROOT / "agentflow"]
+WATCH_DIRS     = [DOCS, ROOT / "wactorz"]
 
 
 
@@ -525,7 +525,7 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="AgentFlow docs builder")
+    parser = argparse.ArgumentParser(description="Wactorz docs builder")
     parser.add_argument("--serve", nargs="?", const=8001, type=int, metavar="PORT",
                         help="serve after building (default port 8001)")
     parser.add_argument("--full", action="store_true",

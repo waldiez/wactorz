@@ -12,7 +12,7 @@ export default defineConfig({
         target: "http://localhost:8080",
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
-      // Proxy WebSocket upgrade for the AgentFlow WS bridge
+      // Proxy WebSocket upgrade for the Wactorz WS bridge
       "/ws": {
         target: "ws://localhost:8081",
         ws: true,

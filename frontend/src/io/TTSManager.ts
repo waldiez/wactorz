@@ -11,8 +11,8 @@
  * Persistence: mute state is stored in localStorage so it survives page reloads.
  */
 
-const LS_BEEP = "agentflow.beep";
-const LS_TTS  = "agentflow.tts";
+const LS_BEEP = "wactorz.beep";
+const LS_TTS  = "wactorz.tts";
 
 /** Patterns that indicate the user wants the reply spoken aloud. */
 const SPEAK_REQUEST = /\b(speak|read|say|tell me|voice|out ?loud|aloud|read ?(it|that|this) ?out)\b/i;

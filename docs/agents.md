@@ -99,15 +99,15 @@ Named after the *nautilus* shell (SSH = **Secure Shell**) and Jules Verne's subm
 ```
 @nautilus-agent ping deploy@myserver.com
 @nautilus-agent exec deploy@myserver.com df -h
-@nautilus-agent push ./static/app/ deploy@myserver.com:/opt/agentflow/static/app/
-@nautilus-agent exec deploy@myserver.com sudo systemctl restart agentflow
+@nautilus-agent push ./static/app/ deploy@myserver.com:/opt/wactorz/static/app/
+@nautilus-agent exec deploy@myserver.com sudo systemctl restart wactorz
 ```
 
 **Security**: arguments are never passed through a shell — each token is a discrete `Command::arg()`, preventing injection attacks.
 
 **Configuration** (`.env`):
 ```
-NAUTILUS_SSH_KEY=~/.ssh/agentflow_deploy
+NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy
 NAUTILUS_STRICT_HOST_KEYS=0
 NAUTILUS_CONNECT_TIMEOUT=10
 NAUTILUS_EXEC_TIMEOUT=120
@@ -123,7 +123,7 @@ NAUTILUS_RSYNC_FLAGS=
 | **Name** | `udx-agent` |
 | **Type** | `expert` |
 
-User and Developer Xpert.  Zero-LLM, always-available knowledge agent.  Answers questions about AgentFlow instantly from a built-in knowledge base — no API key needed.
+User and Developer Xpert.  Zero-LLM, always-available knowledge agent.  Answers questions about Wactorz instantly from a built-in knowledge base — no API key needed.
 
 **Commands:**
 
@@ -173,7 +173,7 @@ Base struct for ML-inference agents.  ONNX and Candle backends are currently stu
 
 ## Adding a new agent
 
-1. Create `rust/crates/agentflow-agents/src/my_agent.rs` — implement `Actor` trait (copy `io_agent.rs` as a template)
+1. Create `rust/crates/wactorz-agents/src/my_agent.rs` — implement `Actor` trait (copy `io_agent.rs` as a template)
 2. Export in `lib.rs`:
    ```rust
    pub mod my_agent;

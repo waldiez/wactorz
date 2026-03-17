@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Agents — AgentFlow</title>
-  <meta name="description" content="AgentFlow — Actor-model multi-agent AI framework"/>
+  <title>Agents — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
   <style>
@@ -100,11 +100,11 @@
 <body>
 <header class="topbar">
   <a href="../index.html" class="topbar-logo">
-    <div class="logo-mark"></div>AgentFlow
+    <div class="logo-mark"></div>Wactorz
   </a>
   <nav class="topbar-links">
-    <a href="https://github.com/waldiez/agentflow" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://pypi.org/project/agentflow/" target="_blank" rel="noopener">PyPI</a>
+    <a href="https://github.com/waldiez/wactorz" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/" target="_blank" rel="noopener">PyPI</a>
     <a href="../api/rust/" target="_blank">Rust Docs</a>
     <a href="../api/js/" target="_blank">JS Docs</a>
   </nav>
@@ -126,8 +126,8 @@
       <a href="../reference/mqtt_topics.html" class="">MQTT Topics</a>
       <a href="../reference/python-api.html" class="">Python API</a>
     </div>
-    <a href="https://waldiez.github.io/agentflow/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
-    <a href="https://waldiez.github.io/agentflow/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
+    <a href="https://waldiez.github.io/wactorz/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
+    <a href="https://waldiez.github.io/wactorz/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
   </aside>
   <main class="content">
 <h1 id="agents">Agents</h1>
@@ -307,13 +307,13 @@ LLM_API_KEY=sk-ant-...
 <p><strong>Examples</strong> (from the IO bar):</p>
 <div class="highlight"><pre><span></span><code><span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">ping</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="n">com</span>
 <span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="k">exec</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="n">com</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">-</span><span class="n">h</span>
-<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">push</span><span class="w"> </span><span class="p">.</span><span class="o">/</span><span class="n">frontend</span><span class="o">/</span><span class="n">dist</span><span class="o">/</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="nl">com</span><span class="p">:</span><span class="o">/</span><span class="n">opt</span><span class="o">/</span><span class="n">agentflow</span><span class="o">/</span><span class="n">frontend</span><span class="o">/</span><span class="n">dist</span><span class="o">/</span>
-<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="k">exec</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="n">com</span><span class="w"> </span><span class="n">sudo</span><span class="w"> </span><span class="n">systemctl</span><span class="w"> </span><span class="n">restart</span><span class="w"> </span><span class="n">agentflow</span>
+<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">push</span><span class="w"> </span><span class="p">.</span><span class="o">/</span><span class="n">frontend</span><span class="o">/</span><span class="n">dist</span><span class="o">/</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="nl">com</span><span class="p">:</span><span class="o">/</span><span class="n">opt</span><span class="o">/</span><span class="n">wactorz</span><span class="o">/</span><span class="n">frontend</span><span class="o">/</span><span class="n">dist</span><span class="o">/</span>
+<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="k">exec</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="n">com</span><span class="w"> </span><span class="n">sudo</span><span class="w"> </span><span class="n">systemctl</span><span class="w"> </span><span class="n">restart</span><span class="w"> </span><span class="n">wactorz</span>
 </code></pre></div>
 
 <p><strong>Security</strong>: arguments are never passed through a shell — each token is a discrete <code>Command::arg()</code>, preventing injection attacks.</p>
 <p><strong>Configuration</strong> (<code>.env</code>):</p>
-<div class="highlight"><pre><span></span><code>NAUTILUS_SSH_KEY=~/.ssh/agentflow_deploy
+<div class="highlight"><pre><span></span><code>NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy
 NAUTILUS_STRICT_HOST_KEYS=0
 NAUTILUS_CONNECT_TIMEOUT=10
 NAUTILUS_EXEC_TIMEOUT=120
@@ -340,7 +340,7 @@ NAUTILUS_RSYNC_FLAGS=
 </tr>
 </tbody>
 </table>
-<p>User and Developer Xpert.  Zero-LLM, always-available knowledge agent.  Answers questions about AgentFlow instantly from a built-in knowledge base — no API key needed.</p>
+<p>User and Developer Xpert.  Zero-LLM, always-available knowledge agent.  Answers questions about Wactorz instantly from a built-in knowledge base — no API key needed.</p>
 <p><strong>Commands:</strong></p>
 <table>
 <thead>
@@ -426,7 +426,7 @@ NAUTILUS_RSYNC_FLAGS=
 <hr />
 <h2 id="adding-a-new-agent">Adding a new agent</h2>
 <ol>
-<li>Create <code>rust/crates/agentflow-agents/src/my_agent.rs</code> — implement <code>Actor</code> trait (copy <code>io_agent.rs</code> as a template)</li>
+<li>Create <code>rust/crates/wactorz-agents/src/my_agent.rs</code> — implement <code>Actor</code> trait (copy <code>io_agent.rs</code> as a template)</li>
 <li>Export in <code>lib.rs</code>:
    <code>rust
    pub mod my_agent;
@@ -443,8 +443,8 @@ NAUTILUS_RSYNC_FLAGS=
 </div>
 
 <footer>
-  <span>AgentFlow &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/agentflow">GitHub</a></span>
-  <span>Built with <a href="https://github.com/waldiez/agentflow/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
 </footer>
 </body>
 </html>

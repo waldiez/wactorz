@@ -667,7 +667,7 @@ All three accept `host`, `user`, and either `password` or `key_path` for SSH aut
 ### Quick Start
 
 ```bash
-git clone https://github.com/your-org/wactorz
+git clone https://github.com/waldiez/wactorz
 cd wactorz
 python -m venv myenv
 

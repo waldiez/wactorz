@@ -62,8 +62,8 @@ list_entities
 unknown
 
 Guidelines:
-- recommend_hardware  → user wants hardware/device suggestions or compatibility info
-- create_automation   → user wants to create/add/build/make a new automation
+- recommend_hardware  → user only wants hardware/device suggestions, compatibility info, or to know what the existing hardware can do
+- create_automation   → user wants to create/add/build/make a new automation, even if they also mention choosing between existing sensors, lights, or devices
 - delete_automation   → user wants to delete/remove/disable an existing automation
 - edit_automation     → user wants to update/change/rename/modify an existing automation
 - list_automations    → user wants to see/list/show existing automations
@@ -71,6 +71,10 @@ Guidelines:
 - list_devices        → user wants to see/list/show devices
 - list_entities       → user wants to see/list/show entities
 - unknown             → request is unclear or not one of the supported Home Assistant operations
+
+Decision rule:
+- If the user asks you to create/build/add/set up an automation, classify as create_automation.
+- Use recommend_hardware only when the user is asking about hardware feasibility or hardware choices and is not asking you to actually create the automation.
 """
 
 HARDWARE_SELECTION_PROMPT = """You are a Home Assistant hardware selection specialist.
@@ -134,6 +138,90 @@ Output strict JSON object only with keys:
             "protocol": string,
             "required_domains": [string],
             "required_entities": [string]
+        }
+    ]
+}
+"""
+
+HARDWARE_RECOMMENDATION_PROMPT = """You are a Home Assistant hardware recommendation specialist.
+
+Task:
+- Answer pure hardware feasibility and hardware-selection requests.
+- Recommend only from currently discovered Home Assistant devices and entities.
+- NEVER suggest new, hypothetical, or missing hardware.
+- You MUST NOT create the automation. You ONLY explain whether the existing hardware can support it and which available hardware is best.
+
+Input:
+- user_request: natural language request
+- device_discovery: Home Assistant connection and discovered devices
+- device_discovery.devices: list of objects with this schema:
+    {
+        "device_id": string,
+        "name": string,
+        "manufacturer": string,
+        "model": string,
+        "area": string,
+        "entities": [
+            {
+                "entity_id": string,
+                "unique_id": string,
+                "platform": string,
+                "area": string,
+                "original_name": string,
+                "name": string
+            }
+        ]
+    }
+
+Rules:
+- If device_discovery.connected is false, return can_fulfill=false with empty primary_hardware and empty alternatives.
+- If device_discovery.connected is true, every recommendation must map to discovered entity_ids in required_entities.
+- Use only the discovered hardware. Do not mention anything unavailable.
+- Recommend hardware only when it can satisfy the specific requested behavior completely for the role you assign it.
+- If the user requests a specific capability or attribute, such as color, brightness, dimming, temperature, presence detection, motion detection, or a particular trigger or action type, only recommend hardware that supports that capability.
+- Do not recommend approximate matches or partial matches as primary_hardware or alternatives. Example: if the request is to turn a room light blue on entry, do not recommend simple on/off light switches or non-color lights.
+- If the request can be satisfied with current hardware, set can_fulfill=true and provide at least one primary_hardware item.
+- If the request can be partially satisfied with current hardware, set can_fulfill=false and still return the best matching existing hardware in primary_hardware.
+- If multiple suitable sensors exist, choose one for primary_hardware and put the other valid options in alternatives.
+- If multiple suitable lights exist, either choose all of them when the request clearly targets the whole room, or choose one and put the others in alternatives.
+- Alternatives must also be existing discovered hardware that fully satisfy the requested behavior.
+- Every alternative must clearly indicate which primary_hardware entity_id it is an alternative for.
+- Use the same role grouping when presenting alternatives. Example: an occupancy sensor can be an alternative to a selected motion sensor, and additional capable lights can be alternatives to the selected light.
+- If the request cannot be fully satisfied with current hardware, set can_fulfill=false and explain the gap using only the discovered hardware context.
+- Keep the explanation concise and concrete.
+
+Validation before final answer:
+1) If can_fulfill=true then len(primary_hardware) >= 1.
+2) Every primary_hardware item must include hardware, why, protocol, required_domains, and required_entities.
+3) Every alternatives item must include hardware, why, protocol, required_domains, required_entities, and alternative_to.
+4) Every required_entities value must be an entity_id present in device_discovery.devices.
+5) Every alternative_to value must exactly match one entity_id from primary_hardware.required_entities.
+6) If connected=false, both primary_hardware and alternatives must be empty.
+7) Do not include the same entity_id in both primary_hardware and alternatives.
+8) can_fulfill=false is allowed with non-empty primary_hardware when the request is only partially fulfillable.
+9) Never include hardware in primary_hardware or alternatives if it lacks a required user-requested capability.
+
+Output strict JSON object only with keys:
+{
+    "can_fulfill": boolean,
+    "result": string,
+    "primary_hardware": [
+        {
+            "hardware": string,
+            "why": string,
+            "protocol": string,
+            "required_domains": [string],
+            "required_entities": [string]
+        }
+    ],
+    "alternatives": [
+        {
+            "hardware": string,
+            "why": string,
+            "protocol": string,
+            "required_domains": [string],
+            "required_entities": [string],
+            "alternative_to": string  // must be a primary_hardware entity_id
         }
     ]
 }
@@ -412,6 +500,11 @@ class HomeAssistantAgent(LLMAgent):
             return "delete_automation"
         if any(w in lower for w in ("edit", "update automation", "change automation", "modify automation", "rename automation")):
             return "edit_automation"
+        if (
+            "automation" in lower
+            and any(w in lower for w in ("create", "add", "new", "build", "make", "set up"))
+        ):
+            return "create_automation"
         if any(w in lower for w in ("hardware", "what device", "what sensor", "what do i need", "compatible with")):
             return "recommend_hardware"
         if any(w in lower for w in ("create", "add automation", "new automation", "build automation", "make automation")):
@@ -565,7 +658,168 @@ class HomeAssistantAgent(LLMAgent):
 
     async def _recommend_hardware(self, text: str, devices: dict[str, Any]) -> dict[str, Any]:
         """Entry point for pure hardware-recommendation requests."""
-        return await self._select_hardware(text, devices)
+        connected = bool(devices.get("connected"))
+        available_entities = self._available_entity_ids(devices)
+
+        if not connected:
+            reason = str(devices.get("reason", "Device discovery unavailable.")).strip()
+            return self._format_available_hardware_result(
+                text,
+                devices,
+                [],
+                [],
+                False,
+                reason or "Device discovery unavailable.",
+            )
+
+        if self.llm is None:
+            return self._format_available_hardware_result(
+                text,
+                devices,
+                [],
+                [],
+                False,
+                "No LLM provider configured.",
+            )
+
+        payload = {
+            "user_request": text,
+            "device_discovery": {
+                "connected": connected,
+                "reason": devices.get("reason", ""),
+                "domains": sorted(list(devices.get("domains", set()) or set())),
+                "devices": devices.get("devices", []) or [],
+            },
+        }
+        user_msg = {"role": "user", "content": json.dumps(payload)}
+
+        try:
+            response, usage = await self.llm.complete(
+                messages=[user_msg],
+                system=HARDWARE_RECOMMENDATION_PROMPT,
+            )
+            print(f"LLM hardware recommendation response: {response}")
+            self._accumulate_usage(usage)
+            data = json.loads(self._strip_fences(response))
+            print(f"Parsed hardware recommendation data: {data}")
+            if not isinstance(data, dict):
+                raise ValueError("LLM response is not a JSON object")
+
+            primary = self._normalize_available_hardware_items(
+                data.get("primary_hardware") or [],
+                available_entities,
+            )
+            alternatives = self._normalize_available_hardware_items(
+                data.get("alternatives") or [],
+                available_entities,
+            )
+            alternatives = self._filter_hardware_alternatives(primary, alternatives)
+            can_fulfill = bool(data.get("can_fulfill"))
+            fallback_text = str(data.get("result", "")).strip()
+
+            if can_fulfill and not primary:
+                correction = {
+                    "role": "user",
+                    "content": (
+                        "Your previous JSON is invalid: can_fulfill=true but primary_hardware is empty or not grounded in discovered entities. "
+                        "Return corrected JSON only. Either provide at least one valid primary_hardware item with discovered entity_ids or set can_fulfill=false."
+                    ),
+                }
+                retry, usage = await self.llm.complete(
+                    messages=[user_msg, {"role": "assistant", "content": response}, correction],
+                    system=HARDWARE_RECOMMENDATION_PROMPT,
+                )
+                self._accumulate_usage(usage)
+                retry_data = json.loads(self._strip_fences(retry))
+                if isinstance(retry_data, dict):
+                    primary = self._normalize_available_hardware_items(
+                        retry_data.get("primary_hardware") or [],
+                        available_entities,
+                    )
+                    alternatives = self._normalize_available_hardware_items(
+                        retry_data.get("alternatives") or [],
+                        available_entities,
+                    )
+                    alternatives = self._filter_hardware_alternatives(primary, alternatives)
+                    can_fulfill = bool(retry_data.get("can_fulfill"))
+                    fallback_text = str(retry_data.get("result", "")).strip()
+
+            if can_fulfill and not primary:
+                can_fulfill = False
+                fallback_text = (
+                    fallback_text
+                    or "No grounded hardware recommendations could be verified from the discovered entities."
+                )
+
+            return self._format_available_hardware_result(
+                text,
+                devices,
+                primary,
+                alternatives,
+                can_fulfill,
+                fallback_text,
+            )
+
+        except Exception as exc:
+            logger.error("[%s] Hardware recommendation failed: %s", self.name, exc, exc_info=True)
+            return self._format_available_hardware_result(
+                text,
+                devices,
+                [],
+                [],
+                False,
+                f"Hardware recommendation error: {exc}",
+            )
+
+    def _format_available_hardware_result(
+        self,
+        text: str,
+        devices: dict[str, Any],
+        primary_hardware: list[dict[str, Any]],
+        alternatives: list[dict[str, Any]],
+        can_fulfill: bool,
+        fallback_text: str = "",
+    ) -> dict[str, Any]:
+        connected = bool(devices.get("connected"))
+        has_primary = bool(primary_hardware)
+
+        lines = [f"Can be done with existing hardware: {'yes' if can_fulfill and has_primary else 'no'}." ]
+        if has_primary:
+            lines.append("Primary hardware:")
+            lines.extend(self._hardware_summary_lines(primary_hardware))
+            if alternatives:
+                lines.append("Alternatives:")
+                lines.extend(self._hardware_summary_lines(alternatives))
+            if can_fulfill:
+                lines.append("Recommendations are grounded only in currently discovered Home Assistant entities.")
+            elif fallback_text:
+                lines.append(fallback_text)
+            else:
+                lines.append("The selected hardware covers only part of the request based on currently discovered Home Assistant entities.")
+        else:
+            lines.append(
+                fallback_text
+                or (
+                    "No combination of the currently discovered hardware can satisfy this request."
+                    if connected
+                    else "Device discovery unavailable."
+                )
+            )
+            if alternatives:
+                lines.append("Other related available hardware:")
+                lines.extend(self._hardware_summary_lines(alternatives))
+
+        return {
+            "can_fulfill": bool(can_fulfill and has_primary),
+            "task": text,
+            "request": text,
+            "hardware": primary_hardware,
+            "primary_hardware": primary_hardware,
+            "alternatives": alternatives,
+            "based_on_available_hardware": connected,
+            "result": "\n".join(lines),
+            "device_discovery": {"connected": connected, "reason": devices.get("reason", "")},
+        }
 
     def _format_hardware_result(
         self,
@@ -1030,6 +1284,138 @@ class HomeAssistantAgent(LLMAgent):
         if not isinstance(automation.get("mode", "single"), str) or not automation.get("mode", "single").strip():
             return "automation.mode must be a non-empty string"
         return None
+
+    @staticmethod
+    def _available_entity_ids(devices: dict[str, Any]) -> set[str]:
+        available: set[str] = set()
+        for device in devices.get("devices", []) or []:
+            if not isinstance(device, dict):
+                continue
+            for entity in device.get("entities", []) or []:
+                if not isinstance(entity, dict):
+                    continue
+                entity_id = str(entity.get("entity_id", "")).strip()
+                if entity_id:
+                    available.add(entity_id)
+        return available
+
+    @staticmethod
+    def _normalize_available_hardware_items(
+        items: list[dict[str, Any]],
+        available_entities: set[str],
+    ) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            entity_ids: list[str] = []
+            for entity_id in item.get("required_entities", []) or []:
+                normalized_entity = str(entity_id).strip()
+                if (
+                    normalized_entity
+                    and normalized_entity in available_entities
+                    and normalized_entity not in entity_ids
+                ):
+                    entity_ids.append(normalized_entity)
+
+            if not entity_ids:
+                continue
+
+            hardware_name = str(item.get("hardware", "")).strip()
+            why = str(item.get("why", "")).strip()
+            protocol = str(item.get("protocol", "")).strip() or "N/A"
+            required_domains = [
+                str(domain).strip()
+                for domain in item.get("required_domains", []) or []
+                if str(domain).strip()
+            ]
+            if not required_domains:
+                required_domains = sorted({entity_id.split(".", 1)[0] for entity_id in entity_ids if "." in entity_id})
+
+            if not hardware_name or not required_domains:
+                continue
+
+            identity = (hardware_name.lower(), tuple(entity_ids))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            normalized.append(
+                {
+                    "hardware": hardware_name,
+                    "why": why,
+                    "protocol": protocol,
+                    "required_domains": required_domains,
+                    "required_entities": entity_ids,
+                    **(
+                        {"alternative_to": str(item.get("alternative_to", "")).strip()}
+                        if str(item.get("alternative_to", "")).strip()
+                        else {}
+                    ),
+                }
+            )
+
+        return normalized
+
+    @staticmethod
+    def _filter_hardware_alternatives(
+        primary_hardware: list[dict[str, Any]],
+        alternatives: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        primary_entities = {
+            str(entity_id).strip()
+            for item in primary_hardware
+            if isinstance(item, dict)
+            for entity_id in item.get("required_entities", []) or []
+            if str(entity_id).strip()
+        }
+        filtered: list[dict[str, Any]] = []
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+
+        for item in alternatives:
+            if not isinstance(item, dict):
+                continue
+            alternative_to = str(item.get("alternative_to", "")).strip()
+            entity_ids = [
+                str(entity_id).strip()
+                for entity_id in item.get("required_entities", []) or []
+                if str(entity_id).strip()
+            ]
+            if (
+                not entity_ids
+                or not alternative_to
+                or alternative_to not in primary_entities
+                or any(entity_id in primary_entities for entity_id in entity_ids)
+            ):
+                continue
+            identity = (str(item.get("hardware", "")).strip().lower(), tuple(entity_ids))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            filtered.append(item)
+
+        return filtered
+
+    @staticmethod
+    def _hardware_summary_lines(items: list[dict[str, Any]]) -> list[str]:
+        lines: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            entities = [str(entity_id) for entity_id in item.get("required_entities", []) or [] if str(entity_id)]
+            line = f"- {item.get('hardware', '?')} ({item.get('protocol', 'N/A')})"
+            alternative_to = str(item.get("alternative_to", "")).strip()
+            if alternative_to:
+                line += f" [alternative to {alternative_to}]"
+            why = str(item.get("why", "")).strip()
+            if why:
+                line += f" — {why}"
+            if entities:
+                line += f" Available: {', '.join(entities[:3])}"
+            lines.append(line)
+        return lines
 
     @staticmethod
     def _extract_entity_ids_from_hardware(hardware_result: dict[str, Any]) -> list[str]:

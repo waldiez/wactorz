@@ -412,6 +412,7 @@ class HomeAssistantAgent(LLMAgent):
     async def _process(self, text: str) -> dict[str, Any]:
         """Classify intent then route to the appropriate handler."""
         action = await self._classify_action(text)
+        logger.info("[%s] Classified action: %s", self.name, action)
 
         if action == "list_areas":
             return await self._list_areas()
@@ -437,6 +438,7 @@ class HomeAssistantAgent(LLMAgent):
 
         if action == "recommend_hardware":
             devices = await self._get_devices()
+            logger.info("[%s] Got devices from Home Assistant", self.name)
             return await self._recommend_hardware(text, devices)
 
         if action == "create_automation":
@@ -468,6 +470,7 @@ class HomeAssistantAgent(LLMAgent):
         }
 
         if self.llm is None:
+            logger.warning("[%s] No LLM provider configured; skipping action classification LLM call.", self.name)
             return self._classify_action_heuristic(text)
 
         try:
@@ -698,10 +701,9 @@ class HomeAssistantAgent(LLMAgent):
                 messages=[user_msg],
                 system=HARDWARE_RECOMMENDATION_PROMPT,
             )
-            print(f"LLM hardware recommendation response: {response}")
+            logger.info("[%s] Received hardware recommendation response from LLM.", self.name)
             self._accumulate_usage(usage)
             data = json.loads(self._strip_fences(response))
-            print(f"Parsed hardware recommendation data: {data}")
             if not isinstance(data, dict):
                 raise ValueError("LLM response is not a JSON object")
 

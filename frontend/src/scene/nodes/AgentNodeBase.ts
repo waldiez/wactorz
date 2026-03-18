@@ -50,8 +50,14 @@ export abstract class AgentNodeBase {
    * @param yOffset  Distance above the mesh centre (default 0.8).
    */
   protected createLabel(yOffset = 0.8): void {
-    const texW = 512, texH = 96;
-    const texture = new DynamicTexture(`label-tex-${this.info.id}`, { width: texW, height: texH }, this.scene, true);
+    const texW = 512,
+      texH = 96;
+    const texture = new DynamicTexture(
+      `label-tex-${this.info.id}`,
+      { width: texW, height: texH },
+      this.scene,
+      true,
+    );
     texture.hasAlpha = true;
 
     const ctx = texture.getContext() as CanvasRenderingContext2D;
@@ -62,11 +68,17 @@ export abstract class AgentNodeBase {
     // subtle dark halo for readability
     ctx.shadowColor = "rgba(0,0,0,0.8)";
     ctx.shadowBlur = 6;
-    ctx.fillStyle = this.isMainActor ? "rgba(255, 210, 100, 0.95)" : "rgba(180, 210, 255, 0.9)";
+    ctx.fillStyle = this.isMainActor
+      ? "rgba(255, 210, 100, 0.95)"
+      : "rgba(180, 210, 255, 0.9)";
     ctx.fillText(this.info.name, texW / 2, texH / 2);
     texture.update();
 
-    const plane = MeshBuilder.CreatePlane(`label-${this.info.id}`, { width: 1.8, height: 0.34 }, this.scene);
+    const plane = MeshBuilder.CreatePlane(
+      `label-${this.info.id}`,
+      { width: 1.8, height: 0.34 },
+      this.scene,
+    );
     plane.parent = this.mesh;
     plane.position.y = yOffset;
     plane.billboardMode = Mesh.BILLBOARDMODE_ALL;
@@ -119,7 +131,8 @@ export abstract class AgentNodeBase {
   private static showTooltip(info: AgentInfo): void {
     const el = document.getElementById("node-tooltip");
     if (!el) return;
-    const state = typeof info.state === "object" ? "failed" : (info.state ?? "unknown");
+    const state =
+      typeof info.state === "object" ? "failed" : (info.state ?? "unknown");
     const hb = info.lastHeartbeatAt
       ? new Date(info.lastHeartbeatAt).toLocaleTimeString()
       : "—";
@@ -159,8 +172,12 @@ export abstract class AgentNodeBase {
 
   // ── Convenience getters ───────────────────────────────────────────────────
 
-  get id(): string { return this.info.id; }
-  get agentName(): string { return this.info.name; }
+  get id(): string {
+    return this.info.id;
+  }
+  get agentName(): string {
+    return this.info.name;
+  }
 
   get position() {
     return this.mesh.position;

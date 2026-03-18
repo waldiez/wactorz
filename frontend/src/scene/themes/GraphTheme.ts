@@ -31,7 +31,9 @@ export class GraphTheme extends ThemeBase {
   private starParticles: ParticleSystem | null = null;
 
   /** Spring-force layout: positions evolve over time. */
-  private layoutObserver: ReturnType<Scene["onBeforeRenderObservable"]["add"]> | null = null;
+  private layoutObserver: ReturnType<
+    Scene["onBeforeRenderObservable"]["add"]
+  > | null = null;
 
   setup(): void {
     // ── Ambient light ─────────────────────────────────────────────────────────
@@ -88,9 +90,15 @@ export class GraphTheme extends ThemeBase {
   }
 
   addAgent(agent: AgentInfo): void {
-    if (this.nodes.has(agent.id)) { this.updateAgent(agent); return; }
+    if (this.nodes.has(agent.id)) {
+      this.updateAgent(agent);
+      return;
+    }
 
-    const isMain = agent.name === "main-actor" || agent.agentType === "orchestrator" || agent.agentType === "main";
+    const isMain =
+      agent.name === "main-actor" ||
+      agent.agentType === "orchestrator" ||
+      agent.agentType === "main";
 
     // Place new agents at a random position around the scene centre
     const theta = Math.random() * Math.PI * 2;
@@ -107,7 +115,9 @@ export class GraphTheme extends ThemeBase {
     const node = new GraphNode(agent, this.scene, finalPosition, isMain);
     node.onClick = (info) => {
       document.dispatchEvent(
-        new CustomEvent<{ agent: AgentInfo }>("agent-selected", { detail: { agent: info } }),
+        new CustomEvent<{ agent: AgentInfo }>("agent-selected", {
+          detail: { agent: info },
+        }),
       );
     };
 
@@ -132,7 +142,9 @@ export class GraphTheme extends ThemeBase {
       const a = entries[i];
       if (!a || a.isMainActor) continue; // main actor is pinned
 
-      let fx = 0, fy = 0, fz = 0;
+      let fx = 0,
+        fy = 0,
+        fz = 0;
 
       // Repulsion from other nodes
       for (let j = 0; j < entries.length; j++) {

@@ -10,29 +10,38 @@
 
 import type { ThemeChangeEvent } from "../types/agent";
 
-export type ThemeName = "graph" | "galaxy" | "cards" | "grave" | "social" | "fin";
+export type ThemeName =
+  | "graph"
+  | "galaxy"
+  | "cards"
+  | "grave"
+  | "social"
+  | "fin";
 const STORAGE_KEY = "wactorz-theme";
 
 export class ThemeSwitcher {
-  private buttons: Partial<Record<ThemeName, HTMLButtonElement | undefined | null>>;
+  private buttons: Partial<
+    Record<ThemeName, HTMLButtonElement | undefined | null>
+  >;
   private current: ThemeName = "social";
 
   constructor() {
     const get = (id: string, fb: string | null = null) =>
-      (document.getElementById(id) as HTMLButtonElement | undefined | null) ?? undefined;
+      (document.getElementById(id) as HTMLButtonElement | undefined | null) ??
+      undefined;
 
     this.buttons = {
-      graph:  get("btn-graph", null),
+      graph: get("btn-graph", null),
       galaxy: get("btn-galaxy", null),
-      cards:  get("btn-cards", null),
-      grave:  get("btn-grave", null),
+      cards: get("btn-cards", null),
+      grave: get("btn-grave", null),
       social: get("btn-social", "default"),
-      fin:    get("btn-fin", null),
+      fin: get("btn-fin", null),
     };
 
     (Object.keys(this.buttons) as ThemeName[]).forEach((name) => {
       // if (this.buttons[name]) {
-        this.buttons[name]?.addEventListener("click", () => this.switchTo(name));
+      this.buttons[name]?.addEventListener("click", () => this.switchTo(name));
       // }
     });
 
@@ -71,11 +80,11 @@ export class ThemeSwitcher {
   }
 
   private updateButtons(): void {
-    this.buttons.graph?.classList.toggle("active",  this.current === "graph");
+    this.buttons.graph?.classList.toggle("active", this.current === "graph");
     this.buttons.galaxy?.classList.toggle("active", this.current === "galaxy");
-    this.buttons.cards?.classList.toggle("active",  this.current === "cards");
-    this.buttons.grave?.classList.toggle("active",  this.current === "grave");
+    this.buttons.cards?.classList.toggle("active", this.current === "cards");
+    this.buttons.grave?.classList.toggle("active", this.current === "grave");
     this.buttons.social?.classList.toggle("active", this.current === "social");
-    this.buttons.fin?.classList.toggle("active",    this.current === "fin");
+    this.buttons.fin?.classList.toggle("active", this.current === "fin");
   }
 }

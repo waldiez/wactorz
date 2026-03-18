@@ -60,6 +60,8 @@ fmt: ## Format Rust + TypeScript
 	cargo fmt
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run fmt 2>/dev/null || $(PKG_MGR) x prettier --write "src/**/*.ts"
 
+format: fmt ## Format Rust + TypeScript
+
 lint: ## Clippy + TS typecheck
 	cargo clippy -- -D warnings
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run typecheck

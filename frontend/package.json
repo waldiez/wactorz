@@ -10,6 +10,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "fmt": "bun x prettier --write --list-different \"src/**/*.ts\"",
+    "format": "bun fmt",
     "docs": "typedoc --out ../site/api/js --entryPointStrategy expand src --name \"Wactorz JS\" --readme none --hideGenerator"
   },
   "dependencies": {

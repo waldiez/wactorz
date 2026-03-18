@@ -21,7 +21,12 @@ import {
   Vector3,
 } from "@babylonjs/core";
 
-import type { AgentInfo, HeartbeatPayload, AlertPayload, SpawnPayload } from "../types/agent";
+import type {
+  AgentInfo,
+  HeartbeatPayload,
+  AlertPayload,
+  SpawnPayload,
+} from "../types/agent";
 import { ThemeBase } from "./themes/ThemeBase";
 import { GraphTheme } from "./themes/GraphTheme";
 import { GalaxyTheme } from "./themes/GalaxyTheme";
@@ -31,7 +36,14 @@ import { CardDashboard } from "../ui/CardDashboard";
 import { SocialDashboard } from "../ui/SocialDashboard";
 import { FinDashboard } from "../ui/FinDashboard";
 
-export type ThemeName = "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin";
+export type ThemeName =
+  | "graph"
+  | "galaxy"
+  | "cards"
+  | "cards-3d"
+  | "grave"
+  | "social"
+  | "fin";
 
 // ── NullTheme — minimal placeholder used when HTML overlays are active ─────────
 
@@ -46,7 +58,11 @@ class NullTheme extends ThemeBase {
   setup(): void {
     this.scene.clearColor = new Color4(0.05, 0.08, 0.14, 1);
     // Gentle ambient so the canvas background looks intentional
-    const light = new HemisphericLight("null-ambient", new Vector3(0, 1, 0), this.scene);
+    const light = new HemisphericLight(
+      "null-ambient",
+      new Vector3(0, 1, 0),
+      this.scene,
+    );
     light.intensity = 0.2;
   }
 
@@ -55,7 +71,7 @@ class NullTheme extends ThemeBase {
     l?.dispose();
   }
 
-  addAgent(): void { }
+  addAgent(): void {}
 }
 
 // ── SceneManager ──────────────────────────────────────────────────────────────
@@ -80,7 +96,7 @@ export class SceneManager {
     });
 
     this.scene = new Scene(this.engine);
-    this.scene.clearColor.set(0.02, 0.03, 0.10, 1); // deep indigo
+    this.scene.clearColor.set(0.02, 0.03, 0.1, 1); // deep indigo
 
     // ── Camera ────────────────────────────────────────────────────────────────
     this.camera = new ArcRotateCamera(
@@ -115,8 +131,11 @@ export class SceneManager {
   setTheme(name: ThemeName): void {
     if (this.activeTheme.name === name) return;
 
-    const leavingHTML = ["cards", "social", "fin"].includes(this.activeTheme.name);
-    const enteringHTML = name === "cards" || name === "social" || name === "fin";
+    const leavingHTML = ["cards", "social", "fin"].includes(
+      this.activeTheme.name,
+    );
+    const enteringHTML =
+      name === "cards" || name === "social" || name === "fin";
     const entering3D = name === "cards-3d";
 
     // Restore camera when leaving any HTML/cards mode back to a 3D view
@@ -129,9 +148,18 @@ export class SceneManager {
     this.activeTheme.teardown();
 
     // Tear down whichever HTML overlay is currently active
-    if (this.cardDashboard)   { this.cardDashboard.hide();   this.cardDashboard = null; }
-    if (this.socialDashboard) { this.socialDashboard.hide(); this.socialDashboard = null; }
-    if (this.finDashboard)    { this.finDashboard.hide();    this.finDashboard = null; }
+    if (this.cardDashboard) {
+      this.cardDashboard.hide();
+      this.cardDashboard = null;
+    }
+    if (this.socialDashboard) {
+      this.socialDashboard.hide();
+      this.socialDashboard = null;
+    }
+    if (this.finDashboard) {
+      this.finDashboard.hide();
+      this.finDashboard = null;
+    }
 
     if (name === "cards") {
       this.activeTheme = new NullTheme(this.scene, "cards");
@@ -187,9 +215,9 @@ export class SceneManager {
     for (const [oldId, oldAgent] of this.agents) {
       if (oldAgent.name === agent.name && oldId !== agent.id) {
         this.agents.delete(oldId);
-        if (this.cardDashboard)       this.cardDashboard.removeAgent(oldId);
+        if (this.cardDashboard) this.cardDashboard.removeAgent(oldId);
         else if (this.socialDashboard) this.socialDashboard.removeAgent(oldId);
-        else                           this.activeTheme.removeAgent(oldId);
+        else this.activeTheme.removeAgent(oldId);
         break;
       }
     }
@@ -199,22 +227,30 @@ export class SceneManager {
     const merged: AgentInfo = existing ? { ...existing, ...agent } : agent;
     this.agents.set(agent.id, merged);
     if (this.cardDashboard) {
-      existing ? this.cardDashboard.updateAgent(merged) : this.cardDashboard.addAgent(merged);
+      existing
+        ? this.cardDashboard.updateAgent(merged)
+        : this.cardDashboard.addAgent(merged);
     } else if (this.socialDashboard) {
-      existing ? this.socialDashboard.updateAgent(merged) : this.socialDashboard.addAgent(merged);
+      existing
+        ? this.socialDashboard.updateAgent(merged)
+        : this.socialDashboard.addAgent(merged);
     } else if (this.finDashboard) {
-      existing ? this.finDashboard.updateAgent(merged) : this.finDashboard.addAgent(merged);
+      existing
+        ? this.finDashboard.updateAgent(merged)
+        : this.finDashboard.addAgent(merged);
     } else {
-      existing ? this.activeTheme.updateAgent(merged) : this.activeTheme.addAgent(merged);
+      existing
+        ? this.activeTheme.updateAgent(merged)
+        : this.activeTheme.addAgent(merged);
     }
   }
 
   removeAgent(id: string): void {
     this.agents.delete(id);
-    if (this.cardDashboard)        this.cardDashboard.removeAgent(id);
+    if (this.cardDashboard) this.cardDashboard.removeAgent(id);
     else if (this.socialDashboard) this.socialDashboard.removeAgent(id);
-    else if (this.finDashboard)    this.finDashboard.removeAgent(id);
-    else                           this.activeTheme.removeAgent(id);
+    else if (this.finDashboard) this.finDashboard.removeAgent(id);
+    else this.activeTheme.removeAgent(id);
   }
 
   onHeartbeat(payload: HeartbeatPayload): void {
@@ -222,29 +258,39 @@ export class SceneManager {
     if (agent) {
       agent.state = payload.state;
       agent.lastHeartbeatAt = new Date(payload.timestampMs).toISOString();
-      if (payload.cpu !== undefined)       agent.cpu = payload.cpu;
+      if (payload.cpu !== undefined) agent.cpu = payload.cpu;
       if (payload.memory_mb !== undefined) agent.mem = payload.memory_mb;
-      if (payload.task !== undefined)      agent.task = payload.task;
-      if (this.cardDashboard)        this.cardDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
-      else if (this.socialDashboard) this.socialDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
-      else if (this.finDashboard)    this.finDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
-      else                           this.activeTheme.onHeartbeat(payload.agentId);
+      if (payload.task !== undefined) agent.task = payload.task;
+      if (this.cardDashboard)
+        this.cardDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
+      else if (this.socialDashboard)
+        this.socialDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
+      else if (this.finDashboard)
+        this.finDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
+      else this.activeTheme.onHeartbeat(payload.agentId);
     } else {
       this.addOrUpdateAgent({
         id: payload.agentId,
         name: payload.agentName,
         state: payload.state,
         protected: false,
-        lastHeartbeatAt: new Date(Number.isFinite(payload.timestampMs) ? payload.timestampMs : Date.now()).toISOString(),
+        lastHeartbeatAt: new Date(
+          Number.isFinite(payload.timestampMs)
+            ? payload.timestampMs
+            : Date.now(),
+        ).toISOString(),
       });
     }
   }
 
   onAlert(payload: AlertPayload): void {
-    if (this.cardDashboard)        this.cardDashboard.showAlert(payload.agentId, payload.severity);
-    else if (this.socialDashboard) this.socialDashboard.showAlert(payload.agentId, payload.severity);
-    else if (this.finDashboard)    this.finDashboard.showAlert(payload.agentId, payload.severity);
-    else                           this.activeTheme.onAlert(payload.agentId, payload.severity);
+    if (this.cardDashboard)
+      this.cardDashboard.showAlert(payload.agentId, payload.severity);
+    else if (this.socialDashboard)
+      this.socialDashboard.showAlert(payload.agentId, payload.severity);
+    else if (this.finDashboard)
+      this.finDashboard.showAlert(payload.agentId, payload.severity);
+    else this.activeTheme.onAlert(payload.agentId, payload.severity);
   }
 
   onChat(fromName: string, toName: string): void {
@@ -255,11 +301,12 @@ export class SceneManager {
       if (agent.name === toName) toId = agent.id;
     }
     if (!fromId) return;
-    if (this.cardDashboard)        this.cardDashboard.onChat(fromId, toId ?? "");
-    else if (this.socialDashboard) this.socialDashboard.onChat(fromId, toId ?? "");
-    else if (this.finDashboard)    this.finDashboard.onChat(fromId, toId ?? "");
-    else if (toId)                 this.activeTheme.onChat(fromId, toId);
-    else                           this.activeTheme.onHeartbeat(fromId);
+    if (this.cardDashboard) this.cardDashboard.onChat(fromId, toId ?? "");
+    else if (this.socialDashboard)
+      this.socialDashboard.onChat(fromId, toId ?? "");
+    else if (this.finDashboard) this.finDashboard.onChat(fromId, toId ?? "");
+    else if (toId) this.activeTheme.onChat(fromId, toId);
+    else this.activeTheme.onHeartbeat(fromId);
   }
 
   onSpawn(payload: SpawnPayload): void {
@@ -293,10 +340,15 @@ export class SceneManager {
     const ease = new CubicEase();
     ease.setEasingMode(EasingFunction.EASINGMODE_EASEINOUT);
     Animation.CreateAndStartAnimation(
-      "camPan", this.camera, "target",
-      30, 30,
-      this.camera.target.clone(), node.position.clone(),
-      Animation.ANIMATIONLOOPMODE_CONSTANT, ease,
+      "camPan",
+      this.camera,
+      "target",
+      30,
+      30,
+      this.camera.target.clone(),
+      node.position.clone(),
+      Animation.ANIMATIONLOOPMODE_CONSTANT,
+      ease,
     );
   }
 

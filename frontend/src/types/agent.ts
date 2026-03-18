@@ -109,7 +109,7 @@ export interface SpawnPayload {
 export interface ChatMessage {
   id: string;
   from: "user" | string; // "user" or agent name
-  to: string;            // agent name or "user"
+  to: string; // agent name or "user"
   content: string;
   timestampMs: number;
 }
@@ -122,8 +122,8 @@ export interface AgentSelectedEvent {
 }
 
 /** Custom DOM event payload for theme switching. */
-// 
-  // theme: "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin";
+//
+// theme: "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin";
 export interface ThemeChangeEvent {
   theme: "graph" | "galaxy" | "cards" | "grave" | "social" | "fin";
 }

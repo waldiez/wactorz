@@ -24,50 +24,66 @@ function dicebearFor(name: string): string {
 }
 
 export class ChatPanel {
-  private panel:         HTMLElement;
-  private agentNameEl:   HTMLElement;
+  private panel: HTMLElement;
+  private agentNameEl: HTMLElement;
   private agentStatusEl: HTMLElement;
-  private avatarEl:      HTMLImageElement;
-  private closeBtn:      HTMLButtonElement;
-  private messagesEl:    HTMLElement;
+  private avatarEl: HTMLImageElement;
+  private closeBtn: HTMLButtonElement;
+  private messagesEl: HTMLElement;
 
-  private selectedAgent:   AgentInfo | null = null;
-  private activeAgentName: string | null    = null;
+  private selectedAgent: AgentInfo | null = null;
+  private activeAgentName: string | null = null;
 
   /** Per-agent conversation history.  Key = agent name. */
   private threads: Map<string, ChatMessage[]> = new Map();
 
   /** Active typing bubbles keyed by agent name. */
-  private typingBubbles:  Map<string, HTMLElement>                    = new Map();
-  private typingTimeouts: Map<string, ReturnType<typeof setTimeout>>  = new Map();
+  private typingBubbles: Map<string, HTMLElement> = new Map();
+  private typingTimeouts: Map<string, ReturnType<typeof setTimeout>> =
+    new Map();
 
   /** Streaming state — one active stream at a time. */
-  private _streamRow:         HTMLElement | null = null;
-  private _streamBody:        HTMLElement | null = null;
-  private _streamFrom:        string | null      = null;
-  private _streamText:        string             = "";
-  private _lastStreamedText:  string             = "";
+  private _streamRow: HTMLElement | null = null;
+  private _streamBody: HTMLElement | null = null;
+  private _streamFrom: string | null = null;
+  private _streamText: string = "";
+  private _lastStreamedText: string = "";
 
   constructor() {
-    this.panel         = document.getElementById("chat-panel")!;
-    this.agentNameEl   = document.getElementById("panel-agent-name")!;
+    this.panel = document.getElementById("chat-panel")!;
+    this.agentNameEl = document.getElementById("panel-agent-name")!;
     this.agentStatusEl = document.getElementById("panel-agent-status")!;
-    this.avatarEl      = document.getElementById("panel-agent-avatar") as HTMLImageElement;
-    this.closeBtn      = document.getElementById("panel-close") as HTMLButtonElement;
-    this.messagesEl    = document.getElementById("chat-messages")!;
+    this.avatarEl = document.getElementById(
+      "panel-agent-avatar",
+    ) as HTMLImageElement;
+    this.closeBtn = document.getElementById("panel-close") as HTMLButtonElement;
+    this.messagesEl = document.getElementById("chat-messages")!;
 
     this.closeBtn.addEventListener("click", () => this.close());
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.close(); });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") this.close();
+    });
 
     // Swipe-right to close (mobile)
     let _touchX = 0;
-    this.panel.addEventListener("touchstart", (e) => { _touchX = e.touches[0]?.clientX ?? 0; }, { passive: true });
-    this.panel.addEventListener("touchend",   (e) => { if ((e.changedTouches[0]?.clientX ?? 0) - _touchX > 60) this.close(); }, { passive: true });
+    this.panel.addEventListener(
+      "touchstart",
+      (e) => {
+        _touchX = e.touches[0]?.clientX ?? 0;
+      },
+      { passive: true },
+    );
+    this.panel.addEventListener(
+      "touchend",
+      (e) => {
+        if ((e.changedTouches[0]?.clientX ?? 0) - _touchX > 60) this.close();
+      },
+      { passive: true },
+    );
 
     document.addEventListener("agent-selected", (e) => {
       this.open((e as CustomEvent<{ agent: AgentInfo }>).detail.agent);
     });
-
   }
 
   // ── Public ─────────────────────────────────────────────────────────────────
@@ -75,15 +91,15 @@ export class ChatPanel {
   /** Open or switch to the given agent's thread. */
   open(agent: AgentInfo): void {
     const prev = this.activeAgentName;
-    this.selectedAgent   = agent;
+    this.selectedAgent = agent;
     this.activeAgentName = agent.name;
 
     // Header update
-    this.agentNameEl.textContent   = agent.name;
+    this.agentNameEl.textContent = agent.name;
     this.agentStatusEl.textContent =
       typeof agent.state === "object" ? "failed" : (agent.state ?? "active");
-    this.avatarEl.src           = agentImageGen.get(agent);
-    this.avatarEl.alt           = agent.name;
+    this.avatarEl.src = agentImageGen.get(agent);
+    this.avatarEl.alt = agent.name;
     this.avatarEl.style.opacity = "1";
 
     // Clear unread notification for this agent
@@ -100,7 +116,9 @@ export class ChatPanel {
     }
 
     document.dispatchEvent(
-      new CustomEvent<{ agent: AgentInfo }>("panel-opened", { detail: { agent } }),
+      new CustomEvent<{ agent: AgentInfo }>("panel-opened", {
+        detail: { agent },
+      }),
     );
   }
 
@@ -110,10 +128,10 @@ export class ChatPanel {
    */
   ensureOpen(hint = "Chat"): void {
     if (this.panel.classList.contains("open")) return;
-    this.agentNameEl.textContent   = hint;
+    this.agentNameEl.textContent = hint;
     this.agentStatusEl.textContent = "active";
-    this.avatarEl.src           = dicebearFor(hint);
-    this.avatarEl.alt           = hint;
+    this.avatarEl.src = dicebearFor(hint);
+    this.avatarEl.alt = hint;
     this.avatarEl.style.opacity = "1";
     if (!this.activeAgentName) this.activeAgentName = hint;
     this.renderThread(hint, false);
@@ -147,7 +165,9 @@ export class ChatPanel {
         (m) => m.from !== "user" && m.from !== "system",
       ).length;
       document.dispatchEvent(
-        new CustomEvent("agent-unread", { detail: { name: key, count: agentMsgCount } }),
+        new CustomEvent("agent-unread", {
+          detail: { name: key, count: agentMsgCount },
+        }),
       );
     }
   }
@@ -158,9 +178,15 @@ export class ChatPanel {
     }
   }
 
-  get activeAgent(): AgentInfo | null { return this.selectedAgent; }
+  get activeAgent(): AgentInfo | null {
+    return this.selectedAgent;
+  }
   /** The full text of the most recently finalized stream (cleared after read). */
-  get lastStreamedText(): string { const t = this._lastStreamedText; this._lastStreamedText = ""; return t; }
+  get lastStreamedText(): string {
+    const t = this._lastStreamedText;
+    this._lastStreamedText = "";
+    return t;
+  }
 
   // ── Streaming ───────────────────────────────────────────────────────────────
 
@@ -179,15 +205,15 @@ export class ChatPanel {
 
       const avatar = document.createElement("img");
       avatar.className = "msg-avatar";
-      avatar.src       = dicebearFor(from);
-      avatar.alt       = from;
-      avatar.loading   = "lazy";
+      avatar.src = dicebearFor(from);
+      avatar.alt = from;
+      avatar.loading = "lazy";
 
       const bubble = document.createElement("div");
       bubble.className = "msg agent";
 
       const meta = document.createElement("div");
-      meta.className   = "msg-meta";
+      meta.className = "msg-meta";
       meta.textContent = `${from} · ${new Date().toLocaleTimeString()}`;
 
       const body = document.createElement("div");
@@ -203,7 +229,7 @@ export class ChatPanel {
         this.messagesEl.appendChild(row);
       }
 
-      this._streamRow  = row;
+      this._streamRow = row;
       this._streamBody = body;
     }
 
@@ -221,15 +247,15 @@ export class ChatPanel {
 
     // Render markdown on the completed text
     this._streamBody.innerHTML = renderMarkdown(this._streamText);
-    this.messagesEl.scrollTop  = this.messagesEl.scrollHeight;
+    this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
 
     // Store in thread history
     const key = this.activeAgentName ?? "main-actor";
     const msg: ChatMessage = {
-      id:          `stream-${Date.now()}`,
-      from:        this._streamFrom,
-      to:          "user",
-      content:     this._streamText,
+      id: `stream-${Date.now()}`,
+      from: this._streamFrom,
+      to: "user",
+      content: this._streamText,
       timestampMs: Date.now(),
     };
     if (!this.threads.has(key)) this.threads.set(key, []);
@@ -237,7 +263,7 @@ export class ChatPanel {
 
     // Reset streaming state
     this._lastStreamedText = this._streamText;
-    this._streamRow  = null;
+    this._streamRow = null;
     this._streamBody = null;
     this._streamFrom = null;
     this._streamText = "";
@@ -278,10 +304,10 @@ export class ChatPanel {
     const timer = setTimeout(() => {
       this.hideTyping(agentId);
       this.appendMessage({
-        id:          `timeout-${agentId}`,
-        from:        "system",
-        to:          "user",
-        content:     `⏳ No response from **${agentName ?? agentId}** — the agent may still be processing.`,
+        id: `timeout-${agentId}`,
+        from: "system",
+        to: "user",
+        content: `⏳ No response from **${agentName ?? agentId}** — the agent may still be processing.`,
         timestampMs: Date.now(),
       });
     }, 45_000);
@@ -291,9 +317,15 @@ export class ChatPanel {
   /** Remove the typing bubble for the given agent. */
   hideTyping(agentId: string): void {
     const el = this.typingBubbles.get(agentId);
-    if (el) { el.remove(); this.typingBubbles.delete(agentId); }
+    if (el) {
+      el.remove();
+      this.typingBubbles.delete(agentId);
+    }
     const t = this.typingTimeouts.get(agentId);
-    if (t !== undefined) { clearTimeout(t); this.typingTimeouts.delete(agentId); }
+    if (t !== undefined) {
+      clearTimeout(t);
+      this.typingTimeouts.delete(agentId);
+    }
   }
 
   // ── Private ─────────────────────────────────────────────────────────────────
@@ -311,16 +343,19 @@ export class ChatPanel {
     };
 
     if (animate) {
-      this.messagesEl.style.opacity    = "0";
+      this.messagesEl.style.opacity = "0";
       this.messagesEl.style.transition = "opacity 0.14s ease";
-      setTimeout(() => { paint(); this.messagesEl.style.opacity = "1"; }, 140);
+      setTimeout(() => {
+        paint();
+        this.messagesEl.style.opacity = "1";
+      }, 140);
     } else {
       paint();
     }
   }
 
   private renderMessageEl(msg: ChatMessage): void {
-    const isUser   = msg.from === "user";
+    const isUser = msg.from === "user";
     const isSystem = msg.from === "system";
 
     if (isUser || isSystem) {
@@ -346,9 +381,9 @@ export class ChatPanel {
 
       const avatar = document.createElement("img");
       avatar.className = "msg-avatar";
-      avatar.src       = dicebearFor(msg.from);
-      avatar.alt       = msg.from;
-      avatar.loading   = "lazy";
+      avatar.src = dicebearFor(msg.from);
+      avatar.alt = msg.from;
+      avatar.loading = "lazy";
 
       const bubble = document.createElement("div");
       bubble.className = "msg agent";
@@ -377,18 +412,20 @@ function renderMarkdown(raw: string): string {
   let s = tmp.innerHTML;
 
   // Fenced code blocks
-  s = s.replace(/```[\s\S]*?```/g,
-    (m) => `<pre><code>${m.slice(3, -3).trim()}</code></pre>`);
+  s = s.replace(
+    /```[\s\S]*?```/g,
+    (m) => `<pre><code>${m.slice(3, -3).trim()}</code></pre>`,
+  );
   // Inline code
-  s = s.replace(/`([^`]+)`/g,     "<code>$1</code>");
+  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
   // Bold
   s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/__(.+?)__/g,     "<strong>$1</strong>");
+  s = s.replace(/__(.+?)__/g, "<strong>$1</strong>");
   // Italic
-  s = s.replace(/\*([^*]+)\*/g,   "<em>$1</em>");
-  s = s.replace(/_([^_]+)_/g,     "<em>$1</em>");
+  s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  s = s.replace(/_([^_]+)_/g, "<em>$1</em>");
   // Line breaks
-  s = s.replace(/\n/g,            "<br>");
+  s = s.replace(/\n/g, "<br>");
 
   return s;
 }

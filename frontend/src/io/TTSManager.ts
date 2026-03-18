@@ -12,20 +12,21 @@
  */
 
 const LS_BEEP = "wactorz.beep";
-const LS_TTS  = "wactorz.tts";
+const LS_TTS = "wactorz.tts";
 
 /** Patterns that indicate the user wants the reply spoken aloud. */
-const SPEAK_REQUEST = /\b(speak|read|say|tell me|voice|out ?loud|aloud|read ?(it|that|this) ?out)\b/i;
+const SPEAK_REQUEST =
+  /\b(speak|read|say|tell me|voice|out ?loud|aloud|read ?(it|that|this) ?out)\b/i;
 
 export class TTSManager {
   private _beepEnabled: boolean;
-  private _ttsEnabled:  boolean;
-  private _forceNext  = false;        // speak the very next reply regardless of toggle
+  private _ttsEnabled: boolean;
+  private _forceNext = false; // speak the very next reply regardless of toggle
   private _audioCtx: AudioContext | null = null;
 
   constructor() {
     this._beepEnabled = localStorage.getItem(LS_BEEP) !== "0";
-    this._ttsEnabled  = localStorage.getItem(LS_TTS)  === "1";
+    this._ttsEnabled = localStorage.getItem(LS_TTS) === "1";
   }
 
   /**
@@ -37,8 +38,12 @@ export class TTSManager {
     if (SPEAK_REQUEST.test(text)) this._forceNext = true;
   }
 
-  get beepEnabled(): boolean { return this._beepEnabled; }
-  get ttsEnabled():  boolean { return this._ttsEnabled;  }
+  get beepEnabled(): boolean {
+    return this._beepEnabled;
+  }
+  get ttsEnabled(): boolean {
+    return this._ttsEnabled;
+  }
 
   toggleBeep(): boolean {
     this._beepEnabled = !this._beepEnabled;
@@ -85,9 +90,9 @@ export class TTSManager {
     try {
       const osc = ctx.createOscillator();
       const vol = ctx.createGain();
-      osc.type            = "sine";
+      osc.type = "sine";
       osc.frequency.value = freq;
-      vol.gain.value      = gain;
+      vol.gain.value = gain;
       osc.connect(vol);
       vol.connect(ctx.destination);
       const t = ctx.currentTime;
@@ -106,8 +111,8 @@ export class TTSManager {
     // Truncate very long messages to avoid reading walls of text
     const excerpt = text.replace(/```[\s\S]*?```/g, "code block").slice(0, 300);
     const utt = new SpeechSynthesisUtterance(excerpt);
-    utt.rate   = 1.1;
-    utt.pitch  = 1.0;
+    utt.rate = 1.1;
+    utt.pitch = 1.0;
     utt.volume = 0.9;
     synth.speak(utt);
   }

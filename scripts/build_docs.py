@@ -51,8 +51,9 @@ NAV = [
         ("MQTT Topics",          "mqtt_topics.md"),
         ("Python API",           "python-api.md"),
     ]),
-    ("Rust Docs ↗",  "https://waldiez.github.io/wactorz/api/rust/"),
-    ("JS/TS Docs ↗", "https://waldiez.github.io/wactorz/api/js/"),
+    ("Rust Docs ↗",   "https://waldiez.github.io/wactorz/api/rust/"),
+    ("JS/TS Docs ↗",  "https://waldiez.github.io/wactorz/api/js/"),
+    ("Python Docs ↗", "https://waldiez.github.io/wactorz/api/python/"),
 ]
 
 # ── HTML template ──────────────────────────────────────────────────────────────
@@ -162,10 +163,11 @@ TEMPLATE = """\
     <div class="logo-mark"></div>Wactorz
   </a>
   <nav class="topbar-links">
-    <a href="https://github.com/waldiez/wactorz" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://pypi.org/project/wactorz/" target="_blank" rel="noopener">PyPI</a>
-    <a href="{root}api/rust/" target="_blank">Rust Docs</a>
-    <a href="{root}api/js/" target="_blank">JS Docs</a>
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+    <a href="{root}api/rust/" target="_blank" rel="noopener">Rust Docs</a>
+    <a href="{root}api/js/" target="_blank" rel="noopener">JS Docs</a>
+    <a href="{root}api/python/" target="_blank" rel="noopener">Python Docs</a>
   </nav>
 </header>
 
@@ -331,21 +333,17 @@ def build(site_dir: Path = SITE) -> None:
 # ── Rust + JS/TS docs ──────────────────────────────────────────────────────────
 
 def build_rust(site_dir: Path = SITE) -> None:
-    rust_dir = ROOT / "rust"
     out_dir = site_dir / "api" / "rust"
-    if not rust_dir.is_dir():
-        print("  [skip] rust/ not found")
-        return
     print("  building rustdoc …")
     try:
-        r = subprocess.run(["cargo", "doc", "--no-deps", "--workspace"], cwd=rust_dir, check=False)
+        r = subprocess.run(["cargo", "doc", "--no-deps", "--workspace"], cwd=ROOT, check=False)
     except FileNotFoundError:
         print("  [skip] cargo not found")
         return
     if r.returncode != 0:
         print("  [warn] cargo doc failed")
         return
-    doc_src = rust_dir / "target" / "doc"
+    doc_src = ROOT / "target" / "doc"
     if doc_src.is_dir():
         shutil.copytree(doc_src, out_dir, dirs_exist_ok=True)
         print(f"  rustdoc  → static/docs/api/rust/")
@@ -373,8 +371,45 @@ def build_jsdocs(site_dir: Path = SITE) -> None:
         return
     if r.returncode != 0:
         print("  [warn] typedoc failed")
-    else:
+        return
+    # typedoc --out is hardcoded to ../site/api/js (relative to frontend/);
+    # copy the result into the docs tree.
+    js_src = ROOT / "site" / "api" / "js"
+    if js_src.is_dir():
+        shutil.copytree(js_src, out_dir, dirs_exist_ok=True)
         print(f"  typedoc  → static/docs/api/js/")
+    else:
+        print(f"  [warn] typedoc output not found at {js_src.relative_to(ROOT)}")
+
+
+def build_pydocs(site_dir: Path = SITE) -> None:
+    out_dir = site_dir / "api" / "python"
+    print("  building pydoc …")
+    try:
+        import pdoc
+    except ImportError:
+        print("  [skip] pdoc not installed (pip install 'wactorz[docs]')")
+        return
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        pdoc.pdoc("wactorz", output_directory=out_dir)
+    except Exception as exc:
+        print(f"  [warn] pdoc failed: {exc}")
+        return
+    # Force dark mode: pdoc uses Bootstrap 5.3 data-bs-theme; also inject a
+    # fallback CSS rule for older Bootstrap versions that use prefers-color-scheme.
+    _dark_inject = (
+        '<style>:root{color-scheme:dark!important}'
+        'body,[data-bs-theme]{--bs-body-bg:#0d1117;--bs-body-color:#e6edf3}</style>'
+    )
+    for html_file in out_dir.rglob("*.html"):
+        text = html_file.read_text(encoding="utf-8")
+        # Set data-bs-theme="dark" on <html> and inject CSS
+        patched = text.replace("<html", '<html data-bs-theme="dark"', 1)
+        patched = patched.replace("</head>", f"{_dark_inject}</head>", 1)
+        if patched != text:
+            html_file.write_text(patched, encoding="utf-8")
+    print("  pydoc    → static/docs/api/python/")
 
 
 # ── Watcher ────────────────────────────────────────────────────────────────────
@@ -482,6 +517,7 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
     if full:
         build_rust()
         build_jsdocs()
+        build_pydocs()
 
     if reload:
         _start_watcher()
@@ -514,6 +550,7 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
         print(f"  guide     → {url}guide/")
         print(f"  api/rust  → {url}api/rust/")
         print(f"  api/js    → {url}api/js/")
+        print(f"  api/python→ {url}api/python/")
         print(f"\nPress Ctrl-C to stop.\n")
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
         try:
@@ -544,3 +581,4 @@ if __name__ == "__main__":
         if args.full:
             build_rust()
             build_jsdocs()
+            build_pydocs()

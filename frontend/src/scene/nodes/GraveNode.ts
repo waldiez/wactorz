@@ -24,14 +24,18 @@ import type { AgentInfo, AgentState } from "../../types/agent";
 import { AgentNodeBase } from "./AgentNodeBase";
 
 /** Velocity vector for the undead layout shamble. */
-export interface Velocity3 { x: number; y: number; z: number; }
+export interface Velocity3 {
+  x: number;
+  y: number;
+  z: number;
+}
 
 // Graveyard palette
-const DECAY_GREEN   = new Color3(0.18, 0.78, 0.25);
-const BONE_WHITE    = new Color3(0.85, 0.88, 0.72);
+const DECAY_GREEN = new Color3(0.18, 0.78, 0.25);
+const BONE_WHITE = new Color3(0.85, 0.88, 0.72);
 const ZOMBIE_PURPLE = new Color3(0.55, 0.2, 0.75);
-const TOXIC         = new Color3(0.38, 0.85, 0.1);
-const BLOOD_RED     = new Color3(0.9, 0.05, 0.05);
+const TOXIC = new Color3(0.38, 0.85, 0.1);
+const BLOOD_RED = new Color3(0.9, 0.05, 0.05);
 
 const PALETTE = [DECAY_GREEN, TOXIC, ZOMBIE_PURPLE, BONE_WHITE];
 
@@ -41,14 +45,21 @@ export class GraveNode extends AgentNodeBase {
   readonly mesh: Mesh;
   private mat: StandardMaterial;
   private eyeLight: PointLight | null = null;
-  private bobObserver: ReturnType<Scene["onBeforeRenderObservable"]["add"]> | null = null;
+  private bobObserver: ReturnType<
+    Scene["onBeforeRenderObservable"]["add"]
+  > | null = null;
   private bobPhase: number;
   private baseY: number = 0;
 
   /** Layout velocity for the shamble (spring layout). */
   velocity: Velocity3 = { x: 0, y: 0, z: 0 };
 
-  constructor(info: AgentInfo, scene: Scene, position: Vector3, isMainActor: boolean) {
+  constructor(
+    info: AgentInfo,
+    scene: Scene,
+    position: Vector3,
+    isMainActor: boolean,
+  ) {
     super(info, scene, isMainActor);
     this.bobPhase = Math.random() * Math.PI * 2;
 
@@ -75,21 +86,25 @@ export class GraveNode extends AgentNodeBase {
     this.mat = new StandardMaterial(`grave-mat-${info.id}`, scene);
     if (isMainActor) {
       this.mat.emissiveColor = BLOOD_RED;
-      this.mat.diffuseColor  = new Color3(0.3, 0.02, 0.02);
+      this.mat.diffuseColor = new Color3(0.3, 0.02, 0.02);
     } else {
       const col = PALETTE[graveIndex % PALETTE.length] ?? DECAY_GREEN;
       graveIndex++;
       this.mat.emissiveColor = col.scale(0.4);
-      this.mat.diffuseColor  = col.scale(0.15);
+      this.mat.diffuseColor = col.scale(0.15);
     }
     this.mat.disableLighting = false;
     this.mesh.material = this.mat;
 
     // ── Eye/halo light ────────────────────────────────────────────────────────
-    this.eyeLight = new PointLight(`grave-eye-${info.id}`, position.clone(), scene);
-    this.eyeLight.diffuse  = isMainActor ? BLOOD_RED : DECAY_GREEN;
+    this.eyeLight = new PointLight(
+      `grave-eye-${info.id}`,
+      position.clone(),
+      scene,
+    );
+    this.eyeLight.diffuse = isMainActor ? BLOOD_RED : DECAY_GREEN;
     this.eyeLight.intensity = isMainActor ? 1.8 : 0.5;
-    this.eyeLight.range     = isMainActor ? 10  : 4;
+    this.eyeLight.range = isMainActor ? 10 : 4;
 
     // Keep light at mesh position
     scene.onBeforeRenderObservable.add(() => {
@@ -131,13 +146,16 @@ export class GraveNode extends AgentNodeBase {
       if (this.eyeLight) this.eyeLight.intensity = 0.05;
     } else if (typeof state === "object" && "failed" in state) {
       this.mat.emissiveColor = BLOOD_RED;
-      if (this.eyeLight) { this.eyeLight.diffuse = BLOOD_RED; this.eyeLight.intensity = 1.5; }
+      if (this.eyeLight) {
+        this.eyeLight.diffuse = BLOOD_RED;
+        this.eyeLight.intensity = 1.5;
+      }
     } else {
       const col = this.isMainActor ? BLOOD_RED : DECAY_GREEN;
       this.mat.emissiveColor = col.scale(0.4);
       if (this.eyeLight) {
-        this.eyeLight.diffuse    = col;
-        this.eyeLight.intensity  = this.isMainActor ? 1.8 : 0.5;
+        this.eyeLight.diffuse = col;
+        this.eyeLight.intensity = this.isMainActor ? 1.8 : 0.5;
       }
     }
   }
@@ -156,12 +174,13 @@ export class GraveNode extends AgentNodeBase {
   }
 
   showAlert(severity: string): void {
-    const flash = severity === "critical" || severity === "error"
-      ? BLOOD_RED
-      : TOXIC;
+    const flash =
+      severity === "critical" || severity === "error" ? BLOOD_RED : TOXIC;
     const prev = this.mat.emissiveColor.clone();
     this.mat.emissiveColor = flash;
-    setTimeout(() => { this.mat.emissiveColor = prev; }, 600);
+    setTimeout(() => {
+      this.mat.emissiveColor = prev;
+    }, 600);
   }
 
   playSpawnEffect(): void {

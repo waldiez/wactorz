@@ -73,12 +73,14 @@ export class VoiceInput {
       | undefined;
 
     if (!API) {
-      console.warn("[VoiceInput] Web Speech API not available in this browser.");
+      console.warn(
+        "[VoiceInput] Web Speech API not available in this browser.",
+      );
       return;
     }
 
     this.recognition = new API();
-    this.recognition.continuous = false;  // browser VAD: auto-stops on silence
+    this.recognition.continuous = false; // browser VAD: auto-stops on silence
     this.recognition.interimResults = true;
     this.recognition.lang = "en-US";
 
@@ -112,12 +114,18 @@ export class VoiceInput {
     this.recognition.onerror = (event: { error: string }) => {
       // Permanent failures: null out recognition so isAvailable → false
       // and the mic button hides itself.
-      const permanent = new Set(["service-not-allowed", "not-allowed", "audio-capture"]);
+      const permanent = new Set([
+        "service-not-allowed",
+        "not-allowed",
+        "audio-capture",
+      ]);
       const userMessages: Record<string, string> = {
-        "not-allowed":        "Microphone access denied. Check your browser/OS permissions.",
-        "service-not-allowed": "Speech recognition requires HTTPS. Mic unavailable over HTTP.",
-        "audio-capture":      "No microphone detected.",
-        "network":            "Network error during speech recognition.",
+        "not-allowed":
+          "Microphone access denied. Check your browser/OS permissions.",
+        "service-not-allowed":
+          "Speech recognition requires HTTPS. Mic unavailable over HTTP.",
+        "audio-capture": "No microphone detected.",
+        network: "Network error during speech recognition.",
       };
       const msg = userMessages[event.error];
       if (msg) {
@@ -127,7 +135,7 @@ export class VoiceInput {
       }
       this._isRecording = false;
       if (permanent.has(event.error)) {
-        this.recognition = null;  // disables isAvailable; IOBar will hide the button
+        this.recognition = null; // disables isAvailable; IOBar will hide the button
       }
       this.onStop?.();
     };
@@ -148,7 +156,9 @@ export class VoiceInput {
       // SpeechRecognition manages its own audio pipeline; stop the test stream.
       stream.getTracks().forEach((t) => t.stop());
     } catch {
-      this.onError?.("Microphone access denied. Check your browser/OS permissions.");
+      this.onError?.(
+        "Microphone access denied. Check your browser/OS permissions.",
+      );
       return false;
     }
 

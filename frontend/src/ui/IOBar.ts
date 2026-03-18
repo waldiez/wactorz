@@ -36,7 +36,9 @@ export class IOBar {
     this.ioManager = ioManager;
 
     this.micBtn = document.getElementById("mic-btn") as HTMLButtonElement;
-    this.textInput = document.getElementById("text-input") as HTMLTextAreaElement;
+    this.textInput = document.getElementById(
+      "text-input",
+    ) as HTMLTextAreaElement;
     this.sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
 
     this.bindEvents();
@@ -77,7 +79,7 @@ export class IOBar {
       this.micBtn.setPointerCapture(e.pointerId);
       void this.startMic();
     });
-    this.micBtn.addEventListener("pointerup",     () => this.stopMic());
+    this.micBtn.addEventListener("pointerup", () => this.stopMic());
     this.micBtn.addEventListener("pointercancel", () => this.stopMic());
 
     // Update placeholder + activeAgent when chat panel opens/closes
@@ -112,7 +114,9 @@ export class IOBar {
       if (!this.voiceInput.isAvailable) {
         this.micBtn.style.display = "none";
       } else {
-        setTimeout(() => { this.micBtn.title = "Voice input"; }, 5000);
+        setTimeout(() => {
+          this.micBtn.title = "Voice input";
+        }, 5000);
       }
     };
   }

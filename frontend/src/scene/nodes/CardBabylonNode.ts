@@ -22,18 +22,24 @@ import { AgentNodeBase } from "./AgentNodeBase";
 
 const CARD_W = 2.4;
 const CARD_H = 3.2;
-const TEX_W  = 288;
-const TEX_H  = 384;
+const TEX_W = 288;
+const TEX_H = 384;
 
 function accentHex(info: AgentInfo): string {
-  if (info.name === "main-actor" || info.agentType === "orchestrator") return "#f59e0b";
+  if (info.name === "main-actor" || info.agentType === "orchestrator")
+    return "#f59e0b";
   if (typeof info.state === "object") return "#f43f5e";
   switch (info.state as string) {
-    case "running":      return "#3dd68c";
-    case "paused":       return "#fb923c";
-    case "initializing": return "#60a5fa";
-    case "stopped":      return "#475569";
-    default:             return "#3dd68c";
+    case "running":
+      return "#3dd68c";
+    case "paused":
+      return "#fb923c";
+    case "initializing":
+      return "#60a5fa";
+    case "stopped":
+      return "#475569";
+    default:
+      return "#3dd68c";
   }
 }
 
@@ -59,9 +65,9 @@ export class CardBabylonNode extends AgentNodeBase {
     this.tex.hasAlpha = true;
 
     this.mat = new StandardMaterial(`card3d-mat-${info.id}`, scene);
-    this.mat.diffuseTexture  = this.tex;
+    this.mat.diffuseTexture = this.tex;
     this.mat.emissiveTexture = this.tex;
-    this.mat.emissiveColor   = Color3.White();
+    this.mat.emissiveColor = Color3.White();
     this.mat.disableLighting = true;
     this.mat.backFaceCulling = false;
 
@@ -84,7 +90,7 @@ export class CardBabylonNode extends AgentNodeBase {
 
     const accent = accentHex(this.info);
     const isMain = this.isMainActor;
-    const stStr  = stateLabel(this.info.state);
+    const stStr = stateLabel(this.info.state);
 
     // ── Background ───────────────────────────────────────────────────────────
     ctx.fillStyle = isMain ? "#1c1407" : "#0d1424";
@@ -108,7 +114,7 @@ export class CardBabylonNode extends AgentNodeBase {
     // ── Avatar circle ─────────────────────────────────────────────────────────
     const cx = TEX_W / 2;
     const cy = 90;
-    const r  = 34;
+    const r = 34;
     ctx.globalAlpha = 0.2;
     ctx.fillStyle = accent;
     ctx.beginPath();
@@ -133,9 +139,10 @@ export class CardBabylonNode extends AgentNodeBase {
     ctx.font = "bold 17px 'Segoe UI', Arial, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    const nameText = this.info.name.length > 18
-      ? this.info.name.slice(0, 16) + "…"
-      : this.info.name;
+    const nameText =
+      this.info.name.length > 18
+        ? this.info.name.slice(0, 16) + "…"
+        : this.info.name;
     ctx.fillText(nameText, cx, 140);
 
     // ── Agent type ────────────────────────────────────────────────────────────
@@ -201,9 +208,10 @@ export class CardBabylonNode extends AgentNodeBase {
   }
 
   showAlert(severity: string): void {
-    const flash = severity === "error" || severity === "critical"
-      ? new Color3(1, 0.15, 0.15)
-      : new Color3(1, 0.75, 0.1);
+    const flash =
+      severity === "error" || severity === "critical"
+        ? new Color3(1, 0.15, 0.15)
+        : new Color3(1, 0.75, 0.1);
     const prev = this.mat.emissiveColor.clone();
     this.mat.emissiveTexture = null;
     this.mat.emissiveColor = flash;

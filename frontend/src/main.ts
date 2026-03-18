@@ -55,9 +55,20 @@ const wsChat = new WSChatClient();
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
 wsChat.onChat((content, from, timestampMs) => {
-  ioManager.receiveAgentMessage({ id: `ws-${timestampMs}`, from, to: "user", content, timestampMs });
+  ioManager.receiveAgentMessage({
+    id: `ws-${timestampMs}`,
+    from,
+    to: "user",
+    content,
+    timestampMs,
+  });
   scene.onChat(from, "user");
-  feed.push({ type: "chat", label: content.slice(0, 60), agentName: from, timestamp: timestampMs });
+  feed.push({
+    type: "chat",
+    label: content.slice(0, 60),
+    agentName: from,
+    timestamp: timestampMs,
+  });
 });
 
 // Streaming replies — onStreamChunk / onStreamEnd are wired inside setWSClient
@@ -210,9 +221,10 @@ mqtt.on("metrics", (payload) => {
     state: existing?.state ?? "running",
     protected: existing?.protected ?? false,
   };
-  if (payload.messagesProcessed !== undefined) update.messagesProcessed = payload.messagesProcessed;
-  if (payload.costUsd !== undefined)           update.costUsd = payload.costUsd;
-  if (payload.uptime !== undefined)            update.uptime = payload.uptime;
+  if (payload.messagesProcessed !== undefined)
+    update.messagesProcessed = payload.messagesProcessed;
+  if (payload.costUsd !== undefined) update.costUsd = payload.costUsd;
+  if (payload.uptime !== undefined) update.uptime = payload.uptime;
   scene.addOrUpdateAgent(update);
   refreshStats();
 });
@@ -294,16 +306,22 @@ if (haLink) {
 // ── Sound / TTS toggles ───────────────────────────────────────────────────────
 
 const btnBeep = document.getElementById("btn-beep");
-const btnTTS  = document.getElementById("btn-tts");
+const btnTTS = document.getElementById("btn-tts");
 
 function syncSoundButtons(): void {
   btnBeep?.classList.toggle("active", tts.beepEnabled);
-  btnTTS?.classList.toggle("active",  tts.ttsEnabled);
+  btnTTS?.classList.toggle("active", tts.ttsEnabled);
 }
 syncSoundButtons();
 
-btnBeep?.addEventListener("click", () => { tts.toggleBeep(); syncSoundButtons(); });
-btnTTS?.addEventListener("click",  () => { tts.toggleTTS();  syncSoundButtons(); });
+btnBeep?.addEventListener("click", () => {
+  tts.toggleBeep();
+  syncSoundButtons();
+});
+btnTTS?.addEventListener("click", () => {
+  tts.toggleTTS();
+  syncSoundButtons();
+});
 
 // ── Connect ───────────────────────────────────────────────────────────────────
 

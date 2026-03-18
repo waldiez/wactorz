@@ -139,7 +139,10 @@ export class MentionPopup {
    * Returns the position of the triggering `@` and the partial name typed
    * after it, or `{ atPos: null, partial: null }` if not in a mention.
    */
-  private getMentionContext(): { atPos: number | null; partial: string | null } {
+  private getMentionContext(): {
+    atPos: number | null;
+    partial: string | null;
+  } {
     const val = this.input.value;
     const cursor = this.input.selectionStart ?? val.length;
     const before = val.slice(0, cursor);

@@ -15,7 +15,7 @@ import { agentImageGen } from "../io/AgentImageGen";
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtUptime(s: number): string {
-  if (s < 60)   return `${Math.round(s)}s`;
+  if (s < 60) return `${Math.round(s)}s`;
   if (s < 3600) return `${Math.round(s / 60)}m`;
   return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
 }
@@ -27,35 +27,51 @@ function stateStr(state: AgentState): string {
 function coverGradient(info: AgentInfo): string {
   const t = (info.agentType ?? "").toLowerCase();
   const n = info.name.toLowerCase();
-  if (n === "main-actor"  || t.includes("orchestrator")) return "linear-gradient(135deg,#78350f,#b45309,#f59e0b)";
-  if (t.includes("monitor") || n.includes("monitor"))    return "linear-gradient(135deg,#172554,#1e3a8a,#3b82f6)";
-  if (t.includes("guardian") || n.includes("qa"))        return "linear-gradient(135deg,#14532d,#15803d,#4ade80)";
-  if (t.includes("gateway")  || n.includes("io"))        return "linear-gradient(135deg,#0c4a6e,#0284c7,#38bdf8)";
-  if (t.includes("expert")   || n.includes("udx"))       return "linear-gradient(135deg,#713f12,#b45309,#fcd34d)";
-  if (t.includes("dynamic")  || t.includes("script"))    return "linear-gradient(135deg,#581c87,#7c3aed,#a78bfa)";
-  if (n.includes("math"))                                 return "linear-gradient(135deg,#1e1b4b,#3730a3,#818cf8)";
-  if (n.includes("weather"))                              return "linear-gradient(135deg,#0c4a6e,#0ea5e9,#bae6fd)";
-  if (n.includes("news"))                                 return "linear-gradient(135deg,#1a1a2e,#16213e,#e94560)";
-  if (t.includes("financier") || n.includes("wif"))       return "linear-gradient(135deg,#052e16,#065f46,#00d97e)";
-  if (t.includes("data") || n.includes("fetcher"))        return "linear-gradient(135deg,#0f3460,#533483,#e94560)";
-  if (n.includes("ml") || n.includes("classifier"))      return "linear-gradient(135deg,#4c0519,#be123c,#fb7185)";
+  if (n === "main-actor" || t.includes("orchestrator"))
+    return "linear-gradient(135deg,#78350f,#b45309,#f59e0b)";
+  if (t.includes("monitor") || n.includes("monitor"))
+    return "linear-gradient(135deg,#172554,#1e3a8a,#3b82f6)";
+  if (t.includes("guardian") || n.includes("qa"))
+    return "linear-gradient(135deg,#14532d,#15803d,#4ade80)";
+  if (t.includes("gateway") || n.includes("io"))
+    return "linear-gradient(135deg,#0c4a6e,#0284c7,#38bdf8)";
+  if (t.includes("expert") || n.includes("udx"))
+    return "linear-gradient(135deg,#713f12,#b45309,#fcd34d)";
+  if (t.includes("dynamic") || t.includes("script"))
+    return "linear-gradient(135deg,#581c87,#7c3aed,#a78bfa)";
+  if (n.includes("math"))
+    return "linear-gradient(135deg,#1e1b4b,#3730a3,#818cf8)";
+  if (n.includes("weather"))
+    return "linear-gradient(135deg,#0c4a6e,#0ea5e9,#bae6fd)";
+  if (n.includes("news"))
+    return "linear-gradient(135deg,#1a1a2e,#16213e,#e94560)";
+  if (t.includes("financier") || n.includes("wif"))
+    return "linear-gradient(135deg,#052e16,#065f46,#00d97e)";
+  if (t.includes("data") || n.includes("fetcher"))
+    return "linear-gradient(135deg,#0f3460,#533483,#e94560)";
+  if (n.includes("ml") || n.includes("classifier"))
+    return "linear-gradient(135deg,#4c0519,#be123c,#fb7185)";
   return "linear-gradient(135deg,#0f2027,#203a43,#2c5364)";
 }
 
 function bioline(info: AgentInfo): string {
   const t = (info.agentType ?? "").toLowerCase();
   const n = info.name.toLowerCase();
-  if (t.includes("orchestrator"))  return "Central AI orchestrator · spawns + routes agents";
-  if (t.includes("monitor"))       return "System health monitor · tracks all actors";
-  if (t.includes("guardian"))      return "QA guardian · passive safety observer";
-  if (t.includes("gateway"))       return "User I/O gateway · routes messages";
-  if (t.includes("expert") || n.includes("udx")) return "User & Developer Xpert · built-in knowledge base";
-  if (t.includes("dynamic"))       return "Runtime script agent · LLM-generated";
-  if (n.includes("math"))          return "Math evaluator · runs Rhai expressions";
-  if (n.includes("weather"))       return "Weather on demand · powered by wttr.in";
-  if (n.includes("news"))          return "Live headlines · Hacker News feed";
-  if (t.includes("financier") || n.includes("wif")) return "Finance expert · budgets, expenses & calculations";
-  if (t.includes("data") || n.includes("fetcher")) return "On-demand data fetcher";
+  if (t.includes("orchestrator"))
+    return "Central AI orchestrator · spawns + routes agents";
+  if (t.includes("monitor")) return "System health monitor · tracks all actors";
+  if (t.includes("guardian")) return "QA guardian · passive safety observer";
+  if (t.includes("gateway")) return "User I/O gateway · routes messages";
+  if (t.includes("expert") || n.includes("udx"))
+    return "User & Developer Xpert · built-in knowledge base";
+  if (t.includes("dynamic")) return "Runtime script agent · LLM-generated";
+  if (n.includes("math")) return "Math evaluator · runs Rhai expressions";
+  if (n.includes("weather")) return "Weather on demand · powered by wttr.in";
+  if (n.includes("news")) return "Live headlines · Hacker News feed";
+  if (t.includes("financier") || n.includes("wif"))
+    return "Finance expert · budgets, expenses & calculations";
+  if (t.includes("data") || n.includes("fetcher"))
+    return "On-demand data fetcher";
   if (n.includes("ml") || n.includes("classifier")) return "ML inference agent";
   return info.name.replace(/-/g, " ");
 }
@@ -64,11 +80,11 @@ function bioline(info: AgentInfo): string {
 
 export class SocialDashboard {
   private container: HTMLElement;
-  private grid:      HTMLElement;
-  private agents     = new Map<string, AgentInfo>();
+  private grid: HTMLElement;
+  private agents = new Map<string, AgentInfo>();
   private heartbeats = new Map<string, number>();
-  private messages   = new Map<string, number>();
-  private unreadListener:      ((e: Event) => void) | null = null;
+  private messages = new Map<string, number>();
+  private unreadListener: ((e: Event) => void) | null = null;
   private unreadClearListener: ((e: Event) => void) | null = null;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -79,7 +95,9 @@ export class SocialDashboard {
 
     // Unread badge on the chat button
     this.unreadListener = (e) => {
-      const { name, count } = (e as CustomEvent<{ name: string; count: number }>).detail;
+      const { name, count } = (
+        e as CustomEvent<{ name: string; count: number }>
+      ).detail;
       const btn = this.grid.querySelector<HTMLElement>(
         `.sd-chat-btn[data-name="${CSS.escape(name)}"]`,
       );
@@ -97,7 +115,9 @@ export class SocialDashboard {
     this.unreadClearListener = (e) => {
       const { name } = (e as CustomEvent<{ name: string }>).detail;
       this.grid
-        .querySelector(`.sd-chat-btn[data-name="${CSS.escape(name)}"] .chat-unread-badge`)
+        .querySelector(
+          `.sd-chat-btn[data-name="${CSS.escape(name)}"] .chat-unread-badge`,
+        )
         ?.remove();
     };
     document.addEventListener("agent-unread-cleared", this.unreadClearListener);
@@ -114,7 +134,10 @@ export class SocialDashboard {
 
   hide(): void {
     this.container.classList.remove("sd-visible");
-    if (this.tickTimer) { clearInterval(this.tickTimer); this.tickTimer = null; }
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
   }
 
   destroy(): void {
@@ -124,7 +147,10 @@ export class SocialDashboard {
       this.unreadListener = null;
     }
     if (this.unreadClearListener) {
-      document.removeEventListener("agent-unread-cleared", this.unreadClearListener);
+      document.removeEventListener(
+        "agent-unread-cleared",
+        this.unreadClearListener,
+      );
       this.unreadClearListener = null;
     }
     this.container.remove();
@@ -143,10 +169,15 @@ export class SocialDashboard {
   }
 
   removeAgent(id: string): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(id)}"]`,
+    );
     if (card) {
       card.style.animation = "sd-exit 0.3s ease forwards";
-      setTimeout(() => { card.remove(); this.agents.delete(id); }, 300);
+      setTimeout(() => {
+        card.remove();
+        this.agents.delete(id);
+      }, 300);
     } else {
       this.agents.delete(id);
     }
@@ -154,7 +185,9 @@ export class SocialDashboard {
 
   onHeartbeat(agentId: string, _ts: number): void {
     this.heartbeats.set(agentId, (this.heartbeats.get(agentId) ?? 0) + 1);
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agentId)}"]`,
+    );
     if (!card) return;
 
     // Update beat counter
@@ -167,10 +200,13 @@ export class SocialDashboard {
     const agent = this.agents.get(agentId);
     if (agent) {
       const st = stateStr(agent.state);
-      const dot   = card.querySelector<HTMLElement>(".sd-state-dot");
+      const dot = card.querySelector<HTMLElement>(".sd-state-dot");
       const badge = card.querySelector<HTMLElement>(".sd-type-badge");
-      if (dot)   dot.className = `sd-state-dot sd-dot-${st}`;
-      if (badge) { badge.textContent = st.toUpperCase(); badge.className = `sd-type-badge sd-badge-${st}`; }
+      if (dot) dot.className = `sd-state-dot sd-dot-${st}`;
+      if (badge) {
+        badge.textContent = st.toUpperCase();
+        badge.className = `sd-type-badge sd-badge-${st}`;
+      }
       this.updateControls(card, agent);
     }
 
@@ -188,7 +224,9 @@ export class SocialDashboard {
 
   onChat(fromId: string, _toId: string): void {
     this.messages.set(fromId, (this.messages.get(fromId) ?? 0) + 1);
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(fromId)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(fromId)}"]`,
+    );
     if (!card) return;
     const el = card.querySelector<HTMLElement>(".sd-msg-count");
     if (el) el.textContent = String(this.messages.get(fromId));
@@ -197,9 +235,14 @@ export class SocialDashboard {
   }
 
   showAlert(agentId: string, severity: string): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agentId)}"]`,
+    );
     if (!card) return;
-    const cls = severity === "error" || severity === "critical" ? "sd-alert-error" : "sd-alert-warn";
+    const cls =
+      severity === "error" || severity === "critical"
+        ? "sd-alert-error"
+        : "sd-alert-warn";
     card.classList.add(cls);
     setTimeout(() => card.classList.remove(cls), 900);
   }
@@ -226,36 +269,58 @@ export class SocialDashboard {
   }
 
   private renderCard(agent: AgentInfo): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(agent.id)}"]`);
-    if (!card) { this.grid.appendChild(this.buildCard(agent)); return; }
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agent.id)}"]`,
+    );
+    if (!card) {
+      this.grid.appendChild(this.buildCard(agent));
+      return;
+    }
 
     const st = stateStr(agent.state);
-    const dot   = card.querySelector<HTMLElement>(".sd-state-dot");
+    const dot = card.querySelector<HTMLElement>(".sd-state-dot");
     const badge = card.querySelector<HTMLElement>(".sd-type-badge");
-    if (dot)   dot.className   = `sd-state-dot sd-dot-${st}`;
-    if (badge) { badge.textContent = st.toUpperCase(); badge.className = `sd-type-badge sd-badge-${st}`; }
+    if (dot) dot.className = `sd-state-dot sd-dot-${st}`;
+    if (badge) {
+      badge.textContent = st.toUpperCase();
+      badge.className = `sd-type-badge sd-badge-${st}`;
+    }
     this.updateControls(card, agent);
     this.refreshMetricsRow(card, agent);
   }
 
   private updateControls(card: HTMLElement, agent: AgentInfo): void {
-    const st   = stateStr(agent.state);
+    const st = stateStr(agent.state);
     const prot = agent.protected ?? false;
-    const pauseBtn  = card.querySelector<HTMLButtonElement>('[data-action="pause"]');
-    const resumeBtn = card.querySelector<HTMLButtonElement>('[data-action="resume"]');
-    const stopBtn   = card.querySelector<HTMLButtonElement>('[data-action="stop"]');
-    const deleteBtn = card.querySelector<HTMLButtonElement>('[data-action="delete"]');
-    if (pauseBtn)  pauseBtn.style.display  = st === "running" ? "" : "none";
-    if (resumeBtn) resumeBtn.style.display = st === "paused"  ? "" : "none";
-    if (stopBtn)   { stopBtn.style.display = st !== "stopped" ? "" : "none"; stopBtn.disabled = prot; }
-    if (deleteBtn) { deleteBtn.disabled = prot; deleteBtn.title = prot ? "Protected" : "Delete"; }
+    const pauseBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="pause"]',
+    );
+    const resumeBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="resume"]',
+    );
+    const stopBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="stop"]',
+    );
+    const deleteBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="delete"]',
+    );
+    if (pauseBtn) pauseBtn.style.display = st === "running" ? "" : "none";
+    if (resumeBtn) resumeBtn.style.display = st === "paused" ? "" : "none";
+    if (stopBtn) {
+      stopBtn.style.display = st !== "stopped" ? "" : "none";
+      stopBtn.disabled = prot;
+    }
+    if (deleteBtn) {
+      deleteBtn.disabled = prot;
+      deleteBtn.title = prot ? "Protected" : "Delete";
+    }
   }
 
   private buildCard(agent: AgentInfo): HTMLElement {
     const imgUrl = agentImageGen.get(agent);
-    const st     = stateStr(agent.state);
-    const hb     = this.heartbeats.get(agent.id) ?? 0;
-    const msgs   = this.messages.get(agent.id)   ?? 0;
+    const st = stateStr(agent.state);
+    const hb = this.heartbeats.get(agent.id) ?? 0;
+    const msgs = this.messages.get(agent.id) ?? 0;
     const handle = `@${(agent.agentType ?? agent.name).replace(/[^a-z0-9]/gi, "").toLowerCase()}`;
 
     const card = document.createElement("div");
@@ -310,36 +375,53 @@ export class SocialDashboard {
 
     card.querySelector(".sd-chat-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
-      document.dispatchEvent(new CustomEvent("agent-selected", { detail: { agent } }));
+      document.dispatchEvent(
+        new CustomEvent("agent-selected", { detail: { agent } }),
+      );
     });
 
     card.querySelector(".cd-controls")?.addEventListener("click", (e) => {
-      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+        "[data-action]",
+      );
       if (!btn || btn.disabled) return;
       e.stopPropagation();
-      this.sendCommand(agent.id, btn.dataset.action as "pause" | "resume" | "stop" | "delete");
+      this.sendCommand(
+        agent.id,
+        btn.dataset.action as "pause" | "resume" | "stop" | "delete",
+      );
     });
 
     this.updateControls(card, agent);
     return card;
   }
 
-  private sendCommand(id: string, action: "pause" | "resume" | "stop" | "delete"): void {
+  private sendCommand(
+    id: string,
+    action: "pause" | "resume" | "stop" | "delete",
+  ): void {
     const base = `/api/actors/${encodeURIComponent(id)}`;
     const [url, method] =
-      action === "pause"  ? [`${base}/pause`,  "POST"] :
-      action === "resume" ? [`${base}/resume`, "POST"] :
-                            [base,             "DELETE"];
+      action === "pause"
+        ? [`${base}/pause`, "POST"]
+        : action === "resume"
+          ? [`${base}/resume`, "POST"]
+          : [base, "DELETE"];
     fetch(url, { method })
       .then((r) => {
-        if (!r.ok && r.status !== 404) { this.flashError(id); return; }
+        if (!r.ok && r.status !== 404) {
+          this.flashError(id);
+          return;
+        }
         if (action === "delete") this.removeAgent(id);
       })
       .catch(() => this.flashError(id));
   }
 
   private flashError(id: string): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(id)}"]`,
+    );
     if (!card) return;
     card.classList.add("sd-alert-error");
     setTimeout(() => card.classList.remove("sd-alert-error"), 900);
@@ -347,15 +429,29 @@ export class SocialDashboard {
 
   private buildMetricsRow(agent: AgentInfo): string {
     const parts: string[] = [];
-    if (agent.task)                          parts.push(`<span class="sd-metric-task">${agent.task}</span>`);
-    if (agent.cpu != null)                   parts.push(`<span class="sd-metric-chip">${agent.cpu.toFixed(1)}% CPU</span>`);
-    if (agent.mem != null)                   parts.push(`<span class="sd-metric-chip">${agent.mem.toFixed(0)} MB</span>`);
-    if (agent.messagesProcessed != null)     parts.push(`<span class="sd-metric-chip">${agent.messagesProcessed} proc</span>`);
-    if (agent.uptime != null)               parts.push(`<span class="sd-metric-chip">${fmtUptime(agent.uptime)}</span>`);
+    if (agent.task)
+      parts.push(`<span class="sd-metric-task">${agent.task}</span>`);
+    if (agent.cpu != null)
+      parts.push(
+        `<span class="sd-metric-chip">${agent.cpu.toFixed(1)}% CPU</span>`,
+      );
+    if (agent.mem != null)
+      parts.push(
+        `<span class="sd-metric-chip">${agent.mem.toFixed(0)} MB</span>`,
+      );
+    if (agent.messagesProcessed != null)
+      parts.push(
+        `<span class="sd-metric-chip">${agent.messagesProcessed} proc</span>`,
+      );
+    if (agent.uptime != null)
+      parts.push(
+        `<span class="sd-metric-chip">${fmtUptime(agent.uptime)}</span>`,
+      );
     if (agent.costUsd != null && agent.costUsd > 0.0001) {
-      const cost = agent.costUsd < 0.01
-        ? (agent.costUsd * 100).toFixed(2) + "¢"
-        : "$" + agent.costUsd.toFixed(3);
+      const cost =
+        agent.costUsd < 0.01
+          ? (agent.costUsd * 100).toFixed(2) + "¢"
+          : "$" + agent.costUsd.toFixed(3);
       parts.push(`<span class="sd-metric-cost">${cost}</span>`);
     }
     if (!parts.length) return "";
@@ -389,7 +485,9 @@ export class SocialDashboard {
       <div class="sd-grid"></div>
     `;
     el.querySelector(".sd-3d-btn")?.addEventListener("click", () => {
-      document.dispatchEvent(new CustomEvent("theme-change", { detail: { theme: "graph" } }));
+      document.dispatchEvent(
+        new CustomEvent("theme-change", { detail: { theme: "graph" } }),
+      );
     });
     return el;
   }

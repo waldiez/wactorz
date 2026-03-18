@@ -330,7 +330,9 @@ impl Actor for DynamicAgent {
             }
         };
 
-        if !response.is_empty() && let Some(pub_) = &self.publisher {
+        if !response.is_empty()
+            && let Some(pub_) = &self.publisher
+        {
             pub_.publish(
                 wactorz_mqtt::topics::chat(&self.config.id),
                 &serde_json::json!({

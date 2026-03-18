@@ -21,11 +21,11 @@ import { AgentNodeBase } from "./AgentNodeBase";
 
 /** Planet colour palette (cycles through for each new agent). */
 const PLANET_COLORS: Color3[] = [
-  new Color3(0.3, 0.7, 1.0),  // ice blue
-  new Color3(0.7, 0.4, 1.0),  // violet
-  new Color3(0.3, 1.0, 0.6),  // teal
-  new Color3(1.0, 0.5, 0.3),  // orange
-  new Color3(0.8, 0.8, 0.3),  // yellow
+  new Color3(0.3, 0.7, 1.0), // ice blue
+  new Color3(0.7, 0.4, 1.0), // violet
+  new Color3(0.3, 1.0, 0.6), // teal
+  new Color3(1.0, 0.5, 0.3), // orange
+  new Color3(0.8, 0.8, 0.3), // yellow
 ];
 
 let colorIndex = 0;
@@ -38,7 +38,9 @@ export class PlanetNode extends AgentNodeBase {
   private readonly orbitSpeed: number;
   private readonly orbitRadius: number;
   private highlightLayer: HighlightLayer | null;
-  private orbitObserver: ReturnType<Scene["onBeforeRenderObservable"]["add"]> | null = null;
+  private orbitObserver: ReturnType<
+    Scene["onBeforeRenderObservable"]["add"]
+  > | null = null;
 
   constructor(
     info: AgentInfo,
@@ -65,7 +67,8 @@ export class PlanetNode extends AgentNodeBase {
       this.material.emissiveColor = new Color3(1.0, 0.85, 0.3);
       this.material.diffuseColor = new Color3(1.0, 0.7, 0.1);
     } else {
-      const c = PLANET_COLORS[colorIndex % PLANET_COLORS.length] ?? PLANET_COLORS[0]!;
+      const c =
+        PLANET_COLORS[colorIndex % PLANET_COLORS.length] ?? PLANET_COLORS[0]!;
       colorIndex++;
       this.material.diffuseColor = c;
       this.material.specularColor = c.scale(0.4);
@@ -137,12 +140,15 @@ export class PlanetNode extends AgentNodeBase {
   }
 
   showAlert(severity: string): void {
-    const flash = severity === "critical"
-      ? new Color3(1, 0.05, 0.05)
-      : new Color3(1, 0.7, 0.1);
+    const flash =
+      severity === "critical"
+        ? new Color3(1, 0.05, 0.05)
+        : new Color3(1, 0.7, 0.1);
     const prev = this.material.emissiveColor.clone();
     this.material.emissiveColor = flash;
-    setTimeout(() => { this.material.emissiveColor = prev; }, 700);
+    setTimeout(() => {
+      this.material.emissiveColor = prev;
+    }, 700);
   }
 
   playSpawnEffect(): void {

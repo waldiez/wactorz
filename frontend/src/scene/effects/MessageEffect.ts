@@ -49,9 +49,12 @@ export function playMessageEffect(
 
     // Quadratic bezier: B(t) = (1-t)²·P0 + 2(1-t)t·P1 + t²·P2
     const oneMinusT = 1 - t;
-    comet.position.x = oneMinusT * oneMinusT * from.x + 2 * oneMinusT * t * mid.x + t * t * to.x;
-    comet.position.y = oneMinusT * oneMinusT * from.y + 2 * oneMinusT * t * mid.y + t * t * to.y;
-    comet.position.z = oneMinusT * oneMinusT * from.z + 2 * oneMinusT * t * mid.z + t * t * to.z;
+    comet.position.x =
+      oneMinusT * oneMinusT * from.x + 2 * oneMinusT * t * mid.x + t * t * to.x;
+    comet.position.y =
+      oneMinusT * oneMinusT * from.y + 2 * oneMinusT * t * mid.y + t * t * to.y;
+    comet.position.z =
+      oneMinusT * oneMinusT * from.z + 2 * oneMinusT * t * mid.z + t * t * to.z;
 
     // Fade out as comet approaches destination
     mat.alpha = t > 0.8 ? 1 - (t - 0.8) * 5 : 1;

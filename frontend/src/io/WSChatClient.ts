@@ -9,18 +9,26 @@
  *   {"type":"chat","from":"io-gateway","content":"...","timestamp":...}
  */
 
-export type ChatHandler        = (content: string, from: string, timestampMs: number) => void;
-export type StreamChunkHandler = (chunk: string,   from: string, timestampMs: number) => void;
-export type StreamEndHandler   = (from: string) => void;
-export type ModeHandler        = (mode: "direct_ws" | "mqtt") => void;
+export type ChatHandler = (
+  content: string,
+  from: string,
+  timestampMs: number,
+) => void;
+export type StreamChunkHandler = (
+  chunk: string,
+  from: string,
+  timestampMs: number,
+) => void;
+export type StreamEndHandler = (from: string) => void;
+export type ModeHandler = (mode: "direct_ws" | "mqtt") => void;
 
 export class WSChatClient {
   private ws: WebSocket | null = null;
   private _chatMode: "direct_ws" | "mqtt" = "mqtt";
-  private _onChat:        ChatHandler        | null = null;
+  private _onChat: ChatHandler | null = null;
   private _onStreamChunk: StreamChunkHandler | null = null;
-  private _onStreamEnd:   StreamEndHandler   | null = null;
-  private _onMode:        ModeHandler        | null = null;
+  private _onStreamEnd: StreamEndHandler | null = null;
+  private _onMode: ModeHandler | null = null;
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _url = "";
   private _closed = false;
@@ -34,16 +42,24 @@ export class WSChatClient {
   }
 
   /** Complete (non-streaming) message — slash command replies, errors, etc. */
-  onChat(fn: ChatHandler): void { this._onChat = fn; }
+  onChat(fn: ChatHandler): void {
+    this._onChat = fn;
+  }
 
   /** One streaming chunk from the LLM. */
-  onStreamChunk(fn: StreamChunkHandler): void { this._onStreamChunk = fn; }
+  onStreamChunk(fn: StreamChunkHandler): void {
+    this._onStreamChunk = fn;
+  }
 
   /** Stream finished — render final markdown, clear typing indicator. */
-  onStreamEnd(fn: StreamEndHandler): void { this._onStreamEnd = fn; }
+  onStreamEnd(fn: StreamEndHandler): void {
+    this._onStreamEnd = fn;
+  }
 
   /** Server announced which chat mode is active. */
-  onMode(fn: ModeHandler): void { this._onMode = fn; }
+  onMode(fn: ModeHandler): void {
+    this._onMode = fn;
+  }
 
   connect(url: string): void {
     this._url = url;
@@ -95,16 +111,17 @@ export class WSChatClient {
       }
 
       if (data["type"] === "config") {
-        const mode = (data["chat_mode"] as string) === "direct_ws" ? "direct_ws" : "mqtt";
+        const mode =
+          (data["chat_mode"] as string) === "direct_ws" ? "direct_ws" : "mqtt";
         this._chatMode = mode;
         console.info("[WSChat] chat_mode =", mode);
         this._onMode?.(mode);
         return;
       }
 
-      const from  = String(data["from"]      ?? "io-gateway");
+      const from = String(data["from"] ?? "io-gateway");
       const rawTs = data["timestamp"] as number | undefined;
-      const ts    = rawTs ? (rawTs < 1e10 ? rawTs * 1000 : rawTs) : Date.now();
+      const ts = rawTs ? (rawTs < 1e10 ? rawTs * 1000 : rawTs) : Date.now();
 
       if (data["type"] === "chat") {
         this._onChat?.(String(data["content"] ?? ""), from, ts);

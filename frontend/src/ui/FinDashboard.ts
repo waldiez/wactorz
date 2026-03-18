@@ -22,12 +22,18 @@ function stateStr(state: AgentState): string {
 /** Finance-terminal status labels. */
 function stateLabel(st: string): string {
   switch (st) {
-    case "running":      return "LIVE";
-    case "paused":       return "HALTED";
-    case "stopped":      return "CLOSED";
-    case "initializing": return "INIT";
-    case "error":        return "ERROR";
-    default:             return st.toUpperCase().slice(0, 6);
+    case "running":
+      return "LIVE";
+    case "paused":
+      return "HALTED";
+    case "stopped":
+      return "CLOSED";
+    case "initializing":
+      return "INIT";
+    case "error":
+      return "ERROR";
+    default:
+      return st.toUpperCase().slice(0, 6);
   }
 }
 
@@ -40,17 +46,17 @@ function agentTicker(info: AgentInfo): string {
 function agentTypeShort(info: AgentInfo): string {
   const t = (info.agentType ?? "").toLowerCase();
   const n = info.name.toLowerCase();
-  if (t.includes("orchestrator"))                        return "ORCH";
-  if (t.includes("monitor"))                             return "MON";
-  if (t.includes("guardian"))                            return "QA";
-  if (t.includes("gateway"))                             return "GWY";
-  if (t.includes("expert"))                              return "UDX";
-  if (t.includes("financier") || n.includes("wif"))      return "FIN";
-  if (t.includes("transfer")  || n.includes("nautilus")) return "SCP";
-  if (t.includes("dynamic")   || t.includes("script"))  return "DYN";
-  if (n.includes("weather"))                             return "WX";
-  if (n.includes("news"))                                return "NEWS";
-  if (n.includes("ml") || n.includes("classifier"))      return "ML";
+  if (t.includes("orchestrator")) return "ORCH";
+  if (t.includes("monitor")) return "MON";
+  if (t.includes("guardian")) return "QA";
+  if (t.includes("gateway")) return "GWY";
+  if (t.includes("expert")) return "UDX";
+  if (t.includes("financier") || n.includes("wif")) return "FIN";
+  if (t.includes("transfer") || n.includes("nautilus")) return "SCP";
+  if (t.includes("dynamic") || t.includes("script")) return "DYN";
+  if (n.includes("weather")) return "WX";
+  if (n.includes("news")) return "NEWS";
+  if (n.includes("ml") || n.includes("classifier")) return "ML";
   return "AGT";
 }
 
@@ -58,36 +64,39 @@ function agentTypeShort(info: AgentInfo): string {
 function agentAccent(info: AgentInfo): string {
   const t = (info.agentType ?? "").toLowerCase();
   const n = info.name.toLowerCase();
-  if (n === "main-actor"  || t.includes("orchestrator")) return "#ffd700";
-  if (t.includes("monitor")  || n.includes("monitor"))  return "#38bdf8";
-  if (t.includes("guardian") || n.includes("qa"))       return "#a78bfa";
-  if (t.includes("gateway")  || n.includes("io"))       return "#22d3ee";
-  if (t.includes("expert")   || n.includes("udx"))      return "#f59e0b";
-  if (t.includes("financier")|| n.includes("wif"))      return "#00d97e";
+  if (n === "main-actor" || t.includes("orchestrator")) return "#ffd700";
+  if (t.includes("monitor") || n.includes("monitor")) return "#38bdf8";
+  if (t.includes("guardian") || n.includes("qa")) return "#a78bfa";
+  if (t.includes("gateway") || n.includes("io")) return "#22d3ee";
+  if (t.includes("expert") || n.includes("udx")) return "#f59e0b";
+  if (t.includes("financier") || n.includes("wif")) return "#00d97e";
   if (t.includes("transfer") || n.includes("nautilus")) return "#818cf8";
-  if (n.includes("weather"))                            return "#7dd3fc";
-  if (n.includes("news"))                               return "#f87171";
-  if (t.includes("dynamic")  || t.includes("script"))  return "#c084fc";
+  if (n.includes("weather")) return "#7dd3fc";
+  if (n.includes("news")) return "#f87171";
+  if (t.includes("dynamic") || t.includes("script")) return "#c084fc";
   return "#64748b";
 }
 
 /** 8-bar sparkline from heartbeat timestamps. */
 function buildSparkline(tsList: number[]): string {
   const BARS = 8;
-  const now  = Date.now();
+  const now = Date.now();
   const chars: string[] = [];
 
   for (let i = 0; i < BARS; i++) {
     const ts = tsList[i];
-    if (ts === undefined) { chars.push("░"); continue; }
+    if (ts === undefined) {
+      chars.push("░");
+      continue;
+    }
     const ageSec = (now - ts) / 1000;
-    if      (ageSec <   5) chars.push("█");
-    else if (ageSec <  20) chars.push("▇");
-    else if (ageSec <  40) chars.push("▆");
-    else if (ageSec <  60) chars.push("▄");
-    else if (ageSec <  90) chars.push("▃");
+    if (ageSec < 5) chars.push("█");
+    else if (ageSec < 20) chars.push("▇");
+    else if (ageSec < 40) chars.push("▆");
+    else if (ageSec < 60) chars.push("▄");
+    else if (ageSec < 90) chars.push("▃");
     else if (ageSec < 120) chars.push("▂");
-    else                   chars.push("▁");
+    else chars.push("▁");
   }
   return chars.join("");
 }
@@ -96,29 +105,31 @@ function buildSparkline(tsList: number[]): string {
 
 export class FinDashboard {
   private container: HTMLElement;
-  private grid:      HTMLElement;
-  private countEl:   HTMLElement | null = null;
-  private clockEl:   HTMLElement | null = null;
+  private grid: HTMLElement;
+  private countEl: HTMLElement | null = null;
+  private clockEl: HTMLElement | null = null;
 
-  private agents      = new Map<string, AgentInfo>();
-  private heartbeats  = new Map<string, number>();
-  private heartbeatTs = new Map<string, number[]>();   // last 8 timestamps
-  private messages    = new Map<string, number>();
+  private agents = new Map<string, AgentInfo>();
+  private heartbeats = new Map<string, number>();
+  private heartbeatTs = new Map<string, number[]>(); // last 8 timestamps
+  private messages = new Map<string, number>();
 
-  private clockTimer:         ReturnType<typeof setInterval> | null = null;
-  private unreadListener:     ((e: Event) => void) | null = null;
-  private unreadClearLis:     ((e: Event) => void) | null = null;
+  private clockTimer: ReturnType<typeof setInterval> | null = null;
+  private unreadListener: ((e: Event) => void) | null = null;
+  private unreadClearLis: ((e: Event) => void) | null = null;
 
   constructor() {
     this.container = this.buildContainer();
-    this.grid      = this.container.querySelector(".fin-grid")!;
-    this.countEl   = this.container.querySelector(".fin-agent-count span");
-    this.clockEl   = this.container.querySelector(".fin-clock");
+    this.grid = this.container.querySelector(".fin-grid")!;
+    this.countEl = this.container.querySelector(".fin-agent-count span");
+    this.clockEl = this.container.querySelector(".fin-clock");
     document.body.appendChild(this.container);
 
     // Unread badge on Chat button
     this.unreadListener = (e) => {
-      const { name, count } = (e as CustomEvent<{ name: string; count: number }>).detail;
+      const { name, count } = (
+        e as CustomEvent<{ name: string; count: number }>
+      ).detail;
       const btn = this.grid.querySelector<HTMLElement>(
         `.fin-chat-btn[data-name="${CSS.escape(name)}"]`,
       );
@@ -136,7 +147,9 @@ export class FinDashboard {
     this.unreadClearLis = (e) => {
       const { name } = (e as CustomEvent<{ name: string }>).detail;
       this.grid
-        .querySelector(`.fin-chat-btn[data-name="${CSS.escape(name)}"] .chat-unread-badge`)
+        .querySelector(
+          `.fin-chat-btn[data-name="${CSS.escape(name)}"] .chat-unread-badge`,
+        )
         ?.remove();
     };
     document.addEventListener("agent-unread-cleared", this.unreadClearLis);
@@ -182,10 +195,16 @@ export class FinDashboard {
   }
 
   removeAgent(id: string): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(id)}"]`,
+    );
     if (card) {
       card.style.animation = "fin-exit 0.3s ease forwards";
-      setTimeout(() => { card.remove(); this.agents.delete(id); this.syncCount(); }, 300);
+      setTimeout(() => {
+        card.remove();
+        this.agents.delete(id);
+        this.syncCount();
+      }, 300);
     } else {
       this.agents.delete(id);
       this.syncCount();
@@ -201,7 +220,9 @@ export class FinDashboard {
     if (tsList.length > 8) tsList.shift();
     this.heartbeatTs.set(agentId, tsList);
 
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agentId)}"]`,
+    );
     if (!card) return;
 
     // Update tick count
@@ -223,7 +244,9 @@ export class FinDashboard {
         statusEl.setAttribute("aria-label", `Status: ${st}`);
       }
       const dotEl = card.querySelector<HTMLElement>(".fin-dot");
-      if (dotEl) { dotEl.className = `fin-dot fin-dot-${st}`; }
+      if (dotEl) {
+        dotEl.className = `fin-dot fin-dot-${st}`;
+      }
       const stateValEl = card.querySelector<HTMLElement>(".fin-state-val");
       if (stateValEl) stateValEl.textContent = st.toUpperCase();
       this.updateControls(card, agent);
@@ -242,7 +265,9 @@ export class FinDashboard {
     const count = (this.messages.get(fromId) ?? 0) + 1;
     this.messages.set(fromId, count);
 
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(fromId)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(fromId)}"]`,
+    );
     if (!card) return;
 
     const msgEl = card.querySelector<HTMLElement>(".fin-msgs");
@@ -253,9 +278,14 @@ export class FinDashboard {
   }
 
   showAlert(agentId: string, severity: string): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agentId)}"]`,
+    );
     if (!card) return;
-    const cls = severity === "error" || severity === "critical" ? "fin-alert-error" : "fin-alert-warn";
+    const cls =
+      severity === "error" || severity === "critical"
+        ? "fin-alert-error"
+        : "fin-alert-warn";
     card.classList.add(cls);
     setTimeout(() => card.classList.remove(cls), 900);
   }
@@ -288,8 +318,13 @@ export class FinDashboard {
   }
 
   private renderCard(agent: AgentInfo): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(agent.id)}"]`);
-    if (!card) { this.grid.appendChild(this.buildCard(agent)); return; }
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agent.id)}"]`,
+    );
+    if (!card) {
+      this.grid.appendChild(this.buildCard(agent));
+      return;
+    }
 
     const st = stateStr(agent.state);
     const statusEl = card.querySelector<HTMLElement>(".fin-status");
@@ -306,16 +341,30 @@ export class FinDashboard {
   }
 
   private updateControls(card: HTMLElement, agent: AgentInfo): void {
-    const st   = stateStr(agent.state);
+    const st = stateStr(agent.state);
     const prot = agent.protected ?? false;
-    const pauseBtn  = card.querySelector<HTMLButtonElement>('[data-action="pause"]');
-    const resumeBtn = card.querySelector<HTMLButtonElement>('[data-action="resume"]');
-    const stopBtn   = card.querySelector<HTMLButtonElement>('[data-action="stop"]');
-    const deleteBtn = card.querySelector<HTMLButtonElement>('[data-action="delete"]');
-    if (pauseBtn)  pauseBtn.style.display  = st === "running" ? "" : "none";
-    if (resumeBtn) resumeBtn.style.display = st === "paused"  ? "" : "none";
-    if (stopBtn)   { stopBtn.style.display = st !== "stopped" ? "" : "none"; stopBtn.disabled = prot; }
-    if (deleteBtn) { deleteBtn.disabled = prot; deleteBtn.title = prot ? "Protected agent" : "Delete agent"; }
+    const pauseBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="pause"]',
+    );
+    const resumeBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="resume"]',
+    );
+    const stopBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="stop"]',
+    );
+    const deleteBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="delete"]',
+    );
+    if (pauseBtn) pauseBtn.style.display = st === "running" ? "" : "none";
+    if (resumeBtn) resumeBtn.style.display = st === "paused" ? "" : "none";
+    if (stopBtn) {
+      stopBtn.style.display = st !== "stopped" ? "" : "none";
+      stopBtn.disabled = prot;
+    }
+    if (deleteBtn) {
+      deleteBtn.disabled = prot;
+      deleteBtn.title = prot ? "Protected agent" : "Delete agent";
+    }
   }
 
   private syncCount(): void {
@@ -323,20 +372,22 @@ export class FinDashboard {
   }
 
   private buildCard(agent: AgentInfo): HTMLElement {
-    const imgUrl  = agentImageGen.get(agent);
-    const st      = stateStr(agent.state);
-    const hb      = this.heartbeats.get(agent.id) ?? 0;
-    const msgs    = this.messages.get(agent.id) ?? 0;
-    const tsList  = this.heartbeatTs.get(agent.id) ?? [];
-    const spark   = buildSparkline(tsList);
-    const ticker  = agentTicker(agent);
+    const imgUrl = agentImageGen.get(agent);
+    const st = stateStr(agent.state);
+    const hb = this.heartbeats.get(agent.id) ?? 0;
+    const msgs = this.messages.get(agent.id) ?? 0;
+    const tsList = this.heartbeatTs.get(agent.id) ?? [];
+    const spark = buildSparkline(tsList);
+    const ticker = agentTicker(agent);
     const tyShort = agentTypeShort(agent);
-    const accent  = agentAccent(agent);
-    const isMain  = agent.name === "main-actor" || (agent.agentType ?? "").includes("orchestrator");
+    const accent = agentAccent(agent);
+    const isMain =
+      agent.name === "main-actor" ||
+      (agent.agentType ?? "").includes("orchestrator");
 
     const card = document.createElement("article");
-    card.className   = `fin-card${isMain ? " fin-card-main" : ""}`;
-    card.dataset.id  = agent.id;
+    card.className = `fin-card${isMain ? " fin-card-main" : ""}`;
+    card.dataset.id = agent.id;
     card.setAttribute("role", "article");
     card.setAttribute("aria-label", `${agent.name} agent — ${stateLabel(st)}`);
     card.setAttribute("tabindex", "0");
@@ -349,9 +400,11 @@ export class FinDashboard {
           <span class="fin-status fin-status-${st}"
                 role="status" aria-live="polite"
                 aria-label="Agent status: ${stateLabel(st)}">${stateLabel(st)}</span>
-          ${agent.protected
-            ? '<span class="fin-protected" aria-label="Core protected agent" title="Protected">⊛</span>'
-            : ""}
+          ${
+            agent.protected
+              ? '<span class="fin-protected" aria-label="Core protected agent" title="Protected">⊛</span>'
+              : ""
+          }
         </div>
         <div class="fin-card-id">
           <div class="fin-avatar-wrap">
@@ -410,22 +463,31 @@ export class FinDashboard {
     // Chat button
     card.querySelector(".fin-chat-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
-      document.dispatchEvent(new CustomEvent("agent-selected", { detail: { agent } }));
+      document.dispatchEvent(
+        new CustomEvent("agent-selected", { detail: { agent } }),
+      );
     });
 
     // Control buttons
     card.querySelector(".fin-controls")?.addEventListener("click", (e) => {
-      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+        "[data-action]",
+      );
       if (!btn || btn.disabled) return;
       e.stopPropagation();
-      this.sendCommand(agent.id, btn.dataset.action as "pause" | "resume" | "stop" | "delete");
+      this.sendCommand(
+        agent.id,
+        btn.dataset.action as "pause" | "resume" | "stop" | "delete",
+      );
     });
 
     // Keyboard: Enter/Space on card → open chat (like clicking)
     card.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        document.dispatchEvent(new CustomEvent("agent-selected", { detail: { agent } }));
+        document.dispatchEvent(
+          new CustomEvent("agent-selected", { detail: { agent } }),
+        );
       }
     });
 
@@ -435,22 +497,32 @@ export class FinDashboard {
 
   // ── REST commands ─────────────────────────────────────────────────────────
 
-  private sendCommand(id: string, action: "pause" | "resume" | "stop" | "delete"): void {
+  private sendCommand(
+    id: string,
+    action: "pause" | "resume" | "stop" | "delete",
+  ): void {
     const base = `/api/actors/${encodeURIComponent(id)}`;
     const [url, method] =
-      action === "pause"  ? [`${base}/pause`,  "POST"] :
-      action === "resume" ? [`${base}/resume`, "POST"] :
-                            [base,             "DELETE"];
+      action === "pause"
+        ? [`${base}/pause`, "POST"]
+        : action === "resume"
+          ? [`${base}/resume`, "POST"]
+          : [base, "DELETE"];
     fetch(url, { method })
       .then((r) => {
-        if (!r.ok && r.status !== 404) { this.flashError(id); return; }
+        if (!r.ok && r.status !== 404) {
+          this.flashError(id);
+          return;
+        }
         if (action === "delete") this.removeAgent(id);
       })
       .catch(() => this.flashError(id));
   }
 
   private flashError(id: string): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(id)}"]`,
+    );
     if (!card) return;
     card.classList.add("fin-alert-error");
     setTimeout(() => card.classList.remove("fin-alert-error"), 900);
@@ -462,9 +534,9 @@ export class FinDashboard {
     const tick = () => {
       if (!this.clockEl) return;
       const now = new Date();
-      const hh  = String(now.getUTCHours()).padStart(2, "0");
-      const mm  = String(now.getUTCMinutes()).padStart(2, "0");
-      const ss  = String(now.getUTCSeconds()).padStart(2, "0");
+      const hh = String(now.getUTCHours()).padStart(2, "0");
+      const mm = String(now.getUTCMinutes()).padStart(2, "0");
+      const ss = String(now.getUTCSeconds()).padStart(2, "0");
       this.clockEl.textContent = `${hh}:${mm}:${ss} UTC`;
     };
     tick();
@@ -472,14 +544,17 @@ export class FinDashboard {
   }
 
   private stopClock(): void {
-    if (this.clockTimer) { clearInterval(this.clockTimer); this.clockTimer = null; }
+    if (this.clockTimer) {
+      clearInterval(this.clockTimer);
+      this.clockTimer = null;
+    }
   }
 
   // ── DOM skeleton ─────────────────────────────────────────────────────────
 
   private buildContainer(): HTMLElement {
     const el = document.createElement("div");
-    el.id        = "fin-dashboard";
+    el.id = "fin-dashboard";
     el.className = "fin-root";
     el.setAttribute("role", "main");
     el.setAttribute("aria-label", "WIF Finance Terminal — Agent Dashboard");
@@ -505,7 +580,9 @@ export class FinDashboard {
     `;
 
     el.querySelector(".fin-3d-btn")?.addEventListener("click", () => {
-      document.dispatchEvent(new CustomEvent("theme-change", { detail: { theme: "graph" } }));
+      document.dispatchEvent(
+        new CustomEvent("theme-change", { detail: { theme: "graph" } }),
+      );
     });
 
     return el;

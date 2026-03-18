@@ -25,7 +25,9 @@ import { AgentNodeBase } from "./AgentNodeBase";
 
 /** Velocity vector used by the spring layout. */
 export interface Velocity3 {
-  x: number; y: number; z: number;
+  x: number;
+  y: number;
+  z: number;
 }
 
 export class GraphNode extends AgentNodeBase {
@@ -119,12 +121,15 @@ export class GraphNode extends AgentNodeBase {
   }
 
   showAlert(severity: string): void {
-    const flash = severity === "critical" || severity === "error"
-      ? new Color3(1, 0.1, 0.1)
-      : new Color3(1, 0.8, 0.1);
+    const flash =
+      severity === "critical" || severity === "error"
+        ? new Color3(1, 0.1, 0.1)
+        : new Color3(1, 0.8, 0.1);
     const prev = this.material.emissiveColor.clone();
     this.material.emissiveColor = flash;
-    setTimeout(() => { this.material.emissiveColor = prev; }, 600);
+    setTimeout(() => {
+      this.material.emissiveColor = prev;
+    }, 600);
   }
 
   playSpawnEffect(): void {
@@ -132,7 +137,9 @@ export class GraphNode extends AgentNodeBase {
     let t = 0;
     const obs = this.scene.onBeforeRenderObservable.add(() => {
       t = Math.min(t + 0.06, 1);
-      this.mesh.scaling.setAll(t < 0.5 ? t * 2 : 1 + 0.1 * Math.sin((t - 0.5) * Math.PI * 4));
+      this.mesh.scaling.setAll(
+        t < 0.5 ? t * 2 : 1 + 0.1 * Math.sin((t - 0.5) * Math.PI * 4),
+      );
       if (t >= 1) {
         this.mesh.scaling.setAll(1);
         this.scene.onBeforeRenderObservable.remove(obs);

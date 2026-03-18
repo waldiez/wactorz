@@ -120,7 +120,10 @@ export class MQTTClient {
 
   // ── Event emitter ───────────────────────────────────────────────────────────
 
-  on<K extends keyof MQTTEvents>(event: K, listener: Listener<MQTTEvents[K]>): this {
+  on<K extends keyof MQTTEvents>(
+    event: K,
+    listener: Listener<MQTTEvents[K]>,
+  ): this {
     if (!this.listeners[event]) {
       (this.listeners as Listeners)[event] = [];
     }
@@ -128,8 +131,13 @@ export class MQTTClient {
     return this;
   }
 
-  off<K extends keyof MQTTEvents>(event: K, listener: Listener<MQTTEvents[K]>): this {
-    const arr = this.listeners[event] as Array<Listener<MQTTEvents[K]>> | undefined;
+  off<K extends keyof MQTTEvents>(
+    event: K,
+    listener: Listener<MQTTEvents[K]>,
+  ): this {
+    const arr = this.listeners[event] as
+      | Array<Listener<MQTTEvents[K]>>
+      | undefined;
     if (arr) {
       const idx = arr.indexOf(listener);
       if (idx !== -1) arr.splice(idx, 1);
@@ -137,10 +145,17 @@ export class MQTTClient {
     return this;
   }
 
-  private emit<K extends keyof MQTTEvents>(event: K, data: MQTTEvents[K]): void {
-    const arr = this.listeners[event] as Array<Listener<MQTTEvents[K]>> | undefined;
+  private emit<K extends keyof MQTTEvents>(
+    event: K,
+    data: MQTTEvents[K],
+  ): void {
+    const arr = this.listeners[event] as
+      | Array<Listener<MQTTEvents[K]>>
+      | undefined;
     arr?.forEach((fn) => {
-      try { fn(data); } catch (err) {
+      try {
+        fn(data);
+      } catch (err) {
         console.error(`[MQTT] listener error on "${event}":`, err);
       }
     });
@@ -212,18 +227,26 @@ export class MQTTClient {
       const agentId = metricsMatch[1];
       const p = payload as Record<string, unknown>;
       const costUsd = (p["costUsd"] ?? p["cost_usd"]) as number | undefined;
-      const inputTokens = (p["inputTokens"] ?? p["input_tokens"]) as number | undefined;
-      const outputTokens = (p["outputTokens"] ?? p["output_tokens"]) as number | undefined;
-      const messagesProcessed = (p["messagesProcessed"] ?? p["messages_processed"]) as number | undefined;
+      const inputTokens = (p["inputTokens"] ?? p["input_tokens"]) as
+        | number
+        | undefined;
+      const outputTokens = (p["outputTokens"] ?? p["output_tokens"]) as
+        | number
+        | undefined;
+      const messagesProcessed = (p["messagesProcessed"] ??
+        p["messages_processed"]) as number | undefined;
       const uptime = p["uptime"] as number | undefined;
       this.emit("metrics", {
         agentId,
-        agentName: (p["agentName"] as string) ?? (p["name"] as string) ?? agentId.slice(0, 8),
-        ...(costUsd !== undefined          && { costUsd }),
-        ...(inputTokens !== undefined      && { inputTokens }),
-        ...(outputTokens !== undefined     && { outputTokens }),
+        agentName:
+          (p["agentName"] as string) ??
+          (p["name"] as string) ??
+          agentId.slice(0, 8),
+        ...(costUsd !== undefined && { costUsd }),
+        ...(inputTokens !== undefined && { inputTokens }),
+        ...(outputTokens !== undefined && { outputTokens }),
         ...(messagesProcessed !== undefined && { messagesProcessed }),
-        ...(uptime !== undefined           && { uptime }),
+        ...(uptime !== undefined && { uptime }),
       });
       return;
     }
@@ -236,7 +259,10 @@ export class MQTTClient {
       const message = (p["message"] ?? p["text"]) as string | undefined;
       this.emit("logs", {
         agentId,
-        agentName: (p["agentName"] as string) ?? (p["name"] as string) ?? agentId.slice(0, 8),
+        agentName:
+          (p["agentName"] as string) ??
+          (p["name"] as string) ??
+          agentId.slice(0, 8),
         ...(message !== undefined && { message }),
       });
       return;
@@ -249,7 +275,10 @@ export class MQTTClient {
       const p = payload as Record<string, unknown>;
       this.emit("completed", {
         agentId,
-        agentName: (p["agentName"] as string) ?? (p["name"] as string) ?? agentId.slice(0, 8),
+        agentName:
+          (p["agentName"] as string) ??
+          (p["name"] as string) ??
+          agentId.slice(0, 8),
       });
       return;
     }
@@ -293,9 +322,11 @@ function str(v: unknown, fallback = ""): string {
 
 function normaliseHeartbeat(p: unknown): HeartbeatPayload {
   const o = (p ?? {}) as RawObj;
-  const agentId   = str(o["agentId"]   ?? o["actor_id"]  ?? o["agent_id"]);
-  const agentName = str(o["agentName"] ?? o["name"]       ?? agentId.slice(0, 8));
-  const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
+  const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
+  const agentName = str(o["agentName"] ?? o["name"] ?? agentId.slice(0, 8));
+  const timestampMs = toMs(
+    o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"],
+  );
   return {
     ...(o as unknown as HeartbeatPayload),
     agentId,
@@ -307,21 +338,23 @@ function normaliseHeartbeat(p: unknown): HeartbeatPayload {
 
 function normaliseChat(p: unknown): ChatMessage {
   const o = (p ?? {}) as RawObj;
-  const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
+  const timestampMs = toMs(
+    o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"],
+  );
   return {
     ...(o as unknown as ChatMessage),
-    id:          str(o["id"]) || `chat-${timestampMs}`,
-    from:        str(o["from"] ?? o["agentName"] ?? o["name"]),
-    to:          str(o["to"]) || "user",  // default to "user" when field absent
-    content:     str(o["content"]),
+    id: str(o["id"]) || `chat-${timestampMs}`,
+    from: str(o["from"] ?? o["agentName"] ?? o["name"]),
+    to: str(o["to"]) || "user", // default to "user" when field absent
+    content: str(o["content"]),
     timestampMs,
   };
 }
 
 function normaliseStatus(p: unknown): StatusPayload {
   const o = (p ?? {}) as RawObj;
-  const agentId   = str(o["agentId"]   ?? o["actor_id"]  ?? o["agent_id"]);
-  const agentName = str(o["agentName"] ?? o["name"]       ?? agentId.slice(0, 8));
+  const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
+  const agentName = str(o["agentName"] ?? o["name"] ?? agentId.slice(0, 8));
   return {
     ...(o as unknown as StatusPayload),
     agentId,

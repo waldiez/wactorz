@@ -26,15 +26,29 @@ function staticAvatar(name: string, type?: string): string | null {
     return "/avatars/manager.webp";
 
   // Code execution / dynamic / reasoning
-  if (n.includes("code") || n.includes("dynamic") || n.includes("reasoning") || t.includes("script"))
+  if (
+    n.includes("code") ||
+    n.includes("dynamic") ||
+    n.includes("reasoning") ||
+    t.includes("script")
+  )
     return "/avatars/reasoning.webp";
 
   // Manual / assistant / knowledge / udx
-  if (n.includes("manual") || n.includes("assistant") || n.includes("udx") || n.includes("rag"))
+  if (
+    n.includes("manual") ||
+    n.includes("assistant") ||
+    n.includes("udx") ||
+    n.includes("rag")
+  )
     return "/avatars/assistant.webp";
 
   // Remote / home-assistant / nautilus
-  if (n.includes("home-assistant") || n.includes("nautilus") || n.includes("remote"))
+  if (
+    n.includes("home-assistant") ||
+    n.includes("nautilus") ||
+    n.includes("remote")
+  )
     return "/avatars/remote.webp";
 
   // IO / user gateway
@@ -65,8 +79,7 @@ export class AgentImageGen {
   get(agent: Pick<AgentInfo, "id" | "name"> & { agentType?: string }): string {
     if (!this.cache.has(agent.id)) {
       const url =
-        staticAvatar(agent.name, agent.agentType) ??
-        dicebearUrl(agent.name);
+        staticAvatar(agent.name, agent.agentType) ?? dicebearUrl(agent.name);
       this.cache.set(agent.id, url);
     }
     return this.cache.get(agent.id)!;

@@ -102,13 +102,19 @@ export class GalaxyTheme extends ThemeBase {
     this.nextOrbitRadius = 6;
 
     // Restore default clear colour
-    this.scene.clearColor = new Color4(0.02, 0.03, 0.10, 1);
+    this.scene.clearColor = new Color4(0.02, 0.03, 0.1, 1);
   }
 
   addAgent(agent: AgentInfo): void {
-    if (this.nodes.has(agent.id)) { this.updateAgent(agent); return; }
+    if (this.nodes.has(agent.id)) {
+      this.updateAgent(agent);
+      return;
+    }
 
-    const isMain = agent.name === "main-actor" || agent.agentType === "orchestrator" || agent.agentType === "main";
+    const isMain =
+      agent.name === "main-actor" ||
+      agent.agentType === "orchestrator" ||
+      agent.agentType === "main";
 
     const orbitRadius = isMain ? 0 : this.nextOrbitRadius;
     if (!isMain) this.nextOrbitRadius += 3.5;
@@ -122,7 +128,9 @@ export class GalaxyTheme extends ThemeBase {
     );
     node.onClick = (info) => {
       document.dispatchEvent(
-        new CustomEvent<{ agent: AgentInfo }>("agent-selected", { detail: { agent: info } }),
+        new CustomEvent<{ agent: AgentInfo }>("agent-selected", {
+          detail: { agent: info },
+        }),
       );
     };
 

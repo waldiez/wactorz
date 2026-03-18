@@ -20,10 +20,10 @@ import type { AgentInfo } from "../../types/agent";
 import { CardBabylonNode } from "../nodes/CardBabylonNode";
 import { ThemeBase } from "./ThemeBase";
 
-const COLS      = 4;   // cards per row
-const GAP_X     = 3.0; // horizontal spacing (world units)
-const GAP_Y     = 4.0; // vertical spacing
-const CARD_DEPTH = 0;  // all cards sit at z = 0
+const COLS = 4; // cards per row
+const GAP_X = 3.0; // horizontal spacing (world units)
+const GAP_Y = 4.0; // vertical spacing
+const CARD_DEPTH = 0; // all cards sit at z = 0
 
 export class CardBabylonTheme extends ThemeBase {
   readonly name = "cards-3d" as const;
@@ -39,7 +39,7 @@ export class CardBabylonTheme extends ThemeBase {
       this.scene,
     );
     this.ambientLight.intensity = 1.0;
-    this.ambientLight.diffuse   = Color3.White();
+    this.ambientLight.diffuse = Color3.White();
   }
 
   teardown(): void {
@@ -50,20 +50,26 @@ export class CardBabylonTheme extends ThemeBase {
       this.removeAgent(id);
     }
 
-    this.scene.clearColor = new Color4(0.02, 0.03, 0.10, 1);
+    this.scene.clearColor = new Color4(0.02, 0.03, 0.1, 1);
   }
 
   addAgent(agent: AgentInfo): void {
-    if (this.nodes.has(agent.id)) { this.updateAgent(agent); return; }
+    if (this.nodes.has(agent.id)) {
+      this.updateAgent(agent);
+      return;
+    }
 
-    const isMain = agent.name === "main-actor"
-      || agent.agentType === "orchestrator"
-      || agent.agentType === "main";
+    const isMain =
+      agent.name === "main-actor" ||
+      agent.agentType === "orchestrator" ||
+      agent.agentType === "main";
 
     const node = new CardBabylonNode(agent, this.scene, isMain);
     node.onClick = (info) => {
       document.dispatchEvent(
-        new CustomEvent<{ agent: AgentInfo }>("agent-selected", { detail: { agent: info } }),
+        new CustomEvent<{ agent: AgentInfo }>("agent-selected", {
+          detail: { agent: info },
+        }),
       );
     };
 
@@ -79,9 +85,9 @@ export class CardBabylonTheme extends ThemeBase {
   /** Recompute grid positions for all cards. */
   private relayout(): void {
     const agents = [...this.nodes.values()];
-    const count  = agents.length;
-    const cols   = Math.min(count, COLS);
-    const rows   = Math.ceil(count / cols);
+    const count = agents.length;
+    const cols = Math.min(count, COLS);
+    const rows = Math.ceil(count / cols);
 
     // Centre the grid at origin
     const totalW = (cols - 1) * GAP_X;

@@ -19,14 +19,20 @@ import { agentImageGen } from "../io/AgentImageGen";
 // ── Palette helpers ──────────────────────────────────────────────────────────
 
 function accentFor(info: AgentInfo): string {
-  if (info.name === "main-actor" || info.agentType === "orchestrator") return "#f59e0b";
+  if (info.name === "main-actor" || info.agentType === "orchestrator")
+    return "#f59e0b";
   if (typeof info.state === "object") return "#f43f5e";
   switch (info.state as string) {
-    case "running":      return "#3dd68c";
-    case "paused":       return "#fb923c";
-    case "initializing": return "#60a5fa";
-    case "stopped":      return "#475569";
-    default:             return "#3dd68c";
+    case "running":
+      return "#3dd68c";
+    case "paused":
+      return "#fb923c";
+    case "initializing":
+      return "#60a5fa";
+    case "stopped":
+      return "#475569";
+    default:
+      return "#3dd68c";
   }
 }
 
@@ -44,22 +50,24 @@ function relTime(ms: number): string {
 // ── CardDashboard ────────────────────────────────────────────────────────────
 
 export class CardDashboard {
-  private container:     HTMLElement;
-  private grid:          HTMLElement;
-  private agents:        Map<string, AgentInfo> = new Map();
-  private lastHb:        Map<string, number>    = new Map();
-  private tickTimer:     ReturnType<typeof setInterval> | null = null;
-  private unreadListener:       ((e: Event) => void) | null = null;
-  private unreadClearListener:  ((e: Event) => void) | null = null;
+  private container: HTMLElement;
+  private grid: HTMLElement;
+  private agents: Map<string, AgentInfo> = new Map();
+  private lastHb: Map<string, number> = new Map();
+  private tickTimer: ReturnType<typeof setInterval> | null = null;
+  private unreadListener: ((e: Event) => void) | null = null;
+  private unreadClearListener: ((e: Event) => void) | null = null;
 
   constructor() {
     this.container = this.buildContainer();
-    this.grid      = this.container.querySelector(".cd-grid")!;
+    this.grid = this.container.querySelector(".cd-grid")!;
     document.body.appendChild(this.container);
 
     // Unread badge: show count when a background thread gets a message
     this.unreadListener = (e) => {
-      const { name, count } = (e as CustomEvent<{ name: string; count: number }>).detail;
+      const { name, count } = (
+        e as CustomEvent<{ name: string; count: number }>
+      ).detail;
       const btn = this.grid.querySelector<HTMLElement>(
         `.cd-chat-btn[data-name="${CSS.escape(name)}"]`,
       );
@@ -78,7 +86,9 @@ export class CardDashboard {
     this.unreadClearListener = (e) => {
       const { name } = (e as CustomEvent<{ name: string }>).detail;
       this.grid
-        .querySelector(`.cd-chat-btn[data-name="${CSS.escape(name)}"] .chat-unread-badge`)
+        .querySelector(
+          `.cd-chat-btn[data-name="${CSS.escape(name)}"] .chat-unread-badge`,
+        )
         ?.remove();
     };
     document.addEventListener("agent-unread-cleared", this.unreadClearListener);
@@ -96,7 +106,10 @@ export class CardDashboard {
 
   hide(): void {
     this.container.classList.remove("cd-visible");
-    if (this.tickTimer) { clearInterval(this.tickTimer); this.tickTimer = null; }
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
   }
 
   destroy(): void {
@@ -106,7 +119,10 @@ export class CardDashboard {
       this.unreadListener = null;
     }
     if (this.unreadClearListener) {
-      document.removeEventListener("agent-unread-cleared", this.unreadClearListener);
+      document.removeEventListener(
+        "agent-unread-cleared",
+        this.unreadClearListener,
+      );
       this.unreadClearListener = null;
     }
     this.container.remove();
@@ -128,7 +144,10 @@ export class CardDashboard {
     const card = this.grid.querySelector(`[data-id="${CSS.escape(id)}"]`);
     if (card) {
       (card as HTMLElement).style.animation = "cd-exit 0.25s ease forwards";
-      setTimeout(() => { card.remove(); this.agents.delete(id); }, 250);
+      setTimeout(() => {
+        card.remove();
+        this.agents.delete(id);
+      }, 250);
     } else {
       this.agents.delete(id);
     }
@@ -136,7 +155,9 @@ export class CardDashboard {
 
   onHeartbeat(agentId: string, timestampMs: number): void {
     this.lastHb.set(agentId, timestampMs);
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agentId)}"]`,
+    );
     if (!card) return;
 
     // Update heartbeat row
@@ -146,11 +167,15 @@ export class CardDashboard {
     // Sync state badge — agent.state is already mutated in-place by SceneManager
     const agent = this.agents.get(agentId);
     if (agent) {
-      const stType  = typeof agent.state === "object" ? "error" : (agent.state as string);
+      const stType =
+        typeof agent.state === "object" ? "error" : (agent.state as string);
       const badgeEl = card.querySelector<HTMLElement>(".cd-badge");
-      const dotEl   = card.querySelector<HTMLElement>(".cd-status-dot");
-      if (badgeEl) { badgeEl.textContent = stateLabel(agent.state); badgeEl.className = `cd-badge cd-badge-${stType}`; }
-      if (dotEl)   dotEl.className       = `cd-status-dot cd-dot-${stType}`;
+      const dotEl = card.querySelector<HTMLElement>(".cd-status-dot");
+      if (badgeEl) {
+        badgeEl.textContent = stateLabel(agent.state);
+        badgeEl.className = `cd-badge cd-badge-${stType}`;
+      }
+      if (dotEl) dotEl.className = `cd-status-dot cd-dot-${stType}`;
       card.style.setProperty("--accent", accentFor(agent));
       this.updateControls(card, agent);
     }
@@ -165,15 +190,25 @@ export class CardDashboard {
   }
 
   showAlert(agentId: string, severity: string): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agentId)}"]`,
+    );
     if (!card) return;
-    const cls = severity === "error" || severity === "critical" ? "cd-alert-error" : "cd-alert-warn";
+    const cls =
+      severity === "error" || severity === "critical"
+        ? "cd-alert-error"
+        : "cd-alert-warn";
     card.classList.add(cls);
-    setTimeout(() => card.classList.remove(cls, "cd-alert-error", "cd-alert-warn"), 900);
+    setTimeout(
+      () => card.classList.remove(cls, "cd-alert-error", "cd-alert-warn"),
+      900,
+    );
   }
 
   onChat(fromId: string, _toId: string): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(fromId)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(fromId)}"]`,
+    );
     if (!card) return;
     card.classList.add("cd-chat-flash");
     setTimeout(() => card.classList.remove("cd-chat-flash"), 600);
@@ -203,53 +238,73 @@ export class CardDashboard {
   }
 
   private renderCard(agent: AgentInfo): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(agent.id)}"]`);
-    if (!card) { this.grid.appendChild(this.buildCard(agent)); return; }
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agent.id)}"]`,
+    );
+    if (!card) {
+      this.grid.appendChild(this.buildCard(agent));
+      return;
+    }
 
     const accent = accentFor(agent);
     card.style.setProperty("--accent", accent);
 
-    const stType = typeof agent.state === "object" ? "error" : (agent.state as string);
-    const nameEl  = card.querySelector<HTMLElement>(".cd-name");
+    const stType =
+      typeof agent.state === "object" ? "error" : (agent.state as string);
+    const nameEl = card.querySelector<HTMLElement>(".cd-name");
     const badgeEl = card.querySelector<HTMLElement>(".cd-badge");
-    const typeEl  = card.querySelector<HTMLElement>(".cd-type");
-    const dotEl   = card.querySelector<HTMLElement>(".cd-status-dot");
-    if (nameEl)  nameEl.textContent  = agent.name;
-    if (badgeEl) { badgeEl.textContent = stateLabel(agent.state); badgeEl.className = `cd-badge cd-badge-${stType}`; }
-    if (typeEl)  typeEl.textContent  = agent.agentType ?? "";
-    if (dotEl)   dotEl.className     = `cd-status-dot cd-dot-${stType}`;
+    const typeEl = card.querySelector<HTMLElement>(".cd-type");
+    const dotEl = card.querySelector<HTMLElement>(".cd-status-dot");
+    if (nameEl) nameEl.textContent = agent.name;
+    if (badgeEl) {
+      badgeEl.textContent = stateLabel(agent.state);
+      badgeEl.className = `cd-badge cd-badge-${stType}`;
+    }
+    if (typeEl) typeEl.textContent = agent.agentType ?? "";
+    if (dotEl) dotEl.className = `cd-status-dot cd-dot-${stType}`;
 
     this.updateControls(card, agent);
   }
 
   /** Show/hide and enable/disable control buttons based on current agent state. */
   private updateControls(card: HTMLElement, agent: AgentInfo): void {
-    const st   = typeof agent.state === "object" ? "error" : (agent.state as string);
+    const st =
+      typeof agent.state === "object" ? "error" : (agent.state as string);
     const prot = agent.protected ?? false;
 
-    const pauseBtn  = card.querySelector<HTMLButtonElement>('[data-action="pause"]');
-    const resumeBtn = card.querySelector<HTMLButtonElement>('[data-action="resume"]');
-    const stopBtn   = card.querySelector<HTMLButtonElement>('[data-action="stop"]');
-    const deleteBtn = card.querySelector<HTMLButtonElement>('[data-action="delete"]');
+    const pauseBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="pause"]',
+    );
+    const resumeBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="resume"]',
+    );
+    const stopBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="stop"]',
+    );
+    const deleteBtn = card.querySelector<HTMLButtonElement>(
+      '[data-action="delete"]',
+    );
 
-    if (pauseBtn)  pauseBtn.style.display  = st === "running" ? "" : "none";
-    if (resumeBtn) resumeBtn.style.display = st === "paused"  ? "" : "none";
+    if (pauseBtn) pauseBtn.style.display = st === "running" ? "" : "none";
+    if (resumeBtn) resumeBtn.style.display = st === "paused" ? "" : "none";
     if (stopBtn) {
       stopBtn.style.display = st !== "stopped" ? "" : "none";
-      stopBtn.disabled      = prot;
-      stopBtn.title         = prot ? "Protected — cannot stop" : "Stop";
+      stopBtn.disabled = prot;
+      stopBtn.title = prot ? "Protected — cannot stop" : "Stop";
     }
     if (deleteBtn) {
       deleteBtn.disabled = prot;
-      deleteBtn.title    = prot ? "Protected — cannot delete" : "Delete";
+      deleteBtn.title = prot ? "Protected — cannot delete" : "Delete";
     }
   }
 
   private buildCard(agent: AgentInfo): HTMLElement {
     const accent = accentFor(agent);
-    const hbMs   = this.lastHb.get(agent.id) ?? 0;
-    const isMain = agent.name === "main-actor" || agent.agentType === "orchestrator";
-    const stType = typeof agent.state === "object" ? "error" : (agent.state as string);
+    const hbMs = this.lastHb.get(agent.id) ?? 0;
+    const isMain =
+      agent.name === "main-actor" || agent.agentType === "orchestrator";
+    const stType =
+      typeof agent.state === "object" ? "error" : (agent.state as string);
 
     const card = document.createElement("div");
     card.className = `cd-card${isMain ? " cd-card-main" : ""}`;
@@ -282,10 +337,14 @@ export class CardDashboard {
             <span class="cd-meta-key">ID</span>
             <span class="cd-meta-val cd-mono">…${agent.id.slice(-20)}</span>
           </div>
-          ${agent.agentType ? `<div class="cd-meta-row">
+          ${
+            agent.agentType
+              ? `<div class="cd-meta-row">
             <span class="cd-meta-key">type</span>
             <span class="cd-meta-val">${agent.agentType}</span>
-          </div>` : ""}
+          </div>`
+              : ""
+          }
           <div class="cd-meta-row">
             <div class="cd-status-dot cd-dot-${stType}"></div>
             <span class="cd-meta-key">heartbeat</span>
@@ -310,15 +369,23 @@ export class CardDashboard {
     card.querySelector(".cd-chat-btn")?.addEventListener("click", (e) => {
       e.stopPropagation();
       document.dispatchEvent(
-        new CustomEvent<{ agent: AgentInfo }>("agent-selected", { detail: { agent } }),
+        new CustomEvent<{ agent: AgentInfo }>("agent-selected", {
+          detail: { agent },
+        }),
       );
     });
 
     card.querySelector(".cd-controls")?.addEventListener("click", (e) => {
-      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+        "[data-action]",
+      );
       if (!btn || btn.disabled) return;
       e.stopPropagation();
-      const action = btn.dataset.action as "pause" | "resume" | "stop" | "delete";
+      const action = btn.dataset.action as
+        | "pause"
+        | "resume"
+        | "stop"
+        | "delete";
       this.sendCommand(agent.id, agent.name, action);
     });
 
@@ -335,9 +402,11 @@ export class CardDashboard {
   ): void {
     const base = `/api/actors/${encodeURIComponent(id)}`;
     const [url, method] =
-      action === "pause"  ? [`${base}/pause`,  "POST"] :
-      action === "resume" ? [`${base}/resume`, "POST"] :
-                            [base,             "DELETE"]; // stop + delete both send Stop
+      action === "pause"
+        ? [`${base}/pause`, "POST"]
+        : action === "resume"
+          ? [`${base}/resume`, "POST"]
+          : [base, "DELETE"]; // stop + delete both send Stop
 
     fetch(url, { method })
       .then((r) => {
@@ -356,7 +425,9 @@ export class CardDashboard {
 
   /** Briefly flash the card border red on a failed command. */
   private flashError(id: string): void {
-    const card = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+    const card = this.grid.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(id)}"]`,
+    );
     if (!card) return;
     card.classList.add("cd-alert-error");
     setTimeout(() => card.classList.remove("cd-alert-error"), 900);
@@ -364,7 +435,9 @@ export class CardDashboard {
 
   private refreshTimestamps(): void {
     this.lastHb.forEach((ms, id) => {
-      const el = this.grid.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"] .cd-hb-time`);
+      const el = this.grid.querySelector<HTMLElement>(
+        `[data-id="${CSS.escape(id)}"] .cd-hb-time`,
+      );
       if (el) el.textContent = relTime(ms);
     });
   }

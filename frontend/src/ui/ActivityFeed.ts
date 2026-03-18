@@ -34,7 +34,7 @@ const TYPE_COLORS: Record<FeedEventType, string> = {
   "alert-warning": "#fbbf24",
   stopped: "#5a6a8a",
   health: "#a0a0c0",
-  "qa-flag": "#c084fc",   // violet — QA flags stand out
+  "qa-flag": "#c084fc", // violet — QA flags stand out
 };
 
 export class ActivityFeed {
@@ -51,12 +51,18 @@ export class ActivityFeed {
   constructor() {
     this.panel = document.getElementById("activity-feed")!;
     this.list = document.getElementById("feed-list")!;
-    this.toggleBtn = document.getElementById("feed-toggle") as HTMLButtonElement;
+    this.toggleBtn = document.getElementById(
+      "feed-toggle",
+    ) as HTMLButtonElement;
     this.badge = document.getElementById("feed-badge")!;
 
     this.toggleBtn.addEventListener("click", () => this.toggle());
-    this.list.addEventListener("mouseenter", () => { this.isPaused = true; });
-    this.list.addEventListener("mouseleave", () => { this.isPaused = false; });
+    this.list.addEventListener("mouseenter", () => {
+      this.isPaused = true;
+    });
+    this.list.addEventListener("mouseleave", () => {
+      this.isPaused = false;
+    });
   }
 
   /** Push a new event into the feed. */
@@ -119,7 +125,9 @@ export class ActivityFeed {
 
   private updateBadge(): void {
     if (this.unseenCount > 0 && !this.isOpen) {
-      this.badge.textContent = String(this.unseenCount > 99 ? "99+" : this.unseenCount);
+      this.badge.textContent = String(
+        this.unseenCount > 99 ? "99+" : this.unseenCount,
+      );
       this.badge.style.display = "inline-flex";
     } else {
       this.badge.style.display = "none";

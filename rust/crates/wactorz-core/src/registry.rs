@@ -298,6 +298,15 @@ impl Supervisor {
         }
     }
 
+    pub fn with_poll_interval(system: ActorSystem, poll_interval: Duration) -> Self {
+        Self {
+            system,
+            specs: Arc::new(Mutex::new(Vec::new())),
+            poll_interval,
+            watch_task: None,
+        }
+    }
+
     /// Register an actor to be supervised. Call before [`start`].
     pub fn supervise(
         &mut self,
@@ -518,11 +527,17 @@ async fn stop_one(
         .and_then(|(_, e)| e.actor_id.clone());
 
     if let Some(id) = actor_id {
-        let _ = system.registry
-            .send(&id, Message::command(id.clone(), ActorCommand::Stop))
-            .await;
-        // Brief pause to let the actor deregister
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Only send Stop and wait if the actor is still in the registry.
+        // An already-crashed actor has already deregistered itself; waiting
+        // for it would waste 200 ms and push cascaded restarts beyond the
+        // expected window.
+        if system.registry.get(&id).await.is_some() {
+            let _ = system.registry
+                .send(&id, Message::command(id.clone(), ActorCommand::Stop))
+                .await;
+            // Brief pause to let the actor deregister
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
     // Clear actor_id
     let mut specs_guard = specs.lock().unwrap();

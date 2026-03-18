@@ -434,6 +434,7 @@ class HomeAssistantAgent(LLMAgent):
         if action == "edit_automation":
             automations = await self._get_automations_brief()
             devices = await self._get_devices()
+            logger.info("[%s] Got devices from Home Assistant", self.name)
             return await self._edit_automation(text, automations, devices)
 
         if action == "recommend_hardware":
@@ -444,12 +445,14 @@ class HomeAssistantAgent(LLMAgent):
         if action == "create_automation":
             # Create flow: hardware selection then automation generation.
             devices = await self._get_devices()
-            hardware_result = await self._select_hardware(text, devices)
-            if not hardware_result.get("can_fulfill"):
-                return hardware_result
+            logger.info("[%s] Got devices from Home Assistant", self.name)
+            # hardware_result = await self._select_hardware(text, devices)
+            # if not hardware_result.get("can_fulfill"):
+            #     return hardware_result
 
-            entities = self._extract_entity_ids_from_hardware(hardware_result)
-            return await self._create_automation(text, entities, hardware_result.get("hardware", []))
+            # entities = self._extract_entity_ids_from_hardware(hardware_result)
+            # return await self._create_automation(text, entities, hardware_result.get("hardware", []))
+            return await self._recommend_hardware(text, devices)
 
         return self._unsupported_action_response(text)
 

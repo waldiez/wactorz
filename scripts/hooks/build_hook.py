@@ -42,6 +42,12 @@ def _pkg_manager(frontend_dir: Path) -> list[str]:
     return ["npm"]
 
 
+def _pm_available(pm: list[str]) -> bool:
+    """Return True if the package-manager executable is on PATH."""
+    import shutil
+    return shutil.which(pm[0]) is not None
+
+
 def _is_stale(dist_index: Path) -> bool:
     if not dist_index.exists():
         return True
@@ -72,6 +78,20 @@ class CustomBuildHook(BuildHookInterface):
             return
 
         pm = _pkg_manager(frontend)
+
+        if not _pm_available(pm):
+            if dist_index.exists():
+                self.app.display_info(
+                    f"[build-hook] {pm[0]} not found — "
+                    "static/app already present (committed), skipping rebuild"
+                )
+                return
+            self.app.display_error(
+                f"[build-hook] {pm[0]} not found and static/app/index.html is missing. "
+                f"Install {pm[0]} (or bun/pnpm/npm) to build the frontend."
+            )
+            sys.exit(1)
+
         self.app.display_info(f"[build-hook] building frontend with {pm[0]} …")
 
         def _run(cmd: list[str]) -> None:

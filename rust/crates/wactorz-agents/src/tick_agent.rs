@@ -16,16 +16,16 @@ use tokio::sync::mpsc;
 use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 pub struct TickAgent {
-    config:        ActorConfig,
+    config: ActorConfig,
     interval_secs: u64,
     /// Optional Rhai script executed on each tick (receives `tick_count` variable).
-    script:        Option<String>,
-    tick_count:    u64,
-    state:         ActorState,
-    metrics:       Arc<ActorMetrics>,
-    mailbox_tx:    mpsc::Sender<Message>,
-    mailbox_rx:    Option<mpsc::Receiver<Message>>,
-    publisher:     Option<EventPublisher>,
+    script: Option<String>,
+    tick_count: u64,
+    state: ActorState,
+    metrics: Arc<ActorMetrics>,
+    mailbox_tx: mpsc::Sender<Message>,
+    mailbox_rx: Option<mpsc::Receiver<Message>>,
+    publisher: Option<EventPublisher>,
 }
 
 impl TickAgent {
@@ -34,13 +34,13 @@ impl TickAgent {
         Self {
             config,
             interval_secs,
-            script:     None,
+            script: None,
             tick_count: 0,
-            state:      ActorState::Initializing,
-            metrics:    Arc::new(ActorMetrics::new()),
+            state: ActorState::Initializing,
+            metrics: Arc::new(ActorMetrics::new()),
             mailbox_tx: tx,
             mailbox_rx: Some(rx),
-            publisher:  None,
+            publisher: None,
         }
     }
 
@@ -84,15 +84,29 @@ impl TickAgent {
 
 #[async_trait]
 impl Actor for TickAgent {
-    fn id(&self)      -> String { self.config.id.clone() }
-    fn name(&self)    -> &str   { &self.config.name }
-    fn state(&self)   -> ActorState { self.state.clone() }
-    fn metrics(&self) -> Arc<ActorMetrics> { Arc::clone(&self.metrics) }
-    fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
-        tracing::info!("[{}] Tick agent started (interval={}s)", self.config.name, self.interval_secs);
+        tracing::info!(
+            "[{}] Tick agent started (interval={}s)",
+            self.config.name,
+            self.interval_secs
+        );
         if let Some(pub_) = &self.publisher {
             pub_.publish(
                 wactorz_mqtt::topics::spawn(&self.config.id),
@@ -112,9 +126,10 @@ impl Actor for TickAgent {
         use wactorz_core::message::MessageType;
         // Accept interval change via Task payload {"interval_secs": N}
         if let MessageType::Task { payload, .. } = &message.payload
-            && let Some(n) = payload.get("interval_secs").and_then(|v| v.as_u64()) {
-                self.interval_secs = n;
-                tracing::info!("[{}] interval changed to {n}s", self.config.name);
+            && let Some(n) = payload.get("interval_secs").and_then(|v| v.as_u64())
+        {
+            self.interval_secs = n;
+            tracing::info!("[{}] interval changed to {n}s", self.config.name);
         }
         Ok(())
     }
@@ -138,11 +153,12 @@ impl Actor for TickAgent {
 
     async fn run(&mut self) -> Result<()> {
         self.on_start().await?;
-        let mut rx = self.mailbox_rx.take()
+        let mut rx = self
+            .mailbox_rx
+            .take()
             .ok_or_else(|| anyhow::anyhow!("TickAgent already running"))?;
-        let mut hb = tokio::time::interval(Duration::from_secs(
-            self.config.heartbeat_interval_secs,
-        ));
+        let mut hb =
+            tokio::time::interval(Duration::from_secs(self.config.heartbeat_interval_secs));
         let mut tick_timer = tokio::time::interval(Duration::from_secs(self.interval_secs));
         hb.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         tick_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

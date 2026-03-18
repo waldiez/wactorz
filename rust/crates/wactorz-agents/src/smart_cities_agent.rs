@@ -9,16 +9,16 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 use crate::llm_agent::{LlmAgent, LlmConfig};
+use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 pub struct SmartCitiesAgent {
-    config:    ActorConfig,
-    city:      String,
-    http:      reqwest::Client,
-    llm:       Option<LlmAgent>,
-    state:     ActorState,
-    metrics:   Arc<ActorMetrics>,
+    config: ActorConfig,
+    city: String,
+    http: reqwest::Client,
+    llm: Option<LlmAgent>,
+    state: ActorState,
+    metrics: Arc<ActorMetrics>,
     mailbox_tx: mpsc::Sender<Message>,
     mailbox_rx: Option<mpsc::Receiver<Message>>,
     publisher: Option<EventPublisher>,
@@ -29,11 +29,11 @@ impl SmartCitiesAgent {
         let (tx, rx) = mpsc::channel(config.mailbox_capacity);
         Self {
             config,
-            city:      city.into(),
-            http:      reqwest::Client::new(),
-            llm:       None,
-            state:     ActorState::Initializing,
-            metrics:   Arc::new(ActorMetrics::new()),
+            city: city.into(),
+            http: reqwest::Client::new(),
+            llm: None,
+            state: ActorState::Initializing,
+            metrics: Arc::new(ActorMetrics::new()),
             mailbox_tx: tx,
             mailbox_rx: Some(rx),
             publisher: None,
@@ -79,7 +79,7 @@ impl SmartCitiesAgent {
                 Ok(v) => {
                     let pm25 = v["hourly"]["pm2_5"][0].as_f64().unwrap_or(0.0);
                     let pm10 = v["hourly"]["pm10"][0].as_f64().unwrap_or(0.0);
-                    let no2  = v["hourly"]["nitrogen_dioxide"][0].as_f64().unwrap_or(0.0);
+                    let no2 = v["hourly"]["nitrogen_dioxide"][0].as_f64().unwrap_or(0.0);
                     format!(
                         "Air quality for {}:\n  PM2.5: {:.1} μg/m³\n  PM10:  {:.1} μg/m³\n  NO₂:   {:.1} μg/m³",
                         self.city, pm25, pm10, no2
@@ -94,9 +94,14 @@ impl SmartCitiesAgent {
                  Answer with available urban data insights.",
                 self.city
             );
-            llm.complete(&prompt).await.unwrap_or_else(|e| format!("LLM error: {e}"))
+            llm.complete(&prompt)
+                .await
+                .unwrap_or_else(|e| format!("LLM error: {e}"))
         } else {
-            format!("Smart cities agent for {}. Ask about air quality, traffic, or energy.", self.city)
+            format!(
+                "Smart cities agent for {}. Ask about air quality, traffic, or energy.",
+                self.city
+            )
         }
     }
 
@@ -110,15 +115,29 @@ impl SmartCitiesAgent {
 
 #[async_trait]
 impl Actor for SmartCitiesAgent {
-    fn id(&self)      -> String { self.config.id.clone() }
-    fn name(&self)    -> &str   { &self.config.name }
-    fn state(&self)   -> ActorState { self.state.clone() }
-    fn metrics(&self) -> Arc<ActorMetrics> { Arc::clone(&self.metrics) }
-    fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
-        tracing::info!("[{}] Smart cities agent for '{}'", self.config.name, self.city);
+        tracing::info!(
+            "[{}] Smart cities agent for '{}'",
+            self.config.name,
+            self.city
+        );
         if let Some(pub_) = &self.publisher {
             pub_.publish(
                 wactorz_mqtt::topics::spawn(&self.config.id),
@@ -137,7 +156,7 @@ impl Actor for SmartCitiesAgent {
     async fn handle_message(&mut self, message: Message) -> Result<()> {
         use wactorz_core::message::MessageType;
         let text = match &message.payload {
-            MessageType::Text { content }        => content.clone(),
+            MessageType::Text { content } => content.clone(),
             MessageType::Task { description, .. } => description.clone(),
             _ => return Ok(()),
         };
@@ -174,7 +193,9 @@ impl Actor for SmartCitiesAgent {
 
     async fn run(&mut self) -> Result<()> {
         self.on_start().await?;
-        let mut rx = self.mailbox_rx.take()
+        let mut rx = self
+            .mailbox_rx
+            .take()
             .ok_or_else(|| anyhow::anyhow!("SmartCitiesAgent already running"))?;
         let mut hb = tokio::time::interval(std::time::Duration::from_secs(
             self.config.heartbeat_interval_secs,

@@ -13,39 +13,39 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 use crate::llm_agent::{LlmAgent, LlmConfig};
+use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 /// Home Assistant agent.
 pub struct HomeAssistantAgent {
-    config:   ActorConfig,
-    ha_url:   String,
+    config: ActorConfig,
+    ha_url: String,
     ha_token: String,
-    http:     reqwest::Client,
-    llm:      Option<LlmAgent>,
-    state:    ActorState,
-    metrics:  Arc<ActorMetrics>,
+    http: reqwest::Client,
+    llm: Option<LlmAgent>,
+    state: ActorState,
+    metrics: Arc<ActorMetrics>,
     mailbox_tx: mpsc::Sender<Message>,
     mailbox_rx: Option<mpsc::Receiver<Message>>,
-    publisher:  Option<EventPublisher>,
+    publisher: Option<EventPublisher>,
 }
 
 impl HomeAssistantAgent {
     pub fn new(config: ActorConfig) -> Self {
-        let ha_url   = std::env::var("HA_URL").unwrap_or_default();
+        let ha_url = std::env::var("HA_URL").unwrap_or_default();
         let ha_token = std::env::var("HA_TOKEN").unwrap_or_default();
         let (tx, rx) = mpsc::channel(config.mailbox_capacity);
         Self {
             config,
             ha_url,
             ha_token,
-            http:       reqwest::Client::new(),
-            llm:        None,
-            state:      ActorState::Initializing,
-            metrics:    Arc::new(ActorMetrics::new()),
+            http: reqwest::Client::new(),
+            llm: None,
+            state: ActorState::Initializing,
+            metrics: Arc::new(ActorMetrics::new()),
             mailbox_tx: tx,
             mailbox_rx: Some(rx),
-            publisher:  None,
+            publisher: None,
         }
     }
 
@@ -62,32 +62,46 @@ impl HomeAssistantAgent {
 
     /// GET /api/states — return all entity states as JSON.
     async fn get_states(&self) -> Result<serde_json::Value> {
-        let resp = self.http
+        let resp = self
+            .http
             .get(format!("{}/api/states", self.ha_url))
             .header("Authorization", format!("Bearer {}", self.ha_token))
             .header("Content-Type", "application/json")
-            .send().await?;
+            .send()
+            .await?;
         Ok(resp.json().await?)
     }
 
     /// GET /api/states/<entity_id> — single entity state.
     async fn get_state(&self, entity_id: &str) -> Result<serde_json::Value> {
-        let resp = self.http
+        let resp = self
+            .http
             .get(format!("{}/api/states/{}", self.ha_url, entity_id))
             .header("Authorization", format!("Bearer {}", self.ha_token))
-            .send().await?;
+            .send()
+            .await?;
         Ok(resp.json().await?)
     }
 
     /// POST /api/services/<domain>/<service> — call a HA service.
     #[expect(dead_code)]
-    async fn call_service(&self, domain: &str, service: &str, data: serde_json::Value) -> Result<serde_json::Value> {
-        let resp = self.http
-            .post(format!("{}/api/services/{}/{}", self.ha_url, domain, service))
+    async fn call_service(
+        &self,
+        domain: &str,
+        service: &str,
+        data: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/services/{}/{}",
+                self.ha_url, domain, service
+            ))
             .header("Authorization", format!("Bearer {}", self.ha_token))
             .header("Content-Type", "application/json")
             .json(&data)
-            .send().await?;
+            .send()
+            .await?;
         Ok(resp.json().await?)
     }
 
@@ -97,8 +111,10 @@ impl HomeAssistantAgent {
 
         if lower.contains("states") || lower.contains("all entities") {
             match self.get_states().await {
-                Ok(v) => format!("HA states: {}", serde_json::to_string_pretty(&v)
-                    .unwrap_or_else(|_| v.to_string())),
+                Ok(v) => format!(
+                    "HA states: {}",
+                    serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())
+                ),
                 Err(e) => format!("HA error: {e}"),
             }
         } else if let Some(entity) = extract_entity_id(text) {
@@ -112,9 +128,12 @@ impl HomeAssistantAgent {
                  Interpret this as a HA request and respond helpfully. \
                  If you need to call a service, suggest: call_service(domain, service, {{data}})."
             );
-            llm.complete(&prompt).await.unwrap_or_else(|e| format!("LLM error: {e}"))
+            llm.complete(&prompt)
+                .await
+                .unwrap_or_else(|e| format!("LLM error: {e}"))
         } else {
-            "I can query HA entity states. Try: 'get state light.living_room' or 'list all states'".into()
+            "I can query HA entity states. Try: 'get state light.living_room' or 'list all states'"
+                .into()
         }
     }
 
@@ -129,22 +148,38 @@ impl HomeAssistantAgent {
 fn extract_entity_id(text: &str) -> Option<String> {
     // Look for patterns like "light.living_room", "sensor.temperature", etc.
     let words: Vec<&str> = text.split_whitespace().collect();
-    words.iter().find(|w| w.contains('.') && !w.starts_with("http"))
+    words
+        .iter()
+        .find(|w| w.contains('.') && !w.starts_with("http"))
         .map(|s| s.to_string())
 }
 
 #[async_trait]
 impl Actor for HomeAssistantAgent {
-    fn id(&self)      -> String       { self.config.id.clone() }
-    fn name(&self)    -> &str         { &self.config.name }
-    fn state(&self)   -> ActorState   { self.state.clone() }
-    fn metrics(&self) -> Arc<ActorMetrics> { Arc::clone(&self.metrics) }
-    fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
         let connected = !self.ha_url.is_empty() && !self.ha_token.is_empty();
-        tracing::info!("[{}] HA agent started (connected={})", self.config.name, connected);
+        tracing::info!(
+            "[{}] HA agent started (connected={})",
+            self.config.name,
+            connected
+        );
         if let Some(pub_) = &self.publisher {
             pub_.publish(
                 wactorz_mqtt::topics::spawn(&self.config.id),
@@ -163,7 +198,7 @@ impl Actor for HomeAssistantAgent {
     async fn handle_message(&mut self, message: Message) -> Result<()> {
         use wactorz_core::message::MessageType;
         let text = match &message.payload {
-            MessageType::Text { content }        => content.clone(),
+            MessageType::Text { content } => content.clone(),
             MessageType::Task { description, .. } => description.clone(),
             _ => return Ok(()),
         };
@@ -200,7 +235,9 @@ impl Actor for HomeAssistantAgent {
 
     async fn run(&mut self) -> Result<()> {
         self.on_start().await?;
-        let mut rx = self.mailbox_rx.take()
+        let mut rx = self
+            .mailbox_rx
+            .take()
             .ok_or_else(|| anyhow::anyhow!("HomeAssistantAgent already running"))?;
         let mut hb = tokio::time::interval(std::time::Duration::from_secs(
             self.config.heartbeat_interval_secs,

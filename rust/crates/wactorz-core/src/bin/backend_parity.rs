@@ -11,8 +11,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -36,11 +36,7 @@ struct ProbeActor {
 }
 
 impl ProbeActor {
-    fn new(
-        name: &str,
-        starts: Arc<AtomicU64>,
-        crash_remaining: Arc<AtomicU64>,
-    ) -> Self {
+    fn new(name: &str, starts: Arc<AtomicU64>, crash_remaining: Arc<AtomicU64>) -> Self {
         let config = ActorConfig::new(name);
         let (tx, rx) = mpsc::channel(16);
         Self {
@@ -56,13 +52,25 @@ impl ProbeActor {
 
 #[async_trait::async_trait]
 impl Actor for ProbeActor {
-    fn id(&self) -> String { self.config.id.clone() }
-    fn name(&self) -> &str { &self.config.name }
-    fn state(&self) -> ActorState { ActorState::Running }
-    fn metrics(&self) -> Arc<ActorMetrics> { self.metrics.clone() }
-    fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        ActorState::Running
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        self.metrics.clone()
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
 
-    async fn handle_message(&mut self, _msg: Message) -> Result<()> { Ok(()) }
+    async fn handle_message(&mut self, _msg: Message) -> Result<()> {
+        Ok(())
+    }
 
     async fn run(&mut self) -> Result<()> {
         self.starts.fetch_add(1, Ordering::Relaxed);
@@ -78,7 +86,10 @@ impl Actor for ProbeActor {
             match rx.recv().await {
                 None => break,
                 Some(m) => {
-                    if let MessageType::Command { command: ActorCommand::Stop } = &m.payload {
+                    if let MessageType::Command {
+                        command: ActorCommand::Stop,
+                    } = &m.payload
+                    {
                         break;
                     }
                 }
@@ -141,8 +152,7 @@ struct Output {
 
 async fn run_scenario(scenario: &Scenario) -> Result<ScenarioResult> {
     let system = ActorSystem::new();
-    let mut sup =
-        Supervisor::with_poll_interval(system.clone(), Duration::from_millis(50));
+    let mut sup = Supervisor::with_poll_interval(system.clone(), Duration::from_millis(50));
 
     let mut starts_map: HashMap<String, Arc<AtomicU64>> = HashMap::new();
 
@@ -154,18 +164,10 @@ async fn run_scenario(scenario: &Scenario) -> Result<ScenarioResult> {
         let name = cfg.name.clone();
         let starts_c = starts.clone();
         let crash_c = crash_rem.clone();
-        let factory: ActorFactory = Arc::new(move || {
-            Box::new(ProbeActor::new(&name, starts_c.clone(), crash_c.clone()))
-        });
+        let factory: ActorFactory =
+            Arc::new(move || Box::new(ProbeActor::new(&name, starts_c.clone(), crash_c.clone())));
 
-        sup.supervise(
-            &cfg.name,
-            factory,
-            scenario.strategy.clone(),
-            3,
-            60.0,
-            0.0,
-        );
+        sup.supervise(&cfg.name, factory, scenario.strategy.clone(), 3, 60.0, 0.0);
     }
 
     sup.start().await?;
@@ -204,12 +206,22 @@ async fn run_scenario(scenario: &Scenario) -> Result<ScenarioResult> {
             .unwrap_or("running") // deregistered after stop command → treat as running
             .to_string();
 
-        actors.insert(cfg.name.clone(), ActorResult { starts, restart_count, final_state });
+        actors.insert(
+            cfg.name.clone(),
+            ActorResult {
+                starts,
+                restart_count,
+                final_state,
+            },
+        );
     }
 
     sup.stop().await;
 
-    Ok(ScenarioResult { scenario: scenario.name.clone(), actors })
+    Ok(ScenarioResult {
+        scenario: scenario.name.clone(),
+        actors,
+    })
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -252,17 +264,33 @@ fn build_expected(fixture: &Fixture) -> Output {
                 .start_counts
                 .iter()
                 .map(|(name, &starts)| {
-                    let restart_count =
-                        s.expected.restart_counts.get(name).copied().unwrap_or(0);
-                    let final_state =
-                        s.expected.final_states.get(name).cloned().unwrap_or_default();
-                    (name.clone(), ActorResult { starts, restart_count, final_state })
+                    let restart_count = s.expected.restart_counts.get(name).copied().unwrap_or(0);
+                    let final_state = s
+                        .expected
+                        .final_states
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_default();
+                    (
+                        name.clone(),
+                        ActorResult {
+                            starts,
+                            restart_count,
+                            final_state,
+                        },
+                    )
                 })
                 .collect();
-            ScenarioResult { scenario: s.name.clone(), actors }
+            ScenarioResult {
+                scenario: s.name.clone(),
+                actors,
+            }
         })
         .collect();
-    Output { contract: fixture.contract.clone(), results }
+    Output {
+        contract: fixture.contract.clone(),
+        results,
+    }
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -279,7 +307,10 @@ async fn main() -> Result<()> {
     for scenario in &fixture.scenarios {
         results.push(run_scenario(scenario).await?);
     }
-    let actual = Output { contract: fixture.contract.clone(), results };
+    let actual = Output {
+        contract: fixture.contract.clone(),
+        results,
+    };
 
     if assert_expected {
         let expected = build_expected(&fixture);

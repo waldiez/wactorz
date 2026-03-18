@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, ActorSystem, EventPublisher, Message};
+use wactorz_core::{
+    Actor, ActorConfig, ActorMetrics, ActorState, ActorSystem, EventPublisher, Message,
+};
 
 /// How often the monitor sweeps all actors (seconds).
 pub const POLL_INTERVAL_SECS: u64 = 15;
@@ -79,7 +81,11 @@ impl MonitorAgent {
             .filter(|e| e.name != self.config.name)
             .map(|e| {
                 let last = e.metrics.last_message_at.load(Ordering::Relaxed);
-                let age = if last == 0 { 0 } else { now.saturating_sub(last) };
+                let age = if last == 0 {
+                    0
+                } else {
+                    now.saturating_sub(last)
+                };
                 ActorHealthReport {
                     actor_id: e.id.clone(),
                     actor_name: e.name,

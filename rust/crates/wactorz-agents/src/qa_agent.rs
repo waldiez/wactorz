@@ -108,7 +108,7 @@ impl QAAgent {
                 "rhai error:",
                 "panicked at",
                 "thread 'main' panicked",
-                "(no output)",         // DynamicAgent fallback when script returns nothing
+                "(no output)", // DynamicAgent fallback when script returns nothing
                 "script not compiled", // compile step was skipped or failed
             ];
             for pat in ERRORS {
@@ -147,7 +147,11 @@ impl QAAgent {
 
     fn publish_flag(&self, category: &str, severity: &str, from: &str, excerpt: &str) {
         if let Some(pub_) = &self.publisher {
-            let snippet = if excerpt.len() > 80 { &excerpt[..80] } else { excerpt };
+            let snippet = if excerpt.len() > 80 {
+                &excerpt[..80]
+            } else {
+                excerpt
+            };
             pub_.publish(
                 "system/qa-flag",
                 &serde_json::json!({
@@ -167,12 +171,24 @@ impl QAAgent {
 
 #[async_trait]
 impl Actor for QAAgent {
-    fn id(&self) -> String { self.config.id.clone() }
-    fn name(&self) -> &str { &self.config.name }
-    fn state(&self) -> ActorState { self.state.clone() }
-    fn metrics(&self) -> Arc<ActorMetrics> { Arc::clone(&self.metrics) }
-    fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
-    fn is_protected(&self) -> bool { self.config.protected }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
+    fn is_protected(&self) -> bool {
+        self.config.protected
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
@@ -202,8 +218,8 @@ impl Actor for QAAgent {
             Ok(v) => v,
             Err(_) => return Ok(()),
         };
-        let from    = val.get("from").and_then(|v| v.as_str()).unwrap_or("");
-        let to      = val.get("to").and_then(|v| v.as_str()).unwrap_or("");
+        let from = val.get("from").and_then(|v| v.as_str()).unwrap_or("");
+        let to = val.get("to").and_then(|v| v.as_str()).unwrap_or("");
         let content = val.get("content").and_then(|v| v.as_str()).unwrap_or("");
 
         if content.is_empty() {
@@ -225,7 +241,11 @@ impl Actor for QAAgent {
                     .map(|w| w[1..].to_string())
             };
             if let Some(agent_name) = target {
-                let excerpt = if content.len() > 60 { &content[..60] } else { content };
+                let excerpt = if content.len() > 60 {
+                    &content[..60]
+                } else {
+                    content
+                };
                 self.pending
                     .insert(agent_name, (excerpt.to_string(), Self::now_ms()));
             }
@@ -278,10 +298,13 @@ impl Actor for QAAgent {
 
     async fn run(&mut self) -> Result<()> {
         self.on_start().await?;
-        let mut rx = self.mailbox_rx.take()
+        let mut rx = self
+            .mailbox_rx
+            .take()
             .ok_or_else(|| anyhow::anyhow!("QAAgent already running"))?;
-        let mut hb = tokio::time::interval(
-            std::time::Duration::from_secs(self.config.heartbeat_interval_secs));
+        let mut hb = tokio::time::interval(std::time::Duration::from_secs(
+            self.config.heartbeat_interval_secs,
+        ));
         hb.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {

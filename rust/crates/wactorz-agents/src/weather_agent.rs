@@ -20,9 +20,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use wactorz_core::{
-    Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message,
-};
+use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 /// Default location used when the user sends `@weather-agent` with no argument.
 const DEFAULT_LOCATION_ENV: &str = "WEATHER_DEFAULT_LOCATION";
@@ -93,10 +91,7 @@ impl WeatherAgent {
 
     async fn fetch_weather(&self, location: &str) -> Result<String> {
         // wttr.in format=j1 returns JSON with current conditions.
-        let url = format!(
-            "https://wttr.in/{}?format=j1",
-            urlencoding(location)
-        );
+        let url = format!("https://wttr.in/{}?format=j1", urlencoding(location));
 
         let resp = self.http.get(&url).send().await?;
         if !resp.status().is_success() {
@@ -124,14 +119,38 @@ impl WeatherAgent {
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown");
 
-        let temp_c  = current.get("temp_C").and_then(|v| v.as_str()).unwrap_or("?");
-        let temp_f  = current.get("temp_F").and_then(|v| v.as_str()).unwrap_or("?");
-        let feels_c = current.get("FeelsLikeC").and_then(|v| v.as_str()).unwrap_or("?");
-        let humidity = current.get("humidity").and_then(|v| v.as_str()).unwrap_or("?");
-        let wind_kmph = current.get("windspeedKmph").and_then(|v| v.as_str()).unwrap_or("?");
-        let wind_dir  = current.get("winddir16Point").and_then(|v| v.as_str()).unwrap_or("?");
-        let uv = current.get("uvIndex").and_then(|v| v.as_str()).unwrap_or("?");
-        let visibility = current.get("visibility").and_then(|v| v.as_str()).unwrap_or("?");
+        let temp_c = current
+            .get("temp_C")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let temp_f = current
+            .get("temp_F")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let feels_c = current
+            .get("FeelsLikeC")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let humidity = current
+            .get("humidity")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let wind_kmph = current
+            .get("windspeedKmph")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let wind_dir = current
+            .get("winddir16Point")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let uv = current
+            .get("uvIndex")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let visibility = current
+            .get("visibility")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
 
         // Nearest area name
         let area = json
@@ -172,12 +191,24 @@ fn urlencoding(s: &str) -> String {
 
 #[async_trait]
 impl Actor for WeatherAgent {
-    fn id(&self)       -> String       { self.config.id.clone() }
-    fn name(&self)     -> &str         { &self.config.name }
-    fn state(&self)    -> ActorState   { self.state.clone() }
-    fn metrics(&self)  -> Arc<ActorMetrics> { Arc::clone(&self.metrics) }
-    fn mailbox(&self)  -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
-    fn is_protected(&self) -> bool     { self.config.protected }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
+    fn is_protected(&self) -> bool {
+        self.config.protected
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
@@ -239,7 +270,9 @@ impl Actor for WeatherAgent {
                 self.reply(&typing);
                 match self.fetch_weather(location).await {
                     Ok(report) => self.reply(&report),
-                    Err(e) => self.reply(&format!("⚠ Could not fetch weather for '{location}': {e}")),
+                    Err(e) => {
+                        self.reply(&format!("⚠ Could not fetch weather for '{location}': {e}"))
+                    }
                 }
             }
         }

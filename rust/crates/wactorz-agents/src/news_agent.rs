@@ -28,9 +28,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use wactorz_core::{
-    Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message,
-};
+use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 /// Default number of stories to show.
 const DEFAULT_STORY_COUNT: usize = 5;
@@ -129,24 +127,34 @@ impl NewsAgent {
         let mut lines = Vec::with_capacity(take);
         for (i, handle) in handles.into_iter().enumerate() {
             if let Ok(Some(item)) = handle.await {
-                let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("(no title)");
-                let url   = item.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                let title = item
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(no title)");
+                let url = item.get("url").and_then(|v| v.as_str()).unwrap_or("");
                 let score = item.get("score").and_then(|v| v.as_i64()).unwrap_or(0);
                 let hn_url = format!("https://news.ycombinator.com/item?id={}", ids[i]);
 
-                let link = if url.is_empty() { hn_url.clone() } else { url.to_string() };
-                lines.push(format!("{}. **[{title}]({link})** — ⬆ {score} · [HN]({hn_url})", i + 1));
+                let link = if url.is_empty() {
+                    hn_url.clone()
+                } else {
+                    url.to_string()
+                };
+                lines.push(format!(
+                    "{}. **[{title}]({link})** — ⬆ {score} · [HN]({hn_url})",
+                    i + 1
+                ));
             }
         }
 
         let feed_label = match feed {
-            "top"  => "Top",
-            "new"  => "Newest",
+            "top" => "Top",
+            "new" => "Newest",
             "best" => "Best",
-            "ask"  => "Ask HN",
+            "ask" => "Ask HN",
             "show" => "Show HN",
-            "job"  => "Jobs",
-            other  => other,
+            "job" => "Jobs",
+            other => other,
         };
 
         if lines.is_empty() {
@@ -162,12 +170,24 @@ impl NewsAgent {
 
 #[async_trait]
 impl Actor for NewsAgent {
-    fn id(&self)       -> String              { self.config.id.clone() }
-    fn name(&self)     -> &str                { &self.config.name }
-    fn state(&self)    -> ActorState          { self.state.clone() }
-    fn metrics(&self)  -> Arc<ActorMetrics>   { Arc::clone(&self.metrics) }
-    fn mailbox(&self)  -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
-    fn is_protected(&self) -> bool            { self.config.protected }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
+    fn is_protected(&self) -> bool {
+        self.config.protected
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
@@ -206,11 +226,41 @@ impl Actor for NewsAgent {
 
         // Determine feed and count
         let (feed, count) = match first {
-            "" | "top"  => ("top",  parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_STORY_COUNT)),
-            "new"       => ("new",  parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_STORY_COUNT)),
-            "best"      => ("best", parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_STORY_COUNT)),
-            "ask"       => ("ask",  parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_STORY_COUNT)),
-            "show"      => ("show", parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_STORY_COUNT)),
+            "" | "top" => (
+                "top",
+                parts
+                    .get(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(DEFAULT_STORY_COUNT),
+            ),
+            "new" => (
+                "new",
+                parts
+                    .get(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(DEFAULT_STORY_COUNT),
+            ),
+            "best" => (
+                "best",
+                parts
+                    .get(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(DEFAULT_STORY_COUNT),
+            ),
+            "ask" => (
+                "ask",
+                parts
+                    .get(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(DEFAULT_STORY_COUNT),
+            ),
+            "show" => (
+                "show",
+                parts
+                    .get(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(DEFAULT_STORY_COUNT),
+            ),
             "jobs" | "job" => ("job", DEFAULT_STORY_COUNT),
             n if n.parse::<usize>().is_ok() => ("top", n.parse().unwrap_or(DEFAULT_STORY_COUNT)),
             "help" => {
@@ -225,7 +275,7 @@ impl Actor for NewsAgent {
                      @news-agent show         # Show HN\n\
                      @news-agent jobs         # job postings\n\
                      @news-agent help         # this message\n\
-                     ```"
+                     ```",
                 );
                 return Ok(());
             }
@@ -233,11 +283,13 @@ impl Actor for NewsAgent {
         };
 
         let count = count.min(MAX_STORY_COUNT);
-        self.reply(&format!("📰 Fetching top {count} {feed} stories from Hacker News…"));
+        self.reply(&format!(
+            "📰 Fetching top {count} {feed} stories from Hacker News…"
+        ));
 
         match self.fetch_hn(feed, count).await {
-            Ok(report)  => self.reply(&report),
-            Err(e)      => self.reply(&format!("⚠ Could not fetch news: {e}")),
+            Ok(report) => self.reply(&report),
+            Err(e) => self.reply(&format!("⚠ Could not fetch news: {e}")),
         }
 
         Ok(())

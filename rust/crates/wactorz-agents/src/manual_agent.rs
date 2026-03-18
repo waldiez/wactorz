@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 use crate::llm_agent::{LlmAgent, LlmConfig};
+use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 const SYSTEM_PROMPT: &str = "\
 You are a technical documentation and device manual expert. \
@@ -23,13 +23,13 @@ When answering:\n\
 - Suggest searching the official manufacturer documentation if needed";
 
 pub struct ManualAgent {
-    config:     ActorConfig,
-    llm:        LlmAgent,
-    state:      ActorState,
-    metrics:    Arc<ActorMetrics>,
+    config: ActorConfig,
+    llm: LlmAgent,
+    state: ActorState,
+    metrics: Arc<ActorMetrics>,
     mailbox_tx: mpsc::Sender<Message>,
     mailbox_rx: Option<mpsc::Receiver<Message>>,
-    publisher:  Option<EventPublisher>,
+    publisher: Option<EventPublisher>,
 }
 
 impl ManualAgent {
@@ -40,12 +40,12 @@ impl ManualAgent {
         let (tx, rx) = mpsc::channel(config.mailbox_capacity);
         Self {
             config,
-            llm:        LlmAgent::new(llm_cfg, lc),
-            state:      ActorState::Initializing,
-            metrics:    Arc::new(ActorMetrics::new()),
+            llm: LlmAgent::new(llm_cfg, lc),
+            state: ActorState::Initializing,
+            metrics: Arc::new(ActorMetrics::new()),
             mailbox_tx: tx,
             mailbox_rx: Some(rx),
-            publisher:  None,
+            publisher: None,
         }
     }
 
@@ -64,11 +64,21 @@ impl ManualAgent {
 
 #[async_trait]
 impl Actor for ManualAgent {
-    fn id(&self)      -> String { self.config.id.clone() }
-    fn name(&self)    -> &str   { &self.config.name }
-    fn state(&self)   -> ActorState { self.state.clone() }
-    fn metrics(&self) -> Arc<ActorMetrics> { Arc::clone(&self.metrics) }
-    fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
@@ -89,12 +99,15 @@ impl Actor for ManualAgent {
     async fn handle_message(&mut self, message: Message) -> Result<()> {
         use wactorz_core::message::MessageType;
         let text = match &message.payload {
-            MessageType::Text { content }        => content.clone(),
+            MessageType::Text { content } => content.clone(),
             MessageType::Task { description, .. } => description.clone(),
             _ => return Ok(()),
         };
 
-        let response = self.llm.complete(&text).await
+        let response = self
+            .llm
+            .complete(&text)
+            .await
             .unwrap_or_else(|e| format!("LLM error: {e}"));
 
         if let Some(pub_) = &self.publisher {
@@ -132,7 +145,9 @@ impl Actor for ManualAgent {
 
     async fn run(&mut self) -> Result<()> {
         self.on_start().await?;
-        let mut rx = self.mailbox_rx.take()
+        let mut rx = self
+            .mailbox_rx
+            .take()
             .ok_or_else(|| anyhow::anyhow!("ManualAgent already running"))?;
         let mut hb = tokio::time::interval(std::time::Duration::from_secs(
             self.config.heartbeat_interval_secs,

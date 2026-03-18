@@ -70,11 +70,7 @@ impl MqttClient {
     /// The returned `EventLoop` must be driven by calling [`MqttClient::run_event_loop`]
     /// or by polling it manually in a dedicated task.
     pub fn new(config: MqttConfig) -> Result<(Self, EventLoop)> {
-        let mut opts = rumqttc::MqttOptions::new(
-            &config.client_id,
-            &config.host,
-            config.port,
-        );
+        let mut opts = rumqttc::MqttOptions::new(&config.client_id, &config.host, config.port);
         opts.set_keep_alive(std::time::Duration::from_secs(config.keep_alive_secs));
         if let (Some(user), Some(pass)) = (&config.username, &config.password) {
             opts.set_credentials(user, pass);

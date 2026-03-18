@@ -14,13 +14,13 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use rhai::{Engine, AST};
+use rhai::{AST, Engine};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 use crate::llm_agent::{LlmAgent, LlmConfig};
+use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 /// A dynamically scripted agent.
 pub struct DynamicAgent {
@@ -48,8 +48,10 @@ impl DynamicAgent {
     /// Create a new DynamicAgent with the given Rhai script source.
     pub fn new(config: ActorConfig, script_source: impl Into<String>) -> Self {
         let (tx, rx) = mpsc::channel(config.mailbox_capacity);
-        let agent_state =
-            std::sync::Arc::new(std::sync::Mutex::new(HashMap::<String, serde_json::Value>::new()));
+        let agent_state = std::sync::Arc::new(std::sync::Mutex::new(HashMap::<
+            String,
+            serde_json::Value,
+        >::new()));
         let log_queue = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let mut agent = Self {
             config,
@@ -102,9 +104,7 @@ impl DynamicAgent {
             .register_fn("agent_state_get", move |key: &str| -> rhai::Dynamic {
                 let map = state_r.lock().unwrap();
                 match map.get(key) {
-                    Some(v) => {
-                        rhai::serde::to_dynamic(v.clone()).unwrap_or(rhai::Dynamic::UNIT)
-                    }
+                    Some(v) => rhai::serde::to_dynamic(v.clone()).unwrap_or(rhai::Dynamic::UNIT),
                     None => rhai::Dynamic::UNIT,
                 }
             });
@@ -128,12 +128,12 @@ impl DynamicAgent {
         // Type helpers: allow `"text" + any_value` and `str(x)` in scripts.
         // LLM-generated scripts often write `"= " + result` without calling
         // `.to_string()` first; these registrations make that safe.
-        self.engine.register_fn("+", |a: String, b: rhai::Dynamic| -> String {
-            format!("{a}{b}")
-        });
-        self.engine.register_fn("str", |v: rhai::Dynamic| -> String {
-            v.to_string()
-        });
+        self.engine
+            .register_fn("+", |a: String, b: rhai::Dynamic| -> String {
+                format!("{a}{b}")
+            });
+        self.engine
+            .register_fn("str", |v: rhai::Dynamic| -> String { v.to_string() });
     }
 
     /// Compile (or recompile) the stored script source.
@@ -158,10 +158,16 @@ impl DynamicAgent {
             let prompt = format!(
                 "You are {}. {}\n\nUser: {}",
                 self.config.name,
-                if self.description.is_empty() { "A helpful AI agent." } else { &self.description },
+                if self.description.is_empty() {
+                    "A helpful AI agent."
+                } else {
+                    &self.description
+                },
                 user_input,
             );
-            llm.complete(&prompt).await.unwrap_or_else(|e| format!("LLM error: {e}"))
+            llm.complete(&prompt)
+                .await
+                .unwrap_or_else(|e| format!("LLM error: {e}"))
         } else {
             format!(
                 "I received '{}' but my script produced no response. \
@@ -179,11 +185,17 @@ impl DynamicAgent {
                  Your Rhai script had an error: {}\n\
                  Respond helpfully to the user anyway.\n\nUser: {}",
                 self.config.name,
-                if self.description.is_empty() { "A helpful AI agent." } else { &self.description },
+                if self.description.is_empty() {
+                    "A helpful AI agent."
+                } else {
+                    &self.description
+                },
                 script_err,
                 user_input,
             );
-            llm.complete(&prompt).await.unwrap_or_else(|e| format!("LLM error: {e}"))
+            llm.complete(&prompt)
+                .await
+                .unwrap_or_else(|e| format!("LLM error: {e}"))
         } else {
             format!("script error: {script_err}")
         }
@@ -201,9 +213,12 @@ impl DynamicAgent {
             .ok_or_else(|| anyhow::anyhow!("script not compiled"))?;
 
         let mut scope = rhai::Scope::new();
-        let call_result = self
-            .engine
-            .call_fn::<rhai::Dynamic>(&mut scope, ast, "main", (message_json.to_string(),));
+        let call_result = self.engine.call_fn::<rhai::Dynamic>(
+            &mut scope,
+            ast,
+            "main",
+            (message_json.to_string(),),
+        );
 
         match call_result {
             Ok(v) => Ok(v.to_string()),
@@ -268,7 +283,11 @@ impl Actor for DynamicAgent {
             wactorz_core::message::MessageType::Task { description, .. } => description.clone(),
             _ => return Ok(()),
         };
-        tracing::info!("[{}] recv: {:?}", self.config.name, &content[..content.len().min(120)]);
+        tracing::info!(
+            "[{}] recv: {:?}",
+            self.config.name,
+            &content[..content.len().min(120)]
+        );
 
         let script_result = tokio::task::block_in_place(|| self.run_script(&content));
 
@@ -290,11 +309,19 @@ impl Actor for DynamicAgent {
         //   3. No LLM → publish error/empty notice so the user isn't left hanging
         let response: String = match script_result {
             Ok(r) if !r.is_empty() && r != "()" => {
-                tracing::info!("[{}] script → {:?}", self.config.name, &r[..r.len().min(120)]);
+                tracing::info!(
+                    "[{}] script → {:?}",
+                    self.config.name,
+                    &r[..r.len().min(120)]
+                );
                 r
             }
             Ok(r) => {
-                tracing::info!("[{}] script returned {:?} — trying LLM fallback", self.config.name, r);
+                tracing::info!(
+                    "[{}] script returned {:?} — trying LLM fallback",
+                    self.config.name,
+                    r
+                );
                 self.llm_respond(&content).await
             }
             Err(e) => {

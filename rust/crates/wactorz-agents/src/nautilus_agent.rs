@@ -32,9 +32,7 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-use wactorz_core::{
-    Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message,
-};
+use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -140,9 +138,10 @@ impl NautilusAgent {
 
     /// Build the SSH option flags shared by all SSH/rsync invocations.
     fn ssh_opts(&self) -> Vec<String> {
-        let mut opts = vec![
-            format!("ConnectTimeout={}", self.nautilus.connect_timeout_secs),
-        ];
+        let mut opts = vec![format!(
+            "ConnectTimeout={}",
+            self.nautilus.connect_timeout_secs
+        )];
         if !self.nautilus.strict_host_keys {
             opts.push("StrictHostKeyChecking=accept-new".to_string());
         }
@@ -173,9 +172,7 @@ impl NautilusAgent {
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(self.nautilus.connect_timeout_secs + 2),
-            self.ssh_cmd()
-                .args([host, "exit"])
-                .output(),
+            self.ssh_cmd().args([host, "exit"]).output(),
         )
         .await;
 
@@ -212,10 +209,7 @@ impl NautilusAgent {
         // Each remote token is a discrete argument — no shell interpolation.
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(self.nautilus.exec_timeout_secs),
-            self.ssh_cmd()
-                .arg(host)
-                .args(remote_args)
-                .output(),
+            self.ssh_cmd().arg(host).args(remote_args).output(),
         )
         .await;
 
@@ -225,9 +219,8 @@ impl NautilusAgent {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 let code = out.status.code().unwrap_or(-1);
                 let status_icon = if out.status.success() { "✓" } else { "✗" };
-                let mut response = format!(
-                    "{status_icon} `{display_cmd}` on `{host}` (exit {code})"
-                );
+                let mut response =
+                    format!("{status_icon} `{display_cmd}` on `{host}` (exit {code})");
                 if !stdout.trim().is_empty() {
                     response.push_str(&format!("\n```\n{}\n```", stdout.trim()));
                 }
@@ -268,9 +261,7 @@ impl NautilusAgent {
 
     /// Shared rsync executor used by both `sync` and `push`.
     async fn rsync(&self, src: &str, dst: &str, direction: &str) {
-        self.reply(&format!(
-            "Starting rsync {direction}: `{src}` → `{dst}`…"
-        ));
+        self.reply(&format!("Starting rsync {direction}: `{src}` → `{dst}`…"));
 
         // Build SSH options string for rsync's -e flag
         let mut ssh_parts = vec!["ssh".to_string()];
@@ -303,9 +294,8 @@ impl NautilusAgent {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 let code = out.status.code().unwrap_or(-1);
                 let icon = if out.status.success() { "✓" } else { "✗" };
-                let mut response = format!(
-                    "{icon} rsync {direction} `{src}` → `{dst}` (exit {code})"
-                );
+                let mut response =
+                    format!("{icon} rsync {direction} `{src}` → `{dst}` (exit {code})");
                 if !stdout.trim().is_empty() {
                     // Keep last 20 lines of rsync output to avoid flooding chat
                     let lines: Vec<&str> = stdout.trim().lines().collect();
@@ -368,9 +358,7 @@ impl NautilusAgent {
                 self.cmd_push(src, dst).await;
             }
             [cmd, ..] => {
-                self.reply(&format!(
-                    "Unknown command: `{cmd}`. Type `help` for usage."
-                ));
+                self.reply(&format!("Unknown command: `{cmd}`. Type `help` for usage."));
             }
         }
     }

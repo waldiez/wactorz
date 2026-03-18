@@ -64,7 +64,10 @@ impl MainActor {
             protected: true,
             ..config.clone()
         };
-        let llm = LlmAgent::new(ActorConfig::new(format!("{}-llm", config.name)), llm_config.clone());
+        let llm = LlmAgent::new(
+            ActorConfig::new(format!("{}-llm", config.name)),
+            llm_config.clone(),
+        );
         let (tx, rx) = mpsc::channel(config.mailbox_capacity);
         Self {
             config: protected_config,
@@ -118,8 +121,8 @@ impl MainActor {
         let actor: Box<dyn wactorz_core::Actor> = match directive.agent_type.as_str() {
             "DynamicAgent" | "dynamic" => {
                 let script = directive.script.unwrap_or_default();
-                let mut a = DynamicAgent::new(cfg, script)
-                    .with_llm(self.llm_config.clone(), description);
+                let mut a =
+                    DynamicAgent::new(cfg, script).with_llm(self.llm_config.clone(), description);
                 if let Some(pub_) = &self.publisher {
                     a = a.with_publisher(pub_.clone());
                 }

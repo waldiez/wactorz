@@ -37,9 +37,9 @@ pub mod tick_agent;
 pub mod udx_agent;
 pub mod weather_agent;
 pub mod wif_agent;
-pub mod wme_agent;
 pub mod wik_agent;
 pub mod wis_agent;
+pub mod wme_agent;
 
 pub use dynamic_agent::DynamicAgent;
 pub use fuseki_agent::FusekiAgent;
@@ -60,6 +60,6 @@ pub use tick_agent::TickAgent;
 pub use udx_agent::UdxAgent;
 pub use weather_agent::WeatherAgent;
 pub use wif_agent::WifAgent;
-pub use wme_agent::WmeAgent;
 pub use wik_agent::WikAgent;
 pub use wis_agent::WisAgent;
+pub use wme_agent::WmeAgent;

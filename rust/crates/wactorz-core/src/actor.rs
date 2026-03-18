@@ -63,7 +63,13 @@ pub struct ActorConfig {
 fn sanitize_node_name(name: &str) -> String {
     let s: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(20)
         .collect();
     if s.is_empty() { "actor".to_string() } else { s }

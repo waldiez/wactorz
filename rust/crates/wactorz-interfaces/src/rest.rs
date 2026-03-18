@@ -16,19 +16,19 @@
 
 use anyhow::Result;
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
-    Json, Router,
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
-use wactorz_core::message::{ActorCommand, Message};
 use wactorz_core::ActorSystem;
+use wactorz_core::message::{ActorCommand, Message};
 
 /// Shared application state injected into axum handlers.
 #[derive(Clone)]
@@ -183,7 +183,11 @@ async fn pause_actor_handler(
     }
     let msg = Message::command(id.clone(), ActorCommand::Pause);
     match state.system.registry.send(&id, msg).await {
-        Ok(_) => (StatusCode::OK, Json(serde_json::json!({"status": "pausing"}))).into_response(),
+        Ok(_) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "pausing"})),
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -201,7 +205,11 @@ async fn resume_actor_handler(
     }
     let msg = Message::command(id.clone(), ActorCommand::Resume);
     match state.system.registry.send(&id, msg).await {
-        Ok(_) => (StatusCode::OK, Json(serde_json::json!({"status": "resuming"}))).into_response(),
+        Ok(_) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "resuming"})),
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -220,9 +228,8 @@ async fn chat_handler(
         Some(entry) => {
             let msg = Message::text(None, Some(entry.id.clone()), body.message);
             match state.system.registry.send(&entry.id, msg).await {
-                Ok(_) => {
-                    Json(serde_json::json!({"status": "sent", "agent": target_name})).into_response()
-                }
+                Ok(_) => Json(serde_json::json!({"status": "sent", "agent": target_name}))
+                    .into_response(),
                 Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
             }
         }

@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 use crate::llm_agent::{LlmAgent, LlmConfig};
+use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 const SYSTEM_PROMPT: &str = "\
 You are a task planning expert. Given a goal, break it into clear, ordered steps.\n\
@@ -22,13 +22,13 @@ Example:\n\
 Keep steps concise. Do not include explanation or preamble.";
 
 pub struct PlannerAgent {
-    config:     ActorConfig,
-    llm:        LlmAgent,
-    state:      ActorState,
-    metrics:    Arc<ActorMetrics>,
+    config: ActorConfig,
+    llm: LlmAgent,
+    state: ActorState,
+    metrics: Arc<ActorMetrics>,
     mailbox_tx: mpsc::Sender<Message>,
     mailbox_rx: Option<mpsc::Receiver<Message>>,
-    publisher:  Option<EventPublisher>,
+    publisher: Option<EventPublisher>,
 }
 
 impl PlannerAgent {
@@ -39,12 +39,12 @@ impl PlannerAgent {
         let (tx, rx) = mpsc::channel(config.mailbox_capacity);
         Self {
             config,
-            llm:        LlmAgent::new(llm_cfg, lc),
-            state:      ActorState::Initializing,
-            metrics:    Arc::new(ActorMetrics::new()),
+            llm: LlmAgent::new(llm_cfg, lc),
+            state: ActorState::Initializing,
+            metrics: Arc::new(ActorMetrics::new()),
             mailbox_tx: tx,
             mailbox_rx: Some(rx),
-            publisher:  None,
+            publisher: None,
         }
     }
 
@@ -59,10 +59,15 @@ impl PlannerAgent {
             .filter_map(|line| {
                 let l = line.trim();
                 // Strip leading "1." / "1)" / "- " etc.
-                let stripped = l.trim_start_matches(|c: char| c.is_ascii_digit())
+                let stripped = l
+                    .trim_start_matches(|c: char| c.is_ascii_digit())
                     .trim_start_matches(['.', ')', ' '])
                     .trim();
-                if stripped.is_empty() { None } else { Some(stripped.to_string()) }
+                if stripped.is_empty() {
+                    None
+                } else {
+                    Some(stripped.to_string())
+                }
             })
             .collect()
     }
@@ -77,11 +82,21 @@ impl PlannerAgent {
 
 #[async_trait]
 impl Actor for PlannerAgent {
-    fn id(&self)      -> String { self.config.id.clone() }
-    fn name(&self)    -> &str   { &self.config.name }
-    fn state(&self)   -> ActorState { self.state.clone() }
-    fn metrics(&self) -> Arc<ActorMetrics> { Arc::clone(&self.metrics) }
-    fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
@@ -102,12 +117,15 @@ impl Actor for PlannerAgent {
     async fn handle_message(&mut self, message: Message) -> Result<()> {
         use wactorz_core::message::MessageType;
         let goal = match &message.payload {
-            MessageType::Text { content }        => content.clone(),
+            MessageType::Text { content } => content.clone(),
             MessageType::Task { description, .. } => description.clone(),
             _ => return Ok(()),
         };
 
-        let plan_text = self.llm.complete(&goal).await
+        let plan_text = self
+            .llm
+            .complete(&goal)
+            .await
             .unwrap_or_else(|e| format!("LLM error: {e}"));
 
         let steps = Self::parse_steps(&plan_text);
@@ -150,7 +168,9 @@ impl Actor for PlannerAgent {
 
     async fn run(&mut self) -> Result<()> {
         self.on_start().await?;
-        let mut rx = self.mailbox_rx.take()
+        let mut rx = self
+            .mailbox_rx
+            .take()
             .ok_or_else(|| anyhow::anyhow!("PlannerAgent already running"))?;
         let mut hb = tokio::time::interval(std::time::Duration::from_secs(
             self.config.heartbeat_interval_secs,

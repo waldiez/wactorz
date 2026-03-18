@@ -60,7 +60,7 @@ use wactorz_mqtt::MqttClient;
 /// Consumed by [`WsBridge::spawn_monitor_task`]; not sent to browser clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsEnvelope {
-    pub topic:   String,
+    pub topic: String,
     pub payload: Value,
 }
 
@@ -76,10 +76,10 @@ fn now_secs() -> f64 {
 /// Mirrors the in-memory state maintained by Python's `monitor_server.py`.
 #[derive(Debug, Default)]
 pub struct MonitorState {
-    agents:        HashMap<String, Value>,
-    nodes:         HashMap<String, Value>,
-    alerts:        Vec<Value>,
-    log_feed:      Vec<Value>,
+    agents: HashMap<String, Value>,
+    nodes: HashMap<String, Value>,
+    alerts: Vec<Value>,
+    log_feed: Vec<Value>,
     system_health: Value,
 }
 
@@ -87,12 +87,14 @@ impl MonitorState {
     /// Serialisable snapshot sent to browser clients.
     pub fn snapshot(&self) -> Value {
         let agents: Vec<Value> = self.agents.values().cloned().collect();
-        let nodes:  Vec<Value> = self.nodes.values().cloned().collect();
-        let total_cost: f64 = self.agents.values()
+        let nodes: Vec<Value> = self.nodes.values().cloned().collect();
+        let total_cost: f64 = self
+            .agents
+            .values()
             .filter_map(|a| a.get("cost_usd").and_then(|v| v.as_f64()))
             .sum();
-        let alert_end    = self.alerts.len().min(10);
-        let log_end      = self.log_feed.len().min(20);
+        let alert_end = self.alerts.len().min(10);
+        let log_end = self.log_feed.len().min(20);
         json!({
             "agents":          agents,
             "nodes":           nodes,
@@ -105,13 +107,13 @@ impl MonitorState {
 
     fn update_agent(&mut self, agent_id: &str, key: &str, data: Value) {
         let short = &agent_id[..agent_id.len().min(8)];
-        let entry = self.agents
-            .entry(agent_id.to_string())
-            .or_insert_with(|| json!({
+        let entry = self.agents.entry(agent_id.to_string()).or_insert_with(|| {
+            json!({
                 "agent_id":   agent_id,
                 "name":       short,
                 "first_seen": now_secs(),
-            }));
+            })
+        });
         if let Some(obj) = entry.as_object_mut() {
             obj.insert(key.to_string(), data);
             obj.insert("last_update".to_string(), json!(now_secs()));
@@ -137,33 +139,45 @@ impl MonitorState {
         // ── system/# ────────────────────────────────────────────────────────
         if parts[0] == "system" && parts.len() >= 2 {
             match parts[1] {
-                "health" => { self.system_health = payload.clone(); }
+                "health" => {
+                    self.system_health = payload.clone();
+                }
                 "alerts" => {
                     self.alerts.insert(0, payload.clone());
-                    if self.alerts.len() > 50 { self.alerts.pop(); }
+                    if self.alerts.len() > 50 {
+                        self.alerts.pop();
+                    }
                 }
                 _ => {}
             }
-            return Some((json!({
-                "type":    "system",
-                "subtype": parts[1],
-                "data":    payload,
-            }), false));
+            return Some((
+                json!({
+                    "type":    "system",
+                    "subtype": parts[1],
+                    "data":    payload,
+                }),
+                false,
+            ));
         }
 
         // ── agents/{id}/{metric} ─────────────────────────────────────────────
         if parts[0] == "agents" && parts.len() >= 3 {
             let agent_id = parts[1];
-            let metric   = parts[2];
+            let metric = parts[2];
 
             match metric {
                 "status" => {
                     self.update_agent(agent_id, "status", payload.clone());
                     if let Some(obj) = payload.as_object()
                         && let Some(entry) = self.agents.get_mut(agent_id)
-                        && let Some(e) = entry.as_object_mut() {
-                            if let Some(n) = obj.get("name")  { e.insert("name".into(),  n.clone()); }
-                            if let Some(s) = obj.get("state") { e.insert("state".into(), s.clone()); }
+                        && let Some(e) = entry.as_object_mut()
+                    {
+                        if let Some(n) = obj.get("name") {
+                            e.insert("name".into(), n.clone());
+                        }
+                        if let Some(s) = obj.get("state") {
+                            e.insert("state".into(), s.clone());
+                        }
                     }
                     self.add_log(json!({
                         "type":      "status",
@@ -178,31 +192,49 @@ impl MonitorState {
                         let short = &agent_id[..agent_id.len().min(8)];
                         let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or(short);
                         if let Some(entry) = self.agents.get_mut(agent_id)
-                            && let Some(e) = entry.as_object_mut() {
-                                e.insert("name".into(), json!(name));
-                                for k in &["cpu", "state"] {
-                                    if let Some(v) = obj.get(*k) { e.insert(k.to_string(), v.clone()); }
+                            && let Some(e) = entry.as_object_mut()
+                        {
+                            e.insert("name".into(), json!(name));
+                            for k in &["cpu", "state"] {
+                                if let Some(v) = obj.get(*k) {
+                                    e.insert(k.to_string(), v.clone());
                                 }
-                                if let Some(v) = obj.get("memory_mb") { e.insert("mem".into(), v.clone()); }
-                                if let Some(v) = obj.get("task")      { e.insert("task".into(), v.clone()); }
+                            }
+                            if let Some(v) = obj.get("memory_mb") {
+                                e.insert("mem".into(), v.clone());
+                            }
+                            if let Some(v) = obj.get("task") {
+                                e.insert("task".into(), v.clone());
+                            }
                         }
                     }
                     // heartbeat → broadcast state update but suppress from log_feed
-                    return Some((json!({
-                        "type":     "agent",
-                        "agent_id": agent_id,
-                        "metric":   metric,
-                        "data":     payload,
-                    }), true));
+                    return Some((
+                        json!({
+                            "type":     "agent",
+                            "agent_id": agent_id,
+                            "metric":   metric,
+                            "data":     payload,
+                        }),
+                        true,
+                    ));
                 }
                 "metrics" => {
                     self.update_agent(agent_id, "metrics", payload.clone());
                     if let Some(obj) = payload.as_object()
                         && let Some(entry) = self.agents.get_mut(agent_id)
-                        && let Some(e) = entry.as_object_mut() {
-                            for k in &["messages_processed", "cost_usd", "input_tokens", "output_tokens"] {
-                                if let Some(v) = obj.get(*k) { e.insert(k.to_string(), v.clone()); }
+                        && let Some(e) = entry.as_object_mut()
+                    {
+                        for k in &[
+                            "messages_processed",
+                            "cost_usd",
+                            "input_tokens",
+                            "output_tokens",
+                        ] {
+                            if let Some(v) = obj.get(*k) {
+                                e.insert(k.to_string(), v.clone());
                             }
+                        }
                     }
                 }
                 "logs" => {
@@ -212,7 +244,9 @@ impl MonitorState {
                         "timestamp": now_secs(),
                     });
                     if let (Some(src), Some(dst)) = (payload.as_object(), log.as_object_mut()) {
-                        for (k, v) in src { dst.entry(k.clone()).or_insert(v.clone()); }
+                        for (k, v) in src {
+                            dst.entry(k.clone()).or_insert(v.clone());
+                        }
                     }
                     self.add_log(log);
                 }
@@ -223,7 +257,9 @@ impl MonitorState {
                         "timestamp": now_secs(),
                     });
                     if let (Some(src), Some(dst)) = (payload.as_object(), log.as_object_mut()) {
-                        for (k, v) in src { dst.entry(k.clone()).or_insert(v.clone()); }
+                        for (k, v) in src {
+                            dst.entry(k.clone()).or_insert(v.clone());
+                        }
                     }
                     self.add_log(log);
                 }
@@ -237,7 +273,9 @@ impl MonitorState {
                 }
                 "alert" => {
                     let short = &agent_id[..agent_id.len().min(8)];
-                    let known_name = self.agents.get(agent_id)
+                    let known_name = self
+                        .agents
+                        .get(agent_id)
                         .and_then(|a| a.get("name"))
                         .and_then(|v| v.as_str())
                         .unwrap_or(short)
@@ -245,17 +283,26 @@ impl MonitorState {
                     let enriched = if let Some(obj) = payload.as_object() {
                         let mut e = obj.clone();
                         e.insert("agent_id".into(), json!(agent_id));
-                        e.entry("name".to_string()).or_insert_with(|| json!(&known_name));
+                        e.entry("name".to_string())
+                            .or_insert_with(|| json!(&known_name));
                         Value::Object(e)
                     } else {
                         json!({ "agent_id": agent_id })
                     };
-                    let severity = enriched.get("severity").and_then(|v| v.as_str())
-                        .unwrap_or("warning").to_string();
-                    let name = enriched.get("name").and_then(|v| v.as_str())
-                        .unwrap_or(&known_name).to_string();
+                    let severity = enriched
+                        .get("severity")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("warning")
+                        .to_string();
+                    let name = enriched
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&known_name)
+                        .to_string();
                     self.alerts.insert(0, enriched);
-                    if self.alerts.len() > 50 { self.alerts.pop(); }
+                    if self.alerts.len() > 50 {
+                        self.alerts.pop();
+                    }
                     self.add_log(json!({
                         "type":      "alert",
                         "agent_id":  agent_id,
@@ -266,31 +313,40 @@ impl MonitorState {
                 }
                 _ => {}
             }
-            return Some((json!({
-                "type":     "agent",
-                "agent_id": agent_id,
-                "metric":   metric,
-                "data":     payload,
-            }), false));
+            return Some((
+                json!({
+                    "type":     "agent",
+                    "agent_id": agent_id,
+                    "metric":   metric,
+                    "data":     payload,
+                }),
+                false,
+            ));
         }
 
         // ── nodes/{name}/heartbeat ───────────────────────────────────────────
         if parts[0] == "nodes" && parts.len() >= 3 && parts[2] == "heartbeat" {
             let node_name = parts[1];
             if let Some(obj) = payload.as_object() {
-                self.nodes.insert(node_name.to_string(), json!({
-                    "node":      node_name,
-                    "agents":    obj.get("agents").cloned().unwrap_or(json!([])),
-                    "last_seen": now_secs(),
-                    "online":    true,
-                    "node_id":   obj.get("node_id").cloned().unwrap_or(json!("")),
-                }));
+                self.nodes.insert(
+                    node_name.to_string(),
+                    json!({
+                        "node":      node_name,
+                        "agents":    obj.get("agents").cloned().unwrap_or(json!([])),
+                        "last_seen": now_secs(),
+                        "online":    true,
+                        "node_id":   obj.get("node_id").cloned().unwrap_or(json!("")),
+                    }),
+                );
             }
-            return Some((json!({
-                "type":      "node",
-                "node_name": node_name,
-                "data":      payload,
-            }), false));
+            return Some((
+                json!({
+                    "type":      "node",
+                    "node_name": node_name,
+                    "data":      payload,
+                }),
+                false,
+            ));
         }
 
         None
@@ -302,15 +358,15 @@ impl MonitorState {
 #[derive(Clone)]
 pub struct BridgeState {
     /// MQTT → WS broadcast (raw envelopes, consumed by monitor task).
-    pub mqtt_tx:     broadcast::Sender<WsEnvelope>,
+    pub mqtt_tx: broadcast::Sender<WsEnvelope>,
     /// Aggregated monitor state shared across all `/ws` connections.
-    pub monitor:     Arc<Mutex<MonitorState>>,
+    pub monitor: Arc<Mutex<MonitorState>>,
     /// Broadcast channel: serialised JSON patches to all `/ws` clients.
-    pub monitor_tx:  broadcast::Sender<String>,
+    pub monitor_tx: broadcast::Sender<String>,
     /// MQTT client for publishing commands received from the browser.
     pub mqtt_client: Arc<MqttClient>,
     /// Mosquitto WebSocket host (for `/mqtt` proxy).
-    pub mqtt_host:   String,
+    pub mqtt_host: String,
     /// Mosquitto WebSocket port (for `/mqtt` proxy, default 9001).
     pub mqtt_ws_port: u16,
 }
@@ -323,9 +379,9 @@ pub struct WsBridge {
 
 impl WsBridge {
     pub fn new(
-        mqtt_tx:      broadcast::Sender<WsEnvelope>,
-        mqtt_client:  Arc<MqttClient>,
-        mqtt_host:    String,
+        mqtt_tx: broadcast::Sender<WsEnvelope>,
+        mqtt_client: Arc<MqttClient>,
+        mqtt_host: String,
         mqtt_ws_port: u16,
     ) -> Self {
         let (monitor_tx, _) = broadcast::channel::<String>(256);
@@ -347,9 +403,9 @@ impl WsBridge {
     /// 2. Updates [`MonitorState`].
     /// 3. Broadcasts Python-compatible JSON patches to all `/ws` clients.
     pub fn spawn_monitor_task(&self) {
-        let mut rx      = self.state.mqtt_tx.subscribe();
-        let monitor     = Arc::clone(&self.state.monitor);
-        let monitor_tx  = self.state.monitor_tx.clone();
+        let mut rx = self.state.mqtt_tx.subscribe();
+        let monitor = Arc::clone(&self.state.monitor);
+        let monitor_tx = self.state.monitor_tx.clone();
 
         tokio::spawn(async move {
             while let Ok(envelope) = rx.recv().await {
@@ -358,13 +414,14 @@ impl WsBridge {
                     match st.parse_topic(&envelope.topic, envelope.payload) {
                         None => continue,
                         Some((event, is_heartbeat)) => {
-                            let snap      = st.snapshot();
+                            let snap = st.snapshot();
                             let log_event = if is_heartbeat { Value::Null } else { event };
                             serde_json::to_string(&json!({
                                 "type":  "patch",
                                 "event": log_event,
                                 "state": snap,
-                            })).unwrap_or_default()
+                            }))
+                            .unwrap_or_default()
                         }
                     }
                 };
@@ -378,7 +435,7 @@ impl WsBridge {
     /// Build the axum `Router` with `/ws` and `/mqtt` routes.
     pub fn router(&self) -> Router {
         Router::new()
-            .route("/ws",   get(ws_handler))
+            .route("/ws", get(ws_handler))
             .route("/mqtt", get(mqtt_proxy_handler))
             .with_state(self.state.clone())
     }
@@ -386,10 +443,7 @@ impl WsBridge {
 
 // ── /ws handler: Python-compatible aggregated state ───────────────────────────
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<BridgeState>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<BridgeState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws_socket(socket, state))
 }
 
@@ -403,7 +457,8 @@ async fn handle_ws_socket(socket: WebSocket, state: BridgeState) {
         serde_json::to_string(&json!({
             "type":  "full_snapshot",
             "state": st.snapshot(),
-        })).unwrap_or_default()
+        }))
+        .unwrap_or_default()
     };
     if ws_send.send(Message::Text(snap_json)).await.is_err() {
         return;
@@ -432,11 +487,19 @@ async fn handle_ws_socket(socket: WebSocket, state: BridgeState) {
 }
 
 async fn handle_browser_command(text: &str, state: &BridgeState) {
-    let Ok(cmd) = serde_json::from_str::<Value>(text) else { return };
-    if cmd.get("type").and_then(|v| v.as_str()) != Some("command") { return; }
+    let Ok(cmd) = serde_json::from_str::<Value>(text) else {
+        return;
+    };
+    if cmd.get("type").and_then(|v| v.as_str()) != Some("command") {
+        return;
+    }
 
-    let Some(command)  = cmd.get("command").and_then(|v| v.as_str())  else { return };
-    let Some(agent_id) = cmd.get("agent_id").and_then(|v| v.as_str()) else { return };
+    let Some(command) = cmd.get("command").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let Some(agent_id) = cmd.get("agent_id").and_then(|v| v.as_str()) else {
+        return;
+    };
 
     let valid = ["pause", "stop", "resume", "delete"];
     if !valid.contains(&command) {
@@ -444,7 +507,11 @@ async fn handle_browser_command(text: &str, state: &BridgeState) {
         return;
     }
 
-    tracing::info!("[ws] {} -> {}", command.to_uppercase(), &agent_id[..agent_id.len().min(8)]);
+    tracing::info!(
+        "[ws] {} -> {}",
+        command.to_uppercase(),
+        &agent_id[..agent_id.len().min(8)]
+    );
 
     // Publish command to MQTT
     let mqtt_payload = json!({
@@ -468,23 +535,26 @@ async fn handle_browser_command(text: &str, state: &BridgeState) {
                 "type":     "delete_agent",
                 "agent_id": agent_id,
                 "state":    snap,
-            })).unwrap_or_default()
+            }))
+            .unwrap_or_default()
         } else {
             if let Some(entry) = st.agents.get_mut(agent_id)
-                && let Some(e) = entry.as_object_mut() {
-                    let new_state = match command {
-                        "stop"   => "stopped",
-                        "pause"  => "paused",
-                        "resume" => "running",
-                        _        => return,
-                    };
-                    e.insert("state".into(), json!(new_state));
+                && let Some(e) = entry.as_object_mut()
+            {
+                let new_state = match command {
+                    "stop" => "stopped",
+                    "pause" => "paused",
+                    "resume" => "running",
+                    _ => return,
+                };
+                e.insert("state".into(), json!(new_state));
             }
             let snap = st.snapshot();
             serde_json::to_string(&json!({
                 "type":  "patch",
                 "state": snap,
-            })).unwrap_or_default()
+            }))
+            .unwrap_or_default()
         }
     };
 
@@ -529,7 +599,7 @@ async fn proxy_to_mosquitto(socket: WebSocket, state: BridgeState, proto: Option
         let p = proto.as_deref().unwrap_or("mqtt");
         builder = builder.header("Sec-WebSocket-Protocol", p);
         match builder.body(()) {
-            Ok(r)  => r,
+            Ok(r) => r,
             Err(e) => {
                 tracing::warn!("[mqtt-proxy] bad request: {e}");
                 return;
@@ -556,11 +626,13 @@ async fn proxy_to_mosquitto(socket: WebSocket, state: BridgeState, proto: Option
         while let Some(Ok(msg)) = up_recv.next().await {
             let out = match msg {
                 TMsg::Binary(b) => Message::Binary(b),
-                TMsg::Text(t)   => Message::Text(t),
-                TMsg::Close(_)  => break,
-                _               => continue,
+                TMsg::Text(t) => Message::Text(t),
+                TMsg::Close(_) => break,
+                _ => continue,
             };
-            if cl_send.send(out).await.is_err() { break; }
+            if cl_send.send(out).await.is_err() {
+                break;
+            }
         }
     });
 
@@ -568,11 +640,13 @@ async fn proxy_to_mosquitto(socket: WebSocket, state: BridgeState, proto: Option
     while let Some(Ok(msg)) = cl_recv.next().await {
         let fwd = match msg {
             Message::Binary(b) => TMsg::Binary(b),
-            Message::Text(t)   => TMsg::Text(t),
-            Message::Close(_)  => break,
-            _                  => continue,
+            Message::Text(t) => TMsg::Text(t),
+            Message::Close(_) => break,
+            _ => continue,
         };
-        if up_send.send(fwd).await.is_err() { break; }
+        if up_send.send(fwd).await.is_err() {
+            break;
+        }
     }
 
     up_to_cl.abort();

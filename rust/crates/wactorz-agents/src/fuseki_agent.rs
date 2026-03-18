@@ -12,38 +12,39 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 use crate::llm_agent::{LlmAgent, LlmConfig};
+use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 pub struct FusekiAgent {
-    config:      ActorConfig,
-    fuseki_url:  String,
-    dataset:     String,
-    http:        reqwest::Client,
-    llm:         Option<LlmAgent>,
-    state:       ActorState,
-    metrics:     Arc<ActorMetrics>,
-    mailbox_tx:  mpsc::Sender<Message>,
-    mailbox_rx:  Option<mpsc::Receiver<Message>>,
-    publisher:   Option<EventPublisher>,
+    config: ActorConfig,
+    fuseki_url: String,
+    dataset: String,
+    http: reqwest::Client,
+    llm: Option<LlmAgent>,
+    state: ActorState,
+    metrics: Arc<ActorMetrics>,
+    mailbox_tx: mpsc::Sender<Message>,
+    mailbox_rx: Option<mpsc::Receiver<Message>>,
+    publisher: Option<EventPublisher>,
 }
 
 impl FusekiAgent {
     pub fn new(config: ActorConfig) -> Self {
-        let fuseki_url = std::env::var("FUSEKI_URL").unwrap_or_else(|_| "http://fuseki:3030".into());
-        let dataset    = std::env::var("FUSEKI_DATASET").unwrap_or_else(|_| "/ds".into());
-        let (tx, rx)   = mpsc::channel(config.mailbox_capacity);
+        let fuseki_url =
+            std::env::var("FUSEKI_URL").unwrap_or_else(|_| "http://fuseki:3030".into());
+        let dataset = std::env::var("FUSEKI_DATASET").unwrap_or_else(|_| "/ds".into());
+        let (tx, rx) = mpsc::channel(config.mailbox_capacity);
         Self {
             config,
             fuseki_url,
             dataset,
-            http:       reqwest::Client::new(),
-            llm:        None,
-            state:      ActorState::Initializing,
-            metrics:    Arc::new(ActorMetrics::new()),
+            http: reqwest::Client::new(),
+            llm: None,
+            state: ActorState::Initializing,
+            metrics: Arc::new(ActorMetrics::new()),
             mailbox_tx: tx,
             mailbox_rx: Some(rx),
-            publisher:  None,
+            publisher: None,
         }
     }
 
@@ -61,12 +62,14 @@ impl FusekiAgent {
     /// Execute a SPARQL SELECT query; returns JSON results.
     async fn sparql_query(&self, query: &str) -> Result<serde_json::Value> {
         let url = format!("{}{}/query", self.fuseki_url, self.dataset);
-        let resp = self.http
+        let resp = self
+            .http
             .post(&url)
             .header("Content-Type", "application/sparql-query")
             .header("Accept", "application/sparql-results+json")
             .body(query.to_string())
-            .send().await?;
+            .send()
+            .await?;
         if !resp.status().is_success() {
             let s = resp.status();
             let t = resp.text().await.unwrap_or_default();
@@ -78,11 +81,13 @@ impl FusekiAgent {
     /// Execute a SPARQL UPDATE statement.
     async fn sparql_update(&self, update: &str) -> Result<()> {
         let url = format!("{}{}/update", self.fuseki_url, self.dataset);
-        let resp = self.http
+        let resp = self
+            .http
             .post(&url)
             .header("Content-Type", "application/sparql-update")
             .body(update.to_string())
-            .send().await?;
+            .send()
+            .await?;
         if !resp.status().is_success() {
             let s = resp.status();
             let t = resp.text().await.unwrap_or_default();
@@ -94,15 +99,24 @@ impl FusekiAgent {
     async fn process(&mut self, text: &str) -> String {
         // If input looks like SPARQL, run it directly
         let trimmed = text.trim().to_uppercase();
-        if trimmed.starts_with("SELECT") || trimmed.starts_with("ASK") || trimmed.starts_with("CONSTRUCT") {
+        if trimmed.starts_with("SELECT")
+            || trimmed.starts_with("ASK")
+            || trimmed.starts_with("CONSTRUCT")
+        {
             match self.sparql_query(text).await {
-                Ok(v)  => format!("SPARQL results:\n{}", serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())),
+                Ok(v) => format!(
+                    "SPARQL results:\n{}",
+                    serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())
+                ),
                 Err(e) => format!("Fuseki error: {e}"),
             }
-        } else if trimmed.starts_with("INSERT") || trimmed.starts_with("DELETE") || trimmed.starts_with("WITH") {
+        } else if trimmed.starts_with("INSERT")
+            || trimmed.starts_with("DELETE")
+            || trimmed.starts_with("WITH")
+        {
             match self.sparql_update(text).await {
-                Ok(())  => "Update executed successfully.".into(),
-                Err(e)  => format!("Fuseki update error: {e}"),
+                Ok(()) => "Update executed successfully.".into(),
+                Err(e) => format!("Fuseki update error: {e}"),
             }
         } else if let Some(llm) = &mut self.llm {
             let prompt = format!(
@@ -112,10 +126,14 @@ impl FusekiAgent {
                  If you generate a query, wrap it in ```sparql ... ``` fences.",
                 self.fuseki_url, self.dataset
             );
-            llm.complete(&prompt).await.unwrap_or_else(|e| format!("LLM error: {e}"))
+            llm.complete(&prompt)
+                .await
+                .unwrap_or_else(|e| format!("LLM error: {e}"))
         } else {
-            format!("Provide a SPARQL query (SELECT/ASK/INSERT/DELETE) to execute against {}{}",
-                    self.fuseki_url, self.dataset)
+            format!(
+                "Provide a SPARQL query (SELECT/ASK/INSERT/DELETE) to execute against {}{}",
+                self.fuseki_url, self.dataset
+            )
         }
     }
 
@@ -129,15 +147,30 @@ impl FusekiAgent {
 
 #[async_trait]
 impl Actor for FusekiAgent {
-    fn id(&self)      -> String       { self.config.id.clone() }
-    fn name(&self)    -> &str         { &self.config.name }
-    fn state(&self)   -> ActorState   { self.state.clone() }
-    fn metrics(&self) -> Arc<ActorMetrics> { Arc::clone(&self.metrics) }
-    fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
-        tracing::info!("[{}] Fuseki agent → {}{}", self.config.name, self.fuseki_url, self.dataset);
+        tracing::info!(
+            "[{}] Fuseki agent → {}{}",
+            self.config.name,
+            self.fuseki_url,
+            self.dataset
+        );
         if let Some(pub_) = &self.publisher {
             pub_.publish(
                 wactorz_mqtt::topics::spawn(&self.config.id),
@@ -157,7 +190,7 @@ impl Actor for FusekiAgent {
     async fn handle_message(&mut self, message: Message) -> Result<()> {
         use wactorz_core::message::MessageType;
         let text = match &message.payload {
-            MessageType::Text { content }        => content.clone(),
+            MessageType::Text { content } => content.clone(),
             MessageType::Task { description, .. } => description.clone(),
             _ => return Ok(()),
         };
@@ -194,7 +227,9 @@ impl Actor for FusekiAgent {
 
     async fn run(&mut self) -> Result<()> {
         self.on_start().await?;
-        let mut rx = self.mailbox_rx.take()
+        let mut rx = self
+            .mailbox_rx
+            .take()
             .ok_or_else(|| anyhow::anyhow!("FusekiAgent already running"))?;
         let mut hb = tokio::time::interval(std::time::Duration::from_secs(
             self.config.heartbeat_interval_secs,

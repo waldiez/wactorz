@@ -35,10 +35,10 @@ impl std::fmt::Display for LlmProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LlmProvider::Anthropic => write!(f, "anthropic"),
-            LlmProvider::OpenAI    => write!(f, "openai"),
-            LlmProvider::Ollama    => write!(f, "ollama"),
-            LlmProvider::Gemini    => write!(f, "gemini"),
-            LlmProvider::Nim       => write!(f, "nim"),
+            LlmProvider::OpenAI => write!(f, "openai"),
+            LlmProvider::Ollama => write!(f, "ollama"),
+            LlmProvider::Gemini => write!(f, "gemini"),
+            LlmProvider::Nim => write!(f, "nim"),
         }
     }
 }
@@ -46,25 +46,25 @@ impl std::fmt::Display for LlmProvider {
 /// Per-model pricing in USD per 1M tokens.
 fn pricing(model: &str) -> (f64, f64) {
     match model {
-        m if m.starts_with("claude-sonnet-4-6")         => (3.0,   15.0),
-        m if m.starts_with("claude-haiku-4-5")          => (0.8,    4.0),
-        m if m.starts_with("claude-opus-4-6")           => (15.0,  75.0),
-        m if m.starts_with("gpt-4o-mini")               => (0.15,   0.6),
-        m if m.starts_with("gpt-4o")                    => (2.5,   10.0),
-        m if m.starts_with("deepseek")                  => (0.27,   1.10),
-        m if m.contains("llama-3.3-70b")                => (0.39,   0.39),
-        m if m.contains("llama-3.1-8b")                 => (0.10,   0.10),
-        m if m.starts_with("gemini-2.0-flash")          => (0.10,   0.40),
-        m if m.starts_with("gemini-1.5-pro")            => (1.25,   5.0),
-        _                                                => (1.0,    3.0),
+        m if m.starts_with("claude-sonnet-4-6") => (3.0, 15.0),
+        m if m.starts_with("claude-haiku-4-5") => (0.8, 4.0),
+        m if m.starts_with("claude-opus-4-6") => (15.0, 75.0),
+        m if m.starts_with("gpt-4o-mini") => (0.15, 0.6),
+        m if m.starts_with("gpt-4o") => (2.5, 10.0),
+        m if m.starts_with("deepseek") => (0.27, 1.10),
+        m if m.contains("llama-3.3-70b") => (0.39, 0.39),
+        m if m.contains("llama-3.1-8b") => (0.10, 0.10),
+        m if m.starts_with("gemini-2.0-flash") => (0.10, 0.40),
+        m if m.starts_with("gemini-1.5-pro") => (1.25, 5.0),
+        _ => (1.0, 3.0),
     }
 }
 
 /// Calculate cost in nano-USD from token counts and model name.
 pub fn calc_cost_nano_usd(model: &str, input_tokens: u64, output_tokens: u64) -> u64 {
     let (in_price, out_price) = pricing(model);
-    let cost_usd = (input_tokens as f64 * in_price + output_tokens as f64 * out_price)
-        / 1_000_000.0;
+    let cost_usd =
+        (input_tokens as f64 * in_price + output_tokens as f64 * out_price) / 1_000_000.0;
     (cost_usd * 1_000_000_000.0) as u64
 }
 
@@ -150,16 +150,19 @@ impl LlmAgent {
     /// Also records token usage and cost in the actor metrics.
     pub async fn complete(&self, prompt: &str) -> Result<String> {
         let (text, input_tok, output_tok) = match self.llm_config.provider {
-            LlmProvider::Anthropic              => self.complete_anthropic(prompt).await?,
-            LlmProvider::OpenAI | LlmProvider::Ollama => self.complete_openai_compat(prompt, None).await?,
-            LlmProvider::Nim                    => {
+            LlmProvider::Anthropic => self.complete_anthropic(prompt).await?,
+            LlmProvider::OpenAI | LlmProvider::Ollama => {
+                self.complete_openai_compat(prompt, None).await?
+            }
+            LlmProvider::Nim => {
                 let base = "https://integrate.api.nvidia.com/v1";
                 self.complete_openai_compat(prompt, Some(base)).await?
             }
-            LlmProvider::Gemini                 => self.complete_gemini(prompt).await?,
+            LlmProvider::Gemini => self.complete_gemini(prompt).await?,
         };
         let cost_nano = calc_cost_nano_usd(&self.llm_config.model, input_tok, output_tok);
-        self.metrics.record_llm_usage(input_tok, output_tok, cost_nano);
+        self.metrics
+            .record_llm_usage(input_tok, output_tok, cost_nano);
         Ok(text)
     }
 
@@ -196,10 +199,14 @@ impl LlmAgent {
 
         let mut messages = serde_json::json!([]);
         for m in &self.history {
-            messages.as_array_mut().unwrap()
+            messages
+                .as_array_mut()
+                .unwrap()
                 .push(serde_json::json!({"role": m.role, "content": m.content}));
         }
-        messages.as_array_mut().unwrap()
+        messages
+            .as_array_mut()
+            .unwrap()
             .push(serde_json::json!({"role": "user", "content": prompt}));
 
         let mut body = serde_json::json!({
@@ -230,7 +237,7 @@ impl LlmAgent {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("unexpected Anthropic response: {json}"))?
             .to_string();
-        let input_tok  = json["usage"]["input_tokens"].as_u64().unwrap_or(0);
+        let input_tok = json["usage"]["input_tokens"].as_u64().unwrap_or(0);
         let output_tok = json["usage"]["output_tokens"].as_u64().unwrap_or(0);
         Ok((text, input_tok, output_tok))
     }
@@ -249,10 +256,18 @@ impl LlmAgent {
             model, api_key
         );
 
-        let mut contents: Vec<serde_json::Value> = self.history.iter().map(|m| {
-            let role = if m.role == "assistant" { "model" } else { "user" };
-            serde_json::json!({ "role": role, "parts": [{ "text": m.content }] })
-        }).collect();
+        let mut contents: Vec<serde_json::Value> = self
+            .history
+            .iter()
+            .map(|m| {
+                let role = if m.role == "assistant" {
+                    "model"
+                } else {
+                    "user"
+                };
+                serde_json::json!({ "role": role, "parts": [{ "text": m.content }] })
+            })
+            .collect();
         contents.push(serde_json::json!({
             "role": "user",
             "parts": [{ "text": prompt }]
@@ -274,8 +289,12 @@ impl LlmAgent {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("unexpected Gemini response: {json}"))?
             .to_string();
-        let input_tok  = json["usageMetadata"]["promptTokenCount"].as_u64().unwrap_or(0);
-        let output_tok = json["usageMetadata"]["candidatesTokenCount"].as_u64().unwrap_or(0);
+        let input_tok = json["usageMetadata"]["promptTokenCount"]
+            .as_u64()
+            .unwrap_or(0);
+        let output_tok = json["usageMetadata"]["candidatesTokenCount"]
+            .as_u64()
+            .unwrap_or(0);
         Ok((text, input_tok, output_tok))
     }
 
@@ -307,7 +326,10 @@ impl LlmAgent {
             "temperature": self.llm_config.temperature,
         });
 
-        let mut req = self.http.post(format!("{base}/chat/completions")).json(&body);
+        let mut req = self
+            .http
+            .post(format!("{base}/chat/completions"))
+            .json(&body);
         if let Some(key) = &self.llm_config.api_key {
             req = req.header("Authorization", format!("Bearer {key}"));
         }
@@ -322,7 +344,7 @@ impl LlmAgent {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("unexpected response: {json}"))?
             .to_string();
-        let input_tok  = json["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+        let input_tok = json["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
         let output_tok = json["usage"]["completion_tokens"].as_u64().unwrap_or(0);
         Ok((text, input_tok, output_tok))
     }
@@ -353,21 +375,33 @@ impl Actor for LlmAgent {
         use wactorz_core::message::MessageType;
 
         // ── WIK hot-swap: task_id "wik/switch" carries new provider config ──────
-        if let MessageType::Task { task_id, payload, .. } = &message.payload {
+        if let MessageType::Task {
+            task_id, payload, ..
+        } = &message.payload
+        {
             if task_id == "wik/switch" {
-                let provider_str = payload.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+                let provider_str = payload
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let new_provider = match provider_str {
                     "anthropic" => LlmProvider::Anthropic,
-                    "openai"    => LlmProvider::OpenAI,
-                    "gemini"    => LlmProvider::Gemini,
-                    "ollama"    => LlmProvider::Ollama,
-                    "nim"       => LlmProvider::Nim,
+                    "openai" => LlmProvider::OpenAI,
+                    "gemini" => LlmProvider::Gemini,
+                    "ollama" => LlmProvider::Ollama,
+                    "nim" => LlmProvider::Nim,
                     other => {
-                        tracing::warn!("[{}] wik/switch: unknown provider '{other}'", self.config.name);
+                        tracing::warn!(
+                            "[{}] wik/switch: unknown provider '{other}'",
+                            self.config.name
+                        );
                         return Ok(());
                     }
                 };
-                let reason = payload.get("reason").and_then(|v| v.as_str()).unwrap_or("WIK switch");
+                let reason = payload
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("WIK switch");
                 tracing::info!(
                     "[{}] ⚡ provider switch: {} → {provider_str} ({reason})",
                     self.config.name,
@@ -397,11 +431,22 @@ impl Actor for LlmAgent {
         match self.complete(&prompt).await {
             Ok(reply_text) => {
                 self.consecutive_errors = 0;
-                self.history.push(ChatMessage { role: "user".into(),      content: prompt });
-                self.history.push(ChatMessage { role: "assistant".into(), content: reply_text.clone() });
+                self.history.push(ChatMessage {
+                    role: "user".into(),
+                    content: prompt,
+                });
+                self.history.push(ChatMessage {
+                    role: "assistant".into(),
+                    content: reply_text.clone(),
+                });
                 if let Some(sender_id) = message.from {
-                    tracing::debug!("[{}] generated reply ({} chars)", self.config.name, reply_text.len());
-                    let reply = Message::text(Some(self.config.id.clone()), Some(sender_id), reply_text);
+                    tracing::debug!(
+                        "[{}] generated reply ({} chars)",
+                        self.config.name,
+                        reply_text.len()
+                    );
+                    let reply =
+                        Message::text(Some(self.config.id.clone()), Some(sender_id), reply_text);
                     let _ = reply;
                 }
             }
@@ -410,7 +455,8 @@ impl Actor for LlmAgent {
                 let err_str = e.to_string();
                 tracing::error!(
                     "[{}] LLM error (consecutive: {}) — {err_str}",
-                    self.config.name, self.consecutive_errors
+                    self.config.name,
+                    self.consecutive_errors
                 );
                 self.publish_llm_error(&err_str);
                 return Err(e);

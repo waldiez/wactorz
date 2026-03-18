@@ -39,13 +39,13 @@ use wactorz_core::{
 
 /// User and Developer Xpert — built-in knowledge agent.
 pub struct UdxAgent {
-    config:      ActorConfig,
-    system:      ActorSystem,
-    state:       ActorState,
-    metrics:     Arc<ActorMetrics>,
-    mailbox_tx:  mpsc::Sender<Message>,
-    mailbox_rx:  Option<mpsc::Receiver<Message>>,
-    publisher:   Option<EventPublisher>,
+    config: ActorConfig,
+    system: ActorSystem,
+    state: ActorState,
+    metrics: Arc<ActorMetrics>,
+    mailbox_tx: mpsc::Sender<Message>,
+    mailbox_rx: Option<mpsc::Receiver<Message>>,
+    publisher: Option<EventPublisher>,
 }
 
 impl UdxAgent {
@@ -54,11 +54,11 @@ impl UdxAgent {
         Self {
             config,
             system,
-            state:      ActorState::Initializing,
-            metrics:    Arc::new(ActorMetrics::new()),
+            state: ActorState::Initializing,
+            metrics: Arc::new(ActorMetrics::new()),
             mailbox_tx: tx,
             mailbox_rx: Some(rx),
-            publisher:  None,
+            publisher: None,
         }
     }
 
@@ -91,20 +91,20 @@ impl UdxAgent {
 
     /// Main dispatch: parse command + args, build response.
     async fn dispatch(&self, raw: &str) -> String {
-        let text  = raw.trim();
+        let text = raw.trim();
         let lower = text.to_lowercase();
         let mut parts = lower.splitn(2, char::is_whitespace);
-        let cmd  = parts.next().unwrap_or("");
+        let cmd = parts.next().unwrap_or("");
         let rest = parts.next().unwrap_or("").trim();
 
         match cmd {
-            "help"    => self.cmd_help(rest),
-            "docs"    => Self::cmd_docs(rest),
+            "help" => self.cmd_help(rest),
+            "docs" => Self::cmd_docs(rest),
             "explain" => Self::cmd_explain(rest),
             "version" => Self::cmd_version(),
-            "agents"  => self.cmd_agents().await,
-            "status"  => self.cmd_status().await,
-            _         => Self::fallback(text),
+            "agents" => self.cmd_agents().await,
+            "status" => self.cmd_status().await,
+            _ => Self::fallback(text),
         }
     }
 
@@ -143,12 +143,12 @@ impl UdxAgent {
     fn cmd_docs(topic: &str) -> String {
         match topic {
             "architecture" | "arch" => Self::doc_architecture(),
-            "agents"                => Self::doc_agents(),
-            "chat"                  => Self::doc_chat(),
-            "dashboard"             => Self::doc_dashboard(),
-            "api"                   => Self::doc_api(),
-            "mqtt"                  => Self::doc_mqtt(),
-            "deploy"                => Self::doc_deploy(),
+            "agents" => Self::doc_agents(),
+            "chat" => Self::doc_chat(),
+            "dashboard" => Self::doc_dashboard(),
+            "api" => Self::doc_api(),
+            "mqtt" => Self::doc_mqtt(),
+            "deploy" => Self::doc_deploy(),
             _ => format!(
                 "Unknown topic **{topic}**.\n\
                  Available: `architecture` · `agents` · `chat` · `dashboard` · `api` · `mqtt` · `deploy`"
@@ -302,7 +302,7 @@ impl UdxAgent {
              `wactorz-interfaces` · `wactorz-server`\n\
              Frontend: Vite + TypeScript + Babylon.js 7.x\n\
              Default LLM: `claude-sonnet-4-6` (Anthropic)",
-            rust  = env!("CARGO_PKG_RUST_VERSION", "unknown"),
+            rust = env!("CARGO_PKG_RUST_VERSION", "unknown"),
             built = env!("CARGO_PKG_VERSION"),
         )
     }
@@ -315,7 +315,7 @@ impl UdxAgent {
         let mut lines = vec![format!("**Live agents** ({})", entries.len())];
         for e in &entries {
             let state = format!("{:?}", e.state).to_lowercase();
-            let prot  = if e.protected { " ⭐" } else { "" };
+            let prot = if e.protected { " ⭐" } else { "" };
             lines.push(format!("• `{}` — {} [{}]{}", e.name, e.id, state, prot));
         }
         lines.join("\n")
@@ -323,11 +323,20 @@ impl UdxAgent {
 
     async fn cmd_status(&self) -> String {
         let entries = self.system.registry.list().await;
-        let total    = entries.len();
-        let running  = entries.iter().filter(|e| format!("{:?}", e.state).to_lowercase() == "running").count();
-        let stopped  = entries.iter().filter(|e| format!("{:?}", e.state).to_lowercase() == "stopped").count();
-        let paused   = entries.iter().filter(|e| format!("{:?}", e.state).to_lowercase() == "paused").count();
-        let other    = total - running - stopped - paused;
+        let total = entries.len();
+        let running = entries
+            .iter()
+            .filter(|e| format!("{:?}", e.state).to_lowercase() == "running")
+            .count();
+        let stopped = entries
+            .iter()
+            .filter(|e| format!("{:?}", e.state).to_lowercase() == "stopped")
+            .count();
+        let paused = entries
+            .iter()
+            .filter(|e| format!("{:?}", e.state).to_lowercase() == "paused")
+            .count();
+        let other = total - running - stopped - paused;
         format!(
             "**System status**\n\
              Total agents : {total}\n\
@@ -376,7 +385,8 @@ impl UdxAgent {
         ```\n\
         \n\
         Every agent is an async actor; all communication is via MQTT topics.\n\
-        Use `explain actor-model` or `explain mqtt` for deeper dives.".to_string()
+        Use `explain actor-model` or `explain mqtt` for deeper dives."
+            .to_string()
     }
 
     fn doc_agents() -> String {
@@ -391,7 +401,8 @@ impl UdxAgent {
         | nautilus-agent   | transfer     | no        | SSH & rsync file bridge       |\n\
         | udx-agent        | expert       | no        | Built-in knowledge base       |\n\
         | dynamic-*        | dynamic      | no        | LLM-generated script agents   |\n\n\
-        Use `explain <agent-name>` for details on any agent.".to_string()
+        Use `explain <agent-name>` for details on any agent."
+            .to_string()
     }
 
     fn doc_chat() -> String {
@@ -404,7 +415,8 @@ impl UdxAgent {
         • Shift+Enter → newline (Enter alone sends)\n\
         • Arrow Up/Down → message history\n\
         • Swipe right (mobile) or press Escape → close the panel\n\
-        • 3-dot indicator shows when an agent is processing your message".to_string()
+        • 3-dot indicator shows when an agent is processing your message"
+            .to_string()
     }
 
     fn doc_dashboard() -> String {
@@ -417,7 +429,8 @@ impl UdxAgent {
         `Social`     → Instagram-style profile cards with stats\n\
         `Graveyard`  → shows stopped/failed agents as tombstones\n\n\
         Controls per card: 💬 Chat · ⏸ Pause · ▶ Resume · ⏹ Stop · 🗑 Delete\n\
-        Protected agents (⭐) cannot be stopped or deleted.".to_string()
+        Protected agents (⭐) cannot be stopped or deleted."
+            .to_string()
     }
 
     fn doc_api() -> String {
@@ -445,7 +458,8 @@ impl UdxAgent {
         `system/spawn`           → dynamic-agent spawn announcements\n\
         `io/chat`                → frontend → IOAgent gateway\n\n\
         Broker: Mosquitto TCP 1883 (internal) / WS 9001 via nginx `/mqtt`\n\
-        All payloads are camelCase JSON.".to_string()
+        All payloads are camelCase JSON."
+            .to_string()
     }
 
     fn doc_deploy() -> String {
@@ -462,7 +476,8 @@ impl UdxAgent {
         **systemd** (persistent on reboot):\n\
         `sudo cp systemd/wactorz.service /etc/systemd/system/`\n\
         `sudo systemctl enable --now wactorz`\n\
-        `journalctl -u wactorz -f`".to_string()
+        `journalctl -u wactorz -f`"
+            .to_string()
     }
 }
 
@@ -470,12 +485,24 @@ impl UdxAgent {
 
 #[async_trait]
 impl Actor for UdxAgent {
-    fn id(&self)      -> String          { self.config.id.clone() }
-    fn name(&self)    -> &str            { &self.config.name }
-    fn state(&self)   -> ActorState      { self.state.clone() }
-    fn metrics(&self) -> Arc<ActorMetrics> { Arc::clone(&self.metrics) }
-    fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
-    fn is_protected(&self) -> bool       { self.config.protected }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
+    fn is_protected(&self) -> bool {
+        self.config.protected
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
@@ -496,7 +523,7 @@ impl Actor for UdxAgent {
     async fn handle_message(&mut self, message: Message) -> Result<()> {
         use wactorz_core::message::MessageType;
         let content = match &message.payload {
-            MessageType::Text { content }        => content.clone(),
+            MessageType::Text { content } => content.clone(),
             MessageType::Task { description, .. } => description.clone(),
             _ => return Ok(()),
         };

@@ -38,9 +38,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-use wactorz_core::{
-    Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message,
-};
+use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 // ── GPT/OpenAI warning ─────────────────────────────────────────────────────────
 
@@ -60,25 +58,25 @@ _Type `@wik-agent add openai <key> --confirm` to register anyway._";
 
 #[derive(Clone)]
 struct ProviderEntry {
-    name:         String, // "anthropic" | "gemini" | "openai" | "ollama"
-    api_key:      String,
-    model:        String,
-    base_url:     Option<String>,
-    priority:     usize,  // 1 = highest
-    call_count:   u64,
-    error_count:  u64,
-    rotate_flag:  bool,
-    active:       bool,
+    name: String, // "anthropic" | "gemini" | "openai" | "ollama"
+    api_key: String,
+    model: String,
+    base_url: Option<String>,
+    priority: usize, // 1 = highest
+    call_count: u64,
+    error_count: u64,
+    rotate_flag: bool,
+    active: bool,
 }
 
 impl ProviderEntry {
     fn default_model(name: &str) -> &'static str {
         match name {
             "anthropic" => "claude-sonnet-4-6",
-            "gemini"    => "gemini-2.0-flash",
-            "openai"    => "gpt-4o",
-            "ollama"    => "llama3",
-            _           => "unknown",
+            "gemini" => "gemini-2.0-flash",
+            "openai" => "gpt-4o",
+            "ollama" => "llama3",
+            _ => "unknown",
         }
     }
 }
@@ -86,13 +84,13 @@ impl ProviderEntry {
 // ── WikAgent ───────────────────────────────────────────────────────────────────
 
 pub struct WikAgent {
-    config:          ActorConfig,
-    state:           ActorState,
-    metrics:         Arc<ActorMetrics>,
-    mailbox_tx:      mpsc::Sender<Message>,
-    mailbox_rx:      Option<mpsc::Receiver<Message>>,
-    publisher:       Option<EventPublisher>,
-    providers:       Arc<Mutex<Vec<ProviderEntry>>>,
+    config: ActorConfig,
+    state: ActorState,
+    metrics: Arc<ActorMetrics>,
+    mailbox_tx: mpsc::Sender<Message>,
+    mailbox_rx: Option<mpsc::Receiver<Message>>,
+    publisher: Option<EventPublisher>,
+    providers: Arc<Mutex<Vec<ProviderEntry>>>,
     /// Consecutive errors received from the current active provider.
     consecutive_errors: Arc<Mutex<u32>>,
     /// How many consecutive errors before triggering failover.
@@ -104,14 +102,14 @@ impl WikAgent {
         let (tx, rx) = mpsc::channel(config.mailbox_capacity);
         Self {
             config,
-            state:              ActorState::Initializing,
-            metrics:            Arc::new(ActorMetrics::new()),
-            mailbox_tx:         tx,
-            mailbox_rx:         Some(rx),
-            publisher:          None,
-            providers:          Arc::new(Mutex::new(Vec::new())),
+            state: ActorState::Initializing,
+            metrics: Arc::new(ActorMetrics::new()),
+            mailbox_tx: tx,
+            mailbox_rx: Some(rx),
+            publisher: None,
+            providers: Arc::new(Mutex::new(Vec::new())),
             consecutive_errors: Arc::new(Mutex::new(0)),
-            error_threshold:    Arc::new(Mutex::new(3)),
+            error_threshold: Arc::new(Mutex::new(3)),
         }
     }
 
@@ -162,14 +160,21 @@ impl WikAgent {
     /// the active provider and triggers failover when threshold is reached.
     fn handle_llm_error(&self, payload: &serde_json::Value) {
         let incoming_provider = payload
-            .get("provider").and_then(|v| v.as_str()).unwrap_or("");
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let error_msg = payload
-            .get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
 
         let mut providers = self.providers.lock().unwrap();
 
         // Update error counter for that provider
-        if let Some(entry) = providers.iter_mut().find(|e| e.active && e.name == incoming_provider) {
+        if let Some(entry) = providers
+            .iter_mut()
+            .find(|e| e.active && e.name == incoming_provider)
+        {
             entry.error_count += 1;
         }
 
@@ -188,11 +193,13 @@ impl WikAgent {
 
         // Threshold reached — find the next provider in priority order
         let next = {
-            let active_priority = providers.iter()
+            let active_priority = providers
+                .iter()
                 .find(|e| e.active)
                 .map(|e| e.priority)
                 .unwrap_or(0);
-            providers.iter()
+            providers
+                .iter()
                 .filter(|e| !e.active && e.priority > active_priority && !e.api_key.is_empty())
                 .min_by_key(|e| e.priority)
                 .cloned()
@@ -212,7 +219,10 @@ impl WikAgent {
                 let reason = format!(
                     "auto-failover: {incoming_provider} hit {threshold} consecutive errors"
                 );
-                tracing::info!("[wik-agent] ⚡ failover: {incoming_provider} → {}", next_entry.name);
+                tracing::info!(
+                    "[wik-agent] ⚡ failover: {incoming_provider} → {}",
+                    next_entry.name
+                );
 
                 // Mark active/inactive
                 for e in providers.iter_mut() {
@@ -240,7 +250,8 @@ impl WikAgent {
         let providers = self.providers.lock().unwrap();
         if providers.is_empty() {
             return "📭 No providers configured.\n\n\
-                    Add one: `@wik-agent add anthropic <key>`".to_string();
+                    Add one: `@wik-agent add anthropic <key>`"
+                .to_string();
         }
 
         let mut sorted: Vec<&ProviderEntry> = providers.iter().collect();
@@ -263,7 +274,11 @@ impl WikAgent {
             )
         }).collect();
 
-        let active_name = sorted.iter().find(|e| e.active).map(|e| e.name.as_str()).unwrap_or("none");
+        let active_name = sorted
+            .iter()
+            .find(|e| e.active)
+            .map(|e| e.name.as_str())
+            .unwrap_or("none");
         format!(
             "**🔑 WIK — Key Status**\n\n\
              Active: **{active_name}** · threshold: {threshold} errors · consecutive now: {consecutive}\n\n{}",
@@ -288,7 +303,8 @@ impl WikAgent {
         }
 
         let api_key = parts[1].to_string();
-        let model   = parts.get(2)
+        let model = parts
+            .get(2)
             .filter(|&&s| s != "--confirm")
             .map(|&s| s.to_string())
             .unwrap_or_else(|| ProviderEntry::default_model(&name).to_string());
@@ -298,28 +314,34 @@ impl WikAgent {
         if let Some(existing) = providers.iter_mut().find(|e| e.name == name) {
             let old_key_hint = if existing.api_key.len() > 4 {
                 format!("{}…", &existing.api_key[..4])
-            } else { "••••".to_string() };
+            } else {
+                "••••".to_string()
+            };
             existing.api_key = api_key;
-            existing.model   = model.clone();
+            existing.model = model.clone();
             return format!("🔑 Updated **{name}** (was `{old_key_hint}`) → model `{model}`");
         }
 
         // Assign next priority
         let next_priority = providers.iter().map(|e| e.priority).max().unwrap_or(0) + 1;
-        let is_first      = providers.is_empty();
+        let is_first = providers.is_empty();
         providers.push(ProviderEntry {
-            name:        name.clone(),
+            name: name.clone(),
             api_key,
-            model:       model.clone(),
-            base_url:    None,
-            priority:    next_priority,
-            call_count:  0,
+            model: model.clone(),
+            base_url: None,
+            priority: next_priority,
+            call_count: 0,
             error_count: 0,
             rotate_flag: false,
-            active:      is_first,
+            active: is_first,
         });
 
-        let active_note = if is_first { " — set as **active** (first provider)" } else { "" };
+        let active_note = if is_first {
+            " — set as **active** (first provider)"
+        } else {
+            ""
+        };
         format!("✅ Registered **{name}** · `{model}` [P{next_priority}]{active_note}")
     }
 
@@ -337,7 +359,9 @@ impl WikAgent {
                 e.priority = priority;
                 updated.push(format!("  {}. {name}", priority));
             } else {
-                return format!("❓ Provider `{name}` not found. Add it first with `add {name} <key>`.");
+                return format!(
+                    "❓ Provider `{name}` not found. Add it first with `add {name} <key>`."
+                );
             }
         }
 
@@ -349,7 +373,11 @@ impl WikAgent {
             return "Usage: `switch <provider> [reason]`\n\nExample: `switch gemini manual override`".to_string();
         }
         let name = parts[0].to_lowercase();
-        let reason = if parts.len() > 1 { parts[1..].join(" ") } else { "manual switch".to_string() };
+        let reason = if parts.len() > 1 {
+            parts[1..].join(" ")
+        } else {
+            "manual switch".to_string()
+        };
 
         let mut providers = self.providers.lock().unwrap();
         let found = providers.iter().any(|e| e.name == name);
@@ -358,14 +386,23 @@ impl WikAgent {
         }
 
         let target = providers.iter().find(|e| e.name == name).cloned().unwrap();
-        let prev = providers.iter().find(|e| e.active).map(|e| e.name.clone()).unwrap_or_else(|| "none".to_string());
-        for e in providers.iter_mut() { e.active = e.name == name; }
+        let prev = providers
+            .iter()
+            .find(|e| e.active)
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| "none".to_string());
+        for e in providers.iter_mut() {
+            e.active = e.name == name;
+        }
 
         *self.consecutive_errors.lock().unwrap() = 0;
         drop(providers);
 
         self.publish_switch(&target, &reason);
-        format!("⚡ Switched: **{prev}** → **{name}** (`{}`)\n\n_Reason: {reason}_", target.model)
+        format!(
+            "⚡ Switched: **{prev}** → **{name}** (`{}`)\n\n_Reason: {reason}_",
+            target.model
+        )
     }
 
     fn cmd_usage(&self) -> String {
@@ -374,42 +411,57 @@ impl WikAgent {
             return "📭 No providers registered yet.".to_string();
         }
 
-        let total_calls:  u64 = providers.iter().map(|e| e.call_count).sum();
+        let total_calls: u64 = providers.iter().map(|e| e.call_count).sum();
         let total_errors: u64 = providers.iter().map(|e| e.error_count).sum();
 
         let mut sorted: Vec<&ProviderEntry> = providers.iter().collect();
         sorted.sort_by_key(|e| e.priority);
 
-        let rows: Vec<String> = sorted.iter().map(|e| {
-            let bar = if total_calls > 0 {
-                let frac = e.call_count as f64 / total_calls as f64;
-                let filled = (frac * 10.0).round() as usize;
-                format!("[{}{}]", "█".repeat(filled), "░".repeat(10 - filled))
-            } else { "[░░░░░░░░░░]".to_string() };
-            let err_rate = if e.call_count > 0 {
-                format!("{:.1}% err", e.error_count as f64 / e.call_count as f64 * 100.0)
-            } else { "no calls".to_string() };
-            format!("  **{}** {bar} {} calls · {err_rate}", e.name, e.call_count)
-        }).collect();
+        let rows: Vec<String> = sorted
+            .iter()
+            .map(|e| {
+                let bar = if total_calls > 0 {
+                    let frac = e.call_count as f64 / total_calls as f64;
+                    let filled = (frac * 10.0).round() as usize;
+                    format!("[{}{}]", "█".repeat(filled), "░".repeat(10 - filled))
+                } else {
+                    "[░░░░░░░░░░]".to_string()
+                };
+                let err_rate = if e.call_count > 0 {
+                    format!(
+                        "{:.1}% err",
+                        e.error_count as f64 / e.call_count as f64 * 100.0
+                    )
+                } else {
+                    "no calls".to_string()
+                };
+                format!("  **{}** {bar} {} calls · {err_rate}", e.name, e.call_count)
+            })
+            .collect();
 
         format!(
             "**📊 WIK Usage**\n\n{}\n\n**Total**: {} calls · {} errors\n\n\
              _Use `@wif-agent add misc \"LLM API\" <cost>` to log spend._",
-            rows.join("\n"), total_calls, total_errors,
+            rows.join("\n"),
+            total_calls,
+            total_errors,
         )
     }
 
     fn cmd_rotate(&self, parts: &[&str]) -> String {
         if parts.is_empty() {
-            return "Usage: `rotate <provider>`\n\nFlags the provider key for rotation reminder.".to_string();
+            return "Usage: `rotate <provider>`\n\nFlags the provider key for rotation reminder."
+                .to_string();
         }
         let name = parts[0].to_lowercase();
         let mut providers = self.providers.lock().unwrap();
         match providers.iter_mut().find(|e| e.name == name) {
-            None    => format!("❓ Provider `{name}` not found."),
+            None => format!("❓ Provider `{name}` not found."),
             Some(e) => {
                 e.rotate_flag = true;
-                format!("🔄 **{name}** flagged for key rotation.\n\nWhen ready:\n`@wik-agent add {name} <new_key>`")
+                format!(
+                    "🔄 **{name}** flagged for key rotation.\n\nWhen ready:\n`@wik-agent add {name} <new_key>`"
+                )
             }
         }
     }
@@ -434,7 +486,7 @@ impl WikAgent {
 
         let targets: Vec<&ProviderEntry> = match name {
             Some(n) => providers.iter().filter(|e| e.name == n).collect(),
-            None    => providers.iter().filter(|e| e.active).collect(),
+            None => providers.iter().filter(|e| e.active).collect(),
         };
 
         if targets.is_empty() {
@@ -442,16 +494,19 @@ impl WikAgent {
         }
 
         // We can't do async HTTP here (sync context), so just report config sanity.
-        let results: Vec<String> = targets.iter().map(|e| {
-            let key_ok = !e.api_key.is_empty();
-            let icon = if key_ok { "✅" } else { "❌" };
-            let note = if key_ok {
-                format!("key present · model `{}` · P{}", e.model, e.priority)
-            } else {
-                "no API key set".to_string()
-            };
-            format!("  {icon} **{}** — {note}", e.name)
-        }).collect();
+        let results: Vec<String> = targets
+            .iter()
+            .map(|e| {
+                let key_ok = !e.api_key.is_empty();
+                let icon = if key_ok { "✅" } else { "❌" };
+                let note = if key_ok {
+                    format!("key present · model `{}` · P{}", e.model, e.priority)
+                } else {
+                    "no API key set".to_string()
+                };
+                format!("  {icon} **{}** — {note}", e.name)
+            })
+            .collect();
 
         format!(
             "**🔍 WIK Provider Check**\n\n{}\n\n\
@@ -462,10 +517,7 @@ impl WikAgent {
     }
 
     fn dispatch(&self, text: &str) -> Option<String> {
-        let arg = text
-            .strip_prefix("@wik-agent")
-            .unwrap_or(text)
-            .trim();
+        let arg = text.strip_prefix("@wik-agent").unwrap_or(text).trim();
 
         // Transparently handle system/llm/error JSON payloads routed by main.rs
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(arg) {
@@ -479,16 +531,15 @@ impl WikAgent {
         let cmd = parts.first().copied().unwrap_or("help");
 
         Some(match cmd {
-            "status"   => self.cmd_status(),
-            "add"      => self.cmd_add(&parts[1..]),
+            "status" => self.cmd_status(),
+            "add" => self.cmd_add(&parts[1..]),
             "priority" => self.cmd_priority(&parts[1..]),
-            "switch"   => self.cmd_switch(&parts[1..]),
-            "usage"    => self.cmd_usage(),
-            "rotate"   => self.cmd_rotate(&parts[1..]),
-            "set"      => self.cmd_set(&parts[1..]),
-            "test"     => self.cmd_test(&parts[1..]),
-            "help" | "" => {
-                "**WIK — Key Manager** 🔑\n\
+            "switch" => self.cmd_switch(&parts[1..]),
+            "usage" => self.cmd_usage(),
+            "rotate" => self.cmd_rotate(&parts[1..]),
+            "set" => self.cmd_set(&parts[1..]),
+            "test" => self.cmd_test(&parts[1..]),
+            "help" | "" => "**WIK — Key Manager** 🔑\n\
                  _Waldiez Intelligence Keys · NATO: kilo_\n\n\
                  ```\n\
                  add <anthropic|gemini|openai|ollama> <key> [model]\n\
@@ -503,8 +554,7 @@ impl WikAgent {
                  ```\n\n\
                  Auto-failover: after `threshold` consecutive errors WIK\n\
                  switches to the next-priority provider automatically."
-                    .to_string()
-            }
+                .to_string(),
             _ => format!("Unknown command: `{cmd}`. Type `help` for the full command list."),
         })
     }
@@ -514,12 +564,24 @@ impl WikAgent {
 
 #[async_trait]
 impl Actor for WikAgent {
-    fn id(&self)           -> String                { self.config.id.clone() }
-    fn name(&self)         -> &str                  { &self.config.name }
-    fn state(&self)        -> ActorState            { self.state.clone() }
-    fn metrics(&self)      -> Arc<ActorMetrics>     { Arc::clone(&self.metrics) }
-    fn mailbox(&self)      -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
-    fn is_protected(&self) -> bool                  { self.config.protected }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
+    fn is_protected(&self) -> bool {
+        self.config.protected
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
@@ -541,7 +603,7 @@ impl Actor for WikAgent {
         use wactorz_core::message::MessageType;
 
         let content = match &message.payload {
-            MessageType::Text { content }         => content.trim().to_string(),
+            MessageType::Text { content } => content.trim().to_string(),
             MessageType::Task { description, .. } => description.trim().to_string(),
             _ => return Ok(()),
         };

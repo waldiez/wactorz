@@ -12,12 +12,12 @@ use tokio::sync::mpsc;
 use wactorz_core::{Actor, ActorConfig, ActorMetrics, ActorState, EventPublisher, Message};
 
 pub struct InstallerAgent {
-    config:     ActorConfig,
-    state:      ActorState,
-    metrics:    Arc<ActorMetrics>,
+    config: ActorConfig,
+    state: ActorState,
+    metrics: Arc<ActorMetrics>,
     mailbox_tx: mpsc::Sender<Message>,
     mailbox_rx: Option<mpsc::Receiver<Message>>,
-    publisher:  Option<EventPublisher>,
+    publisher: Option<EventPublisher>,
 }
 
 impl InstallerAgent {
@@ -25,11 +25,11 @@ impl InstallerAgent {
         let (tx, rx) = mpsc::channel(config.mailbox_capacity);
         Self {
             config,
-            state:      ActorState::Initializing,
-            metrics:    Arc::new(ActorMetrics::new()),
+            state: ActorState::Initializing,
+            metrics: Arc::new(ActorMetrics::new()),
             mailbox_tx: tx,
             mailbox_rx: Some(rx),
-            publisher:  None,
+            publisher: None,
         }
     }
 
@@ -50,13 +50,14 @@ impl InstallerAgent {
         let pkg_refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
         args.extend_from_slice(&pkg_refs);
 
-        tracing::info!("[{}] Running: {} install {}", self.config.name, pip, packages.join(" "));
+        tracing::info!(
+            "[{}] Running: {} install {}",
+            self.config.name,
+            pip,
+            packages.join(" ")
+        );
 
-        match tokio::process::Command::new(pip)
-            .args(&args)
-            .output()
-            .await
-        {
+        match tokio::process::Command::new(pip).args(&args).output().await {
             Ok(out) => {
                 let _stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -90,11 +91,21 @@ fn which_pip(cmd: &str) -> bool {
 
 #[async_trait]
 impl Actor for InstallerAgent {
-    fn id(&self)      -> String { self.config.id.clone() }
-    fn name(&self)    -> &str   { &self.config.name }
-    fn state(&self)   -> ActorState { self.state.clone() }
-    fn metrics(&self) -> Arc<ActorMetrics> { Arc::clone(&self.metrics) }
-    fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
+    fn id(&self) -> String {
+        self.config.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn state(&self) -> ActorState {
+        self.state.clone()
+    }
+    fn metrics(&self) -> Arc<ActorMetrics> {
+        Arc::clone(&self.metrics)
+    }
+    fn mailbox(&self) -> mpsc::Sender<Message> {
+        self.mailbox_tx.clone()
+    }
 
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
@@ -118,18 +129,22 @@ impl Actor for InstallerAgent {
         let packages: Vec<String> = match &message.payload {
             MessageType::Text { content } => {
                 // Parse space- or comma-separated package names
-                content.split([' ', ','])
+                content
+                    .split([' ', ','])
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect()
             }
             MessageType::Task { payload, .. } => {
                 // Expect {"packages": ["pkg1", "pkg2"]}
-                payload.get("packages")
+                payload
+                    .get("packages")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
                     .unwrap_or_default()
             }
             _ => return Ok(()),
@@ -176,7 +191,9 @@ impl Actor for InstallerAgent {
 
     async fn run(&mut self) -> Result<()> {
         self.on_start().await?;
-        let mut rx = self.mailbox_rx.take()
+        let mut rx = self
+            .mailbox_rx
+            .take()
             .ok_or_else(|| anyhow::anyhow!("InstallerAgent already running"))?;
         let mut hb = tokio::time::interval(std::time::Duration::from_secs(
             self.config.heartbeat_interval_secs,

@@ -19,4 +19,6 @@ pub use actor::{Actor, ActorConfig, ActorState};
 pub use message::{Message, MessageType};
 pub use metrics::{ActorMetrics, MetricsSnapshot};
 pub use publish::EventPublisher;
-pub use registry::{ActorEntry, ActorRegistry, ActorSystem, ActorFactory, Supervisor, SupervisorStrategy};
+pub use registry::{
+    ActorEntry, ActorFactory, ActorRegistry, ActorSystem, Supervisor, SupervisorStrategy,
+};

@@ -65,23 +65,26 @@ impl ActorMetrics {
 
     /// Record LLM usage: token counts and cost (in nano-USD).
     pub fn record_llm_usage(&self, input_tokens: u64, output_tokens: u64, cost_nano_usd: u64) {
-        self.llm_input_tokens.fetch_add(input_tokens, Ordering::Relaxed);
-        self.llm_output_tokens.fetch_add(output_tokens, Ordering::Relaxed);
-        self.llm_cost_nano_usd.fetch_add(cost_nano_usd, Ordering::Relaxed);
+        self.llm_input_tokens
+            .fetch_add(input_tokens, Ordering::Relaxed);
+        self.llm_output_tokens
+            .fetch_add(output_tokens, Ordering::Relaxed);
+        self.llm_cost_nano_usd
+            .fetch_add(cost_nano_usd, Ordering::Relaxed);
     }
 
     /// Snapshot current counters as a serializable struct.
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
-            messages_received:  self.messages_received.load(Ordering::Relaxed),
+            messages_received: self.messages_received.load(Ordering::Relaxed),
             messages_processed: self.messages_processed.load(Ordering::Relaxed),
-            messages_failed:    self.messages_failed.load(Ordering::Relaxed),
-            heartbeats:         self.heartbeats.load(Ordering::Relaxed),
-            last_message_at:    self.last_message_at.load(Ordering::Relaxed),
-            restart_count:      self.restart_count.load(Ordering::Relaxed),
-            llm_input_tokens:   self.llm_input_tokens.load(Ordering::Relaxed),
-            llm_output_tokens:  self.llm_output_tokens.load(Ordering::Relaxed),
-            llm_cost_usd:       self.llm_cost_nano_usd.load(Ordering::Relaxed) as f64 / 1_000_000_000.0,
+            messages_failed: self.messages_failed.load(Ordering::Relaxed),
+            heartbeats: self.heartbeats.load(Ordering::Relaxed),
+            last_message_at: self.last_message_at.load(Ordering::Relaxed),
+            restart_count: self.restart_count.load(Ordering::Relaxed),
+            llm_input_tokens: self.llm_input_tokens.load(Ordering::Relaxed),
+            llm_output_tokens: self.llm_output_tokens.load(Ordering::Relaxed),
+            llm_cost_usd: self.llm_cost_nano_usd.load(Ordering::Relaxed) as f64 / 1_000_000_000.0,
         }
     }
 }

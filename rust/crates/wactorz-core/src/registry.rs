@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 
 use crate::actor::{Actor, ActorState};
 use crate::message::{ActorCommand, Message};
@@ -36,31 +36,34 @@ pub enum SupervisorStrategy {
 pub type ActorFactory = Arc<dyn Fn() -> Box<dyn Actor> + Send + Sync + 'static>;
 
 struct SpecEntry {
-    factory:        ActorFactory,
-    strategy:       SupervisorStrategy,
-    max_restarts:   u32,
+    factory: ActorFactory,
+    strategy: SupervisorStrategy,
+    max_restarts: u32,
     restart_window: Duration,
-    restart_delay:  Duration,
+    restart_delay: Duration,
     /// ID of the currently running actor instance.
-    actor_id:       Option<String>,
+    actor_id: Option<String>,
     /// Timestamps of recent restarts within the window.
-    restart_times:  Vec<Instant>,
+    restart_times: Vec<Instant>,
     /// Set to true after `Supervisor::stop()` to suppress the watch loop.
-    stopped:        bool,
+    stopped: bool,
 }
 
 impl SpecEntry {
     /// Record a restart attempt. Returns `true` if within budget.
     fn record_restart(&mut self) -> bool {
         let now = Instant::now();
-        self.restart_times.retain(|t| now.duration_since(*t) < self.restart_window);
+        self.restart_times
+            .retain(|t| now.duration_since(*t) < self.restart_window);
         self.restart_times.push(now);
         (self.restart_times.len() as u32) <= self.max_restarts
     }
 
     fn exhausted(&self) -> bool {
         let now = Instant::now();
-        let recent = self.restart_times.iter()
+        let recent = self
+            .restart_times
+            .iter()
             .filter(|t| now.duration_since(**t) < self.restart_window)
             .count();
         (recent as u32) >= self.max_restarts
@@ -167,11 +170,17 @@ pub struct ActorSystem {
 impl ActorSystem {
     pub fn new() -> Self {
         let (publisher, _rx) = EventPublisher::channel();
-        Self { registry: ActorRegistry::new(), publisher }
+        Self {
+            registry: ActorRegistry::new(),
+            publisher,
+        }
     }
 
     pub fn with_publisher(publisher: EventPublisher) -> Self {
-        Self { registry: ActorRegistry::new(), publisher }
+        Self {
+            registry: ActorRegistry::new(),
+            publisher,
+        }
     }
 
     pub fn publisher(&self) -> EventPublisher {
@@ -193,11 +202,11 @@ impl ActorSystem {
         actor: Box<dyn Actor>,
         supervisor_id: Option<String>,
     ) -> anyhow::Result<String> {
-        let id       = actor.id();
-        let name     = actor.name().to_string();
-        let mailbox  = actor.mailbox();
+        let id = actor.id();
+        let name = actor.name().to_string();
+        let mailbox = actor.mailbox();
         let protected = actor.is_protected();
-        let metrics  = actor.metrics();
+        let metrics = actor.metrics();
 
         let entry = ActorEntry {
             id: id.clone(),
@@ -210,16 +219,18 @@ impl ActorSystem {
         };
         self.registry.register(entry).await;
 
-        let registry  = self.registry.clone();
-        let id_task   = id.clone();
+        let registry = self.registry.clone();
+        let id_task = id.clone();
         tokio::spawn(async move {
             let mut actor = actor;
             registry.update_state(&id_task, ActorState::Running).await;
             match actor.run().await {
-                Ok(_)  => registry.update_state(&id_task, ActorState::Stopped).await,
+                Ok(_) => registry.update_state(&id_task, ActorState::Stopped).await,
                 Err(e) => {
                     tracing::error!("[{}] run error: {e}", id_task);
-                    registry.update_state(&id_task, ActorState::Failed(e.to_string())).await;
+                    registry
+                        .update_state(&id_task, ActorState::Failed(e.to_string()))
+                        .await;
                 }
             }
             registry.deregister(&id_task).await;
@@ -239,7 +250,10 @@ impl ActorSystem {
             anyhow::bail!("actor '{name}' is protected");
         }
         self.registry
-            .send(&entry.id, Message::command(entry.id.clone(), ActorCommand::Stop))
+            .send(
+                &entry.id,
+                Message::command(entry.id.clone(), ActorCommand::Stop),
+            )
             .await
     }
 
@@ -250,7 +264,10 @@ impl ActorSystem {
             if !entry.protected {
                 let _ = self
                     .registry
-                    .send(&entry.id, Message::command(entry.id.clone(), ActorCommand::Stop))
+                    .send(
+                        &entry.id,
+                        Message::command(entry.id.clone(), ActorCommand::Stop),
+                    )
                     .await;
             }
         }
@@ -282,10 +299,10 @@ impl Default for ActorSystem {
 /// sup.start().await?;
 /// ```
 pub struct Supervisor {
-    system:       ActorSystem,
-    specs:        Arc<Mutex<Vec<(String, SpecEntry)>>>,
+    system: ActorSystem,
+    specs: Arc<Mutex<Vec<(String, SpecEntry)>>>,
     poll_interval: Duration,
-    watch_task:   Option<tokio::task::JoinHandle<()>>,
+    watch_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Supervisor {
@@ -310,22 +327,22 @@ impl Supervisor {
     /// Register an actor to be supervised. Call before [`start`].
     pub fn supervise(
         &mut self,
-        name:                impl Into<String>,
-        factory:             ActorFactory,
-        strategy:            SupervisorStrategy,
-        max_restarts:        u32,
+        name: impl Into<String>,
+        factory: ActorFactory,
+        strategy: SupervisorStrategy,
+        max_restarts: u32,
         restart_window_secs: f64,
-        restart_delay_secs:  f64,
+        restart_delay_secs: f64,
     ) -> &mut Self {
         let entry = SpecEntry {
             factory,
             strategy,
             max_restarts,
             restart_window: Duration::from_secs_f64(restart_window_secs),
-            restart_delay:  Duration::from_secs_f64(restart_delay_secs),
-            actor_id:       None,
-            restart_times:  Vec::new(),
-            stopped:        false,
+            restart_delay: Duration::from_secs_f64(restart_delay_secs),
+            actor_id: None,
+            restart_times: Vec::new(),
+            stopped: false,
         };
         self.specs.lock().unwrap().push((name.into(), entry));
         self
@@ -339,12 +356,16 @@ impl Supervisor {
         // std::sync::MutexGuard is !Send and must not be held across .await.
         let tasks: Vec<(String, ActorFactory)> = {
             let specs = self.specs.lock().unwrap();
-            specs.iter().map(|(name, e)| (name.clone(), Arc::clone(&e.factory))).collect()
+            specs
+                .iter()
+                .map(|(name, e)| (name.clone(), Arc::clone(&e.factory)))
+                .collect()
         };
 
         for (name, factory) in &tasks {
             let actor = factory();
-            let actor_id = self.system
+            let actor_id = self
+                .system
                 .spawn_actor_supervised(actor, Some(sup_id.clone()))
                 .await?;
             {
@@ -357,9 +378,9 @@ impl Supervisor {
         }
 
         // Start watch loop
-        let specs_clone  = Arc::clone(&self.specs);
+        let specs_clone = Arc::clone(&self.specs);
         let system_clone = self.system.clone();
-        let poll         = self.poll_interval;
+        let poll = self.poll_interval;
         let sup_id_clone = sup_id.clone();
 
         self.watch_task = Some(tokio::spawn(async move {
@@ -384,7 +405,9 @@ impl Supervisor {
         for (name, entry) in specs.iter_mut() {
             entry.stopped = true;
             if let Some(id) = &entry.actor_id {
-                let _ = self.system.registry
+                let _ = self
+                    .system
+                    .registry
                     .send(id, Message::command(id.clone(), ActorCommand::Stop))
                     .await;
             }
@@ -395,38 +418,41 @@ impl Supervisor {
     /// Return a snapshot of supervision status.
     pub fn status(&self) -> Vec<serde_json::Value> {
         let specs = self.specs.lock().unwrap();
-        specs.iter().map(|(name, e)| {
-            let now = Instant::now();
-            let recent = e.restart_times.iter()
-                .filter(|t| now.duration_since(**t) < e.restart_window)
-                .count();
-            serde_json::json!({
-                "name":          name,
-                "strategy":      format!("{:?}", e.strategy),
-                "max_restarts":  e.max_restarts,
-                "restarts_used": recent,
-                "exhausted":     e.exhausted(),
-                "actor_id":      e.actor_id,
+        specs
+            .iter()
+            .map(|(name, e)| {
+                let now = Instant::now();
+                let recent = e
+                    .restart_times
+                    .iter()
+                    .filter(|t| now.duration_since(**t) < e.restart_window)
+                    .count();
+                serde_json::json!({
+                    "name":          name,
+                    "strategy":      format!("{:?}", e.strategy),
+                    "max_restarts":  e.max_restarts,
+                    "restarts_used": recent,
+                    "exhausted":     e.exhausted(),
+                    "actor_id":      e.actor_id,
+                })
             })
-        }).collect()
+            .collect()
     }
 }
 
 // ── Supervision watch-loop helpers ────────────────────────────────────────────
 
-async fn watch_once(
-    system: &ActorSystem,
-    specs:  &Mutex<Vec<(String, SpecEntry)>>,
-    sup_id: &str,
-) {
+async fn watch_once(system: &ActorSystem, specs: &Mutex<Vec<(String, SpecEntry)>>, sup_id: &str) {
     // Collect names of failed/missing actors
     let failed: Vec<String> = {
         let specs_guard = specs.lock().unwrap();
         let mut out = Vec::new();
         for (name, entry) in specs_guard.iter() {
-            if entry.stopped { continue; }
+            if entry.stopped {
+                continue;
+            }
             let is_dead = match &entry.actor_id {
-                None     => true,
+                None => true,
                 Some(_id) => {
                     // Use a blocking check — actor state is updated by the spawned task
                     // We do an immediate registry lookup (async, but brief)
@@ -445,19 +471,23 @@ async fn watch_once(
     for name in &failed {
         let actor_id_opt = {
             let specs_guard = specs.lock().unwrap();
-            specs_guard.iter()
+            specs_guard
+                .iter()
                 .find(|(n, _)| n == name)
                 .and_then(|(_, e)| e.actor_id.clone())
         };
         let dead = match actor_id_opt {
             None => true,
             Some(ref id) => match system.registry.get(id).await {
-                None    => true, // deregistered → crashed
+                None => true, // deregistered → crashed
                 Some(e) => matches!(e.state, ActorState::Failed(_)),
-            }
+            },
         };
         // Skip intentionally stopped
-        let stopped = specs.lock().unwrap().iter()
+        let stopped = specs
+            .lock()
+            .unwrap()
+            .iter()
             .find(|(n, _)| n == name)
             .map(|(_, e)| e.stopped)
             .unwrap_or(true);
@@ -466,12 +496,15 @@ async fn watch_once(
         }
     }
 
-    if truly_failed.is_empty() { return; }
+    if truly_failed.is_empty() {
+        return;
+    }
 
     for crashed_name in &truly_failed {
         let strategy = {
             let specs_guard = specs.lock().unwrap();
-            specs_guard.iter()
+            specs_guard
+                .iter()
                 .find(|(n, _)| n == crashed_name)
                 .map(|(_, e)| e.strategy.clone())
                 .unwrap_or(SupervisorStrategy::OneForOne)
@@ -488,8 +521,12 @@ async fn watch_once(
             }
             SupervisorStrategy::OneForAll => {
                 // Stop all others, then restart all in order
-                let all_names: Vec<String> = specs.lock().unwrap()
-                    .iter().map(|(n, _)| n.clone()).collect();
+                let all_names: Vec<String> = specs
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect();
                 for name in all_names.iter().rev() {
                     if name != crashed_name {
                         stop_one(system, specs, name).await;
@@ -500,9 +537,16 @@ async fn watch_once(
                 }
             }
             SupervisorStrategy::RestForOne => {
-                let all_names: Vec<String> = specs.lock().unwrap()
-                    .iter().map(|(n, _)| n.clone()).collect();
-                let idx = all_names.iter().position(|n| n == crashed_name).unwrap_or(0);
+                let all_names: Vec<String> = specs
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect();
+                let idx = all_names
+                    .iter()
+                    .position(|n| n == crashed_name)
+                    .unwrap_or(0);
                 let affected: Vec<String> = all_names[idx..].to_vec();
                 for name in affected.iter().rev() {
                     if name != crashed_name {
@@ -517,12 +561,11 @@ async fn watch_once(
     }
 }
 
-async fn stop_one(
-    system: &ActorSystem,
-    specs:  &Mutex<Vec<(String, SpecEntry)>>,
-    name:   &str,
-) {
-    let actor_id = specs.lock().unwrap().iter()
+async fn stop_one(system: &ActorSystem, specs: &Mutex<Vec<(String, SpecEntry)>>, name: &str) {
+    let actor_id = specs
+        .lock()
+        .unwrap()
+        .iter()
         .find(|(n, _)| n == name)
         .and_then(|(_, e)| e.actor_id.clone());
 
@@ -532,7 +575,8 @@ async fn stop_one(
         // for it would waste 200 ms and push cascaded restarts beyond the
         // expected window.
         if system.registry.get(&id).await.is_some() {
-            let _ = system.registry
+            let _ = system
+                .registry
                 .send(&id, Message::command(id.clone(), ActorCommand::Stop))
                 .await;
             // Brief pause to let the actor deregister
@@ -548,8 +592,8 @@ async fn stop_one(
 
 async fn restart_one(
     system: &ActorSystem,
-    specs:  &Mutex<Vec<(String, SpecEntry)>>,
-    name:   &str,
+    specs: &Mutex<Vec<(String, SpecEntry)>>,
+    name: &str,
     sup_id: &str,
 ) {
     let (_exhausted, delay, within_budget, factory) = {
@@ -565,10 +609,17 @@ async fn restart_one(
             return;
         }
         let budget_ok = entry.record_restart();
-        (false, entry.restart_delay, budget_ok, Arc::clone(&entry.factory))
+        (
+            false,
+            entry.restart_delay,
+            budget_ok,
+            Arc::clone(&entry.factory),
+        )
     };
 
-    if !within_budget { return; }
+    if !within_budget {
+        return;
+    }
 
     // Stop old actor first if still registered
     stop_one(system, specs, name).await;
@@ -579,18 +630,25 @@ async fn restart_one(
 
     let restart_count = {
         let specs_guard = specs.lock().unwrap();
-        specs_guard.iter()
+        specs_guard
+            .iter()
             .find(|(n, _)| n == name)
             .map(|(_, e)| e.restart_times.len() as u64)
             .unwrap_or(0)
     };
 
     let actor = factory();
-    match system.spawn_actor_supervised(actor, Some(sup_id.to_string())).await {
+    match system
+        .spawn_actor_supervised(actor, Some(sup_id.to_string()))
+        .await
+    {
         Ok(new_id) => {
             // Record restart count in actor metrics
             if let Some(entry) = system.registry.get(&new_id).await {
-                entry.metrics.restart_count.store(restart_count, std::sync::atomic::Ordering::Relaxed);
+                entry
+                    .metrics
+                    .restart_count
+                    .store(restart_count, std::sync::atomic::Ordering::Relaxed);
             }
             let mut specs_guard = specs.lock().unwrap();
             if let Some((_, e)) = specs_guard.iter_mut().find(|(n, _)| n == name) {

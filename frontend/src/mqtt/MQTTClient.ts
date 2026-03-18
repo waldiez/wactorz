@@ -64,7 +64,7 @@ export interface MQTTEvents {
   raw: { topic: string; payload: unknown };
 }
 
-type Listener<T> = (data: T) => void;
+export type Listener<T> = (data: T) => void;
 type Listeners = { [K in keyof MQTTEvents]: Array<Listener<MQTTEvents[K]>> };
 
 // ── Client ────────────────────────────────────────────────────────────────────

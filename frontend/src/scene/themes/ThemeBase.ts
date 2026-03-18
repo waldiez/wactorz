@@ -16,7 +16,7 @@ import type { AgentNodeBase } from "../nodes/AgentNodeBase";
 import { playMessageEffect } from "../effects/MessageEffect";
 
 export abstract class ThemeBase {
-  /** Unique theme identifier used by {@link SceneManager}. */
+  /** Unique theme identifier used by `SceneManager`. */
   abstract readonly name: "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin";
 
   /** The nodes currently in this theme, keyed by agent ID. */

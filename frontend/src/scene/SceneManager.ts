@@ -276,7 +276,7 @@ export class SceneManager {
     }
   }
 
-  /** Return all currently tracked agents (for @mention autocomplete etc.). */
+  /** Return all currently tracked agents (for mention-autocomplete etc.). */
   getAgents(): AgentInfo[] {
     return [...this.agents.values()];
   }

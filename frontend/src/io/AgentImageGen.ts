@@ -59,7 +59,7 @@ function dicebearUrl(name: string): string {
 
 // ── Service ───────────────────────────────────────────────────────────────────
 
-class AgentImageGen {
+export class AgentImageGen {
   private cache = new Map<string, string>();
 
   get(agent: Pick<AgentInfo, "id" | "name"> & { agentType?: string }): string {

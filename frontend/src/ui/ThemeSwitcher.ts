@@ -10,9 +10,7 @@
 
 import type { ThemeChangeEvent } from "../types/agent";
 
-type ThemeName = "graph" | "galaxy" | "cards" | "grave" | "social" | "fin";
-// type ThemeName = "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | 
-// type ThemeName =  "social" | "fin";
+export type ThemeName = "graph" | "galaxy" | "cards" | "grave" | "social" | "fin";
 const STORAGE_KEY = "wactorz-theme";
 
 export class ThemeSwitcher {

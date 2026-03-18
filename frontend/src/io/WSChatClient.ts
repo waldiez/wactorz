@@ -9,10 +9,10 @@
  *   {"type":"chat","from":"io-gateway","content":"...","timestamp":...}
  */
 
-type ChatHandler        = (content: string, from: string, timestampMs: number) => void;
-type StreamChunkHandler = (chunk: string,   from: string, timestampMs: number) => void;
-type StreamEndHandler   = (from: string) => void;
-type ModeHandler        = (mode: "direct_ws" | "mqtt") => void;
+export type ChatHandler        = (content: string, from: string, timestampMs: number) => void;
+export type StreamChunkHandler = (chunk: string,   from: string, timestampMs: number) => void;
+export type StreamEndHandler   = (from: string) => void;
+export type ModeHandler        = (mode: "direct_ws" | "mqtt") => void;
 
 export class WSChatClient {
   private ws: WebSocket | null = null;

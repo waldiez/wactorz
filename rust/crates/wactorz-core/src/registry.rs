@@ -324,7 +324,7 @@ impl Supervisor {
         }
     }
 
-    /// Register an actor to be supervised. Call before [`start`].
+    /// Register an actor to be supervised. Call before [`Supervisor::start`].
     pub fn supervise(
         &mut self,
         name: impl Into<String>,

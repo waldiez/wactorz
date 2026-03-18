@@ -14,7 +14,7 @@
 //!
 //! *Temporal checks (on every heartbeat tick):*
 //! - No-response tracking: if a user message is sent to an agent and no
-//!   reply arrives within [`AGENT_RESPONSE_TIMEOUT_MS`], a `no-response`
+//!   reply arrives within `AGENT_RESPONSE_TIMEOUT_MS` (30 s), a `no-response`
 //!   flag is raised — exactly what triggered the math-agent 45 s timeout.
 //!
 //! The agent does NOT block messages; it only annotates.

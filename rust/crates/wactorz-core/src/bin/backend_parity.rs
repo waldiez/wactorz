@@ -7,7 +7,7 @@
 //!
 //! Usage:
 //!   cargo run -q -p wactorz-core --bin backend_parity -- \
-//!       --fixture <path> [--assert-expected]
+//!       --fixture `<path>` \[--assert-expected\]
 
 use std::collections::HashMap;
 use std::path::PathBuf;

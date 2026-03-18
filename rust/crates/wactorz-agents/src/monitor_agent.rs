@@ -4,7 +4,7 @@
 //! seconds.  If an actor's last heartbeat exceeds [`TIMEOUT_SECS`], an alert
 //! is broadcast to the MQTT `system/health` topic.
 //!
-//! Like [`MainActor`], the monitor is **protected** from external kill commands.
+//! Like [`crate::main_actor::MainActor`], the monitor is **protected** from external kill commands.
 
 use anyhow::Result;
 use async_trait::async_trait;

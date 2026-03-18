@@ -48,20 +48,20 @@ dev-ui: ## Start Vite dev server only (needs mosquitto running)
 build: build-rust build-frontend ## Build everything
 
 build-rust: ## Build Rust workspace (release)
-	cd $(RUST_DIR) && cargo build --release
+	cargo build --release
 
 build-frontend: ## Build Vite frontend
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run build
 
 check: ## Cargo check (fast, no codegen)
-	cd $(RUST_DIR) && cargo check
+	cargo check
 
 fmt: ## Format Rust + TypeScript
-	cd $(RUST_DIR) && cargo fmt
+	cargo fmt
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run fmt 2>/dev/null || $(PKG_MGR) x prettier --write "src/**/*.ts"
 
 lint: ## Clippy + TS typecheck
-	cd $(RUST_DIR) && cargo clippy -- -D warnings
+	cargo clippy -- -D warnings
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run typecheck
 
 # ── Docker stack ────────────────────────────────────────────────────────────
@@ -101,7 +101,7 @@ release-source: ## Package source-only tarball
 # ── Misc ────────────────────────────────────────────────────────────────────
 
 clean: ## Remove Rust build artifacts and frontend dist
-	cd $(RUST_DIR) && cargo clean
+	cargo clean
 	rm -rf $(FRONTEND_DIR)/dist
 
 install: install-py install-frontend ## Install everything (Python + frontend)
@@ -130,7 +130,7 @@ test-py: ## Run Python tests
 	python3 -m unittest discover -s tests -p 'test_*.py'
 
 test-rust: ## Run Rust tests
-	cd $(RUST_DIR) && cargo test
+	cargo test
 
 parity: ## Prove Python and Rust core supervisor semantics match
 	python3 scripts/check_backend_parity.py
@@ -145,7 +145,7 @@ coverage-py: ## Generate Python coverage XML + terminal report
 
 coverage-rust: ## Generate Rust coverage with cargo-llvm-cov
 	mkdir -p coverage
-	cd $(RUST_DIR) && cargo llvm-cov --workspace --lcov --output-path ../coverage/rust.lcov
+	cargo llvm-cov --workspace --lcov --output-path coverage/rust.lcov
 
 docs-serve: ## Build docs + serve locally on :8001
 	python3 scripts/build_docs.py --serve

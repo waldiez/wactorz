@@ -150,6 +150,7 @@ pyrightconfig.json
 .gemini/
 __pycache__/
 rust/**/target/
+/target/
 **.log
 
 # Pre-built assets committed to the repo and bundled into the wheel as-is.

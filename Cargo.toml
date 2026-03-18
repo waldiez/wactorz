@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/wactorz-core",
-    # "crates/wactorz-mqtt",
-    "crates/wactorz-agents",
-    "crates/wactorz-interfaces",
-    # "crates/wactorz-server",
+    "rust/crates/wactorz-core",
+    # "rust/crates/wactorz-mqtt",
+    "rust/crates/wactorz-agents",
+    "rust/crates/wactorz-interfaces",
+    # "rust/crates/wactorz-server",
 ]
 
 [workspace.package]
@@ -66,10 +66,10 @@ uuid = { version = "1", features = ["v4"] }
 clap = { version = "4", features = ["derive", "env"] }
 
 # Internal crates
-wactorz-core = { path = "crates/wactorz-core" }
-wactorz-mqtt = { path = "crates/wactorz-mqtt" }
-wactorz-agents = { path = "crates/wactorz-agents" }
-wactorz-interfaces = { path = "crates/wactorz-interfaces" }
+wactorz-core = { path = "rust/crates/wactorz-core" }
+wactorz-mqtt = { path = "rust/crates/wactorz-mqtt" }
+wactorz-agents = { path = "rust/crates/wactorz-agents" }
+wactorz-interfaces = { path = "rust/crates/wactorz-interfaces" }
 
 [profile.release]
 opt-level = 3

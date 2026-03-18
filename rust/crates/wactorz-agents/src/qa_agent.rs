@@ -120,10 +120,11 @@ impl QAAgent {
             // Raw JSON / data bleed — agent returned internal message structure.
             // Heuristic: content is valid JSON object/array and longer than 20 chars.
             let trimmed = content.trim_start();
-            if (trimmed.starts_with('{') || trimmed.starts_with('[')) && trimmed.len() > 20 {
-                if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
-                    return Some(("raw-data-bleed".into(), "warning"));
-                }
+            if (trimmed.starts_with('{') || trimmed.starts_with('['))
+                && trimmed.len() > 20
+                && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+            {
+                return Some(("raw-data-bleed".into(), "warning"));
             }
         }
 

@@ -228,11 +228,9 @@ async fn run_scenario(scenario: &Scenario) -> Result<ScenarioResult> {
 
 fn parse_args() -> (PathBuf, bool) {
     let args: Vec<String> = std::env::args().collect();
-    let mut fixture = PathBuf::from(
-        std::env::current_dir()
-            .unwrap_or_default()
-            .join("tests/parity_fixtures/backend_supervisor_parity.json"),
-    );
+    let mut fixture = std::env::current_dir()
+        .unwrap_or_default()
+        .join("tests/parity_fixtures/backend_supervisor_parity.json");
     let mut assert_expected = false;
 
     let mut i = 1;

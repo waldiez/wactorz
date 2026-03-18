@@ -378,48 +378,47 @@ impl Actor for LlmAgent {
         if let MessageType::Task {
             task_id, payload, ..
         } = &message.payload
+            && task_id == "wik/switch"
         {
-            if task_id == "wik/switch" {
-                let provider_str = payload
-                    .get("provider")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let new_provider = match provider_str {
-                    "anthropic" => LlmProvider::Anthropic,
-                    "openai" => LlmProvider::OpenAI,
-                    "gemini" => LlmProvider::Gemini,
-                    "ollama" => LlmProvider::Ollama,
-                    "nim" => LlmProvider::Nim,
-                    other => {
-                        tracing::warn!(
-                            "[{}] wik/switch: unknown provider '{other}'",
-                            self.config.name
-                        );
-                        return Ok(());
-                    }
-                };
-                let reason = payload
-                    .get("reason")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("WIK switch");
-                tracing::info!(
-                    "[{}] ⚡ provider switch: {} → {provider_str} ({reason})",
-                    self.config.name,
-                    self.llm_config.provider,
-                );
-                self.llm_config.provider = new_provider;
-                if let Some(model) = payload.get("model").and_then(|v| v.as_str()) {
-                    self.llm_config.model = model.to_string();
+            let provider_str = payload
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let new_provider = match provider_str {
+                "anthropic" => LlmProvider::Anthropic,
+                "openai" => LlmProvider::OpenAI,
+                "gemini" => LlmProvider::Gemini,
+                "ollama" => LlmProvider::Ollama,
+                "nim" => LlmProvider::Nim,
+                other => {
+                    tracing::warn!(
+                        "[{}] wik/switch: unknown provider '{other}'",
+                        self.config.name
+                    );
+                    return Ok(());
                 }
-                if let Some(key) = payload.get("apiKey").and_then(|v| v.as_str()) {
-                    self.llm_config.api_key = Some(key.to_string());
-                }
-                if let Some(url) = payload.get("baseUrl").and_then(|v| v.as_str()) {
-                    self.llm_config.base_url = Some(url.to_string());
-                }
-                self.consecutive_errors = 0;
-                return Ok(());
+            };
+            let reason = payload
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("WIK switch");
+            tracing::info!(
+                "[{}] ⚡ provider switch: {} → {provider_str} ({reason})",
+                self.config.name,
+                self.llm_config.provider,
+            );
+            self.llm_config.provider = new_provider;
+            if let Some(model) = payload.get("model").and_then(|v| v.as_str()) {
+                self.llm_config.model = model.to_string();
             }
+            if let Some(key) = payload.get("apiKey").and_then(|v| v.as_str()) {
+                self.llm_config.api_key = Some(key.to_string());
+            }
+            if let Some(url) = payload.get("baseUrl").and_then(|v| v.as_str()) {
+                self.llm_config.base_url = Some(url.to_string());
+            }
+            self.consecutive_errors = 0;
+            return Ok(());
         }
 
         let prompt = match &message.payload {

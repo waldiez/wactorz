@@ -55,12 +55,12 @@ impl IOAgent {
 
     /// Parse `@name rest` prefix. Returns `(target_name, content)`.
     fn parse_mention(text: &str) -> (&str, &str) {
-        if text.starts_with('@') {
-            if let Some(sp) = text.find(' ') {
-                return (&text[1..sp], text[sp + 1..].trim());
+        if let Some(stripped) = text.strip_prefix('@') {
+            if let Some(sp) = stripped.find(' ') {
+                return (&stripped[..sp], stripped[sp + 1..].trim());
             }
             // whole text is @name with no body
-            return (&text[1..], "");
+            return (stripped, "");
         }
         ("main-actor", text)
     }

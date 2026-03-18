@@ -37,7 +37,7 @@ def main() -> int:
             str(FIXTURE),
             "--assert-expected",
         ],
-        ROOT / "rust",
+        ROOT,
     )
     if python_result != rust_result:
         print(json.dumps({"python": python_result, "rust": rust_result}, indent=2, sort_keys=True))

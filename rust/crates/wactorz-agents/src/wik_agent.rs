@@ -297,7 +297,7 @@ impl WikAgent {
         }
 
         // OpenAI: require --confirm or show warning first
-        let has_confirm = parts.iter().any(|&p| p == "--confirm");
+        let has_confirm = parts.contains(&"--confirm");
         if name == "openai" && !has_confirm {
             return OPENAI_WARNING.to_string();
         }
@@ -520,11 +520,11 @@ impl WikAgent {
         let arg = text.strip_prefix("@wik-agent").unwrap_or(text).trim();
 
         // Transparently handle system/llm/error JSON payloads routed by main.rs
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(arg) {
-            if val.get("consecutiveErrors").is_some() || val.get("provider").is_some() {
-                self.handle_llm_error(&val);
-                return None; // no user-visible reply for internal events
-            }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(arg)
+            && (val.get("consecutiveErrors").is_some() || val.get("provider").is_some())
+        {
+            self.handle_llm_error(&val);
+            return None; // no user-visible reply for internal events
         }
 
         let parts: Vec<&str> = arg.split_whitespace().collect();

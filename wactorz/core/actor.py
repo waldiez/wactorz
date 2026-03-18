@@ -13,8 +13,12 @@ import pickle
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TYPE_CHECKING
 from pathlib import Path
+
+
+if TYPE_CHECKING:
+    from .registry import ActorRegistry
 
 
 class SupervisorStrategy(str, Enum):

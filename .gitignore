@@ -192,3 +192,4 @@ wactorz/**/__pycache__/
 wactorz/**/*.pyc
 
 myenv/
+coverage/

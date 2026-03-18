@@ -7,11 +7,12 @@ COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
 FRONTEND_DIR := frontend
 RUST_DIR     := rust
-PKG_MGR      := $(shell command -v bun 2>/dev/null && echo bun || (command -v pnpm 2>/dev/null && echo pnpm) || echo npm)
+PKG_MGR      := $(shell command -v bun /dev/null 2>/dev/null || (command -v pnpm 2>/dev/null && echo pnpm) || echo npm)
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' | sort
+	@echo $(PKG_MGR)
 
 # ── Runtime ─────────────────────────────────────────────────────────────────
 

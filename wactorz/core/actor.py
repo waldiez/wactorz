@@ -13,12 +13,8 @@ import pickle
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Optional
 from pathlib import Path
-
-
-if TYPE_CHECKING:
-    from .registry import ActorRegistry
 
 
 class SupervisorStrategy(str, Enum):
@@ -120,7 +116,7 @@ class Actor(ABC):
             self.actor_id = actor_id
         elif name:
             # Deterministic UUID from name — same name always gets same ID across restarts
-            self.actor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+            self.actor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"agentflow.actor.{name}"))
         else:
             self.actor_id = str(uuid.uuid4())
         self.name = name or f"actor-{self.actor_id[:8]}"
@@ -435,6 +431,21 @@ class Actor(ABC):
 
     def persist(self, key: str, value: Any):
         self._persistent_state[key] = value
+        # Write to disk immediately so state survives Ctrl+C and crashes
+        path = self._persistence_dir / "state.pkl"
+        try:
+            with open(path, "wb") as f:
+                pickle.dump(self._persistent_state, f)
+        except Exception as e:
+            logger.debug(f"[{self.name}] persist write failed: {e}")
+        # Save to disk immediately so state survives crashes and Ctrl+C
+        path = self._persistence_dir / "state.pkl"
+        try:
+            import pickle as _pickle
+            with open(path, "wb") as f:
+                _pickle.dump(self._persistent_state, f)
+        except Exception as e:
+            logger.debug(f"[{self.name}] persist write failed: {e}")
 
     def recall(self, key: str, default: Any = None) -> Any:
         return self._persistent_state.get(key, default)

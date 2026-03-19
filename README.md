@@ -341,7 +341,7 @@ Start with `--interface rest` (default port 8080). Send `POST` requests to `/cha
 
 ### Discord & WhatsApp
 
-Set `DISCORD_TOKEN` or `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_WHATSAPP_FROM` environment variables and start with `--interface discord` or `--interface whatsapp`. The same `process_user_input()` pipeline handles all interfaces.
+Set `DISCORD_BOT_TOKEN` or `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_WHATSAPP_FROM` environment variables and start with `--interface discord` or `--interface whatsapp`. The same `process_user_input()` pipeline handles all interfaces.
 
 ### Live Dashboard
 
@@ -712,7 +712,7 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-host` and
 | `NIM_API_KEY` | NVIDIA NIM key (free tier — get at build.nvidia.com) |
 | `HA_URL` | Home Assistant base URL (e.g. `http://homeassistant.local:8123`) |
 | `HA_TOKEN` | HA long-lived access token |
-| `DISCORD_TOKEN` | Discord bot token (for `--interface discord`) |
+| `DISCORD_BOT_TOKEN` | Discord bot token (for `--interface discord`) |
 | `TWILIO_ACCOUNT_SID` | Twilio account SID (for `--interface whatsapp`) |
 | `TWILIO_AUTH_TOKEN` | Twilio auth token |
 | `TWILIO_WHATSAPP_FROM` | Twilio WhatsApp sender number |

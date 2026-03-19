@@ -364,7 +364,6 @@ class LLMAgent(Actor):
 
             # Persist after each exchange
             self.persist("conversation_history", self._conversation_history)
-            await self._save_persistent_state()
 
             # Publish completion
             await self._mqtt_publish(
@@ -413,6 +412,7 @@ class LLMAgent(Actor):
             system=self.system_prompt,
         )
         self._conversation_history.append({"role": "assistant", "content": response})
+        self.persist("conversation_history", self._conversation_history)
 
         # Accumulate token usage and cost
         self.total_input_tokens  += usage.get("input_tokens", 0)
@@ -469,6 +469,7 @@ class LLMAgent(Actor):
 
         response = "".join(full_text)
         self._conversation_history.append({"role": "assistant", "content": response})
+        self.persist("conversation_history", self._conversation_history)
 
         self.total_input_tokens  += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)

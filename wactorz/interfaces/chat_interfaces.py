@@ -439,6 +439,20 @@ class CLIInterface:
                         continue
                     print(f"\n[routing to @{agent_name}]")
                     target = self.agent._registry.find_by_name(agent_name) if self.agent._registry else None
+                    # @main goes through the full orchestration pipeline
+                    if target is self.agent:
+                        print(f"\n@{agent_name}: ", end="", flush=True)
+                        system_msg = ""
+                        async for chunk in self.agent.process_user_input_stream(message):
+                            if isinstance(chunk, dict):
+                                system_msg = chunk.get("system_msg", "")
+                            else:
+                                print(chunk, end="", flush=True)
+                        print()
+                        if system_msg:
+                            print(f"[System: {system_msg}]")
+                        print()
+                        continue
                     # Stream if target is an LLMAgent with chat_stream support
                     if target and hasattr(target, "chat_stream"):
                         print(f"\n@{agent_name}: ", end="", flush=True)

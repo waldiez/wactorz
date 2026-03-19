@@ -80,3 +80,22 @@ class HAWebSocketClient:
             resp = await self.receive_json()
             if resp.get("type") == "event" and resp.get("id") == subscription_id:
                 return resp
+
+    async def call_service(
+        self, domain: str, service: str, entity_id: str, **service_data: Any
+    ) -> Any:
+        """Call a Home Assistant service for an entity."""
+        return await self.call(
+            "call_service",
+            domain=domain,
+            service=service,
+            service_data={"entity_id": entity_id, **service_data},
+        )
+
+    async def get_entity_state(self, entity_id: str) -> dict[str, Any] | None:
+        """Return the current state object for a single entity, or None if not found."""
+        states = await self.call("get_states")
+        for state in states or []:
+            if state.get("entity_id") == entity_id:
+                return state
+        return None

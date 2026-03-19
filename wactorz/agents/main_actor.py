@@ -76,7 +76,7 @@ duplicate agents, and ignores pre-built tested code. Always check first.
 
 == SPAWN FORMAT ==
 Only use spawn blocks when STEP 1 confirms no suitable agent exists.
-There are TWO types of agents you can spawn:
+There are FOUR types of agents you can spawn:
 
 --- TYPE 0: Manual Agent (for finding device manuals and answering questions from them) ---
 Use when the user wants to look up a device manual and ask questions about it.
@@ -121,6 +121,35 @@ Provide a "code" field with the Python functions.
   "output_schema": {"field": "type — description of each output field"},
   "poll_interval": 1.0,
   "code": "PYTHON CODE HERE"
+}
+</spawn>
+
+--- TYPE 3: Actuator Agent (for reacting to MQTT detections by controlling Home Assistant devices) ---
+Use when you need a reactive agent that subscribes to MQTT topics and calls
+Home Assistant services (lights, switches, climate, covers, media players, etc.)
+No code or system_prompt needed — provide a "config" object.
+
+The config.detection_filter supports equality values ("class": "person") and operator
+expressions ("accuracy": {"gt": 0.8}).  Supported operators: eq, ne, gt, lt, gte, lte.
+
+<spawn>
+{
+  "name": "actuator-descriptive-name",
+  "type": "actuator",
+  "description": "what triggers this actuator and what it does",
+  "config": {
+    "automation_id": "unique-automation-id",
+    "description": "human-readable description",
+    "mqtt_topics": ["automations/example/detections"],
+    "actions": [
+      {"domain": "light", "service": "turn_on", "entity_id": "light.example", "service_data": {"color_name": "red"}}
+    ],
+    "conditions": [
+      {"entity_id": "sun.sun", "attribute": "state", "operator": "eq", "value": "above_horizon"}
+    ],
+    "detection_filter": {"class": "person", "confidence": {"gte": 0.8}},
+    "cooldown_seconds": 10.0
+  }
 }
 </spawn>
 
@@ -742,10 +771,12 @@ class MainActor(LLMAgent):
         )
 
     async def _is_home_automation_request(self, text: str) -> bool:
+        lowered = (text or "").lower()
+        # Spawn and slash commands are never HA requests
+        if not text or lowered.startswith("spawn ") or text.startswith("/"):
+            return False
         if self._looks_like_home_automation_request(text):
             return True
-        if not text or text.lower().startswith("spawn ") or text.startswith("/"):
-            return False
         if self.llm is None:
             return False
         try:
@@ -1352,7 +1383,9 @@ class MainActor(LLMAgent):
         system_prompt = config.get("system_prompt", "").strip()
 
         # Route to the right agent class
-        if agent_type == "manual" or name == "manual-agent":
+        if agent_type == "actuator":
+            actor = await self._spawn_actuator_agent(config, name)
+        elif agent_type == "manual" or name == "manual-agent":
             actor = await self._spawn_manual_agent(config, name)
         elif agent_type == "llm" or (not code and system_prompt):
             actor = await self._spawn_llm_agent(config, name)
@@ -1366,6 +1399,39 @@ class MainActor(LLMAgent):
             self._save_to_spawn_registry(config)
 
         return actor
+
+    async def _spawn_actuator_agent(self, config: dict, name: str):
+        """Spawn a HomeAssistantActuatorAgent from a config dict.
+
+        Accepts nested format:  {"type": "actuator", "config": {"automation_id": ..., "actions": [...]}}
+        and flat format:        {"type": "actuator", "automation_id": ..., "actions": [...]}
+        """
+        from .ha_actuator_agent import HomeAssistantActuatorAgent, ActuatorConfig
+
+        raw = config.get("config")
+        if not raw or not isinstance(raw, dict):
+            _ACTUATOR_FIELDS = {"automation_id", "description", "mqtt_topics", "actions",
+                                "conditions", "detection_filter", "cooldown_seconds"}
+            raw = {k: v for k, v in config.items() if k in _ACTUATOR_FIELDS}
+            if not raw.get("mqtt_topics") or not raw.get("actions"):
+                logger.error(
+                    f"[{self.name}] Actuator '{name}' missing required fields "
+                    f"(mqtt_topics, actions). Got keys: {list(config.keys())}"
+                )
+                return None
+
+        if not raw.get("automation_id"):
+            import time as _t
+            raw["automation_id"] = f"{name}-{int(_t.time())}"
+
+        actuator_config = ActuatorConfig.from_dict(raw)
+        logger.info(f"[{self.name}] Spawning actuator '{name}' (topics={actuator_config.mqtt_topics})")
+        return await self.spawn(
+            HomeAssistantActuatorAgent,
+            config=actuator_config,
+            name=name,
+            persistence_dir=str(self._persistence_dir.parent),
+        )
 
     async def _spawn_manual_agent(self, config: dict, name: str):
         """Spawn the pre-defined ManualAgent — robust PDF manual search and Q&A."""

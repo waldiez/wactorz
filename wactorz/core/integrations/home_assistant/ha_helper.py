@@ -1,11 +1,66 @@
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+import hashlib
 import re
 import time
 
 import aiohttp
 
 from .ha_web_socket_client import HAWebSocketClient
+
+
+def _normalize_swid_segment(text: str) -> str:
+    """Normalize a text segment for use in a SWID path.
+
+    Lowercases, replaces whitespace/underscores with hyphens,
+    strips unsafe characters, and collapses repeated hyphens.
+    """
+    segment = text.strip().lower()
+    # Replace whitespace and underscores with hyphens
+    segment = re.sub(r"[\s_]+", "-", segment)
+    # Keep only alphanumeric, hyphens, and dots
+    segment = re.sub(r"[^a-z0-9\-\.]", "", segment)
+    # Collapse repeated hyphens and strip leading/trailing hyphens
+    segment = re.sub(r"-{2,}", "-", segment).strip("-")
+    return segment
+
+
+def generate_swid(
+    device_id: str,
+    name: Optional[str] = None,
+    area: Optional[str] = None,
+) -> str:
+    """Generate an internal did:swid: identifier for a Home Assistant device.
+
+    This is a project-specific identifier in ``did:swid:`` format, designed
+    to be spatial and human-readable.  It is NOT an official Spatial Web DID
+    implementation — treat it as a stable internal label that can be replaced
+    later if an official method becomes available.
+
+    Format:  did:swid:home:<area>:<device-name>-<short-hash>
+
+    * *area* — normalised area/room name, or ``unassigned`` when unknown.
+    * *device-name* — normalised device display name, or ``device`` as fallback.
+    * *short-hash* — first 6 hex chars of the SHA-256 of the stable HA device
+      registry ``id``, appended to guarantee uniqueness even if two devices
+      share the same human-readable path.
+
+    The value is deterministic: the same inputs always produce the same SWID.
+    """
+    # --- area segment ---
+    area_segment = _normalize_swid_segment(area) if area else ""
+    if not area_segment:
+        area_segment = "unassigned"
+
+    # --- device-name segment ---
+    name_segment = _normalize_swid_segment(name) if name else ""
+    if not name_segment:
+        name_segment = "device"
+
+    # --- short deterministic hash from the stable device registry id ---
+    stable_hash = hashlib.sha256(device_id.encode("utf-8")).hexdigest()[:6]
+
+    return f"did:swid:home:{area_segment}:{name_segment}-{stable_hash}"
 
 
 async def get_automations(base_url: str, token: str) -> list[dict[str, Any]]:
@@ -111,10 +166,12 @@ async def fetch_devices_entities_with_location(
 
                 ents.append(entity_entry)
 
+            device_name = d.get("name_by_user") or d.get("name")
             output.append(
                 {
                     "device_id": device_id,
-                    "name": d.get("name_by_user") or d.get("name"),
+                    "name": device_name,
+                    "swid": generate_swid(device_id, name=device_name, area=device_area_name),
                     "manufacturer": d.get("manufacturer"),
                     "model": d.get("model"),
                     # "sw_version": d.get("sw_version"),
@@ -138,6 +195,12 @@ async def get_devices(ws_url: str, token: str) -> List[Dict[str, Any]]:
     ws_url = normalize_ha_ws_url(ws_url)
     async with HAWebSocketClient(ws_url, token) as ha:
         devices = await ha.call("config/device_registry/list")
+        for d in (devices or []):
+            d["swid"] = generate_swid(
+                d["id"],
+                name=d.get("name_by_user") or d.get("name"),
+                area=d.get("area_id"),
+            )
         return devices or []
     
 
@@ -148,6 +211,7 @@ async def get_devices_simple(ws_url: str, token: str) -> List[Dict[str, Any]]:
         {
             "device_id": d["id"],
             "name": d.get("name_by_user") or d.get("name"),
+            "swid": d.get("swid", ""),
             "manufacturer": d.get("manufacturer"),
             "model": d.get("model"),
         }

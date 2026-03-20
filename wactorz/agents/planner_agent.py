@@ -111,9 +111,65 @@ class PlannerAgent(Actor):
 
     # ── Core pipeline ──────────────────────────────────────────────────────
 
+    # ── Pipeline registry ──────────────────────────────────────────────────
+    # Each pipeline rule is stored here so users can list / delete them later.
+    # Stored in persistent state under key "_pipeline_rules".
+    #
+    # Schema per rule:
+    # {
+    #   "rule_id":    str,       # unique slug
+    #   "task":       str,       # original user request
+    #   "agents":     [str],     # names of spawned agents for this rule
+    #   "created_at": float,
+    # }
+
+    def _load_pipeline_rules(self) -> list[dict]:
+        return self.recall("_pipeline_rules") or []
+
+    def _save_pipeline_rule(self, rule: dict):
+        rules = self._load_pipeline_rules()
+        rules = [r for r in rules if r.get("rule_id") != rule["rule_id"]]
+        rules.append(rule)
+        self.persist("_pipeline_rules", rules)
+
+    # ── Pipeline detection & dispatch ──────────────────────────────────────
+
+    def _is_pipeline_request(task: str) -> bool:
+        """
+        Detect reactive/persistent pipeline requests vs one-shot tasks.
+        Pipelines use conditional/temporal language: if/when/whenever/monitor/watch/notify.
+        """
+        import re
+        lowered = task.lower()
+
+        # Explicit pipeline prefix always wins
+        if lowered.startswith("pipeline:") or lowered.startswith("pipeline "):
+            return True
+
+        patterns = [
+            r"\bif\b.*\bthen\b",
+            r"\bwhen\b.*\b(detect|open|turn|send|notify|alert)\b",
+            r"\bwhenever\b",
+            r"\bmonitor\b", r"\bwatch\b",
+            r"\balert me\b", r"\bnotify me\b",
+            r"\bsend me\b.*\bwhen\b",
+            r"\bautomatically\b",
+            r"\bevery time\b", r"\bon detection\b",
+            # camera/detect + action = pipeline
+            r"\b(camera|detect|yolo|webcam)\b.*\b(turn|open|send|notify|alert)\b",
+            r"\b(person|motion|object)\b.*\bdetect.*\b(turn|open|light|send)\b",
+        ]
+        return any(re.search(p, lowered) for p in patterns)
+
     async def _run_plan(self, task: str) -> str:
         workers = self._discover_workers()
         await self._log(f"Workers available: {[w['name'] for w in workers]}")
+
+        # Detect pipeline vs one-shot
+        is_pipeline = PlannerAgent._is_pipeline_request(task)
+        if is_pipeline:
+            await self._log("Pipeline request detected — spawning persistent agents...")
+            return await self._run_pipeline(task, workers)
 
         # ── 1. Check cache ─────────────────────────────────────────────────
         cache_key  = _task_hash(task)
@@ -148,6 +204,371 @@ class PlannerAgent(Actor):
             asyncio.create_task(self._deferred_stop())
 
         return answer
+
+    # ── Pipeline mode (persistent reactive agents) ─────────────────────────
+
+
+    async def _run_pipeline(self, task: str, workers: list[dict]) -> str:
+        """
+        Builds and spawns persistent reactive agents for if/when/whenever rules.
+
+        Flow:
+          1. _decompose_pipeline queries HomeAssistantAgent for real entity IDs
+          2. LLM produces spawn configs (ha_actuator for HA actions, dynamic for everything else)
+          3. Each agent is spawned and registered in main's spawn registry
+          4. Rule is saved so it can be listed/deleted later
+          5. Summary returned to the user
+
+        Multiple rules in one request are fully supported.
+        """
+        plan = await self._decompose_pipeline(task, workers)
+
+        if not plan:
+            await self._log("Pipeline decomposition failed — falling back to direct answer")
+            return await self._llm_answer(task)
+
+        if len(plan) == 1 and "_feasibility_error" in plan[0]:
+            error = plan[0]["_feasibility_error"]
+            await self._log(f"Pipeline not feasible: {error}")
+            return f"Cannot set up this pipeline:\n\n{error}"
+
+        await self._log(f"Pipeline plan: {len(plan)} agent(s)")
+        spawned: list[str] = []
+        wired: list[str] = []
+        rule_agents: list[str] = []
+
+        for step in plan:
+            name = step.get("name", "").strip()
+            description = step.get("description", "")
+            spawn_cfg = step.get("spawn_config")
+
+            if not name:
+                await self._log("Step missing name — skipping")
+                continue
+
+            if self._registry and self._registry.find_by_name(name):
+                await self._log(f"'{name}' already running — skipping")
+                wired.append(f"**{name}** (already active)")
+                rule_agents.append(name)
+                continue
+
+            if not spawn_cfg:
+                await self._log(f"Step '{name}' has no spawn_config — skipping")
+                continue
+
+            spawn_cfg = dict(spawn_cfg)
+            spawn_cfg["name"] = name
+
+            spawn_type = spawn_cfg.get("type", "dynamic")
+            await self._log(f"Spawning '{name}' (type={spawn_type})...")
+            try:
+                actor = await self._spawn_agent(spawn_cfg)
+            except Exception as e:
+                await self._log(f"Spawn failed for '{name}': {e}")
+                wired.append(f"**{name}** — spawn failed: {e}")
+                continue
+
+            if actor:
+                self._spawned_by_planner.append(name)
+                spawned.append(name)
+                rule_agents.append(name)
+
+                # Register in main's spawn registry for auto-restore on restart
+                if self._registry:
+                    main = self._registry.find_by_name("main")
+                    if main and hasattr(main, "_save_to_spawn_registry"):
+                        registry_cfg = dict(spawn_cfg)
+                        registry_cfg["name"] = name
+                        registry_cfg["_rule"] = True
+                        registry_cfg["_rule_task"] = task[:200]
+                        main._save_to_spawn_registry(registry_cfg)
+
+                topics = spawn_cfg.get("mqtt_topics", [])
+                label = f"**{name}** — {description}"
+                if topics:
+                    label += "\n  listens: " + ", ".join(topics)
+                wired.append(label)
+                await asyncio.sleep(0.3)
+            else:
+                wired.append(f"**{name}** — failed to spawn")
+
+        # Persist this rule for listing / deletion
+        if rule_agents:
+            import hashlib as _hl
+            rule_id = _hl.md5(task.encode()).hexdigest()[:8]
+            self._save_pipeline_rule({
+                "rule_id": rule_id,
+                "task": task,
+                "agents": rule_agents,
+                "created_at": time.time(),
+            })
+
+        self._auto_terminate = False
+
+        if not wired:
+            return "Pipeline plan generated but no agents could be spawned. Check logs."
+
+        out = ["Pipeline active! Here's what I set up:\n"]
+        out += [f"{i+1}. {w}" for i, w in enumerate(wired)]
+        out.append("\nThese agents run continuously and react to events automatically.")
+        out.append("Use `/rules` to see all active pipeline rules.")
+        if spawned:
+            out.append(f"\nSpawned: {', '.join(spawned)} — will auto-restore on restart.")
+        return "\n".join(out)
+
+    async def _decompose_pipeline(self, task: str, workers: list[dict]) -> list[dict]:
+        """
+        Decomposes a reactive pipeline request into persistent agent spawn configs.
+
+        Flow:
+          1. Query HomeAssistantAgent for live entities (delegates — no duplication)
+          2. Feasibility check — surface clear error if required HA entities are missing
+          3. LLM produces spawn configs with real entity IDs and correct MQTT wiring
+        """
+        if not self.llm:
+            return []
+
+        # ── 1. Get HA entities via HomeAssistantAgent ──────────────────────
+        ha_entities_text = ""
+        ha_available = False
+
+        try:
+            if self._registry and self._registry.find_by_name("home-assistant-agent"):
+                result = await self._delegate("home-assistant-agent", "list_entities")
+                if result and not result.get("error"):
+                    entities_list = result.get("entities", [])
+                    if entities_list:
+                        lines = []
+                        for e in entities_list[:200]:
+                            eid = e.get("entity_id", "")
+                            ename = e.get("name", "")
+                            plat = e.get("platform", "")
+                            if eid:
+                                parts = [eid]
+                                if ename and ename != eid:
+                                    parts.append(f"name={ename}")
+                                if plat:
+                                    parts.append(f"platform={plat}")
+                                lines.append("  " + "  ".join(parts))
+                        ha_entities_text = "\n".join(lines)
+                        ha_available = True
+                        logger.info(f"[{self.name}] Got {len(entities_list)} HA entities via home-assistant-agent")
+        except Exception as e:
+            logger.warning(f"[{self.name}] Could not query home-assistant-agent: {e}")
+
+        # Fallback: fetch directly if HA agent is unavailable
+        if not ha_available:
+            try:
+                from ..config import CONFIG
+                from ..core.integrations.home_assistant.ha_helper import fetch_devices_entities_with_location
+                ha_url = (CONFIG.ha_url or "").rstrip("/")
+                ha_token = (CONFIG.ha_token or "").strip()
+                if ha_url and ha_token:
+                    devices = await fetch_devices_entities_with_location(ha_url, ha_token, include_states=True)
+                    lines = []
+                    for device in devices[:150]:
+                        area = device.get("area", "")
+                        for entity in device.get("entities", []):
+                            eid = entity.get("entity_id", "")
+                            ename = entity.get("friendly_name") or entity.get("name", "")
+                            state = entity.get("state", "")
+                            if eid:
+                                parts = [eid]
+                                if ename: parts.append(f"name={ename}")
+                                if area: parts.append(f"area={area}")
+                                if state: parts.append(f"state={state}")
+                                lines.append("  " + "  ".join(parts))
+                    ha_entities_text = "\n".join(lines)
+                    ha_available = bool(lines)
+                    logger.info(f"[{self.name}] Direct HA fetch: {len(lines)} entities")
+            except Exception as e:
+                logger.warning(f"[{self.name}] Direct HA fetch failed: {e}")
+
+        ha_section = ha_entities_text if ha_entities_text else \
+            "  (HA not reachable — use entity IDs provided by the user)"
+
+        # ── 2. Feasibility check (skip for local/external triggers) ───────
+        _local_kw = ("camera", "webcam", "laptop", "detect", "yolo", "person",
+                     "object detection", "cv2", "opencv")
+        _skip_feasibility = any(kw in task.lower() for kw in _local_kw)
+
+        if ha_available and ha_entities_text and not _skip_feasibility:
+            feas_prompt = (
+                "Check if this reactive automation can be fulfilled with available HA entities.\n\n"
+                f"USER REQUEST: {task}\n\n"
+                f"AVAILABLE HA ENTITIES:\n{ha_section}\n\n"
+                'Return JSON only:\n'
+                '{"feasible": true/false, "reason": "<one sentence if not feasible>", "relevant_entities": ["entity_id", ...]}\n\n'
+                "Rules:\n"
+                "- feasible=true only if ALL required entity types exist\n"
+                "- Camera/webcam/Discord/notification requests: always feasible=true"
+            )
+            try:
+                feas_resp, _ = await self.llm.complete(
+                    messages=[{"role": "user", "content": feas_prompt}],
+                    system="Output only valid JSON. No markdown.",
+                    max_tokens=400,
+                )
+                clean = feas_resp.strip()
+                for fence in ("```json", "```"):
+                    if clean.startswith(fence):
+                        clean = clean[len(fence):]
+                    if clean.endswith("```"):
+                        clean = clean[:-3]
+                clean = clean.strip()
+                feas = json.loads(clean)
+                if not feas.get("feasible", True):
+                    reason = feas.get("reason", "Cannot fulfill request with available HA entities.")
+                    logger.warning(f"[{self.name}] Feasibility failed: {reason}")
+                    return [{"_feasibility_error": reason}]
+                logger.info(f"[{self.name}] Feasibility OK — relevant: {feas.get('relevant_entities', [])}")
+            except Exception as e:
+                logger.warning(f"[{self.name}] Feasibility check error (continuing): {e}")
+
+        # ── 3. Decompose into spawn configs ────────────────────────────────
+        # Build the prompt as a list of parts to avoid f-string escape issues
+        prompt_parts = [
+            "You are designing reactive automation pipelines for a multi-agent IoT system.",
+            "Output ONLY a valid JSON array — no explanation, no markdown, no code fences.",
+            "",
+            "SYSTEM ARCHITECTURE:",
+            "- HomeAssistantStateBridgeAgent (always running): publishes HA state changes to:",
+            "    homeassistant/state_changes/<domain>/<entity_id>",
+            '  Payload: {"type": "home_assistant_state_change", "entity_id": "...", "domain": "...",',
+            '           "new_state": {"state": "...", "attributes": {}}, "old_state": {...}}',
+            "",
+            "AGENT TYPES TO SPAWN:",
+            "",
+            'TYPE 1 — "ha_actuator" — USE FOR: any HA service call (lights, switches, climate, cover)',
+            "  No code needed. Subscribes to MQTT topic, calls HA service when payload matches filter.",
+            "  spawn_config:",
+            "  {",
+            '    "type": "ha_actuator",',
+            '    "automation_id": "<unique-kebab-slug>",',
+            '    "description": "<plain english>",',
+            '    "mqtt_topics": ["<topic>"],',
+            '    "actions": [{"domain": "<domain>", "service": "<service>", "entity_id": "<exact_from_list>", "service_data": {}}],',
+            '    "conditions": [],',
+            '    "detection_filter": {"<key>": "<value>"} or null,',
+            '    "cooldown_seconds": 10',
+            "  }",
+            "  IMPORTANT: detection_filter matches TOP-LEVEL payload keys only.",
+            "  HA state payloads have state nested in new_state.state — use a dynamic filter agent for these (Pattern A).",
+            "",
+            'TYPE 2 — "dynamic" — USE FOR: webcam/YOLO, state filtering, timers, Discord, external APIs',
+            "  Custom Python. Define async functions. Available APIs ONLY:",
+            '    await agent.log("msg")             — log',
+            '    await agent.publish("topic", {})   — MQTT publish',
+            '    agent.recall("key")                — persistent load',
+            '    agent.persist("key", val)          — persistent save',
+            '    agent.state["key"]                 — in-memory (lost on restart)',
+            "  spawn_config:",
+            "  {",
+            '    "type": "dynamic",',
+            '    "description": "<description>",',
+            '    "install": ["<pip-package>"],',
+            '    "poll_interval": <seconds>,',
+            '    "code": "<python source>"',
+            "  }",
+            "",
+            "WIRING PATTERNS:",
+            "",
+            "Pattern A — HA state change -> HA action (door opens -> turn on light):",
+            "  TWO agents:",
+            "  1. dynamic filter agent — subscribes to homeassistant/state_changes/<domain>/<entity_id>,",
+            '     checks new_state["state"] == target_value, publishes {"triggered": true} to custom/triggers/<slug>',
+            "  2. ha_actuator — subscribes to custom/triggers/<slug>, detection_filter: null",
+            "  Dynamic filter code example:",
+            "    async def setup(agent):",
+            "        import asyncio, json, aiomqtt",
+            "        async def _listen():",
+            '            async with aiomqtt.Client("localhost", 1883) as c:',
+            '                await c.subscribe("homeassistant/state_changes/binary_sensor/binary_sensor.front_door")',
+            "                async for msg in c.messages:",
+            "                    try:",
+            "                        d = json.loads(msg.payload)",
+            '                        if d.get("new_state", {}).get("state") == "on":',
+            '                            await agent.publish("custom/triggers/door-open", {"triggered": True})',
+            "                    except: pass",
+            "        asyncio.create_task(_listen())",
+            "",
+            "Pattern B — Webcam person detection -> HA light/action:",
+            "  TWO agents:",
+            '  1. dynamic YOLO agent — publishes {"person_detected": bool, "objects": [str]} to custom/detections/<slug>',
+            '  2. ha_actuator — subscribes to custom/detections/<slug>, detection_filter: {"person_detected": true}',
+            "  YOLO agent code example:",
+            "    async def setup(agent):",
+            "        import cv2",
+            "        from ultralytics import YOLO",
+            '        agent.state["model"] = YOLO("yolov8n.pt")',
+            '        agent.state["cap"] = cv2.VideoCapture(0)',
+            '        await agent.log("YOLO webcam ready")',
+            "    async def process(agent):",
+            '        cap = agent.state.get("cap")',
+            '        model = agent.state.get("model")',
+            "        if not cap or not model: return",
+            "        ret, frame = cap.read()",
+            "        if not ret: return",
+            "        results = model(frame, verbose=False)",
+            "        detected = [model.names[int(b.cls)] for r in results for b in r.boxes]",
+            '        person = "person" in detected',
+            '        await agent.publish("custom/detections/SLUG", {"person_detected": person, "objects": list(set(detected))})',
+            "",
+            "Pattern C — HA state change -> Discord notification:",
+            "  ONE dynamic agent: subscribe to HA state topic, filter state, POST to Discord webhook URL",
+            "  Use httpx: async with httpx.AsyncClient() as c: await c.post(url, json={'content': msg})",
+            "",
+            "Pattern D — Webcam detection -> Discord notification:",
+            "  TWO agents: YOLO dynamic (Pattern B step 1) + Discord dynamic (subscribes, POSTs webhook)",
+            "",
+            "RULES:",
+            "- Use exact entity_id values from the HA entities list below",
+            "- Multiple rules in one request -> produce ALL agents for ALL rules",
+            "- Replace SLUG with actual automation slug in code strings",
+            "- Each agent does ONE thing — keep minimal",
+            "- NEVER spawn HomeAssistantStateBridgeAgent — it is always running",
+            "",
+            "HOME ASSISTANT ENTITIES:",
+            ha_section,
+            "",
+            "OUTPUT FORMAT — JSON array, each item:",
+            '{"name": "<kebab-case>", "description": "<one sentence>", "spawn_config": {...}}',
+            "",
+            "USER REQUEST:",
+            task,
+        ]
+        prompt = "\n".join(prompt_parts)
+
+        try:
+            response, _ = await self.llm.complete(
+                messages=[{"role": "user", "content": prompt}],
+                system="You are a JSON-only pipeline architect. Output only a valid JSON array. No markdown, no explanation.",
+                max_tokens=4000,
+            )
+            clean = response.strip()
+            if clean.startswith("```"):
+                clean = "\n".join(clean.split("\n")[1:])
+            if "```" in clean:
+                clean = clean[:clean.rfind("```")]
+            start = clean.find("[")
+            end = clean.rfind("]")
+            if start != -1 and end != -1:
+                clean = clean[start:end + 1]
+            plan = json.loads(clean.strip())
+            if isinstance(plan, list):
+                logger.info(f"[{self.name}] Pipeline plan: {len(plan)} step(s)")
+                for i, step in enumerate(plan):
+                    sc = step.get("spawn_config", {})
+                    logger.info(
+                        f"[{self.name}]   step {i + 1}: name={step.get('name')}  "
+                        f"type={sc.get('type')}  topics={sc.get('mqtt_topics', [])}"
+                    )
+                return plan
+        except Exception as e:
+            logger.error(f"[{self.name}] Pipeline decomposition error: {e}")
+        return []
+
+        return []
 
     # ── Plan cache ─────────────────────────────────────────────────────────
 
@@ -269,6 +690,8 @@ OUTPUT RULES:
   AGENT TYPE RULES:
     Use "llm" ONLY for pure conversation/Q&A/explanation agents (no external APIs or tools).
     Use "dynamic" for anything that fetches data, calls APIs, runs searches, or uses libraries.
+    In dynamic agent code ALWAYS use: await agent.log(msg), await agent.publish(topic, dict), agent.state dict, agent.recall(key), agent.persist(key, val).
+    NEVER use agent.logger — it does not exist. Use await agent.log(msg) instead.
   LLM agent example:
   {{
     "name": "translator-agent",
@@ -366,6 +789,36 @@ Example:
         """Spawn an agent from a config dict — same logic as MainActor._spawn_from_config."""
         agent_type = config.get("type", "dynamic")
         name       = config.get("name", "spawned-agent")
+
+        if agent_type == "ha_actuator":
+            from .home_assistant_actuator_agent import (
+                HomeAssistantActuatorAgent, ActuatorConfig,
+                ActuatorAction, ActuatorCondition,
+            )
+            # Ensure automation_id is unique — append short hash if needed
+            automation_id = config.get("automation_id", name)
+            if self._registry and self._registry.find_by_name(f"actuator-{automation_id[:20]}"):
+                import hashlib
+                suffix = hashlib.md5(f"{automation_id}{time.time()}".encode()).hexdigest()[:4]
+                automation_id = f"{automation_id}-{suffix}"
+                name = f"actuator-{automation_id[:20]}"
+            actuator_config = ActuatorConfig(
+                automation_id = automation_id,
+                description   = config.get("description", ""),
+                mqtt_topics   = config.get("mqtt_topics", []),
+                actions       = [ActuatorAction.from_dict(a) for a in config.get("actions", [])],
+                conditions    = [ActuatorCondition.from_dict(c) for c in config.get("conditions", [])],
+                detection_filter = config.get("detection_filter"),
+                cooldown_seconds = float(config.get("cooldown_seconds", 10.0)),
+            )
+            actor = await self.spawn(
+                HomeAssistantActuatorAgent,
+                config=actuator_config,
+                name=name,
+                persistence_dir=str(self._persistence_dir.parent),
+            )
+            await self._register_with_main(config)
+            return actor
 
         if agent_type == "llm":
             from .llm_agent import LLMAgent
@@ -499,6 +952,9 @@ Example:
     # ── Delegation ─────────────────────────────────────────────────────────
 
     async def _delegate(self, agent_name: str, task: str, timeout: float = 60.0) -> Optional[dict]:
+        return await self._delegate_with_payload(agent_name, {"text": task}, timeout=timeout)
+
+    async def _delegate_with_payload(self, agent_name: str, payload: dict, timeout: float = 60.0) -> Optional[dict]:
         if not self._registry:
             return None
         target = self._registry.find_by_name(agent_name)
@@ -508,11 +964,11 @@ Example:
 
         import uuid
         task_id = str(uuid.uuid4())[:8]
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._result_futures[task_id] = future
 
         await self.send(target.actor_id, MessageType.TASK, {
-            "text": task, "_task_id": task_id, "_reply_to": self.actor_id
+            **payload, "_task_id": task_id, "_reply_to": self.actor_id
         })
         try:
             return await asyncio.wait_for(future, timeout=timeout)

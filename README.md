@@ -1,7 +1,7 @@
 # Wactorz
 
 **Actor-Model Multi-Agent Framework**  
-*Technical Reference & Developer Guide*
+_Technical Reference & Developer Guide_
 
 ---
 
@@ -66,22 +66,22 @@ Message flow:
 
 ### Core Components
 
-| File | Layer | Role |
-|------|-------|------|
-| `core/actor.py` | Core | Base Actor class — mailbox, lifecycle, heartbeat, spawn, send, persist/recall |
-| `core/registry.py` | Core | ActorSystem & ActorRegistry — actor registration, message routing, broadcast |
-| `agents/main_actor.py` | Agent | The LLM orchestrator — processes user input, spawns agents, routes requests |
-| `agents/monitor_agent.py` | Agent | Health watcher — detects crashes, fires recovery actions, notifies user |
-| `agents/llm_agent.py` | Agent | Base LLM agent with conversation history, cost tracking, streaming, and 4 providers |
-| `agents/dynamic_agent.py` | Agent | Runtime-generated agents — executes LLM-written Python code in a sandboxed namespace |
-| `agents/planner_agent.py` | Agent | Multi-step task planner — decomposes tasks, fans out to workers, synthesizes results |
-| `agents/installer_agent.py` | Agent | Package manager — installs pip packages locally and on remote nodes via SSH |
-| `agents/catalog_agent.py` | Agent | Recipe library — holds pre-built agent configs and spawns them on request without requiring code |
-| `agents/manual_agent.py` | Agent | PDF specialist — 3-layer search strategy to find and extract manual content |
-| `agents/home_assistant_agent.py` | Agent | Unified HA agent — hardware recommendations and automation CRUD via HA REST API |
-| `interfaces/chat_interfaces.py` | I/O | CLI (streaming), REST, Discord, WhatsApp — all call `process_user_input[_stream]` |
-| `monitor_server.py` | I/O | MQTT→WebSocket bridge that feeds the live dashboard |
-| `monitor.html` | I/O | Real-time web dashboard — agent cards, logs, cost meters, error alerts |
+| File                             | Layer | Role                                                                                             |
+| -------------------------------- | ----- | ------------------------------------------------------------------------------------------------ |
+| `core/actor.py`                  | Core  | Base Actor class — mailbox, lifecycle, heartbeat, spawn, send, persist/recall                    |
+| `core/registry.py`               | Core  | ActorSystem & ActorRegistry — actor registration, message routing, broadcast                     |
+| `agents/main_actor.py`           | Agent | The LLM orchestrator — processes user input, spawns agents, routes requests                      |
+| `agents/monitor_agent.py`        | Agent | Health watcher — detects crashes, fires recovery actions, notifies user                          |
+| `agents/llm_agent.py`            | Agent | Base LLM agent with conversation history, cost tracking, streaming, and 4 providers              |
+| `agents/dynamic_agent.py`        | Agent | Runtime-generated agents — executes LLM-written Python code in a sandboxed namespace             |
+| `agents/planner_agent.py`        | Agent | Multi-step task planner — decomposes tasks, fans out to workers, synthesizes results             |
+| `agents/installer_agent.py`      | Agent | Package manager — installs pip packages locally and on remote nodes via SSH                      |
+| `agents/catalog_agent.py`        | Agent | Recipe library — holds pre-built agent configs and spawns them on request without requiring code |
+| `agents/manual_agent.py`         | Agent | PDF specialist — 3-layer search strategy to find and extract manual content                      |
+| `agents/home_assistant_agent.py` | Agent | Unified HA agent — hardware recommendations and automation CRUD via HA REST API                  |
+| `interfaces/chat_interfaces.py`  | I/O   | CLI (streaming), REST, Discord, WhatsApp — all call `process_user_input[_stream]`                |
+| `monitor_server.py`              | I/O   | MQTT→WebSocket bridge that feeds the live dashboard                                              |
+| `monitor.html`                   | I/O   | Real-time web dashboard — agent cards, logs, cost meters, error alerts                           |
 
 ---
 
@@ -93,12 +93,12 @@ All LLM-backed agents inherit from `LLMAgent`, which inherits from `Actor`. It m
 
 **Supported LLM providers:**
 
-| Provider | Key | Notes |
-|----------|-----|-------|
-| Anthropic Claude | `ANTHROPIC_API_KEY` | Default |
-| OpenAI | `OPENAI_API_KEY` | `--llm openai` |
-| Ollama | *(none)* | Local models, `--llm ollama --ollama-model llama3` |
-| NVIDIA NIM | `NIM_API_KEY` | Free tier 1000 req/month, `--llm nim --nim-model meta/llama-3.3-70b-instruct` |
+| Provider         | Key                 | Notes                                                                         |
+| ---------------- | ------------------- | ----------------------------------------------------------------------------- |
+| Anthropic Claude | `ANTHROPIC_API_KEY` | Default                                                                       |
+| OpenAI           | `OPENAI_API_KEY`    | `--llm openai`                                                                |
+| Ollama           | _(none)_            | Local models, `--llm ollama --ollama-model llama3`                            |
+| NVIDIA NIM       | `NIM_API_KEY`       | Free tier 1000 req/month, `--llm nim --nim-model meta/llama-3.3-70b-instruct` |
 
 ### DynamicAgent
 
@@ -122,16 +122,16 @@ async def handle_task(agent, payload):
 
 **The `agent` API (available inside all three functions):**
 
-| Method | Description |
-|--------|-------------|
-| `agent.log(msg)` | Publish a log event |
-| `agent.publish(topic, data)` | Publish to an MQTT topic |
-| `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state |
-| `agent.llm.chat(prompt)` | Call the LLM |
-| `agent.send_to(name, payload)` | Send a task to another agent by name |
-| `agent.delegate(name, payload)` | Same, with cleaner syntax |
-| `agent.send_to_many(tasks)` | Fan-out to multiple agents in parallel |
-| `agent.agents()` | List all currently running agents |
+| Method                                            | Description                            |
+| ------------------------------------------------- | -------------------------------------- |
+| `agent.log(msg)`                                  | Publish a log event                    |
+| `agent.publish(topic, data)`                      | Publish to an MQTT topic               |
+| `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state                |
+| `agent.llm.chat(prompt)`                          | Call the LLM                           |
+| `agent.send_to(name, payload)`                    | Send a task to another agent by name   |
+| `agent.delegate(name, payload)`                   | Same, with cleaner syntax              |
+| `agent.send_to_many(tasks)`                       | Fan-out to multiple agents in parallel |
+| `agent.agents()`                                  | List all currently running agents      |
 
 ### MainActor
 
@@ -198,17 +198,17 @@ Simply describe what you want in the chat. The LLM will write the code and wrap 
 
 ### Spawn Options
 
-| Field | Description |
-|-------|-------------|
-| `name` | Unique agent name. Use `"replace": true` to hot-swap a running agent |
-| `type` | `"dynamic"` (runtime code), `"llm"` (pure conversation), `"manual"` (PDF search) |
-| `node` | Remote node name to spawn on (e.g. `"rpi-kitchen"`). Omit to run locally |
-| `install` | List of pip packages to install before spawning. Fast-path skips if already importable |
-| `poll_interval` | Seconds between `process()` calls. Use `3600` for infrequent background tasks |
-| `replace` | If `true`, stops the existing agent with this name before spawning the new one |
-| `code` | The Python source. May define `setup()`, `process()`, and/or `handle_task()` |
-| `system_prompt` | For `type: "llm"` agents — the LLM's persona and instructions |
-| `description` | Human-readable description shown in the dashboard and used by the planner |
+| Field           | Description                                                                            |
+| --------------- | -------------------------------------------------------------------------------------- |
+| `name`          | Unique agent name. Use `"replace": true` to hot-swap a running agent                   |
+| `type`          | `"dynamic"` (runtime code), `"llm"` (pure conversation), `"manual"` (PDF search)       |
+| `node`          | Remote node name to spawn on (e.g. `"rpi-kitchen"`). Omit to run locally               |
+| `install`       | List of pip packages to install before spawning. Fast-path skips if already importable |
+| `poll_interval` | Seconds between `process()` calls. Use `3600` for infrequent background tasks          |
+| `replace`       | If `true`, stops the existing agent with this name before spawning the new one         |
+| `code`          | The Python source. May define `setup()`, `process()`, and/or `handle_task()`           |
+| `system_prompt` | For `type: "llm"` agents — the LLM's persona and instructions                          |
+| `description`   | Human-readable description shown in the dashboard and used by the planner              |
 
 Agents with packages in `"install"` are spawned in the background. A fast-path checks whether packages are already importable first — if they are, spawning is instant (no installer round-trip needed). All spawned agents are saved to the spawn registry and automatically restored on the next startup.
 
@@ -258,10 +258,10 @@ Every error site (`compile`, `setup`, `process`, `handle_task`) publishes a stru
 
 The monitor subscribes to error events from all agents and maintains an error registry. Recovery decisions:
 
-| Severity | Action |
-|----------|--------|
-| `warning` | Log it, let the agent recover on its own |
-| `critical` / `degraded` | Attempt restart (up to 3 times) |
+| Severity                | Action                                                     |
+| ----------------------- | ---------------------------------------------------------- |
+| `warning`               | Log it, let the agent recover on its own                   |
+| `critical` / `degraded` | Attempt restart (up to 3 times)                            |
 | `fatal` (compile/setup) | Do NOT restart — the code is broken. Notify user to fix it |
 
 **Heartbeat liveness:** every actor publishes a heartbeat every 10 seconds. The monitor reads `metrics.last_heartbeat` directly, so even idle agents (installer, manual-agent) are never falsely flagged as unresponsive. Infrastructure agents (monitor, installer, main, code-agent, anomaly-detector, home-assistant-agent) are excluded from user-facing notifications.
@@ -322,18 +322,18 @@ python -m wactorz --llm nim --nim-model meta/llama-3.3-70b-instruct
 
 **CLI commands:**
 
-| Command | Description |
-|---------|-------------|
-| `/agents` | List all running agents with type and status |
-| `/nodes` | List remote nodes with online/offline status and their agents |
-| `/deploy <node-name>` | Bootstrap a new remote node via SSH (discovers Pi automatically) |
-| `/deploy-pkg <host> <pkg...>` | Install pip packages on a remote node via SSH |
-| `/migrate <agent> <node>` | Move a running agent to a different node |
-| `/cost` | Show per-agent token usage and cost breakdown |
-| `/clear` | Clear the main agent's conversation history |
-| `/clear-plans` | Wipe the planner's plan cache |
-| `/help` | Show all available commands |
-| `@agent-name` | Route your next message directly to a specific agent |
+| Command                       | Description                                                      |
+| ----------------------------- | ---------------------------------------------------------------- |
+| `/agents`                     | List all running agents with type and status                     |
+| `/nodes`                      | List remote nodes with online/offline status and their agents    |
+| `/deploy <node-name>`         | Bootstrap a new remote node via SSH (discovers Pi automatically) |
+| `/deploy-pkg <host> <pkg...>` | Install pip packages on a remote node via SSH                    |
+| `/migrate <agent> <node>`     | Move a running agent to a different node                         |
+| `/cost`                       | Show per-agent token usage and cost breakdown                    |
+| `/clear`                      | Clear the main agent's conversation history                      |
+| `/clear-plans`                | Wipe the planner's plan cache                                    |
+| `/help`                       | Show all available commands                                      |
+| `@agent-name`                 | Route your next message directly to a specific agent             |
 
 ### REST API
 
@@ -351,22 +351,22 @@ Start `monitor_server.py` alongside wactorz. Open `monitor.html` in a browser. T
 
 ## 10. MQTT Topic Reference
 
-| Topic | Description |
-|-------|-------------|
-| `agents/{id}/heartbeat` | Liveness pulse every 10s — name, state, metrics |
-| `agents/{id}/logs` | Log events, spawn notifications, user interactions |
-| `agents/{id}/errors` | Structured error events with phase, severity, traceback |
-| `agents/{id}/alert` | Alert events (heartbeat timeout or error escalation) |
-| `agents/{id}/metrics` | Token usage, cost, tasks completed after each LLM call |
-| `agents/{id}/completed` | Task completion notification with result preview |
-| `agents/by-name/{name}/task` | Address a task to an agent by name (used by remote agents) |
-| `system/health` | Global health snapshot every 15s — running/stopped/failed counts |
-| `nodes/{name}/spawn` | Spawn a new agent on a remote node |
-| `nodes/{name}/stop` | Stop a named agent on a remote node |
-| `nodes/{name}/migrate` | Move an agent from this node to another |
-| `nodes/{name}/list` | Request list of agents running on a node |
-| `nodes/{name}/heartbeat` | Node liveness pulse — agent list, broker, timestamp |
-| `nodes/{name}/migrate_result` | Migration success/failure notification |
+| Topic                         | Description                                                      |
+| ----------------------------- | ---------------------------------------------------------------- |
+| `agents/{id}/heartbeat`       | Liveness pulse every 10s — name, state, metrics                  |
+| `agents/{id}/logs`            | Log events, spawn notifications, user interactions               |
+| `agents/{id}/errors`          | Structured error events with phase, severity, traceback          |
+| `agents/{id}/alert`           | Alert events (heartbeat timeout or error escalation)             |
+| `agents/{id}/metrics`         | Token usage, cost, tasks completed after each LLM call           |
+| `agents/{id}/completed`       | Task completion notification with result preview                 |
+| `agents/by-name/{name}/task`  | Address a task to an agent by name (used by remote agents)       |
+| `system/health`               | Global health snapshot every 15s — running/stopped/failed counts |
+| `nodes/{name}/spawn`          | Spawn a new agent on a remote node                               |
+| `nodes/{name}/stop`           | Stop a named agent on a remote node                              |
+| `nodes/{name}/migrate`        | Move an agent from this node to another                          |
+| `nodes/{name}/list`           | Request list of agents running on a node                         |
+| `nodes/{name}/heartbeat`      | Node liveness pulse — agent list, broker, timestamp              |
+| `nodes/{name}/migrate_result` | Migration success/failure notification                           |
 
 ---
 
@@ -384,17 +384,73 @@ PDF content is extracted in memory (`pdfplumber` → `pymupdf` fallback) and sto
 
 ### HomeAssistantAgent — HA Automation
 
-Connects to your Home Assistant instance (set `HA_URL` and `HA_TOKEN`) and handles five intents, classified by a cheap single-token LLM call:
+Connects to your Home Assistant instance (set `HA_URL` and `HA_TOKEN`) and handles intents, classified by a cheap single-token LLM call:
 
-| Intent | Description |
-|--------|-------------|
-| `recommend_hardware` | Suggests devices and entities for an automation request |
-| `create_automation` | Generates and inserts a new automation via the HA REST API |
-| `edit_automation` | Identifies which automation to change and applies the update |
-| `delete_automation` | Finds and deletes an automation by name (fuzzy matching) |
-| `list_automations` | Returns a formatted list of all automations |
+| Intent               | Description                                                  |
+| -------------------- | ------------------------------------------------------------ |
+| `recommend_hardware` | Suggests devices and entities for an automation request      |
+| `create_automation`  | Generates and inserts a new automation via the HA REST API   |
+| `edit_automation`    | Identifies which automation to change and applies the update |
+| `delete_automation`  | Finds and deletes an automation by name (fuzzy matching)     |
+| `list_automations`   | Returns a formatted list of all automations                  |
+| `list_areas`         | Lists all Home Assistant areas                               |
+| `list_devices`       | Lists all devices                                            |
+| `list_entities`      | Lists all entities                                           |
 
 Device and automation data is cached (30s TTL). The agent includes a self-correction loop for hardware selection — if the LLM returns `can_fulfill=true` with an empty hardware list, it prompts for a correction automatically.
+
+### HomeAssistantMapAgent — Live Entity Map
+
+Maintains a live, location-enriched map of every HA device and entity. Opens a persistent WebSocket connection to Home Assistant and re-fetches the full device/entity/location dataset every time the entity registry changes, then publishes the result to MQTT (or forwards it directly to another actor by name).
+
+**Published topic** (default): `homeassistant/map/entities_with_location`
+
+**Task commands** (sent to agent mailbox):
+
+| Command   | Description                                            |
+| --------- | ------------------------------------------------------ |
+| `refresh` | Force an immediate rebuild and publish                 |
+| `status`  | Return connection state, event counter, and last error |
+
+Configure with `HA_MAP_AGENT_OUTPUT_TOPIC` and optionally `HA_MAP_AGENT_TARGET_ACTOR` (routes the payload to another actor instead of MQTT).
+
+### HomeAssistantStateBridgeAgent — State Change Bridge
+
+Bridges every Home Assistant `state_changed` event to MQTT. Useful for wiring HA sensor readings into the rest of the actor system or downstream data pipelines.
+
+**Published topic** (default): `homeassistant/state_changes[/{domain}/{entity_id}]`
+
+Key options:
+
+- `HA_STATE_BRIDGE_DOMAINS` — comma-separated allow-list (e.g. `light,switch,sensor`); empty = all
+- `HA_STATE_BRIDGE_PER_ENTITY` — `1` splits into per-entity sub-topics; `0` (default) sends everything to one topic
+
+### HomeAssistantActuatorAgent — Reactive Actuator
+
+The actuator end of the sensor→action pipeline. Each instance subscribes to one or more MQTT topics, evaluates optional HA entity conditions, enforces a configurable cooldown, and calls HA services via a persistent WebSocket connection.
+
+```
+DynamicAgent (sensor) → MQTT topic → HomeAssistantActuatorAgent → HA service call
+```
+
+One instance is spawned per automation, configured with an `ActuatorConfig`:
+
+```python
+ActuatorConfig(
+    automation_id="person-light",
+    mqtt_topics=["camera/detections"],
+    detection_filter={"label": "person", "confidence": {"gte": 0.7}},
+    cooldown_seconds=10.0,
+    conditions=[
+        ActuatorCondition(entity_id="sun.sun", attribute="state", operator="eq", value="below_horizon")
+    ],
+    actions=[
+        ActuatorAction(domain="light", service="turn_on", entity_id="light.living_room")
+    ],
+)
+```
+
+Detection filter values can be plain literals (equality) or operator dicts such as `{"gte": 0.7}`. Supported operators: `eq`, `ne`, `gt`, `lt`, `gte`, `lte`. Conditions use AND logic and query live HA entity state via WebSocket.
 
 ### CodeAgent & MLAgent
 
@@ -413,6 +469,7 @@ Some agents are too useful to re-invent every session but too specific to hardco
 ### Usage
 
 **Direct (from CLI):**
+
 ```text
 @catalog spawn image-gen-agent
 @catalog spawn doc-to-pptx-agent
@@ -421,28 +478,30 @@ Some agents are too useful to re-invent every session but too specific to hardco
 ```
 
 **Natural language via main:**
+
 ```text
 "spawn the image generation agent"
 "what agents can you spawn for me?"
 "I need to convert a PDF to PowerPoint"
 ```
+
 Main discovers the catalog via `/capabilities` and routes through it automatically.
 
 ### Available Actions
 
-| Action | Payload | Description |
-| ------ | ------- | ----------- |
-| `list` | `{"action": "list"}` | Returns all available recipes with name, description, and capabilities |
-| `info` | `{"action": "info", "agent": "name"}` | Returns full recipe metadata (without the code string) |
+| Action  | Payload                                | Description                                                               |
+| ------- | -------------------------------------- | ------------------------------------------------------------------------- |
+| `list`  | `{"action": "list"}`                   | Returns all available recipes with name, description, and capabilities    |
+| `info`  | `{"action": "info", "agent": "name"}`  | Returns full recipe metadata (without the code string)                    |
 | `spawn` | `{"action": "spawn", "agent": "name"}` | Spawns the named agent via main's spawn pipeline; saves to spawn registry |
 
 Spawned agents are registered in main's spawn registry — they survive restarts just like any manually spawned agent.
 
 ### Built-in Recipes
 
-| Recipe | Description | Key Dependencies |
-| ------ | ----------- | ---------------- |
-| `image-gen-agent` | Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns absolute PNG path. | `requests`, NIM API key |
+| Recipe              | Description                                                                                                                                                                 | Key Dependencies                               |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `image-gen-agent`   | Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns absolute PNG path.                                                                                  | `requests`, NIM API key                        |
 | `doc-to-pptx-agent` | Converts PDF or TXT documents into PowerPoint presentations. Extracts real embedded images from the PDF first; falls back to NIM FLUX generation for slides without images. | `pymupdf`, `pdfplumber`, `pptxgenjs` (Node.js) |
 
 ### Adding New Recipes
@@ -472,18 +531,20 @@ No changes to `cli.py` or any other file needed. On next restart the recipe is a
 Generates images from text prompts via NVIDIA NIM FLUX.1-dev and saves them as PNG files. Requires a free NIM API key (1000 credits/month at [build.nvidia.com](https://build.nvidia.com)).
 
 **Setup:**
+
 ```text
 @main remember nim_api_key = nvapi-xxxxxxxxxxxxxxxx
 ```
 
 **Task payload:**
+
 ```json
 {
-  "prompt":      "minimalist flat illustration of renewable energy",
+  "prompt": "minimalist flat illustration of renewable energy",
   "output_path": "C:/Users/you/Documents/slide.png",
-  "width":       1024,
-  "height":      576,
-  "steps":       20
+  "width": 1024,
+  "height": 576,
+  "steps": 20
 }
 ```
 
@@ -501,14 +562,15 @@ Converts a PDF or TXT document into a polished PowerPoint presentation in four s
 Slides that received a real PDF image skip NIM generation. Slides without one fall back to `image-gen-agent` (if running) or remain text-only.
 
 **Task payload:**
+
 ```json
 {
-  "file_path":      "C:/Users/you/Documents/report.pdf",
-  "output_path":    "C:/Users/you/Documents/report.pptx",
-  "slide_count":    8,
-  "theme":          "dark executive",
-  "nim_fallback":   true,
-  "min_img_width":  200,
+  "file_path": "C:/Users/you/Documents/report.pdf",
+  "output_path": "C:/Users/you/Documents/report.pptx",
+  "slide_count": 8,
+  "theme": "dark executive",
+  "nim_fallback": true,
+  "min_img_width": 200,
   "min_img_height": 150
 }
 ```
@@ -554,6 +616,7 @@ The installer agent handles SSH deployment — no manual file copying needed.
 ```
 
 This will:
+
 1. Discover the Pi on your LAN (mDNS first, then port-22 scan)
 2. Prompt for SSH user, password, and your MQTT broker IP
 3. Upload `remote_runner.py` via SFTP
@@ -594,7 +657,7 @@ async def process(agent):
 </spawn>
 ```
 
-Or just ask in chat: *"spawn a temperature sensor agent on rpi-kitchen"*
+Or just ask in chat: _"spawn a temperature sensor agent on rpi-kitchen"_
 
 ### Installing Packages on a Node
 
@@ -614,7 +677,7 @@ Move a running agent to a different machine without stopping it manually:
 /migrate temp-sensor rpi-bedroom
 ```
 
-Or via chat: *"move temp-sensor to rpi-bedroom"*
+Or via chat: _"move temp-sensor to rpi-bedroom"_
 
 The system stops the agent on its current node, starts it fresh on the target, and updates the spawn registry so it restores to the right machine on the next restart.
 
@@ -625,6 +688,7 @@ The system stops the agent on its current node, starts it fresh on the target, a
 ```
 
 Output:
+
 ```
   local                online   @main @monitor @installer @home-assistant-agent
   rpi-kitchen          online   @temp-sensor
@@ -637,14 +701,14 @@ A node is considered online if it sent a heartbeat in the last 30 seconds.
 
 Remote agents have the same `agent.*` API as local agents, with one addition and one limitation:
 
-| Feature | Local | Remote |
-|---------|-------|--------|
-| `agent.publish(topic, data)` | ✅ | ✅ |
-| `agent.log(msg)` / `agent.alert(msg)` | ✅ | ✅ |
-| `agent.persist(key, val)` / `agent.recall(key)` | ✅ | ✅ (JSON file on the Pi) |
-| `agent.send_to(name, payload)` | ✅ | ✅ (via MQTT round-trip) |
-| `agent.node` | ❌ | ✅ (node name string) |
-| `agent.llm.chat(prompt)` | ✅ | ❌ (no LLM provider on edge) |
+| Feature                                         | Local | Remote                       |
+| ----------------------------------------------- | ----- | ---------------------------- |
+| `agent.publish(topic, data)`                    | ✅    | ✅                           |
+| `agent.log(msg)` / `agent.alert(msg)`           | ✅    | ✅                           |
+| `agent.persist(key, val)` / `agent.recall(key)` | ✅    | ✅ (JSON file on the Pi)     |
+| `agent.send_to(name, payload)`                  | ✅    | ✅ (via MQTT round-trip)     |
+| `agent.node`                                    | ❌    | ✅ (node name string)        |
+| `agent.llm.chat(prompt)`                        | ✅    | ❌ (no LLM provider on edge) |
 
 For LLM reasoning from a remote agent, use `agent.send_to('main', {'text': prompt})` — main will call its LLM and return the result over MQTT.
 
@@ -652,11 +716,11 @@ For LLM reasoning from a remote agent, use `agent.send_to('main', {'text': promp
 
 The installer agent gained three new actions for node management:
 
-| Action | Description |
-|--------|-------------|
-| `node_deploy` | Full bootstrap: upload runner + install aiomqtt + start process |
-| `node_install` | Install pip packages on a running node via SSH |
-| `node_run` | Run any shell command on a remote node via SSH |
+| Action         | Description                                                     |
+| -------------- | --------------------------------------------------------------- |
+| `node_deploy`  | Full bootstrap: upload runner + install aiomqtt + start process |
+| `node_install` | Install pip packages on a running node via SSH                  |
+| `node_run`     | Run any shell command on a remote node via SSH                  |
 
 All three accept `host`, `user`, and either `password` or `key_path` for SSH auth.
 
@@ -705,17 +769,22 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-host` and
 
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | Claude API key (primary LLM) |
-| `OPENAI_API_KEY` | OpenAI key (alternative LLM) |
-| `NIM_API_KEY` | NVIDIA NIM key (free tier — get at build.nvidia.com) |
-| `HA_URL` | Home Assistant base URL (e.g. `http://homeassistant.local:8123`) |
-| `HA_TOKEN` | HA long-lived access token |
-| `DISCORD_BOT_TOKEN` | Discord bot token (for `--interface discord`) |
-| `TWILIO_ACCOUNT_SID` | Twilio account SID (for `--interface whatsapp`) |
-| `TWILIO_AUTH_TOKEN` | Twilio auth token |
-| `TWILIO_WHATSAPP_FROM` | Twilio WhatsApp sender number |
+| Variable                            | Description                                                                                  |
+| ----------------------------------- | -------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`                 | Claude API key (primary LLM)                                                                 |
+| `OPENAI_API_KEY`                    | OpenAI key (alternative LLM)                                                                 |
+| `NIM_API_KEY`                       | NVIDIA NIM key (free tier — get at build.nvidia.com)                                         |
+| `HA_URL` / `HOME_ASSISTANT_URL`     | Home Assistant base URL (e.g. `http://homeassistant.local:8123`)                             |
+| `HA_TOKEN` / `HOME_ASSISTANT_TOKEN` | HA long-lived access token                                                                   |
+| `HA_MAP_AGENT_OUTPUT_TOPIC`         | MQTT topic for `HomeAssistantMapAgent` (default: `homeassistant/map/entities_with_location`) |
+| `HA_MAP_AGENT_TARGET_ACTOR`         | Route map updates to a named actor instead of MQTT                                           |
+| `HA_STATE_BRIDGE_OUTPUT_TOPIC`      | Base MQTT topic for `HomeAssistantStateBridgeAgent` (default: `homeassistant/state_changes`) |
+| `HA_STATE_BRIDGE_DOMAINS`           | Comma-separated domain allow-list for state bridge (e.g. `light,switch,sensor`; empty = all) |
+| `HA_STATE_BRIDGE_PER_ENTITY`        | `1` (default) = per-entity sub-topics; `0` = single shared topic                             |
+| `DISCORD_BOT_TOKEN`                 | Discord bot token (for `--interface discord`)                                                |
+| `TWILIO_ACCOUNT_SID`                | Twilio account SID (for `--interface whatsapp`)                                              |
+| `TWILIO_AUTH_TOKEN`                 | Twilio auth token                                                                            |
+| `TWILIO_WHATSAPP_FROM`              | Twilio WhatsApp sender number                                                                |
 
 ---
 
@@ -765,7 +834,10 @@ wactorz/
 │   ├── installer_agent.py         InstallerAgent — pip install locally + SSH deploy to remote nodes
 │   ├── catalog_agent.py           CatalogAgent — pre-built recipe library, spawns agents by name
 │   ├── manual_agent.py            ManualAgent — 3-layer PDF search and extraction
-│   ├── home_assistant_agent.py    HomeAssistantAgent — HA automation CRUD
+│   ├── home_assistant_agent.py    HomeAssistantAgent — HA automation CRUD (LLM-backed, intent routing)
+│   ├── home_assistant_map_agent.py HomeAssistantMapAgent — live entity/location map via HA WebSocket
+│   ├── home_assistant_state_bridge_agent.py HomeAssistantStateBridgeAgent — HA state_changed → MQTT bridge
+│   ├── ha_actuator_agent.py       HomeAssistantActuatorAgent — reactive MQTT→HA service actuator
 │   ├── code_agent.py              CodeAgent — sandboxed Python execution
 │   └── ml_agent.py                MLAgent, YOLOAgent, AnomalyDetectorAgent
 │
@@ -780,4 +852,4 @@ catalogue_agents/                  Pre-built agent recipe files (loaded by Catal
 
 ---
 
-*Wactorz — built conversation by conversation.*
+_Wactorz — built conversation by conversation._

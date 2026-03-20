@@ -402,6 +402,9 @@ class HomeAssistantAgent(LLMAgent):
 
         if isinstance(result, dict):
             result.setdefault("task", self._extract_task_id(msg.payload, text))
+            # Echo _task_id so planner futures resolve correctly
+            if isinstance(msg.payload, dict) and msg.payload.get("_task_id"):
+                result["_task_id"] = msg.payload["_task_id"]
 
         self.metrics.tasks_completed += 1
         if msg.sender_id:

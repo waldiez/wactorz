@@ -76,7 +76,7 @@ duplicate agents, and ignores pre-built tested code. Always check first.
 
 == SPAWN FORMAT ==
 Only use spawn blocks when STEP 1 confirms no suitable agent exists.
-There are FOUR types of agents you can spawn:
+There are TWO types of agents you can spawn:
 
 --- TYPE 0: Manual Agent (for finding device manuals and answering questions from them) ---
 Use when the user wants to look up a device manual and ask questions about it.
@@ -124,34 +124,35 @@ Provide a "code" field with the Python functions.
 }
 </spawn>
 
---- TYPE 3: Actuator Agent (for reacting to MQTT detections by controlling Home Assistant devices) ---
-Use when you need a reactive agent that subscribes to MQTT topics and calls
-Home Assistant services (lights, switches, climate, covers, media players, etc.)
-No code or system_prompt needed — provide a "config" object.
-
-The config.detection_filter supports equality values ("class": "person") and operator
-expressions ("accuracy": {"gt": 0.8}).  Supported operators: eq, ne, gt, lt, gte, lte.
+--- TYPE 3: HA Actuator (for reactive automations that control Home Assistant devices) ---
+Use when an agent needs to REACT to MQTT events and CONTROL Home Assistant devices.
+This is a native predefined agent — NO code needed. NO routing through home-assistant-agent.
+NEVER use home-assistant-agent as an intermediary for device control in pipelines.
 
 <spawn>
 {
-  "name": "actuator-descriptive-name",
-  "type": "actuator",
-  "description": "what triggers this actuator and what it does",
-  "config": {
-    "automation_id": "unique-automation-id",
-    "description": "human-readable description",
-    "mqtt_topics": ["automations/example/detections"],
-    "actions": [
-      {"domain": "light", "service": "turn_on", "entity_id": "light.example", "service_data": {"color_name": "red"}}
-    ],
-    "conditions": [
-      {"entity_id": "sun.sun", "attribute": "state", "operator": "eq", "value": "above_horizon"}
-    ],
-    "detection_filter": {"class": "person", "confidence": {"gte": 0.8}},
-    "cooldown_seconds": 10.0
-  }
+  "name": "actuator-name",
+  "type": "ha_actuator",
+  "automation_id": "unique-id",
+  "description": "what this actuator does",
+  "mqtt_topics": ["topic/to/watch"],
+  "actions": [{"domain": "light", "service": "turn_on", "entity_id": "light.xyz"}],
+  "detection_filter": {"person_detected": true},
+  "cooldown_seconds": 10
 }
 </spawn>
+
+CRITICAL HA PIPELINE RULE:
+When building a pipeline that reacts to sensor data and controls HA devices:
+  ✅ CORRECT: sensor-agent publishes to MQTT → ha_actuator subscribes and calls HA directly
+  ❌ WRONG:   sensor-agent → send_to('home-assistant-agent') — this causes LLM classification + timeout
+  ❌ WRONG:   coordinator-agent that sends tasks to home-assistant-agent — same timeout problem
+
+The home-assistant-agent is ONLY for:
+  - User asking to create/edit/delete HA automations via natural language
+  - User asking what devices are available
+  - User asking to list automations
+It is NOT a device control proxy for other agents.
 
 == CAPABILITY & SCHEMA RULES — ALWAYS FOLLOW ==
 
@@ -320,7 +321,7 @@ If the spawn config has an "install" list, the system will install those package
 Standard library and pre-installed packages (asyncio, json, os, time, re, psutil) never need installing.
 
 == REMOTE NODES & SPAWNING ==
-Wactorz can run agents on any machine (Raspberry Pi, VM, cloud server) that is
+AgentFlow can run agents on any machine (Raspberry Pi, VM, cloud server) that is
 running remote_runner.py connected to the same MQTT broker.
 
 To spawn an agent on a remote node, add "node" to the spawn block.
@@ -490,12 +491,12 @@ async def deploy_node(agent, payload):
     try:
         async with asyncssh.connect(**conn_kwargs) as conn:
             # Create directory
-            await conn.run('mkdir -p ~/wactorz')
-            await agent.log(f'[{node_name}] Created ~/wactorz')
+            await conn.run('mkdir -p ~/agentflow')
+            await agent.log(f'[{node_name}] Created ~/agentflow')
 
             # Upload remote_runner.py
             async with conn.start_sftp_client() as sftp:
-                await sftp.put(str(runner_path), f'/home/{user}/wactorz/remote_runner.py')
+                await sftp.put(str(runner_path), f'/home/{user}/agentflow/remote_runner.py')
             await agent.log(f'[{node_name}] Uploaded remote_runner.py')
 
             # Install deps
@@ -507,9 +508,9 @@ async def deploy_node(agent, payload):
 
             # Start in background
             cmd = (
-                f'nohup python3 ~/wactorz/remote_runner.py '
+                f'nohup python3 ~/agentflow/remote_runner.py '
                 f'--broker {broker} --name {node_name} '
-                f'> ~/wactorz/{node_name}.log 2>&1 &'
+                f'> ~/agentflow/{node_name}.log 2>&1 &'
             )
             await conn.run(cmd)
             await agent.log(f'[{node_name}] Runner started! Will appear in dashboard shortly.')
@@ -747,6 +748,18 @@ class MainActor(LLMAgent):
         if lowered.startswith("spawn ") or lowered.startswith("/"):
             return False
 
+        # Wactorz pipeline requests — these involve external sensors/agents, not HA natively
+        # Route to planner instead of HA agent
+        _pipeline_keywords = [
+            "camera", "webcam", "yolo", "detect", "detection", "person detect",
+            "object detect", "laptop camera", "cv2", "opencv",
+            "when detected", "if detected", "whenever detected",
+            "notify me", "send me a message", "send me a discord",
+            "discord", "telegram", "whatsapp",
+        ]
+        if any(kw in lowered for kw in _pipeline_keywords):
+            return False
+
         has_trigger = any(token in lowered for token in [
             "when ", "if ", "on ", "whenever ", "after ", "before ",
             "as soon as ", "at ",
@@ -771,12 +784,21 @@ class MainActor(LLMAgent):
         )
 
     async def _is_home_automation_request(self, text: str) -> bool:
+        # Pipeline requests — always bypass HA agent regardless of LLM classification
+        _pipeline_keywords = [
+            "camera", "webcam", "yolo", "detect", "detection",
+            "laptop camera", "opencv", "cv2", "person detect",
+            "notify me", "send me a message", "send me a discord",
+            "discord", "telegram", "pipeline",
+        ]
         lowered = (text or "").lower()
-        # Spawn and slash commands are never HA requests
-        if not text or lowered.startswith("spawn ") or text.startswith("/"):
+        if any(kw in lowered for kw in _pipeline_keywords):
             return False
+
         if self._looks_like_home_automation_request(text):
             return True
+        if not text or text.lower().startswith("spawn ") or text.startswith("/"):
+            return False
         if self.llm is None:
             return False
         try:
@@ -839,7 +861,25 @@ class MainActor(LLMAgent):
                 lines.append(f"  {t['topic']:40s} ← {agent_strs}")
             return note_prefix + "\n".join(lines)
 
-        if stripped.startswith("/capabilities"):
+        if stripped in ("/rules", "rules"):
+            reg = self._get_spawn_registry()
+            rules = {k: v for k, v in reg.items() if v.get("_rule")}
+            if not rules:
+                return note_prefix + "No pipeline rules active. Describe a reactive rule to create one, e.g. 'when person detected turn on lights'."
+            lines = ["Active pipeline rules:"]
+            for name, cfg in sorted(rules.items()):
+                running = "🟢" if (self._registry and self._registry.find_by_name(name)) else "🔴"
+                task    = cfg.get("_rule_task", "")[:80]
+                persist = cfg.get("_persist", {})
+                topic   = persist.get("mqtt_topic", cfg.get("mqtt_subscribe", ""))
+                lines.append(f"  {running} {name}")
+                if task:
+                    lines.append(f"       rule : {task}")
+                if topic:
+                    lines.append(f"       topic: {topic}")
+            return note_prefix + "\n".join(lines)
+
+        if stripped.startswith("/rules"):
             keyword = stripped[14:].strip().lstrip("(").rstrip(")")
             caps = self.list_capabilities(keyword)
             if not caps:
@@ -952,6 +992,16 @@ class MainActor(LLMAgent):
                     f"Remote agents: {', '.join(known_remote)}")
             return note_prefix + f"Agent '{target_name}' not found."
 
+        # Explicit planning/pipeline prefix always wins — check BEFORE HA routing
+        lowered = text.lower()
+        if any(lowered.startswith(p) for p in (
+            "coordinate:", "coordinate ", "plan:", "pipeline:", "pipeline ",
+            "@planner", "set up a pipeline", "create a rule", "set up a rule",
+        )):
+            result = await self._run_planner(text)
+            if result:
+                return note_prefix + result
+
         # Route home automation requests to the unified HA agent
         if await self._is_home_automation_request(text):
             result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
@@ -1019,6 +1069,18 @@ class MainActor(LLMAgent):
         note_prefix = self._drain_notifications()
         if note_prefix:
             yield note_prefix
+
+        # Explicit planning/pipeline prefix always wins — check BEFORE HA routing
+        _lowered = text.lower()
+        if any(_lowered.startswith(p) for p in (
+            "coordinate:", "coordinate ", "plan:", "pipeline:", "pipeline ",
+            "@planner", "set up a pipeline", "create a rule", "set up a rule",
+        )):
+            result = await self._run_planner(text)
+            if result:
+                yield result
+                yield {"done": True, "spawned": [], "system_msg": ""}
+            return
 
         # HA routing has no streaming — fall back to blocking for those
         if await self._is_home_automation_request(text):
@@ -1093,6 +1155,10 @@ class MainActor(LLMAgent):
         # Multi-step / multi-domain signals
         "first.*then", "step by step", "in order",
         "weather.*news", "news.*weather", "manual.*code", "search.*analyze",
+        # Reactive pipeline signals
+        "if.*then", "when.*send", "when.*turn", "when.*open", "when.*close",
+        "whenever", "monitor.*and", "watch.*and", "detect.*and",
+        "notify me", "alert me", "automatically",
     ]
 
     async def _needs_planning(self, text: str) -> bool:
@@ -1104,7 +1170,11 @@ class MainActor(LLMAgent):
         lowered = text.lower()
 
         # Explicit user request for coordination
-        if any(w in lowered for w in ("coordinate:", "plan:", "pipeline:", "@planner")):
+        if any(w in lowered for w in (
+            "coordinate:", "plan:", "pipeline:", "@planner",
+            "ask the planner", "use the planner", "create a pipeline",
+            "set up a pipeline", "create a rule", "set up a rule",
+        )):
             return True
 
         # Keyword heuristic — multiple signals needed to avoid false positives
@@ -1127,8 +1197,26 @@ class MainActor(LLMAgent):
         from .planner_agent import PlannerAgent
         import uuid
 
+        # Enrich vague follow-up tasks with recent conversation context
+        # so the planner has the full picture (e.g. which entity was found)
+        enriched_task = task
+        if self._conversation_history and len(task.split()) < 15:
+            # Short/vague task — inject last 3 exchanges as context
+            recent = self._conversation_history[-6:]  # 3 user+assistant pairs
+            ctx_lines = []
+            for m in recent:
+                role    = "User" if m["role"] == "user" else "Assistant"
+                content = str(m["content"])[:300]
+                ctx_lines.append(f"{role}: {content}")
+            if ctx_lines:
+                enriched_task = (
+                    f"{task}\n\n"
+                    f"[Context from recent conversation:]\n"
+                    + "\n".join(ctx_lines)
+                )
+
         planner_name = f"planner-{uuid.uuid4().hex[:6]}"
-        logger.info(f"[{self.name}] Spawning planner '{planner_name}' for: {task[:60]}")
+        logger.info(f"[{self.name}] Spawning planner '{planner_name}' for: {enriched_task[:60]}")
 
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
@@ -1144,7 +1232,7 @@ class MainActor(LLMAgent):
                 PlannerAgent,
                 name=planner_name,
                 llm_provider=self.llm,
-                task=task,
+                task=enriched_task,
                 reply_to_id=self.actor_id,
                 reply_task_id=task_id,   # so main can match the result future
                 auto_terminate=True,
@@ -1383,8 +1471,8 @@ class MainActor(LLMAgent):
         system_prompt = config.get("system_prompt", "").strip()
 
         # Route to the right agent class
-        if agent_type == "actuator":
-            actor = await self._spawn_actuator_agent(config, name)
+        if agent_type == "ha_actuator":
+            actor = await self._spawn_ha_actuator(config, name)
         elif agent_type == "manual" or name == "manual-agent":
             actor = await self._spawn_manual_agent(config, name)
         elif agent_type == "llm" or (not code and system_prompt):
@@ -1400,38 +1488,36 @@ class MainActor(LLMAgent):
 
         return actor
 
-    async def _spawn_actuator_agent(self, config: dict, name: str):
-        """Spawn a HomeAssistantActuatorAgent from a config dict.
-
-        Accepts nested format:  {"type": "actuator", "config": {"automation_id": ..., "actions": [...]}}
-        and flat format:        {"type": "actuator", "automation_id": ..., "actions": [...]}
-        """
-        from .ha_actuator_agent import HomeAssistantActuatorAgent, ActuatorConfig
-
-        raw = config.get("config")
-        if not raw or not isinstance(raw, dict):
-            _ACTUATOR_FIELDS = {"automation_id", "description", "mqtt_topics", "actions",
-                                "conditions", "detection_filter", "cooldown_seconds"}
-            raw = {k: v for k, v in config.items() if k in _ACTUATOR_FIELDS}
-            if not raw.get("mqtt_topics") or not raw.get("actions"):
-                logger.error(
-                    f"[{self.name}] Actuator '{name}' missing required fields "
-                    f"(mqtt_topics, actions). Got keys: {list(config.keys())}"
-                )
-                return None
-
-        if not raw.get("automation_id"):
-            import time as _t
-            raw["automation_id"] = f"{name}-{int(_t.time())}"
-
-        actuator_config = ActuatorConfig.from_dict(raw)
-        logger.info(f"[{self.name}] Spawning actuator '{name}' (topics={actuator_config.mqtt_topics})")
-        return await self.spawn(
-            HomeAssistantActuatorAgent,
-            config=actuator_config,
-            name=name,
-            persistence_dir=str(self._persistence_dir.parent),
+    async def _spawn_ha_actuator(self, config: dict, name: str):
+        """Spawn a HomeAssistantActuatorAgent from a spawn block with type: ha_actuator."""
+        from .home_assistant_actuator_agent import (
+            HomeAssistantActuatorAgent, ActuatorConfig, ActuatorAction, ActuatorCondition,
         )
+        import hashlib as _hl
+
+        # Ensure unique name if collision
+        if self._registry and self._registry.find_by_name(name):
+            suffix = _hl.md5(f"{name}{__import__('time').time()}".encode()).hexdigest()[:4]
+            name   = f"{name}-{suffix}"
+
+        automation_id = config.get("automation_id", name)
+        actuator_cfg  = ActuatorConfig(
+            automation_id    = automation_id,
+            description      = config.get("description", ""),
+            mqtt_topics      = config.get("mqtt_topics", []),
+            actions          = [ActuatorAction.from_dict(a) for a in config.get("actions", [])],
+            conditions       = [ActuatorCondition.from_dict(c) for c in config.get("conditions", [])],
+            detection_filter = config.get("detection_filter"),
+            cooldown_seconds = float(config.get("cooldown_seconds", 10.0)),
+        )
+        logger.info(f"[{self.name}] Spawning HomeAssistantActuatorAgent '{name}'")
+        actor = await self.spawn(
+            HomeAssistantActuatorAgent,
+            config          = actuator_cfg,
+            name            = name,
+            persistence_dir = str(self._persistence_dir.parent),
+        )
+        return actor
 
     async def _spawn_manual_agent(self, config: dict, name: str):
         """Spawn the pre-defined ManualAgent — robust PDF manual search and Q&A."""

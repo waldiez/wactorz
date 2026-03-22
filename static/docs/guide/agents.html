@@ -133,7 +133,7 @@
   </aside>
   <main class="content">
 <h1 id="agents">Agents</h1>
-<p>All agents are Rust structs implementing the <code>Actor</code> trait.  They communicate exclusively via MQTT — no direct function calls between agents.</p>
+<p>All agents are Python classes implementing the <code>Actor</code> protocol.  They communicate exclusively via MQTT — no direct function calls between agents.  A Rust implementation mirrors the same actor model and may run in sync as an optional performance layer.</p>
 <hr />
 <h2 id="core-protected-agents">Core (protected) agents</h2>
 <p>These agents are marked <code>protected: true</code> and cannot be stopped or deleted from the dashboard.</p>

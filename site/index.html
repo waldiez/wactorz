@@ -248,6 +248,8 @@
 
     .install-box .prompt { color: var(--muted); user-select: none; }
     .install-box .cmd { color: var(--cyan); }
+    .install-note { margin-top: .5rem; font-size: .78rem; color: var(--muted); }
+    .install-note code { color: var(--muted-hi); font-size: .78rem; }
 
     .copy-btn {
       background: none; border: 1px solid var(--border);
@@ -563,6 +565,10 @@
       <span class="cmd">pip install wactorz[all]</span>
       <button class="copy-btn" onclick="copyInstall(this)">copy</button>
     </div>
+    <div class="install-note">
+      or latest from GitHub:
+      <code>pip install "wactorz[all] @ git+https://github.com/waldiez/wactorz.git"</code>
+    </div>
   </div>
 </section>
 
@@ -624,6 +630,7 @@
       </div>
       <div class="code-body"><pre><span class="cm"># 1. Install</span>
 <span class="cm">#    pip install wactorz[all]</span>
+<span class="cm">#    pip install "wactorz[all] @ git+https://github.com/waldiez/wactorz.git"  # latest</span>
 
 <span class="kw">from</span> <span class="cls">wactorz</span> <span class="kw">import</span> <span class="fn">ActorSystem</span>, <span class="fn">Actor</span>, <span class="fn">Message</span>
 <span class="kw">from</span> <span class="cls">wactorz.agents.llm_agent</span> <span class="kw">import</span> <span class="fn">AnthropicProvider</span>, <span class="fn">LLMAgent</span>

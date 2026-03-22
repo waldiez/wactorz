@@ -18,9 +18,10 @@ Wactorz is an async, multi-agent orchestration system built on the **Actor Model
           ┌─────────────────────────┼──────────────────────────────┐
           │                         │                              │
           ▼                         ▼                              ▼
-  wactorz (Rust)          Mosquitto (MQTT)              Fuseki (RDF)
+  wactorz (Python)        Mosquitto (MQTT)              Fuseki (RDF)
   :8080 REST                :1883 TCP / :9001 WS          :3030 SPARQL
   :8081 WS bridge
+  ┆ Rust in-sync ┆
           │
           │  pub/sub via MQTT
           ├── MainActor        (LLM orchestrator)
@@ -36,9 +37,17 @@ Wactorz is an async, multi-agent orchestration system built on the **Actor Model
 
 ## Components
 
-### wactorz-server (Rust binary)
+### wactorz backend
 
-The single `wactorz` binary that runs the entire backend.
+The backend is **Python-first**: the Python implementation is the primary runtime.  A Rust implementation mirrors the same actor model and API contract and may run in sync alongside Python, but it is not required.
+
+#### Python backend
+
+`run.sh` starts the Python backend by default (`WACTORZ_BACKEND=python`).
+
+#### Rust backend (optional, in-sync)
+
+The single `wactorz` Rust binary exposes the same REST + WebSocket interface.
 
 | Crate | Role |
 |---|---|
@@ -80,7 +89,9 @@ A Vite + TypeScript single-page application.  Connects to the backend via:
 
 ## Actor Model
 
-Each agent implements the `Actor` trait:
+Each agent implements the `Actor` protocol.  The Python implementation is the primary definition; the Rust trait mirrors it.
+
+### Rust mirror (in-sync)
 
 ```rust
 #[async_trait]

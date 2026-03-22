@@ -1,6 +1,6 @@
 # Agents
 
-All agents are Rust structs implementing the `Actor` trait. They communicate exclusively via MQTT — no direct function calls between agents.
+All agents are Python classes implementing the `Actor` protocol. They communicate exclusively via MQTT — no direct function calls between agents.  A Rust implementation mirrors the same actor model and may run in sync as an optional performance layer.
 
 ---
 

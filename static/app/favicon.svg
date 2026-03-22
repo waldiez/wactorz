@@ -1,60 +1,361 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+<svg
+  class="wz-icon"
+  viewBox="0 0 32 32"
+  width="32"
+  height="32"
+  fill="none"
+  xmlns="http://www.w3.org/2000/svg"
+  aria-label="Wactoz"
+  role="img"
+>
+  <style>
+    /*
+     * Wactoz — connect-the-dots W icon
+     * Five crossroads nodes appear numbered, then lines draw between
+     * them to trace the W letterform, hold with glow, fade, loop.
+     * All selectors scoped to svg.wz-icon.
+     *
+     * Cycle: 5 s
+     *   0  –  1.1 s  dots appear one by one   (0–22%)
+     *   1.1 –  2.6 s  lines draw sequentially  (22–52%)
+     *   2.6 –  3.6 s  hold / breathe           (52–72%)
+     *   3.6 –  4.4 s  fade out                 (72–88%)
+     *   4.4 –  5.0 s  dark / reset             (88–100%)
+     */
+
+    svg.wz-icon {
+      overflow: visible;
+      animation: wz-breathe 5s ease-in-out infinite;
+    }
+    @keyframes wz-breathe {
+      0%,100% { filter: drop-shadow(0 2px 8px rgba(139,92,246,0.3)); }
+      62%      { filter: drop-shadow(0 3px 18px rgba(139,92,246,0.72)); }
+    }
+
+    /* ── Dots (opacity fade-in staggered) ───────────────────── */
+    @keyframes wz-d1 {
+      0%,100%  { opacity:0 }
+      2%        { opacity:1 }
+      72%       { opacity:1 }
+      88%       { opacity:0 }
+    }
+    @keyframes wz-d2 {
+      0%,5%    { opacity:0 }
+      7%        { opacity:1 }
+      72%       { opacity:1 }
+      88%       { opacity:0 }
+      100%      { opacity:0 }
+    }
+    @keyframes wz-d3 {
+      0%,10%   { opacity:0 }
+      12%       { opacity:1 }
+      72%       { opacity:1 }
+      88%       { opacity:0 }
+      100%      { opacity:0 }
+    }
+    @keyframes wz-d4 {
+      0%,15%   { opacity:0 }
+      17%       { opacity:1 }
+      72%       { opacity:1 }
+      88%       { opacity:0 }
+      100%      { opacity:0 }
+    }
+    @keyframes wz-d5 {
+      0%,20%   { opacity:0 }
+      22%       { opacity:1 }
+      72%       { opacity:1 }
+      88%       { opacity:0 }
+      100%      { opacity:0 }
+    }
+
+    /* ── Dot number labels (appear with dot, fade before line arrives) */
+    @keyframes wz-n1 {
+      0%,100%  { opacity:0 }
+      2%        { opacity:0.9 }
+      21%       { opacity:0.9 }
+      26%       { opacity:0 }
+    }
+    @keyframes wz-n2 {
+      0%,5%    { opacity:0 }
+      7%        { opacity:0.9 }
+      29%       { opacity:0.9 }
+      34%       { opacity:0 }
+      100%      { opacity:0 }
+    }
+    @keyframes wz-n3 {
+      0%,10%   { opacity:0 }
+      12%       { opacity:0.9 }
+      37%       { opacity:0.9 }
+      42%       { opacity:0 }
+      100%      { opacity:0 }
+    }
+    @keyframes wz-n4 {
+      0%,15%   { opacity:0 }
+      17%       { opacity:0.9 }
+      45%       { opacity:0.9 }
+      50%       { opacity:0 }
+      100%      { opacity:0 }
+    }
+    @keyframes wz-n5 {
+      0%,20%   { opacity:0 }
+      22%       { opacity:0.9 }
+      51%       { opacity:0.9 }
+      56%       { opacity:0 }
+      100%      { opacity:0 }
+    }
+
+    /* ── Lines (stroke-dashoffset draw-on then reset) ────────── */
+    /* L1  P1→P2  len ≈ 21.4 → dasharray 22  draws 22%–30% */
+    @keyframes wz-l1 {
+      0%,22%   { stroke-dashoffset:22; opacity:0 }
+      23%       { stroke-dashoffset:22; opacity:1 }
+      30%       { stroke-dashoffset:0;  opacity:1 }
+      72%       { stroke-dashoffset:0;  opacity:1 }
+      88%       { stroke-dashoffset:0;  opacity:0 }
+      100%      { stroke-dashoffset:22; opacity:0 }
+    }
+    /* L2  P2→P3  len ≈ 13.9 → dasharray 14  draws 30%–38% */
+    @keyframes wz-l2 {
+      0%,30%   { stroke-dashoffset:14; opacity:0 }
+      31%       { stroke-dashoffset:14; opacity:1 }
+      38%       { stroke-dashoffset:0;  opacity:1 }
+      72%       { stroke-dashoffset:0;  opacity:1 }
+      88%       { stroke-dashoffset:0;  opacity:0 }
+      100%      { stroke-dashoffset:14; opacity:0 }
+    }
+    /* L3  P3→P4  len ≈ 13.9 → dasharray 14  draws 38%–46% */
+    @keyframes wz-l3 {
+      0%,38%   { stroke-dashoffset:14; opacity:0 }
+      39%       { stroke-dashoffset:14; opacity:1 }
+      46%       { stroke-dashoffset:0;  opacity:1 }
+      72%       { stroke-dashoffset:0;  opacity:1 }
+      88%       { stroke-dashoffset:0;  opacity:0 }
+      100%      { stroke-dashoffset:14; opacity:0 }
+    }
+    /* L4  P4→P5  len ≈ 21.4 → dasharray 22  draws 46%–56% */
+    @keyframes wz-l4 {
+      0%,46%   { stroke-dashoffset:22; opacity:0 }
+      47%       { stroke-dashoffset:22; opacity:1 }
+      56%       { stroke-dashoffset:0;  opacity:1 }
+      72%       { stroke-dashoffset:0;  opacity:1 }
+      88%       { stroke-dashoffset:0;  opacity:0 }
+      100%      { stroke-dashoffset:22; opacity:0 }
+    }
+
+    /* ── Travelling spark along each line ────────────────────── */
+    @keyframes wz-sp1 {
+      0%,22%   { offset-distance:  0%; opacity:0 }
+      23%       { offset-distance:  0%; opacity:1 }
+      30%       { offset-distance:100%; opacity:1 }
+      31%       { offset-distance:100%; opacity:0 }
+      100%      { offset-distance:100%; opacity:0 }
+    }
+    @keyframes wz-sp2 {
+      0%,30%   { offset-distance:  0%; opacity:0 }
+      31%       { offset-distance:  0%; opacity:1 }
+      38%       { offset-distance:100%; opacity:1 }
+      39%       { offset-distance:100%; opacity:0 }
+      100%      { offset-distance:100%; opacity:0 }
+    }
+    @keyframes wz-sp3 {
+      0%,38%   { offset-distance:  0%; opacity:0 }
+      39%       { offset-distance:  0%; opacity:1 }
+      46%       { offset-distance:100%; opacity:1 }
+      47%       { offset-distance:100%; opacity:0 }
+      100%      { offset-distance:100%; opacity:0 }
+    }
+    @keyframes wz-sp4 {
+      0%,46%   { offset-distance:  0%; opacity:0 }
+      47%       { offset-distance:  0%; opacity:1 }
+      56%       { offset-distance:100%; opacity:1 }
+      57%       { offset-distance:100%; opacity:0 }
+      100%      { offset-distance:100%; opacity:0 }
+    }
+
+    /* ── Apply animations ────────────────────────────────────── */
+    svg.wz-icon .wz-d1 { animation: wz-d1 5s ease-out infinite; }
+    svg.wz-icon .wz-d2 { animation: wz-d2 5s ease-out infinite; }
+    svg.wz-icon .wz-d3 { animation: wz-d3 5s ease-out infinite; }
+    svg.wz-icon .wz-d4 { animation: wz-d4 5s ease-out infinite; }
+    svg.wz-icon .wz-d5 { animation: wz-d5 5s ease-out infinite; }
+
+    svg.wz-icon .wz-n1 { animation: wz-n1 5s ease-out infinite; }
+    svg.wz-icon .wz-n2 { animation: wz-n2 5s ease-out infinite; }
+    svg.wz-icon .wz-n3 { animation: wz-n3 5s ease-out infinite; }
+    svg.wz-icon .wz-n4 { animation: wz-n4 5s ease-out infinite; }
+    svg.wz-icon .wz-n5 { animation: wz-n5 5s ease-out infinite; }
+
+    svg.wz-icon .wz-l1 { stroke-dasharray:22; animation: wz-l1 5s linear infinite; }
+    svg.wz-icon .wz-l2 { stroke-dasharray:14; animation: wz-l2 5s linear infinite; }
+    svg.wz-icon .wz-l3 { stroke-dasharray:14; animation: wz-l3 5s linear infinite; }
+    svg.wz-icon .wz-l4 { stroke-dasharray:22; animation: wz-l4 5s linear infinite; }
+
+    svg.wz-icon .wz-sp1 {
+      offset-path: path('M 3.5 6 L 11 26');
+      animation: wz-sp1 5s linear infinite;
+    }
+    svg.wz-icon .wz-sp2 {
+      offset-path: path('M 11 26 L 16 13');
+      animation: wz-sp2 5s linear infinite;
+    }
+    svg.wz-icon .wz-sp3 {
+      offset-path: path('M 16 13 L 21 26');
+      animation: wz-sp3 5s linear infinite;
+    }
+    svg.wz-icon .wz-sp4 {
+      offset-path: path('M 21 26 L 28.5 6');
+      animation: wz-sp4 5s linear infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      svg.wz-icon,
+      svg.wz-icon .wz-d1, svg.wz-icon .wz-d2, svg.wz-icon .wz-d3,
+      svg.wz-icon .wz-d4, svg.wz-icon .wz-d5,
+      svg.wz-icon .wz-n1, svg.wz-icon .wz-n2, svg.wz-icon .wz-n3,
+      svg.wz-icon .wz-n4, svg.wz-icon .wz-n5,
+      svg.wz-icon .wz-l1, svg.wz-icon .wz-l2,
+      svg.wz-icon .wz-l3, svg.wz-icon .wz-l4,
+      svg.wz-icon .wz-sp1, svg.wz-icon .wz-sp2,
+      svg.wz-icon .wz-sp3, svg.wz-icon .wz-sp4 { animation: none !important; }
+      svg.wz-icon .wz-d1, svg.wz-icon .wz-d2, svg.wz-icon .wz-d3,
+      svg.wz-icon .wz-d4, svg.wz-icon .wz-d5 { opacity: 1; }
+      svg.wz-icon .wz-n1, svg.wz-icon .wz-n2, svg.wz-icon .wz-n3,
+      svg.wz-icon .wz-n4, svg.wz-icon .wz-n5 { opacity: 0; }
+      svg.wz-icon .wz-l1, svg.wz-icon .wz-l2,
+      svg.wz-icon .wz-l3, svg.wz-icon .wz-l4 { stroke-dashoffset: 0; opacity: 1; }
+      svg.wz-icon .wz-sp1, svg.wz-icon .wz-sp2,
+      svg.wz-icon .wz-sp3, svg.wz-icon .wz-sp4 { opacity: 0; }
+    }
+  </style>
+
   <defs>
-    <radialGradient id="bg" cx="50%" cy="40%" r="65%">
+    <!-- Background radial -->
+    <radialGradient id="wz-bg" cx="50%" cy="40%" r="65%">
       <stop offset="0%"   stop-color="#0d1a38"/>
       <stop offset="100%" stop-color="#040810"/>
     </radialGradient>
-    <!-- glow for central node -->
-    <radialGradient id="ng" cx="50%" cy="50%" r="50%">
-      <stop offset="0%"   stop-color="#60a5fa" stop-opacity="0.6"/>
-      <stop offset="100%" stop-color="#2563eb" stop-opacity="0"/>
-    </radialGradient>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="0.9" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
+
+    <!-- W line gradients left→right -->
+    <linearGradient id="wz-gl" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="wz-gr" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+
+    <!-- Dot glow -->
+    <filter id="wz-dot-glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
-    <filter id="softglow" x="-80%" y="-80%" width="260%" height="260%">
-      <feGaussianBlur stdDeviation="1.6" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
+    <!-- Line glow -->
+    <filter id="wz-line-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="0.6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
   </defs>
 
   <!-- Background -->
-  <rect width="32" height="32" rx="7" fill="url(#bg)"/>
+  <rect width="32" height="32" rx="7" fill="url(#wz-bg)"/>
 
-  <!-- Glow halo behind central node -->
-  <circle cx="16" cy="13" r="7" fill="url(#ng)"/>
+  <!-- ── W lines (drawn via stroke-dashoffset) ── -->
+  <!-- L1: P1(3.5,6) → P2(11,26) -->
+  <line class="wz-l1"
+    x1="3.5" y1="6" x2="11" y2="26"
+    stroke="url(#wz-gl)" stroke-width="1.5" stroke-linecap="round"
+    filter="url(#wz-line-glow)"/>
+  <!-- L2: P2(11,26) → P3(16,13) -->
+  <line class="wz-l2"
+    x1="11" y1="26" x2="16" y2="13"
+    stroke="url(#wz-gl)" stroke-width="1.5" stroke-linecap="round"
+    filter="url(#wz-line-glow)"/>
+  <!-- L3: P3(16,13) → P4(21,26) -->
+  <line class="wz-l3"
+    x1="16" y1="13" x2="21" y2="26"
+    stroke="url(#wz-gr)" stroke-width="1.5" stroke-linecap="round"
+    filter="url(#wz-line-glow)"/>
+  <!-- L4: P4(21,26) → P5(28.5,6) -->
+  <line class="wz-l4"
+    x1="21" y1="26" x2="28.5" y2="6"
+    stroke="url(#wz-gr)" stroke-width="1.5" stroke-linecap="round"
+    filter="url(#wz-line-glow)"/>
 
-  <!-- Edge: centre → bottom-left -->
-  <line x1="16" y1="13" x2="8.5" y2="23.5"
-        stroke="#4a7abf" stroke-width="1.3" stroke-linecap="round" opacity="0.75"/>
-  <!-- Edge: centre → bottom-right -->
-  <line x1="16" y1="13" x2="23.5" y2="23.5"
-        stroke="#6a5abf" stroke-width="1.3" stroke-linecap="round" opacity="0.75"/>
-  <!-- Edge: bottom cross -->
-  <line x1="8.5" y1="23.5" x2="23.5" y2="23.5"
-        stroke="#3a4a70" stroke-width="0.9" stroke-linecap="round" opacity="0.5"/>
+  <!-- ── Travelling sparks ── -->
+  <circle class="wz-sp1" r="1.6" fill="#e0e7ff" opacity="0"/>
+  <circle class="wz-sp2" r="1.6" fill="#e0e7ff" opacity="0"/>
+  <circle class="wz-sp3" r="1.6" fill="#e0e7ff" opacity="0"/>
+  <circle class="wz-sp4" r="1.6" fill="#e0e7ff" opacity="0"/>
 
-  <!-- Satellite node — teal (monitor / healthy) -->
-  <circle cx="8.5" cy="23.5" r="3.2" fill="#0d1a30"/>
-  <circle cx="8.5" cy="23.5" r="3.2" fill="#22d3a0" filter="url(#glow)" opacity="0.9"/>
-  <circle cx="8.5" cy="23.5" r="1.4" fill="#a7f3d0"/>
+  <!-- ── Dot 1 — top-left — cyan ── -->
+  <g class="wz-d1">
+    <circle cx="3.5" cy="6" r="2.6" fill="#22d3ee" filter="url(#wz-dot-glow)"/>
+    <circle cx="3.5" cy="6" r="1.1" fill="white" opacity="0.8"/>
+    <!-- crossroads tick marks -->
+    <line x1="3.5" y1="3.2" x2="3.5" y2="4.4" stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="3.5" y1="7.6" x2="3.5" y2="8.8" stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="0.7" y1="6"   x2="1.9" y2="6"   stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="5.1" y1="6"   x2="6.3" y2="6"   stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+  </g>
+  <!-- Label 1 -->
+  <text class="wz-n1" x="5.8" y="4.2"
+    font-family="monospace" font-size="2.8" font-weight="700"
+    fill="#a5f3fc" text-anchor="start">1</text>
 
-  <!-- Satellite node — violet (dynamic / io) -->
-  <circle cx="23.5" cy="23.5" r="3.2" fill="#0d1a30"/>
-  <circle cx="23.5" cy="23.5" r="3.2" fill="#818cf8" filter="url(#glow)" opacity="0.9"/>
-  <circle cx="23.5" cy="23.5" r="1.4" fill="#c4b5fd"/>
+  <!-- ── Dot 2 — bottom-left — indigo ── -->
+  <g class="wz-d2">
+    <circle cx="11" cy="26" r="2.6" fill="#818cf8" filter="url(#wz-dot-glow)"/>
+    <circle cx="11" cy="26" r="1.1" fill="white" opacity="0.8"/>
+    <line x1="11" y1="23.2" x2="11" y2="24.4" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="11" y1="27.6" x2="11" y2="28.8" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="8.2" y1="26"  x2="9.4" y2="26"  stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="12.6" y1="26" x2="13.8" y2="26" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+  </g>
+  <text class="wz-n2" x="13.4" y="24.5"
+    font-family="monospace" font-size="2.8" font-weight="700"
+    fill="#c7d2fe" text-anchor="start">2</text>
 
-  <!-- Central node — main actor (blue) -->
-  <circle cx="16" cy="13" r="5.5" fill="#1e3a7a" opacity="0.6"/>
-  <circle cx="16" cy="13" r="4.2" fill="#2563eb" filter="url(#softglow)"/>
-  <circle cx="16" cy="13" r="2.2" fill="#93c5fd"/>
-  <!-- Specular highlight -->
-  <circle cx="14.8" cy="11.8" r="0.9" fill="white" opacity="0.55"/>
+  <!-- ── Dot 3 — peak-centre — pink ── -->
+  <g class="wz-d3">
+    <circle cx="16" cy="13" r="2.6" fill="#f472b6" filter="url(#wz-dot-glow)"/>
+    <circle cx="16" cy="13" r="1.1" fill="white" opacity="0.8"/>
+    <line x1="16" y1="10.2" x2="16" y2="11.4" stroke="#f9a8d4" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="16" y1="14.6" x2="16" y2="15.8" stroke="#f9a8d4" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="13.2" y1="13" x2="14.4" y2="13" stroke="#f9a8d4" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="17.6" y1="13" x2="18.8" y2="13" stroke="#f9a8d4" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+  </g>
+  <text class="wz-n3" x="18.4" y="11.5"
+    font-family="monospace" font-size="2.8" font-weight="700"
+    fill="#fbcfe8" text-anchor="start">3</text>
+
+  <!-- ── Dot 4 — bottom-right — indigo ── -->
+  <g class="wz-d4">
+    <circle cx="21" cy="26" r="2.6" fill="#818cf8" filter="url(#wz-dot-glow)"/>
+    <circle cx="21" cy="26" r="1.1" fill="white" opacity="0.8"/>
+    <line x1="21" y1="23.2" x2="21" y2="24.4" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="21" y1="27.6" x2="21" y2="28.8" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="18.2" y1="26" x2="19.4" y2="26" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="22.6" y1="26" x2="23.8" y2="26" stroke="#a5b4fc" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+  </g>
+  <text class="wz-n4" x="23.4" y="24.5"
+    font-family="monospace" font-size="2.8" font-weight="700"
+    fill="#c7d2fe" text-anchor="start">4</text>
+
+  <!-- ── Dot 5 — top-right — cyan ── -->
+  <g class="wz-d5">
+    <circle cx="28.5" cy="6" r="2.6" fill="#22d3ee" filter="url(#wz-dot-glow)"/>
+    <circle cx="28.5" cy="6" r="1.1" fill="white" opacity="0.8"/>
+    <line x1="28.5" y1="3.2" x2="28.5" y2="4.4" stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="28.5" y1="7.6" x2="28.5" y2="8.8" stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="25.7" y1="6"   x2="26.9" y2="6"   stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+    <line x1="30.1" y1="6"   x2="31.3" y2="6"   stroke="#67e8f9" stroke-width="0.6" stroke-linecap="round" opacity="0.7"/>
+  </g>
+  <text class="wz-n5" x="22.2" y="4.2"
+    font-family="monospace" font-size="2.8" font-weight="700"
+    fill="#a5f3fc" text-anchor="end">5</text>
+
+  <!-- Rim -->
+  <rect width="32" height="32" rx="7"
+    stroke="#818cf8" stroke-width="0.4" fill="none" opacity="0.22"/>
 </svg>

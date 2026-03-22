@@ -200,37 +200,26 @@ export class ChatPanel {
       this._streamFrom = from;
       this._streamText = "";
 
-      const row = document.createElement("div");
-      row.className = "msg-row streaming";
+      const wrapper = document.createElement("div");
+      wrapper.className = "af-chat-msg af-chat-msg-agent";
 
-      const avatar = document.createElement("img");
-      avatar.className = "msg-avatar";
-      avatar.src = dicebearFor(from);
-      avatar.alt = from;
-      avatar.loading = "lazy";
+      const fromEl = document.createElement("div");
+      fromEl.className = "af-chat-msg-from";
+      fromEl.textContent = from;
 
       const bubble = document.createElement("div");
-      bubble.className = "msg agent";
+      bubble.className = "af-chat-msg-bubble";
 
-      const meta = document.createElement("div");
-      meta.className = "msg-meta";
-      meta.textContent = `${from} · ${new Date().toLocaleTimeString()}`;
-
-      const body = document.createElement("div");
-      body.className = "stream-body";
-
-      bubble.appendChild(meta);
-      bubble.appendChild(body);
-      row.appendChild(avatar);
-      row.appendChild(bubble);
+      wrapper.appendChild(fromEl);
+      wrapper.appendChild(bubble);
 
       // Attach to the active thread in the DOM
       if (this.panel.classList.contains("open")) {
-        this.messagesEl.appendChild(row);
+        this.messagesEl.appendChild(wrapper);
       }
 
-      this._streamRow = row;
-      this._streamBody = body;
+      this._streamRow = wrapper;
+      this._streamBody = bubble;
     }
 
     this._streamText += chunk;
@@ -276,20 +265,18 @@ export class ChatPanel {
     if (this.typingBubbles.has(agentId)) return;
 
     const el = document.createElement("div");
-    el.className = "msg agent typing";
+    el.className = "af-chat-msg af-chat-msg-agent";
     el.dataset["typingFor"] = agentId;
 
-    const meta = document.createElement("div");
-    meta.className = "msg-meta";
-    meta.textContent = agentName ?? agentId;
-    el.appendChild(meta);
+    const fromEl = document.createElement("div");
+    fromEl.className = "af-chat-msg-from";
+    fromEl.textContent = agentName ?? agentId;
+    el.appendChild(fromEl);
 
     const dots = document.createElement("div");
-    dots.className = "typing-dots";
+    dots.className = "af-chat-typing";
     for (let i = 0; i < 3; i++) {
-      const d = document.createElement("span");
-      d.className = "dot";
-      dots.appendChild(d);
+      dots.appendChild(document.createElement("span"));
     }
     el.appendChild(dots);
 
@@ -360,46 +347,44 @@ export class ChatPanel {
 
     if (isUser || isSystem) {
       const el = document.createElement("div");
-      el.className = isSystem ? "msg msg-system" : "msg user";
+      el.className = isSystem
+        ? "af-chat-msg af-chat-msg-system"
+        : "af-chat-msg af-chat-msg-user";
 
-      const meta = document.createElement("div");
-      meta.className = "msg-meta";
-      meta.textContent = isSystem
+      const from = document.createElement("div");
+      from.className = "af-chat-msg-from";
+      from.textContent = isSystem
         ? "system"
         : `you · ${new Date(msg.timestampMs).toLocaleTimeString()}`;
 
-      const body = document.createElement("div");
-      body.innerHTML = renderMarkdown(msg.content);
+      const bubble = document.createElement("div");
+      bubble.className = "af-chat-msg-bubble";
+      bubble.innerHTML = renderMarkdown(msg.content);
 
-      el.appendChild(meta);
-      el.appendChild(body);
+      el.appendChild(from);
+      el.appendChild(bubble);
       this.messagesEl.appendChild(el);
     } else {
-      // Agent message: row = [avatar  |  bubble]
-      const row = document.createElement("div");
-      row.className = "msg-row";
+      // Agent message
+      const wrapper = document.createElement("div");
+      wrapper.className = "af-chat-msg af-chat-msg-agent";
 
-      const avatar = document.createElement("img");
-      avatar.className = "msg-avatar";
-      avatar.src = dicebearFor(msg.from);
-      avatar.alt = msg.from;
-      avatar.loading = "lazy";
+      const from = document.createElement("div");
+      from.className = "af-chat-msg-from";
+      from.textContent = msg.from;
 
       const bubble = document.createElement("div");
-      bubble.className = "msg agent";
+      bubble.className = "af-chat-msg-bubble";
+      bubble.innerHTML = renderMarkdown(msg.content);
 
-      const meta = document.createElement("div");
-      meta.className = "msg-meta";
-      meta.textContent = `${msg.from} · ${new Date(msg.timestampMs).toLocaleTimeString()}`;
+      const time = document.createElement("div");
+      time.className = "af-chat-msg-time";
+      time.textContent = new Date(msg.timestampMs).toLocaleTimeString();
 
-      const body = document.createElement("div");
-      body.innerHTML = renderMarkdown(msg.content);
-
-      bubble.appendChild(meta);
-      bubble.appendChild(body);
-      row.appendChild(avatar);
-      row.appendChild(bubble);
-      this.messagesEl.appendChild(row);
+      wrapper.appendChild(from);
+      wrapper.appendChild(bubble);
+      wrapper.appendChild(time);
+      this.messagesEl.appendChild(wrapper);
     }
   }
 }

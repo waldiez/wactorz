@@ -266,10 +266,10 @@ export class CardDashboard {
   }
 
   private _showFloatingUI(): void {
-    const ioBar = document.getElementById("io-bar");
-    if (ioBar) ioBar.style.display = "";
-    const feedToggle = document.getElementById("feed-toggle");
-    if (feedToggle) feedToggle.style.display = "";
+    ["hud", "hud-stats", "io-bar", "feed-toggle"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = "";
+    });
   }
 
   // ── Private: view rendering ───────────────────────────────────────────────

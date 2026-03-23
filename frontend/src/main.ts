@@ -28,6 +28,7 @@ import type { AgentInfo, ThemeChangeEvent } from "./types/agent";
 // ── Scene ─────────────────────────────────────────────────────────────────────
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
+canvas.style.display = "none";
 const scene = new SceneManager(canvas);
 
 // ── MQTT ──────────────────────────────────────────────────────────────────────
@@ -72,26 +73,6 @@ wsChat.connect(`${_wsProto}//${window.location.host}/ws`);
 const textInput = document.getElementById("text-input") as HTMLTextAreaElement;
 new MentionPopup(textInput, () => scene.getAgents());
 
-// ── Resize canvas when chat panel opens/closes ────────────────────────────────
-// The panel is 480px wide; shrink the canvas so 3D nodes stay visible.
-const PANEL_WIDTH = 480;
-const chatPanelEl = document.getElementById("chat-panel")!;
-
-new MutationObserver(() => {
-  const open = chatPanelEl.classList.contains("open");
-  canvas.style.width = open ? `calc(100% - ${PANEL_WIDTH}px)` : "100%";
-  // Wait for the CSS slide transition (0.3 s) then tell Babylon to re-read size
-  setTimeout(() => scene.engine.resize(), 320);
-}).observe(chatPanelEl, { attributes: true, attributeFilter: ["class"] });
-
-// Tooltip: follow the mouse over the canvas
-canvas.addEventListener("mousemove", (e) => {
-  const tooltip = document.getElementById("node-tooltip");
-  if (tooltip && tooltip.style.display === "block") {
-    tooltip.style.left = `${e.clientX + 14}px`;
-    tooltip.style.top = `${e.clientY - 10}px`;
-  }
-});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

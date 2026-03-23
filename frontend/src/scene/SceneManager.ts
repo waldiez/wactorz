@@ -114,12 +114,9 @@ export class SceneManager {
     this.camera.attachControl(canvas, true);
 
     // ── Default theme ─────────────────────────────────────────────────────────
-    // Start in Social (HTML overlay). Canvas just provides a dark background.
-    // A 3D theme is activated only when the user explicitly switches to one.
-    this.activeTheme = new NullTheme(this.scene, "social");
-    this.activeTheme.setup();
-    this.socialDashboard = new SocialDashboard();
-    this.socialDashboard.show([]);
+    // Use "cards" as the placeholder name so setTheme never needs to create a
+    // dashboard here — the theme-change event from ThemeSwitcher will do it.
+    this.activeTheme = new NullTheme(this.scene, "cards");
 
     // ── Render loop ───────────────────────────────────────────────────────────
     this.engine.runRenderLoop(() => this.scene.render());
@@ -129,7 +126,12 @@ export class SceneManager {
   // ── Theme switching ─────────────────────────────────────────────────────────
 
   setTheme(name: ThemeName): void {
-    if (this.activeTheme.name === name) return;
+    // Skip if the right dashboard is already running.
+    if (
+      this.activeTheme.name === name &&
+      !((name === "cards" && !this.cardDashboard) ||
+        (name === "social" && !this.socialDashboard))
+    ) return;
 
     const leavingHTML = ["cards", "social", "fin"].includes(
       this.activeTheme.name,

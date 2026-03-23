@@ -23,37 +23,39 @@ export class ThemeSwitcher {
   private buttons: Partial<
     Record<ThemeName, HTMLButtonElement | undefined | null>
   >;
-  private current: ThemeName = "social";
+  private current: ThemeName = "cards";
 
   constructor() {
-    const get = (id: string, fb: string | null = null) =>
+    const get = (id: string) =>
       (document.getElementById(id) as HTMLButtonElement | undefined | null) ??
       undefined;
 
     this.buttons = {
-      graph: get("btn-graph", null),
-      galaxy: get("btn-galaxy", null),
-      cards: get("btn-cards", null),
-      grave: get("btn-grave", null),
-      social: get("btn-social", "default"),
-      fin: get("btn-fin", null),
+      graph: get("btn-graph"),
+      galaxy: get("btn-galaxy"),
+      cards: get("btn-cards"),
+      grave: get("btn-grave"),
+      social: get("btn-social"),
+      fin: get("btn-fin"),
     };
 
     (Object.keys(this.buttons) as ThemeName[]).forEach((name) => {
-      // if (this.buttons[name]) {
       this.buttons[name]?.addEventListener("click", () => this.switchTo(name));
-      // }
     });
 
-    // Mark the default (social) button active immediately
-    this.updateButtons();
-
-    // Mobile always stays on Social. Desktop restores saved preference.
-    const isMobile = window.innerWidth < 640;
+    // Restore saved preference; default is "cards".
     const saved = localStorage.getItem(STORAGE_KEY) as ThemeName | null;
-    if (!isMobile && saved && saved !== "social") {
+    if (saved && saved !== this.current) {
       setTimeout(() => this.switchTo(saved), 0);
+    } else {
+      // Kick off the default theme
+      setTimeout(() => {
+        document.dispatchEvent(
+          new CustomEvent<ThemeChangeEvent>("theme-change", { detail: { theme: this.current } }),
+        );
+      }, 0);
     }
+    this.updateButtons();
   }
 
   /** Switch to a theme and persist. */

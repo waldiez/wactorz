@@ -50,8 +50,14 @@ build: build-rust build-frontend ## Build everything
 build-rust: ## Build Rust workspace (release)
 	cargo build --release
 
-build-frontend: ## Build Vite frontend
+build-frontend: ## Build Vite frontend and sync to installed package
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run build
+	@INST=$$(pip3 show wactorz 2>/dev/null | awk '/^Location:/{print $$2}'); \
+	INST="$$INST/wactorz/static/app"; \
+	if [ -d "$$INST" ] && [ "$$INST" != "$(CURDIR)/static/app" ]; then \
+	  echo "Syncing static/app → $$INST"; \
+	  cp -r static/app/ "$$INST/"; \
+	fi
 
 check: ## Cargo check (fast, no codegen)
 	cargo check

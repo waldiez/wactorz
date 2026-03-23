@@ -480,13 +480,13 @@ export class SocialDashboard {
       <div class="sd-topbar" style="display:none">
         <span class="sd-logo">🌐 Wactorz Social</span>
         <span class="sd-tagline">Live multi-agent network</span>
-        <button class="sd-3d-btn" title="Switch to 3D view">⬡ 3D</button>
+        <button class="sd-3d-btn" title="Switch to Wactorz view">⊞ Wactorz</button>
       </div>
       <div class="sd-grid"></div>
     `;
     el.querySelector(".sd-3d-btn")?.addEventListener("click", () => {
       document.dispatchEvent(
-        new CustomEvent("theme-change", { detail: { theme: "graph" } }),
+        new CustomEvent("theme-change", { detail: { theme: "cards" } }),
       );
     });
     return el;

@@ -313,7 +313,7 @@ export class CardDashboard {
     // Workers panel
     const wp = document.createElement("section");
     wp.className = "af-panel";
-    wp.innerHTML = `<div class="af-panel-head"><h3>Workers</h3><span>actor model · MQTT pub-sub</span></div>`;
+    wp.innerHTML = `<div class="af-panel-head"><h3>Wactorz</h3><span>actor model · MQTT pub-sub</span></div>`;
     const grid = document.createElement("div");
     grid.className = "af-cards-grid";
     grid.id = "af-worker-cards";
@@ -361,9 +361,9 @@ export class CardDashboard {
     const events   = this.feedItems.length;
 
     [
-      { label: "Workers",      value: String(total),           detail: `${healthy} running`,               accent: "#60a5fa" },
-      { label: "Messages",     value: String(msgs),            detail: "processed across workers",         accent: "#22d3a0" },
-      { label: "Cost",         value: `$${cost.toFixed(4)}`,   detail: "reported by AgentFlow",            accent: "#f59e0b" },
+      { label: "Wactorz",      value: String(total),           detail: `${healthy} running`,               accent: "#60a5fa" },
+      { label: "Messages",     value: String(msgs),            detail: "processed across actors",          accent: "#22d3a0" },
+      { label: "Cost",         value: `$${cost.toFixed(4)}`,   detail: "reported by actors",               accent: "#f59e0b" },
       { label: "Feed Events",  value: String(events),          detail: "since dashboard loaded",           accent: "#8b5cf6" },
     ].forEach(({ label, value, detail, accent }) => {
       const card = document.createElement("div");
@@ -775,7 +775,7 @@ export class CardDashboard {
     if (!badge) return;
     badge.className = `af-conn-badge af-conn-${this.connState}`;
     badge.textContent =
-      this.connState === "live" ? "● AgentFlow live" :
+      this.connState === "live" ? "● live" :
       this.connState === "connecting" ? "○ Connecting…" :
       "◎ Demo fallback";
   }
@@ -914,7 +914,7 @@ export class CardDashboard {
 
     const title = document.createElement("span");
     title.className = "af-title";
-    title.textContent = "Workers";
+    title.textContent = "Wactorz";
     left.appendChild(title);
 
     const connBadge = document.createElement("span");
@@ -945,9 +945,9 @@ export class CardDashboard {
     const btn3d = document.createElement("button");
     btn3d.className = "af-view-btn";
     btn3d.style.marginLeft = "8px";
-    btn3d.textContent = "⬡ 3D";
+    btn3d.textContent = "⊞ Social";
     btn3d.addEventListener("click", () => {
-      document.dispatchEvent(new CustomEvent("theme-change", { detail: { theme: "graph" } }));
+      document.dispatchEvent(new CustomEvent("theme-change", { detail: { theme: "social" } }));
     });
     right.appendChild(btn3d);
 

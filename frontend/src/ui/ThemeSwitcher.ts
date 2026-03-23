@@ -10,13 +10,7 @@
 
 import type { ThemeChangeEvent } from "../types/agent";
 
-export type ThemeName =
-  | "graph"
-  | "galaxy"
-  | "cards"
-  | "grave"
-  | "social"
-  | "fin";
+export type ThemeName = "cards" | "social";
 const STORAGE_KEY = "wactorz-theme";
 
 export class ThemeSwitcher {
@@ -31,12 +25,8 @@ export class ThemeSwitcher {
       undefined;
 
     this.buttons = {
-      graph: get("btn-graph"),
-      galaxy: get("btn-galaxy"),
       cards: get("btn-cards"),
-      grave: get("btn-grave"),
       social: get("btn-social"),
-      fin: get("btn-fin"),
     };
 
     (Object.keys(this.buttons) as ThemeName[]).forEach((name) => {
@@ -82,11 +72,7 @@ export class ThemeSwitcher {
   }
 
   private updateButtons(): void {
-    this.buttons.graph?.classList.toggle("active", this.current === "graph");
-    this.buttons.galaxy?.classList.toggle("active", this.current === "galaxy");
     this.buttons.cards?.classList.toggle("active", this.current === "cards");
-    this.buttons.grave?.classList.toggle("active", this.current === "grave");
     this.buttons.social?.classList.toggle("active", this.current === "social");
-    this.buttons.fin?.classList.toggle("active", this.current === "fin");
   }
 }

@@ -292,8 +292,9 @@ mqtt.on("error", (err) => {
 document.addEventListener("theme-change", (e) => {
   const evt = e as CustomEvent<ThemeChangeEvent>;
   scene.setTheme(evt.detail.theme);
-  // Sync switcher state if theme was changed externally (e.g. CardDashboard ⬡ 3D button)
-  themeSwitcher.syncState(evt.detail.theme);
+  // Sync switcher state if theme was changed externally (e.g. CardDashboard ⊞ Social button)
+  const t = evt.detail.theme;
+  if (t === "cards" || t === "social") themeSwitcher.syncState(t);
 });
 
 // Camera fly-to when agent is selected (panel open)

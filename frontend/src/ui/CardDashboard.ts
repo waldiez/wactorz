@@ -948,14 +948,14 @@ export class CardDashboard {
       right.appendChild(btn);
     });
 
-    const btn3d = document.createElement("button");
-    btn3d.className = "af-view-btn";
-    btn3d.style.marginLeft = "8px";
-    btn3d.textContent = "⊞ Social";
-    btn3d.addEventListener("click", () => {
-      document.dispatchEvent(new CustomEvent("theme-change", { detail: { theme: "social" } }));
-    });
-    right.appendChild(btn3d);
+    // const btn3d = document.createElement("button");
+    // btn3d.className = "af-view-btn";
+    // btn3d.style.marginLeft = "8px";
+    // btn3d.textContent = "⊞ Social";
+    // btn3d.addEventListener("click", () => {
+    //   document.dispatchEvent(new CustomEvent("theme-change", { detail: { theme: "social" } }));
+    // });
+    // right.appendChild(btn3d);
 
     header.append(left, center, right);
 

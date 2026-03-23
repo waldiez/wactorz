@@ -282,7 +282,13 @@ export class CardDashboard {
 
     if (this.view === "overview") body.appendChild(this._buildOverview());
     else if (this.view === "feed") body.appendChild(this._buildFeedView());
-    else if (this.view === "chat") body.appendChild(this._buildChatView());
+    else if (this.view === "chat") {
+      body.appendChild(this._buildChatView());
+      // _renderSidebar() inside _buildChatView() runs before the element is in
+      // the DOM, so this.root.querySelector returns null. Re-run it now that
+      // the chat view is attached.
+      this._renderSidebar();
+    }
 
     this.root.querySelectorAll<HTMLElement>(".af-view-btn[data-view]").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset["view"] === this.view);

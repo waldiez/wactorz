@@ -55,20 +55,13 @@ const wsChat = new WSChatClient();
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
 wsChat.onChat((content, from, timestampMs) => {
-  ioManager.receiveAgentMessage({
-    id: `ws-${timestampMs}`,
-    from,
-    to: "user",
-    content,
-    timestampMs,
-  });
+  const msg = { id: `ws-${timestampMs}`, from, to: "user", content, timestampMs };
+  ioManager.receiveAgentMessage(msg);
   scene.onChat(from, "user");
-  feed.push({
-    type: "chat",
-    label: content.slice(0, 60),
-    agentName: from,
-    timestamp: timestampMs,
-  });
+  const feedItem = { type: "chat" as const, label: content.slice(0, 60), agentName: from, timestamp: timestampMs };
+  feed.push(feedItem);
+  document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item: feedItem } }));
+  document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
 });
 
 // Streaming replies — onStreamChunk / onStreamEnd are wired inside setWSClient
@@ -80,8 +73,8 @@ const textInput = document.getElementById("text-input") as HTMLTextAreaElement;
 new MentionPopup(textInput, () => scene.getAgents());
 
 // ── Resize canvas when chat panel opens/closes ────────────────────────────────
-// The panel is 340px wide; shrink the canvas so 3D nodes stay visible.
-const PANEL_WIDTH = 340;
+// The panel is 480px wide; shrink the canvas so 3D nodes stay visible.
+const PANEL_WIDTH = 480;
 const chatPanelEl = document.getElementById("chat-panel")!;
 
 new MutationObserver(() => {
@@ -100,11 +93,18 @@ canvas.addEventListener("mousemove", (e) => {
   }
 });
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function pushFeed(item: Parameters<typeof feed.push>[0]): void {
+  feed.push(item);
+  document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
+}
+
 // ── MQTT → Scene/HUD/Feed wiring ──────────────────────────────────────────────
 
 mqtt.on("heartbeat", (payload) => {
   scene.onHeartbeat(payload);
-  feed.push({
+  pushFeed({
     type: "heartbeat",
     label: "heartbeat",
     agentName: payload.agentName,
@@ -114,9 +114,10 @@ mqtt.on("heartbeat", (payload) => {
 
 mqtt.on("spawn", (payload) => {
   scene.onSpawn(payload);
+  chatPanel.updateAgentList(scene.getAgents());
   hud.setAgentCount(scene.getAgents().length);
   refreshStats();
-  feed.push({
+  pushFeed({
     type: "spawn",
     label: `spawned (${payload.agentType ?? "agent"})`,
     agentName: payload.agentName,
@@ -129,7 +130,7 @@ mqtt.on("alert", (payload) => {
   scene.onAlert(payload);
   hud.flashAlert(payload.severity);
   refreshStats();
-  feed.push({
+  pushFeed({
     type: payload.severity === "error" ? "alert-error" : "alert-warning",
     label: payload.message,
     agentName: payload.agentName,
@@ -140,7 +141,8 @@ mqtt.on("alert", (payload) => {
 mqtt.on("chat", (msg) => {
   ioManager.receiveAgentMessage(msg);
   scene.onChat(msg.from, msg.to);
-  feed.push({
+  document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+  pushFeed({
     type: "chat",
     label: `→ ${msg.to}: ${msg.content.slice(0, 40)}${msg.content.length > 40 ? "…" : ""}`,
     agentName: msg.from,
@@ -151,7 +153,7 @@ mqtt.on("chat", (msg) => {
 mqtt.on("status", (payload) => {
   if (payload.state === "stopped") {
     scene.removeAgent(payload.agentId);
-    feed.push({
+    pushFeed({
       type: "stopped",
       label: "stopped",
       agentName: payload.agentName,
@@ -165,6 +167,7 @@ mqtt.on("status", (payload) => {
       protected: false,
     });
   }
+  chatPanel.updateAgentList(scene.getAgents());
   hud.setAgentCount(scene.getAgents().length);
   refreshStats();
   chatPanel.updateAgentStatus(payload.agentId, String(payload.state));
@@ -184,6 +187,7 @@ let seeded = false;
 mqtt.on("connected", () => {
   console.info("[Dashboard] MQTT connected");
   hud.setSystemHealth(true);
+  document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "live" } }));
 
   if (seeded) return;
   seeded = true;
@@ -194,6 +198,7 @@ mqtt.on("connected", () => {
     .then((r) => r.json())
     .then((actors: AgentInfo[]) => {
       actors.forEach((a) => scene.addOrUpdateAgent(a));
+      chatPanel.updateAgentList(scene.getAgents());
       hud.setAgentCount(scene.getAgents().length);
       refreshStats();
       console.info(`[Dashboard] seeded ${actors.length} actors from REST`);
@@ -204,7 +209,7 @@ mqtt.on("connected", () => {
 });
 
 mqtt.on("qa-flag", (payload) => {
-  feed.push({
+  pushFeed({
     type: "qa-flag",
     label: `[${payload.category}] ${payload.excerpt}`,
     agentName: `qa-agent ← ${payload.from}`,
@@ -232,7 +237,7 @@ mqtt.on("metrics", (payload) => {
 mqtt.on("logs", (payload) => {
   const msg = payload.message ?? payload.text ?? "";
   if (!msg) return;
-  feed.push({
+  pushFeed({
     type: "chat",
     label: msg.slice(0, 80),
     agentName: payload.agentName,
@@ -241,7 +246,7 @@ mqtt.on("logs", (payload) => {
 });
 
 mqtt.on("completed", (payload) => {
-  feed.push({
+  pushFeed({
     type: "spawn",
     label: "task completed",
     agentName: payload.agentName,
@@ -250,7 +255,7 @@ mqtt.on("completed", (payload) => {
 });
 
 mqtt.on("node-heartbeat", (payload) => {
-  feed.push({
+  pushFeed({
     type: "health",
     label: `node online · ${payload.agents.length} agent${payload.agents.length !== 1 ? "s" : ""}`,
     agentName: payload.node,
@@ -263,7 +268,7 @@ mqtt.on("system-health", () => {
 });
 
 mqtt.on("coin", (payload) => {
-  feed.push({
+  pushFeed({
     type: "qa-flag",
     label: `balance ${payload.balance}${payload.reason ? " · " + payload.reason : ""}`,
     agentName: "wiz-agent",
@@ -274,6 +279,7 @@ mqtt.on("coin", (payload) => {
 mqtt.on("disconnected", () => {
   console.warn("[Dashboard] MQTT disconnected");
   hud.setSystemHealth(false);
+  document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "demo" } }));
 });
 
 mqtt.on("error", (err) => {
@@ -294,6 +300,13 @@ document.addEventListener("theme-change", (e) => {
 document.addEventListener("agent-selected", (e) => {
   const evt = e as CustomEvent<{ agent: { id: string } }>;
   scene.onAgentSelected(evt.detail.agent.id);
+});
+
+// af-iobar sends: route through ioManager (same as regular io-bar)
+document.addEventListener("af-send-message", (e) => {
+  const { content } = (e as CustomEvent<{ content: string; target: string }>).detail;
+  const agent = scene.getAgents().find((a) => a.name === (e as CustomEvent<{ target: string }>).detail.target) ?? null;
+  void ioManager.send(content, agent);
 });
 
 // ── Set dynamic links ─────────────────────────────────────────────────────────

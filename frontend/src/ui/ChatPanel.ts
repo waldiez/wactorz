@@ -27,9 +27,14 @@ export class ChatPanel {
   private panel: HTMLElement;
   private agentNameEl: HTMLElement;
   private agentStatusEl: HTMLElement;
-  private avatarEl: HTMLImageElement;
+  private avatarEl: HTMLImageElement | null;
   private closeBtn: HTMLButtonElement;
   private messagesEl: HTMLElement;
+
+  private sidebarListEl: HTMLElement;
+  private sidebarSearchEl: HTMLInputElement;
+  private agentList: AgentInfo[] = [];
+  private sidebarFilter: string = "";
 
   private selectedAgent: AgentInfo | null = null;
   private activeAgentName: string | null = null;
@@ -53,11 +58,16 @@ export class ChatPanel {
     this.panel = document.getElementById("chat-panel")!;
     this.agentNameEl = document.getElementById("panel-agent-name")!;
     this.agentStatusEl = document.getElementById("panel-agent-status")!;
-    this.avatarEl = document.getElementById(
-      "panel-agent-avatar",
-    ) as HTMLImageElement;
+    this.avatarEl = document.getElementById("panel-agent-avatar") as HTMLImageElement | null;
     this.closeBtn = document.getElementById("panel-close") as HTMLButtonElement;
     this.messagesEl = document.getElementById("chat-messages")!;
+    this.sidebarListEl = document.getElementById("chat-agent-list")!;
+    this.sidebarSearchEl = document.getElementById("chat-sidebar-search") as HTMLInputElement;
+
+    this.sidebarSearchEl.addEventListener("input", () => {
+      this.sidebarFilter = this.sidebarSearchEl.value.toLowerCase();
+      this.renderSidebar();
+    });
 
     this.closeBtn.addEventListener("click", () => this.close());
     document.addEventListener("keydown", (e) => {
@@ -98,14 +108,21 @@ export class ChatPanel {
     this.agentNameEl.textContent = agent.name;
     this.agentStatusEl.textContent =
       typeof agent.state === "object" ? "failed" : (agent.state ?? "active");
-    this.avatarEl.src = agentImageGen.get(agent);
-    this.avatarEl.alt = agent.name;
-    this.avatarEl.style.opacity = "1";
+    if (this.avatarEl) {
+      this.avatarEl.src = agentImageGen.get(agent);
+      this.avatarEl.alt = agent.name;
+      this.avatarEl.style.opacity = "1";
+    }
 
     // Clear unread notification for this agent
     document.dispatchEvent(
       new CustomEvent("agent-unread-cleared", { detail: { name: agent.name } }),
     );
+
+    // Update sidebar active state
+    this.sidebarListEl.querySelectorAll<HTMLElement>(".af-chat-agent-row").forEach((row) => {
+      row.classList.toggle("active", row.dataset["name"] === agent.name);
+    });
 
     const alreadyOpen = this.panel.classList.contains("open");
     if (!alreadyOpen) {
@@ -130,9 +147,11 @@ export class ChatPanel {
     if (this.panel.classList.contains("open")) return;
     this.agentNameEl.textContent = hint;
     this.agentStatusEl.textContent = "active";
-    this.avatarEl.src = dicebearFor(hint);
-    this.avatarEl.alt = hint;
-    this.avatarEl.style.opacity = "1";
+    if (this.avatarEl) {
+      this.avatarEl.src = dicebearFor(hint);
+      this.avatarEl.alt = hint;
+      this.avatarEl.style.opacity = "1";
+    }
     if (!this.activeAgentName) this.activeAgentName = hint;
     this.renderThread(hint, false);
     this.panel.classList.add("open");
@@ -175,6 +194,46 @@ export class ChatPanel {
   updateAgentStatus(agentId: string, state: string): void {
     if (this.selectedAgent?.id === agentId) {
       this.agentStatusEl.textContent = state;
+    }
+  }
+
+  updateAgentList(agents: AgentInfo[]): void {
+    this.agentList = agents;
+    this.renderSidebar();
+  }
+
+  private renderSidebar(): void {
+    const filtered = this.sidebarFilter
+      ? this.agentList.filter((a) => a.name.toLowerCase().includes(this.sidebarFilter))
+      : this.agentList;
+
+    const sorted = [...filtered].sort((a, b) => {
+      if (a.name === "main-actor") return -1;
+      if (b.name === "main-actor") return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    this.sidebarListEl.innerHTML = "";
+    for (const agent of sorted) {
+      const dotColor =
+        typeof agent.state === "object" ? "#f87171" :
+        agent.state === "running" ? "#34d399" :
+        agent.state === "paused"  ? "#fbbf24" :
+        agent.state === "stopped" ? "#4b5563" : "#60a5fa";
+
+      const row = document.createElement("button");
+      row.className = `af-chat-agent-row${agent.name === this.activeAgentName ? " active" : ""}`;
+      row.dataset["name"] = agent.name;
+      row.innerHTML = `
+        <span class="af-chat-agent-dot" style="background:${dotColor}"></span>
+        <span class="af-chat-agent-name">${agent.name}</span>
+      `;
+      row.addEventListener("click", () => {
+        document.dispatchEvent(
+          new CustomEvent<{ agent: AgentInfo }>("agent-selected", { detail: { agent } }),
+        );
+      });
+      this.sidebarListEl.appendChild(row);
     }
   }
 

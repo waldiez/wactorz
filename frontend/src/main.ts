@@ -31,12 +31,8 @@ const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 canvas.style.display = "none";
 const scene = new SceneManager(canvas);
 
-// Show the default theme immediately — do not wait for ThemeSwitcher / localStorage.
-// localStorage may hold a stale value ("graph", "galaxy", etc.) from an old session;
-// forcing "cards" here ensures the right dashboard is always shown on load.
-const _savedTheme = localStorage.getItem("wactorz-theme");
-const _startTheme: "cards" | "social" = (_savedTheme === "social") ? "social" : "cards";
-scene.setTheme(_startTheme);
+// Always start with the cards dashboard — ignore whatever localStorage says.
+scene.setTheme("cards");
 
 // ── MQTT ──────────────────────────────────────────────────────────────────────
 

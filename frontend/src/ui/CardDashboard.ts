@@ -259,7 +259,7 @@ export class CardDashboard {
   // ── Private: floating UI ──────────────────────────────────────────────────
 
   private _hideFloatingUI(): void {
-    ["io-bar", "chat-panel", "activity-feed", "feed-toggle"].forEach((id) => {
+    ["hud", "hud-stats", "io-bar", "chat-panel", "activity-feed", "feed-toggle"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.style.display = "none";
     });

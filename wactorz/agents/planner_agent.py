@@ -481,10 +481,15 @@ class PlannerAgent(Actor):
             "═══ SYSTEM ARCHITECTURE ═══",
             "",
             "HomeAssistantStateBridgeAgent (ALWAYS running, NEVER spawn again):",
-            "  Publishes every HA state change to MQTT:",
-            "    Topic:   homeassistant/state_changes/{domain}/{entity_id}",
-            '  Payload: {"entity_id": "...", "domain": "...", "new_state": {"state": "...", "attributes": {...}}, "old_state": {...}}',
-            "  NOTE: 'state' is NESTED inside new_state — you cannot filter it at top level.",
+            "  Publishes every HA state change to MQTT.",
+            "  Topic format depends on HA_STATE_BRIDGE_PER_ENTITY config — can be either:",
+            "    Flat:       homeassistant/state_changes                          (all entities, one topic)",
+            "    Per-entity: homeassistant/state_changes/{domain}/{full_entity_id} (one topic per entity)",
+            "  ALWAYS subscribe to the wildcard: homeassistant/state_changes/#",
+            "  This catches BOTH formats and never breaks regardless of config.",
+            '  Payload always contains: {"entity_id": "light.wiz_...", "domain": "light", "new_state": {"state": "on", ...}, "old_state": {...}}',
+            "  Filter by entity_id IN THE PAYLOAD — never rely on the topic path for filtering.",
+            "  NOTE: 'state' is NESTED inside new_state — check payload['new_state']['state'].",
             "",
             "═══ AGENT TYPES ═══",
             "",
@@ -508,11 +513,18 @@ class PlannerAgent(Actor):
             "    async def setup(agent)   — runs once on start, good for subscriptions and init",
             "    async def process(agent) — runs in a loop every poll_interval seconds",
             "  Available APIs (ONLY these — no other agent methods exist):",
-            '    await agent.log("message")              — structured log',
-            '    await agent.publish("topic", {dict})    — publish to MQTT',
-            '    agent.recall("key")                     — load persisted value',
-            '    agent.persist("key", value)             — save persisted value',
-            '    agent.state["key"]                      — in-memory dict (cleared on restart)',
+            '    await agent.log("message")                        — structured log',
+            '    await agent.publish("topic", {dict})              — publish to MQTT',
+            '    agent.subscribe("topic", async_callback)          — subscribe to MQTT, callback(payload_dict) per message',
+            '                                                        IMPORTANT: runs as background task, setup() returns immediately',
+            '    agent.recall("key")                               — load persisted value',
+            '    agent.persist("key", value)                       — save persisted value',
+            '    agent.state["key"]                                — in-memory dict (cleared on restart)',
+            "  CRITICAL RULES FOR DYNAMIC AGENT CODE:",
+            "    NEVER import or use aiomqtt directly — use agent.subscribe() instead",
+            "    NEVER hardcode MQTT broker hostnames or ports — agent.subscribe() handles this automatically",
+            "    NEVER use asyncio.create_task() for MQTT — agent.subscribe() already creates the background task",
+            "    agent.subscribe() is non-blocking — call it in setup() and return immediately",
             "  spawn_config schema:",
             '    "type": "dynamic"',
             '    "description": "<what this does>"',
@@ -526,26 +538,42 @@ class PlannerAgent(Actor):
             "  Problem: HA state is nested in new_state.state, ha_actuator can only filter top-level keys.",
             "  Solution: use a dynamic filter agent to extract and re-publish the trigger.",
             "  Agent 1 (dynamic, name: '<slug>-state-filter'):",
-            "    setup(agent): use aiomqtt to subscribe to homeassistant/state_changes/{domain}/{entity_id}",
-            "      For each message, parse JSON, check new_state['state'] against the target condition,",
-            "      if condition met: await agent.publish('custom/triggers/<slug>', {'triggered': True, 'value': <state>})",
+            "    setup(agent): use agent.subscribe() to listen to homeassistant/state_changes/{domain}/{entity_id}",
+            "      Check new_state['state'] against condition, if met: await agent.publish('custom/triggers/<slug>', {'triggered': True})",
+            "    agent.subscribe() runs as a background task — setup() must return immediately after calling it.",
             "  Agent 2 (ha_actuator, name: '<slug>-actuator'):",
             "    mqtt_topics: ['custom/triggers/<slug>']",
             "    detection_filter: {'triggered': True}",
             "    actions: [the HA service call with the correct entity_id]",
             "  CONDITION EXAMPLES:",
             "    Binary sensor (door/window/motion): new_state['state'] == 'on'",
-            "    Numeric sensor (temperature/humidity): float(new_state['state']) > threshold",
+            "    Numeric sensor (temperature/humidity): float(new_state.get('state', 0)) > threshold",
             "    Switch/light: new_state['state'] == 'on' or 'off'",
-            "    Cover/lock: new_state['state'] == 'open' / 'locked' etc.",
+            "  PATTERN 1 CODE TEMPLATE:",
+            "    async def setup(agent):",
+            "        async def on_state(payload):",
+            "            if payload.get('entity_id') != 'light.wiz_rgbw_tunable_02cba0': return",
+            "            state = payload.get('new_state', {}).get('state', '')",
+            "            if state == 'on':  # adapt condition to user request",
+            "                await agent.publish('custom/triggers/<slug>', {'triggered': True, 'state': state})",
+            "        # Use wildcard — works regardless of per-entity or flat topic config",
+            "        agent.subscribe('homeassistant/state_changes/#', on_state)",
             "",
-            "PATTERN 2 — HA sensor triggers notification (Discord, webhook, HTTP):",
-            "  ONE dynamic agent:",
-            "    setup(agent): subscribe to homeassistant/state_changes/{domain}/{entity_id} via aiomqtt",
-            "      Parse state, check condition, POST to webhook/Discord when triggered.",
-            "    For Discord: POST to webhook URL with json={'content': '<message>'}",
-            "    Install: httpx",
-            "  If no webhook URL is provided by user, use a placeholder and note it in description.",
+            "PATTERN 2 — HA sensor triggers notification (Discord, Slack, HTTP webhook):",
+            "  ONE dynamic agent using agent.subscribe():",
+            "    async def setup(agent):",
+            "        async def on_state(payload):",
+            "            if payload.get('entity_id') != 'light.wiz_rgbw_tunable_02cba0': return",
+            "            state = payload.get('new_state', {}).get('state', '')",
+            "            if state == 'on':  # adapt condition",
+            "                import httpx",
+            "                async with httpx.AsyncClient() as c:",
+            "                    await c.post('<WEBHOOK_URL>', json={'content': 'Lamp turned on!'})",
+            "                await agent.log('Discord notification sent')",
+            "        # Use wildcard — works regardless of per-entity or flat topic config",
+            "        agent.subscribe('homeassistant/state_changes/#', on_state)",
+            "  Install: httpx",
+            "  IMPORTANT: use the exact webhook URL from NOTIFICATION URLS section below.",
             "",
             "PATTERN 3 — Webcam/camera object detection triggers HA action:",
             "  Agent 1 (dynamic, name: '<slug>-camera-detect'):",
@@ -565,8 +593,8 @@ class PlannerAgent(Actor):
             "PATTERN 4 — Webcam detection triggers notification:",
             "  Agent 1: same as Pattern 3 agent 1",
             "  Agent 2 (dynamic, name: '<slug>-notify'):",
-            "    setup(agent): subscribe to custom/detections/<slug> via aiomqtt",
-            "      When detected=True: POST notification",
+            "    setup(agent): use agent.subscribe() on custom/detections/<slug>",
+            "      When detected=True: POST notification via httpx",
             "",
             "PATTERN 5 — Timer/schedule triggers HA action:",
             "  Agent 1 (dynamic, name: '<slug>-timer'):",
@@ -586,6 +614,9 @@ class PlannerAgent(Actor):
             "- Multiple rules in one request → output ALL agents for ALL rules",
             "- Each agent does exactly ONE job — keep it minimal",
             "- Replace <slug> consistently across paired agents with a short descriptive kebab-case id",
+            "- ALWAYS subscribe to homeassistant/state_changes/# (wildcard) — NEVER to a specific sub-topic",
+            "  Filter by entity_id in the payload: if payload.get('entity_id') != 'light.xyz': return",
+            "  This works regardless of whether HA_STATE_BRIDGE_PER_ENTITY is on or off",
             "- If user provides a Discord webhook URL, use it directly in code",
             "- If user provides a condition threshold (e.g. 'above 28 degrees'), encode it in the filter agent code",
             "- Dynamic agent code must be a single string with actual \\n newlines (not literal backslash-n)",
@@ -622,6 +653,8 @@ class PlannerAgent(Actor):
                 clean = clean[start:end + 1]
             plan = json.loads(clean.strip())
             if isinstance(plan, list):
+                # Validate generated code — catch common LLM mistakes
+                plan = self._validate_pipeline_code(plan)
                 logger.info(f"[{self.name}] Pipeline plan: {len(plan)} step(s)")
                 for i, step in enumerate(plan):
                     sc = step.get("spawn_config", {})
@@ -634,7 +667,106 @@ class PlannerAgent(Actor):
             logger.error(f"[{self.name}] Pipeline decomposition error: {e}")
         return []
 
-        return []
+    # ── Pipeline code validator ────────────────────────────────────────────
+
+    def _validate_pipeline_code(self, plan: list[dict]) -> list[dict]:
+        """
+        Scan generated dynamic agent code for common LLM mistakes and fix them.
+        Currently catches:
+          - Raw aiomqtt.Client() usage (should use agent.subscribe() instead)
+          - Hardcoded MQTT broker hostnames
+        Logs warnings so the user knows what was fixed.
+        """
+        import re as _re
+        for step in plan:
+            sc = step.get("spawn_config", {})
+            if sc.get("type") != "dynamic":
+                continue
+            code = sc.get("code", "")
+            if not code:
+                continue
+
+            issues = []
+
+            # Detect raw aiomqtt.Client() — LLM should use agent.subscribe()
+            if "aiomqtt.Client(" in code or "aiomqtt.connect(" in code:
+                issues.append("raw aiomqtt.Client() — should use agent.subscribe()")
+                # Attempt to rewrite: extract topic and replace entire aiomqtt block
+                # with agent.subscribe() pattern
+                topics = _re.findall(r'await\s+client\.subscribe\(["\']([^"\']+)["\']', code)
+                if topics:
+                    topic = topics[0]
+                    # Build replacement code using agent.subscribe()
+                    fixed = self._rewrite_aiomqtt_to_subscribe(code, topic)
+                    if fixed:
+                        sc["code"] = fixed
+                        code = fixed
+                        logger.info(f"[{self.name}] Auto-fixed raw aiomqtt in '{step.get('name')}' → agent.subscribe('{topic}')")
+
+            if issues:
+                logger.warning(
+                    f"[{self.name}] Code issues in '{step.get('name')}': {'; '.join(issues)}"
+                )
+
+        return plan
+
+    @staticmethod
+    def _rewrite_aiomqtt_to_subscribe(code: str, topic: str) -> str:
+        """
+        Best-effort rewrite of raw aiomqtt MQTT subscription code to use agent.subscribe().
+        Extracts the message handling callback and rewires it.
+        Returns empty string if rewrite fails (original code kept).
+        """
+        import re as _re
+
+        # Try to extract the callback body — look for the inner async for loop body
+        # Pattern: async for msg/message in client.messages: ... payload handling ...
+        match = _re.search(
+            r'async\s+for\s+\w+\s+in\s+client\.messages:\s*\n(.*?)(?=\n\s*except|\n\s*$)',
+            code,
+            _re.DOTALL,
+        )
+        if not match:
+            return ""
+
+        callback_body = match.group(1)
+
+        # Detect how payload is parsed — json.loads(msg.payload) or similar
+        payload_parse = ""
+        if "json.loads" in callback_body:
+            payload_parse = "    # payload is already a dict (parsed by agent.subscribe)\n"
+
+        # Strip leading indentation from callback body
+        lines = callback_body.splitlines()
+        min_indent = min((len(l) - len(l.lstrip()) for l in lines if l.strip()), default=4)
+        dedented = "\n".join("    " + l[min_indent:] for l in lines if l.strip())
+
+        # Extract any setup code before the aiomqtt block
+        pre_match = _re.split(r'async\s+with\s+aiomqtt\.Client', code)[0]
+        pre_lines = [l for l in pre_match.splitlines()
+                     if l.strip() and not l.strip().startswith("import aiomqtt")
+                     and not l.strip().startswith("async def setup")]
+        pre_code = "\n".join("    " + l.strip() for l in pre_lines if l.strip()) + "\n" if pre_lines else ""
+
+        rewritten = (
+            f"async def setup(agent):\n"
+            f"{pre_code}"
+            f"    async def _on_message(payload):\n"
+            f"{payload_parse}"
+            f"{dedented}\n"
+            f"    agent.subscribe('{topic}', _on_message)\n"
+            f"    await agent.log('Subscribed to {topic}')\n"
+        )
+
+        # Preserve any process() or handle_task() that existed
+        import re as _re2
+        for fn in ("process", "handle_task"):
+            fn_match = _re2.search(rf'async\s+def\s+{fn}\s*\(', code)
+            if fn_match:
+                rewritten += "\n" + code[fn_match.start():]
+                break
+
+        return rewritten
 
     # ── Plan cache ─────────────────────────────────────────────────────────
 

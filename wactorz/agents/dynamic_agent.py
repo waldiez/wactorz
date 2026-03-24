@@ -119,16 +119,12 @@ class DynamicAgent(Actor):
 
         # ── setup() ───────────────────────────────────────────────────────
         if self._fn_setup:
-            try:
-                await self._fn_setup(self._api)
-                logger.info(f"[{self.name}] setup() completed.")
-            except Exception as e:
-                err = traceback.format_exc()
-                logger.error(f"[{self.name}] setup() failed: {e}\n{err}")
-                await self._publish_error(
-                    phase="setup", error=e, traceback_str=err, fatal=True)
-        if self._fn_process:
-            self._tasks.append(asyncio.create_task(self._process_loop()))
+            # Run setup as a background task so long-running loops (e.g. aiomqtt
+            # subscriptions) don't block on_start() and prevent heartbeats from firing.
+            self._tasks.append(asyncio.create_task(self._run_setup()))
+        else:
+            if self._fn_process:
+                self._tasks.append(asyncio.create_task(self._process_loop()))
 
         # Publish manifest immediately so main's registry knows this agent exists
         # even if it never calls publish() (pure handle_task agents, etc.)
@@ -350,6 +346,30 @@ class DynamicAgent(Actor):
         except Exception as e:
             logger.warning(f"[{self.name}] LLM fix call failed: {e}")
             return None    # only None when LLM is truly unreachable
+
+    # ── Setup wrapper ───────────────────────────────────────────────────────
+
+    async def _run_setup(self):
+        """
+        Run setup() as a background task.
+        - Errors in setup() are published as fatal errors (agent won't restart).
+        - If process() is also defined, it is started AFTER setup() returns.
+          For agents whose setup() never returns (e.g. aiomqtt subscription loops),
+          process() is simply not started — the subscription loop IS the process.
+        """
+        try:
+            await self._fn_setup(self._api)
+            logger.info(f"[{self.name}] setup() completed.")
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            err = traceback.format_exc()
+            logger.error(f"[{self.name}] setup() failed: {e}\n{err}")
+            await self._publish_error(phase="setup", error=e, traceback_str=err, fatal=True)
+            return
+        # setup() returned cleanly — start process() loop if defined
+        if self._fn_process and self.state not in (ActorState.STOPPED, ActorState.FAILED):
+            self._tasks.append(asyncio.create_task(self._process_loop()))
 
     # ── Process loop ───────────────────────────────────────────────────────
 
@@ -586,6 +606,9 @@ class _AgentAPI:
         self.llm = _LLMInterface(actor, self.state) if actor._llm_provider else None
         # Auto-discovered topics this agent publishes to
         self._published_topics: set = set()
+        # MQTT broker info — exposed so generated code can create aiomqtt clients
+        self._mqtt_broker = actor._mqtt_broker
+        self._mqtt_port   = actor._mqtt_port
 
     # ── MQTT ───────────────────────────────────────────────────────────────
 
@@ -595,6 +618,49 @@ class _AgentAPI:
         if topic not in self._published_topics:
             self._published_topics.add(topic)
             await self._publish_manifest()
+
+    def subscribe(self, topic: str, callback):
+        """
+        Subscribe to an MQTT topic and call callback(payload_dict) for each message.
+        Runs as a background task — setup() returns immediately.
+
+        Usage in setup(agent):
+            async def on_message(payload):
+                if payload.get("new_state", {}).get("state") == "on":
+                    await agent.publish("custom/triggers/slug", {"triggered": True})
+            agent.subscribe("homeassistant/state_changes/light/light.xyz", on_message)
+        """
+        import asyncio, json
+        actor = self._actor
+
+        async def _listener():
+            try:
+                import aiomqtt
+            except ImportError:
+                logger.error(f"[{actor.name}] aiomqtt not installed")
+                return
+            while True:
+                try:
+                    async with aiomqtt.Client(actor._mqtt_broker, actor._mqtt_port) as client:
+                        await client.subscribe(topic)
+                        logger.info(f"[{actor.name}] Subscribed to {topic}")
+                        async for msg in client.messages:
+                            try:
+                                payload = json.loads(msg.payload.decode())
+                            except Exception:
+                                payload = {"raw": msg.payload.decode()}
+                            try:
+                                await callback(payload)
+                            except Exception as e:
+                                logger.error(f"[{actor.name}] subscribe callback error: {e}")
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.warning(f"[{actor.name}] MQTT subscribe error: {e} — retrying in 5s")
+                    await asyncio.sleep(5)
+
+        task = asyncio.create_task(_listener())
+        actor._tasks.append(task)
 
     async def publish_detection(self, data: Any):
         """Convenience: publish to agents/{id}/detections"""
@@ -634,6 +700,17 @@ class _AgentAPI:
             f"agents/{self._actor.actor_id}/logs",
             {"type": "log", "message": message, "timestamp": time.time()}
         )
+
+    @property
+    def logger(self):
+        """Compatibility shim — allows agent.logger.info/warning/error in generated code."""
+        api = self
+        class _LoggerShim:
+            def info(self, msg):    asyncio.ensure_future(api.log(msg, "info"))
+            def warning(self, msg): asyncio.ensure_future(api.log(msg, "warning"))
+            def error(self, msg):   asyncio.ensure_future(api.log(msg, "error"))
+            def debug(self, msg):   asyncio.ensure_future(api.log(msg, "debug"))
+        return _LoggerShim()
 
     async def alert(self, message: str, severity: str = "warning"):
         """Trigger an alert visible in the dashboard."""

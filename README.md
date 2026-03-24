@@ -117,6 +117,7 @@ All LLM-backed agents inherit from `LLMAgent`, which inherits from `Actor`. It m
 | OpenAI | `OPENAI_API_KEY` | `--llm openai` |
 | Ollama | _(none)_ | Local models, `--llm ollama --ollama-model llama3` |
 | NVIDIA NIM | `NIM_API_KEY` | Free tier 1000 req/month, `--llm nim --nim-model meta/llama-3.3-70b-instruct` |
+| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | Free tier available, `--llm gemini --gemini-model gemini-2.5-flash` |
 
 ### DynamicAgent
 
@@ -462,7 +463,19 @@ Detection filter values can be plain literals (equality) or operator dicts such 
 
 Every LLM call across every agent accumulates token usage into three counters: `total_input_tokens`, `total_output_tokens`, and `total_cost_usd`. These are visible per-agent in the dashboard and via `/cost` in the CLI.
 
-Cost is tracked for all four providers (Anthropic, OpenAI, Ollama free, NIM free/paid). The `HomeAssistantAgent` tracks costs across all 7 of its internal LLM calls: classification, hardware selection, correction retry, automation generation, delete confirmation, edit identification, and edit generation.
+Cost is tracked for all five providers (Anthropic, OpenAI, Ollama free, NIM free/paid, Google Gemini). The `HomeAssistantAgent` tracks costs across all 7 of its internal LLM calls: classification, hardware selection, correction retry, automation generation, delete confirmation, edit identification, and edit generation.
+
+### Google Gemini Pricing (per 1M tokens, standard context ≤200K)
+
+| Model | Input | Output | Notes |
+|-------|-------|--------|-------|
+| `gemini-2.5-flash-lite` | $0.10 | $0.40 | Cheapest, fast, free tier |
+| `gemini-2.0-flash` | $0.10 | $0.40 | Fast & capable, free tier |
+| `gemini-2.5-flash` | $0.30 | $2.50 | Default, hybrid reasoning, free tier |
+| `gemini-2.5-pro` | $1.25 | $10.00 | Best for coding & complex tasks |
+| `gemini-3.1-pro` | $2.00 | $12.00 | Flagship, no free tier |
+
+Pro models charge 2x for prompts above 200K tokens. Get a free API key at [aistudio.google.com](https://aistudio.google.com).
 
 ---
 
@@ -475,6 +488,8 @@ python -m wactorz                                              # Anthropic Claud
 python -m wactorz --llm openai
 python -m wactorz --llm ollama --ollama-model llama3
 python -m wactorz --llm nim --nim-model meta/llama-3.3-70b-instruct
+python -m wactorz --llm gemini                                         # gemini-2.5-flash default
+python -m wactorz --llm gemini --gemini-model gemini-2.5-pro
 python -m wactorz --interface discord --discord-token YOUR_TOKEN
 ```
 
@@ -926,6 +941,7 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-host` and
 | `ANTHROPIC_API_KEY` | Claude API key (primary LLM) |
 | `OPENAI_API_KEY` | OpenAI key (alternative LLM) |
 | `NIM_API_KEY` | NVIDIA NIM key (free tier — get at build.nvidia.com) |
+| `GEMINI_API_KEY` or `GOOGLE_API_KEY` | Google Gemini API key (free tier — get at aistudio.google.com) |
 | `HA_URL` / `HOME_ASSISTANT_URL` | Home Assistant base URL (e.g. `http://homeassistant.local:8123`) |
 | `HA_TOKEN` / `HOME_ASSISTANT_TOKEN` | HA long-lived access token |
 | `HA_MAP_AGENT_OUTPUT_TOPIC` | MQTT topic for `HomeAssistantMapAgent` (default: `homeassistant/map/entities_with_location`) |

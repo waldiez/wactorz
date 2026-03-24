@@ -520,13 +520,14 @@ class DiscordInterface:
                 return
             if self.channel_id and message.channel.id != self.channel_id:
                 return
-            if not message.content.startswith("!"):
-                return  # Only respond to commands prefixed with !
+            if not client.user.mentioned_in(message):
+                return  # Only respond when the bot is mentioned
 
-            text = message.content[1:].strip()
+            text = message.content.replace(f'<@{client.user.id}>', '').replace(f'<@!{client.user.id}>', '').strip()
             async with message.channel.typing():
                 response = await self.agent.process_user_input(text)
-            await message.channel.send(response)
+            for i in range(0, len(response), 2000):
+                await message.channel.send(response[i:i + 2000])
 
         await client.start(self.token)
 

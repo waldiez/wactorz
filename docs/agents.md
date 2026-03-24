@@ -231,7 +231,7 @@ Complex operations (`create`, `edit`) use up to two additional LLM calls; simple
 | **Listens**   | HA WebSocket `entity_registry_updated` events        |
 | **Publishes** | `homeassistant/map/entities_with_location` (default) |
 
-Maintains a live map of every HA device with its physical location. Opens a persistent WebSocket connection to Home Assistant and re-fetches the full device/entity/location dataset every time the entity registry changes, then publishes the result downstream.
+Maintains a live map of every HA device with its physical location. On startup it performs an immediate refresh and publish of the full device/entity/location dataset, then keeps a persistent WebSocket connection to Home Assistant and re-fetches the map every time the entity registry changes.
 
 Output can be directed to an MQTT topic or forwarded directly to another actor by name:
 

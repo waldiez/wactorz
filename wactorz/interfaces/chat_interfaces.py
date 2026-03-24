@@ -691,6 +691,21 @@ class RESTInterface:
             "llm_cost_usd": 0.0,
         }
 
+    def _latest_ha_map_payload(self) -> dict | None:
+        registry = getattr(self.agent, "_registry", None)
+        if registry is None:
+            return None
+        actor = registry.find_by_name("home-assistant-map-agent")
+        if actor is None:
+            return None
+        if hasattr(actor, "get_latest_map_payload"):
+            payload = actor.get_latest_map_payload()
+        elif hasattr(actor, "recall"):
+            payload = actor.recall("latest_map_payload", None)
+        else:
+            payload = None
+        return payload if isinstance(payload, dict) else None
+
     async def run(self):
         try:
             from aiohttp import web
@@ -800,8 +815,15 @@ class RESTInterface:
         async def health_endpoint(request):
             return web.json_response({"status": "ok"})
 
+        async def ha_map_latest_endpoint(request):
+            payload = self._latest_ha_map_payload()
+            if payload is None:
+                return web.json_response({"error": "Home Assistant map snapshot not available"}, status=404)
+            return web.json_response(payload)
+
         app = web.Application()
         app.router.add_get("/health", health_endpoint)
+        app.router.add_get("/ha-map", ha_map_latest_endpoint)
         app.router.add_get("/actors", agents_endpoint)
         app.router.add_get("/actors/{actor_id}", actor_endpoint)
         app.router.add_post("/actors/{actor_id}/message", actor_message_endpoint)

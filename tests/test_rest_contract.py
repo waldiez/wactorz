@@ -21,6 +21,24 @@ class _FakeActor:
         return {"state": "idle"}
 
 
+class _FakeMapActor:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def get_latest_map_payload(self):
+        return self._payload
+
+
+class _FakeRegistry:
+    def __init__(self, map_actor=None):
+        self._map_actor = map_actor
+
+    def find_by_name(self, name):
+        if name == "home-assistant-map-agent":
+            return self._map_actor
+        return None
+
+
 class RestContractTest(unittest.TestCase):
     def test_actor_payload_matches_frontend_contract(self):
         iface = RESTInterface(main_actor=types.SimpleNamespace(), port=8080)
@@ -42,3 +60,9 @@ class RestContractTest(unittest.TestCase):
         self.assertEqual(payload["messages_failed"], 2)
         self.assertEqual(payload["restart_count"], 1)
         self.assertIn("llm_cost_usd", payload)
+
+    def test_latest_ha_map_payload_reads_from_running_map_agent(self):
+        expected = {"type": "home_assistant_map_update", "devices": [{"device_id": "one"}]}
+        registry = _FakeRegistry(map_actor=_FakeMapActor(expected))
+        iface = RESTInterface(main_actor=types.SimpleNamespace(_registry=registry), port=8080)
+        self.assertEqual(iface._latest_ha_map_payload(), expected)

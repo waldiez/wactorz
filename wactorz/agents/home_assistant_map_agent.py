@@ -178,6 +178,7 @@ class HomeAssistantMapAgent(Actor):
             mqtt_topic=self._output_topic,
             target_actor_name=self._target_actor_name,
         )
+        self._latest_map_payload: dict[str, Any] | None = None
         self._events_seen = 0
         self._last_event_at = 0.0
         self._last_error = ""
@@ -186,6 +187,8 @@ class HomeAssistantMapAgent(Actor):
         self._events_seen = int(self.recall("events_seen", 0))
         self._last_event_at = float(self.recall("last_event_at", 0.0))
         self._last_error = str(self.recall("last_error", ""))
+        latest = self.recall("latest_map_payload", None)
+        self._latest_map_payload = latest if isinstance(latest, dict) else None
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
             {
@@ -196,6 +199,7 @@ class HomeAssistantMapAgent(Actor):
             },
         )
         self._tasks.append(asyncio.create_task(self._entity_registry_listener()))
+        await self._initial_refresh()
         logger.info("[%s] started", self.name)
 
     async def on_stop(self) -> None:
@@ -211,13 +215,9 @@ class HomeAssistantMapAgent(Actor):
         if command == "status":
             payload = self._build_status_payload()
         elif command == "refresh":
-            payload = await self._build_map_update_payload(event=None)
-            await self._dispatcher.dispatch(payload)
-            self.metrics.tasks_completed += 1
+            payload = await self._refresh_map_payload(event=None)
         elif command == "refresh simple":
-            payload = await self._build_map_update_payload(event=None, include_states=False)
-            await self._dispatcher.dispatch(payload)
-            self.metrics.tasks_completed += 1
+            payload = await self._refresh_map_payload(event=None, include_states=False)
         else:
             payload = {
                 "error": "Unsupported command. Use 'status', 'refresh', or 'refresh simple'.",
@@ -264,11 +264,7 @@ class HomeAssistantMapAgent(Actor):
                     await asyncio.sleep(5)
 
     async def _handle_entity_registry_event(self, event_message: dict[str, Any]) -> None:
-        payload = await self._build_map_update_payload(event_message.get("event"))
-        await self._dispatcher.dispatch(payload)
-        self._events_seen += 1
-        self._last_event_at = payload["timestamp"]
-        self.metrics.tasks_completed += 1
+        await self._refresh_map_payload(event_message.get("event"), record_event=True)
 
     async def _build_map_update_payload(
         self,
@@ -287,6 +283,41 @@ class HomeAssistantMapAgent(Actor):
             "event": event or {},
             "devices": devices,
         }
+
+    def _store_latest_map_payload(self, payload: dict[str, Any]) -> None:
+        self._latest_map_payload = payload
+        self.persist("latest_map_payload", payload)
+
+    def get_latest_map_payload(self) -> dict[str, Any] | None:
+        return self._latest_map_payload
+
+    async def _initial_refresh(self) -> None:
+        if not self.ha_url or not self.ha_ws_url or not self.ha_token:
+            return
+        try:
+            await self._refresh_map_payload(event=None)
+        except Exception as exc:
+            self._last_error = str(exc)
+            logger.warning("[%s] initial refresh failed: %s", self.name, exc)
+
+    async def _refresh_map_payload(
+        self,
+        event: dict[str, Any] | None,
+        include_states: bool = True,
+        record_event: bool = False,
+    ) -> dict[str, Any]:
+        payload = await self._build_map_update_payload(
+            event=event,
+            include_states=include_states,
+        )
+        self._store_latest_map_payload(payload)
+        # await self._dispatcher.dispatch(payload)
+        self._last_error = ""
+        if record_event:
+            self._events_seen += 1
+            self._last_event_at = payload["timestamp"]
+        self.metrics.tasks_completed += 1
+        return payload
 
     def _build_status_payload(self) -> dict[str, Any]:
         return {

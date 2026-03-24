@@ -295,10 +295,24 @@ class HomeAssistantMapAgent(Actor):
         if not self.ha_url or not self.ha_ws_url or not self.ha_token:
             return
         try:
-            await self._refresh_map_payload(event=None)
+            await self._warm_latest_map_payload()
         except Exception as exc:
             self._last_error = str(exc)
             logger.warning("[%s] initial refresh failed: %s", self.name, exc)
+
+    async def _warm_latest_map_payload(
+        self,
+        event: dict[str, Any] | None = None,
+        include_states: bool = True,
+    ) -> dict[str, Any]:
+        payload = await self._build_map_update_payload(
+            event=event,
+            include_states=include_states,
+        )
+        self._store_latest_map_payload(payload)
+        self._last_error = ""
+        self.metrics.tasks_completed += 1
+        return payload
 
     async def _refresh_map_payload(
         self,
@@ -306,17 +320,14 @@ class HomeAssistantMapAgent(Actor):
         include_states: bool = True,
         record_event: bool = False,
     ) -> dict[str, Any]:
-        payload = await self._build_map_update_payload(
+        payload = await self._warm_latest_map_payload(
             event=event,
             include_states=include_states,
         )
-        self._store_latest_map_payload(payload)
-        # await self._dispatcher.dispatch(payload)
-        self._last_error = ""
+        await self._dispatcher.dispatch(payload)
         if record_event:
             self._events_seen += 1
             self._last_event_at = payload["timestamp"]
-        self.metrics.tasks_completed += 1
         return payload
 
     def _build_status_payload(self) -> dict[str, Any]:

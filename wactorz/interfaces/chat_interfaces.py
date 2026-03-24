@@ -9,6 +9,7 @@ import os
 from typing import Any
 from typing import TYPE_CHECKING
 
+
 if TYPE_CHECKING:
     from ..agents.main_actor import MainActor
 
@@ -531,6 +532,65 @@ class DiscordInterface:
 
         await client.start(self.token)
 
+
+# ─── Telegram Interface ─────────────────────────────────────────────────────
+
+class TelegramInterface:
+    def __init__(self, main_actor: "MainActor", token: str, allowed_user_id: int | None = None):
+        self.agent = main_actor
+        self.token = token
+        self.allowed_user_id = allowed_user_id
+
+    async def run(self):
+        try:
+            from telegram import Update
+            from telegram.constants import ChatAction
+            from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
+        except ImportError:
+            logger.error("python-telegram-bot not installed. Run: pip install python-telegram-bot")
+            return
+
+        async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            user = update.effective_user
+            await update.message.reply_text(
+                f"Hi {user.first_name if user else ''}. Telegram interface is online.\n"
+                f"Your Telegram user id is: {user.id if user else 'unknown'}"
+            )
+
+        async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            if not update.message or not update.message.text:
+                return
+
+            user = update.effective_user
+            if not user:
+                return
+
+            logger.info("[Telegram] Message from id=%s username=%s: %s",
+                        user.id, user.username, update.message.text[:60])
+
+            if self.allowed_user_id and user.id != self.allowed_user_id:
+                logger.warning("[Telegram] Rejected message from user %s", user.id)
+                return
+
+            text = update.message.text.strip()
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+
+            response = await self.agent.process_user_input(text)
+            response = response or "(no response)"
+
+            for i in range(0, len(response), 4096):
+                await update.message.reply_text(response[i:i + 4096])
+
+        app = Application.builder().token(self.token).build()
+        app.add_handler(CommandHandler("start", start_cmd))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logger.info("[Telegram] Bot starting (polling)...")
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+        await asyncio.Event().wait()
 
 # ─── WhatsApp Interface (via Twilio) ───────────────────────────────────────
 

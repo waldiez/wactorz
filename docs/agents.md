@@ -244,10 +244,17 @@ HA_MAP_AGENT_TARGET_ACTOR=          # optional actor name; overrides MQTT topic
 
 **Task commands** (sent via actor mailbox):
 
-| Command   | Description                                             |
-| --------- | ------------------------------------------------------- |
-| `refresh` | Force an immediate device-map rebuild and publish       |
-| `status`  | Return connection state, event counters, and error info |
+| Command          | Description                                                               |
+| ---------------- | ------------------------------------------------------------------------- |
+| `refresh`        | Force an immediate device-map rebuild and publish                         |
+| `refresh simple` | Force an immediate device-map rebuild and publish without entity states   |
+| `status`         | Return connection state, event counters, and error info                   |
+
+Large MQTT snapshots are published as multiple messages on the same topic when the
+serialized payload is too large. In that case the agent emits a
+`home_assistant_map_update_chunked` manifest first, followed by one or more
+`home_assistant_map_update_chunk` messages carrying a base64-encoded JSON payload
+split into bounded chunks.
 
 **Published payload schema:**
 

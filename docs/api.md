@@ -79,6 +79,32 @@ Send a message to an actor.
 
 ---
 
+### Home Assistant Map
+
+#### `GET /ha-map`
+
+Return the latest cached Home Assistant device map snapshot from `HomeAssistantMapAgent`.
+
+**Response** `200 OK`
+```json
+{
+  "type": "home_assistant_map_update",
+  "event_type": "entity_registry_updated",
+  "timestamp": 1234567890.0,
+  "event": {},
+  "devices": []
+}
+```
+
+**Response** `404 Not Found`
+```json
+{
+  "error": "Home Assistant map snapshot not available"
+}
+```
+
+---
+
 ## WebSocket Bridge  (`/ws`)
 
 Connect: `ws://host/ws`

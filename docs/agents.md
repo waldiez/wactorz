@@ -233,6 +233,8 @@ Complex operations (`create`, `edit`) use up to two additional LLM calls; simple
 
 Maintains a live map of every HA device with its physical location. On startup it performs an immediate refresh of the full device/entity/location dataset and stores the latest snapshot locally without dispatching it, then keeps a persistent WebSocket connection to Home Assistant and re-fetches the map every time the entity registry changes.
 
+The latest cached snapshot is exposed through the REST API at `GET /ha-map`.
+
 Output can be directed to an MQTT topic or forwarded directly to another actor by name:
 
 **Configuration (`.env`):**

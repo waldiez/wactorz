@@ -519,6 +519,8 @@ python -m wactorz --interface discord --discord-token YOUR_TOKEN
 
 Start with `--interface rest` (default port 8080). Send `POST` requests to `/chat` with `{"message": "..."}`. Responses are blocking (non-streaming). Suitable for integration with other services.
 
+The Home Assistant map snapshot is also available at `GET /api/ha-map/latest`. It returns the latest cached map payload from `HomeAssistantMapAgent`, or `404` if no snapshot has been fetched yet.
+
 ### Discord
 
 Set `DISCORD_BOT_TOKEN` and start with `--interface discord`. The bot responds when **mentioned** (e.g. `@YourBot turn on the lights`). Make sure to enable the **Message Content Intent** in your Discord Developer Portal under Bot → Privileged Gateway Intents.
@@ -615,7 +617,7 @@ Device and automation data is cached (30s TTL). The agent includes a self-correc
 
 ### HomeAssistantMapAgent — Live Entity Map
 
-Maintains a live, location-enriched map of every HA device and entity. Opens a persistent WebSocket connection to Home Assistant and re-fetches the full device/entity/location dataset every time the entity registry changes, then publishes the result to MQTT (or forwards it directly to another actor by name).
+Maintains a live, location-enriched map of every HA device and entity. On startup it fetches and caches the latest snapshot locally without dispatching it, then keeps a persistent WebSocket connection to Home Assistant and re-fetches the full device/entity/location dataset every time the entity registry changes. Event-driven and manual refreshes dispatch the result to MQTT or forward it directly to another actor by name.
 
 **Published topic** (default): `homeassistant/map/entities_with_location`
 
@@ -624,9 +626,14 @@ Maintains a live, location-enriched map of every HA device and entity. Opens a p
 | Command | Description |
 |---------|-------------|
 | `refresh` | Force an immediate rebuild and publish |
+| `refresh simple` | Force an immediate rebuild and publish without entity states |
 | `status` | Return connection state, event counter, and last error |
 
 Configure with `HA_MAP_AGENT_OUTPUT_TOPIC` and optionally `HA_MAP_AGENT_TARGET_ACTOR` (routes the payload to another actor instead of MQTT).
+
+The latest cached snapshot is exposed through the REST API at `GET /ha-map`.
+
+When a map payload is too large for one MQTT message, the agent emits a `home_assistant_map_update_chunked` manifest first, followed by one or more `home_assistant_map_update_chunk` messages on the same topic carrying a base64-encoded JSON payload.
 
 ### HomeAssistantStateBridgeAgent — State Change Bridge
 

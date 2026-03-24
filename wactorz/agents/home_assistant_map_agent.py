@@ -111,6 +111,7 @@ class HomeAssistantMapAgent(Actor):
             payload = self._build_status_payload()
         elif command == "refresh":
             payload = await self._build_map_update_payload(event=None)
+            await self._dispatcher.dispatch(payload)
             self.metrics.tasks_completed += 1
         else:
             payload = {

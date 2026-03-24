@@ -521,7 +521,32 @@ Start with `--interface rest` (default port 8080). Send `POST` requests to `/cha
 
 ### Discord
 
-Set `DISCORD_BOT_TOKEN` and start with `--interface discord`. The bot responds to messages prefixed with `!` (e.g. `!turn on the lights`). Make sure to enable the **Message Content Intent** in your Discord Developer Portal under Bot → Privileged Gateway Intents.
+Set `DISCORD_BOT_TOKEN` and start with `--interface discord`. The bot responds when **mentioned** (e.g. `@YourBot turn on the lights`). Make sure to enable the **Message Content Intent** in your Discord Developer Portal under Bot → Privileged Gateway Intents.
+
+### Telegram
+
+Set `TELEGRAM_BOT_TOKEN` and start with `--interface telegram`. The bot responds to any direct message — no prefix needed. Each user runs their own bot with their own token, so it is self-hosted and independent.
+
+```bash
+python -m wactorz --interface telegram
+```
+
+**Setup steps:**
+1. Create a bot via [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token
+2. Add `TELEGRAM_BOT_TOKEN=<token>` to your `.env`
+3. Start wactorz and send `/start` to your bot — it replies with your numeric user ID
+4. Add `TELEGRAM_ALLOWED_USER_ID=<id>` to your `.env` to lock the bot to only you
+
+```env
+TELEGRAM_BOT_TOKEN=7123456789:AAF...
+TELEGRAM_ALLOWED_USER_ID=123456789
+```
+
+> **Privacy & security notes:**
+> - Telegram bots are publicly discoverable by username. Without `TELEGRAM_ALLOWED_USER_ID` set, anyone who finds your bot can send it messages and consume your LLM credits. **Always set it.**
+> - Your bot token is a secret — treat it like a password. Never commit it to git. Make sure `.env` is in your `.gitignore`.
+> - Messages pass through Telegram's servers. If end-to-end privacy is a hard requirement, consider the REST or CLI interface instead.
+> - If your token is ever exposed (e.g. accidentally shared), revoke it immediately via BotFather: `/mybots` → select your bot → API Token → Revoke.
 
 ### WhatsApp
 
@@ -950,6 +975,8 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-host` and
 | `HA_STATE_BRIDGE_DOMAINS` | Comma-separated domain allow-list for state bridge (e.g. `light,switch,sensor`; empty = all) |
 | `HA_STATE_BRIDGE_PER_ENTITY` | `1` (default) = per-entity sub-topics; `0` = single shared topic |
 | `DISCORD_BOT_TOKEN` | Discord bot token (for `--interface discord`) |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather (for `--interface telegram`) |
+| `TELEGRAM_ALLOWED_USER_ID` | Optional — restrict Telegram bot to a single numeric user ID |
 | `TWILIO_ACCOUNT_SID` | Twilio account SID (for `--interface whatsapp`) |
 | `TWILIO_AUTH_TOKEN` | Twilio auth token |
 | `TWILIO_WHATSAPP_FROM` | Twilio WhatsApp sender number |
@@ -985,7 +1012,13 @@ The monitor uses two liveness signals: `STATUS_RESPONSE` messages and `metrics.l
 
 ### Discord bot not responding
 
-Ensure **Message Content Intent** is enabled in the Discord Developer Portal (Bot → Privileged Gateway Intents). The bot only responds to messages prefixed with `!`.
+Ensure **Message Content Intent** is enabled in the Discord Developer Portal (Bot → Privileged Gateway Intents). The bot responds when mentioned — e.g. `@YourBot hello`.
+
+### Telegram bot not responding
+
+- Check that `TELEGRAM_BOT_TOKEN` is set correctly in `.env`
+- If `TELEGRAM_ALLOWED_USER_ID` is set, send `/start` first to confirm your user ID matches
+- The bot uses long polling — no public server or webhook needed
 
 ---
 

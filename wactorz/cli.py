@@ -103,7 +103,7 @@ def _start_reloader() -> None:
 
 def get_args():
 	parser = argparse.ArgumentParser(description="Wactorz - Multi-Agent Framework")
-	parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp"])
+	parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp", "telegram"])
 	parser.add_argument("--port", type=int)
 	parser.add_argument("--llm", choices=["anthropic", "openai", "ollama", "nim", "gemini", "none"])
 	parser.add_argument("--ollama-model",
@@ -114,6 +114,8 @@ def get_args():
 	                    default="gemini-2.5-flash",
 	                    help="Google Gemini model (default: gemini-2.5-flash). Options: gemini-2.5-flash-lite, gemini-2.5-pro, gemini-3.1-pro")
 	parser.add_argument("--discord-token")
+	parser.add_argument("--telegram-token")
+	parser.add_argument("--telegram-allowed-user-id", type=int)
 	parser.add_argument("--mqtt-broker")
 	parser.add_argument("--mqtt-port", type=int)
 	parser.add_argument("--monitor-port", type=int, default=8888,
@@ -291,7 +293,7 @@ async def app():
 	    )
 
 	from wactorz.interfaces.chat_interfaces import (
-	    CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface
+	    CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface, TelegramInterface
 	)
 
 	interface = args.interface or CONFIG.interface
@@ -318,6 +320,14 @@ async def app():
 	        from_number=CONFIG.twilio_whatsapp_number,
 	        port=port,
 	    )
+	    await asyncio.gather(iface.run(), system.run_forever())
+	elif interface == "telegram":
+	    telegram_token = args.telegram_token or CONFIG.telegram_token
+	    if not telegram_token:
+	        logger.error("TELEGRAM_BOT_TOKEN not set.")
+	        sys.exit(1)
+	    allowed_user_id = args.telegram_allowed_user_id or CONFIG.telegram_allowed_user_id or None
+	    iface = TelegramInterface(main_actor, token=telegram_token, allowed_user_id=allowed_user_id)
 	    await asyncio.gather(iface.run(), system.run_forever())
 
 

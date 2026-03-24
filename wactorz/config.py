@@ -33,6 +33,8 @@ class AppConfig:
     ha_state_bridge_domains: str
     ha_state_bridge_per_entity: bool
     discord_token: str
+    telegram_token: str
+    telegram_allowed_user_id: int
     ws_port: int
     nim_api_key: str
     nvidia_api_key: str
@@ -62,6 +64,8 @@ CONFIG = AppConfig(
     ha_state_bridge_domains=os.getenv("HA_STATE_BRIDGE_DOMAINS", ""),
     ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0") not in ("0", "false", "no"),
     discord_token=os.getenv("DISCORD_BOT_TOKEN", ""),
+    telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+    telegram_allowed_user_id=int(os.getenv("TELEGRAM_ALLOWED_USER_ID", 0)),
     ws_port=int(os.getenv("WS_PORT", 8888)),
     nim_api_key=os.getenv("NIM_API_KEY", ""),
     nvidia_api_key=os.getenv("NVIDIA_API_KEY", ""),

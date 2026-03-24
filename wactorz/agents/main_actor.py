@@ -22,7 +22,8 @@ class _SpawnPlaceholder:
 
 
 
-SPAWN_REGISTRY_KEY = "_spawned_agents"
+SPAWN_REGISTRY_KEY   = "_spawned_agents"
+PIPELINE_RULES_KEY   = "_pipeline_rules"
 NODE_REGISTRY_KEY  = "_known_nodes"       # tracks online remote nodes
 
 ORCHESTRATOR_PROMPT = """You are the main orchestrator in a multi-agent system.
@@ -643,13 +644,22 @@ class MainActor(LLMAgent):
     DESCRIPTION  = "Main orchestrator: spawns agents, routes tasks, manages the multi-agent system"
     CAPABILITIES = ["spawn_agent", "list_agents", "list_nodes", "list_topics", "orchestration"]
 
-    HOME_AUTOMATION_INTENT_SYSTEM_PROMPT = (
-        "You are an intent classifier for Home Assistant routing. "
-        "Respond with exactly one token: HA or NOT_HA.\n"
-        "HA = user is asking to automate/control a physical home environment, devices, scenes, "
-        "sensors, routines, or events (lights, doors, climate, presence, ambiance, alerts, etc.), "
-        "including natural-language goals that imply automation.\n"
-        "NOT_HA = anything else (coding, general chat, pure web/software tasks, unrelated requests)."
+    INTENT_CLASSIFIER_PROMPT = (
+        "You are a routing classifier for a smart home AI assistant.\n"
+        "Respond with exactly one token: HA, PIPELINE, or OTHER.\n\n"
+        "HA = a direct, one-shot Home Assistant action or query:\n"
+        "  - Turn on/off a device right now\n"
+        "  - List devices, areas, entities, automations\n"
+        "  - Create/edit/delete a HA automation\n"
+        "  - Set temperature, dim lights, lock door — immediate action\n\n"
+        "PIPELINE = a reactive rule that should run continuously:\n"
+        "  - 'if X happens then do Y' — any conditional/reactive logic\n"
+        "  - 'when X send me a message/notification'\n"
+        "  - 'whenever X turns on/off do Y'\n"
+        "  - Any rule involving a sensor state change triggering an action or notification\n"
+        "  - Any webcam/camera detection triggering anything\n"
+        "  - Anything involving Discord/Telegram notifications triggered by an event\n\n"
+        "OTHER = general conversation, coding, questions, anything not HA or pipeline related."
     )
 
     def __init__(self, llm_provider: Optional[LLMProvider] = None, **kwargs):
@@ -693,6 +703,44 @@ class MainActor(LLMAgent):
             del reg[name]
             self.persist(SPAWN_REGISTRY_KEY, reg)
             logger.info(f"[{self.name}] Removed '{name}' from spawn registry.")
+
+    # ── Pipeline rules registry ────────────────────────────────────────────
+    # Stores grouped rules: one entry per user request, listing all agents spawned for it.
+    # Schema: { rule_id: { "rule_id", "task", "agents": [str], "created_at": float } }
+
+    def get_pipeline_rules(self) -> dict:
+        return self.recall(PIPELINE_RULES_KEY) or {}
+
+    def save_pipeline_rule(self, rule: dict):
+        rules = self.get_pipeline_rules()
+        rules[rule["rule_id"]] = rule
+        self.persist(PIPELINE_RULES_KEY, rules)
+        logger.info(f"[{self.name}] Pipeline rule saved: {rule['rule_id']} agents={rule.get('agents', [])}")
+
+    def get_notification_urls(self) -> dict:
+        """Return persisted notification webhook URLs (discord, telegram, slack, etc.)"""
+        return self.recall("_notification_urls") or {}
+
+    async def delete_pipeline_rule(self, rule_id: str) -> str:
+        """Stop all agents for a rule and remove it from registry."""
+        rules = self.get_pipeline_rules()
+        rule = rules.get(rule_id)
+        if not rule:
+            return f"No rule found with id '{rule_id}'."
+        agents = rule.get("agents", [])
+        stopped = []
+        for agent_name in agents:
+            self._remove_from_spawn_registry(agent_name)
+            if self._registry:
+                actor = self._registry.find_by_name(agent_name)
+                if actor:
+                    await actor.stop()
+                    await self._registry.unregister(actor.actor_id)
+                    stopped.append(agent_name)
+        del rules[rule_id]
+        self.persist(PIPELINE_RULES_KEY, rules)
+        task_preview = rule.get("task", "")[:60]
+        return f"Rule '{rule_id}' deleted. Stopped agents: {', '.join(stopped) or 'none running'}.\nRule was: {task_preview}"
 
     async def _restore_spawned_agents(self):
         reg = self._get_spawn_registry()
@@ -783,35 +831,36 @@ class MainActor(LLMAgent):
             or (has_automation_intent and has_home_context)
         )
 
-    async def _is_home_automation_request(self, text: str) -> bool:
-        # Pipeline requests — always bypass HA agent regardless of LLM classification
-        _pipeline_keywords = [
-            "camera", "webcam", "yolo", "detect", "detection",
-            "laptop camera", "opencv", "cv2", "person detect",
-            "notify me", "send me a message", "send me a discord",
-            "discord", "telegram", "pipeline",
-        ]
-        lowered = (text or "").lower()
-        if any(kw in lowered for kw in _pipeline_keywords):
-            return False
-
-        if self._looks_like_home_automation_request(text):
-            return True
-        if not text or text.lower().startswith("spawn ") or text.startswith("/"):
-            return False
+    async def _classify_intent(self, text: str) -> str:
+        """
+        Classify user intent as HA, PIPELINE, or OTHER using a single cheap LLM call.
+        Returns one of: 'HA', 'PIPELINE', 'OTHER'
+        """
+        if not text or text.startswith("/"):
+            return "OTHER"
         if self.llm is None:
-            return False
+            return "OTHER"
         try:
-            decision_task = self.llm.complete(
-                messages=[{"role": "user", "content": text}],
-                system=self.HOME_AUTOMATION_INTENT_SYSTEM_PROMPT,
-                max_tokens=4,
+            decision, _ = await asyncio.wait_for(
+                self.llm.complete(
+                    messages=[{"role": "user", "content": text}],
+                    system=self.INTENT_CLASSIFIER_PROMPT,
+                    max_tokens=4,
+                ),
+                timeout=5.0,
             )
-            decision, _ = await asyncio.wait_for(decision_task, timeout=4.0)
-            return (decision or "").strip().upper().startswith("HA")
+            token = (decision or "").strip().upper().split()[0] if decision else "OTHER"
+            if token in ("HA", "PIPELINE", "OTHER"):
+                return token
+            return "OTHER"
         except Exception as e:
-            logger.debug(f"[{self.name}] HA intent fallback failed: {e}")
-            return False
+            logger.debug(f"[{self.name}] Intent classification failed: {e}")
+            return "OTHER"
+
+    async def _is_home_automation_request(self, text: str) -> bool:
+        # Keep for backward compat — delegates to _classify_intent
+        intent = await self._classify_intent(text)
+        return intent == "HA"
 
     # ── User input ─────────────────────────────────────────────────────────
 
@@ -861,23 +910,79 @@ class MainActor(LLMAgent):
                 lines.append(f"  {t['topic']:40s} ← {agent_strs}")
             return note_prefix + "\n".join(lines)
 
+        # ── Webhook / notification URL management ───────────────────────────
+        if stripped.startswith("/webhook"):
+            parts = stripped.split(None, 2)
+            if len(parts) == 1:
+                # /webhook — show stored URLs
+                urls = self.recall("_notification_urls") or {}
+                if not urls:
+                    return note_prefix + "No notification URLs stored.\nUse: /webhook discord <url>  or  /webhook telegram <url>"
+                lines = ["Stored notification URLs:"]
+                for svc, url in urls.items():
+                    lines.append(f"  {svc}: {url}")
+                return note_prefix + "\n".join(lines)
+            elif len(parts) >= 3:
+                # /webhook discord <url>
+                service = parts[1].lower()
+                url = parts[2].strip()
+                urls = self.recall("_notification_urls") or {}
+                urls[service] = url
+                self.persist("_notification_urls", urls)
+                return note_prefix + f"Saved {service} webhook URL. Pipelines will use it automatically."
+            else:
+                return note_prefix + "Usage: /webhook <service> <url>\nExample: /webhook discord https://discord.com/api/webhooks/..."
+
+        # Auto-detect webhook URLs in any message and persist them
+        import re as _re
+        _webhook_match = _re.search(
+            r'https?://(?:discord\.com/api/webhooks|hooks\.slack\.com|api\.telegram\.org)/\S+',
+            text
+        )
+        if _webhook_match:
+            url = _webhook_match.group(0).rstrip(".,;!)'\"")
+            urls = self.recall("_notification_urls") or {}
+            if "discord" in url:
+                urls["discord"] = url
+            elif "slack" in url:
+                urls["slack"] = url
+            elif "telegram" in url:
+                urls["telegram"] = url
+            self.persist("_notification_urls", urls)
+            logger.info(f"[{self.name}] Auto-saved webhook URL from message")
+
         if stripped in ("/rules", "rules"):
-            reg = self._get_spawn_registry()
-            rules = {k: v for k, v in reg.items() if v.get("_rule")}
+            rules = self.get_pipeline_rules()
             if not rules:
-                return note_prefix + "No pipeline rules active. Describe a reactive rule to create one, e.g. 'when person detected turn on lights'."
-            lines = ["Active pipeline rules:"]
-            for name, cfg in sorted(rules.items()):
-                running = "🟢" if (self._registry and self._registry.find_by_name(name)) else "🔴"
-                task    = cfg.get("_rule_task", "")[:80]
-                persist = cfg.get("_persist", {})
-                topic   = persist.get("mqtt_topic", cfg.get("mqtt_subscribe", ""))
-                lines.append(f"  {running} {name}")
-                if task:
-                    lines.append(f"       rule : {task}")
-                if topic:
-                    lines.append(f"       topic: {topic}")
+                return note_prefix + "No pipeline rules active.\nDescribe a reactive rule to create one, e.g. 'when the door opens send me a Discord message'."
+            lines = [f"Active pipeline rules ({len(rules)}):"]
+            for rule_id, rule in sorted(rules.items(), key=lambda x: x[1].get("created_at", 0)):
+                agents = rule.get("agents", [])
+                task = rule.get("task", "")[:80]
+                import datetime
+                ts = rule.get("created_at", 0)
+                created = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "unknown"
+                # Check which agents are running
+                running_agents = []
+                stopped_agents = []
+                for a in agents:
+                    if self._registry and self._registry.find_by_name(a):
+                        running_agents.append(a)
+                    else:
+                        stopped_agents.append(a)
+                status = "🟢" if running_agents else "🔴"
+                lines.append(f"\n{status} [{rule_id}] — {task}")
+                lines.append(f"   agents  : {', '.join(agents)}")
+                if stopped_agents:
+                    lines.append(f"   stopped : {', '.join(stopped_agents)}")
+                lines.append(f"   created : {created}")
+            lines.append("\nTo delete a rule: /rules delete <rule_id>")
             return note_prefix + "\n".join(lines)
+
+        if stripped.startswith("/rules delete "):
+            rule_id = stripped[len("/rules delete "):].strip()
+            result = await self.delete_pipeline_rule(rule_id)
+            return note_prefix + result
 
         if stripped.startswith("/rules"):
             keyword = stripped[14:].strip().lstrip("(").rstrip(")")
@@ -992,30 +1097,30 @@ class MainActor(LLMAgent):
                     f"Remote agents: {', '.join(known_remote)}")
             return note_prefix + f"Agent '{target_name}' not found."
 
-        # Explicit planning/pipeline prefix always wins — check BEFORE HA routing
+        # Explicit planner prefix always wins
         lowered = text.lower()
         if any(lowered.startswith(p) for p in (
             "coordinate:", "coordinate ", "plan:", "pipeline:", "pipeline ",
             "@planner", "set up a pipeline", "create a rule", "set up a rule",
         )):
             result = await self._run_planner(text)
-            if result:
-                return note_prefix + result
+            return note_prefix + (result or "Planner did not return a result. Please retry.")
 
-        # Route home automation requests to the unified HA agent
-        if await self._is_home_automation_request(text):
+        # Single LLM call classifies intent: HA (direct action), PIPELINE (reactive rule), OTHER
+        intent = await self._classify_intent(text)
+        logger.info(f"[{self.name}] Intent: {intent} — {text[:60]}")
+
+        if intent == "PIPELINE":
+            result = await self._run_planner(text)
+            return note_prefix + (result or "Planner did not return a result. Please retry.")
+
+        if intent == "HA":
             result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
             if result and isinstance(result, dict) and result.get("result"):
                 return note_prefix + str(result["result"])
             if not result:
                 return note_prefix + "I could not reach the Home Assistant agent right now. Please retry."
             return note_prefix + "The Home Assistant agent did not return a result. Please retry."
-
-        # Detect complex multi-agent tasks and route to PlannerAgent
-        if await self._needs_planning(text):
-            result = await self._run_planner(text)
-            if result:
-                return note_prefix + result
 
         response = await self.chat(text)
 
@@ -1070,20 +1175,28 @@ class MainActor(LLMAgent):
         if note_prefix:
             yield note_prefix
 
-        # Explicit planning/pipeline prefix always wins — check BEFORE HA routing
+        # Explicit planner prefix always wins
         _lowered = text.lower()
         if any(_lowered.startswith(p) for p in (
             "coordinate:", "coordinate ", "plan:", "pipeline:", "pipeline ",
             "@planner", "set up a pipeline", "create a rule", "set up a rule",
         )):
             result = await self._run_planner(text)
-            if result:
-                yield result
-                yield {"done": True, "spawned": [], "system_msg": ""}
+            yield result or "Planner did not return a result. Please retry."
+            yield {"done": True, "spawned": [], "system_msg": ""}
             return
 
-        # HA routing has no streaming — fall back to blocking for those
-        if await self._is_home_automation_request(text):
+        # Single LLM call classifies intent: HA, PIPELINE, or OTHER
+        intent = await self._classify_intent(text)
+        logger.info(f"[{self.name}] Intent: {intent} — {text[:60]}")
+
+        if intent == "PIPELINE":
+            result = await self._run_planner(text)
+            yield result or "Planner did not return a result. Please retry."
+            yield {"done": True, "spawned": [], "system_msg": ""}
+            return
+
+        if intent == "HA":
             result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
             if result and isinstance(result, dict) and result.get("result"):
                 yield str(result["result"])
@@ -1093,14 +1206,6 @@ class MainActor(LLMAgent):
                 yield "The Home Assistant agent did not return a result. Please retry."
             yield {"done": True, "spawned": [], "system_msg": ""}
             return
-
-        # Detect complex multi-agent tasks and route to PlannerAgent
-        if await self._needs_planning(text):
-            result = await self._run_planner(text)
-            if result:
-                yield result
-                yield {"done": True, "spawned": [], "system_msg": ""}
-                return
 
         # Stream the LLM response chunk by chunk
         full_chunks = []
@@ -1224,7 +1329,7 @@ class MainActor(LLMAgent):
         )
 
         task_id = f"plan_{uuid.uuid4().hex[:8]}"
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._result_futures[task_id] = future
 
         try:
@@ -1234,18 +1339,15 @@ class MainActor(LLMAgent):
                 llm_provider=self.llm,
                 task=enriched_task,
                 reply_to_id=self.actor_id,
-                reply_task_id=task_id,   # so main can match the result future
+                reply_task_id=task_id,
                 auto_terminate=True,
                 persistence_dir=str(self._persistence_dir.parent),
             )
             if not planner:
                 return None
 
-            # Planner will call on_start → _run_plan → send RESULT back to us
-            # We wait here with a generous timeout
-            result_payload = await asyncio.wait_for(future, timeout=120.0)
+            result_payload = await asyncio.wait_for(future, timeout=180.0)
             answer = result_payload.get("result") or result_payload.get("text") or ""
-            # Surface any agents the planner spawned
             spawned_names = result_payload.get("spawned", [])
             if spawned_names:
                 answer += f"\n\n[System: Planner created new agents: {', '.join(spawned_names)} — saved for future use]"
@@ -1253,7 +1355,7 @@ class MainActor(LLMAgent):
 
         except asyncio.TimeoutError:
             logger.warning(f"[{self.name}] Planner timed out for: {task[:60]}")
-            return None
+            return "The pipeline is taking longer than expected to set up. Check `/rules` in a moment to see if agents were spawned, or try again."
         except Exception as e:
             logger.error(f"[{self.name}] Planner error: {e}")
             return None

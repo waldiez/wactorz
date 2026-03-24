@@ -105,10 +105,14 @@ def get_args():
 	parser = argparse.ArgumentParser(description="Wactorz - Multi-Agent Framework")
 	parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp"])
 	parser.add_argument("--port", type=int)
-	parser.add_argument("--llm", choices=["anthropic", "openai", "ollama", "nim", "none"])
-	parser.add_argument("--ollama-model")
+	parser.add_argument("--llm", choices=["anthropic", "openai", "ollama", "nim", "gemini", "none"])
+	parser.add_argument("--ollama-model",
+	                    help="Ollama model name (e.g. llama3, mistral)")
 	parser.add_argument("--nim-model",
 	                    help="NVIDIA NIM model, e.g. meta/llama-3.3-70b-instruct or deepseek-ai/deepseek-r1")
+	parser.add_argument("--gemini-model",
+	                    default="gemini-2.5-flash",
+	                    help="Google Gemini model (default: gemini-2.5-flash). Options: gemini-2.5-flash-lite, gemini-2.5-pro, gemini-3.1-pro")
 	parser.add_argument("--discord-token")
 	parser.add_argument("--mqtt-broker")
 	parser.add_argument("--mqtt-port", type=int)
@@ -146,7 +150,6 @@ async def _start_web_ui(port: int, mqtt_broker: str, mqtt_port: int, actor_regis
 
 
 async def build_system(args: argparse.Namespace):
-    # CONFIG = get_config()
     from wactorz.core.registry import ActorSystem
     from wactorz.core.actor import SupervisorStrategy
     from wactorz.agents.main_actor import MainActor
@@ -157,7 +160,10 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.io_agent import IOAgent
     from wactorz.agents.manual_agent import ManualAgent
     from wactorz.agents.catalog_agent import CatalogAgent
-    from wactorz.agents.llm_agent import AnthropicProvider, OpenAIProvider, OllamaProvider, NIMProvider
+    from wactorz.agents.llm_agent import (
+        AnthropicProvider, OpenAIProvider, OllamaProvider,
+        NIMProvider, GeminiProvider,
+    )
     from wactorz.agents.home_assistant_agent import HomeAssistantAgent
     from wactorz.agents.home_assistant_map_agent import HomeAssistantMapAgent
     from wactorz.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
@@ -178,6 +184,10 @@ async def build_system(args: argparse.Namespace):
             model=nim_model,
             api_key=CONFIG.nim_api_key or CONFIG.nvidia_api_key,
         )
+    elif llm == "gemini":
+        gemini_model = args.gemini_model or CONFIG.llm_model or "gemini-2.5-flash"
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or CONFIG.llm_api_key
+        provider = GeminiProvider(model=gemini_model, api_key=api_key)
     else:
         provider = None
         logger.warning("No LLM provider set. Agents will have limited capabilities.")
@@ -243,47 +253,28 @@ async def build_system(args: argparse.Namespace):
         return CatalogAgent(name="catalog", persistence_dir="./state")
 
     # ── Register critical actors under the Supervisor ─────────────────────────
-    #
-    # Strategy guide used here:
-    #   main      — ONE_FOR_ONE: its crash doesn't require restarting others.
-    #               High max_restarts (10) because it's the user-facing brain.
-    #
-    #   monitor   — ONE_FOR_ONE: independent health watcher; restart it alone.
-    #
-    #   installer — ONE_FOR_ONE: stateless pip runner; restart it alone.
-    #               Lower max_restarts (3) — repeated failures mean something
-    #               is wrong with the environment, not a transient glitch.
-    #
-    #   code-agent, manual-agent, home-assistant-agent — ONE_FOR_ONE with
-    #               moderate budgets: specialist agents that are independent.
-    #
-    #   anomaly-detector — ONE_FOR_ONE: sensor pipeline, restart alone.
-    #
-    #   catalog — ONE_FOR_ONE: recipe library, must always be available.
-    #
     (
         system.supervisor
-        .supervise("main",                  make_main,          strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
-        .supervise("monitor",               make_monitor,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=1.0)
-        .supervise("io-agent",              make_io_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=1.0)
-        .supervise("installer",             make_installer,     strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=3,  restart_delay=2.0)
-        .supervise("code-agent",            make_code_agent,    strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
-        .supervise("manual-agent",          make_manual_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
-        .supervise("home-assistant-agent",  make_ha_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
-        .supervise("home-assistant-map-agent", make_ha_map_agent, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
-        .supervise("home-assistant-state-bridge", make_ha_state_bridge, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
-        .supervise("anomaly-detector",      make_anomaly_agent, strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
-        .supervise("catalog",               make_catalog,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
+        .supervise("main",                       make_main,          strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
+        .supervise("monitor",                    make_monitor,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=1.0)
+        .supervise("io-agent",                   make_io_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=1.0)
+        .supervise("installer",                  make_installer,     strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=3,  restart_delay=2.0)
+        .supervise("code-agent",                 make_code_agent,    strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
+        .supervise("manual-agent",               make_manual_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
+        .supervise("home-assistant-agent",       make_ha_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
+        .supervise("home-assistant-map-agent",   make_ha_map_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
+        .supervise("home-assistant-state-bridge",make_ha_state_bridge, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
+        .supervise("anomaly-detector",           make_anomaly_agent, strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
+        .supervise("catalog",                    make_catalog,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
     )
 
-    # Supervisor.start() spawns all actors via their factories and starts the watch loop
     await system.supervisor.start()
 
-    # Convenience references for the caller
     main_actor = system.registry.find_by_name("main")
 
     logger.info("Wactorz system started. Supervision tree active.")
     return system, main_actor
+
 
 async def app():
 	args = get_args()
@@ -303,7 +294,6 @@ async def app():
 	    CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface
 	)
 
-	# CONFIG = get_config()
 	interface = args.interface or CONFIG.interface
 	if interface == "cli":
 	    iface = CLIInterface(main_actor)

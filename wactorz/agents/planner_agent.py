@@ -148,13 +148,19 @@ class PlannerAgent(Actor):
 
         patterns = [
             r"\bif\b.*\bthen\b",
-            r"\bwhen\b.*\b(detect|open|turn|send|notify|alert)\b",
+            r"\bif\b.*\b(send|notify|alert|turn|open|close|post|message)\b",
+            r"\bwhen\b.*\b(detect|open|turn|send|notify|alert|is|becomes|goes|changes)\b",
             r"\bwhenever\b",
             r"\bmonitor\b", r"\bwatch\b",
             r"\balert me\b", r"\bnotify me\b",
-            r"\bsend me\b.*\bwhen\b",
+            r"\bsend me\b.*\b(when|if|discord|message|notification)\b",
+            r"\bsend me a\b",
             r"\bautomatically\b",
             r"\bevery time\b", r"\bon detection\b",
+            r"\bis turned on\b", r"\bis turned off\b",
+            r"\bturns on\b", r"\bturns off\b",
+            r"\bopens\b.*\b(send|notify|alert|light|turn)\b",
+            r"\b(door|window|sensor|lamp|light|temperature|humidity|motion)\b.*\b(send|notify|discord|message)\b",
             # camera/detect + action = pipeline
             r"\b(camera|detect|yolo|webcam)\b.*\b(turn|open|send|notify|alert)\b",
             r"\b(person|motion|object)\b.*\bdetect.*\b(turn|open|light|send)\b",
@@ -292,16 +298,22 @@ class PlannerAgent(Actor):
             else:
                 wired.append(f"**{name}** — failed to spawn")
 
-        # Persist this rule for listing / deletion
+        # Persist this rule into main's pipeline rules registry
         if rule_agents:
             import hashlib as _hl
             rule_id = _hl.md5(task.encode()).hexdigest()[:8]
-            self._save_pipeline_rule({
+            rule = {
                 "rule_id": rule_id,
                 "task": task,
                 "agents": rule_agents,
                 "created_at": time.time(),
-            })
+            }
+            # Save into main so it survives planner self-termination
+            if self._registry:
+                main = self._registry.find_by_name("main")
+                if main and hasattr(main, "save_pipeline_rule"):
+                    main.save_pipeline_rule(rule)
+                    logger.info(f"[{self.name}] Pipeline rule {rule_id} saved to main")
 
         self._auto_terminate = False
 
@@ -387,9 +399,44 @@ class PlannerAgent(Actor):
         ha_section = ha_entities_text if ha_entities_text else \
             "  (HA not reachable — use entity IDs provided by the user)"
 
-        # ── 2. Feasibility check (skip for local/external triggers) ───────
+        # ── Fetch stored notification URLs from main ──────────────────────
+        notification_urls: dict = {}
+        if self._registry:
+            main = self._registry.find_by_name("main")
+            if main and hasattr(main, "get_notification_urls"):
+                notification_urls = main.get_notification_urls()
+
+        # Also extract any URL directly mentioned in the task
+        import re as _re
+        _url_match = _re.search(
+            r'https?://(?:discord\.com/api/webhooks|hooks\.slack\.com|api\.telegram\.org)/\S+',
+            task
+        )
+        if _url_match:
+            url = _url_match.group(0).rstrip(".,;!)'\"")
+            if "discord" in url:
+                notification_urls["discord"] = url
+            elif "slack" in url:
+                notification_urls["slack"] = url
+            elif "telegram" in url:
+                notification_urls["telegram"] = url
+
+        notif_section = ""
+        if notification_urls:
+            lines = ["NOTIFICATION URLS (use these directly in code — do not use placeholders):"]
+            for svc, url in notification_urls.items():
+                lines.append(f"  {svc}: {url}")
+            notif_section = "\n".join(lines)
+        else:
+            notif_section = (
+                "NOTIFICATION URLS: none stored.\n"
+                "If the user wants Discord/Slack/Telegram notifications and no URL is available,\n"
+                "use a placeholder 'WEBHOOK_URL_REQUIRED' and set description to explain the user must run:\n"
+                "  /webhook discord <url>"
+            )
         _local_kw = ("camera", "webcam", "laptop", "detect", "yolo", "person",
-                     "object detection", "cv2", "opencv")
+                     "object detection", "cv2", "opencv",
+                     "discord", "telegram", "slack", "notify", "notification", "message")
         _skip_feasibility = any(kw in task.lower() for kw in _local_kw)
 
         if ha_available and ha_entities_text and not _skip_feasibility:
@@ -431,110 +478,129 @@ class PlannerAgent(Actor):
             "You are designing reactive automation pipelines for a multi-agent IoT system.",
             "Output ONLY a valid JSON array — no explanation, no markdown, no code fences.",
             "",
-            "SYSTEM ARCHITECTURE:",
-            "- HomeAssistantStateBridgeAgent (always running): publishes HA state changes to:",
-            "    homeassistant/state_changes/<domain>/<entity_id>",
-            '  Payload: {"type": "home_assistant_state_change", "entity_id": "...", "domain": "...",',
-            '           "new_state": {"state": "...", "attributes": {}}, "old_state": {...}}',
+            "═══ SYSTEM ARCHITECTURE ═══",
             "",
-            "AGENT TYPES TO SPAWN:",
+            "HomeAssistantStateBridgeAgent (ALWAYS running, NEVER spawn again):",
+            "  Publishes every HA state change to MQTT:",
+            "    Topic:   homeassistant/state_changes/{domain}/{entity_id}",
+            '  Payload: {"entity_id": "...", "domain": "...", "new_state": {"state": "...", "attributes": {...}}, "old_state": {...}}',
+            "  NOTE: 'state' is NESTED inside new_state — you cannot filter it at top level.",
             "",
-            'TYPE 1 — "ha_actuator" — USE FOR: any HA service call (lights, switches, climate, cover)',
-            "  No code needed. Subscribes to MQTT topic, calls HA service when payload matches filter.",
-            "  spawn_config:",
-            "  {",
-            '    "type": "ha_actuator",',
-            '    "automation_id": "<unique-kebab-slug>",',
-            '    "description": "<plain english>",',
-            '    "mqtt_topics": ["<topic>"],',
-            '    "actions": [{"domain": "<domain>", "service": "<service>", "entity_id": "<exact_from_list>", "service_data": {}}],',
-            '    "conditions": [],',
-            '    "detection_filter": {"<key>": "<value>"} or null,',
-            '    "cooldown_seconds": 10',
-            "  }",
-            "  IMPORTANT: detection_filter matches TOP-LEVEL payload keys only.",
-            "  HA state payloads have state nested in new_state.state — use a dynamic filter agent for these (Pattern A).",
+            "═══ AGENT TYPES ═══",
             "",
-            'TYPE 2 — "dynamic" — USE FOR: webcam/YOLO, state filtering, timers, Discord, external APIs',
-            "  Custom Python. Define async functions. Available APIs ONLY:",
-            '    await agent.log("msg")             — log',
-            '    await agent.publish("topic", {})   — MQTT publish',
-            '    agent.recall("key")                — persistent load',
-            '    agent.persist("key", val)          — persistent save',
-            '    agent.state["key"]                 — in-memory (lost on restart)',
-            "  spawn_config:",
-            "  {",
-            '    "type": "dynamic",',
-            '    "description": "<description>",',
-            '    "install": ["<pip-package>"],',
-            '    "poll_interval": <seconds>,',
-            '    "code": "<python source>"',
-            "  }",
+            'TYPE 1 — "ha_actuator"',
+            "  Purpose: call any Home Assistant service (turn_on, turn_off, set_temperature, open_cover, etc.)",
+            "  No code needed. Subscribes to an MQTT trigger topic and calls the HA service.",
+            "  detection_filter matches TOP-LEVEL keys of the incoming payload only.",
+            "  spawn_config schema:",
+            '    "type": "ha_actuator"',
+            '    "automation_id": "<unique-kebab-id>"',
+            '    "description": "<what this does>"',
+            '    "mqtt_topics": ["<trigger-topic>"]',
+            '    "actions": [{"domain": "<ha-domain>", "service": "<ha-service>", "entity_id": "<entity_id-from-list>", "service_data": {}}]',
+            '    "conditions": []',
+            '    "detection_filter": {"<top-level-key>": <value>} or null',
+            '    "cooldown_seconds": <number>',
             "",
-            "WIRING PATTERNS:",
+            'TYPE 2 — "dynamic"',
+            "  Purpose: any logic that needs code — state filtering, webcam, timers, HTTP webhooks, Discord, etc.",
+            "  Define these async functions (all optional except at least one must exist):",
+            "    async def setup(agent)   — runs once on start, good for subscriptions and init",
+            "    async def process(agent) — runs in a loop every poll_interval seconds",
+            "  Available APIs (ONLY these — no other agent methods exist):",
+            '    await agent.log("message")              — structured log',
+            '    await agent.publish("topic", {dict})    — publish to MQTT',
+            '    agent.recall("key")                     — load persisted value',
+            '    agent.persist("key", value)             — save persisted value',
+            '    agent.state["key"]                      — in-memory dict (cleared on restart)',
+            "  spawn_config schema:",
+            '    "type": "dynamic"',
+            '    "description": "<what this does>"',
+            '    "install": ["<pip-package>", ...]       — packages to install before running',
+            '    "poll_interval": <seconds>              — how often process(agent) runs',
+            '    "code": "<full python source as single string with \\n for newlines>"',
             "",
-            "Pattern A — HA state change -> HA action (door opens -> turn on light):",
-            "  TWO agents:",
-            "  1. dynamic filter agent — subscribes to homeassistant/state_changes/<domain>/<entity_id>,",
-            '     checks new_state["state"] == target_value, publishes {"triggered": true} to custom/triggers/<slug>',
-            "  2. ha_actuator — subscribes to custom/triggers/<slug>, detection_filter: null",
-            "  Dynamic filter code example:",
-            "    async def setup(agent):",
-            "        import asyncio, json, aiomqtt",
-            "        async def _listen():",
-            '            async with aiomqtt.Client("localhost", 1883) as c:',
-            '                await c.subscribe("homeassistant/state_changes/binary_sensor/binary_sensor.front_door")',
-            "                async for msg in c.messages:",
-            "                    try:",
-            "                        d = json.loads(msg.payload)",
-            '                        if d.get("new_state", {}).get("state") == "on":',
-            '                            await agent.publish("custom/triggers/door-open", {"triggered": True})',
-            "                    except: pass",
-            "        asyncio.create_task(_listen())",
+            "═══ CANONICAL WIRING PATTERNS ═══",
             "",
-            "Pattern B — Webcam person detection -> HA light/action:",
-            "  TWO agents:",
-            '  1. dynamic YOLO agent — publishes {"person_detected": bool, "objects": [str]} to custom/detections/<slug>',
-            '  2. ha_actuator — subscribes to custom/detections/<slug>, detection_filter: {"person_detected": true}',
-            "  YOLO agent code example:",
-            "    async def setup(agent):",
-            "        import cv2",
-            "        from ultralytics import YOLO",
-            '        agent.state["model"] = YOLO("yolov8n.pt")',
-            '        agent.state["cap"] = cv2.VideoCapture(0)',
-            '        await agent.log("YOLO webcam ready")',
-            "    async def process(agent):",
-            '        cap = agent.state.get("cap")',
-            '        model = agent.state.get("model")',
-            "        if not cap or not model: return",
-            "        ret, frame = cap.read()",
-            "        if not ret: return",
-            "        results = model(frame, verbose=False)",
-            "        detected = [model.names[int(b.cls)] for r in results for b in r.boxes]",
-            '        person = "person" in detected',
-            '        await agent.publish("custom/detections/SLUG", {"person_detected": person, "objects": list(set(detected))})',
+            "PATTERN 1 — HA sensor triggers HA action (door → light, motion → switch, temp → AC):",
+            "  Problem: HA state is nested in new_state.state, ha_actuator can only filter top-level keys.",
+            "  Solution: use a dynamic filter agent to extract and re-publish the trigger.",
+            "  Agent 1 (dynamic, name: '<slug>-state-filter'):",
+            "    setup(agent): use aiomqtt to subscribe to homeassistant/state_changes/{domain}/{entity_id}",
+            "      For each message, parse JSON, check new_state['state'] against the target condition,",
+            "      if condition met: await agent.publish('custom/triggers/<slug>', {'triggered': True, 'value': <state>})",
+            "  Agent 2 (ha_actuator, name: '<slug>-actuator'):",
+            "    mqtt_topics: ['custom/triggers/<slug>']",
+            "    detection_filter: {'triggered': True}",
+            "    actions: [the HA service call with the correct entity_id]",
+            "  CONDITION EXAMPLES:",
+            "    Binary sensor (door/window/motion): new_state['state'] == 'on'",
+            "    Numeric sensor (temperature/humidity): float(new_state['state']) > threshold",
+            "    Switch/light: new_state['state'] == 'on' or 'off'",
+            "    Cover/lock: new_state['state'] == 'open' / 'locked' etc.",
             "",
-            "Pattern C — HA state change -> Discord notification:",
-            "  ONE dynamic agent: subscribe to HA state topic, filter state, POST to Discord webhook URL",
-            "  Use httpx: async with httpx.AsyncClient() as c: await c.post(url, json={'content': msg})",
+            "PATTERN 2 — HA sensor triggers notification (Discord, webhook, HTTP):",
+            "  ONE dynamic agent:",
+            "    setup(agent): subscribe to homeassistant/state_changes/{domain}/{entity_id} via aiomqtt",
+            "      Parse state, check condition, POST to webhook/Discord when triggered.",
+            "    For Discord: POST to webhook URL with json={'content': '<message>'}",
+            "    Install: httpx",
+            "  If no webhook URL is provided by user, use a placeholder and note it in description.",
             "",
-            "Pattern D — Webcam detection -> Discord notification:",
-            "  TWO agents: YOLO dynamic (Pattern B step 1) + Discord dynamic (subscribes, POSTs webhook)",
+            "PATTERN 3 — Webcam/camera object detection triggers HA action:",
+            "  Agent 1 (dynamic, name: '<slug>-camera-detect'):",
+            "    setup(agent): load YOLO model and open camera",
+            "    process(agent): capture frame, run inference, determine if target object is detected,",
+            "      publish {'detected': bool, 'target': '<object-name>', 'objects': [list-of-all-detected]}",
+            "      to custom/detections/<slug>",
+            "    Install: ultralytics, opencv-python",
+            "    poll_interval: 1",
+            "  Agent 2 (ha_actuator, name: '<slug>-actuator'):",
+            "    mqtt_topics: ['custom/detections/<slug>']",
+            "    detection_filter: {'detected': True}",
+            "    actions: [HA service call]",
+            "  IMPORTANT: publish {'detected': bool} not {'person_detected': bool} — generic for any object.",
+            "  In code: target = '<object-name-from-user-request>'; detected = target in set(detected_labels)",
             "",
-            "RULES:",
-            "- Use exact entity_id values from the HA entities list below",
-            "- Multiple rules in one request -> produce ALL agents for ALL rules",
-            "- Replace SLUG with actual automation slug in code strings",
-            "- Each agent does ONE thing — keep minimal",
-            "- NEVER spawn HomeAssistantStateBridgeAgent — it is always running",
+            "PATTERN 4 — Webcam detection triggers notification:",
+            "  Agent 1: same as Pattern 3 agent 1",
+            "  Agent 2 (dynamic, name: '<slug>-notify'):",
+            "    setup(agent): subscribe to custom/detections/<slug> via aiomqtt",
+            "      When detected=True: POST notification",
             "",
-            "HOME ASSISTANT ENTITIES:",
+            "PATTERN 5 — Timer/schedule triggers HA action:",
+            "  Agent 1 (dynamic, name: '<slug>-timer'):",
+            "    process(agent): check current time (import datetime), if matches schedule:",
+            "      await agent.publish('custom/triggers/<slug>', {'triggered': True})",
+            "    poll_interval: 60",
+            "  Agent 2 (ha_actuator): subscribes to custom/triggers/<slug>",
+            "",
+            "═══ GENERAL RULES ═══",
+            "- Use EXACT entity_id values from the HA entities list — never invent entity IDs",
+            "- For HA service calls: look up the correct domain and service for the entity type",
+            "  light → light.turn_on / light.turn_off",
+            "  switch → switch.turn_on / switch.turn_off",
+            "  climate → climate.set_temperature / climate.set_hvac_mode",
+            "  cover → cover.open_cover / cover.close_cover",
+            "  script → script.turn_on",
+            "- Multiple rules in one request → output ALL agents for ALL rules",
+            "- Each agent does exactly ONE job — keep it minimal",
+            "- Replace <slug> consistently across paired agents with a short descriptive kebab-case id",
+            "- If user provides a Discord webhook URL, use it directly in code",
+            "- If user provides a condition threshold (e.g. 'above 28 degrees'), encode it in the filter agent code",
+            "- Dynamic agent code must be a single string with actual \\n newlines (not literal backslash-n)",
+            "",
+            "═══ HOME ASSISTANT ENTITIES ═══",
             ha_section,
             "",
-            "OUTPUT FORMAT — JSON array, each item:",
-            '{"name": "<kebab-case>", "description": "<one sentence>", "spawn_config": {...}}',
+            "═══ NOTIFICATION URLS ═══",
+            notif_section,
             "",
-            "USER REQUEST:",
+            "═══ OUTPUT FORMAT ═══",
+            "JSON array. Each element:",
+            '{"name": "<unique-kebab-name>", "description": "<one sentence>", "spawn_config": {<full spawn_config>}}',
+            "",
+            "═══ USER REQUEST ═══",
             task,
         ]
         prompt = "\n".join(prompt_parts)
@@ -843,7 +909,7 @@ Example:
                 DynamicAgent,
                 name=name,
                 code=code,
-                poll_interval=float(config.get("poll_interval", 1.0)),
+                poll_interval=float(config.get("poll_interval") or 1.0),
                 description=config.get("description", ""),
                 input_schema=config.get("input_schema", {}),
                 output_schema=config.get("output_schema", {}),

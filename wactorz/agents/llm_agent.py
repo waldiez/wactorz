@@ -275,13 +275,16 @@ class LLMAgent(Actor):
         llm_provider: Optional[LLMProvider] = None,
         system_prompt: str = "You are a helpful AI agent.",
         max_history: int = 20,
+        summarize_threshold: int = 30,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.llm = llm_provider
         self.system_prompt = system_prompt
         self.max_history = max_history
+        self.summarize_threshold = summarize_threshold  # compress when history exceeds this
         self._conversation_history: list[dict] = []
+        self._history_summary: str = ""   # rolling summary of compressed messages
         self._current_task = "idle"
         # Cost / token tracking — must be set here so subclasses (MainActor etc.) inherit them
         self.total_input_tokens  = 0
@@ -292,7 +295,7 @@ class LLMAgent(Actor):
         return self._current_task
 
     async def on_start(self):
-        # Restore conversation history from persistence
+        # Restore conversation history and rolling summary from persistence
         saved = self.recall("conversation_history", [])
         clean = []
         for m in saved:
@@ -307,6 +310,7 @@ class LLMAgent(Actor):
             if content.strip():
                 clean.append({"role": role, "content": content})
         self._conversation_history = clean[-self.max_history:]
+        self._history_summary = self.recall("history_summary", "")
 
         # Publish capability manifest so main's topic registry knows this agent exists
         description = (
@@ -326,6 +330,75 @@ class LLMAgent(Actor):
 
     async def on_stop(self):
         self.persist("conversation_history", self._conversation_history)
+        self.persist("history_summary", self._history_summary)
+
+    async def _maybe_summarize(self):
+        """
+        If history exceeds summarize_threshold, compress the oldest half into a
+        rolling summary and keep only the most recent max_history messages.
+        The summary is prepended as a system-style context message when sending
+        to the LLM so no facts are lost.
+        """
+        if len(self._conversation_history) < self.summarize_threshold:
+            return
+        if self.llm is None:
+            # No LLM — just truncate
+            self._conversation_history = self._conversation_history[-self.max_history:]
+            return
+
+        # Split: compress the older half, keep the recent half
+        split = len(self._conversation_history) // 2
+        to_compress = self._conversation_history[:split]
+        to_keep     = self._conversation_history[split:]
+
+        # Build compression prompt
+        prior_summary = f"Previous summary:\n{self._history_summary}\n\n" if self._history_summary else ""
+        messages_text = "\n".join(
+            f"{m['role'].upper()}: {m['content'][:400]}"
+            for m in to_compress
+        )
+        prompt = (
+            f"{prior_summary}"
+            f"Summarize the following conversation segment concisely. "
+            f"Preserve: key facts, decisions, user preferences, entity names, URLs, credentials, "
+            f"any technical details mentioned. Be specific, not vague.\n\n"
+            f"{messages_text}"
+        )
+        try:
+            summary, usage = await self.llm.complete(
+                messages=[{"role": "user", "content": prompt}],
+                system="You are a conversation summarizer. Output a dense, factual summary. No preamble.",
+                max_tokens=400,
+            )
+            self.total_input_tokens  += usage.get("input_tokens", 0)
+            self.total_output_tokens += usage.get("output_tokens", 0)
+            self.total_cost_usd      += usage.get("cost_usd", 0.0)
+            self._history_summary = summary.strip()
+            self._conversation_history = to_keep
+            self.persist("history_summary", self._history_summary)
+            self.persist("conversation_history", self._conversation_history)
+            logger.info(f"[{self.name}] History summarized: {len(to_compress)} messages → summary ({len(summary)} chars), keeping {len(to_keep)}")
+        except Exception as e:
+            logger.warning(f"[{self.name}] Summarization failed: {e} — truncating instead")
+            self._conversation_history = self._conversation_history[-self.max_history:]
+
+    def _build_messages_with_summary(self, n: int) -> list[dict]:
+        """
+        Build the message list to send to the LLM, prepending the rolling summary
+        as context if one exists.
+        """
+        recent = self._conversation_history[-n:]
+        if not self._history_summary:
+            return recent
+        # Inject summary as a user/assistant exchange so it fits the messages format
+        summary_ctx = [{
+            "role": "user",
+            "content": f"[Context from earlier in our conversation]\n{self._history_summary}"
+        }, {
+            "role": "assistant",
+            "content": "Understood, I have that context."
+        }]
+        return summary_ctx + recent
 
     async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:
@@ -400,9 +473,10 @@ class LLMAgent(Actor):
 
         self.metrics.messages_processed += 1
         self._conversation_history.append({"role": "user", "content": user_message})
+
         safe_history = [
             {"role": m["role"], "content": str(m["content"])}
-            for m in self._conversation_history[-self.max_history:]
+            for m in self._build_messages_with_summary(self.max_history)
             if isinstance(m, dict)
             and m.get("role") in ("user", "assistant")
             and m.get("content") is not None
@@ -412,6 +486,7 @@ class LLMAgent(Actor):
             system=self.system_prompt,
         )
         self._conversation_history.append({"role": "assistant", "content": response})
+        await self._maybe_summarize()
         self.persist("conversation_history", self._conversation_history)
 
         # Accumulate token usage and cost
@@ -419,7 +494,6 @@ class LLMAgent(Actor):
         self.total_output_tokens += usage.get("output_tokens", 0)
         self.total_cost_usd      += usage.get("cost_usd", 0.0)
 
-        # Publish updated metrics immediately so dashboard reflects the new count
         await self._mqtt_publish(
             f"agents/{self.actor_id}/metrics",
             self._build_metrics(),
@@ -452,7 +526,7 @@ class LLMAgent(Actor):
 
         safe_history = [
             {"role": m["role"], "content": str(m["content"])}
-            for m in self._conversation_history[-self.max_history:]
+            for m in self._build_messages_with_summary(self.max_history)
             if isinstance(m, dict)
             and m.get("role") in ("user", "assistant")
             and m.get("content") is not None
@@ -469,6 +543,7 @@ class LLMAgent(Actor):
 
         response = "".join(full_text)
         self._conversation_history.append({"role": "assistant", "content": response})
+        await self._maybe_summarize()
         self.persist("conversation_history", self._conversation_history)
 
         self.total_input_tokens  += usage.get("input_tokens", 0)

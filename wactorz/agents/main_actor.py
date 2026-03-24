@@ -685,6 +685,8 @@ class MainActor(LLMAgent):
         self._tasks.append(asyncio.create_task(self._node_heartbeat_listener()))
         # Listen for agent capability manifests to build topic registry
         self._tasks.append(asyncio.create_task(self._manifest_listener()))
+        # Inject persisted user facts into system prompt
+        self._inject_user_facts_into_prompt()
 
     # ── Spawn registry ─────────────────────────────────────────────────────
 
@@ -720,6 +722,66 @@ class MainActor(LLMAgent):
     def get_notification_urls(self) -> dict:
         """Return persisted notification webhook URLs (discord, telegram, slack, etc.)"""
         return self.recall("_notification_urls") or {}
+
+    # ── User facts ─────────────────────────────────────────────────────────
+    # Key facts extracted from conversation: HA URL, entity names, preferences,
+    # user name, webhook URLs, etc. Stored separately from history so they
+    # survive summarization and persist indefinitely.
+
+    _FACTS_EXTRACT_PROMPT = (
+        "Extract durable facts from this conversation exchange that would be useful to remember "
+        "long-term. Focus on: names, locations, device entity IDs, URLs, credentials, preferences, "
+        "configurations, and any explicit statements about the user's setup.\n"
+        "Return a JSON object with short descriptive keys and concise values. "
+        "Return {} if nothing worth remembering was said.\n"
+        "Example: {\"ha_url\": \"http://192.168.1.10:8123\", \"user_name\": \"Alex\", "
+        "\"living_room_light\": \"light.wiz_rgbw_tunable_02cba0\"}\n"
+        "Output only valid JSON. No explanation, no markdown."
+    )
+
+    def get_user_facts(self) -> dict:
+        return self.recall("_user_facts") or {}
+
+    def _inject_user_facts_into_prompt(self):
+        """Prepend known user facts to the system prompt so the LLM always has them."""
+        facts = self.get_user_facts()
+        if not facts:
+            return
+        facts_lines = "\n".join(f"  {k}: {v}" for k, v in facts.items())
+        facts_block = f"\n\n== KNOWN USER FACTS (always keep in mind) ==\n{facts_lines}"
+        # Avoid duplicating if already injected
+        marker = "== KNOWN USER FACTS"
+        base_prompt = ORCHESTRATOR_PROMPT
+        if marker in self.system_prompt:
+            # Replace existing facts block
+            self.system_prompt = base_prompt + facts_block
+        else:
+            self.system_prompt = self.system_prompt + facts_block
+
+    async def _extract_and_save_facts(self, user_message: str, assistant_response: str):
+        """After each exchange, ask the LLM to extract any new durable facts."""
+        if self.llm is None:
+            return
+        exchange = f"USER: {user_message[:600]}\nASSISTANT: {assistant_response[:600]}"
+        try:
+            raw, _ = await self.llm.complete(
+                messages=[{"role": "user", "content": exchange}],
+                system=self._FACTS_EXTRACT_PROMPT,
+                max_tokens=200,
+            )
+            import json as _json, re as _re
+            clean = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            new_facts = _json.loads(clean)
+            if not isinstance(new_facts, dict) or not new_facts:
+                return
+            # Merge with existing facts
+            facts = self.get_user_facts()
+            facts.update(new_facts)
+            self.persist("_user_facts", facts)
+            self._inject_user_facts_into_prompt()
+            logger.info(f"[{self.name}] User facts updated: {list(new_facts.keys())}")
+        except Exception as e:
+            logger.debug(f"[{self.name}] Facts extraction skipped: {e}")
 
     async def delete_pipeline_rule(self, rule_id: str) -> str:
         """Stop all agents for a rule and remove it from registry."""
@@ -864,6 +926,27 @@ class MainActor(LLMAgent):
 
     # ── User input ─────────────────────────────────────────────────────────
 
+    async def chat(self, user_message: str) -> str:
+        response = await super().chat(user_message)
+        # Fire-and-forget fact extraction — don't block the response
+        asyncio.create_task(self._extract_and_save_facts(user_message, response))
+        return response
+
+    async def chat_stream(self, user_message: str):
+        full_response = []
+        async for chunk in super().chat_stream(user_message):
+            if isinstance(chunk, dict):
+                yield chunk
+            else:
+                full_response.append(chunk)
+                yield chunk
+        # Extract facts from completed response
+        if full_response:
+            asyncio.create_task(
+                self._extract_and_save_facts(user_message, "".join(full_response))
+            )
+
+
     def _drain_notifications(self) -> str:
         """Pop queued monitor notifications as a formatted prefix string."""
         if not self._pending_notifications:
@@ -911,6 +994,41 @@ class MainActor(LLMAgent):
             return note_prefix + "\n".join(lines)
 
         # ── Webhook / notification URL management ───────────────────────────
+        if stripped.startswith("/memory"):
+            parts = stripped.split(None, 1)
+            sub = parts[1].strip() if len(parts) > 1 else ""
+            if sub == "clear":
+                self.persist("_user_facts", {})
+                self.persist("history_summary", "")
+                self._history_summary = ""
+                self.system_prompt = ORCHESTRATOR_PROMPT
+                return note_prefix + "Memory cleared — user facts and conversation summary reset."
+            if sub.startswith("forget "):
+                key = sub[7:].strip()
+                facts = self.get_user_facts()
+                if key in facts:
+                    del facts[key]
+                    self.persist("_user_facts", facts)
+                    self._inject_user_facts_into_prompt()
+                    return note_prefix + f"Forgotten: '{key}'"
+                return note_prefix + f"No fact found with key '{key}'."
+            # Default: show memory
+            facts = self.get_user_facts()
+            summary = self._history_summary
+            lines = []
+            if facts:
+                lines.append(f"User facts ({len(facts)}):")
+                for k, v in facts.items():
+                    lines.append(f"  {k}: {v}")
+            else:
+                lines.append("No user facts stored yet.")
+            if summary:
+                lines.append(f"\nConversation summary:\n  {summary[:300]}{'...' if len(summary) > 300 else ''}")
+            else:
+                lines.append("\nNo conversation summary yet.")
+            lines.append("\nCommands: /memory clear | /memory forget <key>")
+            return note_prefix + "\n".join(lines)
+
         if stripped.startswith("/webhook"):
             parts = stripped.split(None, 2)
             if len(parts) == 1:
@@ -1174,6 +1292,20 @@ class MainActor(LLMAgent):
         note_prefix = self._drain_notifications()
         if note_prefix:
             yield note_prefix
+
+        # All slash-commands and direct API intercepts are handled by process_user_input
+        # Route them there to avoid duplicating all that logic here
+        _stripped = text.strip().rstrip("()")
+        _is_command = (
+            _stripped.startswith("/")
+            or _stripped in ("list_nodes", "main.list_nodes", "rules")
+            or _stripped.startswith("@")
+        )
+        if _is_command:
+            result = await self.process_user_input(text)
+            yield result
+            yield {"done": True, "spawned": [], "system_msg": ""}
+            return
 
         # Explicit planner prefix always wins
         _lowered = text.lower()

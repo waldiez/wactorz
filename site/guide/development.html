@@ -189,7 +189,7 @@ npm<span class="w"> </span>run<span class="w"> </span>dev
 <p>The Vite dev server proxies <code>/api/</code>, <code>/ws</code>, and <code>/mqtt</code> to the local ports exposed by <code>compose.dev.yaml</code>.</p>
 <h2 id="python-first-dev-mode">Python-first dev mode</h2>
 <p>For day-to-day development, the repo can default to the Python backend while
-keeping the same frontend-facing API contract as Rust.</p>
+exposing the same frontend-facing API contract (which the optional Rust backend mirrors).</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Terminal 1 — MQTT broker</span>
 docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>mosquitto
 
@@ -209,7 +209,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 </code></pre></div>
 
 <hr />
-<h2 id="full-stack-rust-backend">Full stack (Rust backend)</h2>
+<h2 id="full-stack-rust-backend">Full stack (Rust backend, optional in-sync)</h2>
 <div class="highlight"><pre><span></span><code><span class="c1"># Terminal 1 — support services</span>
 docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>mosquitto<span class="w"> </span>dashboard<span class="w">   </span><span class="c1"># or &#39;docker compose up -d&#39;</span>
 

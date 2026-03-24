@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Wactorz — Actor-model multi-agent AI framework</title>
   <meta name="description" content="Spawn, coordinate and monitor AI agents at runtime. Python · Rust · MQTT." />
+  <!-- ── Favicon ─────────────────────────────────────────────────────────── -->
+  <link rel="icon"             href="/favicon.svg" type="image/svg+xml" />
+  <link rel="icon"             href="/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
   <style>
@@ -244,6 +248,8 @@
 
     .install-box .prompt { color: var(--muted); user-select: none; }
     .install-box .cmd { color: var(--cyan); }
+    .install-note { margin-top: .5rem; font-size: .78rem; color: var(--muted); }
+    .install-note code { color: var(--muted-hi); font-size: .78rem; }
 
     .copy-btn {
       background: none; border: 1px solid var(--border);
@@ -559,6 +565,10 @@
       <span class="cmd">pip install wactorz[all]</span>
       <button class="copy-btn" onclick="copyInstall(this)">copy</button>
     </div>
+    <div class="install-note">
+      or latest from GitHub:
+      <code>pip install "wactorz[all] @ git+https://github.com/waldiez/wactorz.git"</code>
+    </div>
   </div>
 </section>
 
@@ -620,6 +630,7 @@
       </div>
       <div class="code-body"><pre><span class="cm"># 1. Install</span>
 <span class="cm">#    pip install wactorz[all]</span>
+<span class="cm">#    pip install "wactorz[all] @ git+https://github.com/waldiez/wactorz.git"  # latest</span>
 
 <span class="kw">from</span> <span class="cls">wactorz</span> <span class="kw">import</span> <span class="fn">ActorSystem</span>, <span class="fn">Actor</span>, <span class="fn">Message</span>
 <span class="kw">from</span> <span class="cls">wactorz.agents.llm_agent</span> <span class="kw">import</span> <span class="fn">AnthropicProvider</span>, <span class="fn">LLMAgent</span>

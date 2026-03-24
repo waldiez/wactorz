@@ -4,10 +4,11 @@
 
 | Tool | Version | Purpose |
 |---|---|---|
-| Rust | ≥ 1.93 | Backend |
+| Python | ≥ 3.11 | Backend (primary) |
 | Node.js | ≥ 20 | Frontend build |
 | npm | ≥ 10 | Frontend deps |
 | Docker + Compose | any recent | Dev stack |
+| Rust | ≥ 1.93 | Backend (optional, in-sync) |
 | mosquitto-clients | optional | MQTT debugging |
 
 ---
@@ -38,7 +39,7 @@ The Vite dev server proxies `/api/`, `/ws`, and `/mqtt` to the local ports expos
 ## Python-first dev mode
 
 For day-to-day development, the repo can default to the Python backend while
-keeping the same frontend-facing API contract as Rust.
+exposing the same frontend-facing API contract (which the optional Rust backend mirrors).
 
 ```bash
 # Terminal 1 — MQTT broker
@@ -64,7 +65,7 @@ docker compose -f compose.dev.yaml down
 
 ---
 
-## Full stack (Rust backend)
+## Full stack (Rust backend, optional in-sync)
 
 ```bash
 # Terminal 1 — support services

@@ -11,6 +11,11 @@ real-time MQTT telemetry, and a live 3D web dashboard.
 pip install wactorz[all]
 ```
 
+> **Install directly from GitHub (latest dev build):**
+> ```bash
+> pip install "wactorz[all] @ git+https://github.com/waldiez/wactorz.git"
+> ```
+
 ## Navigation
 
 - **[Guide](development.md)** — Installation, configuration, deployment

@@ -25,6 +25,11 @@ import { tts } from "./io/TTSManager";
 
 import type { AgentInfo, AgentState, ThemeChangeEvent } from "./types/agent";
 
+function nameFromWid(id: string): string {
+  const m = id.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
+  return m?.[1] ?? id.slice(0, 8);
+}
+
 // ── Scene ─────────────────────────────────────────────────────────────────────
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
@@ -89,7 +94,7 @@ wsChat.onStatePatch((agents, deletedId) => {
                                     "running";
     const update: AgentInfo = {
       id:        a.agent_id,
-      name:      a.name ?? a.agent_id,
+      name:      a.name || nameFromWid(a.agent_id),
       state,
       protected: a.protected ?? false,
     };

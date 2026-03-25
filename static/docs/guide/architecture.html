@@ -148,9 +148,10 @@
 <span class="w">          </span><span class="err">┌─────────────────────────┼──────────────────────────────┐</span>
 <span class="w">          </span><span class="err">│</span><span class="w">                         </span><span class="err">│</span><span class="w">                              </span><span class="err">│</span>
 <span class="w">          </span><span class="err">▼</span><span class="w">                         </span><span class="err">▼</span><span class="w">                              </span><span class="err">▼</span>
-<span class="w">  </span><span class="nx">wactorz</span><span class="w"> </span><span class="p">(</span><span class="nx">Rust</span><span class="p">)</span><span class="w">          </span><span class="nx">Mosquitto</span><span class="w"> </span><span class="p">(</span><span class="nx">MQTT</span><span class="p">)</span><span class="w">              </span><span class="nx">Fuseki</span><span class="w"> </span><span class="p">(</span><span class="nx">RDF</span><span class="p">)</span>
+<span class="w">  </span><span class="nx">wactorz</span><span class="w"> </span><span class="p">(</span><span class="nx">Python</span><span class="p">)</span><span class="w">        </span><span class="nx">Mosquitto</span><span class="w"> </span><span class="p">(</span><span class="nx">MQTT</span><span class="p">)</span><span class="w">              </span><span class="nx">Fuseki</span><span class="w"> </span><span class="p">(</span><span class="nx">RDF</span><span class="p">)</span>
 <span class="w">  </span><span class="p">:</span><span class="mi">8080</span><span class="w"> </span><span class="nx">REST</span><span class="w">                </span><span class="p">:</span><span class="mi">1883</span><span class="w"> </span><span class="nx">TCP</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">:</span><span class="mi">9001</span><span class="w"> </span><span class="nx">WS</span><span class="w">          </span><span class="p">:</span><span class="mi">3030</span><span class="w"> </span><span class="nx">SPARQL</span>
 <span class="w">  </span><span class="p">:</span><span class="mi">8081</span><span class="w"> </span><span class="nx">WS</span><span class="w"> </span><span class="nx">bridge</span>
+<span class="w">  </span><span class="err">┆</span><span class="w"> </span><span class="nx">Rust</span><span class="w"> </span><span class="k">in</span><span class="o">-</span><span class="nx">sync</span><span class="w"> </span><span class="err">┆</span>
 <span class="w">          </span><span class="err">│</span>
 <span class="w">          </span><span class="err">│</span><span class="w">  </span><span class="nx">pub</span><span class="o">/</span><span class="nx">sub</span><span class="w"> </span><span class="nx">via</span><span class="w"> </span><span class="nx">MQTT</span>
 <span class="w">          </span><span class="err">├──</span><span class="w"> </span><span class="nx">MainActor</span><span class="w">        </span><span class="p">(</span><span class="nx">LLM</span><span class="w"> </span><span class="nx">orchestrator</span><span class="p">)</span>
@@ -164,8 +165,12 @@
 
 <hr />
 <h2 id="components">Components</h2>
-<h3 id="wactorz-server-rust-binary">wactorz-server (Rust binary)</h3>
-<p>The single <code>wactorz</code> binary that runs the entire backend.</p>
+<h3 id="wactorz-backend">wactorz backend</h3>
+<p>The backend is <strong>Python-first</strong>: the Python implementation is the primary runtime.  A Rust implementation mirrors the same actor model and API contract and may run in sync alongside Python, but it is not required.</p>
+<h4 id="python-backend">Python backend</h4>
+<p><code>run.sh</code> starts the Python backend by default (<code>WACTORZ_BACKEND=python</code>).</p>
+<h4 id="rust-backend-optional-in-sync">Rust backend (optional, in-sync)</h4>
+<p>The single <code>wactorz</code> Rust binary exposes the same REST + WebSocket interface.</p>
 <table>
 <thead>
 <tr>
@@ -241,7 +246,8 @@
 </ul>
 <hr />
 <h2 id="actor-model">Actor Model</h2>
-<p>Each agent implements the <code>Actor</code> trait:</p>
+<p>Each agent implements the <code>Actor</code> protocol.  The Python implementation is the primary definition; the Rust trait mirrors it.</p>
+<h3 id="rust-mirror-in-sync">Rust mirror (in-sync)</h3>
 <div class="highlight"><pre><span></span><code><span class="cp">#[async_trait]</span>
 <span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">Actor</span><span class="p">:</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">id</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w">       </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="p">;</span>

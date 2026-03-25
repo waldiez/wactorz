@@ -436,7 +436,6 @@ export class CardDashboard {
     const card = document.createElement("div");
     card.className = "af-card";
     card.dataset.id = agent.id;
-    card.title = agent.id;
 
     const dot = document.createElement("div");
     dot.className = "af-card-state-dot";
@@ -483,8 +482,9 @@ export class CardDashboard {
     controls.className = "af-card-controls";
 
     const chatBtn = document.createElement("button");
-    chatBtn.className = "af-mini-btn";
+    chatBtn.className = "af-mini-btn af-chat-btn";
     chatBtn.textContent = "Chat";
+    chatBtn.hidden = stateLabel(agent.state) === "stopped";
     chatBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       this.chatTarget = agent.name;
@@ -496,7 +496,7 @@ export class CardDashboard {
       const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
       if (!btn || btn.disabled) return;
       e.stopPropagation();
-      this._sendCommand(agent.id, btn.dataset.action as "pause" | "resume" | "stop" | "delete");
+      this._sendCommand(agent.id, btn.dataset.action as "pause" | "resume" | "stop" | "delete", btn);
     });
     card.appendChild(controls);
 
@@ -528,19 +528,23 @@ export class CardDashboard {
       b.className = "af-mini-btn danger"; b.textContent = "Stop"; b.dataset.action = "stop";
       controls.appendChild(b);
     }
+    if (!agent.protected) {
+      const b = document.createElement("button");
+      b.className = "af-mini-btn danger"; b.textContent = "Delete"; b.dataset.action = "delete";
+      controls.appendChild(b);
+    }
   }
 
   private _rebuildControls(card: HTMLElement, agent: AgentInfo): void {
     const controls = card.querySelector<HTMLElement>(".af-card-controls");
     if (!controls) return;
+    // Toggle Chat button visibility based on state
+    const chatBtn = controls.querySelector<HTMLButtonElement>(".af-chat-btn");
+    if (chatBtn) chatBtn.hidden = stateLabel(agent.state) === "stopped";
+    // Only replace the action buttons — the click listener from _buildWorkerCard
+    // is already on the controls element via event delegation, do not re-add it.
     controls.querySelectorAll("[data-action]").forEach((b) => b.remove());
     this._appendActionBtns(controls, agent);
-    controls.addEventListener("click", (e) => {
-      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
-      if (!btn || btn.disabled) return;
-      e.stopPropagation();
-      this._sendCommand(agent.id, btn.dataset.action as "pause" | "resume" | "stop" | "delete");
-    });
   }
 
   // ── Private: feed view ────────────────────────────────────────────────────
@@ -873,18 +877,22 @@ export class CardDashboard {
 
   // ── Private: API calls ────────────────────────────────────────────────────
 
-  private _sendCommand(id: string, action: "pause" | "resume" | "stop" | "delete"): void {
-    const base = `/api/actors/${encodeURIComponent(id)}`;
-    const [url, method] =
-      action === "pause"  ? [`${base}/pause`, "POST"] :
-      action === "resume" ? [`${base}/resume`, "POST"] :
-                            [base, "DELETE"];
-    fetch(url, { method })
-      .then((r) => {
-        if (!r.ok && r.status !== 404) { this.showAlert(id, "error"); return; }
-        if (action === "delete") this.removeAgent(id);
-      })
-      .catch(() => this.showAlert(id, "error"));
+  private _sendCommand(
+    id: string,
+    action: "pause" | "resume" | "stop" | "delete",
+    btn?: HTMLButtonElement,
+  ): void {
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add("sending");
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.classList.remove("sending");
+      }, 600);
+    }
+    document.dispatchEvent(
+      new CustomEvent("af-agent-command", { detail: { command: action, agentId: id } }),
+    );
   }
 
   // ── Private: timestamp refresh ────────────────────────────────────────────

@@ -326,7 +326,6 @@ export class SocialDashboard {
     const card = document.createElement("div");
     card.className = "sd-card";
     card.dataset.id = agent.id;
-    card.title = agent.id;
 
     card.innerHTML = `
       <div class="sd-cover" style="background:${coverGradient(agent)}">
@@ -389,6 +388,7 @@ export class SocialDashboard {
       this.sendCommand(
         agent.id,
         btn.dataset.action as "pause" | "resume" | "stop" | "delete",
+        btn,
       );
     });
 
@@ -399,23 +399,19 @@ export class SocialDashboard {
   private sendCommand(
     id: string,
     action: "pause" | "resume" | "stop" | "delete",
+    btn?: HTMLButtonElement,
   ): void {
-    const base = `/api/actors/${encodeURIComponent(id)}`;
-    const [url, method] =
-      action === "pause"
-        ? [`${base}/pause`, "POST"]
-        : action === "resume"
-          ? [`${base}/resume`, "POST"]
-          : [base, "DELETE"];
-    fetch(url, { method })
-      .then((r) => {
-        if (!r.ok && r.status !== 404) {
-          this.flashError(id);
-          return;
-        }
-        if (action === "delete") this.removeAgent(id);
-      })
-      .catch(() => this.flashError(id));
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add("sending");
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.classList.remove("sending");
+      }, 600);
+    }
+    document.dispatchEvent(
+      new CustomEvent("af-agent-command", { detail: { command: action, agentId: id } }),
+    );
   }
 
   private flashError(id: string): void {

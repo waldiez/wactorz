@@ -23,7 +23,7 @@ import { IOManager } from "./io/IOManager";
 import { WSChatClient } from "./io/WSChatClient";
 import { tts } from "./io/TTSManager";
 
-import type { AgentInfo, ThemeChangeEvent } from "./types/agent";
+import type { AgentInfo, AgentState, ThemeChangeEvent } from "./types/agent";
 
 // ── Scene ─────────────────────────────────────────────────────────────────────
 
@@ -72,6 +72,41 @@ wsChat.onChat((content, from, timestampMs) => {
 
 // Streaming replies — onStreamChunk / onStreamEnd are wired inside setWSClient
 ioManager.setWSClient(wsChat);
+
+// State patches broadcast by the server over the same /ws connection.
+// This is how pause/stop/resume state changes reach the UI without polling.
+wsChat.onStatePatch((agents, deletedId) => {
+  if (deletedId) {
+    scene.removeAgent(deletedId);
+  }
+  agents.forEach((a) => {
+    if (!a.agent_id) return;
+    const rawState = (a.state ?? a.status ?? "running") as string;
+    const state: AgentState =
+      rawState === "paused"       ? "paused"       :
+      rawState === "stopped"      ? "stopped"      :
+      rawState === "initializing" ? "initializing" :
+                                    "running";
+    const update: AgentInfo = {
+      id:        a.agent_id,
+      name:      a.name ?? a.agent_id,
+      state,
+      protected: a.protected ?? false,
+    };
+    if (a.messages_processed != null) update.messagesProcessed = a.messages_processed;
+    if (a.cost_usd  != null) update.costUsd = a.cost_usd;
+    if (a.uptime    != null) update.uptime  = a.uptime;
+    if (a.cpu       != null) update.cpu     = a.cpu;
+    if (a.mem       != null) update.mem     = a.mem;
+    if (a.task      != null) update.task    = a.task;
+    if (a.agent_type != null) update.agentType = a.agent_type;
+    scene.addOrUpdateAgent(update);
+  });
+  chatPanel.updateAgentList(scene.getAgents());
+  hud.setAgentCount(scene.getAgents().length);
+  refreshStats();
+});
+
 wsChat.connect(`${_wsProto}//${window.location.host}/ws`);
 
 // MentionPopup needs the textarea and the agent list from SceneManager
@@ -137,26 +172,27 @@ mqtt.on("chat", (msg) => {
 });
 
 mqtt.on("status", (payload) => {
+  // Keep stopped agents visible — they show with only a Delete button.
+  // Removal happens only when the user explicitly deletes (delete_agent WS message).
+  scene.addOrUpdateAgent({
+    id: payload.agentId,
+    name: payload.agentName,
+    state: payload.state,
+    protected: false,
+    messagesProcessed: payload.messagesProcessed,
+  });
+  chatPanel.updateAgentList(scene.getAgents());
+  hud.setAgentCount(scene.getAgents().length);
+  refreshStats();
+  chatPanel.updateAgentStatus(payload.agentId, String(payload.state));
   if (payload.state === "stopped") {
-    scene.removeAgent(payload.agentId);
     pushFeed({
       type: "stopped",
       label: "stopped",
       agentName: payload.agentName,
       timestamp: Date.now(),
     });
-  } else {
-    scene.addOrUpdateAgent({
-      id: payload.agentId,
-      name: payload.agentName,
-      state: payload.state,
-      protected: false,
-    });
   }
-  chatPanel.updateAgentList(scene.getAgents());
-  hud.setAgentCount(scene.getAgents().length);
-  refreshStats();
-  chatPanel.updateAgentStatus(payload.agentId, String(payload.state));
 });
 
 // ── Stats helpers ─────────────────────────────────────────────────────────────
@@ -287,6 +323,12 @@ document.addEventListener("theme-change", (e) => {
 document.addEventListener("agent-selected", (e) => {
   const evt = e as CustomEvent<{ agent: { id: string } }>;
   scene.onAgentSelected(evt.detail.agent.id);
+});
+
+// Agent commands from CardDashboard / SocialDashboard → WebSocket
+document.addEventListener("af-agent-command", (e) => {
+  const { command, agentId } = (e as CustomEvent<{ command: string; agentId: string }>).detail;
+  wsChat.sendRaw({ type: "command", command, agent_id: agentId });
 });
 
 // af-iobar sends: route through ioManager (same as regular io-bar)

@@ -769,6 +769,30 @@
       .af-card-btn-danger:hover:not(:disabled) { background: rgba(248,113,113,0.1); color: #f87171; }
       .af-card-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
+      /* HA Custom Components */
+      input[type="range"] {
+        -webkit-appearance: none;
+        height: 4px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 2px;
+        outline: none;
+      }
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 12px;
+        height: 12px;
+        background: #34d399;
+        border-radius: 50%;
+        cursor: pointer;
+      }
+      input[type="color"]::-webkit-color-swatch-wrapper {
+        padding: 0;
+      }
+      input[type="color"]::-webkit-color-swatch {
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 4px;
+      }
+
       /* Status dot colours */
       .af-dot-running      { background: #34d399; }
       .af-dot-paused       { background: #fbbf24; }
@@ -1482,7 +1506,7 @@
         .fin-metric-val { font-size: 15px; }
       }
     </style>
-    <script type="module" crossorigin src="./assets/index-Q4gZ0OwE.js"></script>
+    <script type="module" crossorigin src="./assets/index-R9l-Gt91.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-lhHHWwHU.js">
     <link rel="modulepreload" crossorigin href="./assets/babylon-core-DMXg9r-F.js">
     <link rel="modulepreload" crossorigin href="./assets/vendor-Bo7czvDc.js">

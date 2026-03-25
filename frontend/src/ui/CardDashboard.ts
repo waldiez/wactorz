@@ -15,6 +15,7 @@
 
 import type { AgentInfo, AgentState, ChatMessage } from "../types/agent";
 import type { FeedItem } from "./ActivityFeed";
+import { HAClient, type HAEntity } from "../io/HAClient";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -50,7 +51,7 @@ function relTime(ms: number): string {
   return `${Math.floor(s / 60)}m ago`;
 }
 
-type View = "overview" | "feed" | "chat";
+type View = "overview" | "feed" | "chat" | "ha";
 type ConnState = "live" | "connecting" | "demo";
 
 // ── CardDashboard ─────────────────────────────────────────────────────────────
@@ -66,6 +67,10 @@ export class CardDashboard {
   private connState: ConnState = "connecting";
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private sidebarFilter: string = "";
+
+  private haUrl: string | null = (import.meta.env["VITE_HA_URL"] as string) || null;
+  private haToken: string | null = (import.meta.env["VITE_HA_TOKEN"] as string) || null;
+  private haClient: HAClient | null = null;
 
   // Streaming
   private _streamRow: HTMLElement | null = null;
@@ -83,6 +88,10 @@ export class CardDashboard {
   constructor() {
     this.root = this.buildRoot();
     document.body.appendChild(this.root);
+
+    if (this.haUrl && this.haToken) {
+      this.haClient = new HAClient(this.haUrl, this.haToken);
+    }
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -282,6 +291,7 @@ export class CardDashboard {
 
     if (this.view === "overview") body.appendChild(this._buildOverview());
     else if (this.view === "feed") body.appendChild(this._buildFeedView());
+    else if (this.view === "ha") body.appendChild(this._buildHAView());
     else if (this.view === "chat") {
       body.appendChild(this._buildChatView());
       // _renderSidebar() inside _buildChatView() runs before the element is in
@@ -297,8 +307,15 @@ export class CardDashboard {
   }
 
   private _setView(v: View): void {
+    if (this.view === "ha" && v !== "ha") {
+      this.haClient?.disconnect();
+    }
     this.view = v;
     this._renderView();
+
+    if (this.view === "ha") {
+      this.haClient?.connect((entities) => this._renderHADevices(entities));
+    }
   }
 
   // ── Private: overview ─────────────────────────────────────────────────────
@@ -895,6 +912,276 @@ export class CardDashboard {
     );
   }
 
+  // ── Private: Home Assistant view ─────────────────────────────────────────
+
+  private _buildHAView(): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "af-overview"; // Reuse overview styling for padding/scroll
+    el.innerHTML = `
+      <div class="af-panel" style="height: 100%; display: flex; flex-direction: column;">
+        <div class="af-panel-head">
+          <h3>Home Assistant Devices</h3>
+          <span>${this.haUrl}</span>
+        </div>
+        <div id="ha-devices-container" style="flex: 1; overflow-y: auto; margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px;">
+          <div style="color: rgba(255,255,255,0.4); text-align: center; grid-column: 1/-1; margin-top: 40px;">
+            Connecting to Home Assistant WebSocket API...
+          </div>
+        </div>
+      </div>
+    `;
+    return el;
+  }
+
+  private _renderHADevices(entities: HAEntity[]): void {
+    const container = this.root.querySelector<HTMLElement>("#ha-devices-container");
+    if (!container) return;
+
+    container.innerHTML = "";
+
+    // Sort by domain then friendly name
+    const sorted = [...entities].sort((a, b) => {
+      const domA = a.entity_id.split(".")[0] || "";
+      const domB = b.entity_id.split(".")[0] || "";
+      if (domA !== domB) return domA.localeCompare(domB);
+      return (a.attributes.friendly_name || a.entity_id).localeCompare(b.attributes.friendly_name || b.entity_id);
+    });
+
+    if (sorted.length === 0) {
+      container.innerHTML = `<div style="color: rgba(255,255,255,0.4); text-align: center; grid-column: 1/-1; margin-top: 40px;">No entities found.</div>`;
+      return;
+    }
+
+    sorted.forEach(e => {
+      const domain = e.entity_id.split(".")[0] || "";
+      const card = document.createElement("div");
+      card.className = "af-card";
+      card.style.cursor = "default";
+      card.style.minHeight = "130px";
+      card.style.display = "flex";
+      card.style.flexDirection = "column";
+
+      // ── Header: Avatar + Name + ID ──
+      const headerRow = document.createElement("div");
+      headerRow.style.display = "flex";
+      headerRow.style.alignItems = "center";
+      headerRow.style.gap = "8px";
+      headerRow.style.marginBottom = "8px";
+
+      if (e.attributes.entity_picture) {
+        const img = document.createElement("img");
+        img.src = this.haUrl + e.attributes.entity_picture;
+        img.style.width = "28px";
+        img.style.height = "28px";
+        img.style.borderRadius = "4px";
+        img.style.objectFit = "cover";
+        headerRow.appendChild(img);
+      } else {
+        const iconPlaceholder = document.createElement("div");
+        iconPlaceholder.style.width = "28px";
+        iconPlaceholder.style.height = "28px";
+        iconPlaceholder.style.borderRadius = "4px";
+        iconPlaceholder.style.background = "rgba(255,255,255,0.05)";
+        iconPlaceholder.style.display = "flex";
+        iconPlaceholder.style.alignItems = "center";
+        iconPlaceholder.style.justifyContent = "center";
+        iconPlaceholder.style.fontSize = "14px";
+        iconPlaceholder.textContent = this._getDomainIcon(domain);
+        headerRow.appendChild(iconPlaceholder);
+      }
+
+      const nameCol = document.createElement("div");
+      nameCol.style.flex = "1";
+      nameCol.style.minWidth = "0";
+
+      const name = document.createElement("div");
+      name.className = "af-card-name";
+      name.textContent = e.attributes.friendly_name || e.entity_id;
+      name.style.fontSize = "12px";
+
+      const idMeta = document.createElement("div");
+      idMeta.className = "af-card-meta";
+      idMeta.style.fontSize = "9px";
+      idMeta.style.opacity = "0.6";
+      idMeta.textContent = e.entity_id;
+
+      nameCol.append(name, idMeta);
+      headerRow.appendChild(nameCol);
+      card.appendChild(headerRow);
+
+      // ── State Display ──
+      const stateRow = document.createElement("div");
+      stateRow.style.display = "flex";
+      stateRow.style.alignItems = "baseline";
+      stateRow.style.gap = "4px";
+      stateRow.style.marginBottom = "10px";
+
+      const stateVal = document.createElement("div");
+      stateVal.className = "af-card-state-label";
+      stateVal.textContent = e.state;
+      stateVal.style.fontSize = "16px";
+      stateVal.style.fontWeight = "700";
+
+      const isActive = ["on", "playing", "cool", "heat", "open", "active", "detected", "home"].includes(e.state);
+      const isAlert = ["problem", "error", "critical", "warning", "emergency"].includes(e.state);
+      stateVal.style.color = isAlert ? "#f87171" : isActive ? "#34d399" : "rgba(255,255,255,0.4)";
+
+      stateRow.appendChild(stateVal);
+
+      if (e.attributes.unit_of_measurement) {
+        const unit = document.createElement("span");
+        unit.style.fontSize = "11px";
+        unit.style.color = "rgba(255,255,255,0.3)";
+        unit.textContent = e.attributes.unit_of_measurement;
+        stateRow.appendChild(unit);
+      }
+      card.appendChild(stateRow);
+
+      // ── Controls Section ──
+      const controls = document.createElement("div");
+      controls.className = "af-card-controls";
+      controls.style.marginTop = "auto";
+      controls.style.display = "flex";
+      controls.style.flexDirection = "column";
+      controls.style.gap = "8px";
+
+      this._appendEntityControls(controls, e, isActive);
+
+      if (controls.children.length > 0) {
+        card.appendChild(controls);
+      }
+
+      container.appendChild(card);
+    });
+  }
+
+  private _getDomainIcon(domain: string): string {
+    const icons: Record<string, string> = {
+      light: "💡", switch: "🔌", sensor: "🌡", binary_sensor: "🔔",
+      media_player: "📺", climate: "❄", camera: "📷", fan: "🌀",
+      vacuum: "🧹", cover: "🚪", lock: "🔒", drone: "🚁",
+      person: "👤", device_tracker: "📍", sun: "☀️",
+    };
+    return icons[domain] || "📦";
+  }
+
+  private _appendEntityControls(container: HTMLElement, e: HAEntity, isActive: boolean): void {
+    const domain = e.entity_id.split(".")[0] || "";
+
+    // Toggleable items
+    if (["light", "switch", "fan", "input_boolean", "humidifier", "vacuum"].includes(domain)) {
+      const btn = document.createElement("button");
+      btn.className = "af-mini-btn";
+      btn.textContent = isActive ? "Turn Off" : "Turn On";
+      btn.style.width = "100%";
+      btn.addEventListener("click", () => this.haClient?.toggleEntity(e.entity_id));
+      container.appendChild(btn);
+    }
+
+    // Dimmable Light
+    if (domain === "light" && e.attributes.supported_color_modes?.some((m: string) => m !== "onoff")) {
+      this._addSlider(container, "Brightness", 0, 255, e.attributes.brightness || 0, (val) => {
+        this.haClient?.callService("light", "turn_on", { entity_id: e.entity_id, brightness: val });
+      }, (v) => Math.round((v / 255) * 100) + "%");
+    }
+
+    // Color Light
+    if (domain === "light" && e.attributes.supported_color_modes?.includes("rgb")) {
+      this._addColorPicker(container, e);
+    }
+
+    // Climate (Thermostat)
+    if (domain === "climate") {
+      const target = e.attributes.temperature || e.attributes.target_temp_low || 20;
+      this._addSlider(container, "Target Temp", 15, 30, target, (val) => {
+        this.haClient?.callService("climate", "set_temperature", { entity_id: e.entity_id, temperature: val });
+      }, (v) => v + "°");
+    }
+
+    // Covers (Blinds/Doors)
+    if (domain === "cover") {
+      const row = document.createElement("div");
+      row.style.display = "flex"; row.style.gap = "4px";
+      ["open_cover", "stop_cover", "close_cover"].forEach(svc => {
+        const btn = document.createElement("button");
+        btn.className = "af-mini-btn";
+        btn.textContent = (svc.split("_")[0] || "ACTION").toUpperCase();
+        btn.style.flex = "1";
+        btn.addEventListener("click", () => this.haClient?.callService("cover", svc, { entity_id: e.entity_id }));
+        row.appendChild(btn);
+      });
+      container.appendChild(row);
+    }
+
+    // Media Player
+    if (domain === "media_player") {
+      const row = document.createElement("div");
+      row.style.display = "flex"; row.style.gap = "4px";
+      const playPause = document.createElement("button");
+      playPause.className = "af-mini-btn";
+      playPause.textContent = e.state === "playing" ? "⏸" : "▶";
+      playPause.style.flex = "1";
+      playPause.addEventListener("click", () => {
+        const svc = e.state === "playing" ? "media_pause" : "media_play";
+        this.haClient?.callService("media_player", svc, { entity_id: e.entity_id });
+      });
+      row.appendChild(playPause);
+      container.appendChild(row);
+
+      if (e.attributes.volume_level != null) {
+        this._addSlider(container, "Volume", 0, 100, Math.round(e.attributes.volume_level * 100), (val) => {
+          this.haClient?.callService("media_player", "volume_set", { entity_id: e.entity_id, volume_level: val / 100 });
+        }, (v) => v + "%");
+      }
+    }
+  }
+
+  private _addSlider(container: HTMLElement, labelText: string, min: number, max: number, current: number, onChange: (val: number) => void, format?: (v: number) => string): void {
+    const wrap = document.createElement("div");
+    wrap.style.display = "flex"; wrap.style.flexDirection = "column"; wrap.style.gap = "2px";
+
+    const lbl = document.createElement("div");
+    lbl.style.fontSize = "9px"; lbl.style.color = "rgba(255,255,255,0.4)";
+    lbl.textContent = `${labelText}: ${format ? format(current) : current}`;
+
+    const slider = document.createElement("input");
+    slider.type = "range"; slider.min = String(min); slider.max = String(max); slider.value = String(current);
+    slider.style.width = "100%"; slider.style.accentColor = "#34d399";
+    slider.addEventListener("change", () => {
+      const val = parseInt(slider.value, 10);
+      if (format) lbl.textContent = `${labelText}: ${format(val)}`;
+      onChange(val);
+    });
+
+    wrap.append(lbl, slider);
+    container.appendChild(wrap);
+  }
+
+  private _addColorPicker(container: HTMLElement, e: HAEntity): void {
+    const row = document.createElement("div");
+    row.style.display = "flex"; row.style.alignItems = "center"; row.style.gap = "8px";
+    const lbl = document.createElement("div");
+    lbl.style.fontSize = "9px"; lbl.style.color = "rgba(255,255,255,0.4)";
+    lbl.textContent = "Color:";
+
+    const picker = document.createElement("input");
+    picker.type = "color"; picker.style.border = "none"; picker.style.width = "20px"; picker.style.height = "20px";
+    picker.style.background = "none"; picker.style.cursor = "pointer";
+
+    if (e.attributes.rgb_color) {
+      const [r, g, b] = e.attributes.rgb_color;
+      picker.value = `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+    }
+
+    picker.addEventListener("change", () => {
+      const hex = picker.value;
+      const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+      this.haClient?.callService("light", "turn_on", { entity_id: e.entity_id, rgb_color: [r, g, b] });
+    });
+    row.append(lbl, picker);
+    container.appendChild(row);
+  }
+
   // ── Private: timestamp refresh ────────────────────────────────────────────
 
   private _refreshTimestamps(): void {
@@ -946,8 +1233,17 @@ export class CardDashboard {
     const right = document.createElement("div");
     right.className = "af-header-right";
 
-    (["overview", "feed", "chat"] as View[]).forEach((key) => {
-      const label = key === "overview" ? "◫ Overview" : key === "feed" ? "≡ Feed" : "💬 Chat";
+    const views: { key: View; label: string }[] = [
+      { key: "overview", label: "◫ Overview" },
+      { key: "feed", label: "≡ Feed" },
+      { key: "chat", label: "💬 Chat" },
+    ];
+
+    if (this.haUrl && this.haToken) {
+      views.push({ key: "ha", label: "🏠 Devices" });
+    }
+
+    views.forEach(({ key, label }) => {
       const btn = document.createElement("button");
       btn.className = `af-view-btn${key === this.view ? " active" : ""}`;
       btn.dataset["view"] = key;

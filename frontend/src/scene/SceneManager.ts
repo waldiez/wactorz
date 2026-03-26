@@ -29,28 +29,19 @@ import type {
 } from "../types/agent";
 import { ThemeBase } from "./themes/ThemeBase";
 import { GraphTheme } from "./themes/GraphTheme";
-import { GalaxyTheme } from "./themes/GalaxyTheme";
-import { CardBabylonTheme } from "./themes/CardBabylonTheme";
-import { GraveTheme } from "./themes/GraveTheme";
 import { CardDashboard } from "../ui/CardDashboard";
 import { SocialDashboard } from "../ui/SocialDashboard";
-import { FinDashboard } from "../ui/FinDashboard";
 
 export type ThemeName =
-  | "graph"
-  | "galaxy"
   | "cards"
-  | "cards-3d"
-  | "grave"
-  | "social"
-  | "fin";
+  | "social";
 
 // ── NullTheme — minimal placeholder used when HTML overlays are active ─────────
 
 class NullTheme extends ThemeBase {
-  readonly name: "cards" | "social" | "fin";
+  readonly name: "cards" | "social";
 
-  constructor(scene: Scene, variant: "cards" | "social" | "fin" = "cards") {
+  constructor(scene: Scene, variant: "cards" | "social" = "cards") {
     super(scene);
     this.name = variant;
   }
@@ -85,7 +76,6 @@ export class SceneManager {
   private activeTheme: ThemeBase;
   private cardDashboard: CardDashboard | null = null;
   private socialDashboard: SocialDashboard | null = null;
-  private finDashboard: FinDashboard | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     // ── Engine + Scene ────────────────────────────────────────────────────────
@@ -114,12 +104,9 @@ export class SceneManager {
     this.camera.attachControl(canvas, true);
 
     // ── Default theme ─────────────────────────────────────────────────────────
-    // Start in Social (HTML overlay). Canvas just provides a dark background.
-    // A 3D theme is activated only when the user explicitly switches to one.
-    this.activeTheme = new NullTheme(this.scene, "social");
-    this.activeTheme.setup();
-    this.socialDashboard = new SocialDashboard();
-    this.socialDashboard.show([]);
+    // Use "cards" as the placeholder name so setTheme never needs to create a
+    // dashboard here — the theme-change event from ThemeSwitcher will do it.
+    this.activeTheme = new NullTheme(this.scene, "cards");
 
     // ── Render loop ───────────────────────────────────────────────────────────
     this.engine.runRenderLoop(() => this.scene.render());
@@ -129,21 +116,12 @@ export class SceneManager {
   // ── Theme switching ─────────────────────────────────────────────────────────
 
   setTheme(name: ThemeName): void {
-    if (this.activeTheme.name === name) return;
-
-    const leavingHTML = ["cards", "social", "fin"].includes(
-      this.activeTheme.name,
-    );
-    const enteringHTML =
-      name === "cards" || name === "social" || name === "fin";
-    const entering3D = name === "cards-3d";
-
-    // Restore camera when leaving any HTML/cards mode back to a 3D view
-    if (leavingHTML && !enteringHTML && !entering3D) {
-      this.camera.alpha = -Math.PI / 2;
-      this.camera.beta = Math.PI / 3;
-      this.camera.radius = 20;
-    }
+    // Skip if the right dashboard is already running.
+    if (
+      this.activeTheme.name === name &&
+      !((name === "cards" && !this.cardDashboard) ||
+        (name === "social" && !this.socialDashboard))
+    ) return;
 
     this.activeTheme.teardown();
 
@@ -156,10 +134,6 @@ export class SceneManager {
       this.socialDashboard.hide();
       this.socialDashboard = null;
     }
-    if (this.finDashboard) {
-      this.finDashboard.hide();
-      this.finDashboard = null;
-    }
 
     if (name === "cards") {
       this.activeTheme = new NullTheme(this.scene, "cards");
@@ -171,29 +145,12 @@ export class SceneManager {
       this.activeTheme.setup();
       this.socialDashboard = new SocialDashboard();
       this.socialDashboard.show([...this.agents.values()]);
-    } else if (name === "fin") {
-      this.activeTheme = new NullTheme(this.scene, "fin");
-      this.activeTheme.setup();
-      this.finDashboard = new FinDashboard();
-      this.finDashboard.show([...this.agents.values()]);
     } else {
-      if (entering3D) {
-        this.camera.alpha = Math.PI / 2;
-        this.camera.beta = Math.PI / 2;
-        this.camera.radius = 12;
-        this.activeTheme = new CardBabylonTheme(this.scene);
-      } else if (name === "galaxy") {
-        this.activeTheme = new GalaxyTheme(this.scene);
-      } else if (name === "grave") {
-        this.activeTheme = new GraveTheme(this.scene);
-      } else {
         this.activeTheme = new GraphTheme(this.scene);
-      }
-
-      this.activeTheme.setup();
-      for (const agent of this.agents.values()) {
-        this.activeTheme.addAgent(agent);
-      }
+        this.activeTheme.setup();
+        for (const agent of this.agents.values()) {
+          this.activeTheme.addAgent(agent);
+        }
     }
   }
 
@@ -234,10 +191,6 @@ export class SceneManager {
       existing
         ? this.socialDashboard.updateAgent(merged)
         : this.socialDashboard.addAgent(merged);
-    } else if (this.finDashboard) {
-      existing
-        ? this.finDashboard.updateAgent(merged)
-        : this.finDashboard.addAgent(merged);
     } else {
       existing
         ? this.activeTheme.updateAgent(merged)
@@ -249,7 +202,6 @@ export class SceneManager {
     this.agents.delete(id);
     if (this.cardDashboard) this.cardDashboard.removeAgent(id);
     else if (this.socialDashboard) this.socialDashboard.removeAgent(id);
-    else if (this.finDashboard) this.finDashboard.removeAgent(id);
     else this.activeTheme.removeAgent(id);
   }
 
@@ -265,8 +217,6 @@ export class SceneManager {
         this.cardDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
       else if (this.socialDashboard)
         this.socialDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
-      else if (this.finDashboard)
-        this.finDashboard.onHeartbeat(payload.agentId, payload.timestampMs);
       else this.activeTheme.onHeartbeat(payload.agentId);
     } else {
       this.addOrUpdateAgent({
@@ -288,8 +238,6 @@ export class SceneManager {
       this.cardDashboard.showAlert(payload.agentId, payload.severity);
     else if (this.socialDashboard)
       this.socialDashboard.showAlert(payload.agentId, payload.severity);
-    else if (this.finDashboard)
-      this.finDashboard.showAlert(payload.agentId, payload.severity);
     else this.activeTheme.onAlert(payload.agentId, payload.severity);
   }
 
@@ -304,7 +252,6 @@ export class SceneManager {
     if (this.cardDashboard) this.cardDashboard.onChat(fromId, toId ?? "");
     else if (this.socialDashboard)
       this.socialDashboard.onChat(fromId, toId ?? "");
-    else if (this.finDashboard) this.finDashboard.onChat(fromId, toId ?? "");
     else if (toId) this.activeTheme.onChat(fromId, toId);
     else this.activeTheme.onHeartbeat(fromId);
   }
@@ -317,8 +264,7 @@ export class SceneManager {
       protected: false,
       agentType: payload.agentType,
     });
-    // Only fire 3D spawn effect when a 3D theme is actually rendering
-    if (!this.cardDashboard && !this.socialDashboard && !this.finDashboard) {
+    if (!this.cardDashboard && !this.socialDashboard) {
       this.activeTheme.onSpawn(payload.agentId);
     }
   }
@@ -333,7 +279,7 @@ export class SceneManager {
    * No-op in cards mode (chat panel opens instead via agent-selected event).
    */
   onAgentSelected(agentId: string): void {
-    if (this.cardDashboard || this.socialDashboard || this.finDashboard) return; // HTML overlay
+    if (this.cardDashboard || this.socialDashboard) return; // HTML overlay
     const node = this.activeTheme.getNode(agentId);
     if (!node) return;
 
@@ -357,7 +303,6 @@ export class SceneManager {
   dispose(): void {
     this.cardDashboard?.destroy();
     this.socialDashboard?.destroy();
-    this.finDashboard?.destroy();
     this.activeTheme.teardown();
     this.engine.dispose();
   }

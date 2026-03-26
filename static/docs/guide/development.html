@@ -144,9 +144,9 @@
 </thead>
 <tbody>
 <tr>
-<td>Rust</td>
-<td>≥ 1.93</td>
-<td>Backend</td>
+<td>Python</td>
+<td>≥ 3.11</td>
+<td>Backend (primary)</td>
 </tr>
 <tr>
 <td>Node.js</td>
@@ -162,6 +162,11 @@
 <td>Docker + Compose</td>
 <td>any recent</td>
 <td>Dev stack</td>
+</tr>
+<tr>
+<td>Rust</td>
+<td>≥ 1.93</td>
+<td>Backend (optional, in-sync)</td>
 </tr>
 <tr>
 <td>mosquitto-clients</td>
@@ -211,7 +216,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 </code></pre></div>
 
 <hr />
-<h2 id="full-stack-rust-backend">Full stack (Rust backend, optional in-sync)</h2>
+<h2 id="full-stack-rust-backend-optional-in-sync">Full stack (Rust backend, optional in-sync)</h2>
 <div class="highlight"><pre><span></span><code><span class="c1"># Terminal 1 — support services</span>
 docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>mosquitto<span class="w"> </span>dashboard<span class="w">   </span><span class="c1"># or &#39;docker compose up -d&#39;</span>
 

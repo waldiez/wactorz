@@ -50,8 +50,14 @@ build: build-rust build-frontend ## Build everything
 build-rust: ## Build Rust workspace (release)
 	cargo build --release
 
-build-frontend: ## Build Vite frontend
+build-frontend: ## Build Vite frontend and sync to installed package
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run build
+	@INST=$$(pip3 show wactorz 2>/dev/null | awk '/^Location:/{print $$2}'); \
+	INST="$$INST/wactorz/static/app"; \
+	if [ -d "$$INST" ] && [ "$$INST" != "$(CURDIR)/static/app" ]; then \
+	  echo "Syncing static/app → $$INST"; \
+	  cp -r static/app/ "$$INST/"; \
+	fi
 
 check: ## Cargo check (fast, no codegen)
 	cargo check
@@ -150,10 +156,10 @@ coverage-rust: ## Generate Rust coverage with cargo-llvm-cov
 	cargo llvm-cov --workspace --lcov --output-path coverage/rust.lcov
 
 docs-serve: ## Build docs + serve locally on :8001
-	python3 scripts/build_docs.py --serve
+	python3 -W ignore::UserWarning:pdoc scripts/build_docs.py --serve
 
 docs-build: ## Build full docs site (markdown→HTML + rustdoc + typedoc) into site/
-	python3 scripts/build_docs.py --full
+	python3 -W ignore::UserWarning:pdoc scripts/build_docs.py --full
 
 publish: ## Build wheel + sdist and upload to PyPI (requires twine + API token)
 	python scripts/build.py --upload

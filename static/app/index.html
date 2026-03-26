@@ -164,144 +164,155 @@
       #chat-panel {
         position: fixed; top: 0; right: 0;
         bottom: max(70px, calc(60px + env(safe-area-inset-bottom, 0px)));
-        width: 340px;
+        width: 480px;
         display: flex; flex-direction: column;
         transform: translateX(100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         z-index: 300;
-        border-left: 1px solid rgba(100, 160, 255, 0.15);
+        border-left: 1px solid rgba(37, 99, 235, 0.2);
         border-radius: 0;
-        background: rgba(8, 12, 32, 0.88);
+        background: rgba(5, 8, 24, 0.97);
         backdrop-filter: blur(18px);
         -webkit-backdrop-filter: blur(18px);
       }
       #chat-panel.open { transform: translateX(0); }
 
-      #chat-panel .panel-header {
-        display: flex; align-items: center; gap: 10px;
-        padding: 12px 16px;
-        border-bottom: 1px solid rgba(100, 160, 255, 0.1);
+      .af-chat-pane-header {
+        padding: 8px 14px;
         flex-shrink: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        display: flex; align-items: center; gap: 8px;
       }
-      #chat-panel .panel-header .status-badge {
-        font-size: 10px; padding: 2px 8px; border-radius: 10px;
-        background: rgba(52, 211, 153, 0.15); color: #34d399;
-        border: 1px solid rgba(52, 211, 153, 0.25);
+      .af-chat-pane-title {
+        flex: 1;
+        font-size: 13px; font-weight: 600;
+        color: rgba(255, 255, 255, 0.85);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
-      #chat-panel .panel-header .close-btn {
+      .af-chat-pane-state {
+        font-size: 11px; color: rgba(255, 255, 255, 0.35);
+      }
+      .af-chat-pane-state.running { color: #34d399; }
+      .af-chat-pane-state.paused  { color: #fbbf24; }
+      .af-chat-pane-state.failed  { color: #f87171; }
+      .close-btn {
         background: none; border: none; cursor: pointer;
-        color: #5a70a0; font-size: 18px; line-height: 1;
-        padding: 4px; border-radius: 6px;
-        transition: color 0.2s;
+        color: #5a70a0; font-size: 16px; line-height: 1;
+        padding: 4px 6px; border-radius: 6px;
+        transition: color 0.2s; flex-shrink: 0;
       }
-      #chat-panel .panel-header .close-btn:hover { color: #a8b8d8; }
-      @media (max-width: 639px) {
-        #chat-panel .panel-header .close-btn {
-          background: rgba(100, 160, 255, 0.10);
-          border: 1px solid rgba(100, 160, 255, 0.22);
-          border-radius: 20px;
-          padding: 7px 14px;
-          font-size: 13px;
-          color: #a8c8ff;
-          min-width: 72px;
-          text-align: center;
-        }
-        #chat-panel .panel-header .close-btn::before { content: "← "; }
+      .close-btn:hover { color: #a8b8d8; }
+
+      /* ── Chat sidebar (agent list) ────────────────────────────────────────── */
+      #chat-panel { flex-direction: row; }
+      .af-chat-sidebar {
+        width: 152px; flex-shrink: 0;
+        border-right: 1px solid rgba(255,255,255,0.07);
+        display: flex; flex-direction: column; overflow: hidden;
+      }
+      .af-chat-sidebar-search {
+        padding: 8px; flex-shrink: 0;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+      }
+      .af-chat-sidebar-search input {
+        width: 100%; box-sizing: border-box;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 6px; padding: 5px 8px;
+        font-size: 11px; color: rgba(255,255,255,0.8); outline: none;
+        font-family: inherit;
+      }
+      .af-chat-sidebar-search input::placeholder { color: rgba(255,255,255,0.28); }
+      .af-chat-sidebar-search input:focus { border-color: rgba(37,99,235,0.5); }
+      .af-chat-agent-list {
+        flex: 1; overflow-y: auto; padding: 4px;
+        scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;
+      }
+      .af-chat-agent-row {
+        display: flex; align-items: center; gap: 6px;
+        padding: 6px 8px; border-radius: 7px;
+        cursor: pointer; transition: background 0.12s;
+        border: none; background: transparent; width: 100%; text-align: left;
+        color: inherit;
+      }
+      .af-chat-agent-row:hover { background: rgba(255,255,255,0.05); }
+      .af-chat-agent-row.active { background: rgba(37,99,235,0.2); }
+      .af-chat-agent-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+      .af-chat-agent-name {
+        font-size: 11px; color: rgba(255,255,255,0.65);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;
+      }
+      .af-chat-agent-row.active .af-chat-agent-name { color: #93c5fd; font-weight: 600; }
+      .af-chat-pane { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+
+      .panel-avatar {
+        width: 30px; height: 30px; border-radius: 50%;
+        object-fit: cover; flex-shrink: 0;
+        border: 1px solid rgba(37, 99, 235, 0.35);
+        background: #0d1a38;
+        transition: opacity 0.2s;
       }
 
+      /* Thread */
       #chat-messages {
-        flex: 1; overflow-y: auto; padding: 16px 20px;
-        display: flex; flex-direction: column; gap: 12px;
-        scrollbar-width: thin; scrollbar-color: rgba(100,160,255,0.2) transparent;
+        flex: 1; overflow-y: auto; padding: 14px;
+        display: flex; flex-direction: column; gap: 10px;
+        scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;
       }
-      #chat-messages .msg {
-        max-width: 90%; padding: 8px 12px; border-radius: 10px;
-        font-size: 13px; line-height: 1.5;
+      .af-chat-msg { display: flex; flex-direction: column; gap: 3px; max-width: 78%; }
+      .af-chat-msg-user  { align-self: flex-end;  align-items: flex-end; }
+      .af-chat-msg-agent { align-self: flex-start; align-items: flex-start; }
+      .af-chat-msg-from {
+        font-size: 10px; color: rgba(255,255,255,0.4);
+        font-weight: 600; letter-spacing: 0.04em;
       }
-      #chat-messages .msg.user {
-        align-self: flex-end;
-        background: rgba(100, 160, 255, 0.18);
-        color: #d0e4ff;
-        border-bottom-right-radius: 3px;
+      .af-chat-msg-bubble {
+        padding: 8px 12px; border-radius: 12px;
+        font-size: 13px; line-height: 1.55;
+        word-break: break-word; white-space: pre-wrap;
       }
-      #chat-messages .msg.agent {
-        align-self: flex-start;
-        background: rgba(30, 40, 80, 0.8);
-        color: #b0c8f0;
-        border-bottom-left-radius: 3px;
+      .af-chat-msg-user  .af-chat-msg-bubble {
+        background: rgba(37, 99, 235, 0.4); border-bottom-right-radius: 4px; color: #dbeafe;
       }
-      #chat-messages .msg .msg-meta {
-        font-size: 10px; opacity: 0.5; margin-bottom: 3px;
-        font-family: monospace; letter-spacing: 0.05em;
+      .af-chat-msg-agent .af-chat-msg-bubble {
+        background: rgba(255,255,255,0.07); border-bottom-left-radius: 4px;
+        color: rgba(255,255,255,0.88);
       }
-      #chat-messages .msg code {
+      .af-chat-msg-system .af-chat-msg-bubble {
+        background: rgba(255,220,80,0.07); color: #8a9bb8;
+        font-size: 11px; font-style: italic;
+        border: 1px solid rgba(255,220,80,0.12); border-radius: 8px;
+      }
+      .af-chat-msg-time { font-size: 10px; color: rgba(255,255,255,0.3); }
+      .af-chat-msg-bubble code {
         background: rgba(0,0,0,0.3); padding: 1px 4px;
         border-radius: 3px; font-size: 11px; font-family: monospace;
       }
-      #chat-messages .msg pre {
+      .af-chat-msg-bubble pre {
         background: rgba(0,0,0,0.4); padding: 8px;
         border-radius: 6px; overflow-x: auto; margin-top: 4px;
       }
-      #chat-messages .msg pre code { background: none; padding: 0; }
-
-      /* Typing indicator */
-      .msg.typing { opacity: 0.8; }
-      .typing-dots { display: flex; gap: 4px; align-items: center; padding: 4px 0; }
-      .typing-dots .dot {
-        width: 7px; height: 7px; border-radius: 50%;
-        background: #6aabff;
-        animation: blink 1.2s infinite;
-      }
-      .typing-dots .dot:nth-child(2) { animation-delay: 0.2s; }
-      .typing-dots .dot:nth-child(3) { animation-delay: 0.4s; }
-      @keyframes blink {
-        0%, 80%, 100% { opacity: 0.2; transform: scale(0.85); }
-        40% { opacity: 1; transform: scale(1); }
-      }
-
-      /* ── Per-agent chat: panel header avatar ─────────────────────────────── */
-      #chat-panel .panel-header { align-items: center; gap: 10px; }
-      .panel-avatar {
-        width: 38px; height: 38px; border-radius: 50%;
-        object-fit: cover; flex-shrink: 0;
-        border: 2px solid rgba(100, 160, 255, 0.35);
-        background: #1a2040;
-        transition: opacity 0.2s;
-      }
-      .panel-header-info {
-        flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;
-      }
-      .panel-header-info .agent-name {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 13px; font-weight: 600; color: #c0d8ff;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      }
-
-      /* ── Per-agent chat: message row (avatar + bubble) ───────────────────── */
-      #chat-messages .msg-row {
-        display: flex; align-items: flex-end; gap: 8px;
-        animation: msg-appear 0.18s ease;
-      }
-      #chat-messages .msg-avatar {
-        width: 26px; height: 26px; border-radius: 50%;
-        object-fit: cover; flex-shrink: 0;
-        background: #1a2040;
-      }
-      /* User + system messages still animate in */
-      #chat-messages .msg.user,
-      #chat-messages .msg.msg-system {
-        animation: msg-appear 0.18s ease;
-      }
-      #chat-messages .msg.msg-system {
-        align-self: center;
-        background: rgba(255, 220, 80, 0.08);
-        color: #8a9bb8; font-size: 11px; font-style: italic;
-        border: 1px solid rgba(255,220,80,0.12);
-        max-width: 95%;
-      }
+      .af-chat-msg-bubble pre code { background: none; padding: 0; }
       @keyframes msg-appear {
         from { opacity: 0; transform: translateY(5px); }
         to   { opacity: 1; transform: translateY(0); }
+      }
+      .af-chat-msg { animation: msg-appear 0.18s ease; }
+
+      /* Typing indicator */
+      .af-chat-typing {
+        display: flex; align-items: center; gap: 4px; padding: 10px 14px;
+      }
+      .af-chat-typing span {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: rgba(255,255,255,0.3);
+        animation: af-bounce 1.2s ease-in-out infinite;
+      }
+      .af-chat-typing span:nth-child(2) { animation-delay: 0.2s; }
+      .af-chat-typing span:nth-child(3) { animation-delay: 0.4s; }
+      @keyframes af-bounce {
+        0%, 60%, 100% { transform: translateY(0); opacity: 0.3; }
+        30% { transform: translateY(-5px); opacity: 1; }
       }
 
       /* ── Unread badge on chat buttons ────────────────────────────────────── */
@@ -338,35 +349,51 @@
       #activity-feed.open { transform: translateX(0); }
 
       #feed-list {
-        flex: 1; overflow-y: auto; padding: 8px 0;
-        scrollbar-width: thin; scrollbar-color: rgba(100,160,255,0.15) transparent;
+        flex: 1; overflow-y: auto; padding: 10px 14px;
+        display: flex; flex-direction: column; gap: 3px;
+        scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;
       }
-      .feed-row {
-        display: flex; align-items: center; gap: 8px;
-        padding: 5px 12px; font-size: 11px;
-        border-bottom: 1px solid rgba(100,160,255,0.05);
-        transition: background 0.15s;
+      .af-feed-item {
+        display: flex; align-items: baseline; gap: 8px;
+        padding: 5px 8px; border-radius: 6px;
+        border-left: 2px solid transparent;
+        font-size: 12px; transition: background 0.1s;
       }
-      .feed-row:hover { background: rgba(100,160,255,0.06); }
-      .feed-dot {
-        flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%;
+      .af-feed-item:hover { background: rgba(255,255,255,0.04); }
+      .af-feed-heartbeat { border-left-color: #22d3a0; }
+      .af-feed-spawn     { border-left-color: #60a5fa; }
+      .af-feed-alert     { border-left-color: #f87171; }
+      .af-feed-chat      { border-left-color: #a78bfa; }
+      .af-feed-icon { flex-shrink: 0; width: 14px; text-align: center; font-size: 11px; }
+      .af-feed-time {
+        flex-shrink: 0; color: rgba(255,255,255,0.3);
+        font-size: 11px; font-family: monospace;
       }
-      .feed-text { flex: 1; color: #a0b8d8; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-      .feed-time { flex-shrink: 0; color: #4a5a80; font-family: monospace; font-size: 10px; }
+      .af-feed-agent {
+        flex-shrink: 0; color: #93c5fd;
+        font-weight: 600; min-width: 80px;
+      }
+      .af-feed-text {
+        color: rgba(255,255,255,0.65); overflow: hidden;
+        text-overflow: ellipsis; white-space: nowrap; flex: 1;
+      }
 
       /* Feed toggle button (near theme switcher) */
       #feed-toggle {
         position: fixed; top: 60px; right: 16px;
         display: flex; align-items: center; gap: 6px;
-        padding: 6px 12px; border-radius: 20px;
-        background: rgba(10, 15, 40, 0.72);
-        border: 1px solid rgba(100, 160, 255, 0.18);
+        padding: 6px 12px; border-radius: 8px;
+        background: rgba(4, 8, 16, 0.85);
+        border: 1px solid rgba(37, 99, 235, 0.25);
         backdrop-filter: blur(10px);
-        color: #6a80b0; font-size: 11px; font-weight: 600;
+        color: #93c5fd; font-size: 11px; font-weight: 600;
         cursor: pointer; z-index: 100;
         transition: all 0.2s;
       }
-      #feed-toggle:hover, #feed-toggle.active { color: #a8c8ff; border-color: rgba(100,160,255,0.35); }
+      #feed-toggle:hover, #feed-toggle.active {
+        color: #bfdbfe; border-color: rgba(37, 99, 235, 0.55);
+        background: rgba(37, 99, 235, 0.12);
+      }
 
       #feed-badge {
         display: none;
@@ -379,29 +406,27 @@
       /* ── IO bar (bottom) ────────────────────────────────────────────────── */
       #io-bar {
         position: fixed; bottom: 0; left: 0; right: 0;
-        min-height: 64px;
-        display: flex; align-items: flex-end; gap: 10px;
-        padding: 10px 16px;
-        /* iOS home-indicator / Android gesture bar safe area */
-        padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
-        padding-left:   max(16px, env(safe-area-inset-left,   0px));
-        padding-right:  max(16px, env(safe-area-inset-right,  0px));
-        background: rgba(8, 12, 32, 0.9);
+        min-height: 56px;
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 12px;
+        padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+        padding-left:   max(12px, env(safe-area-inset-left,   0px));
+        padding-right:  max(12px, env(safe-area-inset-right,  0px));
+        background: rgba(4, 8, 16, 0.95);
         backdrop-filter: blur(18px);
         -webkit-backdrop-filter: blur(18px);
-        border-top: 1px solid rgba(100, 160, 255, 0.12);
+        border-top: 1px solid rgba(37, 99, 235, 0.15);
         z-index: 400;
       }
       #mic-btn {
-        flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%;
-        background: rgba(100, 160, 255, 0.1);
-        border: 1px solid rgba(100, 160, 255, 0.25);
-        color: #6aabff; font-size: 17px; cursor: pointer;
+        flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;
+        background: rgba(37, 99, 235, 0.12);
+        border: 1px solid rgba(37, 99, 235, 0.3);
+        color: #93c5fd; font-size: 16px; cursor: pointer;
         display: flex; align-items: center; justify-content: center;
         transition: all 0.2s ease;
-        margin-bottom: 0;
       }
-      #mic-btn:hover { background: rgba(100, 160, 255, 0.2); }
+      #mic-btn:hover { background: rgba(37, 99, 235, 0.22); }
       #mic-btn.recording {
         background: rgba(251, 113, 133, 0.2);
         border-color: rgba(251, 113, 133, 0.5);
@@ -414,27 +439,26 @@
       }
       #text-input {
         flex: 1;
-        min-height: 40px; max-height: 120px;
-        padding: 9px 14px;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(100, 160, 255, 0.18);
-        border-radius: 20px; color: #d0e0ff; font-size: 14px;
+        min-height: 36px; max-height: 120px;
+        padding: 8px 14px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px; color: #d0e0ff; font-size: 14px;
         outline: none; transition: border-color 0.2s;
         font-family: inherit;
         resize: none; overflow: hidden; line-height: 1.5;
       }
-      #text-input::placeholder { color: #4a5a80; }
-      #text-input:focus { border-color: rgba(100, 160, 255, 0.45); }
+      #text-input::placeholder { color: rgba(255,255,255,0.3); }
+      #text-input:focus { border-color: rgba(37, 99, 235, 0.5); }
       #send-btn {
-        flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%;
-        background: rgba(100, 160, 255, 0.2);
-        border: 1px solid rgba(100, 160, 255, 0.4);
-        color: #a8c8ff; font-size: 15px; cursor: pointer;
+        flex-shrink: 0; width: 36px; height: 36px; border-radius: 8px;
+        background: #2563eb;
+        border: none;
+        color: #fff; font-size: 15px; cursor: pointer;
         display: flex; align-items: center; justify-content: center;
-        transition: all 0.2s ease;
-        margin-bottom: 0;
+        transition: background 0.2s ease;
       }
-      #send-btn:hover { background: rgba(100, 160, 255, 0.35); }
+      #send-btn:hover { background: #3b82f6; }
       #send-btn.sending { animation: spin 0.8s linear infinite; }
       @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
@@ -494,13 +518,161 @@
 
       /* ── Card Dashboard overlay ─────────────────────────────────────────── */
       .cd-root {
-        position: fixed; top: 0; left: 0; right: 0; bottom: 70px;
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
         display: none; flex-direction: column;
-        background: #080f1e;
+        background: #050818;
         z-index: 160;
         overflow: hidden;
+        color: rgba(255,255,255,0.88);
+        font-size: 13px;
       }
       .cd-root.cd-visible { display: flex; }
+
+      /* ── AgentFlow Workers header / body / iobar ─────────────────────────── */
+      .af-header {
+        display: flex; align-items: center; gap: 12px;
+        padding: 8px 14px;
+        border-bottom: 1px solid rgba(37,99,235,0.2);
+        background: rgba(5,10,24,0.95);
+        flex-shrink: 0;
+      }
+      .af-header-left  { display: flex; align-items: center; gap: 8px; }
+      .af-header-center { flex: 1; text-align: center; }
+      .af-header-right { display: flex; gap: 4px; align-items: center; }
+      .af-title { font-size: 14px; font-weight: 600; color: #93c5fd; letter-spacing: 0.03em; }
+
+      .af-conn-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; border: 1px solid; }
+      .af-conn-live { color: #22d3a0; border-color: rgba(34,211,160,0.35); background: rgba(34,211,160,0.08); }
+      .af-conn-connecting {
+        color: #60a5fa; border-color: rgba(96,165,250,0.35); background: rgba(96,165,250,0.08);
+        animation: af-connecting-blink 1s ease-in-out infinite;
+      }
+      .af-conn-demo { color: #a78bfa; border-color: rgba(167,139,250,0.35); background: rgba(167,139,250,0.08); }
+      @keyframes af-connecting-blink { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+      .af-health { font-size: 12px; color: rgba(255,255,255,0.55); }
+      .af-view-btn {
+        font-size: 12px; padding: 4px 10px; border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.08); background: transparent;
+        color: rgba(255,255,255,0.55); cursor: pointer; transition: all 0.15s;
+      }
+      .af-view-btn:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.85); }
+      .af-view-btn.active { background: rgba(37,99,235,0.2); border-color: rgba(37,99,235,0.5); color: #93c5fd; }
+
+      .af-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+
+      /* ── Overview ── */
+      .af-overview {
+        display: flex; flex-direction: column; gap: 16px;
+        flex: 1; min-height: 0; overflow-y: auto; padding: 14px; box-sizing: border-box;
+      }
+      .af-stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; }
+      .af-stat-card {
+        border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 14px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+      }
+      .af-stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.45); }
+      .af-stat-value { margin-top: 8px; font-size: 26px; font-weight: 700; }
+      .af-stat-detail { margin-top: 6px; color: rgba(255,255,255,0.55); font-size: 12px; }
+
+      .af-overview-panels {
+        display: grid; grid-template-columns: minmax(0,1.5fr) minmax(280px,0.9fr); gap: 16px; align-items: start;
+      }
+      .af-panel {
+        display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 16px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: linear-gradient(180deg, rgba(7,12,24,0.94), rgba(10,14,28,0.82));
+      }
+      .af-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+      .af-panel-head h3 { margin: 0; font-size: 14px; color: rgba(255,255,255,0.92); }
+      .af-panel-head span { font-size: 11px; color: rgba(255,255,255,0.45); }
+
+      /* ── Worker card additions (controls use af-mini-btn) ── */
+      .af-card-task {
+        margin-top: 8px; font-size: 11px; color: rgba(255,255,255,0.5);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 16px;
+      }
+      .af-card-controls { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+      .af-mini-btn {
+        height: 28px; padding: 0 10px; border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.04);
+        color: rgba(255,255,255,0.7); cursor: pointer; transition: background 0.12s; font-size: 11px;
+      }
+      .af-mini-btn:hover { background: rgba(255,255,255,0.08); color: white; }
+      .af-mini-btn.danger { border-color: rgba(248,113,113,0.32); color: #fecaca; }
+      .af-mini-btn.danger:hover { background: rgba(248,113,113,0.1); }
+
+      /* ── Nodes ── */
+      .af-node-list { display: flex; flex-direction: column; gap: 10px; }
+      .af-node-item {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 10px 12px; border-radius: 10px;
+        background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+      }
+      .af-node-name { color: rgba(255,255,255,0.86); font-weight: 600; }
+      .af-node-meta { margin-top: 4px; color: rgba(255,255,255,0.45); font-size: 11px; line-height: 1.4; }
+      .af-node-pill {
+        flex-shrink: 0; padding: 4px 9px; border-radius: 20px; font-size: 11px;
+        border: 1px solid rgba(127,29,29,0.4); color: rgba(255,255,255,0.4); background: rgba(127,29,29,0.18);
+      }
+      .af-node-pill.online { border-color: rgba(34,211,160,0.3); color: #bbf7d0; background: rgba(34,211,160,0.08); }
+
+      /* ── Feed view (inside body) ── */
+      .af-feed {
+        height: 100%; overflow-y: auto; padding: 10px 14px;
+        display: flex; flex-direction: column; gap: 3px; box-sizing: border-box;
+        scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;
+      }
+      .af-feed-empty { color: rgba(255,255,255,0.3); text-align: center; margin-top: 40px; font-size: 13px; }
+
+      /* ── Chat view (inside body) ── */
+      .af-chat { display: flex; height: 100%; overflow: hidden; }
+      .af-chat-pane-via {
+        margin-left: auto; font-size: 10px; color: rgba(255,255,255,0.28);
+        background: rgba(255,255,255,0.06); border-radius: 4px; padding: 2px 6px; font-family: monospace;
+      }
+      .af-chat-thread {
+        flex: 1; overflow-y: auto; padding: 14px;
+        display: flex; flex-direction: column; gap: 10px;
+        scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;
+      }
+      .af-chat-empty {
+        flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 10px; color: rgba(255,255,255,0.45); text-align: center;
+      }
+      .af-stream-caret { margin-left: 2px; opacity: 0.75; animation: af-caret-blink 0.7s ease-in-out infinite; }
+      @keyframes af-caret-blink { 0%,100%{opacity:0.75} 50%{opacity:0.2} }
+
+      /* ── IO Bar (embedded in af-root) ── */
+      .af-iobar {
+        display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+        border-top: 1px solid rgba(37,99,235,0.15); background: rgba(4,8,16,0.9); flex-shrink: 0;
+      }
+      .af-target-select {
+        font-size: 12px; padding: 5px 8px; border-radius: 6px;
+        border: 1px solid rgba(37,99,235,0.3); background: rgba(13,26,56,0.7);
+        color: #93c5fd; cursor: pointer; flex-shrink: 0; max-width: 140px; color-scheme: dark;
+      }
+      .af-target-select option { background: #0d1a38; color: #93c5fd; }
+      .af-iobar-input {
+        flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 8px; padding: 7px 12px; font-size: 13px; color: rgba(255,255,255,0.9);
+        outline: none; transition: border-color 0.15s; font-family: inherit;
+      }
+      .af-iobar-input:focus { border-color: rgba(37,99,235,0.55); background: rgba(255,255,255,0.07); }
+      .af-send-btn {
+        width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: #2563eb; border: none; color: white; cursor: pointer;
+        transition: background 0.15s, transform 0.1s;
+      }
+      .af-send-btn:hover:not(:disabled) { background: #3b82f6; transform: scale(1.05); }
+      .af-send-btn:disabled { background: rgba(37,99,235,0.3); cursor: not-allowed; }
+
+      @media (max-width: 1100px) {
+        .af-stats-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+        .af-overview-panels { grid-template-columns: 1fr; }
+      }
 
       .cd-topbar {
         display: flex; align-items: baseline; gap: 12px;
@@ -518,109 +690,178 @@
         font-size: 11px; color: #475569; letter-spacing: 0.08em;
       }
 
-      .cd-grid {
-        flex: 1; overflow-y: auto;
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-        gap: 16px;
-        padding: 20px 24px;
-        align-content: start;
-      }
-      .cd-grid::-webkit-scrollbar { width: 6px; }
-      .cd-grid::-webkit-scrollbar-track { background: transparent; }
-      .cd-grid::-webkit-scrollbar-thumb { background: #1e3050; border-radius: 3px; }
-
-      /* ── Individual card ─────────────────────────────────────────────────── */
-      .cd-card {
-        --accent: #3dd68c;
-        display: flex;
-        background: #0d1929;
-        border: 1px solid rgba(255,255,255,0.06);
-        border-radius: 12px;
-        overflow: hidden;
-        transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
-        animation: cd-enter 0.3s cubic-bezier(0.34,1.56,0.64,1) both;
-        cursor: default;
-      }
-      .cd-card:hover {
-        border-color: rgba(255,255,255,0.12);
-        box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 0 0 1px var(--accent, #3dd68c)22;
-        transform: translateY(-2px);
-      }
-      .cd-card-main {
-        border-color: rgba(245,158,11,0.2);
-        box-shadow: 0 0 20px rgba(245,158,11,0.08);
-      }
-      .cd-card-main:hover {
-        box-shadow: 0 4px 28px rgba(245,158,11,0.18), 0 0 0 1px #f59e0b33;
-      }
-
       /* Flash animations */
-      .cd-alert-error  { animation: cd-flash-red  0.9s ease !important; }
-      .cd-alert-warn   { animation: cd-flash-warn 0.9s ease !important; }
-      .cd-chat-flash   { animation: cd-flash-chat 0.6s ease !important; }
       @keyframes cd-flash-red  { 0%,100%{box-shadow:none} 40%{box-shadow:0 0 20px #f43f5e88,inset 0 0 20px #f43f5e22} }
       @keyframes cd-flash-warn { 0%,100%{box-shadow:none} 40%{box-shadow:0 0 20px #fb923c88,inset 0 0 20px #fb923c22} }
       @keyframes cd-flash-chat { 0%,100%{box-shadow:none} 40%{box-shadow:0 0 16px #3dd68c66,inset 0 0 12px #3dd68c18} }
       @keyframes cd-enter { from{opacity:0;transform:scale(0.9) translateY(8px)} to{opacity:1;transform:scale(1) translateY(0)} }
       @keyframes cd-exit  { to{opacity:0;transform:scale(0.9);pointer-events:none} }
 
-      .cd-accent-bar {
-        width: 4px; flex-shrink: 0;
-        background: var(--accent, #3dd68c);
-        opacity: 0.85;
+      /* ── AgentFlow Cards ─────────────────────────────────────────────────── */
+      .af-cards-grid {
+        flex: 1; overflow-y: auto;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+        gap: 10px; padding: 14px;
+        align-content: start;
+        scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;
       }
-
-      .cd-body { flex: 1; padding: 16px 16px 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-
-      /* Header row */
-      .cd-header { display: flex; align-items: center; gap: 10px; }
-      .cd-avatar {
-        width: 38px; height: 38px; flex-shrink: 0;
-        border-radius: 50%;
-        background: color-mix(in srgb, var(--accent, #3dd68c) 15%, transparent);
-        border: 1.5px solid color-mix(in srgb, var(--accent, #3dd68c) 60%, transparent);
-        display: flex; align-items: center; justify-content: center;
-        font-size: 16px; font-weight: 700;
-        color: var(--accent, #3dd68c);
+      .af-card {
+        position: relative;
+        display: flex; flex-direction: column; gap: 6px;
+        background: rgba(13, 26, 56, 0.7);
+        border: 1px solid rgba(37, 99, 235, 0.18);
+        border-radius: 10px; padding: 14px 12px 12px;
+        cursor: pointer; text-align: left; color: inherit;
+        transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+        animation: cd-enter 0.25s ease both;
       }
-      .cd-info { flex: 1; min-width: 0; }
-      .cd-name-row { display: flex; align-items: center; gap: 6px; }
-      .cd-name {
-        font-size: 15px; font-weight: 600; color: #e2e8f0;
+      .af-card:hover {
+        background: rgba(20, 40, 80, 0.85);
+        border-color: rgba(37, 99, 235, 0.45);
+        box-shadow: 0 4px 20px rgba(37, 99, 235, 0.15);
+      }
+      .af-card-alert-error { animation: cd-flash-red  0.9s ease !important; }
+      .af-card-alert-warn  { animation: cd-flash-warn 0.9s ease !important; }
+      .af-card-chat-flash  { animation: cd-flash-chat 0.6s ease !important; }
+
+      .af-card-header-row {
+        display: flex; align-items: center; gap: 6px;
+      }
+      .af-card-state-dot {
+        width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+        animation: af-dot-pulse 2.2s ease-in-out infinite;
+      }
+      @keyframes af-dot-pulse {
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.55; }
+      }
+      .af-card-type-badge {
+        font-size: 10px; font-weight: 600; letter-spacing: 0.08em;
+        text-transform: uppercase; padding: 2px 6px;
+        border-radius: 4px; border: 1px solid rgba(37,99,235,0.3);
+        color: #93c5fd;
+      }
+      .af-card-protected { margin-left: auto; font-size: 11px; opacity: 0.55; }
+      .af-card-name {
+        font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.9);
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
+      .af-card-state-label { font-size: 11px; font-weight: 500; }
+      .af-card-meta {
+        display: flex; gap: 10px; flex-wrap: wrap;
+        font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 2px;
+      }
+      .af-card-footer { display: flex; gap: 5px; margin-top: 6px; flex-wrap: wrap; }
+      .af-card-btn {
+        font-size: 11px; padding: 4px 10px; border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.15);
+        background: rgba(255,255,255,0.05);
+        color: rgba(255,255,255,0.7);
+        cursor: pointer; transition: all 0.15s;
+      }
+      .af-card-btn:hover:not(:disabled) { background: rgba(255,255,255,0.1); color: #fff; }
+      .af-card-btn-primary {
+        background: rgba(37,99,235,0.2); border-color: rgba(37,99,235,0.4); color: #93c5fd;
+      }
+      .af-card-btn-primary:hover:not(:disabled) { background: rgba(37,99,235,0.35); color: #bfdbfe; }
+      .af-card-btn-danger { border-color: rgba(248,113,113,0.25); color: rgba(248,113,113,0.75); }
+      .af-card-btn-danger:hover:not(:disabled) { background: rgba(248,113,113,0.1); color: #f87171; }
+      .af-card-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+      /* HA Custom Components */
+      input[type="range"] {
+        -webkit-appearance: none;
+        height: 4px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 2px;
+        outline: none;
+      }
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 12px;
+        height: 12px;
+        background: #34d399;
+        border-radius: 50%;
+        cursor: pointer;
+      }
+      input[type="color"]::-webkit-color-swatch-wrapper {
+        padding: 0;
+      }
+      input[type="color"]::-webkit-color-swatch {
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 4px;
+      }
+
+      /* Status dot colours */
+      .af-dot-running      { background: #34d399; }
+      .af-dot-paused       { background: #fbbf24; }
+      .af-dot-initializing { background: #60a5fa; }
+      .af-dot-stopped      { background: #4b5563; }
+      .af-dot-error        { background: #f87171; }
+
+      /* State label colours */
+      .af-state-running      { color: #34d399; }
+      .af-state-paused       { color: #fbbf24; }
+      .af-state-initializing { color: #60a5fa; }
+      .af-state-stopped      { color: #6b7280; }
+      .af-state-error        { color: #f87171; }
+
+      /* Heartbeat pulse on dot */
+      .af-card-pulse { animation: af-card-hb-once 0.5s ease !important; }
+      @keyframes af-card-hb-once { 0%,100%{transform:scale(1)} 40%{transform:scale(1.9);opacity:1} }
+
+      /* ── Classic (cd-card) layout ────────────────────────────────────────── */
+      .cd-grid {
+        flex: 1; overflow-y: auto;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 16px; padding: 20px 24px; align-content: start;
+        scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;
+      }
+      .cd-card {
+        --accent: #3dd68c;
+        display: flex; background: #0d1929;
+        border: 1px solid rgba(255,255,255,0.06); border-radius: 12px;
+        overflow: hidden; animation: cd-enter 0.3s cubic-bezier(0.34,1.56,0.64,1) both;
+        transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s; cursor: default;
+      }
+      .cd-card:hover {
+        border-color: rgba(255,255,255,0.12); transform: translateY(-2px);
+        box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+      }
+      .cd-card-main { border-color: rgba(245,158,11,0.2); box-shadow: 0 0 20px rgba(245,158,11,0.08); }
+      .cd-alert-error { animation: cd-flash-red  0.9s ease !important; }
+      .cd-alert-warn  { animation: cd-flash-warn 0.9s ease !important; }
+      .cd-chat-flash  { animation: cd-flash-chat 0.6s ease !important; }
+      .cd-accent-bar { width: 4px; flex-shrink: 0; background: var(--accent, #3dd68c); opacity: 0.85; }
+      .cd-body { flex: 1; padding: 16px 16px 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+      .cd-header { display: flex; align-items: center; gap: 10px; }
+      .cd-avatar {
+        width: 38px; height: 38px; flex-shrink: 0; border-radius: 50%;
+        background: color-mix(in srgb, var(--accent, #3dd68c) 15%, transparent);
+        border: 1.5px solid color-mix(in srgb, var(--accent, #3dd68c) 60%, transparent);
+        display: flex; align-items: center; justify-content: center; overflow: hidden;
+      }
+      .cd-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+      .cd-info { flex: 1; min-width: 0; }
+      .cd-name-row { display: flex; align-items: center; gap: 6px; }
+      .cd-name { font-size: 15px; font-weight: 600; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .cd-shield { font-size: 11px; opacity: 0.5; }
       .cd-type { font-size: 11px; color: #64748b; text-transform: lowercase; letter-spacing: 0.04em; }
-
-      /* State badge */
-      .cd-badge {
-        flex-shrink: 0;
-        padding: 2px 9px; border-radius: 20px;
-        font-size: 10px; font-weight: 700; letter-spacing: 0.07em;
-      }
+      .cd-badge { flex-shrink: 0; padding: 2px 9px; border-radius: 20px; font-size: 10px; font-weight: 700; letter-spacing: 0.07em; }
       .cd-badge-running      { background: #3dd68c22; color: #3dd68c; border: 1px solid #3dd68c44; }
       .cd-badge-paused       { background: #fb923c22; color: #fb923c; border: 1px solid #fb923c44; }
       .cd-badge-initializing { background: #60a5fa22; color: #60a5fa; border: 1px solid #60a5fa44; }
       .cd-badge-stopped      { background: #47556922; color: #7a8ea8; border: 1px solid #47556944; }
       .cd-badge-error        { background: #f43f5e22; color: #f43f5e; border: 1px solid #f43f5e44; }
-
       .cd-divider { height: 1px; background: rgba(255,255,255,0.05); }
-
-      /* Meta rows */
       .cd-meta { display: flex; flex-direction: column; gap: 5px; }
-      .cd-meta-row {
-        display: flex; align-items: center; gap: 8px;
-        font-size: 12px; line-height: 1.4;
-      }
+      .cd-meta-row { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 1.4; }
       .cd-meta-key { color: #475569; min-width: 60px; flex-shrink: 0; }
       .cd-meta-val { color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .cd-mono { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #60a5fa; }
-
-      /* Status dot */
-      .cd-status-dot {
-        width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
-      }
+      .cd-status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
       .cd-dot-running      { background: #3dd68c; box-shadow: 0 0 6px #3dd68c88; animation: cd-dot-pulse 2.5s ease-in-out infinite; }
       .cd-dot-paused       { background: #fb923c; }
       .cd-dot-initializing { background: #60a5fa; animation: cd-dot-pulse 1.2s ease-in-out infinite; }
@@ -629,52 +870,37 @@
       @keyframes cd-dot-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
       .cd-pulse-once { animation: cd-dot-once 0.5s ease !important; }
       @keyframes cd-dot-once { 0%,100%{transform:scale(1)} 40%{transform:scale(1.7);opacity:1} }
-
-      /* Footer */
       .cd-footer { margin-top: auto; display: flex; flex-direction: column; gap: 6px; }
       .cd-chat-btn {
-        background: none; border: 1px solid rgba(61,214,140,0.2);
-        border-radius: 7px; padding: 5px 12px;
-        font-size: 12px; color: #3dd68c; cursor: pointer;
-        transition: background 0.15s, border-color 0.15s;
-        width: 100%;
+        background: none; border: 1px solid rgba(61,214,140,0.2); border-radius: 7px;
+        padding: 5px 12px; font-size: 12px; color: #3dd68c; cursor: pointer;
+        transition: background 0.15s, border-color 0.15s; width: 100%;
       }
-      .cd-chat-btn:hover {
-        background: rgba(61,214,140,0.1); border-color: rgba(61,214,140,0.45);
-      }
-      /* Agent control row */
-      .cd-controls {
-        display: flex; gap: 4px; justify-content: flex-end;
-      }
+      .cd-chat-btn:hover { background: rgba(61,214,140,0.1); border-color: rgba(61,214,140,0.45); }
+      .cd-controls { display: flex; gap: 4px; justify-content: flex-end; }
       .cd-ctrl {
-        background: none; border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 6px; padding: 3px 7px; font-size: 13px;
-        color: rgba(255,255,255,0.55); cursor: pointer;
-        transition: background 0.12s, border-color 0.12s, color 0.12s;
-        line-height: 1;
+        background: none; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+        padding: 3px 7px; font-size: 13px; color: rgba(255,255,255,0.55);
+        cursor: pointer; transition: background 0.12s, border-color 0.12s, color 0.12s; line-height: 1;
       }
-      .cd-ctrl:hover:not(:disabled) {
-        background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.25);
-        color: rgba(255,255,255,0.9);
-      }
-      .cd-ctrl-danger:hover:not(:disabled) {
-        background: rgba(244,63,94,0.12); border-color: rgba(244,63,94,0.4);
-        color: #f43f5e;
-      }
-      .cd-ctrl:disabled {
-        opacity: 0.25; cursor: not-allowed;
-      }
+      .cd-ctrl:hover:not(:disabled) { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.25); color: rgba(255,255,255,0.9); }
+      .cd-ctrl-danger:hover:not(:disabled) { background: rgba(244,63,94,0.12); border-color: rgba(244,63,94,0.4); color: #f43f5e; }
+      .cd-ctrl:disabled { opacity: 0.25; cursor: not-allowed; }
 
-      /* ── CardDashboard 3D sub-theme toggle ─────────────────────────────── */
+      /* ── CardDashboard topbar buttons ────────────────────────────────────── */
       .cd-topbar { display: flex; align-items: center; }
       .cd-3d-btn {
         margin-left: auto; padding: 4px 14px; border-radius: 16px;
         border: 1px solid rgba(96,165,250,0.4); background: rgba(96,165,250,0.08);
         color: #60a5fa; font-size: 11px; cursor: pointer; transition: all 0.15s;
       }
-      .cd-3d-btn:hover {
-        background: rgba(96,165,250,0.18); border-color: rgba(96,165,250,0.6);
+      .cd-3d-btn:hover { background: rgba(96,165,250,0.18); border-color: rgba(96,165,250,0.6); }
+      .cd-layout-btn {
+        margin-left: 8px; padding: 4px 12px; border-radius: 16px;
+        border: 1px solid rgba(100,160,255,0.2); background: transparent;
+        color: #6a80b0; font-size: 11px; cursor: pointer; transition: all 0.15s;
       }
+      .cd-layout-btn:hover { background: rgba(100,160,255,0.08); color: #a8c8ff; border-color: rgba(100,160,255,0.4); }
 
       /* ── HUD page links ────────────────────────────────────────────────── */
       .hud-links { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }
@@ -1280,10 +1506,10 @@
         .fin-metric-val { font-size: 15px; }
       }
     </style>
-    <script type="module" crossorigin src="./assets/index-QJ8_pRQc.js"></script>
+    <script type="module" crossorigin src="./assets/index-bbmK7Tmm.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-lhHHWwHU.js">
-    <link rel="modulepreload" crossorigin href="./assets/babylon-core-McGdC081.js">
-    <link rel="modulepreload" crossorigin href="./assets/vendor-Do2CHnry.js">
+    <link rel="modulepreload" crossorigin href="./assets/babylon-core-DMXg9r-F.js">
+    <link rel="modulepreload" crossorigin href="./assets/vendor-Bo7czvDc.js">
   </head>
   <body>
     <!-- 3D canvas -->
@@ -1310,8 +1536,8 @@
     <div id="theme-switcher" class="glass" style="display:none">
       <!--<button id="btn-graph">Graph</button>
       <button id="btn-galaxy">Galaxy</button>
-      <button id="btn-cards">Cards</button>-->
-      <button id="btn-social" class="active">🌐 Social</button>
+      <button id="btn-cards">Cards</button>
+      <button id="btn-social" class="active">🌐 Social</button>-->
     </div>
 
     <!-- Activity feed toggle (below theme switcher) -->
@@ -1326,16 +1552,20 @@
 
     <!-- Chat panel (slides in from right on agent click) -->
     <div id="chat-panel">
-      <div class="panel-header">
-        <img id="panel-agent-avatar" class="panel-avatar" src="" alt=""
-             onerror="this.style.opacity='0'" style="opacity:0">
-        <div class="panel-header-info">
-          <div class="agent-name" id="panel-agent-name">— no agent selected —</div>
-          <span class="status-badge" id="panel-agent-status">running</span>
+      <div class="af-chat-sidebar">
+        <div class="af-chat-sidebar-search">
+          <input id="chat-sidebar-search" placeholder="Filter agents…" autocomplete="off">
         </div>
-        <button class="close-btn" id="panel-close" title="Close">✕</button>
+        <div class="af-chat-agent-list" id="chat-agent-list"></div>
       </div>
-      <div id="chat-messages"></div>
+      <div class="af-chat-pane">
+        <div class="af-chat-pane-header">
+          <div class="af-chat-pane-title" id="panel-agent-name">— select an agent —</div>
+          <span class="af-chat-pane-state" id="panel-agent-status"></span>
+          <button class="close-btn" id="panel-close" title="Close">✕</button>
+        </div>
+        <div id="chat-messages"></div>
+      </div>
     </div>
 
     <!-- Node hover tooltip -->

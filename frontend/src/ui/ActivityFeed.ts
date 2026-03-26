@@ -34,7 +34,29 @@ const TYPE_COLORS: Record<FeedEventType, string> = {
   "alert-warning": "#fbbf24",
   stopped: "#5a6a8a",
   health: "#a0a0c0",
-  "qa-flag": "#c084fc", // violet — QA flags stand out
+  "qa-flag": "#c084fc",
+};
+
+const TYPE_CLASS: Record<FeedEventType, string> = {
+  spawn: "af-feed-spawn",
+  heartbeat: "af-feed-heartbeat",
+  chat: "af-feed-chat",
+  "alert-error": "af-feed-alert",
+  "alert-warning": "af-feed-alert",
+  stopped: "",
+  health: "af-feed-heartbeat",
+  "qa-flag": "af-feed-chat",
+};
+
+const TYPE_ICON: Record<FeedEventType, string> = {
+  spawn: "⊕",
+  heartbeat: "♥",
+  chat: "◈",
+  "alert-error": "⚠",
+  "alert-warning": "⚡",
+  stopped: "◻",
+  health: "◉",
+  "qa-flag": "⚑",
 };
 
 export class ActivityFeed {
@@ -99,27 +121,32 @@ export class ActivityFeed {
 
   private renderItem(item: FeedItem): void {
     const row = document.createElement("div");
-    row.className = "feed-row";
+    row.className = `af-feed-item ${TYPE_CLASS[item.type] ?? ""}`.trim();
 
-    const dot = document.createElement("span");
-    dot.className = "feed-dot";
-    dot.style.background = TYPE_COLORS[item.type] ?? "#6aabff";
-
-    const text = document.createElement("span");
-    text.className = "feed-text";
-    text.textContent = `${item.agentName}: ${item.label}`;
+    const icon = document.createElement("span");
+    icon.className = "af-feed-icon";
+    icon.textContent = TYPE_ICON[item.type] ?? "·";
 
     const time = document.createElement("span");
-    time.className = "feed-time";
+    time.className = "af-feed-time";
     time.textContent = new Date(item.timestamp).toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
     });
 
-    row.appendChild(dot);
-    row.appendChild(text);
+    const agent = document.createElement("span");
+    agent.className = "af-feed-agent";
+    agent.textContent = item.agentName;
+
+    const text = document.createElement("span");
+    text.className = "af-feed-text";
+    text.textContent = item.label;
+
+    row.appendChild(icon);
     row.appendChild(time);
+    row.appendChild(agent);
+    row.appendChild(text);
     this.list.appendChild(row);
   }
 

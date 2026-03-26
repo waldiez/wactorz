@@ -22,6 +22,31 @@ export type StreamChunkHandler = (
 export type StreamEndHandler = (from: string) => void;
 export type ModeHandler = (mode: "direct_ws" | "mqtt") => void;
 
+/** One agent entry as the server includes it in state-patch messages. */
+export type StatePatchAgent = {
+  agent_id: string;
+  name?: string;
+  state?: string;
+  status?: string;
+  protected?: boolean;
+  messages_processed?: number;
+  cost_usd?: number;
+  uptime?: number;
+  cpu?: number;
+  mem?: number;
+  task?: string;
+  agent_type?: string;
+};
+
+/**
+ * Called whenever the server broadcasts a state patch over the WebSocket.
+ * `deletedId` is set when the server explicitly deletes an agent.
+ */
+export type StatePatchHandler = (
+  agents: StatePatchAgent[],
+  deletedId?: string,
+) => void;
+
 export class WSChatClient {
   private ws: WebSocket | null = null;
   private _chatMode: "direct_ws" | "mqtt" = "mqtt";
@@ -29,6 +54,7 @@ export class WSChatClient {
   private _onStreamChunk: StreamChunkHandler | null = null;
   private _onStreamEnd: StreamEndHandler | null = null;
   private _onMode: ModeHandler | null = null;
+  private _onStatePatch: StatePatchHandler | null = null;
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _url = "";
   private _closed = false;
@@ -61,6 +87,11 @@ export class WSChatClient {
     this._onMode = fn;
   }
 
+  /** Server broadcast a state patch (agent list updated, or agent deleted). */
+  onStatePatch(fn: StatePatchHandler): void {
+    this._onStatePatch = fn;
+  }
+
   connect(url: string): void {
     this._url = url;
     this._closed = false;
@@ -84,6 +115,16 @@ export class WSChatClient {
   send(content: string): boolean {
     if (!this.connected) return false;
     this.ws!.send(JSON.stringify({ type: "chat", content }));
+    return true;
+  }
+
+  /**
+   * Send any raw JSON object over the WebSocket (e.g. agent commands).
+   * Returns false when the socket is not open.
+   */
+  sendRaw(msg: object): boolean {
+    if (!this.connected) return false;
+    this.ws!.send(JSON.stringify(msg));
     return true;
   }
 
@@ -117,6 +158,20 @@ export class WSChatClient {
         console.info("[WSChat] chat_mode =", mode);
         this._onMode?.(mode);
         return;
+      }
+
+      // Server explicitly deleted an agent — remove it and apply rest of patch
+      if (data["type"] === "delete_agent") {
+        const patch = data["state"] as { agents?: StatePatchAgent[] } | undefined;
+        this._onStatePatch?.(patch?.agents ?? [], String(data["agent_id"] ?? ""));
+        return;
+      }
+
+      // Any message with a "state" field is a state patch broadcast
+      if (data["state"]) {
+        const patch = data["state"] as { agents?: StatePatchAgent[] };
+        this._onStatePatch?.(patch.agents ?? []);
+        // don't return — message may also carry chat/stream content
       }
 
       const from = String(data["from"] ?? "io-gateway");

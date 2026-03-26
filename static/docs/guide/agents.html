@@ -133,7 +133,7 @@
   </aside>
   <main class="content">
 <h1 id="agents">Agents</h1>
-<p>All agents are Python classes implementing the <code>Actor</code> protocol.  They communicate exclusively via MQTT — no direct function calls between agents.  A Rust implementation mirrors the same actor model and may run in sync as an optional performance layer.</p>
+<p>All agents are Python classes implementing the <code>Actor</code> protocol. They communicate exclusively via MQTT — no direct function calls between agents.  A Rust implementation mirrors the same actor model and may run in sync as an optional performance layer.</p>
 <hr />
 <h2 id="core-protected-agents">Core (protected) agents</h2>
 <p>These agents are marked <code>protected: true</code> and cannot be stopped or deleted from the dashboard.</p>
@@ -160,7 +160,7 @@
 </tr>
 </tbody>
 </table>
-<p>The LLM brain of the system.  Receives user messages, calls the configured LLM (Anthropic / OpenAI / Ollama), and parses <code>&lt;spawn&gt;</code> directives in the response to dynamically create new agents.</p>
+<p>The LLM brain of the system. Receives user messages, calls the configured LLM (Anthropic / OpenAI / Ollama), and parses <code>&lt;spawn&gt;</code> directives in the response to dynamically create new agents.</p>
 <p><strong>Spawn syntax</strong> (in LLM response):</p>
 <div class="highlight"><pre><span></span><code><span class="nt">&lt;spawn</span><span class="w"> </span><span class="na">agent-type=</span><span class="s">&quot;dynamic&quot;</span><span class="w"> </span><span class="na">name=</span><span class="s">&quot;my-agent&quot;</span><span class="nt">&gt;</span>
 <span class="w">  </span>//<span class="w"> </span>Rhai<span class="w"> </span>script<span class="w"> </span>body
@@ -198,7 +198,7 @@ LLM_API_KEY=sk-ant-...
 </tr>
 </tbody>
 </table>
-<p>Polls all registered actors every heartbeat cycle.  Raises a <code>severity: error</code> alert if any actor's last heartbeat is older than 60 seconds.  Publishes a <code>system/health</code> digest on every tick.</p>
+<p>Polls all registered actors every heartbeat cycle. Raises a <code>severity: error</code> alert if any actor's last heartbeat is older than 60 seconds. Publishes a <code>system/health</code> digest on every tick.</p>
 <hr />
 <h3 id="qaagent">QAAgent</h3>
 <table>
@@ -223,7 +223,7 @@ LLM_API_KEY=sk-ant-...
 </tr>
 </tbody>
 </table>
-<p>Passively inspects every chat message flowing through the broker.  Flags content that matches harmful patterns (prompt injection, PII, profanity).  Publishes a <code>system/alert</code> if a policy is violated.</p>
+<p>Passively inspects every chat message flowing through the broker. Flags content that matches harmful patterns (prompt injection, PII, profanity). Publishes a <code>system/alert</code> if a policy is violated.</p>
 <hr />
 <h2 id="standard-agents">Standard agents</h2>
 <h3 id="ioagent">IOAgent</h3>
@@ -274,7 +274,7 @@ LLM_API_KEY=sk-ant-...
 </tr>
 </tbody>
 </table>
-<p>Named after the <em>nautilus</em> shell (SSH = <strong>Secure Shell</strong>) and Jules Verne's submarine.  Bridges remote filesystem operations into the chat interface.</p>
+<p>Named after the <em>nautilus</em> shell (SSH = <strong>Secure Shell</strong>) and Jules Verne's submarine. Bridges remote filesystem operations into the chat interface.</p>
 <p><strong>Commands:</strong></p>
 <table>
 <thead>
@@ -342,7 +342,7 @@ NAUTILUS_RSYNC_FLAGS=
 </tr>
 </tbody>
 </table>
-<p>User and Developer Xpert.  Zero-LLM, always-available knowledge agent.  Answers questions about Wactorz instantly from a built-in knowledge base — no API key needed.</p>
+<p>User and Developer Xpert. Zero-LLM, always-available knowledge agent. Answers questions about Wactorz instantly from a built-in knowledge base — no API key needed.</p>
 <p><strong>Commands:</strong></p>
 <table>
 <thead>
@@ -407,7 +407,7 @@ NAUTILUS_RSYNC_FLAGS=
 </tr>
 </tbody>
 </table>
-<p>Spawned on-demand by <code>MainActor</code> when the LLM response contains a <code>&lt;spawn&gt;</code> directive.  Executes Rhai scripts generated at runtime.  Enables the LLM to extend the system with new capabilities without a server restart.</p>
+<p>Spawned on-demand by <code>MainActor</code> when the LLM response contains a <code>&lt;spawn&gt;</code> directive. Executes Rhai scripts generated at runtime. Enables the LLM to extend the system with new capabilities without a server restart.</p>
 <hr />
 <h3 id="mlagent">MlAgent</h3>
 <table>
@@ -424,7 +424,329 @@ NAUTILUS_RSYNC_FLAGS=
 </tr>
 </tbody>
 </table>
-<p>Base struct for ML-inference agents.  ONNX and Candle backends are currently stubbed (<code>anyhow::bail!</code> placeholders) pending full implementation.</p>
+<p>Base struct for ML-inference agents. ONNX and Candle backends are currently stubbed (<code>anyhow::bail!</code> placeholders) pending full implementation.</p>
+<hr />
+<h2 id="home-assistant-agents">Home Assistant agents</h2>
+<p>These agents integrate with a <a href="https://www.home-assistant.io/">Home Assistant</a> instance.
+They all require at minimum:</p>
+<div class="highlight"><pre><span></span><code>HA_URL=http://homeassistant:8123
+HA_TOKEN=&lt;long-lived access token&gt;
+</code></pre></div>
+
+<h3 id="homeassistantagent">HomeAssistantAgent</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>home-assistant-agent</code></td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>home-assistant</code></td>
+</tr>
+<tr>
+<td><strong>Topic</strong></td>
+<td><code>agents/{id}/chat</code></td>
+</tr>
+</tbody>
+</table>
+<p>Unified LLM-backed agent for all Home Assistant operations. Classifies the user's natural-language request with a cheap single-word LLM call, then routes to the appropriate code path.</p>
+<p><strong>Supported intents:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Intent</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>recommend_hardware</code></td>
+<td>Advise which discovered devices/entities can fulfill a request</td>
+</tr>
+<tr>
+<td><code>create_automation</code></td>
+<td>Build and persist a new automation via the HA REST API</td>
+</tr>
+<tr>
+<td><code>edit_automation</code></td>
+<td>Update an existing automation</td>
+</tr>
+<tr>
+<td><code>delete_automation</code></td>
+<td>Remove an existing automation</td>
+</tr>
+<tr>
+<td><code>list_automations</code></td>
+<td>Enumerate all automations</td>
+</tr>
+<tr>
+<td><code>list_areas</code></td>
+<td>Enumerate Home Assistant areas</td>
+</tr>
+<tr>
+<td><code>list_devices</code></td>
+<td>Enumerate Home Assistant devices</td>
+</tr>
+<tr>
+<td><code>list_entities</code></td>
+<td>Enumerate Home Assistant entities</td>
+</tr>
+</tbody>
+</table>
+<p>Complex operations (<code>create</code>, <code>edit</code>) use up to two additional LLM calls; simpler ones (<code>list</code>, <code>delete</code>) use one. If pre-selected <code>entities</code> or <code>hardware</code> are supplied in the task payload the classification step is skipped and the agent goes straight to automation creation.</p>
+<p><strong>Result schema:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;human-readable confirmation or list&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;structured HA API response (list|dict|null)&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="homeassistantmapagent">HomeAssistantMapAgent</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>home-assistant-map-agent</code></td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>home-assistant-map</code></td>
+</tr>
+<tr>
+<td><strong>Listens</strong></td>
+<td>HA WebSocket <code>entity_registry_updated</code> events</td>
+</tr>
+<tr>
+<td><strong>Publishes</strong></td>
+<td><code>homeassistant/map/entities_with_location</code> (default)</td>
+</tr>
+</tbody>
+</table>
+<p>Maintains a live map of every HA device with its physical location. Opens a persistent WebSocket connection to Home Assistant and re-fetches the full device/entity/location dataset every time the entity registry changes, then publishes the result downstream.</p>
+<p>Output can be directed to an MQTT topic or forwarded directly to another actor by name:</p>
+<p><strong>Configuration (<code>.env</code>):</strong></p>
+<div class="highlight"><pre><span></span><code>HA_MAP_AGENT_OUTPUT_TOPIC=homeassistant/map/entities_with_location
+HA_MAP_AGENT_TARGET_ACTOR=          # optional actor name; overrides MQTT topic
+</code></pre></div>
+
+<p><strong>Task commands</strong> (sent via actor mailbox):</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>refresh</code></td>
+<td>Force an immediate device-map rebuild and publish</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>Return connection state, event counters, and error info</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Published payload schema:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;home_assistant_map_update&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;event_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;entity_registry_updated&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1234567890.0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;event&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span>
+<span class="w">  </span><span class="nt">&quot;devices&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="w"> </span><span class="nt">&quot;device_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;area&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;entities&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="w"> </span><span class="p">}]</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="homeassistantstatebridgeagent">HomeAssistantStateBridgeAgent</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>home-assistant-state-bridge</code></td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>home-assistant-state-bridge</code></td>
+</tr>
+<tr>
+<td><strong>Listens</strong></td>
+<td>HA WebSocket <code>state_changed</code> events</td>
+</tr>
+<tr>
+<td><strong>Publishes</strong></td>
+<td><code>homeassistant/state_changes[/{domain}/{entity_id}]</code> (default)</td>
+</tr>
+</tbody>
+</table>
+<p>Bridges every Home Assistant entity state change to MQTT. Opens a persistent WebSocket connection and forwards each <code>state_changed</code> event — optionally filtered by domain and split into per-entity sub-topics.</p>
+<p><strong>Configuration (<code>.env</code>):</strong></p>
+<div class="highlight"><pre><span></span><code>HA_STATE_BRIDGE_OUTPUT_TOPIC=homeassistant/state_changes   # base MQTT topic
+HA_STATE_BRIDGE_DOMAINS=light,switch,sensor                # empty = all domains
+HA_STATE_BRIDGE_PER_ENTITY=0                               # 1 = per-entity sub-topics; 0 (default) = single topic
+</code></pre></div>
+
+<p>When <code>HA_STATE_BRIDGE_PER_ENTITY=1</code> each event is published to <code>{base_topic}/{domain}/{entity_id}</code>. When <code>0</code>, all events share <code>{base_topic}</code>.</p>
+<p><strong>Task commands</strong> (sent via actor mailbox):</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>status</code></td>
+<td>Return connection state, event counters, domain filter, and error info</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Published payload schema:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;home_assistant_state_change&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;entity_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;light.living_room&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;light&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;new_state&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span>
+<span class="w">  </span><span class="nt">&quot;old_state&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span>
+<span class="w">  </span><span class="nt">&quot;context&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span>
+<span class="w">  </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1234567890.0</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="homeassistantactuatoragent">HomeAssistantActuatorAgent</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>actuator-{automation_id}</code> (truncated to 20 chars)</td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>ha-actuator</code></td>
+</tr>
+<tr>
+<td><strong>Listens</strong></td>
+<td>One or more configurable MQTT topics</td>
+</tr>
+</tbody>
+</table>
+<p>Reactive end-of-pipeline actuator. Subscribes to MQTT topics produced by sensor agents (e.g. <code>DynamicAgent</code>), evaluates optional conditions against live HA entity states, and calls HA services via a persistent WebSocket connection. One instance per automation.</p>
+<p><strong>Detection pipeline:</strong></p>
+<div class="highlight"><pre><span></span><code>MQTT message → detection_filter → cooldown guard → HA conditions → call_service × N
+</code></pre></div>
+
+<p>Spawned with an <code>ActuatorConfig</code> object — not a singleton:</p>
+<div class="highlight"><pre><span></span><code><span class="n">config</span> <span class="o">=</span> <span class="n">ActuatorConfig</span><span class="p">(</span>
+    <span class="n">automation_id</span><span class="o">=</span><span class="s2">&quot;person-light&quot;</span><span class="p">,</span>
+    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Turn on living room light when person detected&quot;</span><span class="p">,</span>
+    <span class="n">mqtt_topics</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;camera/detections&quot;</span><span class="p">],</span>
+    <span class="n">detection_filter</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;label&quot;</span><span class="p">:</span> <span class="s2">&quot;person&quot;</span><span class="p">,</span> <span class="s2">&quot;confidence&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;gte&quot;</span><span class="p">:</span> <span class="mf">0.7</span><span class="p">}},</span>
+    <span class="n">cooldown_seconds</span><span class="o">=</span><span class="mf">10.0</span><span class="p">,</span>
+    <span class="n">conditions</span><span class="o">=</span><span class="p">[</span>
+        <span class="n">ActuatorCondition</span><span class="p">(</span>
+            <span class="n">entity_id</span><span class="o">=</span><span class="s2">&quot;sun.sun&quot;</span><span class="p">,</span>
+            <span class="n">attribute</span><span class="o">=</span><span class="s2">&quot;state&quot;</span><span class="p">,</span>
+            <span class="n">operator</span><span class="o">=</span><span class="s2">&quot;eq&quot;</span><span class="p">,</span>
+            <span class="n">value</span><span class="o">=</span><span class="s2">&quot;below_horizon&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="p">],</span>
+    <span class="n">actions</span><span class="o">=</span><span class="p">[</span>
+        <span class="n">ActuatorAction</span><span class="p">(</span>
+            <span class="n">domain</span><span class="o">=</span><span class="s2">&quot;light&quot;</span><span class="p">,</span>
+            <span class="n">service</span><span class="o">=</span><span class="s2">&quot;turn_on&quot;</span><span class="p">,</span>
+            <span class="n">entity_id</span><span class="o">=</span><span class="s2">&quot;light.living_room&quot;</span><span class="p">,</span>
+            <span class="n">service_data</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;color_name&quot;</span><span class="p">:</span> <span class="s2">&quot;warm_white&quot;</span><span class="p">,</span> <span class="s2">&quot;brightness&quot;</span><span class="p">:</span> <span class="mi">200</span><span class="p">},</span>
+        <span class="p">)</span>
+    <span class="p">],</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p><strong><code>ActuatorConfig</code> fields:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>automation_id</code></td>
+<td><code>str</code></td>
+<td>Unique identifier for this actuator</td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td><code>str</code></td>
+<td>Human-readable description</td>
+</tr>
+<tr>
+<td><code>mqtt_topics</code></td>
+<td><code>list[str]</code></td>
+<td>Topics to subscribe to</td>
+</tr>
+<tr>
+<td><code>actions</code></td>
+<td><code>list[ActuatorAction]</code></td>
+<td>HA service calls to execute on trigger</td>
+</tr>
+<tr>
+<td><code>conditions</code></td>
+<td><code>list[ActuatorCondition]</code></td>
+<td>Optional HA entity conditions (AND logic)</td>
+</tr>
+<tr>
+<td><code>detection_filter</code></td>
+<td><code>dict \| None</code></td>
+<td>Key-value filter on the incoming payload; values may be literals or operator dicts (<code>{"gte": 0.7}</code>)</td>
+</tr>
+<tr>
+<td><code>cooldown_seconds</code></td>
+<td><code>float</code></td>
+<td>Minimum seconds between consecutive actuations (default: 10)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Condition operators:</strong> <code>eq</code>, <code>ne</code>, <code>gt</code>, <code>lt</code>, <code>gte</code>, <code>lte</code></p>
+<p><strong>Published actuation record</strong> (<code>agents/{id}/actuations</code>):</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;automation_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;person-light&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;actions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="w"> </span><span class="nt">&quot;domain&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;light&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;service&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;turn_on&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;entity_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w"> </span><span class="p">}],</span>
+<span class="w">  </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1234567890.0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;trigger_payload&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
+<span class="p">}</span>
+</code></pre></div>
+
 <hr />
 <h2 id="adding-a-new-agent">Adding a new agent</h2>
 <ol>

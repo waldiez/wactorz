@@ -122,8 +122,6 @@ export interface AgentSelectedEvent {
 }
 
 /** Custom DOM event payload for theme switching. */
-//
-// theme: "graph" | "galaxy" | "cards" | "cards-3d" | "grave" | "social" | "fin";
 export interface ThemeChangeEvent {
-  theme: "graph" | "galaxy" | "cards" | "grave" | "social" | "fin";
+  theme: "social" | "cards";
 }

@@ -20,7 +20,7 @@ use wactorz_agents::{
     DynamicAgent, HomeAssistantAgent, InstallerAgent, IOAgent,
     LlmConfig, LlmProvider, MainActor, ManualAgent, MonitorAgent,
 };
-use wactorz_core::{ActorConfig, ActorFactory, ActorSystem, EventPublisher, Supervisor, SupervisorStrategy};
+use wactorz_core::{ActorConfig, ActorSystem, EventPublisher, Supervisor, SupervisorStrategy};
 use wactorz_interfaces::{RestServer, WsBridge};
 use wactorz_interfaces::ws::WsEnvelope;
 use wactorz_mqtt::{MqttClient, MqttConfig};
@@ -264,8 +264,7 @@ async fn main() -> Result<()> {
         ..Default::default()
     };
 
-    // ── Supervisor + agents ───────────────────────────────────────────────────
-    // Matches Python patato4/main.py agent set, plus IOAgent (WS/MQTT bridge).
+    // ── Supervisor + agents ───────────────────────────────────────────────────.
     // NATO node names:
     //   alpha=main-actor  bravo=monitor  charlie=io
     //   delta=installer   echo=code-agent (DynamicAgent)
@@ -371,7 +370,7 @@ async fn main() -> Result<()> {
 
     // ── WebSocket bridge ──────────────────────────────────────────────────────
     let ws_addr: SocketAddr = args.ws_addr;
-    let ws_bridge = WsBridge::new(ws_tx);
+    let ws_bridge = WsBridge::new(ws_tx, mqtt_client, args.mqtt_host, args.mqtt_port);
     tokio::spawn(async move {
         let router = ws_bridge.router();
         match tokio::net::TcpListener::bind(ws_addr).await {

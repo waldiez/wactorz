@@ -4,7 +4,7 @@
 
 Wactorz is an async, multi-agent orchestration system built on the **Actor Model** with **MQTT** as the communication backbone.  Every agent is an independent actor with its own message inbox; no shared mutable state exists between actors.
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────────┐
 │  Browser                                                           │
 │  Babylon.js SPA  ←──WebSocket──►  nginx  ←─── /ws  ──►           │
@@ -50,7 +50,7 @@ The backend is **Python-first**: the Python implementation is the primary runtim
 The single `wactorz` Rust binary exposes the same REST + WebSocket interface.
 
 | Crate | Role |
-|---|---|
+| - | - |
 | `wactorz-core` | `Actor` trait, `ActorRegistry`, message types, `EventPublisher` |
 | `wactorz-agents` | All concrete agent implementations |
 | `wactorz-mqtt` | MQTT client wrapper + topic constants |
@@ -66,7 +66,7 @@ The MQTT broker.  All inter-actor and actor-to-frontend communication passes thr
 The single public HTTP entry point.
 
 | Path | Proxied to |
-|---|---|
+| - | - |
 | `/` | `static/app/` (static SPA) |
 | `/api/` | `wactorz:8080` (REST) |
 | `/ws` | `wactorz:8081` (WebSocket bridge) |
@@ -117,7 +117,7 @@ pub trait Actor: Send {
 
 ### User → Agent
 
-```
+```text
 Browser IO bar
   │  publishes  io/chat  { from: "user", content: "@agent-name text" }
   ▼
@@ -144,7 +144,7 @@ Mosquitto  →  WebSocket bridge  →  Browser
 Every agent publishes to its own MQTT topics on lifecycle events:
 
 | Event | Topic | Triggered by |
-|---|---|---|
+| - | - | - |
 | Spawn | `agents/{id}/spawn` | `on_start()` |
 | Heartbeat | `agents/{id}/heartbeat` | periodic tick |
 | State change | `agents/{id}/status` | state mutation |
@@ -164,7 +164,7 @@ Message IDs use simpler **WIDs**.
 ## Deployment Modes
 
 | Mode | Docker containers | Binary |
-|---|---|---|
+| - | - | - |
 | **Full Docker** (`compose.yaml`) | wactorz + nginx + mosquitto + fuseki + HA | inside container |
 | **Native binary** (`compose.native.yaml`) | nginx + mosquitto only | runs on host OS |
 

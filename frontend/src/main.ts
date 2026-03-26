@@ -25,9 +25,21 @@ import { tts } from "./io/TTSManager";
 
 import type { AgentInfo, AgentState, ThemeChangeEvent } from "./types/agent";
 
-function nameFromWid(id: string): string {
-  const m = id.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
-  return m?.[1] ?? id.slice(0, 8);
+function nameFromWid(raw: string): string {
+  const m = raw.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
+  return m?.[1] ?? raw;
+}
+
+/**
+ * Resolve a human-readable display name from whatever the backend sends.
+ * - If name is empty or looks like a raw timestamp (all digits), extract from WID id.
+ * - If name is itself a WID string (contains "Z-"), extract the embedded name.
+ * - Otherwise trust the name as-is.
+ */
+function resolveAgentName(name: string | undefined, id: string): string {
+  const n = (name ?? "").trim();
+  const isTimestampOnly = !n || /^\d+$/.test(n);
+  return isTimestampOnly ? nameFromWid(id) : nameFromWid(n);
 }
 
 // ── Scene ─────────────────────────────────────────────────────────────────────
@@ -112,7 +124,7 @@ wsChat.onStatePatch((agents, deletedId) => {
             : "running";
     const update: AgentInfo = {
       id: a.agent_id,
-      name: a.name || nameFromWid(a.agent_id),
+      name: resolveAgentName(a.name, a.agent_id),
       state,
       protected: a.protected ?? false,
     };
@@ -246,7 +258,12 @@ mqtt.on("connected", () => {
   fetch("/api/actors")
     .then((r) => r.json())
     .then((actors: AgentInfo[]) => {
-      actors.forEach((a) => scene.addOrUpdateAgent(a));
+      actors.forEach((a) =>
+        scene.addOrUpdateAgent({
+          ...a,
+          name: resolveAgentName(a.name, a.id),
+        }),
+      );
       chatPanel.updateAgentList(scene.getAgents());
       hud.setAgentCount(scene.getAgents().length);
       refreshStats();

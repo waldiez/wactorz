@@ -237,6 +237,7 @@ export class ChatPanel {
       const row = document.createElement("button");
       row.className = `af-chat-agent-row${agent.name === this.activeAgentName ? " active" : ""}`;
       row.dataset["name"] = agent.name;
+      row.title = agent.name;
       row.innerHTML = `
         <span class="af-chat-agent-dot" style="background:${dotColor}"></span>
         <span class="af-chat-agent-name">${agent.name}</span>
@@ -312,8 +313,8 @@ export class ChatPanel {
     this._streamBody.innerHTML = renderMarkdown(this._streamText);
     this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
 
-    // Store in thread history
-    const key = this.activeAgentName ?? "main-actor";
+    // Store in thread history under the actual sender, not the active panel
+    const key = this._streamFrom ?? this.activeAgentName ?? "main-actor";
     const msg: ChatMessage = {
       id: `stream-${Date.now()}`,
       from: this._streamFrom,

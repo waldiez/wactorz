@@ -325,15 +325,23 @@ function str(v: unknown, fallback = ""): string {
  * Format: 20260325T151725.0000Z-{name}[-{6hex}]
  * Falls back to first 8 chars for non-WID strings.
  */
-function nameFromId(id: string): string {
-  const m = id.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
-  return m?.[1] ?? id.slice(0, 8);
+function nameFromId(raw: string): string {
+  const m = raw.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
+  return m?.[1] ?? raw;
+}
+
+function resolveAgentName(name: string, id: string): string {
+  const isTimestampOnly = !name || /^\d+$/.test(name);
+  return isTimestampOnly ? nameFromId(id) : nameFromId(name);
 }
 
 function normaliseHeartbeat(p: unknown): HeartbeatPayload {
   const o = (p ?? {}) as RawObj;
   const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
-  const agentName = str(o["agentName"] ?? o["name"]) || nameFromId(agentId);
+  const agentName = resolveAgentName(
+    str(o["agentName"] ?? o["name"]),
+    agentId,
+  );
   const timestampMs = toMs(
     o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"],
   );
@@ -364,7 +372,7 @@ function normaliseChat(p: unknown): ChatMessage {
 function normaliseStatus(p: unknown): StatusPayload {
   const o = (p ?? {}) as RawObj;
   const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
-  const agentName = str(o["agentName"] ?? o["name"]) || nameFromId(agentId);
+  const agentName = resolveAgentName(str(o["agentName"] ?? o["name"]), agentId);
   return {
     ...(o as unknown as StatusPayload),
     agentId,

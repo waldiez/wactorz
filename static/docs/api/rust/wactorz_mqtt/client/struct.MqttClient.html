@@ -8,8 +8,8 @@ or by polling it manually in a dedicated task.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.publish_message" class="method"><a class="src rightside" href="../../src/wactorz_mqtt/client.rs.html#84-90">Source</a><h4 class="code-header">pub async fn <a href="#method.publish_message" class="fn">publish_message</a>(
     &amp;self,
     topic: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.93.0/std/primitive.str.html">str</a>,
-    message: &amp;<a class="struct" href="../../wactorz_core/message/struct.Message.html" title="struct wactorz_core::message::Message">Message</a>,
-) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.102/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.93.0/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Publish a serialised <a href="../../wactorz_core/message/struct.Message.html" title="struct wactorz_core::message::Message"><code>Message</code></a> to the given topic.</p>
+    message: &amp;Message,
+) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.102/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.93.0/std/primitive.unit.html">()</a>&gt;</h4></section></summary><div class="docblock"><p>Publish a serialised [<code>Message</code>] to the given topic.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.publish_json" class="method"><a class="src rightside" href="../../src/wactorz_mqtt/client.rs.html#93-99">Source</a><h4 class="code-header">pub async fn <a href="#method.publish_json" class="fn">publish_json</a>(
     &amp;self,
     topic: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.93.0/std/primitive.str.html">str</a>,

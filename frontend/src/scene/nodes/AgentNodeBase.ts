@@ -26,7 +26,7 @@ export abstract class AgentNodeBase {
   abstract readonly mesh: AbstractMesh;
 
   /** Whether this node is pinned at the scene origin (main actor). */
-  readonly isMainActor: boolean;
+  readonly isMainWactor: boolean;
 
   /** Callback fired when the user clicks this node. */
   onClick: ((agent: AgentInfo) => void) | null = null;
@@ -37,10 +37,10 @@ export abstract class AgentNodeBase {
   constructor(
     info: AgentInfo,
     protected readonly scene: Scene,
-    isMainActor: boolean,
+    isMainWactor: boolean,
   ) {
     this.info = info;
-    this.isMainActor = isMainActor;
+    this.isMainWactor = isMainWactor;
   }
 
   /**
@@ -68,7 +68,7 @@ export abstract class AgentNodeBase {
     // subtle dark halo for readability
     ctx.shadowColor = "rgba(0,0,0,0.8)";
     ctx.shadowBlur = 6;
-    ctx.fillStyle = this.isMainActor
+    ctx.fillStyle = this.isMainWactor
       ? "rgba(255, 210, 100, 0.95)"
       : "rgba(180, 210, 255, 0.9)";
     ctx.fillText(this.info.name, texW / 2, texH / 2);

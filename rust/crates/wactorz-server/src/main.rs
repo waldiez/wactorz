@@ -17,12 +17,12 @@ use std::sync::Arc;
 use tracing::info;
 
 use wactorz_agents::{
-    DynamicAgent, HomeAssistantAgent, InstallerAgent, IOAgent,
-    LlmConfig, LlmProvider, MainActor, ManualAgent, MonitorAgent,
+    DynamicAgent, HomeAssistantAgent, IOAgent, InstallerAgent, LlmConfig, LlmProvider, MainActor,
+    ManualAgent, MonitorAgent,
 };
 use wactorz_core::{ActorConfig, ActorSystem, EventPublisher, Supervisor, SupervisorStrategy};
-use wactorz_interfaces::{RestServer, WsBridge};
 use wactorz_interfaces::ws::WsEnvelope;
+use wactorz_interfaces::{RestServer, WsBridge};
 use wactorz_mqtt::{MqttClient, MqttConfig};
 
 /// AgentFlow: async multi-agent orchestration framework
@@ -102,10 +102,10 @@ async fn main() -> Result<()> {
     let ws_tx_for_mqtt = ws_tx.clone();
 
     // Registry clone for routing inbound chat messages → actor mailboxes
-    let registry_for_route  = system.registry.clone();
-    let registry_for_qa     = system.registry.clone();
+    let registry_for_route = system.registry.clone();
+    let registry_for_qa = system.registry.clone();
     // WIK receives system/llm/error; LlmAgent/MainActor receives system/llm/switch
-    let registry_for_wik    = system.registry.clone();
+    let registry_for_wik = system.registry.clone();
     let registry_for_switch = system.registry.clone();
 
     // Start MQTT event loop task
@@ -147,9 +147,9 @@ async fn main() -> Result<()> {
                                     Some("wik-agent".to_string()),
                                     Some(entry.id.clone()),
                                     wactorz_core::message::MessageType::Task {
-                                        task_id:     "wik/switch".to_string(),
+                                        task_id: "wik/switch".to_string(),
                                         description: "LLM provider switch".to_string(),
-                                        payload:     switch_payload,
+                                        payload: switch_payload,
                                     },
                                 );
                                 let _ = reg.send(&entry.id, msg).await;
@@ -252,15 +252,15 @@ async fn main() -> Result<()> {
             "openai" => LlmProvider::OpenAI,
             "ollama" => LlmProvider::Ollama,
             "gemini" => LlmProvider::Gemini,
-            "nim"    => LlmProvider::Nim,
-            _        => LlmProvider::Anthropic,
+            "nim" => LlmProvider::Nim,
+            _ => LlmProvider::Anthropic,
         };
         (p, args.llm_model.clone())
     };
     let llm_config = LlmConfig {
         provider: llm_provider,
-        model:    llm_model,
-        api_key:  args.llm_api_key.clone(),
+        model: llm_model,
+        api_key: args.llm_api_key.clone(),
         ..Default::default()
     };
 
@@ -282,7 +282,10 @@ async fn main() -> Result<()> {
                 let c = ActorConfig::new_with_node("main-actor", "alpha").protected();
                 Box::new(MainActor::new(c, lc.clone(), sys.clone()).with_publisher(pub_.clone()))
             }),
-            SupervisorStrategy::OneForOne, 10, 60.0, 2.0,
+            SupervisorStrategy::OneForOne,
+            10,
+            60.0,
+            2.0,
         );
     }
     {
@@ -294,7 +297,10 @@ async fn main() -> Result<()> {
                 let c = ActorConfig::new_with_node("monitor-agent", "bravo").protected();
                 Box::new(MonitorAgent::new(c, sys.clone()).with_publisher(pub_.clone()))
             }),
-            SupervisorStrategy::OneForOne, 10, 60.0, 1.0,
+            SupervisorStrategy::OneForOne,
+            10,
+            60.0,
+            1.0,
         );
     }
     {
@@ -306,7 +312,10 @@ async fn main() -> Result<()> {
                 let c = ActorConfig::new_with_node("io-agent", "charlie");
                 Box::new(IOAgent::new(c, sys.clone()).with_publisher(pub_.clone()))
             }),
-            SupervisorStrategy::OneForOne, 10, 60.0, 1.0,
+            SupervisorStrategy::OneForOne,
+            10,
+            60.0,
+            1.0,
         );
     }
     {
@@ -317,7 +326,10 @@ async fn main() -> Result<()> {
                 let c = ActorConfig::new_with_node("installer-agent", "delta");
                 Box::new(InstallerAgent::new(c).with_publisher(pub_.clone()))
             }),
-            SupervisorStrategy::OneForOne, 5, 60.0, 2.0,
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            2.0,
         );
     }
     {
@@ -328,7 +340,10 @@ async fn main() -> Result<()> {
                 let c = ActorConfig::new_with_node("code-agent", "echo");
                 Box::new(DynamicAgent::new(c, "").with_publisher(pub_.clone()))
             }),
-            SupervisorStrategy::OneForOne, 5, 60.0, 1.0,
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
         );
     }
     {
@@ -340,7 +355,10 @@ async fn main() -> Result<()> {
                 let c = ActorConfig::new_with_node("manual-agent", "foxtrot");
                 Box::new(ManualAgent::new(c, lc.clone()).with_publisher(pub_.clone()))
             }),
-            SupervisorStrategy::OneForOne, 5, 60.0, 1.0,
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
         );
     }
     {
@@ -351,12 +369,17 @@ async fn main() -> Result<()> {
                 let c = ActorConfig::new_with_node("home-assistant-agent", "golf");
                 Box::new(HomeAssistantAgent::new(c).with_publisher(pub_.clone()))
             }),
-            SupervisorStrategy::OneForOne, 5, 60.0, 2.0,
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            2.0,
         );
     }
 
     sup.start().await?;
-    info!("Supervisor started — 7 agents (main, monitor, io, installer, code, manual, home-assistant)");
+    info!(
+        "Supervisor started — 7 agents (main, monitor, io, installer, code, manual, home-assistant)"
+    );
 
     // ── REST server ───────────────────────────────────────────────────────────
     let rest_addr: SocketAddr = args.api_addr;

@@ -46,15 +46,15 @@ export class PlanetNode extends AgentNodeBase {
     info: AgentInfo,
     scene: Scene,
     orbitRadius: number,
-    isMainActor: boolean,
+    isMainWactor: boolean,
     highlightLayer: HighlightLayer | null,
   ) {
-    super(info, scene, isMainActor);
+    super(info, scene, isMainWactor);
     this.orbitRadius = orbitRadius;
     this.orbitSpeed = 0.002 + Math.random() * 0.003;
     this.highlightLayer = highlightLayer;
 
-    const radius = isMainActor ? 1.2 : 0.4 + Math.random() * 0.3;
+    const radius = isMainWactor ? 1.2 : 0.4 + Math.random() * 0.3;
     this.mesh = MeshBuilder.CreateSphere(
       `planet-${info.id}`,
       { diameter: radius * 2, segments: 20 },
@@ -63,7 +63,7 @@ export class PlanetNode extends AgentNodeBase {
 
     // ── Material ──────────────────────────────────────────────────────────────
     this.material = new StandardMaterial(`planet-mat-${info.id}`, scene);
-    if (isMainActor) {
+    if (isMainWactor) {
       this.material.emissiveColor = new Color3(1.0, 0.85, 0.3);
       this.material.diffuseColor = new Color3(1.0, 0.7, 0.1);
     } else {
@@ -74,19 +74,19 @@ export class PlanetNode extends AgentNodeBase {
       this.material.specularColor = c.scale(0.4);
       this.material.emissiveColor = c.scale(0.15);
     }
-    this.mesh.position = isMainActor
+    this.mesh.position = isMainWactor
       ? Vector3.Zero()
       : new Vector3(orbitRadius, 0, 0);
     this.mesh.material = this.material;
 
     // ── Atmosphere highlight ──────────────────────────────────────────────────
-    if (highlightLayer && !isMainActor) {
+    if (highlightLayer && !isMainWactor) {
       const atmColor = this.material.diffuseColor.scale(0.6);
       highlightLayer.addMesh(this.mesh, atmColor);
     }
 
     // ── Orbit ring ────────────────────────────────────────────────────────────
-    if (!isMainActor && orbitRadius > 0) {
+    if (!isMainWactor && orbitRadius > 0) {
       this.orbitRing = MeshBuilder.CreateTorus(
         `orbit-${info.id}`,
         { diameter: orbitRadius * 2, thickness: 0.02, tessellation: 64 },
@@ -100,7 +100,7 @@ export class PlanetNode extends AgentNodeBase {
     }
 
     // ── Orbital animation ─────────────────────────────────────────────────────
-    if (!isMainActor) {
+    if (!isMainWactor) {
       this.orbitObserver = scene.onBeforeRenderObservable.add(() => {
         this.orbitAngle += this.orbitSpeed;
         this.mesh.position.x = Math.cos(this.orbitAngle) * this.orbitRadius;
@@ -119,7 +119,7 @@ export class PlanetNode extends AgentNodeBase {
     } else if (typeof state === "object" && "failed" in state) {
       this.material.emissiveColor = new Color3(0.8, 0.1, 0.1);
     } else {
-      this.material.emissiveColor = this.isMainActor
+      this.material.emissiveColor = this.isMainWactor
         ? new Color3(1.0, 0.85, 0.3)
         : this.material.diffuseColor.scale(0.15);
     }

@@ -60,10 +60,12 @@ export class HAClient {
 
       if (data.type === "auth_required") {
         console.log("[HA] Received auth_required, sending auth message...");
-        this.ws?.send(JSON.stringify({
-          type: "auth",
-          access_token: this.token,
-        }));
+        this.ws?.send(
+          JSON.stringify({
+            type: "auth",
+            access_token: this.token,
+          }),
+        );
       } else if (data.type === "auth_ok") {
         this.authenticated = true;
         console.info("[HA] Authenticated successfully");
@@ -78,7 +80,9 @@ export class HAClient {
         }
       } else if (data.type === "event" && data.event?.data?.new_state) {
         const newState = data.event.data.new_state as HAEntity;
-        const idx = this.entities.findIndex(e => e.entity_id === newState.entity_id);
+        const idx = this.entities.findIndex(
+          (e) => e.entity_id === newState.entity_id,
+        );
         if (idx !== -1) {
           this.entities[idx] = newState;
         } else {

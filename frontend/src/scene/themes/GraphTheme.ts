@@ -4,7 +4,7 @@
  * Visual language:
  * - Deep indigo background with a subtle star-field particle system
  * - Agents = glowing spheres with emissive shader + point light halo
- * - MainActor = larger amber/gold sphere pulsing at the scene centre
+ * - MainWactor = larger amber/gold sphere pulsing at the scene centre
  * - Edges = LineSystem meshes connecting communicating agents
  * - Layout = simple spring-force simulation updated each frame
  */
@@ -140,7 +140,7 @@ export class GraphTheme extends ThemeBase {
 
     for (let i = 0; i < entries.length; i++) {
       const a = entries[i];
-      if (!a || a.isMainActor) continue; // main actor is pinned
+      if (!a || a.isMainWactor) continue; // main actor is pinned
 
       let fx = 0,
         fy = 0,

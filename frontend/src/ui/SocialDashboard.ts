@@ -410,7 +410,9 @@ export class SocialDashboard {
       }, 600);
     }
     document.dispatchEvent(
-      new CustomEvent("af-agent-command", { detail: { command: action, agentId: id } }),
+      new CustomEvent("af-agent-command", {
+        detail: { command: action, agentId: id },
+      }),
     );
   }
 

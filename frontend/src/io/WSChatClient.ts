@@ -162,8 +162,13 @@ export class WSChatClient {
 
       // Server explicitly deleted an agent — remove it and apply rest of patch
       if (data["type"] === "delete_agent") {
-        const patch = data["state"] as { agents?: StatePatchAgent[] } | undefined;
-        this._onStatePatch?.(patch?.agents ?? [], String(data["agent_id"] ?? ""));
+        const patch = data["state"] as
+          | { agents?: StatePatchAgent[] }
+          | undefined;
+        this._onStatePatch?.(
+          patch?.agents ?? [],
+          String(data["agent_id"] ?? ""),
+        );
         return;
       }
 

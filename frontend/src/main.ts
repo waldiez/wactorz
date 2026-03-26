@@ -66,13 +66,28 @@ const wsChat = new WSChatClient();
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
 wsChat.onChat((content, from, timestampMs) => {
-  const msg = { id: `ws-${timestampMs}`, from, to: "user", content, timestampMs };
+  const msg = {
+    id: `ws-${timestampMs}`,
+    from,
+    to: "user",
+    content,
+    timestampMs,
+  };
   ioManager.receiveAgentMessage(msg);
   scene.onChat(from, "user");
-  const feedItem = { type: "chat" as const, label: content.slice(0, 60), agentName: from, timestamp: timestampMs };
+  const feedItem = {
+    type: "chat" as const,
+    label: content.slice(0, 60),
+    agentName: from,
+    timestamp: timestampMs,
+  };
   feed.push(feedItem);
-  document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item: feedItem } }));
-  document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+  document.dispatchEvent(
+    new CustomEvent("af-feed-push", { detail: { item: feedItem } }),
+  );
+  document.dispatchEvent(
+    new CustomEvent("af-chat-message", { detail: { msg } }),
+  );
 });
 
 // Streaming replies — onStreamChunk / onStreamEnd are wired inside setWSClient
@@ -88,22 +103,26 @@ wsChat.onStatePatch((agents, deletedId) => {
     if (!a.agent_id) return;
     const rawState = (a.state ?? a.status ?? "running") as string;
     const state: AgentState =
-      rawState === "paused"       ? "paused"       :
-      rawState === "stopped"      ? "stopped"      :
-      rawState === "initializing" ? "initializing" :
-                                    "running";
+      rawState === "paused"
+        ? "paused"
+        : rawState === "stopped"
+          ? "stopped"
+          : rawState === "initializing"
+            ? "initializing"
+            : "running";
     const update: AgentInfo = {
-      id:        a.agent_id,
-      name:      a.name || nameFromWid(a.agent_id),
+      id: a.agent_id,
+      name: a.name || nameFromWid(a.agent_id),
       state,
       protected: a.protected ?? false,
     };
-    if (a.messages_processed != null) update.messagesProcessed = a.messages_processed;
-    if (a.cost_usd  != null) update.costUsd = a.cost_usd;
-    if (a.uptime    != null) update.uptime  = a.uptime;
-    if (a.cpu       != null) update.cpu     = a.cpu;
-    if (a.mem       != null) update.mem     = a.mem;
-    if (a.task      != null) update.task    = a.task;
+    if (a.messages_processed != null)
+      update.messagesProcessed = a.messages_processed;
+    if (a.cost_usd != null) update.costUsd = a.cost_usd;
+    if (a.uptime != null) update.uptime = a.uptime;
+    if (a.cpu != null) update.cpu = a.cpu;
+    if (a.mem != null) update.mem = a.mem;
+    if (a.task != null) update.task = a.task;
     if (a.agent_type != null) update.agentType = a.agent_type;
     scene.addOrUpdateAgent(update);
   });
@@ -117,7 +136,6 @@ wsChat.connect(`${_wsProto}//${window.location.host}/ws`);
 // MentionPopup needs the textarea and the agent list from SceneManager
 const textInput = document.getElementById("text-input") as HTMLTextAreaElement;
 new MentionPopup(textInput, () => scene.getAgents());
-
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -167,7 +185,9 @@ mqtt.on("alert", (payload) => {
 mqtt.on("chat", (msg) => {
   ioManager.receiveAgentMessage(msg);
   scene.onChat(msg.from, msg.to);
-  document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+  document.dispatchEvent(
+    new CustomEvent("af-chat-message", { detail: { msg } }),
+  );
   pushFeed({
     type: "chat",
     label: `→ ${msg.to}: ${msg.content.slice(0, 40)}${msg.content.length > 40 ? "…" : ""}`,
@@ -214,7 +234,9 @@ let seeded = false;
 mqtt.on("connected", () => {
   console.info("[Dashboard] MQTT connected");
   hud.setSystemHealth(true);
-  document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "live" } }));
+  document.dispatchEvent(
+    new CustomEvent("af-connection-status", { detail: { status: "live" } }),
+  );
 
   if (seeded) return;
   seeded = true;
@@ -306,7 +328,9 @@ mqtt.on("coin", (payload) => {
 mqtt.on("disconnected", () => {
   console.warn("[Dashboard] MQTT disconnected");
   hud.setSystemHealth(false);
-  document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "demo" } }));
+  document.dispatchEvent(
+    new CustomEvent("af-connection-status", { detail: { status: "demo" } }),
+  );
 });
 
 mqtt.on("error", (err) => {
@@ -332,14 +356,22 @@ document.addEventListener("agent-selected", (e) => {
 
 // Agent commands from CardDashboard / SocialDashboard → WebSocket
 document.addEventListener("af-agent-command", (e) => {
-  const { command, agentId } = (e as CustomEvent<{ command: string; agentId: string }>).detail;
+  const { command, agentId } = (
+    e as CustomEvent<{ command: string; agentId: string }>
+  ).detail;
   wsChat.sendRaw({ type: "command", command, agent_id: agentId });
 });
 
 // af-iobar sends: route through ioManager (same as regular io-bar)
 document.addEventListener("af-send-message", (e) => {
-  const { content } = (e as CustomEvent<{ content: string; target: string }>).detail;
-  const agent = scene.getAgents().find((a) => a.name === (e as CustomEvent<{ target: string }>).detail.target) ?? null;
+  const { content } = (e as CustomEvent<{ content: string; target: string }>)
+    .detail;
+  const agent =
+    scene
+      .getAgents()
+      .find(
+        (a) => a.name === (e as CustomEvent<{ target: string }>).detail.target,
+      ) ?? null;
   void ioManager.send(content, agent);
 });
 

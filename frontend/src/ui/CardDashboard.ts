@@ -1,5 +1,5 @@
 /**
- * CardDashboard — Workers / AgentFlow UI (exact port from synapse-os).
+ * CardDashboard — Wactorz.
  *
  * Full-screen overlay with af-header + af-body + af-iobar layout.
  * Views: overview (stats + cards + nodes) | feed | chat (embedded).
@@ -22,11 +22,16 @@ import { HAClient, type HAEntity } from "../io/HAClient";
 function stateColor(state: AgentState): string {
   if (typeof state === "object") return "#f87171";
   switch (state as string) {
-    case "running":      return "#34d399";
-    case "paused":       return "#fbbf24";
-    case "initializing": return "#60a5fa";
-    case "stopped":      return "#4b5563";
-    default:             return "#34d399";
+    case "running":
+      return "#34d399";
+    case "paused":
+      return "#fbbf24";
+    case "initializing":
+      return "#60a5fa";
+    case "stopped":
+      return "#4b5563";
+    default:
+      return "#34d399";
   }
 }
 
@@ -37,16 +42,20 @@ function stateLabel(state: AgentState): string {
 
 function agentTypeColor(agentType?: string): string {
   switch (agentType) {
-    case "orchestrator": return "#f59e0b";
-    case "monitor":      return "#34d399";
-    case "synapse":      return "#8b5cf6";
-    default:             return "#93c5fd";
+    case "orchestrator":
+      return "#f59e0b";
+    case "monitor":
+      return "#34d399";
+    case "synapse":
+      return "#8b5cf6";
+    default:
+      return "#93c5fd";
   }
 }
 
 function relTime(ms: number): string {
   const s = Math.round((Date.now() - ms) / 1000);
-  if (s < 5)  return "now";
+  if (s < 5) return "now";
   if (s < 60) return `${s}s ago`;
   return `${Math.floor(s / 60)}m ago`;
 }
@@ -122,7 +131,10 @@ export class CardDashboard {
     this.root.classList.remove("cd-visible");
     this._showFloatingUI();
     this._unwireEvents();
-    if (this.tickTimer) { clearInterval(this.tickTimer); this.tickTimer = null; }
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
   }
 
   destroy(): void {
@@ -154,7 +166,9 @@ export class CardDashboard {
   removeAgent(id: string): void {
     this.agents.delete(id);
     if (!this.root.classList.contains("cd-visible")) return;
-    const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+    const card = this.root.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(id)}"]`,
+    );
     if (card) {
       card.style.animation = "cd-exit 0.25s ease forwards";
       setTimeout(() => card.remove(), 250);
@@ -167,7 +181,9 @@ export class CardDashboard {
   onHeartbeat(agentId: string, timestampMs: number): void {
     this.lastHb.set(agentId, timestampMs);
     if (!this.root.classList.contains("cd-visible")) return;
-    const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
+    const card = this.root.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agentId)}"]`,
+    );
     if (!card) return;
     const hbEl = card.querySelector<HTMLElement>(".af-card-hb-time");
     if (hbEl) hbEl.textContent = relTime(timestampMs);
@@ -180,15 +196,26 @@ export class CardDashboard {
   }
 
   showAlert(agentId: string, severity: string): void {
-    const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
+    const card = this.root.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agentId)}"]`,
+    );
     if (!card) return;
-    const cls = severity === "error" || severity === "critical" ? "af-card-alert-error" : "af-card-alert-warn";
+    const cls =
+      severity === "error" || severity === "critical"
+        ? "af-card-alert-error"
+        : "af-card-alert-warn";
     card.classList.add(cls);
-    setTimeout(() => card.classList.remove(cls, "af-card-alert-error", "af-card-alert-warn"), 900);
+    setTimeout(
+      () =>
+        card.classList.remove(cls, "af-card-alert-error", "af-card-alert-warn"),
+      900,
+    );
   }
 
   onChat(fromId: string, _toId: string): void {
-    const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(fromId)}"]`);
+    const card = this.root.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(fromId)}"]`,
+    );
     if (!card) return;
     card.classList.add("af-card-chat-flash");
     setTimeout(() => card.classList.remove("af-card-chat-flash"), 600);
@@ -216,7 +243,9 @@ export class CardDashboard {
 
     this._evChunk = (e) => {
       if (this.view !== "chat") return;
-      const { chunk, from } = (e as CustomEvent<{ chunk: string; from: string }>).detail;
+      const { chunk, from } = (
+        e as CustomEvent<{ chunk: string; from: string }>
+      ).detail;
       if (!this._streamRow) {
         this._streamFrom = from;
         this._streamText = "";
@@ -271,17 +300,39 @@ export class CardDashboard {
   }
 
   private _unwireEvents(): void {
-    if (this._evFeed)  { document.removeEventListener("af-feed-push", this._evFeed);  this._evFeed  = null; }
-    if (this._evChat)  { document.removeEventListener("af-chat-message", this._evChat); this._evChat = null; }
-    if (this._evChunk) { document.removeEventListener("af-stream-chunk", this._evChunk); this._evChunk = null; }
-    if (this._evEnd)   { document.removeEventListener("af-stream-end", this._evEnd);  this._evEnd   = null; }
-    if (this._evConn)  { document.removeEventListener("af-connection-status", this._evConn); this._evConn = null; }
+    if (this._evFeed) {
+      document.removeEventListener("af-feed-push", this._evFeed);
+      this._evFeed = null;
+    }
+    if (this._evChat) {
+      document.removeEventListener("af-chat-message", this._evChat);
+      this._evChat = null;
+    }
+    if (this._evChunk) {
+      document.removeEventListener("af-stream-chunk", this._evChunk);
+      this._evChunk = null;
+    }
+    if (this._evEnd) {
+      document.removeEventListener("af-stream-end", this._evEnd);
+      this._evEnd = null;
+    }
+    if (this._evConn) {
+      document.removeEventListener("af-connection-status", this._evConn);
+      this._evConn = null;
+    }
   }
 
   // ── Private: floating UI ──────────────────────────────────────────────────
 
   private _hideFloatingUI(): void {
-    ["hud", "hud-stats", "io-bar", "chat-panel", "activity-feed", "feed-toggle"].forEach((id) => {
+    [
+      "hud",
+      "hud-stats",
+      "io-bar",
+      "chat-panel",
+      "activity-feed",
+      "feed-toggle",
+    ].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.style.display = "none";
     });
@@ -313,9 +364,11 @@ export class CardDashboard {
       this._renderSidebar();
     }
 
-    this.root.querySelectorAll<HTMLElement>(".af-view-btn[data-view]").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset["view"] === this.view);
-    });
+    this.root
+      .querySelectorAll<HTMLElement>(".af-view-btn[data-view]")
+      .forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset["view"] === this.view);
+      });
     this._renderHealth();
   }
 
@@ -346,20 +399,20 @@ export class CardDashboard {
     const panels = document.createElement("div");
     panels.className = "af-overview-panels";
 
-    // Workers panel
+    // Wactorz panel
     const wp = document.createElement("section");
     wp.className = "af-panel";
     wp.innerHTML = `<div class="af-panel-head"><h3>Wactorz</h3><span>actor model · MQTT pub-sub</span></div>`;
     const grid = document.createElement("div");
     grid.className = "af-cards-grid";
-    grid.id = "af-worker-cards";
+    grid.id = "af-wactor-cards";
     [...this.agents.values()]
       .sort((a, b) => {
         if (a.name === "main-actor") return -1;
         if (b.name === "main-actor") return 1;
         return a.name.localeCompare(b.name);
       })
-      .forEach((agent) => grid.appendChild(this._buildWorkerCard(agent)));
+      .forEach((agent) => grid.appendChild(this._buildWactorCard(agent)));
     wp.appendChild(grid);
 
     // Nodes panel
@@ -390,17 +443,39 @@ export class CardDashboard {
   private _buildStatCards(container: HTMLElement): void {
     container.innerHTML = "";
     const agents = [...this.agents.values()];
-    const total    = agents.length;
-    const healthy  = agents.filter((a) => stateLabel(a.state) === "running").length;
-    const msgs     = agents.reduce((s, a) => s + (a.messagesProcessed ?? 0), 0);
-    const cost     = agents.reduce((s, a) => s + (a.costUsd ?? 0), 0);
-    const events   = this.feedItems.length;
+    const total = agents.length;
+    const healthy = agents.filter(
+      (a) => stateLabel(a.state) === "running",
+    ).length;
+    const msgs = agents.reduce((s, a) => s + (a.messagesProcessed ?? 0), 0);
+    const cost = agents.reduce((s, a) => s + (a.costUsd ?? 0), 0);
+    const events = this.feedItems.length;
 
     [
-      { label: "Wactorz",      value: String(total),           detail: `${healthy} running`,               accent: "#60a5fa" },
-      { label: "Messages",     value: String(msgs),            detail: "processed across actors",          accent: "#22d3a0" },
-      { label: "Cost",         value: `$${cost.toFixed(4)}`,   detail: "reported by actors",               accent: "#f59e0b" },
-      { label: "Feed Events",  value: String(events),          detail: "since dashboard loaded",           accent: "#8b5cf6" },
+      {
+        label: "Wactorz",
+        value: String(total),
+        detail: `${healthy} running`,
+        accent: "#60a5fa",
+      },
+      {
+        label: "Messages",
+        value: String(msgs),
+        detail: "processed across actors",
+        accent: "#22d3a0",
+      },
+      {
+        label: "Cost",
+        value: `$${cost.toFixed(4)}`,
+        detail: "reported by actors",
+        accent: "#f59e0b",
+      },
+      {
+        label: "Feed Events",
+        value: String(events),
+        detail: "since dashboard loaded",
+        accent: "#8b5cf6",
+      },
     ].forEach(({ label, value, detail, accent }) => {
       const card = document.createElement("div");
       card.className = "af-stat-card";
@@ -420,7 +495,7 @@ export class CardDashboard {
   }
 
   private _renderCards(): void {
-    const grid = this.root.querySelector<HTMLElement>("#af-worker-cards");
+    const grid = this.root.querySelector<HTMLElement>("#af-wactor-cards");
     if (!grid) return;
     const sorted = [...this.agents.values()].sort((a, b) => {
       if (a.name === "main-actor") return -1;
@@ -433,13 +508,15 @@ export class CardDashboard {
     });
     sorted.forEach((agent) => {
       if (!grid.querySelector(`[data-id="${CSS.escape(agent.id)}"]`)) {
-        grid.appendChild(this._buildWorkerCard(agent));
+        grid.appendChild(this._buildWactorCard(agent));
       }
     });
   }
 
   private _patchCard(agent: AgentInfo): void {
-    const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(agent.id)}"]`);
+    const card = this.root.querySelector<HTMLElement>(
+      `[data-id="${CSS.escape(agent.id)}"]`,
+    );
     if (!card) {
       if (this.view === "overview") this._renderCards();
       return;
@@ -447,21 +524,27 @@ export class CardDashboard {
     const color = stateColor(agent.state);
     const dot = card.querySelector<HTMLElement>(".af-card-state-dot");
     const lbl = card.querySelector<HTMLElement>(".af-card-state-label");
-    const nm  = card.querySelector<HTMLElement>(".af-card-name");
-    if (dot) { dot.style.background = color; dot.style.boxShadow = `0 0 8px ${color}`; }
-    if (lbl) { lbl.style.color = color; lbl.textContent = stateLabel(agent.state); }
-    if (nm)  nm.textContent = agent.name;
+    const nm = card.querySelector<HTMLElement>(".af-card-name");
+    if (dot) {
+      dot.style.background = color;
+      dot.style.boxShadow = `0 0 8px ${color}`;
+    }
+    if (lbl) {
+      lbl.style.color = color;
+      lbl.textContent = stateLabel(agent.state);
+    }
+    if (nm) nm.textContent = agent.name;
     this._rebuildControls(card, agent);
   }
 
-  // ── Private: worker card ──────────────────────────────────────────────────
+  // ── Private: wactor card ──────────────────────────────────────────────────
 
-  private _buildWorkerCard(agent: AgentInfo): HTMLElement {
-    const hbMs     = this.lastHb.get(agent.id) ?? 0;
-    const color    = stateColor(agent.state);
-    const status   = stateLabel(agent.state);
+  private _buildWactorCard(agent: AgentInfo): HTMLElement {
+    const hbMs = this.lastHb.get(agent.id) ?? 0;
+    const color = stateColor(agent.state);
+    const status = stateLabel(agent.state);
     const typeColor = agentTypeColor(agent.agentType);
-    const msgs     = agent.messagesProcessed ?? 0;
+    const msgs = agent.messagesProcessed ?? 0;
 
     const card = document.createElement("div");
     card.className = "af-card";
@@ -470,13 +553,13 @@ export class CardDashboard {
     const dot = document.createElement("div");
     dot.className = "af-card-state-dot";
     dot.style.background = color;
-    dot.style.boxShadow  = `0 0 8px ${color}`;
+    dot.style.boxShadow = `0 0 8px ${color}`;
 
     const badge = document.createElement("div");
     badge.className = "af-card-type-badge";
-    badge.style.color       = typeColor;
+    badge.style.color = typeColor;
     badge.style.borderColor = `${typeColor}55`;
-    badge.textContent = agent.agentType ?? "worker";
+    badge.textContent = agent.agentType ?? "wactor";
 
     const name = document.createElement("div");
     name.className = "af-card-name";
@@ -523,17 +606,23 @@ export class CardDashboard {
     controls.appendChild(chatBtn);
     this._appendActionBtns(controls, agent);
     controls.addEventListener("click", (e) => {
-      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+        "[data-action]",
+      );
       if (!btn || btn.disabled) return;
       e.stopPropagation();
-      this._sendCommand(agent.id, btn.dataset.action as "pause" | "resume" | "stop" | "delete", btn);
+      this._sendCommand(
+        agent.id,
+        btn.dataset.action as "pause" | "resume" | "stop" | "delete",
+        btn,
+      );
     });
     card.appendChild(controls);
 
     if (agent.protected) {
       const shield = document.createElement("div");
       shield.className = "af-card-protected";
-      shield.title = "Protected worker";
+      shield.title = "Protected wactor";
       shield.textContent = "🔒";
       card.appendChild(shield);
     }
@@ -545,22 +634,30 @@ export class CardDashboard {
     const status = stateLabel(agent.state);
     if (status === "running") {
       const b = document.createElement("button");
-      b.className = "af-mini-btn"; b.textContent = "Pause"; b.dataset.action = "pause";
+      b.className = "af-mini-btn";
+      b.textContent = "Pause";
+      b.dataset.action = "pause";
       controls.appendChild(b);
     }
     if (status === "paused") {
       const b = document.createElement("button");
-      b.className = "af-mini-btn"; b.textContent = "Resume"; b.dataset.action = "resume";
+      b.className = "af-mini-btn";
+      b.textContent = "Resume";
+      b.dataset.action = "resume";
       controls.appendChild(b);
     }
     if (!agent.protected && status !== "stopped") {
       const b = document.createElement("button");
-      b.className = "af-mini-btn danger"; b.textContent = "Stop"; b.dataset.action = "stop";
+      b.className = "af-mini-btn danger";
+      b.textContent = "Stop";
+      b.dataset.action = "stop";
       controls.appendChild(b);
     }
     if (!agent.protected) {
       const b = document.createElement("button");
-      b.className = "af-mini-btn danger"; b.textContent = "Delete"; b.dataset.action = "delete";
+      b.className = "af-mini-btn danger";
+      b.textContent = "Delete";
+      b.dataset.action = "delete";
       controls.appendChild(b);
     }
   }
@@ -571,7 +668,7 @@ export class CardDashboard {
     // Toggle Chat button visibility based on state
     const chatBtn = controls.querySelector<HTMLButtonElement>(".af-chat-btn");
     if (chatBtn) chatBtn.hidden = stateLabel(agent.state) === "stopped";
-    // Only replace the action buttons — the click listener from _buildWorkerCard
+    // Only replace the action buttons — the click listener from _buildWactorCard
     // is already on the controls element via event delegation, do not re-add it.
     controls.querySelectorAll("[data-action]").forEach((b) => b.remove());
     this._appendActionBtns(controls, agent);
@@ -592,7 +689,9 @@ export class CardDashboard {
     } else {
       this.feedItems.forEach((item) => this._feedItemEl(feed, item));
     }
-    setTimeout(() => { feed.scrollTop = feed.scrollHeight; }, 0);
+    setTimeout(() => {
+      feed.scrollTop = feed.scrollHeight;
+    }, 0);
     return feed;
   }
 
@@ -606,14 +705,23 @@ export class CardDashboard {
 
   private _feedItemEl(container: HTMLElement, item: FeedItem): void {
     const TYPE_CLASS: Record<string, string> = {
-      spawn: "af-feed-spawn", heartbeat: "af-feed-heartbeat", chat: "af-feed-chat",
-      "alert-error": "af-feed-alert", "alert-warning": "af-feed-alert",
-      health: "af-feed-heartbeat", "qa-flag": "af-feed-chat",
+      spawn: "af-feed-spawn",
+      heartbeat: "af-feed-heartbeat",
+      chat: "af-feed-chat",
+      "alert-error": "af-feed-alert",
+      "alert-warning": "af-feed-alert",
+      health: "af-feed-heartbeat",
+      "qa-flag": "af-feed-chat",
     };
     const TYPE_ICON: Record<string, string> = {
-      spawn: "⚡", heartbeat: "♥", chat: "💬",
-      "alert-error": "🔴", "alert-warning": "🟡",
-      stopped: "◻", health: "◉", "qa-flag": "⚑",
+      spawn: "⚡",
+      heartbeat: "♥",
+      chat: "💬",
+      "alert-error": "🔴",
+      "alert-warning": "🟡",
+      stopped: "◻",
+      health: "◉",
+      "qa-flag": "⚑",
     };
 
     const row = document.createElement("div");
@@ -626,7 +734,9 @@ export class CardDashboard {
     const time = document.createElement("span");
     time.className = "af-feed-time";
     time.textContent = new Date(item.timestamp).toLocaleTimeString([], {
-      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
     });
 
     const agent = document.createElement("span");
@@ -697,7 +807,11 @@ export class CardDashboard {
     if (!list) return;
     list.innerHTML = "";
     [...this.agents.values()]
-      .filter((a) => !this.sidebarFilter || a.name.toLowerCase().includes(this.sidebarFilter))
+      .filter(
+        (a) =>
+          !this.sidebarFilter ||
+          a.name.toLowerCase().includes(this.sidebarFilter),
+      )
       .sort((a, b) => {
         if (a.name === "main-actor") return -1;
         if (b.name === "main-actor") return 1;
@@ -727,7 +841,9 @@ export class CardDashboard {
     const hdr = this.root.querySelector<HTMLElement>("#af-chat-pane-header");
     if (!hdr) return;
     hdr.innerHTML = "";
-    const agent = [...this.agents.values()].find((a) => a.name === this.chatTarget);
+    const agent = [...this.agents.values()].find(
+      (a) => a.name === this.chatTarget,
+    );
     if (agent) {
       const dot = document.createElement("span");
       dot.className = "af-chat-agent-dot";
@@ -765,9 +881,10 @@ export class CardDashboard {
     if (msgs.length === 0) {
       const empty = document.createElement("div");
       empty.className = "af-chat-empty";
-      empty.innerHTML = this.chatTarget === "main-actor"
-        ? `<p>Say hello to <strong>@main-actor</strong> — the system orchestrator.</p>`
-        : `<p>No messages in <strong>@${this.chatTarget}</strong> context yet.</p>
+      empty.innerHTML =
+        this.chatTarget === "main-actor"
+          ? `<p>Say hello to <strong>@main-actor</strong> — the system orchestrator.</p>`
+          : `<p>No messages in <strong>@${this.chatTarget}</strong> context yet.</p>
            <p style="font-size:11px;opacity:0.5">Messages go to @main-actor.</p>`;
       thread.appendChild(empty);
     } else {
@@ -777,7 +894,8 @@ export class CardDashboard {
   }
 
   private _appendChatMsgEl(msg: ChatMessage, container?: HTMLElement): void {
-    const thread = container ?? this.root.querySelector<HTMLElement>("#af-chat-thread");
+    const thread =
+      container ?? this.root.querySelector<HTMLElement>("#af-chat-thread");
     if (!thread) return;
     thread.querySelector(".af-chat-empty")?.remove();
     const isUser = msg.from === "user";
@@ -796,7 +914,8 @@ export class CardDashboard {
       const time = document.createElement("div");
       time.className = "af-chat-msg-time";
       time.textContent = new Date(msg.timestampMs).toLocaleTimeString([], {
-        hour: "2-digit", minute: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
       });
       row.appendChild(time);
     }
@@ -815,17 +934,21 @@ export class CardDashboard {
     if (!badge) return;
     badge.className = `af-conn-badge af-conn-${this.connState}`;
     badge.textContent =
-      this.connState === "live" ? "● live" :
-      this.connState === "connecting" ? "○ Connecting…" :
-      "◎ Demo fallback";
+      this.connState === "live"
+        ? "● live"
+        : this.connState === "connecting"
+          ? "○ Connecting…"
+          : "◎ Demo fallback";
   }
 
   private _renderHealth(): void {
     const el = this.root.querySelector<HTMLElement>(".af-health");
     if (!el) return;
     const agents = [...this.agents.values()];
-    const healthy = agents.filter((a) => stateLabel(a.state) === "running").length;
-    el.textContent = `${healthy}/${agents.length} workers healthy`;
+    const healthy = agents.filter(
+      (a) => stateLabel(a.state) === "running",
+    ).length;
+    el.textContent = `${healthy}/${agents.length} wactorz healthy`;
   }
 
   // ── Private: iobar ────────────────────────────────────────────────────────
@@ -850,7 +973,10 @@ export class CardDashboard {
     });
     select.addEventListener("change", () => {
       const t = select.value;
-      input.placeholder = t === "main-actor" ? "Message @main-actor…" : `Context: @${t} — asking @main-actor…`;
+      input.placeholder =
+        t === "main-actor"
+          ? "Message @main-actor…"
+          : `Context: @${t} — asking @main-actor…`;
     });
 
     const sendBtn = document.createElement("button");
@@ -879,11 +1005,15 @@ export class CardDashboard {
   }
 
   private _updateTargetSelect(): void {
-    const select = this.root.querySelector<HTMLSelectElement>("#af-target-select");
+    const select =
+      this.root.querySelector<HTMLSelectElement>("#af-target-select");
     if (select) this._populateSelect(select);
   }
 
-  private _sendMessage(input: HTMLInputElement, select: HTMLSelectElement): void {
+  private _sendMessage(
+    input: HTMLInputElement,
+    select: HTMLSelectElement,
+  ): void {
     const content = input.value.trim();
     if (!content) return;
     const target = select.value || "main-actor";
@@ -921,7 +1051,9 @@ export class CardDashboard {
       }, 600);
     }
     document.dispatchEvent(
-      new CustomEvent("af-agent-command", { detail: { command: action, agentId: id } }),
+      new CustomEvent("af-agent-command", {
+        detail: { command: action, agentId: id },
+      }),
     );
   }
 
@@ -958,7 +1090,10 @@ export class CardDashboard {
 
     el.querySelector("#ha-reconfigure-btn")?.addEventListener("click", () => {
       const panel = el.querySelector<HTMLElement>(".af-panel");
-      if (panel) { panel.innerHTML = ""; panel.appendChild(this._buildHAConfigForm()); }
+      if (panel) {
+        panel.innerHTML = "";
+        panel.appendChild(this._buildHAConfigForm());
+      }
     });
 
     return el;
@@ -967,7 +1102,8 @@ export class CardDashboard {
   private _buildHAConfigForm(): HTMLElement {
     const form = document.createElement("div");
     form.className = "af-panel";
-    form.style.cssText = "max-width:420px;margin:40px auto;display:flex;flex-direction:column;gap:16px;";
+    form.style.cssText =
+      "max-width:420px;margin:40px auto;display:flex;flex-direction:column;gap:16px;";
     form.innerHTML = `
       <div class="af-panel-head"><h3>Home Assistant</h3></div>
       <p style="font-size:12px;opacity:0.6;margin:0;">Enter your Home Assistant URL and a long-lived access token.<br>These are stored locally in your browser only.</p>
@@ -991,13 +1127,24 @@ export class CardDashboard {
     `;
 
     form.querySelector("#ha-cfg-save")?.addEventListener("click", () => {
-      const url = (form.querySelector<HTMLInputElement>("#ha-cfg-url")?.value ?? "").trim().replace(/\/$/, "");
-      const token = (form.querySelector<HTMLInputElement>("#ha-cfg-token")?.value ?? "").trim();
+      const url = (
+        form.querySelector<HTMLInputElement>("#ha-cfg-url")?.value ?? ""
+      )
+        .trim()
+        .replace(/\/$/, "");
+      const token = (
+        form.querySelector<HTMLInputElement>("#ha-cfg-token")?.value ?? ""
+      ).trim();
       const msg = form.querySelector<HTMLElement>("#ha-cfg-msg")!;
-      if (!url || !token) { msg.style.color = "#f87171"; msg.textContent = "Both fields required."; return; }
+      if (!url || !token) {
+        msg.style.color = "#f87171";
+        msg.textContent = "Both fields required.";
+        return;
+      }
       localStorage.setItem("wactorz-ha-url", url);
       localStorage.setItem("wactorz-ha-token", token);
-      msg.style.color = "#34d399"; msg.textContent = "Saved — reloading…";
+      msg.style.color = "#34d399";
+      msg.textContent = "Saved — reloading…";
       this._initHAClient();
       setTimeout(() => this._setView("ha"), 600);
     });
@@ -1013,7 +1160,9 @@ export class CardDashboard {
   }
 
   private _renderHADevices(entities: HAEntity[]): void {
-    const container = this.root.querySelector<HTMLElement>("#ha-devices-container");
+    const container = this.root.querySelector<HTMLElement>(
+      "#ha-devices-container",
+    );
     if (!container) return;
 
     container.innerHTML = "";
@@ -1023,7 +1172,9 @@ export class CardDashboard {
       const domA = a.entity_id.split(".")[0] || "";
       const domB = b.entity_id.split(".")[0] || "";
       if (domA !== domB) return domA.localeCompare(domB);
-      return (a.attributes.friendly_name || a.entity_id).localeCompare(b.attributes.friendly_name || b.entity_id);
+      return (a.attributes.friendly_name || a.entity_id).localeCompare(
+        b.attributes.friendly_name || b.entity_id,
+      );
     });
 
     if (sorted.length === 0) {
@@ -1031,7 +1182,7 @@ export class CardDashboard {
       return;
     }
 
-    sorted.forEach(e => {
+    sorted.forEach((e) => {
       const domain = e.entity_id.split(".")[0] || "";
       const card = document.createElement("div");
       card.className = "af-card";
@@ -1101,9 +1252,28 @@ export class CardDashboard {
       stateVal.style.fontSize = "16px";
       stateVal.style.fontWeight = "700";
 
-      const isActive = ["on", "playing", "cool", "heat", "open", "active", "detected", "home"].includes(e.state);
-      const isAlert = ["problem", "error", "critical", "warning", "emergency"].includes(e.state);
-      stateVal.style.color = isAlert ? "#f87171" : isActive ? "#34d399" : "rgba(255,255,255,0.4)";
+      const isActive = [
+        "on",
+        "playing",
+        "cool",
+        "heat",
+        "open",
+        "active",
+        "detected",
+        "home",
+      ].includes(e.state);
+      const isAlert = [
+        "problem",
+        "error",
+        "critical",
+        "warning",
+        "emergency",
+      ].includes(e.state);
+      stateVal.style.color = isAlert
+        ? "#f87171"
+        : isActive
+          ? "#34d399"
+          : "rgba(255,255,255,0.4)";
 
       stateRow.appendChild(stateVal);
 
@@ -1136,57 +1306,115 @@ export class CardDashboard {
 
   private _getDomainIcon(domain: string): string {
     const icons: Record<string, string> = {
-      light: "💡", switch: "🔌", sensor: "🌡", binary_sensor: "🔔",
-      media_player: "📺", climate: "❄", camera: "📷", fan: "🌀",
-      vacuum: "🧹", cover: "🚪", lock: "🔒", drone: "🚁",
-      person: "👤", device_tracker: "📍", sun: "☀️",
+      light: "💡",
+      switch: "🔌",
+      sensor: "🌡",
+      binary_sensor: "🔔",
+      media_player: "📺",
+      climate: "❄",
+      camera: "📷",
+      fan: "🌀",
+      vacuum: "🧹",
+      cover: "🚪",
+      lock: "🔒",
+      drone: "🚁",
+      person: "👤",
+      device_tracker: "📍",
+      sun: "☀️",
     };
     return icons[domain] || "📦";
   }
 
-  private _appendEntityControls(container: HTMLElement, e: HAEntity, isActive: boolean): void {
+  private _appendEntityControls(
+    container: HTMLElement,
+    e: HAEntity,
+    isActive: boolean,
+  ): void {
     const domain = e.entity_id.split(".")[0] || "";
 
     // Toggleable items
-    if (["light", "switch", "fan", "input_boolean", "humidifier", "vacuum"].includes(domain)) {
+    if (
+      [
+        "light",
+        "switch",
+        "fan",
+        "input_boolean",
+        "humidifier",
+        "vacuum",
+      ].includes(domain)
+    ) {
       const btn = document.createElement("button");
       btn.className = "af-mini-btn";
       btn.textContent = isActive ? "Turn Off" : "Turn On";
       btn.style.width = "100%";
-      btn.addEventListener("click", () => this.haClient?.toggleEntity(e.entity_id));
+      btn.addEventListener("click", () =>
+        this.haClient?.toggleEntity(e.entity_id),
+      );
       container.appendChild(btn);
     }
 
     // Dimmable Light
-    if (domain === "light" && e.attributes.supported_color_modes?.some((m: string) => m !== "onoff")) {
-      this._addSlider(container, "Brightness", 0, 255, e.attributes.brightness || 0, (val) => {
-        this.haClient?.callService("light", "turn_on", { entity_id: e.entity_id, brightness: val });
-      }, (v) => Math.round((v / 255) * 100) + "%");
+    if (
+      domain === "light" &&
+      e.attributes.supported_color_modes?.some((m: string) => m !== "onoff")
+    ) {
+      this._addSlider(
+        container,
+        "Brightness",
+        0,
+        255,
+        e.attributes.brightness || 0,
+        (val) => {
+          this.haClient?.callService("light", "turn_on", {
+            entity_id: e.entity_id,
+            brightness: val,
+          });
+        },
+        (v) => Math.round((v / 255) * 100) + "%",
+      );
     }
 
     // Color Light
-    if (domain === "light" && e.attributes.supported_color_modes?.includes("rgb")) {
+    if (
+      domain === "light" &&
+      e.attributes.supported_color_modes?.includes("rgb")
+    ) {
       this._addColorPicker(container, e);
     }
 
     // Climate (Thermostat)
     if (domain === "climate") {
-      const target = e.attributes.temperature || e.attributes.target_temp_low || 20;
-      this._addSlider(container, "Target Temp", 15, 30, target, (val) => {
-        this.haClient?.callService("climate", "set_temperature", { entity_id: e.entity_id, temperature: val });
-      }, (v) => v + "°");
+      const target =
+        e.attributes.temperature || e.attributes.target_temp_low || 20;
+      this._addSlider(
+        container,
+        "Target Temp",
+        15,
+        30,
+        target,
+        (val) => {
+          this.haClient?.callService("climate", "set_temperature", {
+            entity_id: e.entity_id,
+            temperature: val,
+          });
+        },
+        (v) => v + "°",
+      );
     }
 
     // Covers (Blinds/Doors)
     if (domain === "cover") {
       const row = document.createElement("div");
-      row.style.display = "flex"; row.style.gap = "4px";
-      ["open_cover", "stop_cover", "close_cover"].forEach(svc => {
+      row.style.display = "flex";
+      row.style.gap = "4px";
+      ["open_cover", "stop_cover", "close_cover"].forEach((svc) => {
         const btn = document.createElement("button");
         btn.className = "af-mini-btn";
         btn.textContent = (svc.split("_")[0] || "ACTION").toUpperCase();
         btn.style.flex = "1";
-        btn.addEventListener("click", () => this.haClient?.callService("cover", svc, { entity_id: e.entity_id }));
+        btn.addEventListener("click", () =>
+          this.haClient?.callService("cover", svc, { entity_id: e.entity_id }),
+        );
         row.appendChild(btn);
       });
       container.appendChild(row);
@@ -1195,37 +1423,66 @@ export class CardDashboard {
     // Media Player
     if (domain === "media_player") {
       const row = document.createElement("div");
-      row.style.display = "flex"; row.style.gap = "4px";
+      row.style.display = "flex";
+      row.style.gap = "4px";
       const playPause = document.createElement("button");
       playPause.className = "af-mini-btn";
       playPause.textContent = e.state === "playing" ? "⏸" : "▶";
       playPause.style.flex = "1";
       playPause.addEventListener("click", () => {
         const svc = e.state === "playing" ? "media_pause" : "media_play";
-        this.haClient?.callService("media_player", svc, { entity_id: e.entity_id });
+        this.haClient?.callService("media_player", svc, {
+          entity_id: e.entity_id,
+        });
       });
       row.appendChild(playPause);
       container.appendChild(row);
 
       if (e.attributes.volume_level != null) {
-        this._addSlider(container, "Volume", 0, 100, Math.round(e.attributes.volume_level * 100), (val) => {
-          this.haClient?.callService("media_player", "volume_set", { entity_id: e.entity_id, volume_level: val / 100 });
-        }, (v) => v + "%");
+        this._addSlider(
+          container,
+          "Volume",
+          0,
+          100,
+          Math.round(e.attributes.volume_level * 100),
+          (val) => {
+            this.haClient?.callService("media_player", "volume_set", {
+              entity_id: e.entity_id,
+              volume_level: val / 100,
+            });
+          },
+          (v) => v + "%",
+        );
       }
     }
   }
 
-  private _addSlider(container: HTMLElement, labelText: string, min: number, max: number, current: number, onChange: (val: number) => void, format?: (v: number) => string): void {
+  private _addSlider(
+    container: HTMLElement,
+    labelText: string,
+    min: number,
+    max: number,
+    current: number,
+    onChange: (val: number) => void,
+    format?: (v: number) => string,
+  ): void {
     const wrap = document.createElement("div");
-    wrap.style.display = "flex"; wrap.style.flexDirection = "column"; wrap.style.gap = "2px";
+    wrap.style.display = "flex";
+    wrap.style.flexDirection = "column";
+    wrap.style.gap = "2px";
 
     const lbl = document.createElement("div");
-    lbl.style.fontSize = "9px"; lbl.style.color = "rgba(255,255,255,0.4)";
+    lbl.style.fontSize = "9px";
+    lbl.style.color = "rgba(255,255,255,0.4)";
     lbl.textContent = `${labelText}: ${format ? format(current) : current}`;
 
     const slider = document.createElement("input");
-    slider.type = "range"; slider.min = String(min); slider.max = String(max); slider.value = String(current);
-    slider.style.width = "100%"; slider.style.accentColor = "#34d399";
+    slider.type = "range";
+    slider.min = String(min);
+    slider.max = String(max);
+    slider.value = String(current);
+    slider.style.width = "100%";
+    slider.style.accentColor = "#34d399";
     slider.addEventListener("change", () => {
       const val = parseInt(slider.value, 10);
       if (format) lbl.textContent = `${labelText}: ${format(val)}`;
@@ -1238,14 +1495,21 @@ export class CardDashboard {
 
   private _addColorPicker(container: HTMLElement, e: HAEntity): void {
     const row = document.createElement("div");
-    row.style.display = "flex"; row.style.alignItems = "center"; row.style.gap = "8px";
+    row.style.display = "flex";
+    row.style.alignItems = "center";
+    row.style.gap = "8px";
     const lbl = document.createElement("div");
-    lbl.style.fontSize = "9px"; lbl.style.color = "rgba(255,255,255,0.4)";
+    lbl.style.fontSize = "9px";
+    lbl.style.color = "rgba(255,255,255,0.4)";
     lbl.textContent = "Color:";
 
     const picker = document.createElement("input");
-    picker.type = "color"; picker.style.border = "none"; picker.style.width = "20px"; picker.style.height = "20px";
-    picker.style.background = "none"; picker.style.cursor = "pointer";
+    picker.type = "color";
+    picker.style.border = "none";
+    picker.style.width = "20px";
+    picker.style.height = "20px";
+    picker.style.background = "none";
+    picker.style.cursor = "pointer";
 
     if (e.attributes.rgb_color) {
       const [r, g, b] = e.attributes.rgb_color;
@@ -1254,8 +1518,13 @@ export class CardDashboard {
 
     picker.addEventListener("change", () => {
       const hex = picker.value;
-      const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
-      this.haClient?.callService("light", "turn_on", { entity_id: e.entity_id, rgb_color: [r, g, b] });
+      const r = parseInt(hex.slice(1, 3), 16),
+        g = parseInt(hex.slice(3, 5), 16),
+        b = parseInt(hex.slice(5, 7), 16);
+      this.haClient?.callService("light", "turn_on", {
+        entity_id: e.entity_id,
+        rgb_color: [r, g, b],
+      });
     });
     row.append(lbl, picker);
     container.appendChild(row);
@@ -1265,7 +1534,9 @@ export class CardDashboard {
 
   private _refreshTimestamps(): void {
     this.lastHb.forEach((ms, id) => {
-      const el = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"] .af-card-hb-time`);
+      const el = this.root.querySelector<HTMLElement>(
+        `[data-id="${CSS.escape(id)}"] .af-card-hb-time`,
+      );
       if (el) el.textContent = relTime(ms);
     });
   }
@@ -1306,7 +1577,7 @@ export class CardDashboard {
     center.className = "af-header-center";
     const health = document.createElement("span");
     health.className = "af-health";
-    health.textContent = "0/0 workers healthy";
+    health.textContent = "0/0 wa healthy";
     center.appendChild(health);
 
     const right = document.createElement("div");

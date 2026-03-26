@@ -53,8 +53,8 @@ export class CardBabylonNode extends AgentNodeBase {
   private mat: StandardMaterial;
   private tex: DynamicTexture;
 
-  constructor(info: AgentInfo, scene: Scene, isMainActor: boolean) {
-    super(info, scene, isMainActor);
+  constructor(info: AgentInfo, scene: Scene, isMainWactor: boolean) {
+    super(info, scene, isMainWactor);
 
     this.tex = new DynamicTexture(
       `card3d-tex-${info.id}`,
@@ -89,7 +89,7 @@ export class CardBabylonNode extends AgentNodeBase {
     ctx.clearRect(0, 0, TEX_W, TEX_H);
 
     const accent = accentHex(this.info);
-    const isMain = this.isMainActor;
+    const isMain = this.isMainWactor;
     const stStr = stateLabel(this.info.state);
 
     // ── Background ───────────────────────────────────────────────────────────

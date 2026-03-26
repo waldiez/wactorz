@@ -41,7 +41,9 @@ export class ThemeSwitcher {
       // Kick off the default theme
       setTimeout(() => {
         document.dispatchEvent(
-          new CustomEvent<ThemeChangeEvent>("theme-change", { detail: { theme: this.current } }),
+          new CustomEvent<ThemeChangeEvent>("theme-change", {
+            detail: { theme: this.current },
+          }),
         );
       }, 0);
     }

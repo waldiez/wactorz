@@ -233,10 +233,16 @@ export class CardDashboard {
 
     this._evChat = (e) => {
       const msg = (e as CustomEvent<{ msg: ChatMessage }>).detail.msg;
-      this.chatMessages.push(msg);
+      // Tag io-gateway / system replies with the active chatTarget so they
+      // only appear in the thread where the user sent the triggering message.
+      const stored: ChatMessage =
+        msg.from === "io-gateway" || msg.from === "system"
+          ? { ...msg, to: this.chatTarget }
+          : msg;
+      this.chatMessages.push(stored);
       if (this.chatMessages.length > 200) this.chatMessages.shift();
-      if (this.view === "chat") {
-        this._appendChatMsgEl(msg);
+      if (this.view === "chat" && this._msgBelongsHere(stored)) {
+        this._appendChatMsgEl(stored);
         this._scrollThread();
       }
     };
@@ -274,7 +280,7 @@ export class CardDashboard {
         const msg: ChatMessage = {
           id: `stream-${Date.now()}`,
           from: this._streamFrom,
-          to: "user",
+          to: this.chatTarget, // tag with active context for thread filtering
           content: this._streamText,
           timestampMs: Date.now(),
         };
@@ -869,15 +875,22 @@ export class CardDashboard {
     }
   }
 
+  /** True when `msg` belongs to the currently open agent thread. */
+  private _msgBelongsHere(msg: ChatMessage): boolean {
+    // User-sent messages: keyed by who they were sent to
+    if (msg.from === "user") return msg.to === this.chatTarget;
+    // io-gateway / system are tagged with chatTarget in _evChat; match on .to
+    if (msg.from === "io-gateway" || msg.from === "system")
+      return msg.to === this.chatTarget;
+    // Regular agent messages: keyed by sender
+    return msg.from === this.chatTarget;
+  }
+
   private _renderChatThread(): void {
     const thread = this.root.querySelector<HTMLElement>("#af-chat-thread");
     if (!thread) return;
     thread.innerHTML = "";
-    const msgs = this.chatMessages.filter((m) => {
-      if (m.from === "user") return true;
-      if (m.from === "io-gateway" || m.from === "system") return true;
-      return m.from === this.chatTarget;
-    });
+    const msgs = this.chatMessages.filter((m) => this._msgBelongsHere(m));
     if (msgs.length === 0) {
       const empty = document.createElement("div");
       empty.className = "af-chat-empty";

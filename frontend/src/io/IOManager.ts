@@ -36,14 +36,18 @@ export class IOManager {
 
     ws.onStreamChunk((chunk, from) => {
       this.chatPanel.streamChunk(chunk, from);
+      // Also dispatch DOM event so CardDashboard (and any other view) receives the stream
+      document.dispatchEvent(
+        new CustomEvent("af-stream-chunk", { detail: { chunk, from } }),
+      );
     });
 
     ws.onStreamEnd(() => {
       this.chatPanel.hideTyping(this._lastTypingKey);
       this.chatPanel.finalizeStream();
-      // Notify after finalizeStream so _streamText is still accessible via the stored msg
       const thread = this.chatPanel.lastStreamedText;
       if (thread) tts.notify(thread);
+      document.dispatchEvent(new CustomEvent("af-stream-end"));
     });
   }
 

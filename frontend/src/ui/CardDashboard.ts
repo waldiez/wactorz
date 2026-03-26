@@ -68,8 +68,6 @@ export class CardDashboard {
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private sidebarFilter: string = "";
 
-  private haUrl: string | null = (import.meta.env["VITE_HA_URL"] as string) || null;
-  private haToken: string | null = (import.meta.env["VITE_HA_TOKEN"] as string) || null;
   private haClient: HAClient | null = null;
 
   // Streaming
@@ -85,12 +83,27 @@ export class CardDashboard {
   private _evEnd: ((e: Event) => void) | null = null;
   private _evConn: ((e: Event) => void) | null = null;
 
+  private get haUrl(): string | null {
+    return localStorage.getItem("wactorz-ha-url") || null;
+  }
+
+  private get haToken(): string | null {
+    return localStorage.getItem("wactorz-ha-token") || null;
+  }
+
   constructor() {
     this.root = this.buildRoot();
     document.body.appendChild(this.root);
+    this._initHAClient();
+  }
 
-    if (this.haUrl && this.haToken) {
-      this.haClient = new HAClient(this.haUrl, this.haToken);
+  private _initHAClient(): void {
+    const url = this.haUrl;
+    const token = this.haToken;
+    if (url && token) {
+      this.haClient = new HAClient(url, token);
+    } else {
+      this.haClient = null;
     }
   }
 
@@ -916,21 +929,87 @@ export class CardDashboard {
 
   private _buildHAView(): HTMLElement {
     const el = document.createElement("div");
-    el.className = "af-overview"; // Reuse overview styling for padding/scroll
+    el.className = "af-overview";
+
+    if (!this.haUrl || !this.haToken) {
+      el.appendChild(this._buildHAConfigForm());
+      return el;
+    }
+
     el.innerHTML = `
-      <div class="af-panel" style="height: 100%; display: flex; flex-direction: column;">
-        <div class="af-panel-head">
+      <div class="af-panel" style="height:100%;display:flex;flex-direction:column;overflow:hidden;">
+        <div class="af-panel-head" style="display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
           <h3>Home Assistant Devices</h3>
-          <span>${this.haUrl}</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <a id="ha-open-link" href="${this.haUrl}" target="_blank" rel="noopener"
+               style="font-size:11px;opacity:0.6;color:inherit;text-decoration:none;display:flex;align-items:center;gap:4px;">
+              ${this.haUrl} ↗
+            </a>
+            <button id="ha-reconfigure-btn" class="af-mini-btn" style="font-size:10px;">⚙ Configure</button>
+          </div>
         </div>
-        <div id="ha-devices-container" style="flex: 1; overflow-y: auto; margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px;">
-          <div style="color: rgba(255,255,255,0.4); text-align: center; grid-column: 1/-1; margin-top: 40px;">
-            Connecting to Home Assistant WebSocket API...
+        <div id="ha-devices-container" style="flex:1;overflow-y:auto;overflow-x:hidden;margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;">
+          <div style="color:rgba(255,255,255,0.4);text-align:center;grid-column:1/-1;margin-top:40px;">
+            Connecting to Home Assistant...
           </div>
         </div>
       </div>
     `;
+
+    el.querySelector("#ha-reconfigure-btn")?.addEventListener("click", () => {
+      const panel = el.querySelector<HTMLElement>(".af-panel");
+      if (panel) { panel.innerHTML = ""; panel.appendChild(this._buildHAConfigForm()); }
+    });
+
     return el;
+  }
+
+  private _buildHAConfigForm(): HTMLElement {
+    const form = document.createElement("div");
+    form.className = "af-panel";
+    form.style.cssText = "max-width:420px;margin:40px auto;display:flex;flex-direction:column;gap:16px;";
+    form.innerHTML = `
+      <div class="af-panel-head"><h3>Home Assistant</h3></div>
+      <p style="font-size:12px;opacity:0.6;margin:0;">Enter your Home Assistant URL and a long-lived access token.<br>These are stored locally in your browser only.</p>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
+        URL
+        <input id="ha-cfg-url" type="url" placeholder="http://192.168.1.2:8123"
+          value="${this.haUrl ?? ""}"
+          style="background:#1a2230;border:1px solid #2a3a50;border-radius:4px;padding:8px 10px;color:#e2e8f0;font-size:13px;outline:none;">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
+        Long-lived access token
+        <input id="ha-cfg-token" type="password" placeholder="eyJ..."
+          value="${this.haToken ?? ""}"
+          style="background:#1a2230;border:1px solid #2a3a50;border-radius:4px;padding:8px 10px;color:#e2e8f0;font-size:13px;outline:none;">
+      </label>
+      <div style="display:flex;gap:8px;">
+        <button id="ha-cfg-save" class="af-mini-btn" style="flex:1;padding:8px;">Save</button>
+        ${this.haUrl ? `<button id="ha-cfg-clear" class="af-mini-btn danger" style="padding:8px 12px;" title="Remove saved credentials">Reset</button>` : ""}
+      </div>
+      <div id="ha-cfg-msg" style="font-size:12px;min-height:16px;"></div>
+    `;
+
+    form.querySelector("#ha-cfg-save")?.addEventListener("click", () => {
+      const url = (form.querySelector<HTMLInputElement>("#ha-cfg-url")?.value ?? "").trim().replace(/\/$/, "");
+      const token = (form.querySelector<HTMLInputElement>("#ha-cfg-token")?.value ?? "").trim();
+      const msg = form.querySelector<HTMLElement>("#ha-cfg-msg")!;
+      if (!url || !token) { msg.style.color = "#f87171"; msg.textContent = "Both fields required."; return; }
+      localStorage.setItem("wactorz-ha-url", url);
+      localStorage.setItem("wactorz-ha-token", token);
+      msg.style.color = "#34d399"; msg.textContent = "Saved — reloading…";
+      this._initHAClient();
+      setTimeout(() => this._setView("ha"), 600);
+    });
+
+    form.querySelector("#ha-cfg-clear")?.addEventListener("click", () => {
+      localStorage.removeItem("wactorz-ha-url");
+      localStorage.removeItem("wactorz-ha-token");
+      this._initHAClient();
+      this._setView("ha");
+    });
+
+    return form;
   }
 
   private _renderHADevices(entities: HAEntity[]): void {
@@ -970,7 +1049,7 @@ export class CardDashboard {
 
       if (e.attributes.entity_picture) {
         const img = document.createElement("img");
-        img.src = this.haUrl + e.attributes.entity_picture;
+        img.src = (this.haUrl ?? "") + e.attributes.entity_picture;
         img.style.width = "28px";
         img.style.height = "28px";
         img.style.borderRadius = "4px";
@@ -1239,9 +1318,7 @@ export class CardDashboard {
       { key: "chat", label: "💬 Chat" },
     ];
 
-    if (this.haUrl && this.haToken) {
-      views.push({ key: "ha", label: "🏠 Devices" });
-    }
+    views.push({ key: "ha", label: "🏠 Devices" });
 
     views.forEach(({ key, label }) => {
       const btn = document.createElement("button");

@@ -37,10 +37,18 @@ export class HAClient {
 
   connect(onUpdate: HAUpdateHandler): void {
     this.onUpdate = onUpdate;
-    // HA WS URL: ws://HOST:8123/api/websocket
-    // Ensure we don't have double slashes if url ends with /
+    // Convert http[s]://... to ws[s]://...
+    // If the URL already has a non-root path (e.g. /ha/api/websocket), use it as-is.
+    // Otherwise append /api/websocket (standard HA setup).
     const baseUrl = this.url.endsWith("/") ? this.url.slice(0, -1) : this.url;
-    const wsUrl = baseUrl.replace(/^http/, "ws") + "/api/websocket";
+    const wsBase = baseUrl.replace(/^http(s?):/, "ws$1:");
+    let wsUrl: string;
+    try {
+      const hasPath = new URL(baseUrl).pathname !== "/";
+      wsUrl = hasPath ? wsBase : wsBase + "/api/websocket";
+    } catch {
+      wsUrl = wsBase + "/api/websocket";
+    }
 
     console.log("[HA] Connecting to", wsUrl);
     this.ws = new WebSocket(wsUrl);

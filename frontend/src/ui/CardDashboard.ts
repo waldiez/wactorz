@@ -1100,18 +1100,28 @@ export class CardDashboard {
   }
 
   private _buildHAConfigForm(): HTMLElement {
+    // Strip protocol from stored URL so we show just the host in the input
+    const storedUrl = this.haUrl ?? "";
+    const storedHost = storedUrl.replace(/^https?:\/\//, "");
+    const storedTls = storedUrl.startsWith("https://");
+
     const form = document.createElement("div");
     form.className = "af-panel";
     form.style.cssText =
       "max-width:420px;margin:40px auto;display:flex;flex-direction:column;gap:16px;";
     form.innerHTML = `
       <div class="af-panel-head"><h3>Home Assistant</h3></div>
-      <p style="font-size:12px;opacity:0.6;margin:0;">Enter your Home Assistant URL and a long-lived access token.<br>These are stored locally in your browser only.</p>
+      <p style="font-size:12px;opacity:0.6;margin:0;">Enter your Home Assistant host and a long-lived access token.<br>These are stored locally in your browser only.</p>
       <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
-        URL
-        <input id="ha-cfg-url" type="url" placeholder="http://192.168.1.2:8123"
-          value="${this.haUrl ?? ""}"
+        Host / IP
+        <input id="ha-cfg-url" type="text" placeholder="192.168.1.2:8123 or ha.example.com/ha"
+          value="${storedHost}"
           style="background:#1a2230;border:1px solid #2a3a50;border-radius:4px;padding:8px 10px;color:#e2e8f0;font-size:13px;outline:none;">
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">
+        <input id="ha-cfg-tls" type="checkbox" ${storedTls ? "checked" : ""}
+          style="width:14px;height:14px;accent-color:#38bdf8;">
+        Use HTTPS (TLS)
       </label>
       <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
         Long-lived access token
@@ -1121,17 +1131,25 @@ export class CardDashboard {
       </label>
       <div style="display:flex;gap:8px;">
         <button id="ha-cfg-save" class="af-mini-btn" style="flex:1;padding:8px;">Save</button>
-        ${this.haUrl ? `<button id="ha-cfg-clear" class="af-mini-btn danger" style="padding:8px 12px;" title="Remove saved credentials">Reset</button>` : ""}
+        ${storedHost ? `<button id="ha-cfg-clear" class="af-mini-btn danger" style="padding:8px 12px;" title="Remove saved credentials">Reset</button>` : ""}
       </div>
       <div id="ha-cfg-msg" style="font-size:12px;min-height:16px;"></div>
     `;
 
     form.querySelector("#ha-cfg-save")?.addEventListener("click", () => {
-      const url = (
+      let raw = (
         form.querySelector<HTMLInputElement>("#ha-cfg-url")?.value ?? ""
-      )
-        .trim()
-        .replace(/\/$/, "");
+      ).trim();
+      // Detect TLS from explicit protocol prefix (ws/wss/http/https)
+      let detectedTls: boolean | null = null;
+      if (/^(https|wss):\/\//i.test(raw)) detectedTls = true;
+      else if (/^(http|ws):\/\//i.test(raw)) detectedTls = false;
+      // Strip any protocol prefix — we re-add http[s] for storage
+      raw = raw.replace(/^(https?|wss?):\/\//i, "").replace(/\/$/, "");
+      const tlsCheckbox =
+        form.querySelector<HTMLInputElement>("#ha-cfg-tls")?.checked ?? false;
+      const tls = detectedTls ?? tlsCheckbox;
+      const url = raw ? `${tls ? "https" : "http"}://${raw}` : "";
       const token = (
         form.querySelector<HTMLInputElement>("#ha-cfg-token")?.value ?? ""
       ).trim();

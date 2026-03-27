@@ -378,10 +378,25 @@ export class CardDashboard {
     this._renderHealth();
   }
 
+  /** Ensure chatTarget is a live agent, defaulting to "main" → "main-actor" → first. */
+  private _syncChatTarget(): void {
+    const agents = [...this.agents.values()];
+    if (!agents.length) return;
+    if (agents.some((a) => a.name === this.chatTarget)) return;
+    const main = agents.find(
+      (a) => a.name === "main" || a.name === "main-actor",
+    );
+    const fallback = [...agents].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    )[0];
+    this.chatTarget = main?.name ?? fallback?.name ?? this.chatTarget;
+  }
+
   private _setView(v: View): void {
     if (this.view === "ha" && v !== "ha") {
       this.haClient?.disconnect();
     }
+    if (v === "chat") this._syncChatTarget();
     this.view = v;
     this._renderView();
 
@@ -811,8 +826,8 @@ export class CardDashboard {
   private _renderSidebar(): void {
     const list = this.root.querySelector<HTMLElement>("#af-chat-agent-list");
     if (!list) return;
-    list.innerHTML = "";
-    [...this.agents.values()]
+
+    const sorted = [...this.agents.values()]
       .filter(
         (a) =>
           !this.sidebarFilter ||
@@ -822,13 +837,32 @@ export class CardDashboard {
         if (a.name === "main-actor") return -1;
         if (b.name === "main-actor") return 1;
         return a.name.localeCompare(b.name);
-      })
-      .forEach((agent) => {
-        const row = document.createElement("button");
-        row.className = `af-chat-agent-row${agent.name === this.chatTarget ? " active" : ""}`;
+      });
+
+    // Collect existing rows for diffing
+    const existing = new Map<string, HTMLElement>();
+    list
+      .querySelectorAll<HTMLElement>(".af-chat-agent-row")
+      .forEach((r) => {
+        if (r.dataset["name"]) existing.set(r.dataset["name"], r);
+      });
+
+    const keep = new Set(sorted.map((a) => a.name));
+    existing.forEach((row, name) => {
+      if (!keep.has(name)) row.remove();
+    });
+
+    sorted.forEach((agent, idx) => {
+      const color = stateColor(agent.state);
+      const isActive = agent.name === this.chatTarget;
+
+      let row = existing.get(agent.name);
+      if (!row) {
+        row = document.createElement("button");
+        row.dataset["name"] = agent.name;
+        row.title = agent.name;
         const dot = document.createElement("span");
         dot.className = "af-chat-agent-dot";
-        dot.style.background = stateColor(agent.state);
         const nm = document.createElement("span");
         nm.className = "af-chat-agent-name";
         nm.textContent = agent.name;
@@ -838,9 +872,18 @@ export class CardDashboard {
           this._renderSidebar();
           this._renderChatPaneHeader();
           this._renderChatThread();
+          this._updateTargetSelect();
         });
-        list.appendChild(row);
-      });
+      }
+
+      // Patch only what may have changed
+      row.className = `af-chat-agent-row${isActive ? " active" : ""}`;
+      const dot = row.querySelector<HTMLElement>(".af-chat-agent-dot");
+      if (dot && dot.style.background !== color) dot.style.background = color;
+
+      const sibling = list.children[idx];
+      if (sibling !== row) list.insertBefore(row, sibling ?? null);
+    });
   }
 
   private _renderChatPaneHeader(): void {
@@ -977,7 +1020,8 @@ export class CardDashboard {
 
     const input = document.createElement("input");
     input.className = "af-iobar-input";
-    input.placeholder = "Message @main-actor…";
+    input.id = "af-iobar-input";
+    input.placeholder = `Message @${this.chatTarget}…`;
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -1015,12 +1059,17 @@ export class CardDashboard {
         opt.textContent = `@${agent.name}`;
         select.appendChild(opt);
       });
+    // Keep dropdown in sync with chatTarget
+    select.value = this.chatTarget;
   }
 
   private _updateTargetSelect(): void {
     const select =
       this.root.querySelector<HTMLSelectElement>("#af-target-select");
     if (select) this._populateSelect(select);
+    const input =
+      this.root.querySelector<HTMLInputElement>("#af-iobar-input");
+    if (input) input.placeholder = `Message @${this.chatTarget}…`;
   }
 
   private _sendMessage(

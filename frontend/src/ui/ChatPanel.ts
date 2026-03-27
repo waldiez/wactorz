@@ -221,8 +221,22 @@ export class ChatPanel {
       return a.name.localeCompare(b.name);
     });
 
-    this.sidebarListEl.innerHTML = "";
-    for (const agent of sorted) {
+    // Collect existing rows by name for diffing
+    const existing = new Map<string, HTMLElement>();
+    this.sidebarListEl
+      .querySelectorAll<HTMLElement>(".af-chat-agent-row")
+      .forEach((r) => {
+        if (r.dataset["name"]) existing.set(r.dataset["name"], r);
+      });
+
+    const keep = new Set(sorted.map((a) => a.name));
+    // Remove rows for agents no longer in the list
+    existing.forEach((row, name) => {
+      if (!keep.has(name)) row.remove();
+    });
+
+    // Upsert rows in sorted order without touching unchanged rows
+    sorted.forEach((agent, idx) => {
       const dotColor =
         typeof agent.state === "object"
           ? "#f87171"
@@ -233,24 +247,39 @@ export class ChatPanel {
               : agent.state === "stopped"
                 ? "#4b5563"
                 : "#60a5fa";
+      const isActive = agent.name === this.activeAgentName;
 
-      const row = document.createElement("button");
-      row.className = `af-chat-agent-row${agent.name === this.activeAgentName ? " active" : ""}`;
-      row.dataset["name"] = agent.name;
-      row.title = agent.name;
-      row.innerHTML = `
-        <span class="af-chat-agent-dot" style="background:${dotColor}"></span>
-        <span class="af-chat-agent-name">${agent.name}</span>
-      `;
-      row.addEventListener("click", () => {
-        document.dispatchEvent(
-          new CustomEvent<{ agent: AgentInfo }>("agent-selected", {
-            detail: { agent },
-          }),
-        );
-      });
-      this.sidebarListEl.appendChild(row);
-    }
+      let row = existing.get(agent.name);
+      if (!row) {
+        row = document.createElement("button");
+        row.className = "af-chat-agent-row";
+        row.dataset["name"] = agent.name;
+        row.title = agent.name;
+        row.innerHTML = `
+          <span class="af-chat-agent-dot"></span>
+          <span class="af-chat-agent-name">${agent.name}</span>
+        `;
+        // Use delegated name lookup so the closure always reflects latest state
+        row.addEventListener("click", () => {
+          const a = this.agentList.find((x) => x.name === agent.name);
+          if (!a) return;
+          document.dispatchEvent(
+            new CustomEvent<{ agent: AgentInfo }>("agent-selected", {
+              detail: { agent: a },
+            }),
+          );
+        });
+      }
+
+      // Patch only what may have changed
+      row.classList.toggle("active", isActive);
+      const dot = row.querySelector<HTMLElement>(".af-chat-agent-dot");
+      if (dot && dot.style.background !== dotColor) dot.style.background = dotColor;
+
+      // Ensure correct position without re-inserting if already there
+      const sibling = this.sidebarListEl.children[idx];
+      if (sibling !== row) this.sidebarListEl.insertBefore(row, sibling ?? null);
+    });
   }
 
   get activeAgent(): AgentInfo | null {

@@ -536,7 +536,8 @@ HA_TOKEN=&lt;long-lived access token&gt;
 </tr>
 </tbody>
 </table>
-<p>Maintains a live map of every HA device with its physical location. Opens a persistent WebSocket connection to Home Assistant and re-fetches the full device/entity/location dataset every time the entity registry changes, then publishes the result downstream.</p>
+<p>Maintains a live map of every HA device with its physical location. On startup it performs an immediate refresh of the full device/entity/location dataset and stores the latest snapshot locally without dispatching it, then keeps a persistent WebSocket connection to Home Assistant and re-fetches the map every time the entity registry changes.</p>
+<p>The latest cached snapshot is exposed through the REST API at <code>GET /ha-map</code>.</p>
 <p>Output can be directed to an MQTT topic or forwarded directly to another actor by name:</p>
 <p><strong>Configuration (<code>.env</code>):</strong></p>
 <div class="highlight"><pre><span></span><code>HA_MAP_AGENT_OUTPUT_TOPIC=homeassistant/map/entities_with_location
@@ -557,11 +558,20 @@ HA_MAP_AGENT_TARGET_ACTOR=          # optional actor name; overrides MQTT topic
 <td>Force an immediate device-map rebuild and publish</td>
 </tr>
 <tr>
+<td><code>refresh simple</code></td>
+<td>Force an immediate device-map rebuild and publish without entity states</td>
+</tr>
+<tr>
 <td><code>status</code></td>
 <td>Return connection state, event counters, and error info</td>
 </tr>
 </tbody>
 </table>
+<p>Large MQTT snapshots are published as multiple messages on the same topic when the
+serialized payload is too large. In that case the agent emits a
+<code>home_assistant_map_update_chunked</code> manifest first, followed by one or more
+<code>home_assistant_map_update_chunk</code> messages carrying a base64-encoded JSON payload
+split into bounded chunks.</p>
 <p><strong>Published payload schema:</strong></p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;home_assistant_map_update&quot;</span><span class="p">,</span>

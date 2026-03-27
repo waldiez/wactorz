@@ -181,6 +181,26 @@
 
 <p><strong>Response</strong> <code>202 Accepted</code> — message queued.  The reply arrives asynchronously via MQTT <code>agents/{id}/chat</code>.</p>
 <hr />
+<h3 id="home-assistant-map">Home Assistant Map</h3>
+<h4 id="get-ha-map"><code>GET /ha-map</code></h4>
+<p>Return the latest cached Home Assistant device map snapshot from <code>HomeAssistantMapAgent</code>.</p>
+<p><strong>Response</strong> <code>200 OK</code></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;home_assistant_map_update&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;event_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;entity_registry_updated&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1234567890.0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;event&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span>
+<span class="w">  </span><span class="nt">&quot;devices&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>Response</strong> <code>404 Not Found</code></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Home Assistant map snapshot not available&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
 <h2 id="websocket-bridge-ws">WebSocket Bridge  (<code>/ws</code>)</h2>
 <p>Connect: <code>ws://host/ws</code></p>
 <p>After connection the server streams every MQTT message as a JSON object:</p>

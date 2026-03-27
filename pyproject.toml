@@ -40,6 +40,7 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.86.0"]
 openai    = ["openai>=2.29.0"]
+google    = ["google-generativeai>=0.8.0"]  # <--- Add this
 discord   = ["discord.py>=2.7.1"]
 whatsapp  = ["twilio>=9.10.4"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
@@ -63,6 +64,7 @@ dev       = [
 all = [
     "wactorz[anthropic]",
     "wactorz[openai]",
+    "wactorz[google]",
     "wactorz[discord]",
     "wactorz[whatsapp]",
 ]

@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pipelines — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;--green:#4ade80;--yellow:#fbbf24;--orange:#fb923c;--purple:#a78bfa;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
+    .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    .layout{display:flex;flex:1}
+
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar-sub{padding-left:.5rem;font-size:.75rem}
+
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:900px;min-width:0}
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:.5rem;line-height:1.15}
+    .content .subtitle{color:var(--muted-hi);margin-bottom:2rem;font-size:.85rem}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:2rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.82rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem;letter-spacing:.06em;text-transform:uppercase}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.3rem 0;color:var(--muted-hi)}
+    .content li strong{color:var(--text)}
+    .content strong{color:#fff;font-weight:500}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2.5rem 0}
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.8}
+    .content table{width:100%;border-collapse:collapse;margin:.75rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.55rem 1rem;border:1px solid var(--border);text-align:left;font-family:var(--display);font-size:.78rem;letter-spacing:.04em}
+    .content td{padding:.45rem 1rem;border:1px solid var(--border);color:var(--muted-hi);vertical-align:top}
+    .content td code{font-size:.8em}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    .callout{border-left:3px solid var(--blue);margin:1.25rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);border-radius:0 4px 4px 0}
+    .callout.tip{border-color:var(--green);background:rgba(74,222,128,.05)}
+    .callout.warn{border-color:var(--yellow);background:rgba(251,191,36,.05)}
+    .callout-title{font-family:var(--display);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--blue);margin-bottom:.25rem}
+    .callout.tip  .callout-title{color:var(--green)}
+    .callout.warn .callout-title{color:var(--yellow)}
+    .callout p{margin:0;color:var(--muted-hi);font-size:.85rem}
+
+    /* ── Pattern cards ── */
+    .pattern{border:1px solid var(--border);border-radius:5px;margin:1.5rem 0 2rem;overflow:hidden}
+    .pattern-header{background:var(--bg3);border-bottom:1px solid var(--border);padding:.65rem 1.25rem;display:flex;align-items:center;gap:.75rem}
+    .pattern-num{font-family:var(--display);font-size:.7rem;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+    .pattern-title{font-family:var(--display);font-size:.9rem;font-weight:600;color:#fff}
+    .pattern-body{padding:1.25rem 1.5rem}
+    .pattern-body p:last-child{margin-bottom:0}
+
+    /* ── Flow diagram ── */
+    .flow{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;font-size:.8rem;line-height:1.8;color:var(--muted-hi);overflow-x:auto;margin:1rem 0 1.25rem}
+    .flow .hi{color:var(--cyan)}
+    .flow .grn{color:var(--green)}
+    .flow .ylw{color:var(--yellow)}
+    .flow .muted{color:var(--muted)}
+
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">
+    <div class="logo-mark"></div>Wactorz
+  </a>
+  <nav class="topbar-links">
+    <a href="../guide/installation.html">Docs</a>
+    <a href="https://github.com/waldiez/wactorz" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/" target="_blank" rel="noopener">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-label">Guide</div>
+      <a href="../guide/installation.html">Installation</a>
+      <a href="../guide/architecture.html">Architecture</a>
+      <a href="../guide/agents.html">Agents</a>
+      <a href="../guide/interfaces.html">Interfaces</a>
+      <a href="../guide/pipelines.html" class="active">Pipelines</a>
+      <a href="../guide/catalog.html">Catalog</a>
+      <a href="../guide/windows.html">Windows</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">On this page</div>
+      <a href="#overview" class="sidebar-sub">Overview</a>
+      <a href="#creating" class="sidebar-sub">Creating a pipeline</a>
+      <a href="#patterns" class="sidebar-sub">Patterns</a>
+      <a href="#p1" class="sidebar-sub">→ HA → HA action</a>
+      <a href="#p2" class="sidebar-sub">→ HA → notification</a>
+      <a href="#p3" class="sidebar-sub">→ Webcam → HA action</a>
+      <a href="#p4" class="sidebar-sub">→ Webcam → notification</a>
+      <a href="#p5" class="sidebar-sub">→ Timer → HA action</a>
+      <a href="#managing" class="sidebar-sub">Managing pipelines</a>
+      <a href="#memory" class="sidebar-sub">Memory &amp; webhooks</a>
+      <a href="#internals" class="sidebar-sub">How it works</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Reference</div>
+      <a href="../reference/mqtt_topics.html">MQTT Topics</a>
+      <a href="../reference/python-api.html">Python API</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <h1>Pipelines</h1>
+    <p class="subtitle">A pipeline is a set of persistent agents that react to events automatically — no user interaction required after setup. Describe what you want in plain language and Wactorz builds and wires the agents for you.</p>
+
+    <h2 id="overview">Overview</h2>
+    <p>Pipelines are created by <strong>PlannerAgent</strong>, which is spawned automatically whenever MainActor classifies a request as <code>PIPELINE</code>. The planner queries your Home Assistant entities, generates a plan, spawns the required agents, and registers a rule that persists across restarts.</p>
+
+    <div class="flow"><pre><span class="muted">You say:</span>  <span class="hi">"notify me on Discord when the front door opens"</span>
+
+<span class="muted">MainActor</span>  →  classifies as PIPELINE
+           →  spawns PlannerAgent
+
+<span class="muted">PlannerAgent</span>  →  queries home-assistant-agent for entity list
+              →  LLM generates a plan (JSON array of agent specs)
+              →  spawns agents from plan
+              →  saves rule to MainActor's registry
+              →  exits
+
+<span class="muted">Agents run indefinitely, reacting to events via MQTT</span></pre></div>
+
+    <hr/>
+
+    <h2 id="creating">Creating a pipeline</h2>
+    <p>Just describe what you want. The intent classifier recognises pipeline requests from natural language:</p>
+
+    <pre><code>"send me a Discord message if the lamp is on"
+"turn on the hallway light when motion is detected"
+"notify me on Telegram if someone is seen on the webcam"
+"turn off all lights every day at midnight"
+"if the temperature goes above 28 degrees, turn on the fan"</code></pre>
+
+    <p>If you have a Discord webhook stored, the planner injects it automatically. Store one with:</p>
+    <pre><code>/webhook discord https://discord.com/api/webhooks/...</code></pre>
+
+    <div class="callout tip">
+      <div class="callout-title">Entity resolution</div>
+      <p>The planner fetches all 280+ entities from your HA instance before generating code, so you can refer to devices by their friendly name — "the living room lamp", "front door sensor" — and the planner maps them to real entity IDs.</p>
+    </div>
+
+    <hr/>
+
+    <h2 id="patterns">Canonical patterns</h2>
+    <p>PlannerAgent uses five canonical wiring patterns. Every pipeline request maps to one of these.</p>
+
+    <!-- Pattern 1 -->
+    <div class="pattern" id="p1">
+      <div class="pattern-header">
+        <span class="pattern-num">Pattern 1</span>
+        <span class="pattern-title">HA sensor → HA action</span>
+      </div>
+      <div class="pattern-body">
+        <p>A Home Assistant sensor triggers a Home Assistant service call — e.g. motion sensor turns on a light, door sensor locks a switch, temperature sensor activates AC.</p>
+        <p>Because HA state is nested inside <code>new_state.state</code> and the ha_actuator agent can only filter top-level payload keys, this pattern requires a two-agent setup:</p>
+        <div class="flow"><pre><span class="grn">Agent 1</span>  (dynamic)  <span class="muted">name: &lt;slug&gt;-state-filter</span>
+  subscribe to homeassistant/state_changes/#
+  filter by entity_id in payload
+  check new_state["state"] against condition
+  if met: publish custom/triggers/&lt;slug&gt; {"triggered": true}
+
+<span class="grn">Agent 2</span>  (ha_actuator)  <span class="muted">name: &lt;slug&gt;-actuator</span>
+  mqtt_topics: ["custom/triggers/&lt;slug&gt;"]
+  detection_filter: {"triggered": true}
+  actions: [HA service call with real entity_id]</pre></div>
+
+        <h4>Example — motion sensor → light on</h4>
+        <pre><code>"turn on the hallway light when motion is detected in the hallway"</code></pre>
+      </div>
+    </div>
+
+    <!-- Pattern 2 -->
+    <div class="pattern" id="p2">
+      <div class="pattern-header">
+        <span class="pattern-num">Pattern 2</span>
+        <span class="pattern-title">HA sensor → notification</span>
+      </div>
+      <div class="pattern-body">
+        <p>A Home Assistant state change triggers a notification — Discord, Telegram, or any HTTP webhook. This is the simplest real-world pattern: one dynamic agent handles both the state subscription and the HTTP call.</p>
+        <div class="flow"><pre><span class="grn">Agent 1</span>  (dynamic)  <span class="muted">name: &lt;slug&gt;-notify</span>
+  async def setup(agent):
+      async def on_state(payload):
+          if payload.get("entity_id") != "sensor.front_door": return
+          if payload.get("new_state", {}).get("state") != "on": return
+          async with httpx.AsyncClient() as c:
+              await c.post(webhook_url, json={"content": "Front door opened!"})
+      agent.subscribe("homeassistant/state_changes/#", on_state)</pre></div>
+
+        <h4>Example</h4>
+        <pre><code>"send me a Discord message if the lamp is on"
+"notify me on Telegram when the washing machine finishes"</code></pre>
+
+        <div class="callout">
+          <div class="callout-title">ℹ Wildcard subscription</div>
+          <p>Always subscribe to <code>homeassistant/state_changes/#</code> and filter by <code>entity_id</code> in the payload. This works regardless of whether <code>HA_STATE_BRIDGE_PER_ENTITY</code> is on or off.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pattern 3 -->
+    <div class="pattern" id="p3">
+      <div class="pattern-header">
+        <span class="pattern-num">Pattern 3</span>
+        <span class="pattern-title">Webcam / camera detection → HA action</span>
+      </div>
+      <div class="pattern-body">
+        <p>Object detection on a local webcam triggers a Home Assistant service call — e.g. person detected unlocks the door, cat detected turns on the pet feeder.</p>
+        <div class="flow"><pre><span class="grn">Agent 1</span>  (dynamic)  <span class="muted">name: &lt;slug&gt;-camera-detect</span>
+  setup(): load YOLO model, open camera
+  process(): capture frame, run inference
+             publish custom/detections/&lt;slug&gt;
+             {"detected": bool, "target": "person", "objects": [...]}
+  poll_interval: 1s
+  install: ultralytics, opencv-python
+
+<span class="grn">Agent 2</span>  (ha_actuator)  <span class="muted">name: &lt;slug&gt;-actuator</span>
+  mqtt_topics: ["custom/detections/&lt;slug&gt;"]
+  detection_filter: {"detected": true}
+  actions: [HA service call]</pre></div>
+
+        <h4>Example</h4>
+        <pre><code>"unlock the front door when a person is detected on the webcam"</code></pre>
+      </div>
+    </div>
+
+    <!-- Pattern 4 -->
+    <div class="pattern" id="p4">
+      <div class="pattern-header">
+        <span class="pattern-num">Pattern 4</span>
+        <span class="pattern-title">Webcam / camera detection → notification</span>
+      </div>
+      <div class="pattern-body">
+        <p>Same detection agent as Pattern 3, but the second agent sends a notification instead of calling an HA service.</p>
+        <div class="flow"><pre><span class="grn">Agent 1</span>  (dynamic)  — same as Pattern 3 camera agent
+
+<span class="grn">Agent 2</span>  (dynamic)  <span class="muted">name: &lt;slug&gt;-notify</span>
+  setup(): subscribe to custom/detections/&lt;slug&gt;
+           when detected=true: POST to webhook</pre></div>
+
+        <h4>Example</h4>
+        <pre><code>"notify me on Discord if a person is seen on the front camera"</code></pre>
+      </div>
+    </div>
+
+    <!-- Pattern 5 -->
+    <div class="pattern" id="p5">
+      <div class="pattern-header">
+        <span class="pattern-num">Pattern 5</span>
+        <span class="pattern-title">Timer → HA action</span>
+      </div>
+      <div class="pattern-body">
+        <p>A scheduled trigger fires a Home Assistant service call at a fixed time or interval.</p>
+        <div class="flow"><pre><span class="grn">Agent 1</span>  (dynamic)  <span class="muted">name: &lt;slug&gt;-timer</span>
+  process(): check current time against schedule
+             if match: publish custom/triggers/&lt;slug&gt; {"triggered": true}
+  poll_interval: 60s
+
+<span class="grn">Agent 2</span>  (ha_actuator)  <span class="muted">name: &lt;slug&gt;-actuator</span>
+  mqtt_topics: ["custom/triggers/&lt;slug&gt;"]
+  detection_filter: {"triggered": true}
+  actions: [HA service call]</pre></div>
+
+        <h4>Example</h4>
+        <pre><code>"turn off all lights every day at midnight"
+"turn on the coffee maker at 07:30 on weekdays"</code></pre>
+      </div>
+    </div>
+
+    <hr/>
+
+    <h2 id="managing">Managing pipelines</h2>
+    <p>Every pipeline is saved as a rule in MainActor's spawn registry. Rules persist across restarts — agents are automatically re-spawned when Wactorz starts.</p>
+
+    <h4>List active rules</h4>
+    <pre><code>/rules</code></pre>
+    <pre><code>Active pipeline rules (2):
+
+🟢 [a1b2c3d4] — send me a Discord message if the lamp is on
+   agents  : lamp-on-discord-notify
+   created : 2026-03-24 19:36
+
+🟢 [e5f6a7b8] — turn on hallway light when motion detected
+   agents  : motion-hallway-state-filter, motion-hallway-actuator
+   created : 2026-03-25 11:14
+
+To delete a rule: /rules delete &lt;rule_id&gt;</code></pre>
+
+    <h4>Delete a rule</h4>
+    <pre><code>/rules delete a1b2c3d4</code></pre>
+    <p>This stops all agents associated with the rule and removes it from the spawn registry. The agents will not be re-spawned on next restart.</p>
+
+    <h4>Check agent status</h4>
+    <pre><code>@lamp-on-discord-notify {"action": "status"}</code></pre>
+
+    <hr/>
+
+    <h2 id="memory">Memory and webhooks</h2>
+    <p>The planner reads from MainActor's memory when generating pipeline code. Two things are particularly useful to store before requesting a pipeline:</p>
+
+    <h4>Webhook URLs</h4>
+    <p>Store notification destinations once — the planner injects them automatically into every generated notification agent.</p>
+    <pre><code>/webhook discord  https://discord.com/api/webhooks/...
+/webhook telegram https://api.telegram.org/bot.../sendMessage</code></pre>
+
+    <h4>User facts</h4>
+    <p>MainActor extracts facts from conversation automatically (HA URLs, entity IDs, preferences). You can also set them explicitly:</p>
+    <pre><code>/memory                    — view stored facts
+/memory forget ha_url      — remove a specific fact
+/memory clear              — wipe everything</code></pre>
+
+    <hr/>
+
+    <h2 id="internals">How it works internally</h2>
+    <p>When MainActor classifies a message as <code>PIPELINE</code> it spawns a short-lived <strong>PlannerAgent</strong> that:</p>
+    <ol>
+      <li>Sends a <code>list_entities</code> task to <code>home-assistant-agent</code> and waits for the full entity list (up to 180 s)</li>
+      <li>Builds a prompt containing the entity list, available agent types, canonical patterns, stored webhook URLs, and the user's request</li>
+      <li>Calls the LLM once to produce a JSON plan — an array of agent specs, each with <code>name</code>, <code>type</code>, <code>code</code> (for dynamic agents) or <code>actions</code> (for ha_actuator agents)</li>
+      <li>Spawns each agent from the plan via <code>DynamicAgent</code></li>
+      <li>Sends a <code>save_pipeline_rule</code> message to MainActor with the list of agent names</li>
+      <li>Exits — the spawned agents run indefinitely from this point</li>
+    </ol>
+
+    <div class="callout warn">
+      <div class="callout-title">⚠ Planner hallucination</div>
+      <p>If the planner's response looks like a tool call (e.g. <code>&lt;tool_call&gt;agent.send_to...&lt;/tool_call&gt;</code>) with an instant perfect response, it is the LLM hallucinating — not a real agent interaction. Real pipeline creation takes 5–15 seconds and produces log lines showing agents being compiled and registered.</p>
+    </div>
+
+    <h4>Agent types the planner can generate</h4>
+    <table>
+      <thead><tr><th>Type</th><th>Description</th><th>When used</th></tr></thead>
+      <tbody>
+        <tr><td><code>dynamic</code></td><td>Full Python code string compiled at runtime by DynamicAgent</td><td>Any custom logic — MQTT subscriptions, HTTP calls, camera inference, timers</td></tr>
+        <tr><td><code>ha_actuator</code></td><td>Declarative: MQTT topic + detection filter + list of HA service calls</td><td>When the only job is to call an HA service when a payload matches</td></tr>
+      </tbody>
+    </table>
+
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Python asyncio actor-model framework</span>
+  <span><a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+</footer>
+</body>
+</html>

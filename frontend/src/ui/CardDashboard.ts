@@ -376,6 +376,12 @@ export class CardDashboard {
         btn.classList.toggle("active", btn.dataset["view"] === this.view);
       });
     this._renderHealth();
+    // Only show the agent-target dropdown in the chat view
+    const select = this.root.querySelector<HTMLSelectElement>("#af-target-select");
+    if (select) {
+      select.style.display = this.view === "chat" ? "" : "none";
+      if (this.view === "chat") select.value = this.chatTarget;
+    }
   }
 
   /** Ensure chatTarget is a live agent, defaulting to "main" → "main-actor" → first. */
@@ -1029,11 +1035,8 @@ export class CardDashboard {
       }
     });
     select.addEventListener("change", () => {
-      const t = select.value;
-      input.placeholder =
-        t === "main-actor"
-          ? "Message @main-actor…"
-          : `Context: @${t} — asking @main-actor…`;
+      this.chatTarget = select.value;
+      input.placeholder = `Message @${select.value}…`;
     });
 
     const sendBtn = document.createElement("button");

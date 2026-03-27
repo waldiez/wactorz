@@ -156,8 +156,6 @@ async def build_system(args: argparse.Namespace):
     from wactorz.core.actor import SupervisorStrategy
     from wactorz.agents.main_actor import MainActor
     from wactorz.agents.monitor_agent import MonitorActor
-    from wactorz.agents.code_agent import CodeAgent
-    from wactorz.agents.ml_agent import AnomalyDetectorAgent
     from wactorz.agents.installer_agent import InstallerAgent
     from wactorz.agents.io_agent import IOAgent
     from wactorz.agents.manual_agent import ManualAgent
@@ -219,10 +217,6 @@ async def build_system(args: argparse.Namespace):
     def make_installer():
         return InstallerAgent(name="installer", persistence_dir="./state")
 
-    def make_code_agent():
-        return CodeAgent(llm_provider=make_provider(), name="code-agent",
-                         execution_mode="subprocess", persistence_dir="./state")
-
     def make_manual_agent():
         return ManualAgent(llm_provider=make_provider(), name="manual-agent",
                            persistence_dir="./state")
@@ -247,9 +241,6 @@ async def build_system(args: argparse.Namespace):
     def make_io_agent():
         return IOAgent(name="io-agent", persistence_dir="./state")
 
-    def make_anomaly_agent():
-        return AnomalyDetectorAgent(name="anomaly-detector", continuous=False,
-                                    persistence_dir="./state")
 
     def make_catalog():
         return CatalogAgent(name="catalog", persistence_dir="./state")
@@ -261,12 +252,10 @@ async def build_system(args: argparse.Namespace):
         .supervise("monitor",                    make_monitor,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=1.0)
         .supervise("io-agent",                   make_io_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=1.0)
         .supervise("installer",                  make_installer,     strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=3,  restart_delay=2.0)
-        .supervise("code-agent",                 make_code_agent,    strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("manual-agent",               make_manual_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-agent",       make_ha_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-map-agent",   make_ha_map_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-state-bridge",make_ha_state_bridge, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
-        .supervise("anomaly-detector",           make_anomaly_agent, strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("catalog",                    make_catalog,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
     )
 

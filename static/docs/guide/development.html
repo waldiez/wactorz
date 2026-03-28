@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Installation — Wactorz</title>
+  <title>Development — Wactorz</title>
   <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
@@ -12,7 +12,7 @@
     :root{
       --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
       --border:#1a2140;--border-hi:#2a3560;
-      --blue:#4f8ef7;--cyan:#00d4ff;--green:#4ade80;--yellow:#fbbf24;
+      --blue:#4f8ef7;--cyan:#00d4ff;
       --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
       --mono:'JetBrains Mono',monospace;
       --display:'Chakra Petch',sans-serif;
@@ -22,58 +22,75 @@
     ::-webkit-scrollbar{width:5px}
     ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
 
+    /* ── Nav bar ── */
     .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
     .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
     .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
     .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
     .topbar-links{display:flex;gap:.1rem}
     .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
-    .topbar-links a:hover{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
 
+    /* ── Layout ── */
     .layout{display:flex;flex:1}
 
+    /* ── Sidebar ── */
     .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
     .sidebar-group{margin-bottom:1.25rem}
     .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
     .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
     .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
     .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
-    .sidebar-sub{padding-left:.5rem;font-size:.75rem}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
 
-    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:900px;min-width:0}
-    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:.5rem;line-height:1.15}
-    .content .subtitle{color:var(--muted-hi);margin-bottom:2rem;font-size:.85rem}
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
     .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
     .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
-    .content h4{font-family:var(--display);font-size:.82rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem;letter-spacing:.06em;text-transform:uppercase}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
     .content p{margin-bottom:1rem;color:var(--text)}
     .content a{color:var(--blue);text-decoration:none}
     .content a:hover{text-decoration:underline}
     .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
-    .content li{margin:.3rem 0;color:var(--muted-hi)}
-    .content li strong{color:var(--text)}
+    .content li{margin:.25rem 0}
     .content strong{color:#fff;font-weight:500}
-    .content hr{border:none;border-top:1px solid var(--border);margin:2.5rem 0}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
     .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
-    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem}
-    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.8}
-    .content table{width:100%;border-collapse:collapse;margin:.75rem 0 1.5rem;font-size:.83rem}
-    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.55rem 1rem;border:1px solid var(--border);text-align:left;font-family:var(--display);font-size:.78rem;letter-spacing:.04em}
-    .content td{padding:.45rem 1rem;border:1px solid var(--border);color:var(--muted-hi);vertical-align:top}
-    .content td code{font-size:.8em}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
     .content tr:hover td{background:rgba(79,142,247,.03)}
 
-    .callout{border-left:3px solid var(--blue);margin:1.25rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);border-radius:0 4px 4px 0}
-    .callout.tip{border-color:var(--green);background:rgba(74,222,128,.05)}
-    .callout.warn{border-color:var(--yellow);background:rgba(251,191,36,.05)}
-    .callout-title{font-family:var(--display);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--blue);margin-bottom:.25rem}
-    .callout.tip  .callout-title{color:var(--green)}
-    .callout.warn .callout-title{color:var(--yellow)}
-    .callout p{margin:0;color:var(--muted-hi);font-size:.85rem}
-
+    /* ── Footer ── */
     footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
     footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
 
+    /* ── Responsive ── */
     @media(max-width:768px){
       .sidebar{display:none}
       .content{padding:2rem 1.25rem 4rem}
@@ -81,15 +98,16 @@
   </style>
 </head>
 <body>
-
 <header class="topbar">
   <a href="../index.html" class="topbar-logo">
     <div class="logo-mark"></div>Wactorz
   </a>
   <nav class="topbar-links">
-    <a href="../guide/installation.html">Docs</a>
-    <a href="https://github.com/waldiez/wactorz" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://pypi.org/project/wactorz/" target="_blank" rel="noopener">PyPI</a>
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+    <a href="../api/rust/" target="_blank" rel="noopener">Rust Docs</a>
+    <a href="../api/js/" target="_blank" rel="noopener">JS Docs</a>
+    <a href="../api/python/" target="_blank" rel="noopener">Python Docs</a>
   </nav>
 </header>
 
@@ -98,305 +116,325 @@
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
       <a href="../guide/development.html" class="active">Installation</a>
-      <a href="../guide/architecture.html">Architecture</a>
-      <a href="../guide/agents.html">Agents</a>
-      <a href="../guide/interfaces.html">Interfaces</a>
-      <a href="../guide/pipelines.html">Pipelines</a>
-      <a href="../guide/remote-nodes.html">Remote Nodes</a>
-    </div>
-    <div class="sidebar-group">
-      <div class="sidebar-label">On this page</div>
-      <a href="#install" class="sidebar-sub">Install</a>
-      <a href="#optional-deps" class="sidebar-sub">Optional deps</a>
-      <a href="#quickstart" class="sidebar-sub">Quick start</a>
-      <a href="#config" class="sidebar-sub">Configuration</a>
-      <a href="#broker" class="sidebar-sub">MQTT broker</a>
-      <a href="#web-ui" class="sidebar-sub">Web UI</a>
-      <a href="#structure" class="sidebar-sub">Project structure</a>
-      <a href="#dev" class="sidebar-sub">Development</a>
-      <a href="#debugging" class="sidebar-sub">Debugging</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+      <a href="../guide/windows.html" class="">Windows</a>
     </div>
     <div class="sidebar-group">
       <div class="sidebar-label">Reference</div>
-      <a href="../reference/mqtt_topics.html">MQTT Topics</a>
-      <a href="../reference/python-api.html">Python API</a>
-      <a href="../reference/config.html">Config</a>
+      <a href="../reference/api.html" class="">REST & WebSocket API</a>
+      <a href="../reference/mqtt_topics.html" class="">MQTT Topics</a>
+      <a href="../reference/python-api.html" class="">Python API</a>
     </div>
+    <a href="https://waldiez.github.io/wactorz/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
+    <a href="https://waldiez.github.io/wactorz/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
+    <a href="https://waldiez.github.io/wactorz/api/python/" class="external" target="_blank" rel="noopener">Python Docs ↗</a>
   </aside>
-
   <main class="content">
-    <h1>Installation</h1>
-    <p class="subtitle">Wactorz requires Python 3.10+ and a running MQTT broker. The <code>wactorz</code> command starts everything — the actor system, the embedded broker, and the web dashboard.</p>
+<h1 id="development">Development</h1>
+<h2 id="prerequisites">Prerequisites</h2>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Version</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Python</td>
+<td>≥ 3.11</td>
+<td>Backend (primary)</td>
+</tr>
+<tr>
+<td>Node.js</td>
+<td>≥ 20</td>
+<td>Frontend build</td>
+</tr>
+<tr>
+<td>npm</td>
+<td>≥ 10</td>
+<td>Frontend deps</td>
+</tr>
+<tr>
+<td>Docker + Compose</td>
+<td>any recent</td>
+<td>Dev stack</td>
+</tr>
+<tr>
+<td>Rust</td>
+<td>≥ 1.93</td>
+<td>Backend (optional, in-sync)</td>
+</tr>
+<tr>
+<td>mosquitto-clients</td>
+<td>optional</td>
+<td>MQTT debugging</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="quick-start-frontend-only-no-rust-build">Quick start (frontend-only, no Rust build)</h2>
+<p>The fastest way to develop the UI is against the mock agent simulator.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Terminal 1 — MQTT broker + mock agents</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d
 
-    <h2 id="install">Install</h2>
+<span class="c1"># Terminal 2 — Vite dev server (hot-reload on http://localhost:3000)</span>
+<span class="nb">cd</span><span class="w"> </span>frontend
+npm<span class="w"> </span>install
+npm<span class="w"> </span>run<span class="w"> </span>dev
+</code></pre></div>
 
-    <h4>From PyPI</h4>
-    <pre><code>pip install wactorz[all]</code></pre>
+<p>The mock simulator (<code>scripts/mock-agents.mjs</code>) publishes realistic MQTT events:
+- 6 agents: main-actor, monitor-agent, data-fetcher, weather-agent, ml-classifier, nautilus-agent, udx-agent
+- Heartbeats every 5 s
+- Chat replies every 4 s
+- Occasional alerts (30% chance every 8 s)
+- Dynamic agent spawns every 20 s (20% chance)</p>
+<p>The Vite dev server proxies <code>/api/</code>, <code>/ws</code>, and <code>/mqtt</code> to the local ports exposed by <code>compose.dev.yaml</code>.</p>
+<h2 id="python-first-dev-mode">Python-first dev mode</h2>
+<p>For day-to-day development, the repo can default to the Python backend while
+exposing the same frontend-facing API contract (which the optional Rust backend mirrors).</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Terminal 1 — MQTT broker</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>mosquitto
 
-    <h4>Latest from GitHub</h4>
-    <pre><code>pip install "wactorz[all] @ git+https://github.com/waldiez/wactorz.git"</code></pre>
+<span class="c1"># Terminal 2 — Python backend, REST on :8080</span>
+<span class="nv">WACTORZ_DEV_MODE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./run.sh
 
-    <h4>From source (editable)</h4>
-    <pre><code>git clone https://github.com/waldiez/wactorz.git
-cd wactorz
-pip install -e ".[all]"</code></pre>
+<span class="c1"># Terminal 3 — frontend SPA</span>
+<span class="nb">cd</span><span class="w"> </span>frontend<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>dev
+</code></pre></div>
 
-    <hr/>
+<p>In this mode:
+- <code>run.sh</code> defaults to the Python backend unless <code>WACTORZ_BACKEND</code> overrides it.
+- The Python backend defaults to <code>INTERFACE=rest</code> and <code>PORT=8080</code>.
+- The primary frontend is <code>frontend/index.html</code>, not the legacy <code>monitor.html</code>.</p>
+<h3 id="stop-mock-stack">Stop mock stack</h3>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>down
+</code></pre></div>
 
-    <h2 id="optional-deps">Optional dependencies</h2>
-    <p>The <code>[all]</code> extra installs everything except the ML stack (heavy torch dependency). Install individual extras as needed:</p>
+<hr />
+<h2 id="full-stack-rust-backend-optional-in-sync">Full stack (Rust backend, optional in-sync)</h2>
+<div class="highlight"><pre><span></span><code><span class="c1"># Terminal 1 — support services</span>
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>mosquitto<span class="w"> </span>dashboard<span class="w">   </span><span class="c1"># or &#39;docker compose up -d&#39;</span>
 
-    <table>
-      <thead><tr><th>Extra</th><th>Installs</th><th>Needed for</th></tr></thead>
-      <tbody>
-        <tr><td><code>wactorz[anthropic]</code></td><td><code>anthropic</code></td><td><code>--llm anthropic</code> (default)</td></tr>
-        <tr><td><code>wactorz[openai]</code></td><td><code>openai</code></td><td><code>--llm openai</code></td></tr>
-        <tr><td><code>wactorz[google]</code></td><td><code>google-generativeai</code></td><td><code>--llm gemini</code></td></tr>
-        <tr><td><code>wactorz[discord]</code></td><td><code>discord.py</code></td><td><code>--interface discord</code></td></tr>
-        <tr><td><code>wactorz[whatsapp]</code></td><td><code>twilio</code></td><td><code>--interface whatsapp</code></td></tr>
-        <tr><td><code>wactorz[ml]</code></td><td><code>ultralytics</code>, <code>torch</code>, <code>numpy</code></td><td>webcam detection pipelines</td></tr>
-        <tr><td><code>wactorz[all]</code></td><td>all of the above except <code>ml</code></td><td>recommended starting point</td></tr>
-      </tbody>
-    </table>
+<span class="c1"># Terminal 2 — Rust backend</span>
+<span class="nb">cd</span><span class="w"> </span>rust
+<span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">wactorz</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>wactorz<span class="w"> </span>--<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--mqtt-host<span class="w"> </span>localhost<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--llm-provider<span class="w"> </span>anthropic<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--llm-api-key<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$LLM_API_KEY</span><span class="s2">&quot;</span>
 
-    <div class="callout tip">
-      <div class="callout-title">LLM provider deps</div>
-      <p>You only need to install the dep for the provider you actually use. If you plan to switch providers, install <code>wactorz[all]</code> once and set the active provider via <code>--llm</code> flag or <code>LLM_PROVIDER</code> in <code>.env</code>.</p>
-    </div>
+<span class="c1"># Terminal 3 — frontend dev server</span>
+<span class="nb">cd</span><span class="w"> </span>frontend<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>dev
+</code></pre></div>
 
-    <hr/>
+<hr />
+<h2 id="project-structure">Project structure</h2>
+<div class="highlight"><pre><span></span><code><span class="nx">wactorz</span><span class="o">/</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">rust</span><span class="o">/</span><span class="w">                          </span><span class="nx">Rust</span><span class="w"> </span><span class="nx">workspace</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">Cargo</span><span class="p">.</span><span class="nx">toml</span><span class="w">                 </span><span class="nx">workspace</span><span class="w"> </span><span class="nx">manifest</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">Dockerfile</span><span class="w">                 </span><span class="nx">multi</span><span class="o">-</span><span class="nx">stage</span><span class="p">:</span><span class="w"> </span><span class="nx">builder</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="nx">runtime</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">crates</span><span class="o">/</span>
+<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">core</span><span class="o">/</span><span class="w">        </span><span class="nx">Actor</span><span class="w"> </span><span class="nx">trait</span><span class="p">,</span><span class="w"> </span><span class="nx">registry</span><span class="p">,</span><span class="w"> </span><span class="nx">messages</span>
+<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">agents</span><span class="o">/</span><span class="w">      </span><span class="nx">All</span><span class="w"> </span><span class="nx">concrete</span><span class="w"> </span><span class="nx">agents</span>
+<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">mqtt</span><span class="o">/</span><span class="w">        </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">client</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">topic</span><span class="w"> </span><span class="nx">helpers</span>
+<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">interfaces</span><span class="o">/</span><span class="w">  </span><span class="nx">REST</span><span class="p">,</span><span class="w"> </span><span class="nx">WebSocket</span><span class="p">,</span><span class="w"> </span><span class="nx">CLI</span>
+<span class="err">│</span><span class="w">       </span><span class="err">└──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">server</span><span class="o">/</span><span class="w">      </span><span class="nx">Binary</span><span class="w"> </span><span class="nx">entry</span><span class="w"> </span><span class="nx">point</span>
+<span class="err">│</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">frontend</span><span class="o">/</span><span class="w">                      </span><span class="nx">Vite</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">TypeScript</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">Babylon</span><span class="p">.</span><span class="nx">js</span><span class="w"> </span><span class="nx">SPA</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">src</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">main</span><span class="p">.</span><span class="nx">ts</span><span class="w">                </span><span class="nx">App</span><span class="w"> </span><span class="nx">bootstrap</span><span class="p">,</span><span class="w"> </span><span class="nx">wires</span><span class="w"> </span><span class="nx">all</span><span class="w"> </span><span class="nx">components</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">types</span><span class="o">/</span><span class="nx">agent</span><span class="p">.</span><span class="nx">ts</span><span class="w">         </span><span class="nx">Shared</span><span class="w"> </span><span class="nx">TypeScript</span><span class="w"> </span><span class="nx">types</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">mqtt</span><span class="o">/</span><span class="nx">MQTTClient</span><span class="p">.</span><span class="nx">ts</span><span class="w">     </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">client</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="nx">routing</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">io</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">IOManager</span><span class="p">.</span><span class="nx">ts</span><span class="w">       </span><span class="nx">Sends</span><span class="w"> </span><span class="nx">messages</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">io</span><span class="o">/</span><span class="nx">chat</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">IOBar</span><span class="p">.</span><span class="nx">ts</span><span class="w">           </span><span class="nx">Input</span><span class="w"> </span><span class="nx">bar</span><span class="w"> </span><span class="p">(</span><span class="nx">history</span><span class="p">,</span><span class="w"> </span><span class="nx">multiline</span><span class="p">,</span><span class="w"> </span><span class="err">@</span><span class="nx">mention</span><span class="p">)</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">AgentImageGen</span><span class="p">.</span><span class="nx">ts</span><span class="w">   </span><span class="nx">DiceBear</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">Gemini</span><span class="w"> </span><span class="nx">avatar</span><span class="w"> </span><span class="nx">generation</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">VoiceInput</span><span class="p">.</span><span class="nx">ts</span><span class="w">      </span><span class="nx">Web</span><span class="w"> </span><span class="nx">Speech</span><span class="w"> </span><span class="nx">API</span><span class="w"> </span><span class="nx">integration</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">scene</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">SceneManager</span><span class="p">.</span><span class="nx">ts</span><span class="w">    </span><span class="nx">Babylon</span><span class="p">.</span><span class="nx">js</span><span class="w"> </span><span class="nx">lifecycle</span><span class="p">,</span><span class="w"> </span><span class="nx">theme</span><span class="w"> </span><span class="nx">switching</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">themes</span><span class="o">/</span><span class="w">            </span><span class="nx">GraphTheme</span><span class="p">,</span><span class="w"> </span><span class="nx">GalaxyTheme</span><span class="p">,</span><span class="w"> </span><span class="nx">GraveTheme</span><span class="p">,</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">                        </span><span class="nx">CardBabylonTheme</span><span class="p">,</span><span class="w"> </span><span class="nx">ThemeBase</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">nodes</span><span class="o">/</span><span class="w">             </span><span class="nx">GraphNode</span><span class="p">,</span><span class="w"> </span><span class="nx">PlanetNode</span><span class="p">,</span><span class="w"> </span><span class="nx">GraveNode</span><span class="p">,</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">                        </span><span class="nx">AgentNodeBase</span><span class="p">,</span><span class="w"> </span><span class="nx">CardBabylonNode</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">effects</span><span class="o">/</span><span class="w">           </span><span class="nx">AlertEffect</span><span class="p">,</span><span class="w"> </span><span class="nx">HeartbeatEffect</span><span class="p">,</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">                            </span><span class="nx">MessageEffect</span><span class="p">,</span><span class="w"> </span><span class="nx">SpawnEffect</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">ui</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">ChatPanel</span><span class="p">.</span><span class="nx">ts</span><span class="w">       </span><span class="nx">Per</span><span class="o">-</span><span class="nx">agent</span><span class="w"> </span><span class="nx">chat</span><span class="w"> </span><span class="nx">threads</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">SocialDashboard</span><span class="p">.</span><span class="nx">ts</span><span class="w"> </span><span class="nx">Instagram</span><span class="o">/</span><span class="nx">Twitter</span><span class="o">-</span><span class="nx">style</span><span class="w"> </span><span class="nx">card</span><span class="w"> </span><span class="nx">grid</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">CardDashboard</span><span class="p">.</span><span class="nx">ts</span><span class="w">   </span><span class="nx">Minimal</span><span class="w"> </span><span class="nx">HTML</span><span class="w"> </span><span class="nx">card</span><span class="w"> </span><span class="nx">grid</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">ActivityFeed</span><span class="p">.</span><span class="nx">ts</span><span class="w">    </span><span class="nx">Collapsible</span><span class="w"> </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="nx">log</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">MentionPopup</span><span class="p">.</span><span class="nx">ts</span><span class="w">    </span><span class="err">@</span><span class="nx">mention</span><span class="w"> </span><span class="nx">autocomplete</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">AgentHUD</span><span class="p">.</span><span class="nx">ts</span><span class="w">        </span><span class="nx">Top</span><span class="o">-</span><span class="nx">left</span><span class="w"> </span><span class="nx">agent</span><span class="w"> </span><span class="nx">count</span><span class="w"> </span><span class="nx">HUD</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">└──</span><span class="w"> </span><span class="nx">ThemeSwitcher</span><span class="p">.</span><span class="nx">ts</span><span class="w">   </span><span class="nx">Theme</span><span class="w"> </span><span class="nx">toggle</span><span class="w"> </span><span class="nx">buttons</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">public</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">favicon</span><span class="p">.</span><span class="nx">svg</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">site</span><span class="p">.</span><span class="nx">webmanifest</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">robots</span><span class="p">.</span><span class="nx">txt</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">index</span><span class="p">.</span><span class="nx">html</span><span class="w">                 </span><span class="nx">All</span><span class="w"> </span><span class="nx">CSS</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="nx">inline</span><span class="w"> </span><span class="nx">here</span><span class="w"> </span><span class="p">(</span><span class="nx">no</span><span class="w"> </span><span class="kd">external</span><span class="w"> </span><span class="nx">CSS</span><span class="w"> </span><span class="nx">files</span><span class="p">)</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">vite</span><span class="p">.</span><span class="nx">config</span><span class="p">.</span><span class="nx">ts</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">tsconfig</span><span class="p">.</span><span class="nx">json</span>
+<span class="err">│</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">infra</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">nginx</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">nginx</span><span class="p">.</span><span class="nx">conf</span><span class="w">             </span><span class="nx">Full</span><span class="w"> </span><span class="nx">Docker</span><span class="w"> </span><span class="nx">mode</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">nginx</span><span class="o">-</span><span class="nx">native</span><span class="p">.</span><span class="nx">conf</span><span class="w">      </span><span class="nx">Native</span><span class="w"> </span><span class="nx">binary</span><span class="w"> </span><span class="nx">mode</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">mosquitto</span><span class="o">/</span><span class="nx">mosquitto</span><span class="p">.</span><span class="nx">conf</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">fuseki</span><span class="o">/</span><span class="w">                    </span><span class="nx">Apache</span><span class="w"> </span><span class="nx">Jena</span><span class="w"> </span><span class="nx">Fuseki</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">homeassistant</span><span class="o">/</span><span class="w">             </span><span class="nx">HA</span><span class="w"> </span><span class="nx">configuration</span>
+<span class="err">│</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">scripts</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">deploy</span><span class="p">.</span><span class="nx">sh</span><span class="w">                  </span><span class="nx">Build</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">rsync</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">restart</span><span class="w"> </span><span class="nx">wizard</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">mock</span><span class="o">-</span><span class="nx">agents</span><span class="p">.</span><span class="nx">mjs</span><span class="w">            </span><span class="nx">Dev</span><span class="o">-</span><span class="nx">mode</span><span class="w"> </span><span class="nx">mock</span><span class="w"> </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">simulator</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="kn">package</span><span class="o">-</span><span class="nx">full</span><span class="o">-</span><span class="nx">release</span><span class="p">.</span><span class="nx">sh</span><span class="w">    </span><span class="nx">Build</span><span class="w"> </span><span class="nx">full</span><span class="w"> </span><span class="nx">zip</span><span class="w"> </span><span class="nx">release</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="kn">package</span><span class="o">-</span><span class="nx">native</span><span class="p">.</span><span class="nx">sh</span><span class="w">          </span><span class="nx">Build</span><span class="w"> </span><span class="nx">native</span><span class="w"> </span><span class="nx">binary</span><span class="w"> </span><span class="nx">tar</span><span class="p">.</span><span class="nx">gz</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">build</span><span class="o">-</span><span class="nx">native</span><span class="p">.</span><span class="nx">sh</span><span class="w">            </span><span class="nx">Build</span><span class="w"> </span><span class="nx">binary</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">the</span><span class="w"> </span><span class="nx">target</span><span class="w"> </span><span class="nx">host</span>
+<span class="err">│</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">systemd</span><span class="o">/</span><span class="nx">wactorz</span><span class="p">.</span><span class="nx">service</span><span class="w">      </span><span class="nx">systemd</span><span class="w"> </span><span class="nx">unit</span><span class="w"> </span><span class="nx">template</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">compose</span><span class="p">.</span><span class="nx">yaml</span><span class="w">                   </span><span class="nx">Full</span><span class="w"> </span><span class="nx">Docker</span><span class="w"> </span><span class="nx">stack</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">compose</span><span class="p">.</span><span class="nx">dev</span><span class="p">.</span><span class="nx">yaml</span><span class="w">               </span><span class="nx">Dev</span><span class="w"> </span><span class="nx">stack</span><span class="w"> </span><span class="p">(</span><span class="nx">mosquitto</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">mock</span><span class="w"> </span><span class="nx">only</span><span class="p">)</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">compose</span><span class="p">.</span><span class="nx">native</span><span class="p">.</span><span class="nx">yaml</span><span class="w">            </span><span class="nx">Native</span><span class="w"> </span><span class="nx">binary</span><span class="w"> </span><span class="nx">stack</span>
+<span class="err">├──</span><span class="w"> </span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">example</span><span class="w">                   </span><span class="nx">Annotated</span><span class="w"> </span><span class="nx">config</span><span class="w"> </span><span class="nx">template</span>
+<span class="err">└──</span><span class="w"> </span><span class="nx">docs</span><span class="o">/</span><span class="w">                          </span><span class="nx">This</span><span class="w"> </span><span class="nx">documentation</span>
+</code></pre></div>
 
-    <h2 id="quickstart">Quick start</h2>
+<hr />
+<h2 id="rust-development">Rust development</h2>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>rust
 
-    <pre><code># 1. Create a .env file with your LLM key (see Configuration below)
-cp .env.example .env
-# edit .env and set ANTHROPIC_API_KEY (or whichever provider you use)
+<span class="c1"># Check (fast — no codegen)</span>
+cargo<span class="w"> </span>check
 
-# 2. Start Wactorz (starts everything including the broker)
-wactorz
+<span class="c1"># Build debug</span>
+cargo<span class="w"> </span>build<span class="w"> </span>--bin<span class="w"> </span>wactorz
 
-# 3. Open the web dashboard
-# http://localhost:8888</code></pre>
+<span class="c1"># Build release</span>
+cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--bin<span class="w"> </span>wactorz
 
-    <p>That's it. The CLI interface starts in your terminal and the web dashboard opens at <code>localhost:8888</code>. Both can be used simultaneously.</p>
+<span class="c1"># Run with debug logging</span>
+<span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">wactorz</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>wactorz
 
-    <h4>Switch interface or provider</h4>
-    <pre><code># Use Gemini instead of Claude
-wactorz --llm gemini --gemini-model gemini-2.5-flash
+<span class="c1"># Lint</span>
+cargo<span class="w"> </span>clippy<span class="w"> </span>--<span class="w"> </span>-D<span class="w"> </span>warnings
 
-# Discord bot
-wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN
+<span class="c1"># Format</span>
+cargo<span class="w"> </span>fmt
+</code></pre></div>
 
-# Hot-reload during development (restarts on source file changes)
-wactorz --reload</code></pre>
+<h2 id="backend-parity-proof">Backend parity proof</h2>
+<p>The repo now carries a shared backend parity contract for the core supervisor
+semantics that both runtimes claim to implement.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Run language-specific tests plus the cross-runtime parity diff</span>
+make<span class="w"> </span><span class="nb">test</span>
 
-    <hr/>
+<span class="c1"># Run only the parity proof</span>
+make<span class="w"> </span>parity
 
-    <h2 id="config">Configuration</h2>
-    <p>Wactorz reads configuration from a <code>.env</code> file in the working directory. All values can also be passed as environment variables.</p>
+<span class="c1"># Generate coverage artifacts used by CI</span>
+python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements-dev.txt
+make<span class="w"> </span>coverage
+</code></pre></div>
 
-    <h4>Core</h4>
-    <pre><code># LLM provider — anthropic | openai | ollama | nim | gemini
-LLM_PROVIDER=anthropic
-LLM_MODEL=claude-sonnet-4-6
+<p>The shared fixture lives at <code>tests/parity_fixtures/backend_supervisor_parity.json</code>.
+Both the Python harness and the Rust harness execute those same scenarios and must
+produce the same normalized JSON output for the build to pass.</p>
+<h2 id="pre-commit">Pre-commit</h2>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements-dev.txt
+make<span class="w"> </span>precommit-install
+make<span class="w"> </span>precommit-run
+</code></pre></div>
 
-# API keys — set whichever provider you use
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
-GEMINI_API_KEY=AIza...
-NIM_API_KEY=nvapi-...</code></pre>
+<p>The configured hooks run:
+- Python unit tests
+- Rust backend parity test
+- Cross-backend parity diff
+- Frontend type-checking</p>
+<h3 id="cross-compile-for-linux-from-macos">Cross-compile for Linux from macOS</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Install target</span>
+rustup<span class="w"> </span>target<span class="w"> </span>add<span class="w"> </span>x86_64-unknown-linux-gnu
 
-    <h4>Home Assistant</h4>
-    <pre><code">HA_URL=http://homeassistant.local:8123
-HA_TOKEN=eyJ...              # Long-lived access token from HA profile page
-HA_STATE_BRIDGE_PER_ENTITY=0 # 0 = flat topic (default), 1 = per-entity topics</code></pre>
+<span class="c1"># Install linker (Homebrew)</span>
+brew<span class="w"> </span>install<span class="w"> </span>FiloSottile/musl-cross/musl-cross
 
-    <h4>Interfaces</h4>
-    <pre><code># Discord
-DISCORD_BOT_TOKEN=MTI4...
+<span class="c1"># Build</span>
+<span class="nv">CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER</span><span class="o">=</span>x86_64-linux-musl-gcc<span class="w"> </span><span class="se">\</span>
+cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--target<span class="w"> </span>x86_64-unknown-linux-gnu<span class="w"> </span>--bin<span class="w"> </span>wactorz
+</code></pre></div>
 
-# WhatsApp (Twilio)
-TWILIO_ACCOUNT_SID=ACxxx...
-TWILIO_AUTH_TOKEN=...
-TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
+<p>Alternatively, use Docker buildx (no linker needed):</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>buildx<span class="w"> </span>build<span class="w"> </span>--platform<span class="w"> </span>linux/amd64<span class="w"> </span>--tag<span class="w"> </span>wactorz:local<span class="w"> </span>--load<span class="w"> </span>./rust
+</code></pre></div>
 
-# Telegram
-TELEGRAM_BOT_TOKEN=1234567890:AAF...
+<hr />
+<h2 id="frontend-development">Frontend development</h2>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>frontend
 
-# REST API auth (optional)
-API_KEY=my-secret-key</code></pre>
+<span class="c1"># Install deps</span>
+npm<span class="w"> </span>install
 
-    <h4>MQTT broker</h4>
-    <pre><code># Only needed if using an external broker instead of the embedded one
-MQTT_HOST=localhost
-MQTT_PORT=1883</code></pre>
+<span class="c1"># Dev server (hot-reload, http://localhost:3000)</span>
+npm<span class="w"> </span>run<span class="w"> </span>dev
 
-    <h4>Web dashboard</h4>
-    <pre><code">MONITOR_PORT=8888   # dashboard port, default 8888</code></pre>
+<span class="c1"># Type-check only</span>
+npm<span class="w"> </span>run<span class="w"> </span>typecheck<span class="w">   </span><span class="c1"># or: npx tsc --noEmit</span>
 
-    <hr/>
+<span class="c1"># Production build</span>
+npm<span class="w"> </span>run<span class="w"> </span>build
+<span class="c1"># → static/app/</span>
 
-    <h2 id="broker">MQTT broker</h2>
-    <p>Wactorz ships with an embedded MQTT broker that starts automatically — no separate installation needed for basic use. If you prefer to use an external Mosquitto instance (e.g. for multi-machine setups or when you already have a broker running), point Wactorz at it:</p>
+<span class="c1"># Preview production build locally</span>
+npm<span class="w"> </span>run<span class="w"> </span>preview
+</code></pre></div>
 
-    <pre><code>wactorz --mqtt-broker 192.168.1.10 --mqtt-port 1883</code></pre>
+<h3 id="vite-dev-proxy">Vite dev proxy</h3>
+<div class="highlight"><pre><span></span><code><span class="c1">// vite.config.ts</span>
+<span class="nx">proxy</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="s2">&quot;/api&quot;</span><span class="o">:</span><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nx">target</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;http://localhost:8080&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="s2">&quot;/ws&quot;</span><span class="o">:</span><span class="w">   </span><span class="p">{</span><span class="w"> </span><span class="nx">target</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;ws://localhost:8081&quot;</span><span class="p">,</span><span class="w">  </span><span class="nx">ws</span><span class="o">:</span><span class="w"> </span><span class="kt">true</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="s2">&quot;/mqtt&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">target</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;ws://localhost:9001&quot;</span><span class="p">,</span><span class="w">  </span><span class="nx">ws</span><span class="o">:</span><span class="w"> </span><span class="kt">true</span><span class="w"> </span><span class="p">},</span>
+<span class="p">}</span>
+</code></pre></div>
 
-    <h4>Running Mosquitto via Docker</h4>
-    <pre><code>docker run -d --name mosquitto \
-  -p 1883:1883 \
-  eclipse-mosquitto:latest \
-  mosquitto -c /mosquitto/config/mosquitto.conf</code></pre>
+<p>This means in dev, <code>window.location.host</code> resolves to <code>localhost:3000</code>, and the MQTT URL is automatically <code>ws://localhost:3000/mqtt</code> → proxied to Mosquitto.</p>
+<h3 id="adding-a-new-ui-theme">Adding a new UI theme</h3>
+<ol>
+<li>Create <code>frontend/src/scene/themes/MyTheme.ts</code> extending <code>ThemeBase</code></li>
+<li>Add a node type in <code>frontend/src/scene/nodes/</code></li>
+<li>Register in <code>SceneManager.ts</code>:
+   <code>typescript
+   case "my-theme": this.activeTheme = new MyTheme(this.scene, ...); break;</code></li>
+<li>Add a button in <code>index.html</code> and <code>ThemeSwitcher.ts</code></li>
+</ol>
+<hr />
+<h2 id="debugging-tips">Debugging tips</h2>
+<h3 id="mqtt-messages-not-arriving-in-the-browser">MQTT messages not arriving in the browser</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Subscribe to all topics from the terminal</span>
+mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span><span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;#&#39;</span><span class="w"> </span>-v
 
-    <p>Or with a <code>compose.yaml</code>:</p>
-    <pre><code>services:
-  mosquitto:
-    image: eclipse-mosquitto:latest
-    ports:
-      - "1883:1883"
-    volumes:
-      - ./infra/mosquitto:/mosquitto/config</code></pre>
+<span class="c1"># Or check the mock is publishing</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>logs<span class="w"> </span>mock-agents
+</code></pre></div>
 
-    <div class="callout">
-      <div class="callout-title">ℹ Docker Desktop on Windows/Mac</div>
-      <p>When services run inside Docker and need to reach the broker on the host, use <code>host.docker.internal</code> as the broker hostname instead of <code>localhost</code>.</p>
-    </div>
+<h3 id="rust-actor-not-responding">Rust actor not responding</h3>
+<div class="highlight"><pre><span></span><code><span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">wactorz</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>wactorz
+<span class="c1"># Look for: &quot;[agent-name] handle_message&quot; or heartbeat logs</span>
+</code></pre></div>
 
-    <hr/>
+<h3 id="typescript-errors">TypeScript errors</h3>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>frontend<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npx<span class="w"> </span>tsc<span class="w"> </span>--noEmit
+</code></pre></div>
 
-    <h2 id="web-ui">Web UI</h2>
-    <p>The web dashboard at <code>http://localhost:8888</code> starts automatically with every <code>wactorz</code> invocation. It provides a real-time view of the running system:</p>
-
-    <ul>
-      <li><strong>Agent grid</strong> — live heartbeat status for every registered actor</li>
-      <li><strong>Log stream</strong> — real-time output from all agents via WebSocket</li>
-      <li><strong>Chat</strong> — full conversation interface, equivalent to the CLI</li>
-      <li><strong>Docs</strong> — this documentation at <code>/docs/</code></li>
-    </ul>
-
-    <pre><code># Change the dashboard port
-wactorz --monitor-port 9000
-
-# Disable the dashboard entirely
-wactorz --no-monitor</code></pre>
-
-    <div class="callout warn">
-      <div class="callout-title">⚠ Browser cache</div>
-      <p>If you update doc files and still see old content, do a hard refresh: <strong>Ctrl+Shift+R</strong> (Windows/Linux) or <strong>Cmd+Shift+R</strong> (Mac). The dashboard serves static files directly from the installed package — edits to source files only take effect after copying to the installed location or reinstalling.</p>
-    </div>
-
-    <hr/>
-
-    <h2 id="structure">Project structure</h2>
-    <pre><code>wactorz/                         ← repo root
-├── wactorz/                     ← Python package
-│   ├── cli.py                   ← entry point (wactorz command)
-│   ├── config.py                ← .env loading, CONFIG object
-│   ├── monitor_server.py        ← web dashboard (aiohttp)
-│   ├── core/
-│   │   ├── actor.py             ← Actor base class, Supervisor, persistence
-│   │   └── registry.py          ← ActorSystem, ActorRegistry, MQTT publisher
-│   ├── agents/
-│   │   ├── main_actor.py        ← LLM orchestrator
-│   │   ├── planner_agent.py     ← pipeline planner
-│   │   ├── dynamic_agent.py     ← runtime code execution
-│   │   ├── catalog_agent.py     ← recipe library
-│   │   ├── llm_agent.py         ← LLM base + all providers
-│   │   ├── home_assistant_agent.py
-│   │   ├── home_assistant_state_bridge_agent.py
-│   │   ├── home_assistant_map_agent.py
-│   │   ├── monitor_agent.py
-│   │   ├── installer_agent.py
-│   │   └── io_agent.py
-│   ├── catalogue_agents/        ← pre-built DynamicAgent recipes
-│   │   ├── discord_notify_agent.py
-│   │   ├── ha_actuator_agent.py
-│   │   ├── image_gen_agent.py
-│   │   └── doc_to_pptx_agent.py
-│   ├── interfaces/
-│   │   └── chat_interfaces.py   ← CLI, REST, Discord, WhatsApp, Telegram
-│   └── static/
-│       └── docs/                ← this documentation (served at /docs/)
-├── static/
-│   └── docs/                    ← source docs (copied into package on build)
-├── state/                       ← agent persistence (created at runtime)
-│   ├── main/state.pkl
-│   └── {agent-name}/state.pkl
-├── .env                         ← your config (gitignored)
-├── .env.example                 ← annotated config template
-└── pyproject.toml</code></pre>
-
-    <hr/>
-
-    <h2 id="dev">Development</h2>
-
-    <h3>Editable install</h3>
-    <pre><code>git clone https://github.com/waldiez/wactorz.git
-cd wactorz
-pip install -e ".[all]"
-
-# Start with hot-reload (restarts on .py/.yaml file changes)
-wactorz --reload</code></pre>
-
-    <div class="callout tip">
-      <div class="callout-title">Docs in dev mode</div>
-      <p>The dashboard serves docs from the <em>installed</em> package path, not the source tree. After editing files in <code>static/docs/</code>, copy them to the installed location or set <code>WACTORZ_DOCS</code> in your <code>.env</code> to point at the source tree directly.</p>
-    </div>
-
-    <h3>Adding a catalog recipe</h3>
-    <pre><code># 1. Create the recipe file
-#    Must export AGENT_CODE = r'''...'''
-touch wactorz/catalogue_agents/my_agent.py
-
-# 2. Register it in catalog_agent.py → _build_catalog()
-#    code = _load_recipe("my_agent.py")
-#    if code:
-#        catalog["my-agent"] = { ...spawn config..., "code": code }
-
-# 3. Restart wactorz — recipe is immediately available
-@catalog list
-@catalog spawn my-agent</code></pre>
-
-    <h3>Running tests</h3>
-    <pre><code">pip install -e ".[dev]"
-pytest</code></pre>
-
-    <hr/>
-
-    <h2 id="debugging">Debugging</h2>
-
-    <h4>Watch all MQTT traffic</h4>
-    <pre><code>mosquitto_sub -h localhost -p 1883 -t '#' -v</code></pre>
-
-    <h4>Watch a specific agent's logs</h4>
-    <pre><code">mosquitto_sub -h localhost -t 'agents/+/logs' -v</code></pre>
-
-    <h4>Check agent status directly</h4>
-    <pre><code>@monitor {"action": "status"}
-@catalog list</code></pre>
-
-    <h4>Read persistence state</h4>
-    <pre><code>python3 -c "
-import pickle
-data = pickle.load(open('state/main/state.pkl', 'rb'))
-print('Spawn registry:', list(data.get('_spawned_agents', {}).keys()))
-print('User facts:', data.get('_user_facts', {}))
-"</code></pre>
-
-    <h4>Remove a stuck agent from the spawn registry</h4>
-    <pre><code>python3 -c "
-import pickle
-data = pickle.load(open('state/main/state.pkl', 'rb'))
-data['_spawned_agents'].pop('my-stuck-agent', None)
-pickle.dump(data, open('state/main/state.pkl', 'wb'))
-print('Done. Remaining:', list(data['_spawned_agents'].keys()))
-"</code></pre>
-
+<h3 id="mqtt-url-wrong-in-browser">MQTT URL wrong in browser</h3>
+<p>Check browser console — the <code>MQTTClient</code> logs its connection URL.  In dev it should be <code>ws://localhost:3000/mqtt</code>.  Override with <code>VITE_MQTT_WS_URL</code> in <code>.env</code> if needed.</p>
   </main>
 </div>
 
 <footer>
-  <span>Wactorz &mdash; Python asyncio actor-model framework</span>
-  <span><a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
 </footer>
 </body>
 </html>

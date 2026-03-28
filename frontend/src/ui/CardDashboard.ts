@@ -364,10 +364,12 @@ export class CardDashboard {
     else if (this.view === "ha") body.appendChild(this._buildHAView());
     else if (this.view === "chat") {
       body.appendChild(this._buildChatView());
-      // _renderSidebar() inside _buildChatView() runs before the element is in
-      // the DOM, so this.root.querySelector returns null. Re-run it now that
+      // _render* calls inside _buildChatView() run before the element is in
+      // the DOM, so this.root.querySelector returns null. Re-run now that
       // the chat view is attached.
       this._renderSidebar();
+      this._renderChatPaneHeader();
+      this._renderChatThread();
     }
 
     this.root

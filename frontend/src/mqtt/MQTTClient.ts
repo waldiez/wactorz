@@ -338,10 +338,7 @@ function resolveAgentName(name: string, id: string): string {
 function normaliseHeartbeat(p: unknown): HeartbeatPayload {
   const o = (p ?? {}) as RawObj;
   const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
-  const agentName = resolveAgentName(
-    str(o["agentName"] ?? o["name"]),
-    agentId,
-  );
+  const agentName = resolveAgentName(str(o["agentName"] ?? o["name"]), agentId);
   const timestampMs = toMs(
     o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"],
   );

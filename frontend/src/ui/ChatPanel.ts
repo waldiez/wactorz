@@ -274,11 +274,13 @@ export class ChatPanel {
       // Patch only what may have changed
       row.classList.toggle("active", isActive);
       const dot = row.querySelector<HTMLElement>(".af-chat-agent-dot");
-      if (dot && dot.style.background !== dotColor) dot.style.background = dotColor;
+      if (dot && dot.style.background !== dotColor)
+        dot.style.background = dotColor;
 
       // Ensure correct position without re-inserting if already there
       const sibling = this.sidebarListEl.children[idx];
-      if (sibling !== row) this.sidebarListEl.insertBefore(row, sibling ?? null);
+      if (sibling !== row)
+        this.sidebarListEl.insertBefore(row, sibling ?? null);
     });
   }
 

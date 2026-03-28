@@ -379,7 +379,8 @@ export class CardDashboard {
       });
     this._renderHealth();
     // Only show the agent-target dropdown in the chat view
-    const select = this.root.querySelector<HTMLSelectElement>("#af-target-select");
+    const select =
+      this.root.querySelector<HTMLSelectElement>("#af-target-select");
     if (select) {
       select.style.display = this.view === "chat" ? "" : "none";
       if (this.view === "chat") select.value = this.chatTarget;
@@ -849,11 +850,9 @@ export class CardDashboard {
 
     // Collect existing rows for diffing
     const existing = new Map<string, HTMLElement>();
-    list
-      .querySelectorAll<HTMLElement>(".af-chat-agent-row")
-      .forEach((r) => {
-        if (r.dataset["name"]) existing.set(r.dataset["name"], r);
-      });
+    list.querySelectorAll<HTMLElement>(".af-chat-agent-row").forEach((r) => {
+      if (r.dataset["name"]) existing.set(r.dataset["name"], r);
+    });
 
     const keep = new Set(sorted.map((a) => a.name));
     existing.forEach((row, name) => {
@@ -1072,8 +1071,7 @@ export class CardDashboard {
     const select =
       this.root.querySelector<HTMLSelectElement>("#af-target-select");
     if (select) this._populateSelect(select);
-    const input =
-      this.root.querySelector<HTMLInputElement>("#af-iobar-input");
+    const input = this.root.querySelector<HTMLInputElement>("#af-iobar-input");
     if (input) input.placeholder = `Message @${this.chatTarget}…`;
   }
 

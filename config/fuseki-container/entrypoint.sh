@@ -18,24 +18,24 @@ chmod -R 777 "${FUSEKI_BASE}/databases" "${FUSEKI_BASE}/configuration" "${FUSEKI
 # ── 1. Admin credentials ──────────────────────────────────────────────────────
 SHIRO="${FUSEKI_BASE}/shiro.ini"
 if [ ! -f "$SHIRO" ]; then
-    # Hash the password using Fuseki's built-in pw tool
-    PW_HASH=$(java ${JVM_ARGS} -cp "${FUSEKI_HOME}/fuseki-server.jar" \
-        org.apache.shiro.tools.HashedCredentialsGenerator \
-        "$ADMIN_PASSWORD" 2>/dev/null || echo "$ADMIN_PASSWORD")
-
+    # Fuseki 5.x / Shiro 2.x: use SimpleCredentialsMatcher for plaintext passwords.
+    # HashedCredentialsGenerator was removed in Shiro 2.x.
+    # User line format: username = password, role  (role required for roles[admin] check)
     cat > "$SHIRO" <<EOF
 [main]
 ssl.enabled = false
+credentialsMatcher = org.apache.shiro.authc.credential.SimpleCredentialsMatcher
+iniRealm.credentialsMatcher = \$credentialsMatcher
 
 [users]
-${ADMIN_USER} = ${PW_HASH}
+${ADMIN_USER} = ${ADMIN_PASSWORD}, admin
 
 [roles]
 admin = *
 
 [urls]
-/$/metrics = anon
-/$/ping    = anon
+/\$/metrics = anon
+/\$/ping    = anon
 /**        = authcBasic, roles[admin]
 EOF
 fi

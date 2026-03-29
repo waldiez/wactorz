@@ -18,30 +18,78 @@ services:
     image: eclipse-mosquitto:2.0
     container_name: wactorz-dev-mosquitto
     restart: unless-stopped
+    networks:
+      - wactorz-net
     ports:
       - "1883:1883"   # MQTT TCP
       - "9001:9001"   # WebSocket (Vite dev proxy → ws://localhost:9001)
     volumes:
       - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-logs:/mosquitto/log
     healthcheck:
       test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "hc", "-W", "3"]
       interval: 5s
       timeout: 3s
       retries: 5
 
-  mock-agents:
-    image: node:22-alpine
-    container_name: wactorz-dev-mock
+  # ── Apache Jena Fuseki ───────────────────────────────────────────────────────
+  fuseki:
+    container_name: wactorz-fuseki
+    image: wactorz-fuseki
+    build:
+     context: config/fuseki-container
+     dockerfile: Containerfile
     restart: unless-stopped
-    working_dir: /app
-    volumes:
-      - ./scripts/mock-agents.mjs:/app/mock-agents.mjs:ro
-      - ./scripts/vendor:/app/vendor:ro
-    command: >
-      sh -c "npm install --silent mqtt && node mock-agents.mjs"
+    # Port 3030 accessible internally; routed via nginx /fuseki/ externally.
+    # Uncomment to expose directly for debugging:
+    ports:
+      - "${FUSEKI_EXTERNAL_PORT:-3030}:3030"
     environment:
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-    depends_on:
-      mosquitto:
-        condition: service_healthy
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=admin
+      - JVM_ARGS=-Xmx2g
+      - TBD=2
+      - FUSEKI_CREATE_DATASETS=true
+      - FUSEKI_DATASET_1=wactorz
+      - FUSEKI_DATASET_2=synapse
+      - FUSEKI_DATASET_3=spatial
+    volumes:
+      - fuseki-data:/fuseki/databases
+      - ./infra/fuseki/ontology:/fuseki/ontology:ro
+    networks:
+      - wactorz-net
+    command: >
+      /jena-fuseki/fuseki-server --update
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3030/$/ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+  
+  # mock-agents:
+  #   image: node:22-alpine
+  #   container_name: wactorz-dev-mock
+  #   restart: unless-stopped
+  #   working_dir: /app
+  #   volumes:
+  #     - ./scripts/mock-agents.mjs:/app/mock-agents.mjs:ro
+  #     - ./scripts/vendor:/app/vendor:ro
+  #   command: >
+  #     sh -c "npm install --silent mqtt && node mock-agents.mjs"
+  #   environment:
+  #     MQTT_HOST: mosquitto
+  #     MQTT_PORT: "1883"
+  #   depends_on:
+  #     mosquitto:
+  #       condition: service_healthy
+
+volumes:
+  mosquitto-data:
+  mosquitto-logs:
+  fuseki-data:
+
+networks:
+  wactorz-net:
+    # driver: bridge

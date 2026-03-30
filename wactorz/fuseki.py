@@ -574,5 +574,10 @@ async def _main() -> None:
             await asyncio.sleep(10)
 
 
-if __name__ == "__main__":
+def _cli_main() -> None:
+    """Sync entry point for the ``wactorz-fuseki`` console script."""
     asyncio.run(_main())
+
+
+if __name__ == "__main__":
+    _cli_main()

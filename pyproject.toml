@@ -72,6 +72,7 @@ all = [
 [project.scripts]
 wactorz         = "wactorz.cli:main"
 wactorz-monitor = "wactorz.monitor_server:cli_main"
+wactorz-fuseki  = "wactorz.fuseki:_cli_main"
 
 [project.urls]
 Homepage      = "https://waldiez.github.io/wactorz/"

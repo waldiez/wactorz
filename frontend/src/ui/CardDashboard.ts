@@ -60,7 +60,7 @@ function relTime(ms: number): string {
   return `${Math.floor(s / 60)}m ago`;
 }
 
-type View = "overview" | "feed" | "chat" | "ha";
+type View = "overview" | "feed" | "chat" | "ha" | "fuseki";
 type ConnState = "live" | "connecting" | "demo";
 
 // ── CardDashboard ─────────────────────────────────────────────────────────────
@@ -98,6 +98,24 @@ export class CardDashboard {
 
   private get haToken(): string | null {
     return localStorage.getItem("wactorz-ha-token") || null;
+  }
+
+  // ── Fuseki config (localStorage) ─────────────────────────────────────────
+
+  private get fusekiUrl(): string | null {
+    return localStorage.getItem("wactorz-fuseki-url") || null;
+  }
+
+  private get fusekiDataset(): string {
+    return localStorage.getItem("wactorz-fuseki-dataset") || "wactorz";
+  }
+
+  private get fusekiUser(): string {
+    return localStorage.getItem("wactorz-fuseki-user") || "admin";
+  }
+
+  private get fusekiPass(): string {
+    return localStorage.getItem("wactorz-fuseki-pass") || "";
   }
 
   constructor() {
@@ -362,6 +380,7 @@ export class CardDashboard {
     if (this.view === "overview") body.appendChild(this._buildOverview());
     else if (this.view === "feed") body.appendChild(this._buildFeedView());
     else if (this.view === "ha") body.appendChild(this._buildHAView());
+    else if (this.view === "fuseki") body.appendChild(this._buildFusekiView());
     else if (this.view === "chat") {
       body.appendChild(this._buildChatView());
       // _render* calls inside _buildChatView() run before the element is in
@@ -1673,6 +1692,7 @@ export class CardDashboard {
     ];
 
     views.push({ key: "ha", label: "🏠 Devices" });
+    views.push({ key: "fuseki", label: "⬡ Graph" });
 
     views.forEach(({ key, label }) => {
       const btn = document.createElement("button");
@@ -1701,5 +1721,401 @@ export class CardDashboard {
 
     root.append(header, body, iobar);
     return root;
+  }
+
+  // ── Private: Fuseki view ───────────────────────────────────────────────────
+
+  private _buildFusekiView(): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "af-overview";
+
+    if (!this.fusekiUrl) {
+      el.appendChild(this._buildFusekiConfigForm());
+      return el;
+    }
+
+    const base = this.fusekiUrl;
+    const ds = this.fusekiDataset;
+    const auth = this.fusekiUser
+      ? `Basic ${btoa(`${this.fusekiUser}:${this.fusekiPass}`)}`
+      : "";
+
+    // ── Preset queries ─────────────────────────────────────────────────────
+    const PRESETS: { label: string; icon: string; sparql: string }[] = [
+      {
+        label: "Current states",
+        icon: "◉",
+        sparql: `SELECT ?entity ?state ?unit WHERE {
+  GRAPH <urn:ha:current> {
+    ?entity syn:state ?state .
+    OPTIONAL { ?entity syn:unit ?unit . }
+  }
+} ORDER BY ?entity LIMIT 200`,
+      },
+      {
+        label: "Recent observations",
+        icon: "⏱",
+        sparql: `SELECT ?obs ?entity ?result ?ts WHERE {
+  GRAPH <urn:ha:history> {
+    ?obs a sosa:Observation ;
+         sosa:madeBySensor ?entity ;
+         sosa:hasSimpleResult ?result ;
+         sosa:resultTime ?ts .
+  }
+} ORDER BY DESC(?ts) LIMIT 100`,
+      },
+      {
+        label: "Device catalog",
+        icon: "⊡",
+        sparql: `SELECT ?entity ?label WHERE {
+  GRAPH <urn:ha:devices> {
+    ?entity rdfs:label ?label .
+    FILTER(?entity != <urn:ha:bridge:wactorz>)
+  }
+} ORDER BY ?label LIMIT 200`,
+      },
+      {
+        label: "Sensors with units",
+        icon: "📡",
+        sparql: `SELECT ?entity ?state ?unit WHERE {
+  GRAPH <urn:ha:current> {
+    ?entity a sosa:Sensor ;
+            syn:state ?state .
+    OPTIONAL { ?entity syn:unit ?unit . }
+  }
+} ORDER BY ?entity LIMIT 200`,
+      },
+      {
+        label: "Graph sizes",
+        icon: "∑",
+        sparql: `SELECT ?g (COUNT(*) AS ?triples) WHERE {
+  VALUES ?g { <urn:ha:current> <urn:ha:history> <urn:ha:devices> }
+  GRAPH ?g { ?s ?p ?o }
+} GROUP BY ?g ORDER BY ?g`,
+      },
+    ];
+
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText =
+      "display:flex;flex-direction:column;gap:14px;height:100%;min-height:0;";
+
+    // ── Header bar ─────────────────────────────────────────────────────────
+    const hdr = document.createElement("div");
+    hdr.style.cssText =
+      "display:flex;align-items:center;gap:10px;flex-shrink:0;";
+    hdr.innerHTML = `
+      <span style="font-size:20px;line-height:1;">⬡</span>
+      <span style="font-weight:700;font-size:14px;color:rgba(255,255,255,0.92);">Knowledge Graph</span>
+      <span class="af-fuseki-ds-badge">${ds}</span>
+      <a href="${base}" target="_blank" rel="noopener"
+         style="font-size:11px;opacity:0.4;color:inherit;text-decoration:none;margin-left:2px;">${base} ↗</a>
+      <div style="flex:1;"></div>
+      <button id="fsk-reconfigure" class="af-mini-btn" style="font-size:10px;">⚙ Configure</button>
+    `;
+    hdr
+      .querySelector("#fsk-reconfigure")
+      ?.addEventListener("click", () => {
+        wrapper.innerHTML = "";
+        wrapper.appendChild(this._buildFusekiConfigForm());
+      });
+    wrapper.appendChild(hdr);
+
+    // ── Presets + editor row ───────────────────────────────────────────────
+    const mainRow = document.createElement("div");
+    mainRow.style.cssText =
+      "display:flex;gap:14px;flex:1;min-height:0;overflow:hidden;";
+
+    // Left: preset buttons
+    const sidebar = document.createElement("div");
+    sidebar.className = "af-fuseki-sidebar";
+    PRESETS.forEach((p) => {
+      const btn = document.createElement("button");
+      btn.className = "af-fuseki-preset-btn";
+      btn.innerHTML = `<span class="af-fuseki-preset-icon">${p.icon}</span><span>${p.label}</span>`;
+      btn.addEventListener("click", () => {
+        editor.value = p.sparql;
+        void runQuery(p.sparql);
+      });
+      sidebar.appendChild(btn);
+    });
+    mainRow.appendChild(sidebar);
+
+    // Right: editor + results
+    const editorPanel = document.createElement("div");
+    editorPanel.style.cssText =
+      "flex:1;display:flex;flex-direction:column;gap:10px;min-width:0;overflow:hidden;";
+
+    const editorRow = document.createElement("div");
+    editorRow.style.cssText = "display:flex;gap:8px;align-items:flex-start;flex-shrink:0;";
+
+    const editor = document.createElement("textarea");
+    editor.className = "af-fuseki-editor";
+    editor.spellcheck = false;
+    editor.placeholder = "SELECT * WHERE { ?s ?p ?o } LIMIT 10";
+    editor.rows = 6;
+    editor.value = PRESETS[0]?.sparql ?? "";
+
+    const runBtn = document.createElement("button");
+    runBtn.className = "af-mini-btn af-fuseki-run-btn";
+    runBtn.innerHTML = "▶ Run";
+    editorRow.append(editor, runBtn);
+    editorPanel.appendChild(editorRow);
+
+    // Status line
+    const status = document.createElement("div");
+    status.className = "af-fuseki-status";
+    status.textContent = "Ready.";
+    editorPanel.appendChild(status);
+
+    // Results
+    const results = document.createElement("div");
+    results.className = "af-fuseki-results";
+    editorPanel.appendChild(results);
+
+    mainRow.appendChild(editorPanel);
+    wrapper.appendChild(mainRow);
+    el.appendChild(wrapper);
+
+    // ── SPARQL runner ──────────────────────────────────────────────────────
+    const sparqlUrl = `${base}/${ds}/sparql`;
+    const updateUrl = `${base}/${ds}/update`;
+
+    const SPARQL_PREFIXES = `PREFIX syn:    <https://synapse.waldiez.io/ns#>
+PREFIX sosa:   <http://www.w3.org/ns/sosa/>
+PREFIX ssn:    <http://www.w3.org/ns/ssn/>
+PREFIX saref:  <https://saref.etsi.org/core/>
+PREFIX rdfs:   <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX xsd:    <http://www.w3.org/2001/XMLSchema#>
+PREFIX prov:   <http://www.w3.org/ns/prov#>
+`;
+
+    const withPrefixes = (q: string): string => {
+      // Only inject prefixes that aren't already declared in the query
+      const declared = new Set(
+        [...q.matchAll(/^\s*PREFIX\s+(\w*:)/gim)].map((m) => m[1])
+      );
+      const needed = SPARQL_PREFIXES.split("\n")
+        .filter((line) => {
+          const m = line.match(/^PREFIX\s+(\w*:)/);
+          return m && !declared.has(m[1]);
+        })
+        .join("\n");
+      return needed ? needed + "\n" + q : q;
+    };
+
+    const runQuery = async (q: string): Promise<void> => {
+      const trimmed = q.trim();
+      if (!trimmed) return;
+
+      status.textContent = "Running…";
+      status.style.color = "rgba(255,255,255,0.4)";
+      results.innerHTML = "";
+
+      const isUpdate = /^\s*(INSERT|DELETE|DROP|CREATE|LOAD|CLEAR|ADD|MOVE|COPY)/i.test(trimmed);
+      const full = withPrefixes(trimmed);
+      const headers: Record<string, string> = {};
+      if (auth) headers["Authorization"] = auth;
+
+      try {
+        let resp: Response;
+        if (isUpdate) {
+          headers["Content-Type"] = "application/x-www-form-urlencoded";
+          resp = await fetch(updateUrl, {
+            method: "POST",
+            headers,
+            body: `update=${encodeURIComponent(full)}`,
+          });
+        } else {
+          headers["Accept"] = "application/sparql-results+json";
+          headers["Content-Type"] = "application/x-www-form-urlencoded";
+          resp = await fetch(sparqlUrl, {
+            method: "POST",
+            headers,
+            body: `query=${encodeURIComponent(full)}`,
+          });
+        }
+
+        if (!resp.ok) {
+          const text = await resp.text();
+          status.textContent = `Error ${resp.status}`;
+          status.style.color = "#f87171";
+          results.innerHTML = `<pre class="af-fuseki-error">${text.slice(0, 600)}</pre>`;
+          return;
+        }
+
+        if (isUpdate) {
+          status.textContent = "Update OK";
+          status.style.color = "#34d399";
+          return;
+        }
+
+        const json = (await resp.json()) as {
+          head: { vars: string[] };
+          results?: { bindings: Record<string, { value: string; type: string }>[] };
+          boolean?: boolean;
+        };
+
+        // ASK query
+        if (typeof json.boolean === "boolean") {
+          status.textContent = `Result: ${json.boolean}`;
+          status.style.color = json.boolean ? "#34d399" : "#fbbf24";
+          return;
+        }
+
+        const vars = json.head?.vars ?? [];
+        const bindings = json.results?.bindings ?? [];
+        status.textContent = `${bindings.length} row${bindings.length !== 1 ? "s" : ""}`;
+        status.style.color = "rgba(255,255,255,0.45)";
+
+        if (bindings.length === 0) {
+          results.innerHTML = `<div class="af-fuseki-empty">No results.</div>`;
+          return;
+        }
+
+        const table = document.createElement("table");
+        table.className = "af-fuseki-table";
+
+        const thead = table.createTHead();
+        const hrow = thead.insertRow();
+        vars.forEach((v) => {
+          const th = document.createElement("th");
+          th.textContent = v;
+          hrow.appendChild(th);
+        });
+
+        const tbody = table.createTBody();
+        bindings.forEach((row) => {
+          const tr = tbody.insertRow();
+          vars.forEach((v) => {
+            const td = tr.insertCell();
+            const cell = row[v];
+            if (!cell) { td.textContent = ""; return; }
+            const val = cell.value;
+            // shorten long URIs
+            const display = val.length > 60
+              ? `<span title="${val}">${val.slice(0, 58)}…</span>`
+              : val;
+            const isUri = cell.type === "uri";
+            td.innerHTML = isUri
+              ? `<span class="af-fuseki-uri">${display}</span>`
+              : display;
+          });
+          tbody.appendChild(tr);
+        });
+
+        results.appendChild(table);
+      } catch (err) {
+        status.textContent = "Network error";
+        status.style.color = "#f87171";
+        results.innerHTML = `<pre class="af-fuseki-error">${String(err)}</pre>`;
+      }
+    };
+
+    runBtn.addEventListener("click", () => void runQuery(editor.value));
+    editor.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        void runQuery(editor.value);
+      }
+    });
+
+    // Auto-run first preset
+    void runQuery(PRESETS[0]?.sparql ?? "");
+
+    return el;
+  }
+
+  private _buildFusekiConfigForm(): HTMLElement {
+    const form = document.createElement("div");
+    form.className = "af-panel";
+    form.style.cssText =
+      "max-width:440px;margin:40px auto;display:flex;flex-direction:column;gap:16px;";
+
+    const stored = {
+      url:  this.fusekiUrl?.replace(/^https?:\/\//, "") ?? "",
+      tls:  (this.fusekiUrl ?? "").startsWith("https://"),
+      ds:   this.fusekiDataset,
+      user: this.fusekiUser,
+      pass: this.fusekiPass,
+    };
+
+    form.innerHTML = `
+      <div class="af-panel-head">
+        <h3>⬡ Knowledge Graph (Fuseki)</h3>
+      </div>
+      <p style="font-size:12px;opacity:0.6;margin:0;">
+        Connect to an Apache Jena Fuseki instance.<br>
+        Credentials are stored locally in your browser.
+      </p>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
+        Host / IP
+        <input id="fsk-cfg-url" type="text" placeholder="localhost:3030"
+          value="${stored.url}"
+          class="af-cfg-input">
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">
+        <input id="fsk-cfg-tls" type="checkbox" ${stored.tls ? "checked" : ""}
+          style="width:14px;height:14px;accent-color:#38bdf8;">
+        Use HTTPS (TLS)
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
+        Dataset
+        <input id="fsk-cfg-ds" type="text" placeholder="wactorz"
+          value="${stored.ds}"
+          class="af-cfg-input">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
+        Username <span style="opacity:0.5;">(optional)</span>
+        <input id="fsk-cfg-user" type="text" placeholder="admin"
+          value="${stored.user}"
+          class="af-cfg-input">
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
+        Password <span style="opacity:0.5;">(optional)</span>
+        <input id="fsk-cfg-pass" type="password" placeholder=""
+          value="${stored.pass}"
+          class="af-cfg-input">
+      </label>
+      <div style="display:flex;gap:8px;">
+        <button id="fsk-cfg-save" class="af-mini-btn" style="flex:1;padding:8px;">Save &amp; Connect</button>
+        ${stored.url ? `<button id="fsk-cfg-clear" class="af-mini-btn danger" style="padding:8px 12px;">Reset</button>` : ""}
+      </div>
+      <div id="fsk-cfg-msg" style="font-size:12px;min-height:16px;"></div>
+    `;
+
+    form.querySelector("#fsk-cfg-save")?.addEventListener("click", () => {
+      const raw = (form.querySelector<HTMLInputElement>("#fsk-cfg-url")?.value ?? "").trim();
+      if (!raw) {
+        const msg = form.querySelector<HTMLElement>("#fsk-cfg-msg")!;
+        msg.style.color = "#f87171";
+        msg.textContent = "Host is required.";
+        return;
+      }
+      const tls = form.querySelector<HTMLInputElement>("#fsk-cfg-tls")?.checked;
+      const proto = tls ? "https" : "http";
+      const hasProto = /^https?:\/\//i.test(raw);
+      const url = hasProto ? raw : `${proto}://${raw}`;
+      const ds = (form.querySelector<HTMLInputElement>("#fsk-cfg-ds")?.value ?? "wactorz").trim() || "wactorz";
+      const user = (form.querySelector<HTMLInputElement>("#fsk-cfg-user")?.value ?? "").trim();
+      const pass = form.querySelector<HTMLInputElement>("#fsk-cfg-pass")?.value ?? "";
+
+      localStorage.setItem("wactorz-fuseki-url", url);
+      localStorage.setItem("wactorz-fuseki-dataset", ds);
+      localStorage.setItem("wactorz-fuseki-user", user);
+      localStorage.setItem("wactorz-fuseki-pass", pass);
+
+      this._renderView();
+    });
+
+    form.querySelector("#fsk-cfg-clear")?.addEventListener("click", () => {
+      ["wactorz-fuseki-url", "wactorz-fuseki-dataset",
+       "wactorz-fuseki-user", "wactorz-fuseki-pass"].forEach((k) =>
+        localStorage.removeItem(k),
+      );
+      this._renderView();
+    });
+
+    return form;
   }
 }

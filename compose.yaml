@@ -5,14 +5,21 @@
 #   Then run:  wactorz
 #
 # Profiles:
-#   rust  — also starts the Rust API server + nginx dashboard
-#           docker compose --profile rust up -d
-#   full  — rust + Fuseki + Home Assistant
-#           docker compose --profile full up -d
+#   python      — Python multi-agent app (REST on :8000, monitor on :8888)
+#                 docker compose --profile python up -d
+#   python-full — Python app + Fuseki
+#                 docker compose --profile python-full up -d
+#   rust        — Rust API server + nginx dashboard
+#                 docker compose --profile rust up -d
+#   full        — rust + Fuseki + Home Assistant
+#                 docker compose --profile full up -d
 #
 # External ports:
 #   :1883  → MQTT TCP
 #   :9001  → MQTT WebSocket
+#   :8000  → Python REST API          (python/python-full profile)
+#   :8888  → Python monitor Web UI    (python/python-full profile)
+#   :3030  → Fuseki                   (python-full/full profile)
 #   :80    → Dashboard SPA, /api/, /ws, /mqtt, /fuseki/  (rust/full profile)
 #   :8123  → Home Assistant proxy                         (full profile)
 #
@@ -29,9 +36,7 @@ services:
     restart: unless-stopped
     hostname: mosquitto
     ports:
-      - "${MQTT_EXTERNAL_PORT:-1883}:1883"   # TCP — IoT devices / external agents
-      # WebSocket (port 9001) is routed through nginx at /mqtt — no host port needed.
-      # Uncomment to expose directly for debugging:
+      - "${MQTT_EXTERNAL_PORT:-1883}:1883"
       - "${MQTT_WS_EXTERNAL_PORT:-9001}:9001"
     volumes:
       - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
@@ -45,18 +50,51 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Wactorz Python app ───────────────────────────────────────────────────────
+  # docker compose --profile python up -d
+  # docker compose --profile python-full up -d   (includes Fuseki)
+  wactorz-python:
+    profiles: [python, python-full]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wactorz-python:latest
+    container_name: wactorz-python
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      FUSEKI_URL: http://fuseki:3030
+      INTERFACE: "${INTERFACE:-rest}"
+    networks:
+      - wactorz-net
+    ports:
+      - "8000:8000"   # REST API
+      - "8888:8888"   # Web UI monitor
+    volumes:
+      - ./state:/app/state
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8888"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ── Apache Jena Fuseki ───────────────────────────────────────────────────────
-  # Optional — only started with: docker compose --profile full up -d
+  # docker compose --profile python-full up -d
+  # docker compose --profile full up -d
   fuseki:
-    profiles: [full]
+    profiles: [full, python-full]
     container_name: wactorz-fuseki
     image: wactorz-fuseki
-    #build:
-    #  context: config/fuseki-container
-    #  dockerfile: Containerfile
+    build:
+      context: config/fuseki-container
+      dockerfile: Containerfile
     restart: unless-stopped
-    # Port 3030 accessible internally; routed via nginx /fuseki/ externally.
-    # Uncomment to expose directly for debugging:
     ports:
       - "${FUSEKI_EXTERNAL_PORT:-3030}:3030"
     environment:
@@ -83,26 +121,19 @@ services:
       start_period: 10s
 
   # ── Home Assistant ───────────────────────────────────────────────────────────
-  # Optional — only started with: docker compose --profile full up -d
+  # docker compose --profile full up -d
   homeassistant:
     profiles: [full]
     image: homeassistant/home-assistant:stable
     container_name: wactorz-homeassistant
     restart: unless-stopped
     privileged: true
-    # network_mode: host is NOT used here — it is unreliable on Docker Desktop for Mac
-    # (the VM layer breaks mDNS/UPnP anyway) and prevents nginx from reaching HA.
-    # On a bare-metal Linux host you can re-enable it for LAN device discovery:
-    #   network_mode: host     # also remove the networks: block below
     networks:
       - wactorz-net
     environment:
       TZ: "${TZ:-UTC}"
     volumes:
       - ./infra/homeassistant:/config
-    # HA is reachable at http://<host>:8123 via the nginx transparent proxy.
-    # Ports are NOT exposed here; nginx exposes :8123 instead.
-    # Uncomment if you want HA directly accessible (bypasses nginx):
     ports:
       - "8123:8123"
     healthcheck:
@@ -112,8 +143,9 @@ services:
       retries: 5
       start_period: 60s
 
-  # ── Wactorz Rust server ────────────────────────────────────────────────────
-  # Optional — only started with: docker compose --profile rust up -d
+  # ── Wactorz Rust server ──────────────────────────────────────────────────────
+  # docker compose --profile rust up -d
+  # docker compose --profile full up -d
   wactorz:
     profiles: [rust, full]
     build:
@@ -123,8 +155,6 @@ services:
     image: wactorz-server:latest
     container_name: wactorz-server
     restart: unless-stopped
-    # Ports 8080/8081 accessible internally; routed via nginx /api/ and /ws.
-    # Uncomment to expose directly for debugging:
     ports:
       - "${API_EXTERNAL_PORT:-8080}:8080"
       - "${WS_EXTERNAL_PORT:-8081}:8081"
@@ -150,26 +180,21 @@ services:
       retries: 5
 
   # ── nginx — Dashboard + reverse proxy ────────────────────────────────────────
-  # Single external entry point for all HTTP services.
-  # Port 80:   Dashboard SPA, /api/ (REST), /ws (WS bridge), /mqtt (MQTT WS), /fuseki/
-  # Port 8123: Home Assistant transparent proxy (HA served at root; SPA paths intact)
-  # Optional — only started with: docker compose --profile rust up -d
+  # docker compose --profile rust up -d
+  # docker compose --profile full up -d
   dashboard:
     profiles: [rust, full]
     image: nginx:1.27-alpine
     container_name: wactorz-dashboard
     restart: unless-stopped
     ports:
-      - "${DASHBOARD_EXTERNAL_PORT:-80}:80"    # Main entry point
-      # - "${HA_EXTERNAL_PORT:-8123}:8123"       # Home Assistant proxy
+      - "${DASHBOARD_EXTERNAL_PORT:-80}:80"
     volumes:
       - ./static/app:/usr/share/nginx/html:ro
       - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - wactorz-net
     depends_on:
-      # homeassistant:  # with profile: ["full"] (otherwise "homeassistant" is not known)
-      #   condition: service_healthy
       wactorz:
         condition: service_healthy
     healthcheck:
@@ -180,7 +205,6 @@ services:
 
 networks:
   wactorz-net:
-    # driver: bridge
 
 volumes:
   mosquitto-data:

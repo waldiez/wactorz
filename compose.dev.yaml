@@ -1,19 +1,19 @@
 # Wactorz — development stack
 #
-# Minimal: just the MQTT broker + a mock agent simulator.
-# No Rust server, no HA, no Fuseki, no nginx needed.
+# Runs MQTT + Fuseki + the Python app with hot-reload friendly settings.
 #
 # Usage:
 #   docker compose -f compose.dev.yaml up -d
-#   cd frontend && npm run dev        # Vite on :3000 with hot-reload
+#   docker compose -f compose.dev.yaml logs -f wactorz
 #
-# The mock-agents service publishes fake heartbeats, spawns, messages
-# and alerts to MQTT so the Babylon.js scene renders without a real backend.
+# For frontend dev:
+#   cd frontend && npm run dev   # Vite on :3000 with hot-reload
 
 name: wactorz-dev
 
 services:
 
+  # ── MQTT broker ─────────────────────────────────────────────────────────────
   mosquitto:
     image: eclipse-mosquitto:2.0
     container_name: wactorz-dev-mosquitto
@@ -21,8 +21,8 @@ services:
     networks:
       - wactorz-net
     ports:
-      - "1883:1883"   # MQTT TCP
-      - "9001:9001"   # WebSocket (Vite dev proxy → ws://localhost:9001)
+      - "1883:1883"
+      - "9001:9001"
     volumes:
       - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
       - mosquitto-data:/mosquitto/data
@@ -38,11 +38,9 @@ services:
     container_name: wactorz-fuseki
     image: wactorz-fuseki
     build:
-     context: config/fuseki-container
-     dockerfile: Containerfile
+      context: config/fuseki-container
+      dockerfile: Containerfile
     restart: unless-stopped
-    # Port 3030 accessible internally; routed via nginx /fuseki/ externally.
-    # Uncomment to expose directly for debugging:
     ports:
       - "${FUSEKI_EXTERNAL_PORT:-3030}:3030"
     environment:
@@ -67,23 +65,33 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-  
-  # mock-agents:
-  #   image: node:22-alpine
-  #   container_name: wactorz-dev-mock
-  #   restart: unless-stopped
-  #   working_dir: /app
-  #   volumes:
-  #     - ./scripts/mock-agents.mjs:/app/mock-agents.mjs:ro
-  #     - ./scripts/vendor:/app/vendor:ro
-  #   command: >
-  #     sh -c "npm install --silent mqtt && node mock-agents.mjs"
-  #   environment:
-  #     MQTT_HOST: mosquitto
-  #     MQTT_PORT: "1883"
-  #   depends_on:
-  #     mosquitto:
-  #       condition: service_healthy
+
+  # ── Wactorz Python app ───────────────────────────────────────────────────────
+  wactorz:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wactorz-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      FUSEKI_URL: http://fuseki:3030
+      INTERFACE: rest
+    networks:
+      - wactorz-net
+    ports:
+      - "8000:8000"
+      - "8888:8888"
+    volumes:
+      - ./state:/app/state
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      fuseki:
+        condition: service_healthy
 
 volumes:
   mosquitto-data:
@@ -92,4 +100,3 @@ volumes:
 
 networks:
   wactorz-net:
-    # driver: bridge

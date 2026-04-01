@@ -31,12 +31,12 @@ except ImportError as exc:  # pragma: no cover
 
 from wactorz.core.integrations.home_assistant.ha_helper import (
     fetch_devices_entities_with_location,
-    get_areas,
-    get_entities_simple,
-    get_automations,
+    get_areas as _ha_get_areas,
+    get_entities_simple as _ha_get_entities_simple,
+    get_automations as _ha_get_automations,
     create_automation_via_rest,
-    update_automation,
-    delete_automation,
+    update_automation as _ha_update_automation,
+    delete_automation as _ha_delete_automation,
     normalize_ha_ws_url,
     normalize_ha_base_url,
 )
@@ -107,7 +107,7 @@ async def get_areas() -> str:
     """
     try:
         ws_url = normalize_ha_ws_url(_ha_url())
-        areas = await get_areas(ws_url, _ha_token())
+        areas = await _ha_get_areas(ws_url, _ha_token())
         return json.dumps(areas, indent=2)
     except Exception as exc:
         return f"Error fetching areas: {exc}"
@@ -122,7 +122,7 @@ async def get_entities() -> str:
     """
     try:
         ws_url = normalize_ha_ws_url(_ha_url())
-        entities = await get_entities_simple(ws_url, _ha_token())
+        entities = await _ha_get_entities_simple(ws_url, _ha_token())
         return json.dumps(entities, indent=2)
     except Exception as exc:
         return f"Error fetching entities: {exc}"
@@ -236,7 +236,7 @@ async def list_automations() -> str:
         JSON array of automation config objects.
     """
     try:
-        automations = await get_automations(_ha_url(), _ha_token())
+        automations = await _ha_get_automations(_ha_url(), _ha_token())
         return json.dumps(automations, indent=2)
     except Exception as exc:
         return f"Error fetching automations: {exc}"
@@ -296,7 +296,7 @@ async def update_automation_tool(automation_id: str, automation_config: str) -> 
         return f"Invalid automation_config JSON: {exc}"
 
     try:
-        result = await update_automation(_ha_url(), _ha_token(), automation_id, config)
+        result = await _ha_update_automation(_ha_url(), _ha_token(), automation_id, config)
         return json.dumps(result, indent=2)
     except Exception as exc:
         return f"Error updating automation: {exc}"
@@ -313,7 +313,7 @@ async def delete_automation_tool(automation_id: str) -> str:
         'deleted' on success, or an error message.
     """
     try:
-        success = await delete_automation(_ha_url(), _ha_token(), automation_id)
+        success = await _ha_delete_automation(_ha_url(), _ha_token(), automation_id)
         return "deleted" if success else f"Deletion failed for automation '{automation_id}'"
     except Exception as exc:
         return f"Error deleting automation: {exc}"

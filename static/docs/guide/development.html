@@ -113,6 +113,7 @@
       <a href="#broker" class="sidebar-sub">MQTT broker</a>
       <a href="#web-ui" class="sidebar-sub">Web UI</a>
       <a href="#structure" class="sidebar-sub">Project structure</a>
+      <a href="#docker" class="sidebar-sub">Docker</a>
       <a href="#dev" class="sidebar-sub">Development</a>
       <a href="#debugging" class="sidebar-sub">Debugging</a>
     </div>
@@ -324,6 +325,92 @@ wactorz --no-monitor</code></pre>
 ├── .env                         ← your config (gitignored)
 ├── .env.example                 ← annotated config template
 └── pyproject.toml</code></pre>
+
+    <hr/>
+
+    <h2 id="docker">Docker</h2>
+    <p>Wactorz ships with a <code>Dockerfile</code> and Docker Compose files for running the full stack in containers. Docker is the recommended approach for production deployments and reproducible dev environments.</p>
+
+    <h3>Prerequisites</h3>
+    <ul>
+      <li><a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noopener">Docker Desktop</a> (Windows/Mac) or Docker Engine (Linux)</li>
+      <li>A <code>.env</code> file copied from <code>.env.example</code> with your secrets filled in</li>
+    </ul>
+
+    <h3>Development stack</h3>
+    <p>The <code>compose.dev.yaml</code> starts MQTT + Fuseki + the Python app together — ideal for local development:</p>
+    <pre><code># Start everything
+docker compose -f compose.dev.yaml up -d --build
+
+# View logs
+docker compose -f compose.dev.yaml logs -f wactorz
+
+# Stop everything
+docker compose -f compose.dev.yaml down</code></pre>
+
+    <p>Services started:</p>
+    <table>
+      <thead><tr><th>Container</th><th>Port</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>wactorz-app</code></td><td>:8000, :8888</td><td>Python agent system (REST API + Web UI)</td></tr>
+        <tr><td><code>wactorz-fuseki</code></td><td>:3030</td><td>Apache Jena Fuseki (knowledge graph)</td></tr>
+        <tr><td><code>wactorz-dev-mosquitto</code></td><td>:1883, :9001</td><td>MQTT broker (TCP + WebSocket)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Production stack (profiles)</h3>
+    <p>The main <code>compose.yaml</code> uses profiles so you only start what you need:</p>
+
+    <pre><code># MQTT broker only (default)
+docker compose up -d
+
+# Python agents + MQTT
+docker compose --profile python up -d
+
+# Python agents + MQTT + Fuseki
+docker compose --profile python-full up -d
+
+# Rust server + nginx dashboard
+docker compose --profile rust up -d
+
+# Everything (Rust + Fuseki + Home Assistant)
+docker compose --profile full up -d</code></pre>
+
+    <table>
+      <thead><tr><th>Profile</th><th>Services</th><th>Ports</th></tr></thead>
+      <tbody>
+        <tr><td><em>default</em></td><td>mosquitto</td><td>:1883, :9001</td></tr>
+        <tr><td><code>python</code></td><td>+ wactorz-python</td><td>+ :8000, :8888</td></tr>
+        <tr><td><code>python-full</code></td><td>+ wactorz-python, fuseki</td><td>+ :8000, :8888, :3030</td></tr>
+        <tr><td><code>rust</code></td><td>+ wactorz-server, dashboard</td><td>+ :8080, :8081, :80</td></tr>
+        <tr><td><code>full</code></td><td>+ rust, fuseki, homeassistant</td><td>+ :8080, :8081, :80, :3030, :8123</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Environment variables in Docker</h3>
+    <p>Your <code>.env</code> file is loaded automatically via <code>env_file</code>. The compose files override a few values so services can reach each other by container name instead of <code>localhost</code>:</p>
+
+    <pre><code># These are set automatically by compose — do not override in .env
+MQTT_HOST=mosquitto       # container name, not localhost
+FUSEKI_URL=http://fuseki:3030</code></pre>
+
+    <div class="callout warn">
+      <div class="callout-title">⚠ Windows line endings</div>
+      <p>If Fuseki fails with <code>exec /entrypoint.sh: no such file or directory</code>, the shell script has Windows CRLF line endings. Fix with: <code>docker run --rm -v "$PWD/config/fuseki-container:/work" alpine sh -c "sed -i 's/\r//' /work/entrypoint.sh"</code> then rebuild.</p>
+    </div>
+
+    <div class="callout tip">
+      <div class="callout-title">Fuseki admin UI</div>
+      <p>After starting Fuseki, the admin UI is at <code>http://localhost:3030</code>. Default credentials: <strong>admin / admin</strong> (set via <code>FUSEKI_ADMIN_PASSWORD</code> in your <code>.env</code>).</p>
+    </div>
+
+    <h3>Rebuilding after code changes</h3>
+    <pre><code># Rebuild and restart just the Python app
+docker compose -f compose.dev.yaml up -d --build wactorz
+
+# Full teardown and rebuild
+docker compose -f compose.dev.yaml down
+docker compose -f compose.dev.yaml up -d --build</code></pre>
 
     <hr/>
 

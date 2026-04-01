@@ -238,28 +238,65 @@ MQTT_PORT=1883</code></pre>
     <hr/>
 
     <h2 id="broker">MQTT broker</h2>
-    <p>Wactorz ships with an embedded MQTT broker that starts automatically — no separate installation needed for basic use. If you prefer to use an external Mosquitto instance (e.g. for multi-machine setups or when you already have a broker running), point Wactorz at it:</p>
 
-    <pre><code>wactorz --mqtt-broker 192.168.1.10 --mqtt-port 1883</code></pre>
+    <div class="callout warn">
+      <div class="callout-title">⚠ Required dependency</div>
+      <p>Wactorz requires a running MQTT broker to function. It does <strong>not</strong> include an embedded broker. By default it connects to <code>localhost:1883</code> — you must have a broker running before starting Wactorz.</p>
+    </div>
 
-    <h4>Running Mosquitto via Docker</h4>
-    <pre><code>docker run -d --name mosquitto \
-  -p 1883:1883 \
-  eclipse-mosquitto:latest \
-  mosquitto -c /mosquitto/config/mosquitto.conf</code></pre>
+    <p>You can change the broker connection via CLI arguments or <code>.env</code>:</p>
+    <pre><code># CLI
+wactorz --mqtt-broker 192.168.1.10 --mqtt-port 1883
 
-    <p>Or with a <code>compose.yaml</code>:</p>
-    <pre><code>services:
-  mosquitto:
-    image: eclipse-mosquitto:latest
-    ports:
-      - "1883:1883"
-    volumes:
-      - ./infra/mosquitto:/mosquitto/config</code></pre>
+# .env
+MQTT_HOST=192.168.1.10
+MQTT_PORT=1883</code></pre>
+
+    <h3>Option 1 — Docker (recommended)</h3>
+    <p>The easiest way to run a broker. No installation required beyond Docker:</p>
+
+    <pre><code># Quick one-liner
+docker run -d --name mosquitto \
+  -p 1883:1883 -p 9001:9001 \
+  eclipse-mosquitto:2.0</code></pre>
+
+    <p>Or use the included compose file which also configures WebSocket support:</p>
+    <pre><code>docker compose up -d mosquitto</code></pre>
+
+    <h3>Option 2 — Install Mosquitto natively</h3>
+
+    <h4>Windows</h4>
+    <pre><code># Download installer from https://mosquitto.org/download/
+# After install, start the service:
+net start mosquitto
+
+# Or run manually:
+mosquitto -c "C:\Program Files\mosquitto\mosquitto.conf"</code></pre>
+
+    <div class="callout warn">
+      <div class="callout-title">⚠ Windows service</div>
+      <p>The Mosquitto installer registers itself as a Windows Service that starts automatically on boot. If you switch to Docker later, stop the service first to free port 1883: run PowerShell as Administrator and run <code>net stop mosquitto</code>. To disable auto-start permanently: <code>sc config mosquitto start= disabled</code>.</p>
+    </div>
+
+    <h4>macOS</h4>
+    <pre><code">brew install mosquitto
+brew services start mosquitto</code></pre>
+
+    <h4>Linux</h4>
+    <pre><code>sudo apt install mosquitto mosquitto-clients
+sudo systemctl enable --now mosquitto</code></pre>
+
+    <h3>Verify the broker is running</h3>
+    <pre><code># Subscribe to all topics — if this hangs waiting, the broker is up
+mosquitto_sub -h localhost -p 1883 -t '#' -v
+
+# Or check the port directly
+netstat -ano | findstr :1883   # Windows
+ss -tlnp | grep 1883           # Linux/Mac</code></pre>
 
     <div class="callout">
       <div class="callout-title">ℹ Docker Desktop on Windows/Mac</div>
-      <p>When services run inside Docker and need to reach the broker on the host, use <code>host.docker.internal</code> as the broker hostname instead of <code>localhost</code>.</p>
+      <p>When Wactorz runs inside Docker and needs to reach a broker on the host machine, use <code>host.docker.internal</code> instead of <code>localhost</code>. When both run in Docker via compose, use the container name (e.g. <code>mosquitto</code>) as the hostname — this is already set automatically in the provided compose files.</p>
     </div>
 
     <hr/>

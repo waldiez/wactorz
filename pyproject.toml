@@ -43,6 +43,7 @@ openai    = ["openai>=2.29.0"]
 google    = ["google-generativeai>=0.8.0"]  # <--- Add this
 discord   = ["discord.py>=2.7.1"]
 whatsapp  = ["twilio>=9.10.4"]
+mcp       = ["mcp>=1.0.0"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
 docs      = [
     "markdown>=3.10.2",
@@ -73,6 +74,8 @@ all = [
 wactorz         = "wactorz.cli:main"
 wactorz-monitor = "wactorz.monitor_server:cli_main"
 wactorz-fuseki  = "wactorz.fuseki:_cli_main"
+wactorz-mcp-fuseki = "wactorz.mcp.fuseki_server:cli_main"
+wactorz-mcp-ha     = "wactorz.mcp.ha_server:cli_main"
 
 [project.urls]
 Homepage      = "https://waldiez.github.io/wactorz/"

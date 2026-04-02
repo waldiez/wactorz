@@ -492,12 +492,12 @@ async def deploy_node(agent, payload):
     try:
         async with asyncssh.connect(**conn_kwargs) as conn:
             # Create directory
-            await conn.run('mkdir -p ~/wactorz')
-            await agent.log(f'[{node_name}] Created ~/wactorz')
+            await conn.run('mkdir -p ~/agentflow')
+            await agent.log(f'[{node_name}] Created ~/agentflow')
 
             # Upload remote_runner.py
             async with conn.start_sftp_client() as sftp:
-                await sftp.put(str(runner_path), f'/home/{user}/wactorz/remote_runner.py')
+                await sftp.put(str(runner_path), f'/home/{user}/agentflow/remote_runner.py')
             await agent.log(f'[{node_name}] Uploaded remote_runner.py')
 
             # Install deps
@@ -509,9 +509,9 @@ async def deploy_node(agent, payload):
 
             # Start in background
             cmd = (
-                f'nohup python3 ~/wactorz/remote_runner.py '
+                f'nohup python3 ~/agentflow/remote_runner.py '
                 f'--broker {broker} --name {node_name} '
-                f'> ~/wactorz/{node_name}.log 2>&1 &'
+                f'> ~/agentflow/{node_name}.log 2>&1 &'
             )
             await conn.run(cmd)
             await agent.log(f'[{node_name}] Runner started! Will appear in dashboard shortly.')

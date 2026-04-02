@@ -72,6 +72,7 @@ export class CardDashboard {
   private feedItems: FeedItem[] = [];
   private chatMessages: ChatMessage[] = [];
   private chatTarget: string = "main-actor";
+  private _lastSentTarget: string = "main-actor";
   private view: View = "overview";
   private connState: ConnState = "connecting";
   private tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -251,11 +252,12 @@ export class CardDashboard {
 
     this._evChat = (e) => {
       const msg = (e as CustomEvent<{ msg: ChatMessage }>).detail.msg;
-      // Tag io-gateway / system replies with the active chatTarget so they
-      // only appear in the thread where the user sent the triggering message.
+      // Tag io-gateway / system replies with the target of the last sent
+      // message so they land in the correct thread even if the user has
+      // switched to a different agent in the sidebar since sending.
       const stored: ChatMessage =
         msg.from === "io-gateway" || msg.from === "system"
-          ? { ...msg, to: this.chatTarget }
+          ? { ...msg, to: this._lastSentTarget }
           : msg;
       this.chatMessages.push(stored);
       if (this.chatMessages.length > 200) this.chatMessages.shift();
@@ -301,7 +303,7 @@ export class CardDashboard {
         const msg: ChatMessage = {
           id: `stream-${Date.now()}`,
           from: this._streamFrom,
-          to: this.chatTarget, // tag with active context for thread filtering
+          to: this._lastSentTarget,
           content: this._streamText,
           timestampMs: Date.now(),
         };
@@ -400,13 +402,6 @@ export class CardDashboard {
         btn.classList.toggle("active", btn.dataset["view"] === this.view);
       });
     this._renderHealth();
-    // Only show the agent-target dropdown in the chat view
-    const select =
-      this.root.querySelector<HTMLSelectElement>("#af-target-select");
-    if (select) {
-      select.style.display = this.view === "chat" ? "" : "none";
-      if (this.view === "chat") select.value = this.chatTarget;
-    }
   }
 
   /** Ensure chatTarget is a live agent, defaulting to "main" → "main-actor" → first. */
@@ -1042,11 +1037,6 @@ export class CardDashboard {
     const bar = document.createElement("div");
     bar.className = "af-iobar";
 
-    const select = document.createElement("select");
-    select.className = "af-target-select";
-    select.id = "af-target-select";
-    this._populateSelect(select);
-
     const input = document.createElement("input");
     input.className = "af-iobar-input";
     input.id = "af-iobar-input";
@@ -1054,56 +1044,29 @@ export class CardDashboard {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        this._sendMessage(input, select);
+        this._sendMessage(input);
       }
-    });
-    select.addEventListener("change", () => {
-      this.chatTarget = select.value;
-      input.placeholder = `Message @${select.value}…`;
     });
 
     const sendBtn = document.createElement("button");
     sendBtn.className = "af-send-btn";
     sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`;
-    sendBtn.addEventListener("click", () => this._sendMessage(input, select));
+    sendBtn.addEventListener("click", () => this._sendMessage(input));
 
-    bar.append(select, input, sendBtn);
+    bar.append(input, sendBtn);
     return bar;
   }
 
-  private _populateSelect(select: HTMLSelectElement): void {
-    select.innerHTML = "";
-    [...this.agents.values()]
-      .sort((a, b) => {
-        if (a.name === "main-actor") return -1;
-        if (b.name === "main-actor") return 1;
-        return a.name.localeCompare(b.name);
-      })
-      .forEach((agent) => {
-        const opt = document.createElement("option");
-        opt.value = agent.name;
-        opt.textContent = `@${agent.name}`;
-        select.appendChild(opt);
-      });
-    // Keep dropdown in sync with chatTarget
-    select.value = this.chatTarget;
-  }
-
   private _updateTargetSelect(): void {
-    const select =
-      this.root.querySelector<HTMLSelectElement>("#af-target-select");
-    if (select) this._populateSelect(select);
     const input = this.root.querySelector<HTMLInputElement>("#af-iobar-input");
     if (input) input.placeholder = `Message @${this.chatTarget}…`;
   }
 
-  private _sendMessage(
-    input: HTMLInputElement,
-    select: HTMLSelectElement,
-  ): void {
+  private _sendMessage(input: HTMLInputElement): void {
     const content = input.value.trim();
     if (!content) return;
-    const target = select.value || "main-actor";
+    const target = this.chatTarget || "main-actor";
+    this._lastSentTarget = target;
     const msg: ChatMessage = {
       id: `user-${Date.now()}`,
       from: "user",

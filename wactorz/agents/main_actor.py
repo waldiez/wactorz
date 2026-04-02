@@ -964,6 +964,40 @@ class MainActor(LLMAgent):
 
         # ── Direct API intercepts — handle without LLM round-trip ──────────
         stripped = text.strip().rstrip("()")
+
+        # ── /help ───────────────────────────────────────────────────────────
+        if stripped in ("/help", "help", "/?"):
+            return note_prefix + "\n".join([
+                "**Wactorz commands**",
+                "",
+                "**Agents**",
+                "  /agents               — list all known agents with descriptions and schemas",
+                "  /agents <keyword>     — filter agents by capability keyword",
+                "  /capabilities         — alias for /agents",
+                "  @agent-name <msg>     — send a message directly to a named agent",
+                "  @catalog list         — list available catalog recipes",
+                "  @catalog spawn <n>    — spawn a catalog agent",
+                "",
+                "**Pipelines**",
+                "  /rules                — list active pipeline rules",
+                "  /rules delete <id>    — stop agents and remove a rule",
+                "",
+                "**Memory**",
+                "  /memory               — show stored user facts and conversation summary",
+                "  /memory clear         — wipe all memory",
+                "  /memory forget <key>  — remove one stored fact",
+                "",
+                "**Notifications**",
+                "  /webhook discord <url>   — store a Discord webhook URL",
+                "  /webhook telegram <url>  — store a Telegram webhook URL",
+                "  /webhook                 — list stored webhook URLs",
+                "",
+                "**System**",
+                "  /nodes                — list remote nodes and their agents",
+                "  /topics               — list MQTT topics published by known agents",
+                "  /topics <keyword>     — filter topics by keyword",
+                "  /help                 — show this help",
+            ])
         if stripped in ("main.list_nodes", "list_nodes", "/nodes"):
             nodes = self.list_nodes()
             if not nodes:
@@ -1102,24 +1136,36 @@ class MainActor(LLMAgent):
             result = await self.delete_pipeline_rule(rule_id)
             return note_prefix + result
 
-        if stripped.startswith("/rules"):
-            keyword = stripped[14:].strip().lstrip("(").rstrip(")")
+        # ── /agents / /capabilities ─────────────────────────────────────────
+        if stripped in ("/agents", "/capabilities") or \
+                stripped.startswith("/agents ") or stripped.startswith("/capabilities "):
+            keyword = ""
+            for prefix in ("/capabilities ", "/agents "):
+                if stripped.startswith(prefix):
+                    keyword = stripped[len(prefix):].strip()
+                    break
             caps = self.list_capabilities(keyword)
             if not caps:
-                msg = "No agents found" + (f" matching '{keyword}'" if keyword else "") + "."
+                msg = "No agents found" + (f" matching {repr(keyword)}" if keyword else "") + "."
                 msg += " Agents publish their capabilities on startup."
                 return note_prefix + msg
             lines = ["Agent capabilities" + (" matching " + repr(keyword) if keyword else "") + ":"]
             for a in caps:
+                running  = "\U0001f7e2" if a["running"] else ("\U0001f4e6" if a["spawnable"] else "\U0001f534")
+                node_str = f" on {a['node']}" if a.get("node") else ""
                 lines.append("")
-                lines.append("  [" + a["name"] + "]" + (" on " + a["node"] if a.get("node") else ""))
-                lines.append("    description : " + a["description"])
+                lines.append(f"  {running} [{a['name']}]{node_str}")
+                lines.append(f"    description : {a['description']}")
                 if a["capabilities"]:
-                    lines.append("    capabilities: " + ", ".join(a["capabilities"]))
+                    lines.append(f"    capabilities: {', '.join(a['capabilities'])}")
                 if a["input_schema"]:
-                    lines.append("    input       : " + str(a["input_schema"]))
+                    lines.append(f"    input       : {a['input_schema']}")
                 if a["output_schema"]:
-                    lines.append("    output      : " + str(a["output_schema"]))
+                    lines.append(f"    output      : {a['output_schema']}")
+                if a["spawnable"]:
+                    lines.append(f"    spawnable   : yes — @catalog spawn {a['name']}")
+            lines.append("\nLegend: \U0001f7e2 running  \U0001f4e6 spawnable (not yet running)  \U0001f534 stopped")
+            lines.append("Filter: /agents <keyword>   e.g. /agents discord")
             return note_prefix + "\n".join(lines)
 
                 # ── @mention direct routing ─────────────────────────────────────────

@@ -266,13 +266,17 @@ export class CardDashboard {
     };
 
     this._evChunk = (e) => {
-      if (this.view !== "chat") return;
       const { chunk, from } = (
         e as CustomEvent<{ chunk: string; from: string }>
       ).detail;
-      if (!this._streamRow) {
+      // Always accumulate text so _evEnd can save it regardless of active view
+      if (!this._streamFrom) {
         this._streamFrom = from;
         this._streamText = "";
+      }
+      this._streamText += chunk;
+      if (this.view !== "chat") return;
+      if (!this._streamRow) {
         const thread = this.root.querySelector<HTMLElement>(".af-chat-thread");
         if (!thread) return;
         const row = document.createElement("div");
@@ -288,7 +292,6 @@ export class CardDashboard {
         this._streamRow = row;
         this._streamBody = bubble;
       }
-      this._streamText += chunk;
       if (this._streamBody) this._streamBody.textContent = this._streamText;
       this._scrollThread();
     };

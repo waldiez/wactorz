@@ -1173,7 +1173,7 @@ Actors are fully async and communicate only through messages.</p>
                             </div>
                             <div id="Actor.supervisor_id" class="classattr">
                                 <div class="attr variable">
-            <span class="name">supervisor_id</span><span class="annotation">: str | None</span>
+            <span class="name">supervisor_id</span><span class="annotation">: Optional[str]</span>
 
         
     </div>
@@ -1749,7 +1749,7 @@ errors defaults to 'strict'.</p>
                             <div id="Message.__init__" class="classattr">
                                 <div class="attr function">
             
-        <span class="name">Message</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="nb">type</span><span class="p">:</span> <span class="n"><a href="#MessageType">MessageType</a></span>,</span><span class="param">	<span class="n">sender_id</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">payload</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">reply_to</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">message_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">factory</span><span class="o">&gt;</span>,</span><span class="param">	<span class="n">timestamp</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">factory</span><span class="o">&gt;</span></span>)</span>
+        <span class="name">Message</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="nb">type</span><span class="p">:</span> <span class="n"><a href="#MessageType">MessageType</a></span>,</span><span class="param">	<span class="n">sender_id</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">payload</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">reply_to</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">message_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">factory</span><span class="o">&gt;</span>,</span><span class="param">	<span class="n">timestamp</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">factory</span><span class="o">&gt;</span></span>)</span>
 
         
     </div>
@@ -1794,7 +1794,7 @@ errors defaults to 'strict'.</p>
                             </div>
                             <div id="Message.reply_to" class="classattr">
                                 <div class="attr variable">
-            <span class="name">reply_to</span><span class="annotation">: str | None</span>        =
+            <span class="name">reply_to</span><span class="annotation">: Optional[str]</span>        =
 <span class="default_value">None</span>
 
         
@@ -2442,7 +2442,7 @@ errors defaults to 'strict'.</p>
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">get</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="n">actor_id</span><span class="p">:</span> <span class="nb">str</span></span><span class="return-annotation">) -> <span class="n"><a href="#Actor">Actor</a></span> <span class="o">|</span> <span class="kc">None</span>:</span></span>
+        <span class="name">get</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="n">actor_id</span><span class="p">:</span> <span class="nb">str</span></span><span class="return-annotation">) -> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="#Actor">Actor</a></span><span class="p">]</span>:</span></span>
 
                 <label class="view-source-button" for="ActorRegistry.get-view-source"><span>View Source</span></label>
 
@@ -2480,7 +2480,7 @@ errors defaults to 'strict'.</p>
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">find_by_name</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="n">name</span><span class="p">:</span> <span class="nb">str</span></span><span class="return-annotation">) -> <span class="n"><a href="#Actor">Actor</a></span> <span class="o">|</span> <span class="kc">None</span>:</span></span>
+        <span class="name">find_by_name</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="n">name</span><span class="p">:</span> <span class="nb">str</span></span><span class="return-annotation">) -> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="#Actor">Actor</a></span><span class="p">]</span>:</span></span>
 
                 <label class="view-source-button" for="ActorRegistry.find_by_name-view-source"><span>View Source</span></label>
 
@@ -2824,7 +2824,7 @@ Maintains conversation history and supports tool use.</p>
                                         <input id="LLMAgent.__init__-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
             
-        <span class="name">LLMAgent</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">llm_provider</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">agents</span><span class="o">.</span><span class="n">llm_agent</span><span class="o">.</span><span class="n">LLMProvider</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;You are a helpful AI agent.&#39;</span>,</span><span class="param">	<span class="n">max_history</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">20</span>,</span><span class="param">	<span class="n">summarize_threshold</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">30</span>,</span><span class="param">	<span class="o">**</span><span class="n">kwargs</span></span>)</span>
+        <span class="name">LLMAgent</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">llm_provider</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">wactorz</span><span class="o">.</span><span class="n">agents</span><span class="o">.</span><span class="n">llm_agent</span><span class="o">.</span><span class="n">LLMProvider</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;You are a helpful AI agent.&#39;</span>,</span><span class="param">	<span class="n">max_history</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">20</span>,</span><span class="param">	<span class="n">summarize_threshold</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">30</span>,</span><span class="param">	<span class="o">**</span><span class="n">kwargs</span></span>)</span>
 
                 <label class="view-source-button" for="LLMAgent.__init__-view-source"><span>View Source</span></label>
 
@@ -3250,7 +3250,7 @@ The caller is responsible for printing chunks as they arrive.</p>
                                         <input id="AnthropicProvider.__init__-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
             
-        <span class="name">AnthropicProvider</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;claude-sonnet-4-6&#39;</span>, </span><span class="param"><span class="n">api_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span></span>)</span>
+        <span class="name">AnthropicProvider</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;claude-sonnet-4-6&#39;</span>, </span><span class="param"><span class="n">api_key</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span>)</span>
 
                 <label class="view-source-button" for="AnthropicProvider.__init__-view-source"><span>View Source</span></label>
 
@@ -3431,7 +3431,7 @@ The caller is responsible for printing chunks as they arrive.</p>
                                         <input id="OpenAIProvider.__init__-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
             
-        <span class="name">OpenAIProvider</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;gpt-4o&#39;</span>, </span><span class="param"><span class="n">api_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span></span>)</span>
+        <span class="name">OpenAIProvider</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;gpt-4o&#39;</span>, </span><span class="param"><span class="n">api_key</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span>)</span>
 
                 <label class="view-source-button" for="OpenAIProvider.__init__-view-source"><span>View Source</span></label>
 
@@ -3835,7 +3835,7 @@ Free tier: 1000 requests/month per model. No local GPU required.</p>
                                         <input id="NIMProvider.__init__-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
             
-        <span class="name">NIMProvider</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;meta/llama-3.3-70b-instruct&#39;</span>,</span><span class="param">	<span class="n">api_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">base_url</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;https://integrate.api.nvidia.com/v1&#39;</span></span>)</span>
+        <span class="name">NIMProvider</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;meta/llama-3.3-70b-instruct&#39;</span>,</span><span class="param">	<span class="n">api_key</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">base_url</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;https://integrate.api.nvidia.com/v1&#39;</span></span>)</span>
 
                 <label class="view-source-button" for="NIMProvider.__init__-view-source"><span>View Source</span></label>
 
@@ -5644,7 +5644,7 @@ Maintains conversation history and supports tool use.</p>
                                         <input id="MainActor.__init__-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
             
-        <span class="name">MainActor</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">llm_provider</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">agents</span><span class="o">.</span><span class="n">llm_agent</span><span class="o">.</span><span class="n">LLMProvider</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="o">**</span><span class="n">kwargs</span></span>)</span>
+        <span class="name">MainActor</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">llm_provider</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">wactorz</span><span class="o">.</span><span class="n">agents</span><span class="o">.</span><span class="n">llm_agent</span><span class="o">.</span><span class="n">LLMProvider</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="o">**</span><span class="n">kwargs</span></span>)</span>
 
                 <label class="view-source-button" for="MainActor.__init__-view-source"><span>View Source</span></label>
 
@@ -9389,7 +9389,7 @@ action, and returns a human-readable string response.</p>
                                         <input id="PlannerAgent.__init__-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
             
-        <span class="name">PlannerAgent</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">llm_provider</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">agents</span><span class="o">.</span><span class="n">llm_agent</span><span class="o">.</span><span class="n">LLMProvider</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">task</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>,</span><span class="param">	<span class="n">reply_to_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>,</span><span class="param">	<span class="n">reply_task_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>,</span><span class="param">	<span class="n">auto_terminate</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>,</span><span class="param">	<span class="o">**</span><span class="n">kwargs</span></span>)</span>
+        <span class="name">PlannerAgent</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">llm_provider</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">wactorz</span><span class="o">.</span><span class="n">agents</span><span class="o">.</span><span class="n">llm_agent</span><span class="o">.</span><span class="n">LLMProvider</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">task</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>,</span><span class="param">	<span class="n">reply_to_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>,</span><span class="param">	<span class="n">reply_task_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>,</span><span class="param">	<span class="n">auto_terminate</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>,</span><span class="param">	<span class="o">**</span><span class="n">kwargs</span></span>)</span>
 
                 <label class="view-source-button" for="PlannerAgent.__init__-view-source"><span>View Source</span></label>
 
@@ -11274,7 +11274,7 @@ Spawns any catalog agent on request by delegating to main's spawn pipeline.</p>
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">get_recipe</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="n">name</span><span class="p">:</span> <span class="nb">str</span></span><span class="return-annotation">) -> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span>:</span></span>
+        <span class="name">get_recipe</span><span class="signature pdoc-code condensed">(<span class="param"><span class="bp">self</span>, </span><span class="param"><span class="n">name</span><span class="p">:</span> <span class="nb">str</span></span><span class="return-annotation">) -> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span>:</span></span>
 
                 <label class="view-source-button" for="CatalogAgent.get_recipe-view-source"><span>View Source</span></label>
 

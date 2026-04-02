@@ -11,11 +11,13 @@ Ontology prefixes used (all inline - no external file references):
   ssn:    SSN        <http://www.w3.org/ns/ssn/>
   syn:    SYNAPSE    <https://synapse.waldiez.io/ns#>
   prov:   PROV-O     <http://www.w3.org/ns/prov#>
+  bot:    BOT        <https://w3id.org/bot#>  (Building Topology Ontology)
 
 Named graphs managed:
   urn:ha:current  - latest state per entity  (DELETE + INSERT on every change)
   urn:ha:history  - append-only observations
   urn:ha:devices  - entity catalog            (rebuilt on startup)
+  urn:ha:areas    - area/room topology        (rebuilt on startup)
 
 Usage::
 
@@ -68,9 +70,11 @@ TTL_PREFIXES = """\
 @prefix saref: <https://saref.etsi.org/core/> .
 @prefix core:  <https://www.spatialwebfoundation.org/ns/hsml/core#> .
 @prefix syn:   <https://synapse.waldiez.io/ns#> .
+@prefix bot:   <https://w3id.org/bot#> .
 @prefix ha:    <urn:ha:entity:> .
 @prefix haobs: <urn:ha:obs:> .
 @prefix haprop: <urn:ha:prop:> .
+@prefix haarea: <urn:ha:area:> .
 """
 
 # Provenance IRI for this bridge process
@@ -80,6 +84,7 @@ BRIDGE_AGENT_IRI = "<urn:ha:bridge:wactorz>"
 GRAPH_CURRENT = "urn:ha:current"
 GRAPH_HISTORY = "urn:ha:history"
 GRAPH_DEVICES = "urn:ha:devices"
+GRAPH_AREAS   = "urn:ha:areas"
 
 # ── Domain → RDF type mapping ─────────────────────────────────────────────────
 
@@ -141,6 +146,10 @@ def _prop_iri(entity_id: str) -> str:
     return f"haprop:{_safe(entity_id)}"
 
 
+def _area_iri(area_id: str) -> str:
+    return f"haarea:{_safe(area_id)}"
+
+
 def _esc(s: str) -> str:
     """Escape a string for Turtle double-quoted literals."""
     return (
@@ -197,7 +206,34 @@ def _bridge_agent_body() -> str:
     )
 
 
-def _device_body(entity_id: str, state_obj: dict[str, Any]) -> str:
+def _area_body(area: dict[str, Any]) -> str:
+    """RDF triples for one HA area (room) using BOT ontology."""
+    area_id = area.get("area_id", "")
+    name = area.get("name", area_id)
+    aliases = area.get("aliases", [])
+    icon = area.get("icon") or ""
+
+    iri = _area_iri(area_id)
+    lines: list[str] = []
+    lines.append(f"{iri}")
+    lines.append(f"  a bot:Space, syn:Area ;")
+    lines.append(f'  rdfs:label "{_esc(name)}" ;')
+    lines.append(f'  syn:areaId "{_esc(area_id)}" ;')
+    if icon:
+        lines.append(f'  syn:icon "{_esc(icon)}" ;')
+    for alias in aliases:
+        lines.append(f'  syn:alias "{_esc(str(alias))}" ;')
+    lines.append(f"  prov:wasAttributedTo {BRIDGE_AGENT_IRI} .")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _device_body(
+    entity_id: str,
+    state_obj: dict[str, Any],
+    area_id: str | None = None,
+    area_name: str | None = None,
+) -> str:
     """Catalog entry for one HA entity (no prefix block)."""
     domain = entity_id.split(".")[0]
     attrs = state_obj.get("attributes") or {}
@@ -217,6 +253,13 @@ def _device_body(entity_id: str, state_obj: dict[str, Any]) -> str:
     lines.append(f"  syn:state {_literal(state_val)} ;")
     if is_actuator:
         lines.append(f"  ssn:hasProperty {prop_iri} ;")
+
+    # Area / room assignment
+    if area_id:
+        lines.append(f"  syn:hasArea {_area_iri(area_id)} ;")
+    if area_name:
+        lines.append(f'  syn:areaName "{_esc(area_name)}" ;')
+
     lines.append(f"  prov:wasAttributedTo {BRIDGE_AGENT_IRI} .")
     lines.append("")
 
@@ -231,11 +274,6 @@ def _device_body(entity_id: str, state_obj: dict[str, Any]) -> str:
 
 
 def _current_obs_body(entity_id: str, state_obj: dict[str, Any], ts_ms: int) -> str:
-    """
-    Current-state triples for one entity:
-      - entity → syn:hasCurrentObservation / syn:state
-      - the observation node
-    """
     attrs = state_obj.get("attributes") or {}
     state_val = str(state_obj.get("state", ""))
     last_changed = (
@@ -250,13 +288,11 @@ def _current_obs_body(entity_id: str, state_obj: dict[str, Any], ts_ms: int) -> 
 
     lines: list[str] = []
 
-    # Entity pointer
     lines.append(f"{iri}")
     lines.append(f"  syn:hasCurrentObservation {obs_iri} ;")
     lines.append(f"  syn:state {_literal(state_val)} .")
     lines.append("")
 
-    # Observation
     lines.append(f"{obs_iri}")
     lines.append("  a sosa:Observation ;")
     lines.append(f"  sosa:madeBySensor {iri} ;")
@@ -274,7 +310,6 @@ def _current_obs_body(entity_id: str, state_obj: dict[str, Any], ts_ms: int) -> 
 
 
 def _history_obs_body(entity_id: str, state_obj: dict[str, Any], ts_ms: int) -> str:
-    """Append-only observation for the history graph (no entity pointer)."""
     attrs = state_obj.get("attributes") or {}
     state_val = str(state_obj.get("state", ""))
     last_changed = (
@@ -321,12 +356,11 @@ class FusekiClient:
         session: aiohttp.ClientSession,
         auth: aiohttp.BasicAuth | None = None,
     ) -> None:
-        self._base = fuseki_url.rstrip("/")  # pyright: ignore[reportUnannotatedClassAttribute]
-        self._ds = dataset  # pyright: ignore[reportUnannotatedClassAttribute]
-        self._session = session  # pyright: ignore[reportUnannotatedClassAttribute]
-        self._auth = auth  # pyright: ignore[reportUnannotatedClassAttribute]
+        self._base = fuseki_url.rstrip("/")
+        self._ds = dataset
+        self._session = session
+        self._auth = auth
 
-    # GSP endpoints
     def _gsp_url(self, graph: str) -> str:
         return f"{self._base}/{self._ds}/data?graph={graph}"
 
@@ -373,12 +407,6 @@ class FusekiClient:
     async def replace_entity_in_graph(
         self, graph: str, entity_id: str, ttl: str
     ) -> None:
-        """
-        Atomically replace all triples about *entity_id* and its current
-        observation in *graph*:
-          1. SPARQL DELETE WHERE for the entity IRI and its obs nodes
-          2. GSP POST to append the new triples
-        """
         full_iri = f"urn:ha:entity:{_safe(entity_id)}"
 
         delete_q = f"""
@@ -420,16 +448,18 @@ class HAFusekiBridge:
         fuseki_password: str = "",
         domains: frozenset[str] | None = None,
     ) -> None:
-        self._ha_url = ha_url.rstrip("/")  # pyright: ignore[reportUnannotatedClassAttribute]
-        self._ha_token = ha_token  # pyright: ignore[reportUnannotatedClassAttribute]
-        self._fuseki_url = fuseki_url  # pyright: ignore[reportUnannotatedClassAttribute]
-        self._fuseki_dataset = fuseki_dataset  # pyright: ignore[reportUnannotatedClassAttribute]
-        self._fuseki_auth: aiohttp.BasicAuth | None = (  # pyright: ignore[reportUnannotatedClassAttribute]
+        self._ha_url = ha_url.rstrip("/")
+        self._ha_token = ha_token
+        self._fuseki_url = fuseki_url
+        self._fuseki_dataset = fuseki_dataset
+        self._fuseki_auth: aiohttp.BasicAuth | None = (
             aiohttp.BasicAuth(fuseki_user, fuseki_password)
             if fuseki_user
             else None
         )
         self._domains: frozenset[str] = domains if domains is not None else DEFAULT_DOMAINS
+        # area_id → area name lookup built during seed
+        self._area_names: dict[str, str] = {}
 
     def _ws_url(self) -> str:
         parsed = urlparse(self._ha_url)
@@ -465,23 +495,98 @@ class HAFusekiBridge:
     # ── Seed on startup ───────────────────────────────────────────────────────
 
     async def _seed(self, ha: HAWebSocketClient, fuseki: FusekiClient) -> None:
+        # ── 1. Fetch areas, entity registry, and device registry ─────────────
+        areas: list[dict[str, Any]] = []
+        entity_area_map: dict[str, str] = {}  # entity_id → area_id
+
+        try:
+            areas = await ha.call("config/area_registry/list") or []
+            log.info("Fetched %d areas from HA.", len(areas))
+        except Exception as exc:
+            log.warning("Could not fetch area registry: %s", exc)
+
+        # device_id → area_id (fallback when entity has no direct area)
+        device_area_map: dict[str, str] = {}
+        try:
+            device_registry: list[dict[str, Any]] = (
+                await ha.call("config/device_registry/list") or []
+            )
+            for dev in device_registry:
+                did = dev.get("id", "")
+                aid = dev.get("area_id") or ""
+                if did and aid:
+                    device_area_map[did] = aid
+            log.info(
+                "Device registry: %d devices, %d with area assignments.",
+                len(device_registry),
+                len(device_area_map),
+            )
+        except Exception as exc:
+            log.warning("Could not fetch device registry: %s", exc)
+
+        try:
+            entity_registry: list[dict[str, Any]] = (
+                await ha.call("config/entity_registry/list") or []
+            )
+            for entry in entity_registry:
+                eid = entry.get("entity_id", "")
+                # Prefer entity-level area, fall back to device-level area
+                aid = (
+                    entry.get("area_id")
+                    or device_area_map.get(entry.get("device_id", ""), "")
+                )
+                if eid and aid:
+                    entity_area_map[eid] = aid
+            log.info(
+                "Entity registry: %d entries, %d with area assignments (incl. device fallback).",
+                len(entity_registry),
+                len(entity_area_map),
+            )
+        except Exception as exc:
+            log.warning("Could not fetch entity registry: %s", exc)
+
+        # Build area_id → name lookup
+        self._area_names = {
+            a["area_id"]: a.get("name", a["area_id"])
+            for a in areas
+            if "area_id" in a
+        }
+
+        # ── 2. Push areas graph ───────────────────────────────────────────────
+        if areas:
+            area_body_parts = [_bridge_agent_body()]
+            for area in areas:
+                area_body_parts.append(_area_body(area))
+            await fuseki.replace_graph(
+                GRAPH_AREAS, _ttl("\n".join(area_body_parts))
+            )
+            log.info("Areas graph replaced (%d areas).", len(areas))
+        else:
+            log.info("No areas found — skipping areas graph.")
+
+        # ── 3. Fetch states ───────────────────────────────────────────────────
         all_states: list[dict[str, Any]] = await ha.call("get_states") or []
         wanted = [s for s in all_states if self._want(s.get("entity_id", ""))]
         log.info(
             "Seeding %d / %d entities → Fuseki …", len(wanted), len(all_states)
         )
 
-        # ── Devices catalog (full replace) ────────────────────────────────────
+        # ── 4. Devices catalog (full replace, with area info) ─────────────────
         catalog_body_parts = [_bridge_agent_body()]
         for s in wanted:
-            catalog_body_parts.append(_device_body(s["entity_id"], s))
+            eid = s["entity_id"]
+            area_id = entity_area_map.get(eid)
+            area_name = self._area_names.get(area_id, "") if area_id else None
+            catalog_body_parts.append(
+                _device_body(eid, s, area_id=area_id, area_name=area_name)
+            )
 
         await fuseki.replace_graph(
             GRAPH_DEVICES, _ttl("\n".join(catalog_body_parts))
         )
         log.info("Devices catalog replaced (%d entities).", len(wanted))
 
-        # ── Current-state graph (patch per entity) ────────────────────────────
+        # ── 5. Current-state graph (patch per entity) ─────────────────────────
         ts_ms = int(time.time() * 1000)
         for s in wanted:
             eid = s["entity_id"]
@@ -508,13 +613,11 @@ class HAFusekiBridge:
             "state_changed  %s → %s", entity_id, new_state.get("state", "?")
         )
 
-        # Update current-state graph
         current_body = _current_obs_body(entity_id, new_state, ts_ms)
         await fuseki.replace_entity_in_graph(
             GRAPH_CURRENT, entity_id, _ttl(current_body)
         )
 
-        # Append to history
         hist_body = _history_obs_body(entity_id, new_state, ts_ms)
         await fuseki.append_graph(GRAPH_HISTORY, _ttl(hist_body))
 

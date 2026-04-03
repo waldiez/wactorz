@@ -220,6 +220,52 @@ Complex operations (`create`, `edit`) use up to two additional LLM calls; simple
 }
 ```
 
+### OneOffActuatorAgent
+
+|              |                                         |
+| ------------ | --------------------------------------- |
+| **Name**     | `one-off-actuator-{task_id_suffix}`     |
+| **Type**     | `home-assistant-actuation`              |
+| **Lifecycle**| ephemeral, self-terminating             |
+
+Spawned by `MainActor` for `ACTUATE` intent requests only. This agent is responsible for immediate one-shot device control such as turning a device on or off, setting climate values, locking or unlocking, and calling multiple HA services from a single natural-language request.
+
+**Capabilities**
+
+- `home_automation`
+- `ha_actuation`
+- `device_control`
+- `one_shot_actuation`
+
+**Input schema**
+
+```json
+{
+  "request": "natural-language Home Assistant device control request",
+  "task_id": "correlation id for the parent future",
+  "reply_to_id": "actor id that receives the RESULT message"
+}
+```
+
+**Output schema**
+
+```json
+{
+  "result": "human-readable summary of executed Home Assistant service calls",
+  "_task_id": "correlation id echoed back to the parent actor"
+}
+```
+
+**Execution flow**
+
+1. Fetch devices and entities from Home Assistant, including location context
+2. Resolve the request into a JSON `ActuatorAction[]` via the configured LLM
+3. Execute the resulting service calls through `HAWebSocketClient`
+4. Return a `RESULT` message to `MainActor`
+5. Publish metrics, unregister, stop, and delete its own persistence directory
+
+This is intentionally separate from `HomeAssistantAgent`, which remains responsible for Home Assistant discovery queries and automation CRUD.
+
 ---
 
 ### HomeAssistantMapAgent

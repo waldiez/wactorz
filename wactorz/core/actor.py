@@ -116,7 +116,7 @@ class Actor(ABC):
             self.actor_id = actor_id
         elif name:
             # Deterministic UUID from name — same name always gets same ID across restarts
-            self.actor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"agentflow.actor.{name}"))
+            self.actor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
         else:
             self.actor_id = str(uuid.uuid4())
         self.name = name or f"actor-{self.actor_id[:8]}"
@@ -455,7 +455,15 @@ class Actor(ABC):
     async def _mqtt_publish(self, topic: str, payload: Any, retain: bool = False, qos: int = 0):
         if self._mqtt_client:
             try:
-                await self._mqtt_client.publish(topic, json.dumps(payload), retain=retain, qos=qos)
+                # Empty bytes = clear a retained message (MQTT spec)
+                # Must send raw empty bytes, not JSON-encoded
+                if payload == b"" or payload is None and retain:
+                    encoded = b""
+                elif isinstance(payload, (bytes, bytearray)):
+                    encoded = payload
+                else:
+                    encoded = json.dumps(payload)
+                await self._mqtt_client.publish(topic, encoded, retain=retain, qos=qos)
             except Exception as e:
                 logger.debug(f"[{self.name}] MQTT publish failed: {e}")
 

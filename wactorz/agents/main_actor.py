@@ -922,7 +922,6 @@ class MainActor(LLMAgent):
                 ),
                 timeout=5.0,
             )
-            print(f"Intent classifier decision: '{decision}' for input: '{text}'")
             token = (decision or "").strip().upper().split()[0] if decision else "OTHER"
             if token in ("HA", "PIPELINE", "OTHER", "ACTUATE"):
                 return token

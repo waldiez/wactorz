@@ -55,6 +55,13 @@ Rules:
 
 class OneOffActuatorAgent(Actor):
     """Ephemeral actor that resolves and executes one-shot HA service calls."""
+    DESCRIPTION = "Ephemeral Home Assistant actuator for one-shot natural-language device control"
+    CAPABILITIES = [
+        "home_automation",
+        "ha_actuation",
+        "device_control",
+        "one_shot_actuation",
+    ]
 
     def __init__(
         self,
@@ -75,6 +82,19 @@ class OneOffActuatorAgent(Actor):
         return self.request[:60] if self.request else "one-shot actuation"
 
     async def on_start(self) -> None:
+        await self.publish_manifest(
+            description=self.DESCRIPTION,
+            capabilities=self.CAPABILITIES,
+            input_schema={
+                "request": "str — natural-language Home Assistant device control request",
+                "task_id": "str — correlation id for the parent future",
+                "reply_to_id": "str — actor id that should receive the RESULT message",
+            },
+            output_schema={
+                "result": "str — human-readable summary of executed Home Assistant service calls",
+                "_task_id": "str — correlation id echoed back to the parent actor",
+            },
+        )
         asyncio.create_task(self._run())
 
     async def handle_message(self, msg: Message):

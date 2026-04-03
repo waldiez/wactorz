@@ -55,14 +55,14 @@ class MainActorActuateRoutingTest(unittest.IsolatedAsyncioTestCase):
         actor._handle_actuate_intent.assert_awaited_once_with("turn on the living room light")
         actor.delegate_task.assert_not_called()
 
-    async def test_classify_intent_requests_low_reasoning_effort(self):
+    async def test_classify_intent_requests_none_reasoning_effort(self):
         llm = types.SimpleNamespace(complete=AsyncMock(return_value=("ACTUATE", {})))
         actor = MainActor(llm_provider=llm)
 
         result = await actor._classify_intent("turn off the office light")
 
         self.assertEqual(result, "ACTUATE")
-        self.assertEqual(llm.complete.await_args.kwargs["reasoning_effort"], "low")
+        self.assertEqual(llm.complete.await_args.kwargs["reasoning_effort"], "none")
 
 
 class OpenAIProviderReasoningTest(unittest.IsolatedAsyncioTestCase):

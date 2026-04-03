@@ -10,6 +10,8 @@ import re
 import uuid
 from typing import Optional
 
+from wactorz.config import CONFIG
+
 from ..core.actor import Actor, Message, MessageType, ActorState
 from .llm_agent import LLMAgent, LLMProvider
 
@@ -646,12 +648,16 @@ class MainActor(LLMAgent):
 
     INTENT_CLASSIFIER_PROMPT = (
         "You are a routing classifier for a smart home AI assistant.\n"
-        "Respond with exactly one token: HA, PIPELINE, or OTHER.\n\n"
-        "HA = a direct, one-shot Home Assistant action or query:\n"
+        "Respond with exactly one token: ACTUATE, HA, PIPELINE, or OTHER.\n\n"
+        "ACTUATE = immediate one-shot device control in Home Assistant:\n"
         "  - Turn on/off a device right now\n"
+        "  - Set temperature, dim lights, lock/unlock door\n"
+        "  - Open/close covers or blinds right now\n"
+        "  - Any direct command whose whole purpose is immediate device control\n\n"
+        "HA = Home Assistant management, listing, or automation CRUD:\n"
         "  - List devices, areas, entities, automations\n"
         "  - Create/edit/delete a HA automation\n"
-        "  - Set temperature, dim lights, lock door — immediate action\n\n"
+        "  - Query what devices or automations exist\n\n"
         "PIPELINE = a reactive rule that should run continuously:\n"
         "  - 'if X happens then do Y' — any conditional/reactive logic\n"
         "  - 'when X send me a message/notification'\n"
@@ -659,7 +665,11 @@ class MainActor(LLMAgent):
         "  - Any rule involving a sensor state change triggering an action or notification\n"
         "  - Any webcam/camera detection triggering anything\n"
         "  - Anything involving Discord/Telegram notifications triggered by an event\n\n"
-        "OTHER = general conversation, coding, questions, anything not HA or pipeline related."
+        "OTHER = general conversation, coding, questions, or mixed requests.\n\n"
+        "Important:\n"
+        "- Choose ACTUATE only when the entire request is immediate device control.\n"
+        "- If the request mixes device control with non-HA tasks, return OTHER.\n"
+        "- If the request is about automations, listing, discovery, or CRUD, return HA."
     )
 
     def __init__(self, llm_provider: Optional[LLMProvider] = None, **kwargs):
@@ -895,8 +905,8 @@ class MainActor(LLMAgent):
 
     async def _classify_intent(self, text: str) -> str:
         """
-        Classify user intent as HA, PIPELINE, or OTHER using a single cheap LLM call.
-        Returns one of: 'HA', 'PIPELINE', 'OTHER'
+        Classify user intent as ACTUATE, HA, PIPELINE, or OTHER using a single cheap LLM call.
+        Returns one of: 'ACTUATE', 'HA', 'PIPELINE', 'OTHER'
         """
         if not text or text.startswith("/"):
             return "OTHER"
@@ -907,17 +917,45 @@ class MainActor(LLMAgent):
                 self.llm.complete(
                     messages=[{"role": "user", "content": text}],
                     system=self.INTENT_CLASSIFIER_PROMPT,
-                    max_tokens=4,
+                    max_tokens=10,
+                    reasoning_effort="none",
                 ),
                 timeout=5.0,
             )
+            print(f"Intent classifier decision: '{decision}' for input: '{text}'")
             token = (decision or "").strip().upper().split()[0] if decision else "OTHER"
-            if token in ("HA", "PIPELINE", "OTHER"):
+            if token in ("HA", "PIPELINE", "OTHER", "ACTUATE"):
                 return token
             return "OTHER"
         except Exception as e:
             logger.debug(f"[{self.name}] Intent classification failed: {e}")
             return "OTHER"
+
+    async def _handle_actuate_intent(self, text: str) -> str:
+        if not CONFIG.ha_url or not CONFIG.ha_token:
+            return "Home Assistant is not configured. Set `HA_URL` and `HA_TOKEN` in your .env file."
+
+        from .one_off_actuator_agent import OneOffActuatorAgent
+
+        task_id = f"actuate_{uuid.uuid4().hex[:8]}"
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._result_futures[task_id] = future
+
+        try:
+            await self.spawn(
+                OneOffActuatorAgent,
+                request=text,
+                llm_provider=self.llm,
+                task_id=task_id,
+                reply_to_id=self.actor_id,
+                persistence_dir=str(self._persistence_dir.parent),
+            )
+            result = await asyncio.wait_for(future, timeout=30.0)
+            return result.get("result", "Done.")
+        except asyncio.TimeoutError:
+            return "Actuation timed out, please retry."
+        finally:
+            self._result_futures.pop(task_id, None)
 
     async def _is_home_automation_request(self, text: str) -> bool:
         # Keep for backward compat — delegates to _classify_intent
@@ -1270,13 +1308,16 @@ class MainActor(LLMAgent):
             result = await self._run_planner(text)
             return note_prefix + (result or "Planner did not return a result. Please retry.")
 
-        # Single LLM call classifies intent: HA (direct action), PIPELINE (reactive rule), OTHER
+        # Single LLM call classifies intent: ACTUATE, HA, PIPELINE, or OTHER
         intent = await self._classify_intent(text)
         logger.info(f"[{self.name}] Intent: {intent} — {text[:60]}")
 
         if intent == "PIPELINE":
             result = await self._run_planner(text)
             return note_prefix + (result or "Planner did not return a result. Please retry.")
+
+        if intent == "ACTUATE":
+            return note_prefix + await self._handle_actuate_intent(text)
 
         if intent == "HA":
             result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
@@ -1364,13 +1405,19 @@ class MainActor(LLMAgent):
             yield {"done": True, "spawned": [], "system_msg": ""}
             return
 
-        # Single LLM call classifies intent: HA, PIPELINE, or OTHER
+        # Single LLM call classifies intent: ACTUATE, HA, PIPELINE, or OTHER
         intent = await self._classify_intent(text)
         logger.info(f"[{self.name}] Intent: {intent} — {text[:60]}")
 
         if intent == "PIPELINE":
             result = await self._run_planner(text)
             yield result or "Planner did not return a result. Please retry."
+            yield {"done": True, "spawned": [], "system_msg": ""}
+            return
+
+        if intent == "ACTUATE":
+            result = await self._handle_actuate_intent(text)
+            yield result
             yield {"done": True, "spawned": [], "system_msg": ""}
             return
 

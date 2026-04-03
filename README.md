@@ -69,11 +69,12 @@ Message flow:
 
 ### Intent Routing
 
-Every user message goes through a single cheap LLM call that classifies it into one of three categories before any further processing:
+Every user message goes through a single cheap LLM call that classifies it into one of four categories before any further processing:
 
 | Intent | Description | Route |
 |--------|-------------|-------|
-| `HA` | Direct Home Assistant action — turn on lights, list devices, create automation | → `home-assistant-agent` |
+| `ACTUATE` | Immediate one-shot Home Assistant device control — turn on/off lights, set temperature, lock/unlock, open/close covers | → ephemeral `OneOffActuatorAgent` |
+| `HA` | Home Assistant management and automation CRUD — list devices/entities/areas, create/edit/delete automations | → `home-assistant-agent` |
 | `PIPELINE` | Reactive rule — "if X then Y", "when X send me a message", any event-driven logic | → `PlannerAgent` |
 | `OTHER` | General conversation, coding, questions, everything else | → `main` LLM |
 
@@ -94,6 +95,7 @@ This replaces all previous keyword heuristics with a single LLM classification s
 | `agents/catalog_agent.py` | Agent | Recipe library — holds pre-built agent configs and spawns them on request without requiring code |
 | `agents/manual_agent.py` | Agent | PDF specialist — 3-layer search strategy to find and extract manual content |
 | `agents/home_assistant_agent.py` | Agent | Unified HA agent — hardware recommendations and automation CRUD via HA REST API |
+| `agents/one_off_actuator_agent.py` | Agent | Ephemeral one-shot HA actuator — resolves natural language to HA service calls, executes, reports, then deletes itself |
 | `agents/home_assistant_map_agent.py` | Agent | Live entity/location map via HA WebSocket |
 | `agents/home_assistant_state_bridge_agent.py` | Agent | HA `state_changed` → MQTT bridge |
 | `agents/home_assistant_actuator_agent.py` | Agent | Reactive MQTT→HA actuator — subscribes to topics, calls HA services |
@@ -158,13 +160,14 @@ async def handle_task(agent, payload):
 The user-facing orchestrator. Every message you type is processed by main, which:
 
 1. Intercepts slash-commands (`/rules`, `/memory`, `/webhook`, `/topics`, etc.) without any LLM call
-2. Classifies intent with a single LLM call: `HA`, `PIPELINE`, or `OTHER`
-3. Routes `HA` requests to `home-assistant-agent`
-4. Routes `PIPELINE` requests to `PlannerAgent`
-5. Handles `OTHER` with its own streaming LLM conversation
-6. Extracts and persists user facts in the background after every response
-7. Drains any pending monitor notifications and prepends them to the response
-8. Parses `<spawn>` blocks in the LLM output and creates agents automatically
+2. Classifies intent with a single LLM call: `ACTUATE`, `HA`, `PIPELINE`, or `OTHER`
+3. Routes `ACTUATE` requests to an ephemeral `OneOffActuatorAgent`
+4. Routes `HA` requests to `home-assistant-agent`
+5. Routes `PIPELINE` requests to `PlannerAgent`
+6. Handles `OTHER` with its own streaming LLM conversation
+7. Extracts and persists user facts in the background after every response
+8. Drains any pending monitor notifications and prepends them to the response
+9. Parses `<spawn>` blocks in the LLM output and creates agents automatically
 
 ### PlannerAgent
 
@@ -614,6 +617,28 @@ Connects to your Home Assistant instance (set `HA_URL` and `HA_TOKEN`) and handl
 | `list_entities` | Lists all entities |
 
 Device and automation data is cached (30s TTL). The agent includes a self-correction loop for hardware selection — if the LLM returns `can_fulfill=true` with an empty hardware list, it prompts for a correction automatically.
+
+### OneOffActuatorAgent — One-Shot HA Actuation
+
+Spawned by `MainActor` only for `ACTUATE` intent requests: immediate device control where the whole user request is about acting on Home Assistant devices right now.
+
+Examples:
+
+- `turn on the living room light`
+- `turn off the office light`
+- `set heating to 23 degrees`
+- `lock the front door`
+- `turn on the hallway light and turn off the kitchen light`
+
+Flow:
+
+1. Fetch the full Home Assistant device/entity map with location context
+2. Ask the configured LLM to resolve the natural-language request into a JSON array of Home Assistant service calls
+3. Execute those calls via the Home Assistant WebSocket API
+4. Send the result back to `MainActor`
+5. Publish metrics, unregister, stop, and delete its own persistence directory
+
+The agent is ephemeral by design. Unlike `HomeAssistantAgent`, it does not handle listing, discovery, automation CRUD, or persistent rules.
 
 ### HomeAssistantMapAgent — Live Entity Map
 

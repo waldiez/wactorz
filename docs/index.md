@@ -1,9 +1,9 @@
 # Wactorz
 
-**Actor-model multi-agent AI framework — Python · Rust · MQTT**
+**Actor-model multi-agent AI framework — Python MQTT**
 
-Spawn, coordinate and monitor AI agents at runtime with Erlang/OTP-style supervision,
-real-time MQTT telemetry, and a live 3D web dashboard.
+Spawn, coordinate and monitor AI agents running 24/7 with Erlang/OTP-style supervision,
+and real-time MQTT telemetry.
 
 ## Quick install
 
@@ -21,11 +21,11 @@ pip install wactorz[all]
 - **[Guide](development.md)** — Installation, configuration, deployment
 - **[Architecture](architecture.md)** — Actor model, supervision trees, message flow
 - **[Agents](agents.md)** — Built-in and custom agent reference
-- **[REST & WebSocket API](api.md)** — HTTP endpoints and WebSocket protocol
-- **[MQTT Topics](mqtt_topics.md)** — Full topic reference with payload schemas
-- **[Python API](python-api.md)** — Auto-generated Python class reference
-- **[Rust Docs](https://waldiez.github.io/wactorz/api/rust/)** — Rustdoc for wactorz-core and wactorz-interfaces
-- **[JS/TS Docs](https://waldiez.github.io/wactorz/api/js/)** — TypeDoc for the Babylon.js frontend
+- **[Interfaces](interfaces.md)** — HTTP endpoints and WebSocket protocol
+- **[Pipelines](pipelines.md)** — Full topic reference with payload schemas
+- **[Remote Nodes](remote-nodes.md)** — Auto-generated Python class reference
+<!-- - **[Rust Docs](https://waldiez.github.io/wactorz/api/rust/)** — Rustdoc for wactorz-core and wactorz-interfaces
+- **[JS/TS Docs](https://waldiez.github.io/wactorz/api/js/)** — TypeDoc for the Babylon.js frontend -->
 
 ## Links
 

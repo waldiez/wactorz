@@ -43,17 +43,18 @@ NAV = [
         ("Installation", "development.md"),
         ("Architecture", "architecture.md"),
         ("Agents",       "agents.md"),
-        ("Deployment",   "deployment.md"),
-        ("Windows",      "windows.md"),
+        ("Interfaces",   "interfaces.md"),
+        ("Pipelines",      "pipelines.md"),
+        ("Remote Nodes",      "remote-nodes.md"),
     ]),
-    ("Reference", "reference", [
-        ("REST & WebSocket API", "api.md"),
-        ("MQTT Topics",          "mqtt_topics.md"),
-        ("Python API",           "python-api.md"),
-    ]),
-    ("Rust Docs ↗",   "https://waldiez.github.io/wactorz/api/rust/"),
-    ("JS/TS Docs ↗",  "https://waldiez.github.io/wactorz/api/js/"),
-    ("Python Docs ↗", "https://waldiez.github.io/wactorz/api/python/"),
+    #("Reference", "reference", [
+    #    ("REST & WebSocket API", "api.md"),
+    #    ("MQTT Topics",          "mqtt_topics.md"),
+    #    ("Python API",           "python-api.md"),
+    #]),
+    #("Rust Docs ↗",   "https://waldiez.github.io/wactorz/api/rust/"),
+    #("JS/TS Docs ↗",  "https://waldiez.github.io/wactorz/api/js/"),
+    #("Python Docs ↗", "https://waldiez.github.io/wactorz/api/python/"),
 ]
 
 # ── HTML template ──────────────────────────────────────────────────────────────
@@ -65,6 +66,7 @@ TEMPLATE = """\
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>{title} — Wactorz</title>
   <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
   <style>
@@ -165,9 +167,6 @@ TEMPLATE = """\
   <nav class="topbar-links">
     <a href="https://github.com/waldiez/wactorz">GitHub</a>
     <a href="https://pypi.org/project/wactorz/">PyPI</a>
-    <a href="{root}api/rust/" target="_blank" rel="noopener">Rust Docs</a>
-    <a href="{root}api/js/" target="_blank" rel="noopener">JS Docs</a>
-    <a href="{root}api/python/" target="_blank" rel="noopener">Python Docs</a>
   </nav>
 </header>
 

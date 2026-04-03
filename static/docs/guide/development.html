@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Development — Wactorz</title>
+  <title>Installation — Wactorz</title>
   <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
   <style>
@@ -105,9 +106,6 @@
   <nav class="topbar-links">
     <a href="https://github.com/waldiez/wactorz">GitHub</a>
     <a href="https://pypi.org/project/wactorz/">PyPI</a>
-    <a href="../api/rust/" target="_blank" rel="noopener">Rust Docs</a>
-    <a href="../api/js/" target="_blank" rel="noopener">JS Docs</a>
-    <a href="../api/python/" target="_blank" rel="noopener">Python Docs</a>
   </nav>
 </header>
 
@@ -118,317 +116,409 @@
       <a href="../guide/development.html" class="active">Installation</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
-      <a href="../guide/deployment.html" class="">Deployment</a>
-      <a href="../guide/windows.html" class="">Windows</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
     </div>
-    <div class="sidebar-group">
-      <div class="sidebar-label">Reference</div>
-      <a href="../reference/api.html" class="">REST & WebSocket API</a>
-      <a href="../reference/mqtt_topics.html" class="">MQTT Topics</a>
-      <a href="../reference/python-api.html" class="">Python API</a>
-    </div>
-    <a href="https://waldiez.github.io/wactorz/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
-    <a href="https://waldiez.github.io/wactorz/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
-    <a href="https://waldiez.github.io/wactorz/api/python/" class="external" target="_blank" rel="noopener">Python Docs ↗</a>
   </aside>
   <main class="content">
-<h1 id="development">Development</h1>
-<h2 id="prerequisites">Prerequisites</h2>
+<h1 id="installation">Installation</h1>
+<p>Wactorz requires Python 3.10+ and a running MQTT broker. The <code>wactorz</code> command starts everything — the actor system, the embedded broker, and the web dashboard.</p>
+<hr />
+<h2 id="install">Install</h2>
+<h4 id="from-pypi">From PyPI</h4>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>wactorz<span class="o">[</span>all<span class="o">]</span>
+</code></pre></div>
+
+<h4 id="latest-from-github">Latest from GitHub</h4>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;wactorz[all] @ git+https://github.com/waldiez/wactorz.git&quot;</span>
+</code></pre></div>
+
+<h4 id="from-source-editable">From source (editable)</h4>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/waldiez/wactorz.git
+<span class="nb">cd</span><span class="w"> </span>wactorz
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[all]&quot;</span>
+</code></pre></div>
+
+<hr />
+<h2 id="optional-dependencies">Optional dependencies</h2>
+<p>The <code>[all]</code> extra installs everything except the ML stack (heavy torch dependency). Install individual extras as needed:</p>
 <table>
 <thead>
 <tr>
-<th>Tool</th>
-<th>Version</th>
-<th>Purpose</th>
+<th>Extra</th>
+<th>Installs</th>
+<th>Needed for</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Python</td>
-<td>≥ 3.11</td>
-<td>Backend (primary)</td>
+<td><code>wactorz[anthropic]</code></td>
+<td><code>anthropic</code></td>
+<td><code>--llm anthropic</code> (default)</td>
 </tr>
 <tr>
-<td>Node.js</td>
-<td>≥ 20</td>
-<td>Frontend build</td>
+<td><code>wactorz[openai]</code></td>
+<td><code>openai</code></td>
+<td><code>--llm openai</code></td>
 </tr>
 <tr>
-<td>npm</td>
-<td>≥ 10</td>
-<td>Frontend deps</td>
+<td><code>wactorz[google]</code></td>
+<td><code>google-generativeai</code></td>
+<td><code>--llm gemini</code></td>
 </tr>
 <tr>
-<td>Docker + Compose</td>
-<td>any recent</td>
-<td>Dev stack</td>
+<td><code>wactorz[discord]</code></td>
+<td><code>discord.py</code></td>
+<td><code>--interface discord</code></td>
 </tr>
 <tr>
-<td>Rust</td>
-<td>≥ 1.93</td>
-<td>Backend (optional, in-sync)</td>
+<td><code>wactorz[whatsapp]</code></td>
+<td><code>twilio</code></td>
+<td><code>--interface whatsapp</code></td>
 </tr>
 <tr>
-<td>mosquitto-clients</td>
-<td>optional</td>
-<td>MQTT debugging</td>
+<td><code>wactorz[ml]</code></td>
+<td><code>ultralytics</code>, <code>torch</code>, <code>numpy</code></td>
+<td>webcam detection pipelines</td>
+</tr>
+<tr>
+<td><code>wactorz[all]</code></td>
+<td>all of the above except <code>ml</code></td>
+<td>recommended starting point</td>
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong>Tip:</strong> You only need to install the dep for the provider you actually use. If you plan to switch providers, install <code>wactorz[all]</code> once and set the active provider via <code>--llm</code> flag or <code>LLM_PROVIDER</code> in <code>.env</code>.</p>
+</blockquote>
 <hr />
-<h2 id="quick-start-frontend-only-no-rust-build">Quick start (frontend-only, no Rust build)</h2>
-<p>The fastest way to develop the UI is against the mock agent simulator.</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Terminal 1 — MQTT broker + mock agents</span>
-docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d
+<h2 id="quick-start">Quick start</h2>
+<div class="highlight"><pre><span></span><code><span class="c1"># 1. Create a .env file with your LLM key (see Configuration below)</span>
+cp<span class="w"> </span>.env.example<span class="w"> </span>.env
+<span class="c1"># edit .env and set LLM_API_KEY (or whichever provider you use)</span>
 
-<span class="c1"># Terminal 2 — Vite dev server (hot-reload on http://localhost:3000)</span>
-<span class="nb">cd</span><span class="w"> </span>frontend
-npm<span class="w"> </span>install
-npm<span class="w"> </span>run<span class="w"> </span>dev
+<span class="c1"># 2. Start Wactorz (starts everything including the broker)</span>
+wactorz
+
+<span class="c1"># 3. Open the web dashboard</span>
+<span class="c1"># http://localhost:8888</span>
 </code></pre></div>
 
-<p>The mock simulator (<code>scripts/mock-agents.mjs</code>) publishes realistic MQTT events:
-- 6 agents: main-actor, monitor-agent, data-fetcher, weather-agent, ml-classifier, nautilus-agent, udx-agent
-- Heartbeats every 5 s
-- Chat replies every 4 s
-- Occasional alerts (30% chance every 8 s)
-- Dynamic agent spawns every 20 s (20% chance)</p>
-<p>The Vite dev server proxies <code>/api/</code>, <code>/ws</code>, and <code>/mqtt</code> to the local ports exposed by <code>compose.dev.yaml</code>.</p>
-<h2 id="python-first-dev-mode">Python-first dev mode</h2>
-<p>For day-to-day development, the repo can default to the Python backend while
-exposing the same frontend-facing API contract (which the optional Rust backend mirrors).</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Terminal 1 — MQTT broker</span>
-docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>mosquitto
+<p>That's it. The CLI interface starts in your terminal and the web dashboard opens at <code>localhost:8888</code>. Both can be used simultaneously.</p>
+<h4 id="switch-interface-or-provider">Switch interface or provider</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Use Gemini instead of Claude</span>
+wactorz<span class="w"> </span>--llm<span class="w"> </span>gemini<span class="w"> </span>--gemini-model<span class="w"> </span>gemini-2.5-flash
 
-<span class="c1"># Terminal 2 — Python backend, REST on :8080</span>
-<span class="nv">WACTORZ_DEV_MODE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./run.sh
+<span class="c1"># Discord bot</span>
+wactorz<span class="w"> </span>--interface<span class="w"> </span>discord<span class="w"> </span>--discord-token<span class="w"> </span><span class="nv">$DISCORD_BOT_TOKEN</span>
 
-<span class="c1"># Terminal 3 — frontend SPA</span>
-<span class="nb">cd</span><span class="w"> </span>frontend<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>install<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>dev
-</code></pre></div>
-
-<p>In this mode:
-- <code>run.sh</code> defaults to the Python backend unless <code>WACTORZ_BACKEND</code> overrides it.
-- The Python backend defaults to <code>INTERFACE=rest</code> and <code>PORT=8080</code>.
-- The primary frontend is <code>frontend/index.html</code>, not the legacy <code>monitor.html</code>.</p>
-<h3 id="stop-mock-stack">Stop mock stack</h3>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>down
+<span class="c1"># Hot-reload during development (restarts on source file changes)</span>
+wactorz<span class="w"> </span>--reload
 </code></pre></div>
 
 <hr />
-<h2 id="full-stack-rust-backend-optional-in-sync">Full stack (Rust backend, optional in-sync)</h2>
-<div class="highlight"><pre><span></span><code><span class="c1"># Terminal 1 — support services</span>
-docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>mosquitto<span class="w"> </span>dashboard<span class="w">   </span><span class="c1"># or &#39;docker compose up -d&#39;</span>
+<h2 id="configuration">Configuration</h2>
+<p>Wactorz reads configuration from a <code>.env</code> file in the working directory. All values can also be passed as environment variables.</p>
+<h4 id="core">Core</h4>
+<div class="highlight"><pre><span></span><code><span class="gh">#</span> LLM provider — anthropic | openai | ollama | nim | gemini
+LLM_PROVIDER=anthropic
+LLM_MODEL=claude-sonnet-4-6
 
-<span class="c1"># Terminal 2 — Rust backend</span>
-<span class="nb">cd</span><span class="w"> </span>rust
-<span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">wactorz</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>wactorz<span class="w"> </span>--<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--mqtt-host<span class="w"> </span>localhost<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--llm-provider<span class="w"> </span>anthropic<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--llm-api-key<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$LLM_API_KEY</span><span class="s2">&quot;</span>
+<span class="gh">#</span> API keys — set whichever provider you use
+LLM_API_KEY=sk-ant-...
+</code></pre></div>
 
-<span class="c1"># Terminal 3 — frontend dev server</span>
-<span class="nb">cd</span><span class="w"> </span>frontend<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>dev
+<h4 id="home-assistant">Home Assistant</h4>
+<div class="highlight"><pre><span></span><code>HA_URL=http://homeassistant.local:8123
+HA_TOKEN=eyJ...              # Long-lived access token from HA profile page
+HA_STATE_BRIDGE_PER_ENTITY=0 # 0 = flat topic (default), 1 = per-entity topics
+</code></pre></div>
+
+<h4 id="interfaces">Interfaces</h4>
+<div class="highlight"><pre><span></span><code><span class="gh">#</span> Discord
+DISCORD_BOT_TOKEN=MTI4...
+
+<span class="gh">#</span> WhatsApp (Twilio)
+TWILIO_ACCOUNT_SID=ACxxx...
+TWILIO_AUTH_TOKEN=...
+TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
+
+<span class="gh">#</span> Telegram
+TELEGRAM_BOT_TOKEN=1234567890:AAF...
+
+<span class="gh">#</span> REST API auth (optional)
+API_KEY=my-secret-key
+</code></pre></div>
+
+<h4 id="mqtt-broker">MQTT broker</h4>
+<div class="highlight"><pre><span></span><code><span class="gh">#</span> Only needed if using an external broker instead of the embedded one
+MQTT_HOST=localhost
+MQTT_PORT=1883
+</code></pre></div>
+
+<h4 id="web-dashboard">Web dashboard</h4>
+<div class="highlight"><pre><span></span><code>MONITOR_PORT=8888   # dashboard port, default 8888
+</code></pre></div>
+
+<hr />
+<h2 id="mqtt-broker_1">MQTT broker</h2>
+<p>Wactorz ships with an embedded MQTT broker that starts automatically — no separate installation needed for basic use. If you prefer to use an external Mosquitto instance (e.g. for multi-machine setups or when you already have a broker running), point Wactorz at it:</p>
+<div class="highlight"><pre><span></span><code>wactorz<span class="w"> </span>--mqtt-broker<span class="w"> </span><span class="m">192</span>.168.1.10<span class="w"> </span>--mqtt-port<span class="w"> </span><span class="m">1883</span>
+</code></pre></div>
+
+<h4 id="running-mosquitto-via-docker">Running Mosquitto via Docker</h4>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>eclipse-mosquitto:latest<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>mosquitto<span class="w"> </span>-c<span class="w"> </span>/mosquitto/config/mosquitto.conf
+</code></pre></div>
+
+<blockquote>
+<p><strong>Note (Docker Desktop on Windows/Mac):</strong> When services run inside Docker and need to reach the broker on the host, use <code>host.docker.internal</code> as the broker hostname instead of <code>localhost</code>.</p>
+</blockquote>
+<hr />
+<h2 id="web-ui">Web UI</h2>
+<p>The web dashboard at <code>http://localhost:8888</code> starts automatically with every <code>wactorz</code> invocation. It provides a real-time view of the running system:</p>
+<ul>
+<li><strong>Agent grid</strong> — live heartbeat status for every registered actor</li>
+<li><strong>Log stream</strong> — real-time output from all agents via WebSocket</li>
+<li><strong>Chat</strong> — full conversation interface, equivalent to the CLI</li>
+<li><strong>Docs</strong> — this documentation at <code>/docs/</code></li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="c1"># Change the dashboard port</span>
+wactorz<span class="w"> </span>--monitor-port<span class="w"> </span><span class="m">9000</span>
+
+<span class="c1"># Disable the dashboard entirely</span>
+wactorz<span class="w"> </span>--no-monitor
+</code></pre></div>
+
+<blockquote>
+<p><strong>Browser cache:</strong> If you update doc files and still see old content, do a hard refresh: <strong>Ctrl+Shift+R</strong> (Windows/Linux) or <strong>Cmd+Shift+R</strong> (Mac).</p>
+</blockquote>
+<hr />
+<h2 id="docker">Docker</h2>
+<p>Wactorz ships with a <code>Dockerfile</code> and Docker Compose files for running the full stack in containers. Docker is the recommended approach for production deployments and reproducible dev environments.</p>
+<h3 id="prerequisites">Prerequisites</h3>
+<ul>
+<li><a href="https://www.docker.com/products/docker-desktop/">Docker Desktop</a> (Windows/Mac) or Docker Engine (Linux)</li>
+<li>A <code>.env</code> file copied from <code>.env.example</code> with your secrets filled in</li>
+</ul>
+<h3 id="development-stack">Development stack</h3>
+<p>The <code>compose.dev.yaml</code> starts MQTT + Fuseki + the Python app together — ideal for local development:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Start everything</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+
+<span class="c1"># View logs</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>wactorz
+
+<span class="c1"># Stop everything</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>down
+</code></pre></div>
+
+<p>Services started:</p>
+<table>
+<thead>
+<tr>
+<th>Container</th>
+<th>Port</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wactorz-app</code></td>
+<td>:8000, :8888</td>
+<td>Python agent system (REST API + Web UI)</td>
+</tr>
+<tr>
+<td><code>wactorz-fuseki</code></td>
+<td>:3030</td>
+<td>Apache Jena Fuseki (knowledge graph)</td>
+</tr>
+<tr>
+<td><code>wactorz-dev-mosquitto</code></td>
+<td>:1883, :9001</td>
+<td>MQTT broker (TCP + WebSocket)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="production-stack-profiles">Production stack (profiles)</h3>
+<p>The main <code>compose.yaml</code> uses profiles so you only start what you need:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># MQTT broker only (default)</span>
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+
+<span class="c1"># Python agents + MQTT</span>
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
+
+<span class="c1"># Python agents + MQTT + Fuseki</span>
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>up<span class="w"> </span>-d
+
+<span class="c1"># Rust server + nginx dashboard</span>
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>rust<span class="w"> </span>up<span class="w"> </span>-d
+
+<span class="c1"># Everything (Rust + Fuseki + Home Assistant)</span>
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Profile</th>
+<th>Services</th>
+<th>Ports</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><em>(default)</em></td>
+<td>mosquitto</td>
+<td>:1883, :9001</td>
+</tr>
+<tr>
+<td><code>python</code></td>
+<td>+ wactorz-python</td>
+<td>+ :8000, :8888</td>
+</tr>
+<tr>
+<td><code>python-full</code></td>
+<td>+ wactorz-python, fuseki</td>
+<td>+ :8000, :8888, :3030</td>
+</tr>
+<tr>
+<td><code>rust</code></td>
+<td>+ wactorz-server, dashboard</td>
+<td>+ :8080, :8081, :80</td>
+</tr>
+<tr>
+<td><code>full</code></td>
+<td>+ rust, fuseki, homeassistant</td>
+<td>+ :8080, :8081, :80, :3030, :8123</td>
+</tr>
+</tbody>
+</table>
+<h3 id="environment-variables-in-docker">Environment variables in Docker</h3>
+<p>Your <code>.env</code> file is loaded automatically via <code>env_file</code>. The compose files override a few values so services can reach each other by container name instead of <code>localhost</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="gh">#</span> These are set automatically by compose — do not override in .env
+MQTT_HOST=mosquitto         # container name, not localhost
+FUSEKI_URL=http://fuseki:3030
+</code></pre></div>
+
+<blockquote>
+<p><strong>Warning (Windows line endings):</strong> If Fuseki fails with <code>exec /entrypoint.sh: no such file or directory</code>, the shell script has Windows CRLF line endings. Fix with:
+<code>bash
+docker run --rm -v "$PWD/config/fuseki-container:/work" alpine sh -c "sed -i 's/\r//' /work/entrypoint.sh"</code>
+Then rebuild: <code>docker compose -f compose.dev.yaml up -d --build fuseki</code></p>
+<p><strong>Fuseki admin UI:</strong> After starting Fuseki, the admin UI is at <code>http://localhost:3030</code>. Default credentials: <strong>admin / admin</strong> (set via <code>FUSEKI_ADMIN_PASSWORD</code> in your <code>.env</code>).</p>
+</blockquote>
+<h3 id="rebuilding-after-code-changes">Rebuilding after code changes</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Rebuild and restart just the Python app</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build<span class="w"> </span>wactorz
+
+<span class="c1"># Full teardown and rebuild</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>down
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
 </code></pre></div>
 
 <hr />
 <h2 id="project-structure">Project structure</h2>
-<div class="highlight"><pre><span></span><code><span class="nx">wactorz</span><span class="o">/</span>
-<span class="err">├──</span><span class="w"> </span><span class="nx">rust</span><span class="o">/</span><span class="w">                          </span><span class="nx">Rust</span><span class="w"> </span><span class="nx">workspace</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">Cargo</span><span class="p">.</span><span class="nx">toml</span><span class="w">                 </span><span class="nx">workspace</span><span class="w"> </span><span class="nx">manifest</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">Dockerfile</span><span class="w">                 </span><span class="nx">multi</span><span class="o">-</span><span class="nx">stage</span><span class="p">:</span><span class="w"> </span><span class="nx">builder</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="nx">runtime</span>
-<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">crates</span><span class="o">/</span>
-<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">core</span><span class="o">/</span><span class="w">        </span><span class="nx">Actor</span><span class="w"> </span><span class="nx">trait</span><span class="p">,</span><span class="w"> </span><span class="nx">registry</span><span class="p">,</span><span class="w"> </span><span class="nx">messages</span>
-<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">agents</span><span class="o">/</span><span class="w">      </span><span class="nx">All</span><span class="w"> </span><span class="nx">concrete</span><span class="w"> </span><span class="nx">agents</span>
-<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">mqtt</span><span class="o">/</span><span class="w">        </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">client</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">topic</span><span class="w"> </span><span class="nx">helpers</span>
-<span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">interfaces</span><span class="o">/</span><span class="w">  </span><span class="nx">REST</span><span class="p">,</span><span class="w"> </span><span class="nx">WebSocket</span><span class="p">,</span><span class="w"> </span><span class="nx">CLI</span>
-<span class="err">│</span><span class="w">       </span><span class="err">└──</span><span class="w"> </span><span class="nx">wactorz</span><span class="o">-</span><span class="nx">server</span><span class="o">/</span><span class="w">      </span><span class="nx">Binary</span><span class="w"> </span><span class="nx">entry</span><span class="w"> </span><span class="nx">point</span>
-<span class="err">│</span>
-<span class="err">├──</span><span class="w"> </span><span class="nx">frontend</span><span class="o">/</span><span class="w">                      </span><span class="nx">Vite</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">TypeScript</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">Babylon</span><span class="p">.</span><span class="nx">js</span><span class="w"> </span><span class="nx">SPA</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">src</span><span class="o">/</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">main</span><span class="p">.</span><span class="nx">ts</span><span class="w">                </span><span class="nx">App</span><span class="w"> </span><span class="nx">bootstrap</span><span class="p">,</span><span class="w"> </span><span class="nx">wires</span><span class="w"> </span><span class="nx">all</span><span class="w"> </span><span class="nx">components</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">types</span><span class="o">/</span><span class="nx">agent</span><span class="p">.</span><span class="nx">ts</span><span class="w">         </span><span class="nx">Shared</span><span class="w"> </span><span class="nx">TypeScript</span><span class="w"> </span><span class="nx">types</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">mqtt</span><span class="o">/</span><span class="nx">MQTTClient</span><span class="p">.</span><span class="nx">ts</span><span class="w">     </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">client</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="nx">routing</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">io</span><span class="o">/</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">IOManager</span><span class="p">.</span><span class="nx">ts</span><span class="w">       </span><span class="nx">Sends</span><span class="w"> </span><span class="nx">messages</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">io</span><span class="o">/</span><span class="nx">chat</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">IOBar</span><span class="p">.</span><span class="nx">ts</span><span class="w">           </span><span class="nx">Input</span><span class="w"> </span><span class="nx">bar</span><span class="w"> </span><span class="p">(</span><span class="nx">history</span><span class="p">,</span><span class="w"> </span><span class="nx">multiline</span><span class="p">,</span><span class="w"> </span><span class="err">@</span><span class="nx">mention</span><span class="p">)</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">AgentImageGen</span><span class="p">.</span><span class="nx">ts</span><span class="w">   </span><span class="nx">DiceBear</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">Gemini</span><span class="w"> </span><span class="nx">avatar</span><span class="w"> </span><span class="nx">generation</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">VoiceInput</span><span class="p">.</span><span class="nx">ts</span><span class="w">      </span><span class="nx">Web</span><span class="w"> </span><span class="nx">Speech</span><span class="w"> </span><span class="nx">API</span><span class="w"> </span><span class="nx">integration</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">scene</span><span class="o">/</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">SceneManager</span><span class="p">.</span><span class="nx">ts</span><span class="w">    </span><span class="nx">Babylon</span><span class="p">.</span><span class="nx">js</span><span class="w"> </span><span class="nx">lifecycle</span><span class="p">,</span><span class="w"> </span><span class="nx">theme</span><span class="w"> </span><span class="nx">switching</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">themes</span><span class="o">/</span><span class="w">            </span><span class="nx">GraphTheme</span><span class="p">,</span><span class="w"> </span><span class="nx">GalaxyTheme</span><span class="p">,</span><span class="w"> </span><span class="nx">GraveTheme</span><span class="p">,</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">                        </span><span class="nx">CardBabylonTheme</span><span class="p">,</span><span class="w"> </span><span class="nx">ThemeBase</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">nodes</span><span class="o">/</span><span class="w">             </span><span class="nx">GraphNode</span><span class="p">,</span><span class="w"> </span><span class="nx">PlanetNode</span><span class="p">,</span><span class="w"> </span><span class="nx">GraveNode</span><span class="p">,</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">                        </span><span class="nx">AgentNodeBase</span><span class="p">,</span><span class="w"> </span><span class="nx">CardBabylonNode</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">effects</span><span class="o">/</span><span class="w">           </span><span class="nx">AlertEffect</span><span class="p">,</span><span class="w"> </span><span class="nx">HeartbeatEffect</span><span class="p">,</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">                            </span><span class="nx">MessageEffect</span><span class="p">,</span><span class="w"> </span><span class="nx">SpawnEffect</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">ui</span><span class="o">/</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">ChatPanel</span><span class="p">.</span><span class="nx">ts</span><span class="w">       </span><span class="nx">Per</span><span class="o">-</span><span class="nx">agent</span><span class="w"> </span><span class="nx">chat</span><span class="w"> </span><span class="nx">threads</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">SocialDashboard</span><span class="p">.</span><span class="nx">ts</span><span class="w"> </span><span class="nx">Instagram</span><span class="o">/</span><span class="nx">Twitter</span><span class="o">-</span><span class="nx">style</span><span class="w"> </span><span class="nx">card</span><span class="w"> </span><span class="nx">grid</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">CardDashboard</span><span class="p">.</span><span class="nx">ts</span><span class="w">   </span><span class="nx">Minimal</span><span class="w"> </span><span class="nx">HTML</span><span class="w"> </span><span class="nx">card</span><span class="w"> </span><span class="nx">grid</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">ActivityFeed</span><span class="p">.</span><span class="nx">ts</span><span class="w">    </span><span class="nx">Collapsible</span><span class="w"> </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="nx">log</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">MentionPopup</span><span class="p">.</span><span class="nx">ts</span><span class="w">    </span><span class="err">@</span><span class="nx">mention</span><span class="w"> </span><span class="nx">autocomplete</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">├──</span><span class="w"> </span><span class="nx">AgentHUD</span><span class="p">.</span><span class="nx">ts</span><span class="w">        </span><span class="nx">Top</span><span class="o">-</span><span class="nx">left</span><span class="w"> </span><span class="nx">agent</span><span class="w"> </span><span class="nx">count</span><span class="w"> </span><span class="nx">HUD</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">       </span><span class="err">└──</span><span class="w"> </span><span class="nx">ThemeSwitcher</span><span class="p">.</span><span class="nx">ts</span><span class="w">   </span><span class="nx">Theme</span><span class="w"> </span><span class="nx">toggle</span><span class="w"> </span><span class="nx">buttons</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">public</span><span class="o">/</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">favicon</span><span class="p">.</span><span class="nx">svg</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">site</span><span class="p">.</span><span class="nx">webmanifest</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">robots</span><span class="p">.</span><span class="nx">txt</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">index</span><span class="p">.</span><span class="nx">html</span><span class="w">                 </span><span class="nx">All</span><span class="w"> </span><span class="nx">CSS</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="nx">inline</span><span class="w"> </span><span class="nx">here</span><span class="w"> </span><span class="p">(</span><span class="nx">no</span><span class="w"> </span><span class="kd">external</span><span class="w"> </span><span class="nx">CSS</span><span class="w"> </span><span class="nx">files</span><span class="p">)</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">vite</span><span class="p">.</span><span class="nx">config</span><span class="p">.</span><span class="nx">ts</span>
-<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">tsconfig</span><span class="p">.</span><span class="nx">json</span>
-<span class="err">│</span>
-<span class="err">├──</span><span class="w"> </span><span class="nx">infra</span><span class="o">/</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">nginx</span><span class="o">/</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">nginx</span><span class="p">.</span><span class="nx">conf</span><span class="w">             </span><span class="nx">Full</span><span class="w"> </span><span class="nx">Docker</span><span class="w"> </span><span class="nx">mode</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">nginx</span><span class="o">-</span><span class="nx">native</span><span class="p">.</span><span class="nx">conf</span><span class="w">      </span><span class="nx">Native</span><span class="w"> </span><span class="nx">binary</span><span class="w"> </span><span class="nx">mode</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">mosquitto</span><span class="o">/</span><span class="nx">mosquitto</span><span class="p">.</span><span class="nx">conf</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">fuseki</span><span class="o">/</span><span class="w">                    </span><span class="nx">Apache</span><span class="w"> </span><span class="nx">Jena</span><span class="w"> </span><span class="nx">Fuseki</span>
-<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">homeassistant</span><span class="o">/</span><span class="w">             </span><span class="nx">HA</span><span class="w"> </span><span class="nx">configuration</span>
-<span class="err">│</span>
-<span class="err">├──</span><span class="w"> </span><span class="nx">scripts</span><span class="o">/</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">deploy</span><span class="p">.</span><span class="nx">sh</span><span class="w">                  </span><span class="nx">Build</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">rsync</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">restart</span><span class="w"> </span><span class="nx">wizard</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">mock</span><span class="o">-</span><span class="nx">agents</span><span class="p">.</span><span class="nx">mjs</span><span class="w">            </span><span class="nx">Dev</span><span class="o">-</span><span class="nx">mode</span><span class="w"> </span><span class="nx">mock</span><span class="w"> </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">simulator</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="kn">package</span><span class="o">-</span><span class="nx">full</span><span class="o">-</span><span class="nx">release</span><span class="p">.</span><span class="nx">sh</span><span class="w">    </span><span class="nx">Build</span><span class="w"> </span><span class="nx">full</span><span class="w"> </span><span class="nx">zip</span><span class="w"> </span><span class="nx">release</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="kn">package</span><span class="o">-</span><span class="nx">native</span><span class="p">.</span><span class="nx">sh</span><span class="w">          </span><span class="nx">Build</span><span class="w"> </span><span class="nx">native</span><span class="w"> </span><span class="nx">binary</span><span class="w"> </span><span class="nx">tar</span><span class="p">.</span><span class="nx">gz</span>
-<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">build</span><span class="o">-</span><span class="nx">native</span><span class="p">.</span><span class="nx">sh</span><span class="w">            </span><span class="nx">Build</span><span class="w"> </span><span class="nx">binary</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">the</span><span class="w"> </span><span class="nx">target</span><span class="w"> </span><span class="nx">host</span>
-<span class="err">│</span>
-<span class="err">├──</span><span class="w"> </span><span class="nx">systemd</span><span class="o">/</span><span class="nx">wactorz</span><span class="p">.</span><span class="nx">service</span><span class="w">      </span><span class="nx">systemd</span><span class="w"> </span><span class="nx">unit</span><span class="w"> </span><span class="nx">template</span>
-<span class="err">├──</span><span class="w"> </span><span class="nx">compose</span><span class="p">.</span><span class="nx">yaml</span><span class="w">                   </span><span class="nx">Full</span><span class="w"> </span><span class="nx">Docker</span><span class="w"> </span><span class="nx">stack</span>
-<span class="err">├──</span><span class="w"> </span><span class="nx">compose</span><span class="p">.</span><span class="nx">dev</span><span class="p">.</span><span class="nx">yaml</span><span class="w">               </span><span class="nx">Dev</span><span class="w"> </span><span class="nx">stack</span><span class="w"> </span><span class="p">(</span><span class="nx">mosquitto</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">mock</span><span class="w"> </span><span class="nx">only</span><span class="p">)</span>
-<span class="err">├──</span><span class="w"> </span><span class="nx">compose</span><span class="p">.</span><span class="nx">native</span><span class="p">.</span><span class="nx">yaml</span><span class="w">            </span><span class="nx">Native</span><span class="w"> </span><span class="nx">binary</span><span class="w"> </span><span class="nx">stack</span>
-<span class="err">├──</span><span class="w"> </span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">example</span><span class="w">                   </span><span class="nx">Annotated</span><span class="w"> </span><span class="nx">config</span><span class="w"> </span><span class="nx">template</span>
-<span class="err">└──</span><span class="w"> </span><span class="nx">docs</span><span class="o">/</span><span class="w">                          </span><span class="nx">This</span><span class="w"> </span><span class="nx">documentation</span>
+<div class="highlight"><pre><span></span><code><span class="n">wactorz</span>/                         ← <span class="n">repo</span> <span class="n">root</span>
+├── <span class="n">wactorz</span>/                     ← <span class="n">Python</span> <span class="nb">package</span>
+│   ├── <span class="n">cli</span>.<span class="n">py</span>                   ← <span class="n">entry</span> <span class="n">point</span> (<span class="n">wactorz</span> <span class="nb">command</span>)
+│   ├── <span class="nb">config</span>.<span class="n">py</span>                ← .<span class="n">env</span> <span class="n">loading</span>, <span class="n">CONFIG</span> <span class="n">object</span>
+│   ├── <span class="n">monitor_server</span>.<span class="n">py</span>        ← <span class="n">web</span> <span class="n">dashboard</span> (<span class="n">aiohttp</span>)
+│   ├── <span class="n">core</span>/
+│   │   ├── <span class="n">actor</span>.<span class="n">py</span>             ← <span class="n">Actor</span> <span class="nb">base</span> <span class="k">class</span>, <span class="n">Supervisor</span>, <span class="n">persistence</span>
+│   │   └── <span class="n">registry</span>.<span class="n">py</span>          ← <span class="n">ActorSystem</span>, <span class="n">ActorRegistry</span>, <span class="n">MQTT</span> <span class="n">publisher</span>
+│   ├── <span class="n">agents</span>/
+│   │   ├── <span class="n">main_actor</span>.<span class="n">py</span>        ← <span class="n">LLM</span> <span class="n">orchestrator</span>
+│   │   ├── <span class="n">llm_agent</span>.<span class="n">py</span>         ← <span class="n">LLM</span> <span class="nb">base</span> + <span class="nb">all</span> <span class="n">providers</span>
+│   │   ├── <span class="n">home_assistant_agent</span>.<span class="n">py</span>
+│   │   ├── <span class="n">home_assistant_state_bridge_agent</span>.<span class="n">py</span>
+│   │   ├── <span class="n">home_assistant_map_agent</span>.<span class="n">py</span>
+│   │   ├── <span class="n">monitor_agent</span>.<span class="n">py</span>
+│   │   ├── <span class="n">installer_agent</span>.<span class="n">py</span>
+│   │   └── <span class="n">io_agent</span>.<span class="n">py</span>
+│   ├── <span class="n">catalogue_agents</span>/        ← <span class="n">pre-built</span> <span class="n">DynamicAgent</span> <span class="n">recipes</span>
+│   ├── <span class="n">interfaces</span>/
+│   │   └── <span class="n">chat_interfaces</span>.<span class="n">py</span>   ← <span class="n">CLI</span>, <span class="n">REST</span>, <span class="n">Discord</span>, <span class="n">WhatsApp</span>, <span class="n">Telegram</span>
+│   └── <span class="n">static</span>/
+│       └── <span class="n">docs</span>/                ← <span class="n">documentation</span> (<span class="n">served</span> <span class="nb">at</span> /<span class="n">docs</span>/)
+├── <span class="n">static</span>/                      ← <span class="nb">source</span> <span class="n">docs</span> + <span class="n">frontend</span> <span class="n">SPA</span>
+├── <span class="k">state</span>/                       ← <span class="n">agent</span> <span class="n">persistence</span> (<span class="n">created</span> <span class="nb">at</span> <span class="n">runtime</span>)
+├── <span class="n">Dockerfile</span>                   ← <span class="n">Python</span> <span class="n">app</span> <span class="n">container</span>
+├── .<span class="n">dockerignore</span>
+├── <span class="nb">compose</span>.<span class="n">yaml</span>                 ← <span class="n">production</span> <span class="n">stack</span> (<span class="n">profiles</span>)
+├── <span class="nb">compose</span>.<span class="n">dev</span>.<span class="n">yaml</span>             ← <span class="n">development</span> <span class="n">stack</span>
+├── .<span class="n">env</span>                         ← <span class="n">your</span> <span class="nb">config</span> (<span class="n">gitignored</span>)
+├── .<span class="n">env</span>.<span class="n">example</span>                 ← <span class="n">annotated</span> <span class="nb">config</span> <span class="n">template</span>
+└── <span class="n">pyproject</span>.<span class="n">toml</span>
 </code></pre></div>
 
 <hr />
-<h2 id="rust-development">Rust development</h2>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>rust
+<h2 id="development">Development</h2>
+<h3 id="editable-install">Editable install</h3>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/waldiez/wactorz.git
+<span class="nb">cd</span><span class="w"> </span>wactorz
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[all]&quot;</span>
 
-<span class="c1"># Check (fast — no codegen)</span>
-cargo<span class="w"> </span>check
-
-<span class="c1"># Build debug</span>
-cargo<span class="w"> </span>build<span class="w"> </span>--bin<span class="w"> </span>wactorz
-
-<span class="c1"># Build release</span>
-cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--bin<span class="w"> </span>wactorz
-
-<span class="c1"># Run with debug logging</span>
-<span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">wactorz</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>wactorz
-
-<span class="c1"># Lint</span>
-cargo<span class="w"> </span>clippy<span class="w"> </span>--<span class="w"> </span>-D<span class="w"> </span>warnings
-
-<span class="c1"># Format</span>
-cargo<span class="w"> </span>fmt
+<span class="c1"># Start with hot-reload (restarts on .py/.yaml file changes)</span>
+wactorz<span class="w"> </span>--reload
 </code></pre></div>
 
-<h2 id="backend-parity-proof">Backend parity proof</h2>
-<p>The repo now carries a shared backend parity contract for the core supervisor
-semantics that both runtimes claim to implement.</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Run language-specific tests plus the cross-runtime parity diff</span>
-make<span class="w"> </span><span class="nb">test</span>
+<h3 id="adding-a-catalog-recipe">Adding a catalog recipe</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># 1. Create the recipe file</span>
+<span class="c1">#    Must export AGENT_CODE = r&#39;&#39;&#39;...&#39;&#39;&#39;</span>
+touch<span class="w"> </span>wactorz/catalogue_agents/my_agent.py
 
-<span class="c1"># Run only the parity proof</span>
-make<span class="w"> </span>parity
+<span class="c1"># 2. Register it in catalog_agent.py → _build_catalog()</span>
+<span class="c1">#    code = _load_recipe(&quot;my_agent.py&quot;)</span>
+<span class="c1">#    if code:</span>
+<span class="c1">#        catalog[&quot;my-agent&quot;] = { ...spawn config..., &quot;code&quot;: code }</span>
 
-<span class="c1"># Generate coverage artifacts used by CI</span>
-python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements-dev.txt
-make<span class="w"> </span>coverage
+<span class="c1"># 3. Restart wactorz — recipe is immediately available</span>
+@catalog<span class="w"> </span>list
+@catalog<span class="w"> </span>spawn<span class="w"> </span>my-agent
 </code></pre></div>
 
-<p>The shared fixture lives at <code>tests/parity_fixtures/backend_supervisor_parity.json</code>.
-Both the Python harness and the Rust harness execute those same scenarios and must
-produce the same normalized JSON output for the build to pass.</p>
-<h2 id="pre-commit">Pre-commit</h2>
-<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements-dev.txt
-make<span class="w"> </span>precommit-install
-make<span class="w"> </span>precommit-run
-</code></pre></div>
-
-<p>The configured hooks run:
-- Python unit tests
-- Rust backend parity test
-- Cross-backend parity diff
-- Frontend type-checking</p>
-<h3 id="cross-compile-for-linux-from-macos">Cross-compile for Linux from macOS</h3>
-<div class="highlight"><pre><span></span><code><span class="c1"># Install target</span>
-rustup<span class="w"> </span>target<span class="w"> </span>add<span class="w"> </span>x86_64-unknown-linux-gnu
-
-<span class="c1"># Install linker (Homebrew)</span>
-brew<span class="w"> </span>install<span class="w"> </span>FiloSottile/musl-cross/musl-cross
-
-<span class="c1"># Build</span>
-<span class="nv">CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER</span><span class="o">=</span>x86_64-linux-musl-gcc<span class="w"> </span><span class="se">\</span>
-cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>--target<span class="w"> </span>x86_64-unknown-linux-gnu<span class="w"> </span>--bin<span class="w"> </span>wactorz
-</code></pre></div>
-
-<p>Alternatively, use Docker buildx (no linker needed):</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>buildx<span class="w"> </span>build<span class="w"> </span>--platform<span class="w"> </span>linux/amd64<span class="w"> </span>--tag<span class="w"> </span>wactorz:local<span class="w"> </span>--load<span class="w"> </span>./rust
+<h3 id="running-tests">Running tests</h3>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[dev]&quot;</span>
+pytest
 </code></pre></div>
 
 <hr />
-<h2 id="frontend-development">Frontend development</h2>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>frontend
-
-<span class="c1"># Install deps</span>
-npm<span class="w"> </span>install
-
-<span class="c1"># Dev server (hot-reload, http://localhost:3000)</span>
-npm<span class="w"> </span>run<span class="w"> </span>dev
-
-<span class="c1"># Type-check only</span>
-npm<span class="w"> </span>run<span class="w"> </span>typecheck<span class="w">   </span><span class="c1"># or: npx tsc --noEmit</span>
-
-<span class="c1"># Production build</span>
-npm<span class="w"> </span>run<span class="w"> </span>build
-<span class="c1"># → static/app/</span>
-
-<span class="c1"># Preview production build locally</span>
-npm<span class="w"> </span>run<span class="w"> </span>preview
+<h2 id="debugging">Debugging</h2>
+<h4 id="watch-all-mqtt-traffic">Watch all MQTT traffic</h4>
+<div class="highlight"><pre><span></span><code>mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span><span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;#&#39;</span><span class="w"> </span>-v
 </code></pre></div>
 
-<h3 id="vite-dev-proxy">Vite dev proxy</h3>
-<div class="highlight"><pre><span></span><code><span class="c1">// vite.config.ts</span>
-<span class="nx">proxy</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="s2">&quot;/api&quot;</span><span class="o">:</span><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="nx">target</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;http://localhost:8080&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">},</span>
-<span class="w">  </span><span class="s2">&quot;/ws&quot;</span><span class="o">:</span><span class="w">   </span><span class="p">{</span><span class="w"> </span><span class="nx">target</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;ws://localhost:8081&quot;</span><span class="p">,</span><span class="w">  </span><span class="nx">ws</span><span class="o">:</span><span class="w"> </span><span class="kt">true</span><span class="w"> </span><span class="p">},</span>
-<span class="w">  </span><span class="s2">&quot;/mqtt&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">target</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;ws://localhost:9001&quot;</span><span class="p">,</span><span class="w">  </span><span class="nx">ws</span><span class="o">:</span><span class="w"> </span><span class="kt">true</span><span class="w"> </span><span class="p">},</span>
-<span class="p">}</span>
+<h4 id="watch-a-specific-agents-logs">Watch a specific agent's logs</h4>
+<div class="highlight"><pre><span></span><code>mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;agents/+/logs&#39;</span><span class="w"> </span>-v
 </code></pre></div>
 
-<p>This means in dev, <code>window.location.host</code> resolves to <code>localhost:3000</code>, and the MQTT URL is automatically <code>ws://localhost:3000/mqtt</code> → proxied to Mosquitto.</p>
-<h3 id="adding-a-new-ui-theme">Adding a new UI theme</h3>
-<ol>
-<li>Create <code>frontend/src/scene/themes/MyTheme.ts</code> extending <code>ThemeBase</code></li>
-<li>Add a node type in <code>frontend/src/scene/nodes/</code></li>
-<li>Register in <code>SceneManager.ts</code>:
-   <code>typescript
-   case "my-theme": this.activeTheme = new MyTheme(this.scene, ...); break;</code></li>
-<li>Add a button in <code>index.html</code> and <code>ThemeSwitcher.ts</code></li>
-</ol>
-<hr />
-<h2 id="debugging-tips">Debugging tips</h2>
-<h3 id="mqtt-messages-not-arriving-in-the-browser">MQTT messages not arriving in the browser</h3>
-<div class="highlight"><pre><span></span><code><span class="c1"># Subscribe to all topics from the terminal</span>
-mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span><span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;#&#39;</span><span class="w"> </span>-v
-
-<span class="c1"># Or check the mock is publishing</span>
-docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>logs<span class="w"> </span>mock-agents
+<h4 id="check-agent-status-directly">Check agent status directly</h4>
+<div class="highlight"><pre><span></span><code><span class="nv">@monitor</span><span class="w"> </span><span class="err">{</span><span class="ss">&quot;action&quot;</span><span class="err">:</span><span class="w"> </span><span class="ss">&quot;status&quot;</span><span class="err">}</span>
+<span class="nv">@catalog</span><span class="w"> </span><span class="n">list</span>
 </code></pre></div>
 
-<h3 id="rust-actor-not-responding">Rust actor not responding</h3>
-<div class="highlight"><pre><span></span><code><span class="nv">RUST_LOG</span><span class="o">=</span><span class="nv">wactorz</span><span class="o">=</span>debug<span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--bin<span class="w"> </span>wactorz
-<span class="c1"># Look for: &quot;[agent-name] handle_message&quot; or heartbeat logs</span>
+<h4 id="read-persistence-state">Read persistence state</h4>
+<div class="highlight"><pre><span></span><code><span class="n">python3</span> <span class="o">-</span><span class="n">c</span> <span class="s2">&quot;</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pickle</span>
+<span class="n">data</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="nb">open</span><span class="p">(</span><span class="s1">&#39;state/main/state.pkl&#39;</span><span class="p">,</span> <span class="s1">&#39;rb&#39;</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Spawn registry:&#39;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;_spawned_agents&#39;</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;User facts:&#39;</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;_user_facts&#39;</span><span class="p">,</span> <span class="p">{}))</span>
+<span class="s2">&quot;</span>
 </code></pre></div>
 
-<h3 id="typescript-errors">TypeScript errors</h3>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>frontend<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npx<span class="w"> </span>tsc<span class="w"> </span>--noEmit
+<h4 id="remove-a-stuck-agent-from-the-spawn-registry">Remove a stuck agent from the spawn registry</h4>
+<div class="highlight"><pre><span></span><code><span class="n">python3</span> <span class="o">-</span><span class="n">c</span> <span class="s2">&quot;</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pickle</span>
+<span class="n">data</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="nb">open</span><span class="p">(</span><span class="s1">&#39;state/main/state.pkl&#39;</span><span class="p">,</span> <span class="s1">&#39;rb&#39;</span><span class="p">))</span>
+<span class="n">data</span><span class="p">[</span><span class="s1">&#39;_spawned_agents&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s1">&#39;my-stuck-agent&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+<span class="n">pickle</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">open</span><span class="p">(</span><span class="s1">&#39;state/main/state.pkl&#39;</span><span class="p">,</span> <span class="s1">&#39;wb&#39;</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Done. Remaining:&#39;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;_spawned_agents&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
+<span class="s2">&quot;</span>
 </code></pre></div>
-
-<h3 id="mqtt-url-wrong-in-browser">MQTT URL wrong in browser</h3>
-<p>Check browser console — the <code>MQTTClient</code> logs its connection URL.  In dev it should be <code>ws://localhost:3000/mqtt</code>.  Override with <code>VITE_MQTT_WS_URL</code> in <code>.env</code> if needed.</p>
   </main>
 </div>
 

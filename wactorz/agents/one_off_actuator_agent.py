@@ -78,6 +78,9 @@ class OneOffActuatorAgent(Actor):
         self.llm = llm_provider
         self.task_id = task_id
         self.reply_to_id = reply_to_id
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cost_usd = 0.0
 
     def _current_task_description(self) -> str:
         return self.request[:60] if self.request else "one-shot actuation"
@@ -105,8 +108,18 @@ class OneOffActuatorAgent(Actor):
     async def _run(self) -> None:
         try:
             result = await self._execute_request()
+            self.metrics.tasks_completed += 1
+            await self._mqtt_publish(
+                f"agents/{self.actor_id}/metrics",
+                self._build_metrics(),
+            )
             await self._send_result(result)
         except Exception as exc:
+            self.metrics.tasks_failed += 1
+            await self._mqtt_publish(
+                f"agents/{self.actor_id}/metrics",
+                self._build_metrics(),
+            )
             logger.error("[%s] One-shot actuation failed: %s", self.name, exc, exc_info=True)
             await self._send_result(f"Actuation failed: {exc}")
         finally:
@@ -134,7 +147,7 @@ class OneOffActuatorAgent(Actor):
             "user_request": self.request,
             "devices": devices,
         }
-        raw, _ = await asyncio.wait_for(
+        raw, usage = await asyncio.wait_for(
             self.llm.complete(
                 messages=[{"role": "user", "content": json.dumps(prompt_input)}],
                 system=_RESOLVER_PROMPT,
@@ -142,6 +155,7 @@ class OneOffActuatorAgent(Actor):
             ),
             timeout=10.0,
         )
+        self._accumulate_usage(usage)
         parsed = self._parse_actions_json(raw)
         return [ActuatorAction.from_dict(item) for item in parsed]
 
@@ -198,6 +212,13 @@ class OneOffActuatorAgent(Actor):
             {"result": result, "_task_id": self.task_id},
         )
 
+    def _accumulate_usage(self, usage: dict[str, Any]) -> None:
+        if not isinstance(usage, dict):
+            return
+        self.total_input_tokens += usage.get("input_tokens", 0)
+        self.total_output_tokens += usage.get("output_tokens", 0)
+        self.total_cost_usd += usage.get("cost_usd", 0.0)
+
     async def _deferred_stop(self) -> None:
         await asyncio.sleep(2.0)
         await self._log("Self-terminating.")
@@ -225,3 +246,10 @@ class OneOffActuatorAgent(Actor):
                 self._persistence_dir,
                 exc,
             )
+
+    def _build_metrics(self) -> dict[str, Any]:
+        metrics = super()._build_metrics()
+        metrics["input_tokens"] = self.total_input_tokens
+        metrics["output_tokens"] = self.total_output_tokens
+        metrics["cost_usd"] = round(self.total_cost_usd, 6)
+        return metrics

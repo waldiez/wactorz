@@ -133,6 +133,32 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
                 [("light", "turn_on", "light.living_room", {"brightness_pct": 50})],
             )
 
+    async def test_resolve_actions_accumulates_usage_costs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            llm = types.SimpleNamespace(
+                complete=AsyncMock(
+                    return_value=(
+                        '[{"domain":"light","service":"turn_on","entity_id":"light.office","service_data":{}}]',
+                        {"input_tokens": 11, "output_tokens": 7, "cost_usd": 0.00123},
+                    )
+                )
+            )
+            agent = OneOffActuatorAgent(
+                request="turn off the office light",
+                llm_provider=llm,
+                task_id="actuate_test",
+                reply_to_id="main-actor",
+                persistence_dir=tmpdir,
+            )
+
+            actions = await agent._resolve_actions([])
+
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(agent.total_input_tokens, 11)
+            self.assertEqual(agent.total_output_tokens, 7)
+            self.assertEqual(agent.total_cost_usd, 0.00123)
+            self.assertEqual(agent._build_metrics()["cost_usd"], 0.00123)
+
 
 if __name__ == "__main__":
     unittest.main()

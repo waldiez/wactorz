@@ -1752,10 +1752,31 @@ export class CardDashboard {
 } ORDER BY ?entity LIMIT 200`,
       },
       {
+        label: "Agent services",
+        icon: "⬡",
+        sparql: `SELECT ?name ?desc ?prop ?propLabel ?propType WHERE {
+  GRAPH <urn:wactorz:agents> {
+    ?agent a <https://synapse.waldiez.io/ns#Agent> ;
+           rdfs:label ?name .
+    OPTIONAL { ?agent <http://purl.org/dc/terms/description> ?desc . }
+    OPTIONAL {
+      ?agent <http://www.w3.org/ns/ssn/hasProperty> ?prop .
+      ?prop rdfs:label ?propLabel ;
+            a ?propType .
+      FILTER(?propType IN (
+        <http://www.w3.org/ns/sosa/ActuatableProperty>,
+        <http://www.w3.org/ns/sosa/ObservableProperty>,
+        <https://synapse.waldiez.io/ns#Action>
+      ))
+    }
+  }
+} ORDER BY ?name ?propType ?propLabel`,
+      },
+      {
         label: "Graph sizes",
         icon: "∑",
         sparql: `SELECT ?g (COUNT(*) AS ?triples) WHERE {
-  VALUES ?g { <urn:ha:current> <urn:ha:history> <urn:ha:devices> }
+  VALUES ?g { <urn:ha:current> <urn:ha:history> <urn:ha:devices> <urn:wactorz:agents> }
   GRAPH ?g { ?s ?p ?o }
 } GROUP BY ?g ORDER BY ?g`,
       },

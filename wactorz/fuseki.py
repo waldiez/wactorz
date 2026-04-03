@@ -1,23 +1,35 @@
 """
-wactorz/fuseki.py  -  Home Assistant → Apache Jena Fuseki bridge.
+wactorz/fuseki.py  -  Home Assistant + Agent Manifest → Apache Jena Fuseki bridge.
 
-Subscribes to HA ``state_changed`` events and pushes RDF/Turtle to Fuseki
-using the Graph Store Protocol (GSP) and SPARQL Update.
+Two bridges run concurrently:
+
+  HAFusekiBridge        — subscribes to HA ``state_changed`` events and pushes
+                          RDF/Turtle to Fuseki via the Graph Store Protocol (GSP)
+                          and SPARQL Update.
+
+  AgentManifestBridge   — subscribes to the MQTT ``agents/+/manifest`` topic and
+                          maps each wactorz agent manifest to HSML/SOSA/syn RDF,
+                          storing it in the ``urn:wactorz:agents`` named graph so
+                          that any HSML-compatible consumer can discover agents and
+                          their input/output schemas via SPARQL.
 
 Ontology prefixes used (all inline - no external file references):
-  core:   HSML Core  <https://www.spatialwebfoundation.org/ns/hsml/core#>
-  saref:  SAREF Core <https://saref.etsi.org/core/>
-  sosa:   SOSA       <http://www.w3.org/ns/sosa/>
-  ssn:    SSN        <http://www.w3.org/ns/ssn/>
-  syn:    SYNAPSE    <https://synapse.waldiez.io/ns#>
-  prov:   PROV-O     <http://www.w3.org/ns/prov#>
+  core:     HSML Core  <https://www.spatialwebfoundation.org/ns/hsml/core#>
+  saref:    SAREF Core <https://saref.etsi.org/core/>
+  sosa:     SOSA       <http://www.w3.org/ns/sosa/>
+  ssn:      SSN        <http://www.w3.org/ns/ssn/>
+  syn:      SYNAPSE    <https://synapse.waldiez.io/ns#>
+  prov:     PROV-O     <http://www.w3.org/ns/prov#>
+  dcterms:  DC Terms   <http://purl.org/dc/terms/>
   bot:    BOT        <https://w3id.org/bot#>  (Building Topology Ontology)
+  
 
 Named graphs managed:
   urn:ha:current  - latest state per entity  (DELETE + INSERT on every change)
   urn:ha:history  - append-only observations
   urn:ha:devices  - entity catalog            (rebuilt on startup)
   urn:ha:areas    - area/room topology        (rebuilt on startup)
+  urn:wactorz:agents   - wactorz agent service catalog (upserted on every manifest)
 
 Usage::
 
@@ -25,12 +37,14 @@ Usage::
 
 Environment variables:
     HA_URL          Home Assistant base URL  (default: http://homeassistant.local:8123)
-    HA_TOKEN        Long-lived access token  (required)
+    HA_TOKEN        Long-lived access token  (required for HAFusekiBridge)
     FUSEKI_URL      Fuseki base URL          (default: http://localhost:3030)
     FUSEKI_DATASET  Fuseki dataset name      (default: wactorz)
     FUSEKI_USER     Fuseki admin user        (default: admin)
     FUSEKI_PASSWORD Fuseki admin password    (default: empty = no auth)
     HA_DOMAINS      Comma-separated domains  (default: see DEFAULT_DOMAINS)
+    MQTT_BROKER     MQTT broker host         (default: localhost)
+    MQTT_PORT       MQTT broker port         (default: 1883)
 """
 
 # cspell: disable
@@ -41,6 +55,7 @@ Environment variables:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -50,6 +65,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
+import aiomqtt
 
 from wactorz.core.integrations.home_assistant.ha_web_socket_client import (
     HAWebSocketClient,
@@ -60,30 +76,35 @@ log = logging.getLogger("wactorz.fuseki")
 # ── Shared Turtle prefix block ────────────────────────────────────────────────
 
 TTL_PREFIXES = """\
-@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
-@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
-@prefix owl:   <http://www.w3.org/2002/07/owl#> .
-@prefix prov:  <http://www.w3.org/ns/prov#> .
-@prefix sosa:  <http://www.w3.org/ns/sosa/> .
-@prefix ssn:   <http://www.w3.org/ns/ssn/> .
-@prefix saref: <https://saref.etsi.org/core/> .
-@prefix core:  <https://www.spatialwebfoundation.org/ns/hsml/core#> .
-@prefix syn:   <https://synapse.waldiez.io/ns#> .
+@prefix rdf:     <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:     <http://www.w3.org/2001/XMLSchema#> .
+@prefix owl:     <http://www.w3.org/2002/07/owl#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix prov:    <http://www.w3.org/ns/prov#> .
+@prefix sosa:    <http://www.w3.org/ns/sosa/> .
+@prefix ssn:     <http://www.w3.org/ns/ssn/> .
+@prefix saref:   <https://saref.etsi.org/core/> .
+@prefix core:    <https://www.spatialwebfoundation.org/ns/hsml/core#> .
+@prefix syn:     <https://synapse.waldiez.io/ns#> .
 @prefix bot:   <https://w3id.org/bot#> .
-@prefix ha:    <urn:ha:entity:> .
-@prefix haobs: <urn:ha:obs:> .
-@prefix haprop: <urn:ha:prop:> .
+@prefix ha:      <urn:ha:entity:> .
+@prefix haobs:   <urn:ha:obs:> .
+@prefix haprop:  <urn:ha:prop:> .
+@prefix wact:    <urn:wactorz:agent:> .
+@prefix wactprop: <urn:wactorz:prop:> .
 @prefix haarea: <urn:ha:area:> .
 """
 
-# Provenance IRI for this bridge process
+# Provenance IRIs
 BRIDGE_AGENT_IRI = "<urn:ha:bridge:wactorz>"
+MANIFEST_BRIDGE_IRI = "<urn:wactorz:bridge:agent-manifest>"
 
 # Named graph IRIs
 GRAPH_CURRENT = "urn:ha:current"
 GRAPH_HISTORY = "urn:ha:history"
 GRAPH_DEVICES = "urn:ha:devices"
+GRAPH_AGENTS  = "urn:wactorz:agents"
 GRAPH_AREAS   = "urn:ha:areas"
 
 # ── Domain → RDF type mapping ─────────────────────────────────────────────────
@@ -344,6 +365,115 @@ def _ttl(body: str) -> str:
     return TTL_PREFIXES + "\n" + body
 
 
+# ── Agent manifest → RDF helpers ─────────────────────────────────────────────
+
+def _agent_iri(actor_id: str) -> str:
+    return f"wact:{_safe(actor_id)}"
+
+
+def _aprop_iri(actor_id: str, direction: str, field: str) -> str:
+    return f"wactprop:{_safe(actor_id)}_{direction}_{_safe(field)}"
+
+
+def _parse_schema_desc(spec: Any) -> str:
+    """Extract human description from schema values like 'str — some description'."""
+    s = str(spec)
+    for sep in (" \u2014 ", " — ", " - "):
+        if sep in s:
+            return s.split(sep, 1)[1].strip()
+    return ""
+
+
+def _agent_manifest_body(manifest: dict[str, Any]) -> str:
+    """Convert a wactorz agent manifest dict to a Turtle body (no prefix block)."""
+    actor_id: str = str(manifest.get("actor_id") or manifest.get("name") or "unknown")
+    name: str = str(manifest.get("name") or actor_id)
+    description: str = str(manifest.get("description") or "")
+    input_schema: dict[str, Any] = manifest.get("input_schema") or {}
+    output_schema: dict[str, Any] = manifest.get("output_schema") or {}
+    capabilities: list[Any] = manifest.get("capabilities") or []
+    publishes: list[Any] = manifest.get("publishes") or []
+    timestamp: float = float(manifest.get("timestamp") or time.time())
+
+    safe_id = _safe(actor_id)
+    agent_iri = f"wact:{safe_id}"
+    ts_dt = datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+    in_props  = [_aprop_iri(actor_id, "in",  f) for f in input_schema]
+    out_props = [_aprop_iri(actor_id, "out", f) for f in output_schema]
+    cap_iris  = [_aprop_iri(actor_id, "cap", c) for c in capabilities if isinstance(c, str)]
+    pub_iris  = [_aprop_iri(actor_id, "pub", t) for t in publishes   if isinstance(t, str)]
+    all_props = in_props + out_props + cap_iris + pub_iris
+
+    lines: list[str] = []
+
+    # ── Agent node ────────────────────────────────────────────────────────────
+    lines.append(f"{agent_iri}")
+    lines.append(f"  a syn:Agent, prov:SoftwareAgent, core:Thing ;")
+    lines.append(f'  rdfs:label "{_esc(name)}" ;')
+    if description:
+        lines.append(f'  dcterms:description "{_esc(description)}" ;')
+    lines.append(f'  syn:actorId "{_esc(actor_id)}" ;')
+    for p in all_props:
+        lines.append(f"  ssn:hasProperty {p} ;")
+    lines.append(f'  prov:generatedAtTime "{ts_dt}"^^xsd:dateTime ;')
+    lines.append(f"  prov:wasAttributedTo {MANIFEST_BRIDGE_IRI} .")
+    lines.append("")
+
+    # ── Input schema → ActuatableProperty ────────────────────────────────────
+    for field, spec in input_schema.items():
+        prop_iri = _aprop_iri(actor_id, "in", field)
+        desc = _parse_schema_desc(spec)
+        lines.append(f"{prop_iri}")
+        lines.append(f"  a sosa:ActuatableProperty ;")
+        lines.append(f'  rdfs:label "{_esc(field)}" ;')
+        if desc:
+            lines.append(f'  rdfs:comment "{_esc(desc)}" ;')
+        lines.append(f"  ssn:isPropertyOf {agent_iri} ;")
+        lines.append(f"  syn:claimedBy {agent_iri} .")
+        lines.append("")
+
+    # ── Output schema → ObservableProperty ───────────────────────────────────
+    for field, spec in output_schema.items():
+        prop_iri = _aprop_iri(actor_id, "out", field)
+        desc = _parse_schema_desc(spec)
+        lines.append(f"{prop_iri}")
+        lines.append(f"  a sosa:ObservableProperty ;")
+        lines.append(f'  rdfs:label "{_esc(field)}" ;')
+        if desc:
+            lines.append(f'  rdfs:comment "{_esc(desc)}" ;')
+        lines.append(f"  ssn:isPropertyOf {agent_iri} ;")
+        lines.append(f"  syn:claimedBy {agent_iri} .")
+        lines.append("")
+
+    # ── Capabilities → syn:Action ─────────────────────────────────────────────
+    for cap in capabilities:
+        if not isinstance(cap, str):
+            continue
+        cap_iri = _aprop_iri(actor_id, "cap", cap)
+        lines.append(f"{cap_iri}")
+        lines.append(f"  a syn:Action ;")
+        lines.append(f'  rdfs:label "{_esc(cap)}" ;')
+        lines.append(f"  syn:claimedBy {agent_iri} .")
+        lines.append("")
+
+    # ── Published MQTT topics → ObservableProperty ───────────────────────────
+    for topic in publishes:
+        if not isinstance(topic, str):
+            continue
+        pub_iri = _aprop_iri(actor_id, "pub", topic)
+        lines.append(f"{pub_iri}")
+        lines.append(f"  a sosa:ObservableProperty ;")
+        lines.append(f'  rdfs:label "{_esc(topic)}" ;')
+        lines.append(f'  syn:publishesTopic "{_esc(topic)}" ;')
+        lines.append(f"  syn:claimedBy {agent_iri} .")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 # ── Fuseki GSP / SPARQL Update client ────────────────────────────────────────
 
 class FusekiClient:
@@ -403,6 +533,38 @@ class FusekiClient:
             if resp.status not in (200, 204):
                 body = await resp.text()
                 log.warning("SPARQL Update → %s: %s", resp.status, body[:300])
+
+    async def replace_agent_in_graph(
+        self, graph: str, actor_id: str, ttl: str
+    ) -> None:
+        """
+        Atomically replace all triples for *actor_id* and its properties in *graph*:
+          1. SPARQL DELETE WHERE for the agent IRI and all properties it owns
+          2. GSP POST to append the new triples
+        """
+        full_iri = f"urn:wactorz:agent:{_safe(actor_id)}"
+
+        delete_q = f"""
+PREFIX ssn:  <http://www.w3.org/ns/ssn/>
+
+DELETE {{
+  GRAPH <{graph}> {{
+    ?prop ?pp ?po .
+    <{full_iri}> ?ap ?ao .
+  }}
+}}
+WHERE {{
+  GRAPH <{graph}> {{
+    OPTIONAL {{
+      <{full_iri}> ssn:hasProperty ?prop .
+      ?prop ?pp ?po .
+    }}
+    OPTIONAL {{ <{full_iri}> ?ap ?ao . }}
+  }}
+}}
+"""
+        await self.sparql_update(delete_q)
+        await self.append_graph(graph, ttl)
 
     async def replace_entity_in_graph(
         self, graph: str, entity_id: str, ttl: str
@@ -622,6 +784,69 @@ class HAFusekiBridge:
         await fuseki.append_graph(GRAPH_HISTORY, _ttl(hist_body))
 
 
+# ── Agent manifest bridge ────────────────────────────────────────────────────
+
+class AgentManifestBridge:
+    """Subscribe to agents/+/manifest MQTT and push RDF to Fuseki."""
+
+    def __init__(
+        self,
+        mqtt_broker: str,
+        mqtt_port: int,
+        fuseki_url: str,
+        fuseki_dataset: str,
+        fuseki_user: str = "",
+        fuseki_password: str = "",
+    ) -> None:
+        self._mqtt_broker = mqtt_broker  # pyright: ignore[reportUnannotatedClassAttribute]
+        self._mqtt_port = mqtt_port  # pyright: ignore[reportUnannotatedClassAttribute]
+        self._fuseki_url = fuseki_url  # pyright: ignore[reportUnannotatedClassAttribute]
+        self._fuseki_dataset = fuseki_dataset  # pyright: ignore[reportUnannotatedClassAttribute]
+        self._fuseki_auth: aiohttp.BasicAuth | None = (  # pyright: ignore[reportUnannotatedClassAttribute]
+            aiohttp.BasicAuth(fuseki_user, fuseki_password) if fuseki_user else None
+        )
+
+    async def run(self) -> None:
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as http:
+            fuseki = FusekiClient(
+                self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth
+            )
+            # Register the bridge itself
+            bridge_body = (
+                f"{MANIFEST_BRIDGE_IRI}\n"
+                f"  a syn:Agent, prov:SoftwareAgent ;\n"
+                f'  rdfs:label "wactorz agent-manifest bridge" .\n'
+            )
+            await fuseki.append_graph(GRAPH_AGENTS, _ttl(bridge_body))
+
+            async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                await client.subscribe("agents/+/manifest")
+                log.info(
+                    "AgentManifestBridge listening on %s:%d agents/+/manifest",
+                    self._mqtt_broker, self._mqtt_port,
+                )
+                async for message in client.messages:
+                    try:
+                        manifest: dict[str, Any] = json.loads(bytes(message.payload))
+                        await self._on_manifest(manifest, fuseki)
+                    except Exception as exc:
+                        log.exception("Manifest handling error: %s", exc)
+
+    async def _on_manifest(
+        self, manifest: dict[str, Any], fuseki: FusekiClient
+    ) -> None:
+        actor_id = str(manifest.get("actor_id") or manifest.get("name") or "")
+        if not actor_id:
+            log.warning("Manifest missing actor_id/name — skipping")
+            return
+        name = manifest.get("name", actor_id)
+        log.debug("agent manifest: %s (%s)", name, actor_id)
+        body = _agent_manifest_body(manifest)
+        await fuseki.replace_agent_in_graph(GRAPH_AGENTS, actor_id, _ttl(body))
+        log.info("Upserted agent manifest: %s → %s", name, GRAPH_AGENTS)
+
+
 # ── CLI entrypoint ────────────────────────────────────────────────────────────
 
 def _parse_domains(raw: str | None) -> frozenset[str] | None:
@@ -630,51 +855,72 @@ def _parse_domains(raw: str | None) -> frozenset[str] | None:
     return frozenset(d.strip() for d in raw.split(",") if d.strip())
 
 
+async def _run_with_retry(coro_factory: Any, label: str) -> None:
+    """Run a bridge coroutine, reconnecting on error."""
+    while True:
+        try:
+            await coro_factory()
+        except KeyboardInterrupt:
+            log.info("%s shutting down.", label)
+            break
+        except Exception as exc:
+            log.error("%s error: %s — reconnecting in 10 s …", label, exc)
+            await asyncio.sleep(10)
+
+
 async def _main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s  %(message)s",
     )
 
-    ha_url = os.environ.get("HA_URL", "http://homeassistant.local:8123")
-    ha_token = os.environ.get("HA_TOKEN", "")
-    fuseki_url = os.environ.get("FUSEKI_URL", "http://localhost:3030")
+    ha_url        = os.environ.get("HA_URL", "http://homeassistant.local:8123")
+    ha_token      = os.environ.get("HA_TOKEN", "")
+    fuseki_url    = os.environ.get("FUSEKI_URL", "http://localhost:3030")
     fuseki_dataset = os.environ.get("FUSEKI_DATASET", "wactorz")
-    fuseki_user = os.environ.get("FUSEKI_USER", "admin")
+    fuseki_user   = os.environ.get("FUSEKI_USER", "admin")
     fuseki_password = os.environ.get("FUSEKI_PASSWORD", "")
-    domains = _parse_domains(os.environ.get("HA_DOMAINS"))
-
-    if not ha_token:
-        raise SystemExit("HA_TOKEN environment variable is required.")
+    domains       = _parse_domains(os.environ.get("HA_DOMAINS"))
+    mqtt_broker   = os.environ.get("MQTT_BROKER", "localhost")
+    mqtt_port     = int(os.environ.get("MQTT_PORT", "1883"))
 
     log.info(
-        "HA→Fuseki bridge  ha=%s  fuseki=%s/%s  auth=%s  domains=%s",
-        ha_url,
-        fuseki_url,
-        fuseki_dataset,
-        "yes" if fuseki_password else "none",
-        ",".join(sorted(domains)) if domains else "default",
+        "Bridges starting  fuseki=%s/%s  auth=%s",
+        fuseki_url, fuseki_dataset, "yes" if fuseki_password else "none",
     )
 
-    bridge = HAFusekiBridge(
-        ha_url=ha_url,
-        ha_token=ha_token,
+    tasks: list[Any] = []
+
+    # ── HA bridge (optional — skipped if no HA_TOKEN) ────────────────────────
+    if ha_token:
+        log.info("HA→Fuseki bridge  ha=%s  domains=%s",
+                 ha_url, ",".join(sorted(domains)) if domains else "default")
+        ha_bridge = HAFusekiBridge(
+            ha_url=ha_url,
+            ha_token=ha_token,
+            fuseki_url=fuseki_url,
+            fuseki_dataset=fuseki_dataset,
+            fuseki_user=fuseki_user,
+            fuseki_password=fuseki_password,
+            domains=domains,
+        )
+        tasks.append(_run_with_retry(ha_bridge.run, "HAFusekiBridge"))
+    else:
+        log.info("HA_TOKEN not set — HAFusekiBridge disabled.")
+
+    # ── Agent manifest bridge ─────────────────────────────────────────────────
+    log.info("AgentManifestBridge  mqtt=%s:%d", mqtt_broker, mqtt_port)
+    agent_bridge = AgentManifestBridge(
+        mqtt_broker=mqtt_broker,
+        mqtt_port=mqtt_port,
         fuseki_url=fuseki_url,
         fuseki_dataset=fuseki_dataset,
         fuseki_user=fuseki_user,
         fuseki_password=fuseki_password,
-        domains=domains,
     )
+    tasks.append(_run_with_retry(agent_bridge.run, "AgentManifestBridge"))
 
-    while True:
-        try:
-            await bridge.run()
-        except KeyboardInterrupt:
-            log.info("Shutting down.")
-            break
-        except Exception as exc:
-            log.error("Bridge error: %s — reconnecting in 10 s …", exc)
-            await asyncio.sleep(10)
+    await asyncio.gather(*tasks)
 
 
 def _cli_main() -> None:

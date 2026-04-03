@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import time
 from typing import Any, Optional
 
@@ -203,6 +204,7 @@ class OneOffActuatorAgent(Actor):
         if self._registry:
             await self._registry.unregister(self.actor_id)
         await self.stop()
+        self._delete_persistence_dir()
 
     async def _log(self, msg: str) -> None:
         logger.info("[%s] %s", self.name, msg)
@@ -210,3 +212,16 @@ class OneOffActuatorAgent(Actor):
             f"agents/{self.actor_id}/logs",
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
+
+    def _delete_persistence_dir(self) -> None:
+        try:
+            shutil.rmtree(self._persistence_dir, ignore_errors=False)
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            logger.warning(
+                "[%s] Failed to delete persistence dir %s: %s",
+                self.name,
+                self._persistence_dir,
+                exc,
+            )

@@ -50,7 +50,7 @@ The `[all]` extra installs everything except the ML stack (heavy torch dependenc
 
 ```bash
 # 1. Create a .env file with your LLM key (see Configuration below)
-cp .env.example .env
+cp .env.template .env
 # edit .env and set LLM_API_KEY (or whichever provider you use)
 
 # 2. Start Wactorz (starts everything including the broker)
@@ -183,11 +183,74 @@ Wactorz ships with a `Dockerfile` and Docker Compose files for running the full 
 ### Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or Docker Engine (Linux)
-- A `.env` file copied from `.env.example` with your secrets filled in
+- A `.env` file copied from `.env.template` with your secrets filled in
+
+```bash
+cp .env.template .env
+# edit .env and set LLM_API_KEY, FUSEKI_PASSWORD, etc.
+```
+
+### Production stack (profiles)
+
+The main `compose.yaml` uses profiles so you only start what you need:
+
+```bash
+# Python agents + MQTT + Fuseki (recommended)
+docker compose --profile python-full up -d
+
+# Python agents + MQTT only (no Fuseki)
+docker compose --profile python up -d
+
+# MQTT broker only (default)
+docker compose up -d
+
+# Rust server + nginx dashboard
+docker compose --profile rust up -d
+
+# Everything (Rust + Fuseki + Home Assistant)
+docker compose --profile full up -d
+```
+
+| Profile | Services | Ports |
+|---|---|---|
+| *(default)* | mosquitto | :1883, :9001 |
+| `python` | + wactorz-python | + :8000, :8888 |
+| `python-full` | + wactorz-python, fuseki | + :8000, :8888, :3030 |
+| `rust` | + wactorz-server, dashboard | + :8080, :8081, :80 |
+| `full` | + rust, fuseki, homeassistant | + :8080, :8081, :80, :3030, :8123 |
+
+Once running:
+
+| Service | URL | Credentials |
+|---|---|---|
+| Web UI | http://localhost:8888 | — |
+| REST API | http://localhost:8000 | — |
+| Fuseki | http://localhost:3030 | admin / `FUSEKI_PASSWORD` from `.env` |
+
+### Stopping and teardown
+
+```bash
+# Stop services
+docker compose --profile python-full down
+
+# Stop and remove all volumes and persisted data
+docker compose --profile python-full down -v
+```
+
+### Rebuilding after code changes or a fresh start
+
+```bash
+# Rebuild and restart just the Python app
+docker compose --profile python-full up -d --build wactorz
+
+# Full teardown and clean rebuild
+docker compose --profile python-full down -v
+docker compose --profile python-full up -d --build
+```
 
 ### Development stack
 
-The `compose.dev.yaml` starts MQTT + Fuseki + the Python app together — ideal for local development:
+For local development, `compose.dev.yaml` starts MQTT + Fuseki + the Python app together with a single command:
 
 ```bash
 # Start everything
@@ -208,35 +271,6 @@ Services started:
 | `wactorz-fuseki` | :3030 | Apache Jena Fuseki (knowledge graph) |
 | `wactorz-dev-mosquitto` | :1883, :9001 | MQTT broker (TCP + WebSocket) |
 
-### Production stack (profiles)
-
-The main `compose.yaml` uses profiles so you only start what you need:
-
-```bash
-# MQTT broker only (default)
-docker compose up -d
-
-# Python agents + MQTT
-docker compose --profile python up -d
-
-# Python agents + MQTT + Fuseki
-docker compose --profile python-full up -d
-
-# Rust server + nginx dashboard
-docker compose --profile rust up -d
-
-# Everything (Rust + Fuseki + Home Assistant)
-docker compose --profile full up -d
-```
-
-| Profile | Services | Ports |
-|---|---|---|
-| *(default)* | mosquitto | :1883, :9001 |
-| `python` | + wactorz-python | + :8000, :8888 |
-| `python-full` | + wactorz-python, fuseki | + :8000, :8888, :3030 |
-| `rust` | + wactorz-server, dashboard | + :8080, :8081, :80 |
-| `full` | + rust, fuseki, homeassistant | + :8080, :8081, :80, :3030, :8123 |
-
 ### Environment variables in Docker
 
 Your `.env` file is loaded automatically via `env_file`. The compose files override a few values so services can reach each other by container name instead of `localhost`:
@@ -251,20 +285,9 @@ FUSEKI_URL=http://fuseki:3030
 > ```bash
 > docker run --rm -v "$PWD/config/fuseki-container:/work" alpine sh -c "sed -i 's/\r//' /work/entrypoint.sh"
 > ```
-> Then rebuild: `docker compose -f compose.dev.yaml up -d --build fuseki`
+> Then rebuild: `docker compose --profile python-full up -d --build fuseki`
 
 > **Fuseki admin UI:** After starting Fuseki, the admin UI is at `http://localhost:3030`. Default credentials: **admin / admin** (set via `FUSEKI_ADMIN_PASSWORD` in your `.env`).
-
-### Rebuilding after code changes
-
-```bash
-# Rebuild and restart just the Python app
-docker compose -f compose.dev.yaml up -d --build wactorz
-
-# Full teardown and rebuild
-docker compose -f compose.dev.yaml down
-docker compose -f compose.dev.yaml up -d --build
-```
 
 ---
 
@@ -300,7 +323,7 @@ wactorz/                         ← repo root
 ├── compose.yaml                 ← production stack (profiles)
 ├── compose.dev.yaml             ← development stack
 ├── .env                         ← your config (gitignored)
-├── .env.example                 ← annotated config template
+├── .env.template                ← annotated config template
 └── pyproject.toml
 ```
 

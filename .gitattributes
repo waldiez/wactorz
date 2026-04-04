@@ -1,0 +1,4 @@
+# .gitattributes
+* text=auto
+*.sh text eol=lf
+config/fuseki-container/entrypoint.sh text eol=lf

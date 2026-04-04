@@ -17,4 +17,8 @@ RUN pip install --no-cache-dir ".[all]"
 
 RUN mkdir -p /app/state
 
+ENV INTERFACE=rest
+
+EXPOSE 8000 8888
+
 CMD ["wactorz"]

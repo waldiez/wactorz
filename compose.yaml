@@ -14,14 +14,15 @@
 #   full        — rust + Fuseki + Home Assistant
 #                 docker compose --profile full up -d
 #
-# External ports:
-#   :1883  → MQTT TCP
-#   :9001  → MQTT WebSocket
-#   :8000  → Python REST API          (python/python-full profile)
-#   :8888  → Python monitor Web UI    (python/python-full profile)
-#   :3030  → Fuseki                   (python-full/full profile)
-#   :80    → Dashboard SPA, /api/, /ws, /mqtt, /fuseki/  (rust/full profile)
-#   :8123  → Home Assistant proxy                         (full profile)
+# External ports (defaults, override via .env):
+#   :1883  → MQTT TCP                  MQTT_EXTERNAL_PORT
+#   :9001  → MQTT WebSocket            MQTT_WS_EXTERNAL_PORT
+#   :8000  → Python REST API           REST_EXTERNAL_PORT       (python/python-full)
+#   :8888  → Python monitor Web UI     MONITOR_EXTERNAL_PORT    (python/python-full)
+#   :3030  → Fuseki                    FUSEKI_EXTERNAL_PORT     (python-full/full)
+#   :80    → Dashboard SPA + proxy     DASHBOARD_EXTERNAL_PORT  (rust/full)
+#   :8080  → Rust API                  API_EXTERNAL_PORT        (rust/full)
+#   :8123  → Home Assistant                                      (full)
 #
 # Copy .env.example → .env and fill in secrets before running.
 
@@ -52,7 +53,7 @@ services:
 
   # ── Wactorz Python app ───────────────────────────────────────────────────────
   # docker compose --profile python up -d
-  # docker compose --profile python-full up -d   (includes Fuseki)
+  # docker compose --profile python-full up -d   (includes Fuseki + bridge)
   wactorz-python:
     profiles: [python, python-full]
     build:
@@ -71,8 +72,8 @@ services:
     networks:
       - wactorz-net
     ports:
-      - "8000:8000"   # REST API
-      - "8888:8888"   # Web UI monitor
+      - "${REST_EXTERNAL_PORT:-8000}:8000"     # REST API
+      - "${MONITOR_EXTERNAL_PORT:-8888}:8888"  # Web UI monitor
     volumes:
       - ./state:/app/state
     depends_on:
@@ -83,6 +84,31 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # ── Wactorz Fuseki bridge ─────────────────────────────────────────────────────
+  # Subscribes to agents/+/manifest MQTT and pushes RDF to Fuseki.
+  # Only started with python-full (requires Fuseki).
+  wactorz-fuseki:
+    profiles: [python-full]
+    image: wactorz-python:latest
+    container_name: wactorz-fuseki-bridge
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MQTT_BROKER: mosquitto
+      MQTT_PORT: "1883"
+      FUSEKI_URL: http://fuseki:3030
+      FUSEKI_USER: "${FUSEKI_USER:-admin}"
+      FUSEKI_PASSWORD: "${FUSEKI_PASSWORD:-admin}"
+    networks:
+      - wactorz-net
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      fuseki:
+        condition: service_healthy
+    command: ["wactorz-fuseki"]
 
   # ── Apache Jena Fuseki ───────────────────────────────────────────────────────
   # docker compose --profile python-full up -d
@@ -111,8 +137,6 @@ services:
       - ./infra/fuseki/ontology:/fuseki/ontology:ro
     networks:
       - wactorz-net
-    command: >
-      /jena-fuseki/fuseki-server --update --mem /wactorz
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3030/$/ping"]
       interval: 15s

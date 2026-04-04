@@ -62,7 +62,7 @@ import re
 import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 
 import aiohttp
 import aiomqtt
@@ -492,7 +492,7 @@ class FusekiClient:
         self._auth = auth
 
     def _gsp_url(self, graph: str) -> str:
-        return f"{self._base}/{self._ds}/data?graph={graph}"
+        return f"{self._base}/{self._ds}/data?graph={quote(graph, safe='')}"
 
     def _update_url(self) -> str:
         return f"{self._base}/{self._ds}/update"
@@ -632,7 +632,7 @@ class HAFusekiBridge:
         return entity_id.split(".")[0] in self._domains
 
     async def run(self) -> None:
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as http:
             fuseki = FusekiClient(
                 self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth
@@ -807,18 +807,21 @@ class AgentManifestBridge:
         )
 
     async def run(self) -> None:
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as http:
             fuseki = FusekiClient(
                 self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth
             )
-            # Register the bridge itself
+            # Register the bridge itself (best-effort — Fuseki may not be ready yet)
             bridge_body = (
                 f"{MANIFEST_BRIDGE_IRI}\n"
                 f"  a syn:Agent, prov:SoftwareAgent ;\n"
                 f'  rdfs:label "wactorz agent-manifest bridge" .\n'
             )
-            await fuseki.append_graph(GRAPH_AGENTS, _ttl(bridge_body))
+            try:
+                await fuseki.append_graph(GRAPH_AGENTS, _ttl(bridge_body))
+            except Exception as exc:
+                log.warning("AgentManifestBridge: Fuseki not ready yet (%s) — will retry on first manifest", exc)
 
             async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
                 await client.subscribe("agents/+/manifest")

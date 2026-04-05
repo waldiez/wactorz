@@ -49,6 +49,7 @@ NAV = [
     ]),
     #("Reference", "reference", [
     #    ("REST & WebSocket API", "api.md"),
+    #    ("Prometheus Monitoring", "prometheus.md"),
     #    ("MQTT Topics",          "mqtt_topics.md"),
     #    ("Python API",           "python-api.md"),
     #]),

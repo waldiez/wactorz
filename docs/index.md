@@ -12,6 +12,7 @@ pip install wactorz[all]
 ```
 
 > **Install directly from GitHub (latest dev build):**
+>
 > ```bash
 > pip install "wactorz[all] @ git+https://github.com/waldiez/wactorz.git"
 > ```
@@ -22,6 +23,7 @@ pip install wactorz[all]
 - **[Architecture](architecture.md)** — Actor model, supervision trees, message flow
 - **[Agents](agents.md)** — Built-in and custom agent reference
 - **[Interfaces](interfaces.md)** — HTTP endpoints and WebSocket protocol
+- **[Prometheus Monitoring](prometheus.md)** — Python metrics, Prometheus, and optional dependency probes
 - **[Pipelines](pipelines.md)** — Full topic reference with payload schemas
 - **[Remote Nodes](remote-nodes.md)** — Auto-generated Python class reference
 <!-- - **[Rust Docs](https://waldiez.github.io/wactorz/api/rust/)** — Rustdoc for wactorz-core and wactorz-interfaces

@@ -9,6 +9,7 @@ import os
 from typing import Any
 from typing import TYPE_CHECKING
 
+from ..monitoring import PrometheusMonitor
 
 if TYPE_CHECKING:
     from ..agents.main_actor import MainActor
@@ -662,6 +663,7 @@ class RESTInterface:
         self.agent = main_actor
         self.port = port
         self.api_key = api_key
+        self._monitor = PrometheusMonitor(lambda: getattr(self.agent, "_registry", None))
 
     @staticmethod
     def _normalize_state(state: str) -> str:
@@ -815,14 +817,18 @@ class RESTInterface:
         async def health_endpoint(request):
             return web.json_response({"status": "ok"})
 
+        async def prometheus_metrics_endpoint(request):
+            return self._monitor.metrics_response()
+
         async def ha_map_latest_endpoint(request):
             payload = self._latest_ha_map_payload()
             if payload is None:
                 return web.json_response({"error": "Home Assistant map snapshot not available"}, status=404)
             return web.json_response(payload)
 
-        app = web.Application()
+        app = web.Application(middlewares=[self._monitor.middleware])
         app.router.add_get("/health", health_endpoint)
+        app.router.add_get("/metrics", prometheus_metrics_endpoint)
         app.router.add_get("/ha-map", ha_map_latest_endpoint)
         app.router.add_get("/actors", agents_endpoint)
         app.router.add_get("/actors/{actor_id}", actor_endpoint)

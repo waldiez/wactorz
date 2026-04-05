@@ -3,6 +3,7 @@ asyncio-mqtt>=0.16.0
 aiomqtt>=1.0.0
 psutil>=5.9.0
 aiohttp>=3.9.0
+prometheus-client>=0.24.0
 
 # LLM Providers (install as needed)
 anthropic>=0.25.0          # pip install anthropic

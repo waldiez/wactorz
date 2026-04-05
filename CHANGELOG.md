@@ -8,11 +8,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Version
 ## [Unreleased]
 
 ### Added
+
 - **Telegram interface** — new `--interface telegram` mode using `python-telegram-bot`; users self-host their own bot via a BotFather token. Supports `TELEGRAM_ALLOWED_USER_ID` to restrict access to a single user. The `/start` command replies with the user's numeric Telegram ID for easy setup.
 - **`TELEGRAM_BOT_TOKEN` / `TELEGRAM_ALLOWED_USER_ID`** env vars added to `config.py` and `.env.example`
 - **One-shot Home Assistant actuation** — `MainActor` now classifies immediate device-control requests as `ACTUATE` and routes them to a new ephemeral `OneOffActuatorAgent` that resolves natural language to HA service calls, executes them, reports the result, tracks LLM cost, then unregisters, stops, and deletes its own persistence directory.
+- **Prometheus monitoring for the Python runtime** — the REST interface now exposes `GET /metrics` with Prometheus-formatted HTTP, actor, process, and LLM usage metrics via a shared `PrometheusMonitor` collector in `wactorz/monitoring/prometheus.py`.
+- **Prometheus Compose services** — `prometheus` and `blackbox-exporter` services added to `compose.yaml` and `compose.dev.yaml` for Python-stack monitoring. Optional Mosquitto and Fuseki availability probes are controlled via `PROMETHEUS_MONITOR_MOSQUITTO` and `PROMETHEUS_MONITOR_FUSEKI`.
+- **Prometheus configuration assets** — added templated config generation in `infra/prometheus/` including `prometheus.yml`, `render-config.sh`, `blackbox.yml`, and starter alert rules in `alerts.yml`.
+- **Prometheus docs and tests** — added `docs/prometheus.md`, linked it in the docs navigation, documented `GET /api/metrics`, and added focused tests for collector output, config generation, and REST content type handling.
 
 ### Changed
+
 - **Discord interface** — bot now responds to `@mention` instead of the `!` prefix for a more natural UX. Long responses are automatically split into 2000-character chunks to avoid Discord's message length limit.
 - **Documentation** — added README and agent reference coverage for `ACTUATE` intent routing and the new `OneOffActuatorAgent`.
 
@@ -21,6 +27,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Version
 ## [0.2.0] — 2026-03-13
 
 ### Added
+
 - **IOAgent** — MQTT gateway routing `io/chat` messages to the correct actor; replaces direct topic publishing
 - **MQTT TCP bridge** in `monitor_server.py` — `/mqtt` WebSocket endpoint now falls back to raw TCP (port 1883) when Mosquitto's WS listener (port 9001) is unavailable
 - **Web UI auto-start** — `wactorz` CLI spawns the monitor server as a quiet background asyncio task (`--no-monitor` to opt out, `--monitor-port` to override port 8888)
@@ -31,6 +38,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Version
 - **`scripts/build.py`** — clean build script (hatchling + twine) with `--upload` flag for PyPI
 
 ### Fixed
+
 - **`RangeError: invalid date`** — Python heartbeat uses epoch seconds (`timestamp`); TypeScript normaliser now converts to ms automatically for both Python (snake_case) and Rust (camelCase) payloads
 - **MQTT disconnect on listener error** — `emit()` now wraps each listener call in try/catch; a throwing handler no longer crashes the MQTT connection
 - **Chat infinite typing indicator** — fixed key mismatch between `showTyping("main-actor")` and `hideTyping("io-agent")`; `IOManager` tracks `_lastTypingKey` and clears it on any reply
@@ -39,6 +47,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Version
 - **`/api/actors` 404** — Python monitor server now serves actor list at this endpoint
 
 ### Changed
+
 - `wactorz/__init__.py` — optional agent imports (LLM, HA, ML) now wrapped in `try/except ImportError` so importing any submodule works without all optional deps installed
 - Python payload normalisers centralised in `MQTTClient.ts` — `normaliseHeartbeat`, `normaliseChat`, `normaliseStatus`
 - Monitor server `_find_dir()` helper resolves `static/app` for both editable and installed-wheel layouts
@@ -48,6 +57,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Version
 ## [0.1.0] — 2025-11-01
 
 ### Added
+
 - Initial open-source release
 - Python actor model core: `Actor`, `ActorSystem`, `Supervisor` with ONE_FOR_ONE / ONE_FOR_ALL / REST_FOR_ONE strategies
 - Built-in agents: `MainActor`, `MonitorActor`, `CodeAgent`, `ManualAgent`, `IOAgent`, `InstallerAgent`, `AnomalyDetectorAgent`

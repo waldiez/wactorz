@@ -314,6 +314,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
     if target is None:
         await reply_fn(f"Agent @{target_name} not found.")
         return
+    sender_name = getattr(target, "name", target_name)
 
     logger.info(f"[io-gateway] → {target.name}: {text[:60]!r}")
 
@@ -326,13 +327,13 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
             async for chunk in gen_fn(text):
                 if isinstance(chunk, dict):
                     continue
-                await _chunk_fn(str(chunk))
+                await _chunk_fn(str(chunk), sender_name)
         finally:
-            await _end_fn()
+            await _end_fn(sender_name)
     elif hasattr(target, "process_user_input"):
         result = await target.process_user_input(text)
-        await reply_fn(str(result))
-        await _end_fn()
+        await reply_fn(str(result), sender_name)
+        await _end_fn(sender_name)
 
 
 # ── MQTT chat handler (legacy / IOAgent-less fallback) ─────────────────────
@@ -345,13 +346,13 @@ async def handle_chat_mqtt(data: dict):
     if not content:
         return
 
-    async def mqtt_reply(text: str):
+    async def mqtt_reply(text: str, from_name: str = IO_GATEWAY_ID):
         global mqtt_client_ref
         if mqtt_client_ref:
             await mqtt_client_ref.publish(
                 f"agents/{IO_GATEWAY_ID}/chat",
                 json.dumps({
-                    "from":      IO_GATEWAY_ID,
+                    "from":      from_name,
                     "to":        "user",
                     "content":   text,
                     "timestamp": time.time(),
@@ -376,33 +377,33 @@ async def ws_handler(request):
     # Advertise chat mode so the frontend knows where to send messages
     await ws.send_str(json.dumps({"type": "config", "chat_mode": _chat_mode()}))
 
-    async def ws_reply(text: str):
+    async def ws_reply(text: str, from_name: str = IO_GATEWAY_ID):
         try:
             await ws.send_str(json.dumps({
                 "type":      "chat",
-                "from":      IO_GATEWAY_ID,
+                "from":      from_name,
                 "content":   text,
                 "timestamp": time.time(),
             }))
         except Exception:
             pass
 
-    async def ws_stream_chunk(chunk: str):
+    async def ws_stream_chunk(chunk: str, from_name: str = IO_GATEWAY_ID):
         try:
             await ws.send_str(json.dumps({
                 "type":      "stream_chunk",
-                "from":      IO_GATEWAY_ID,
+                "from":      from_name,
                 "content":   chunk,
                 "timestamp": time.time(),
             }))
         except Exception:
             pass
 
-    async def ws_stream_end():
+    async def ws_stream_end(from_name: str = IO_GATEWAY_ID):
         try:
             await ws.send_str(json.dumps({
                 "type":      "stream_end",
-                "from":      IO_GATEWAY_ID,
+                "from":      from_name,
                 "timestamp": time.time(),
             }))
         except Exception:

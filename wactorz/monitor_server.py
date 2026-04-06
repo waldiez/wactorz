@@ -687,6 +687,13 @@ FRONTEND_PUBLIC = _find_dir("frontend", "public")
 DOCS_SITE       = _find_dir("static", "docs")
 
 
+def _with_no_cache(response):
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
 async def index_handler(request):
     from aiohttp import web
     for candidate in [
@@ -696,7 +703,7 @@ async def index_handler(request):
         _root / "monitor.html",
     ]:
         if candidate.exists():
-            return web.FileResponse(candidate)
+            return _with_no_cache(web.FileResponse(candidate))
     raise web.HTTPNotFound()
 
 
@@ -708,7 +715,7 @@ async def static_handler(request):
         try:
             candidate = candidate.resolve()
             if candidate.is_file() and str(candidate).startswith(str(base.resolve())):
-                return web.FileResponse(candidate)
+                return _with_no_cache(web.FileResponse(candidate))
         except Exception:
             pass
     raise web.HTTPNotFound()

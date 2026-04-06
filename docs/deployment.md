@@ -183,6 +183,10 @@ See `.env.example` for the full annotated list.  The most important ones:
 | `MQTT_PORT` | `1883` | |
 | `API_ADDR` | `0.0.0.0:8080` | REST listen address |
 | `WS_ADDR` | `0.0.0.0:8081` | WS bridge listen address |
+| `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
+| `PROMETHEUS_SCRAPE_INTERVAL` | `15s` | Global Prometheus scrape interval |
+| `PROMETHEUS_MONITOR_MOSQUITTO` | `1` | Enable Mosquitto TCP availability probe |
+| `PROMETHEUS_MONITOR_FUSEKI` | `0` | Enable Fuseki HTTP availability probe |
 | `DASHBOARD_EXTERNAL_PORT` | `80` | nginx host port |
 | `NAUTILUS_SSH_KEY` | _(default key)_ | Path to SSH private key |
 | `NAUTILUS_STRICT_HOST_KEYS` | `0` | `1` = enforce strict host-key checking |

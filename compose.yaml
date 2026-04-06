@@ -19,6 +19,7 @@
 #   :9001  → MQTT WebSocket            MQTT_WS_EXTERNAL_PORT
 #   :8000  → Python REST API           REST_EXTERNAL_PORT       (python/python-full)
 #   :8888  → Python monitor Web UI     MONITOR_EXTERNAL_PORT    (python/python-full)
+#   :9090  → Prometheus UI            (python/python-full profile)
 #   :3030  → Fuseki                    FUSEKI_EXTERNAL_PORT     (python-full/full)
 #   :80    → Dashboard SPA + proxy     DASHBOARD_EXTERNAL_PORT  (rust/full)
 #   :8080  → Rust API                  API_EXTERNAL_PORT        (rust/full)
@@ -109,6 +110,56 @@ services:
       fuseki:
         condition: service_healthy
     command: ["wactorz-fuseki"]
+
+  prometheus:
+    profiles: [python, python-full]
+    image: prom/prometheus:v2.54.1
+    container_name: wactorz-prometheus
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -ec
+    environment:
+      PROMETHEUS_SCRAPE_INTERVAL: "${PROMETHEUS_SCRAPE_INTERVAL:-15s}"
+      PROMETHEUS_PYTHON_TARGET: "${PROMETHEUS_PYTHON_TARGET:-wactorz-python}"
+      PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
+      PROMETHEUS_MONITOR_FUSEKI: "${PROMETHEUS_MONITOR_FUSEKI:-0}"
+    ports:
+      - "${PROMETHEUS_EXTERNAL_PORT:-9090}:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml.template:ro
+      - ./infra/prometheus/render-config.sh:/etc/prometheus/render-config.sh:ro
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - |
+        export PROMETHEUS_TEMPLATE_FILE=/etc/prometheus/prometheus.yml.template
+        sh /etc/prometheus/render-config.sh /etc/prometheus/prometheus.yml
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --web.console.libraries=/etc/prometheus/console_libraries \
+          --web.console.templates=/etc/prometheus/consoles
+    depends_on:
+      wactorz-python:
+        condition: service_started
+      blackbox-exporter:
+        condition: service_started
+    networks:
+      - wactorz-net
+  blackbox-exporter:
+    profiles: [python, python-full]
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: wactorz-blackbox
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/blackbox_exporter/config.yml
+    volumes:
+      - ./infra/prometheus/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    networks:
+      - wactorz-net
 
   # ── Apache Jena Fuseki ───────────────────────────────────────────────────────
   # docker compose --profile python-full up -d
@@ -234,3 +285,4 @@ volumes:
   mosquitto-data:
   mosquitto-logs:
   fuseki-data:
+  prometheus-data:

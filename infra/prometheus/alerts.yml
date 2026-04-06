@@ -1,0 +1,31 @@
+groups:
+  - name: wactorz-python
+    rules:
+      - alert: WactorzPythonDown
+        expr: up{job="wactorz-python"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Wactorz Python target is down
+          description: Prometheus has failed to scrape the Python Wactorz API for at least 2 minutes.
+
+      - alert: WactorzActorHeartbeatStale
+        expr: wactorz_actor_heartbeat_age_seconds > 60
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Wactorz actor heartbeat is stale
+          description: Actor {{ $labels.actor_name }} has not emitted a heartbeat for more than 60 seconds.
+
+  - name: wactorz-probes
+    rules:
+      - alert: OptionalDependencyProbeFailing
+        expr: probe_success{job=~"mosquitto-blackbox|fuseki-blackbox"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Optional dependency probe is failing
+          description: Probe {{ $labels.job }} for {{ $labels.instance }} has been failing for at least 2 minutes.

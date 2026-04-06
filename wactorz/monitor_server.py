@@ -884,7 +884,7 @@ if __name__ == "__main__":
     parser.add_argument("--broker",       default=os.getenv("WACTORZ_BROKER", "localhost"))
     parser.add_argument("--mqtt-port",    type=int, default=1883)
     parser.add_argument("--mqtt-ws-port", type=int, default=int(os.getenv("MQTT_WS_PORT", "9001")))
-    parser.add_argument("--ws-port",      type=int, default=8888)
+    parser.add_argument("--ws-port",      type=int, default=int(os.getenv("MONITOR_PORT", "8888")))
     args = parser.parse_args()
 
     thismodule = sys.modules[__name__]

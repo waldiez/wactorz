@@ -820,6 +820,40 @@ def _actor_payload(ag: dict) -> dict:
     }
 
 
+async def history_handler(request):
+    """Return the persisted conversation_history for one agent.
+
+    Tries the live actor first (registry.recall), then falls back to reading
+    state.pkl from disk so it works even when the actor has restarted.
+    Returns at most the last 100 role/content pairs.
+    """
+    import pickle
+    from aiohttp import web
+
+    agent_name = request.match_info["agent_name"]
+
+    # ── 1. Live actor ──────────────────────────────────────────────────────────
+    if registry is not None:
+        actor = registry.find_by_name(agent_name)
+        if actor is not None and hasattr(actor, "recall"):
+            history = actor.recall("conversation_history", [])
+            return web.json_response({"agent": agent_name, "history": history[-100:]})
+
+    # ── 2. Disk fallback ───────────────────────────────────────────────────────
+    safe_name = agent_name.replace("/", "_").replace("\\", "_")
+    state_file = Path("./state") / safe_name / "state.pkl"
+    if state_file.exists():
+        try:
+            with open(state_file, "rb") as fh:
+                data = pickle.load(fh)
+            history = data.get("conversation_history", [])
+            return web.json_response({"agent": agent_name, "history": history[-100:]})
+        except Exception as exc:
+            logger.warning("[history] read failed for %s: %s", agent_name, exc)
+
+    return web.json_response({"agent": agent_name, "history": []})
+
+
 async def actors_handler(request):
     from aiohttp import web
     return web.json_response([_actor_payload(ag) for ag in state["agents"].values()])
@@ -856,8 +890,9 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/",                      index_handler)
     app.router.add_get("/ws",                    ws_handler)
     app.router.add_get("/mqtt",                  mqtt_proxy_handler)
-    app.router.add_get("/api/actors",            actors_handler)
-    app.router.add_get("/api/actors/{actor_id}", actor_handler)
+    app.router.add_get("/api/actors",                    actors_handler)
+    app.router.add_get("/api/actors/{actor_id}",         actor_handler)
+    app.router.add_get("/api/history/{agent_name}",      history_handler)
     app.router.add_get("/docs",  lambda r: web.HTTPFound("/docs/"))
     app.router.add_get("/docs/",             docs_handler)
     app.router.add_get("/docs/{path:.+}",    docs_handler)

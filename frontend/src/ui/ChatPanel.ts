@@ -40,7 +40,7 @@ export class ChatPanel {
   private activeAgentName: string | null = null;
 
   /** Per-agent conversation history.  Key = agent name. */
-  private threads: Map<string, ChatMessage[]> = new Map();
+  private threads: Map<string, ChatMessage[]> = this._loadThreads();
 
   /** Active typing bubbles keyed by agent name. */
   private typingBubbles: Map<string, HTMLElement> = new Map();
@@ -53,6 +53,25 @@ export class ChatPanel {
   private _streamFrom: string | null = null;
   private _streamText: string = "";
   private _lastStreamedText: string = "";
+
+  private _loadThreads(): Map<string, ChatMessage[]> {
+    try {
+      const raw = localStorage.getItem("wactorz-chat-threads");
+      if (!raw) return new Map();
+      return new Map(JSON.parse(raw) as [string, ChatMessage[]][]);
+    } catch {
+      return new Map();
+    }
+  }
+
+  private _saveThreads(): void {
+    try {
+      localStorage.setItem(
+        "wactorz-chat-threads",
+        JSON.stringify([...this.threads.entries()]),
+      );
+    } catch { /* storage quota — ignore */ }
+  }
 
   constructor() {
     this.panel = document.getElementById("chat-panel")!;
@@ -174,6 +193,7 @@ export class ChatPanel {
 
     if (!this.threads.has(key)) this.threads.set(key, []);
     this.threads.get(key)!.push(msg);
+    this._saveThreads();
 
     if (key === this.activeAgentName) {
       this.renderMessageEl(msg);
@@ -200,6 +220,36 @@ export class ChatPanel {
   updateAgentList(agents: AgentInfo[]): void {
     this.agentList = agents;
     this.renderSidebar();
+  }
+
+  /**
+   * Seed a thread from backend history (role/content pairs).
+   * No-op if the thread already has messages (localStorage already hydrated it).
+   */
+  rehydrate(
+    agentName: string,
+    history: { role: string; content: string }[],
+  ): void {
+    if (!history.length) return;
+    if ((this.threads.get(agentName) ?? []).length > 0) return;
+
+    const now = Date.now();
+    const msgs: import("../types/agent").ChatMessage[] = history.map(
+      (h, i) => ({
+        id: `hist-${agentName}-${i}`,
+        from: h.role === "user" ? "user" : agentName,
+        to: h.role === "user" ? agentName : "user",
+        content: h.content,
+        timestampMs: now - (history.length - i) * 60_000,
+      }),
+    );
+
+    this.threads.set(agentName, msgs);
+    this._saveThreads();
+
+    if (agentName === this.activeAgentName) {
+      this.renderThread(agentName, false);
+    }
   }
 
   private renderSidebar(): void {
@@ -308,6 +358,7 @@ export class ChatPanel {
     };
     if (!this.threads.has(key)) this.threads.set(key, []);
     this.threads.get(key)!.push(msg);
+    this._saveThreads();
 
     // Reset streaming state
     this._lastStreamedText = this._streamText;

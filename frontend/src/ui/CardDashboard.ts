@@ -80,9 +80,61 @@ export class CardDashboard {
   private _evEnd: ((e: Event) => void) | null = null;
   private _evConn: ((e: Event) => void) | null = null;
 
+  private _loadChatHistory(): ChatMessage[] {
+    try {
+      const raw = localStorage.getItem("wactorz-chat-messages");
+      return raw ? (JSON.parse(raw) as ChatMessage[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private _saveChatHistory(): void {
+    try {
+      localStorage.setItem(
+        "wactorz-chat-messages",
+        JSON.stringify(this.chatMessages),
+      );
+    } catch { /* storage quota — ignore */ }
+  }
+
   constructor() {
     this.root = this.buildRoot();
     document.body.appendChild(this.root);
+    this.chatMessages = this._loadChatHistory();
+  }
+
+  /**
+   * Seed chat history from backend role/content pairs.
+   * No-op if we already have any message involving this agent.
+   */
+  rehydrate(
+    agentName: string,
+    history: { role: string; content: string }[],
+  ): void {
+    if (!history.length) return;
+    const hasExisting = this.chatMessages.some(
+      (m) => m.from === agentName || m.to === agentName,
+    );
+    if (hasExisting) return;
+
+    const now = Date.now();
+    const msgs: ChatMessage[] = history.map((h, i) => ({
+      id: `hist-${agentName}-${i}`,
+      from: h.role === "user" ? "user" : agentName,
+      to: h.role === "user" ? agentName : "user",
+      content: h.content,
+      timestampMs: now - (history.length - i) * 60_000,
+    }));
+
+    this.chatMessages.push(...msgs);
+    if (this.chatMessages.length > 200)
+      this.chatMessages.splice(0, this.chatMessages.length - 200);
+    this._saveChatHistory();
+
+    if (this.view === "chat" && this.chatTarget === agentName) {
+      this._renderChatThread();
+    }
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -186,6 +238,7 @@ export class CardDashboard {
       const msg = (e as CustomEvent<{ msg: ChatMessage }>).detail.msg;
       this.chatMessages.push(msg);
       if (this.chatMessages.length > 200) this.chatMessages.shift();
+      this._saveChatHistory();
       if (this.view === "chat") {
         this._appendChatMsgEl(msg);
         this._scrollThread();
@@ -228,6 +281,7 @@ export class CardDashboard {
           timestampMs: Date.now(),
         };
         this.chatMessages.push(msg);
+        this._saveChatHistory();
       }
       this._streamRow = null;
       this._streamBody = null;
@@ -861,6 +915,7 @@ export class CardDashboard {
       timestampMs: Date.now(),
     };
     this.chatMessages.push(msg);
+    this._saveChatHistory();
     if (this.view === "chat") {
       this._appendChatMsgEl(msg);
       this._scrollThread();

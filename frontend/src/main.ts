@@ -188,6 +188,20 @@ mqtt.on("connected", () => {
       hud.setAgentCount(scene.getAgents().length);
       refreshStats();
       console.info(`[Dashboard] seeded ${actors.length} actors from REST`);
+
+      // Rehydrate chat history from backend for each known agent.
+      // Each rehydrate() call is a no-op if localStorage already has messages.
+      scene.getAgents().forEach((agent) => {
+        fetch(`/api/history/${encodeURIComponent(agent.name)}`)
+          .then((r) => r.json())
+          .then((data: { history: { role: string; content: string }[] }) => {
+            const h = data.history ?? [];
+            if (!h.length) return;
+            chatPanel.rehydrate(agent.name, h);
+            scene.rehydrateHistory(agent.name, h);
+          })
+          .catch(() => {});
+      });
     })
     .catch(() => {
       // Dev mode without a running server — ignore silently

@@ -205,6 +205,13 @@ export class SceneManager {
     else this.activeTheme.removeAgent(id);
   }
 
+  rehydrateHistory(
+    agentName: string,
+    history: { role: string; content: string }[],
+  ): void {
+    this.cardDashboard?.rehydrate(agentName, history);
+  }
+
   onHeartbeat(payload: HeartbeatPayload): void {
     const agent = this.agents.get(payload.agentId);
     if (agent) {

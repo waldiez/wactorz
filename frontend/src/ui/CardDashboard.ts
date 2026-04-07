@@ -679,14 +679,14 @@ export class CardDashboard {
 
   private _appendActionBtns(controls: HTMLElement, agent: AgentInfo): void {
     const status = stateLabel(agent.state);
-    if (status === "running") {
+    if (!agent.protected && status === "running") {
       const b = document.createElement("button");
       b.className = "af-mini-btn";
       b.textContent = "Pause";
       b.dataset.action = "pause";
       controls.appendChild(b);
     }
-    if (status === "paused") {
+    if (!agent.protected && status === "paused") {
       const b = document.createElement("button");
       b.className = "af-mini-btn";
       b.textContent = "Resume";

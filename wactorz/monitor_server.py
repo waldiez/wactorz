@@ -24,6 +24,8 @@ import socket
 import time
 from pathlib import Path
 
+from .config import CONFIG, raw_url_target
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -875,6 +877,26 @@ async def actor_handler(request):
     return web.json_response(_actor_payload(ag))
 
 
+async def ha_config_handler(request):
+    from aiohttp import web
+
+    return web.json_response({
+        "url": raw_url_target(CONFIG.ha_url),
+        "token": CONFIG.ha_token,
+    })
+
+
+async def fuseki_config_handler(request):
+    from aiohttp import web
+
+    return web.json_response({
+        "url": raw_url_target(CONFIG.fuseki_url),
+        "user": CONFIG.fuseki_user,
+        "password": CONFIG.fuseki_password,
+        "dataset": CONFIG.fuseki_dataset,
+    })
+
+
 # ── Entry point ────────────────────────────────────────────────────────────
 
 async def main(exit_on_failure: bool = False):
@@ -900,6 +922,8 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/api/actors",                    actors_handler)
     app.router.add_get("/api/actors/{actor_id}",         actor_handler)
     app.router.add_get("/api/history/{agent_name}",      history_handler)
+    app.router.add_get("/api/config/ha",                 ha_config_handler)
+    app.router.add_get("/api/config/fuseki",             fuseki_config_handler)
     app.router.add_get("/docs",  lambda r: web.HTTPFound("/docs/"))
     app.router.add_get("/docs/",             docs_handler)
     app.router.add_get("/docs/{path:.+}",    docs_handler)

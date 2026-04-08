@@ -1,11 +1,28 @@
 from dotenv import load_dotenv, find_dotenv
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 import os
 
 
 def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "dev"}
+
+
+def raw_url_target(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+
+    parsed = urlparse(raw if "://" in raw else f"//{raw}")
+    host = parsed.hostname
+    if host is None:
+        return raw.rstrip("/").split("/", 1)[0]
+
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+
+    return f"{host}:{parsed.port}" if parsed.port is not None else host
 
 
 DEV_MODE = _env_truthy("WACTORZ_DEV_MODE")
@@ -47,6 +64,8 @@ class AppConfig:
     weather_default_location: str
     fuseki_url: str
     fuseki_dataset: str
+    fuseki_user: str
+    fuseki_password: str
 
 
 CONFIG = AppConfig(
@@ -77,5 +96,7 @@ CONFIG = AppConfig(
     nautilus_strict_host_keys=os.getenv("NAUTILUS_STRICT_HOST_KEYS", "0"),
     weather_default_location=os.getenv("WEATHER_DEFAULT_LOCATION", "London"),
     fuseki_url=os.getenv("FUSEKI_URL", "http://fuseki:3030"),
-    fuseki_dataset=os.getenv("FUSEKI_DATASET", "/ds")
+    fuseki_dataset=os.getenv("FUSEKI_DATASET", "/wactorz"),
+    fuseki_user=os.getenv("FUSEKI_USER", "admin"),
+    fuseki_password=os.getenv("FUSEKI_PASSWORD", ""),
 )

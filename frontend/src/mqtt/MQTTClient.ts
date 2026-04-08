@@ -171,28 +171,28 @@ export class MQTTClient {
       return;
     }
 
-    // agents/{id}/heartbeat
-    if (/^agents\/[^/]+\/heartbeat$/.test(topic)) {
+    // agents/{id}/heartbeat  — id may contain slashes (wid/hlc format)
+    if (/^agents\/.+\/heartbeat$/.test(topic)) {
       this.emit("heartbeat", normaliseHeartbeat(payload));
       return;
     }
     // agents/{id}/status
-    if (/^agents\/[^/]+\/status$/.test(topic)) {
+    if (/^agents\/.+\/status$/.test(topic)) {
       this.emit("status", normaliseStatus(payload));
       return;
     }
     // agents/{id}/alert
-    if (/^agents\/[^/]+\/alert$/.test(topic)) {
+    if (/^agents\/.+\/alert$/.test(topic)) {
       this.emit("alert", payload as AlertPayload);
       return;
     }
     // agents/{id}/chat
-    if (/^agents\/[^/]+\/chat$/.test(topic)) {
+    if (/^agents\/.+\/chat$/.test(topic)) {
       this.emit("chat", normaliseChat(payload));
       return;
     }
     // agents/{id}/spawn  (real backend + mock both use this topic)
-    if (/^agents\/[^/]+\/spawn$/.test(topic)) {
+    if (/^agents\/.+\/spawn$/.test(topic)) {
       this.emit("spawn", payload as SpawnPayload);
       return;
     }
@@ -222,7 +222,7 @@ export class MQTTClient {
     }
 
     // agents/{id}/metrics  (LLM cost, token counts, message counts)
-    const metricsMatch = topic.match(/^agents\/([^/]+)\/metrics$/);
+    const metricsMatch = topic.match(/^agents\/(.+)\/metrics$/);
     if (metricsMatch?.[1]) {
       const agentId = metricsMatch[1];
       const p = payload as Record<string, unknown>;
@@ -252,7 +252,7 @@ export class MQTTClient {
     }
 
     // agents/{id}/logs
-    const logsMatch = topic.match(/^agents\/([^/]+)\/logs$/);
+    const logsMatch = topic.match(/^agents\/(.+)\/logs$/);
     if (logsMatch?.[1]) {
       const agentId = logsMatch[1];
       const p = payload as Record<string, unknown>;
@@ -269,7 +269,7 @@ export class MQTTClient {
     }
 
     // agents/{id}/completed
-    const completedMatch = topic.match(/^agents\/([^/]+)\/completed$/);
+    const completedMatch = topic.match(/^agents\/(.+)\/completed$/);
     if (completedMatch?.[1]) {
       const agentId = completedMatch[1];
       const p = payload as Record<string, unknown>;
@@ -320,10 +320,25 @@ function str(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback;
 }
 
+/**
+ * Extract a human-readable name from a WID/HLC-WID.
+ * Format: 20260325T151725.0000Z-{name}[-{6hex}]
+ * Falls back to first 8 chars for non-WID strings.
+ */
+function nameFromId(raw: string): string {
+  const m = raw.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
+  return m?.[1] ?? raw;
+}
+
+function resolveAgentName(name: string, id: string): string {
+  const isTimestampOnly = !name || /^\d+$/.test(name);
+  return isTimestampOnly ? nameFromId(id) : nameFromId(name);
+}
+
 function normaliseHeartbeat(p: unknown): HeartbeatPayload {
   const o = (p ?? {}) as RawObj;
   const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
-  const agentName = str(o["agentName"] ?? o["name"] ?? agentId.slice(0, 8));
+  const agentName = resolveAgentName(str(o["agentName"] ?? o["name"]), agentId);
   const timestampMs = toMs(
     o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"],
   );
@@ -354,7 +369,7 @@ function normaliseChat(p: unknown): ChatMessage {
 function normaliseStatus(p: unknown): StatusPayload {
   const o = (p ?? {}) as RawObj;
   const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
-  const agentName = str(o["agentName"] ?? o["name"] ?? agentId.slice(0, 8));
+  const agentName = resolveAgentName(str(o["agentName"] ?? o["name"]), agentId);
   return {
     ...(o as unknown as StatusPayload),
     agentId,

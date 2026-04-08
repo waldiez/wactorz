@@ -124,6 +124,15 @@ class _RemoteAgentAPI:
             {"agent": self.name, "node": self.node, "result": data, "timestamp": time.time()},
         )
 
+    async def publish_detection(self, data: Any):
+        """Publish detection results to agents/{id}/detections — mirrors DynamicAgent API."""
+        await self._agent._publish(
+            f"agents/{self.actor_id}/detections",
+            {"agent": self.name, "node": self.node, "detections": data, "timestamp": time.time()},
+        )
+        # Also publish to a human-friendly topic for easy MQTT subscription
+        await self.publish(f"{self.node}/{self.name}/detections", data)
+
     async def set_status(self, status: str):
         """Update agent task status string visible in dashboard."""
         self._agent._status = status

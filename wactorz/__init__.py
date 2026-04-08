@@ -16,7 +16,6 @@ except ImportError:
 try:
     from .agents.main_actor import MainActor
     from .agents.monitor_agent import MonitorActor
-    from .agents.code_agent import CodeAgent
     from .agents.manual_agent import ManualAgent
     from .agents.planner_agent import PlannerAgent
     from .agents.dynamic_agent import DynamicAgent
@@ -26,11 +25,11 @@ try:
                 "DynamicAgent", "InstallerAgent", "CatalogAgent"]
 except ImportError:
     pass
-try:
-    from .agents.ml_agent import MLAgent, YOLOAgent, AnomalyDetectorAgent
-    __all__ += ["MLAgent", "YOLOAgent", "AnomalyDetectorAgent"]
-except ImportError:
-    pass
+#try:
+#    from .agents.ml_agent import MLAgent, YOLOAgent, AnomalyDetectorAgent
+#    __all__ += ["MLAgent", "YOLOAgent", "AnomalyDetectorAgent"]
+#except ImportError:
+#    pass
 try:
     from .agents.home_assistant_hardware_agent import HomeAssistantHardwareAgent
     __all__ += ["HomeAssistantHardwareAgent"]

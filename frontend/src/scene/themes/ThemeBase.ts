@@ -17,10 +17,7 @@ import { playMessageEffect } from "../effects/MessageEffect";
 
 export abstract class ThemeBase {
   /** Unique theme identifier used by `SceneManager`. */
-  abstract readonly name:
-    | "graph"
-    | "cards"
-    | "social";
+  abstract readonly name: "graph" | "cards" | "social";
 
   /** The nodes currently in this theme, keyed by agent ID. */
   protected nodes: Map<string, AgentNodeBase> = new Map();

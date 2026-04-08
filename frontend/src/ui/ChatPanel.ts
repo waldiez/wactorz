@@ -77,11 +77,15 @@ export class ChatPanel {
     this.panel = document.getElementById("chat-panel")!;
     this.agentNameEl = document.getElementById("panel-agent-name")!;
     this.agentStatusEl = document.getElementById("panel-agent-status")!;
-    this.avatarEl = document.getElementById("panel-agent-avatar") as HTMLImageElement | null;
+    this.avatarEl = document.getElementById(
+      "panel-agent-avatar",
+    ) as HTMLImageElement | null;
     this.closeBtn = document.getElementById("panel-close") as HTMLButtonElement;
     this.messagesEl = document.getElementById("chat-messages")!;
     this.sidebarListEl = document.getElementById("chat-agent-list")!;
-    this.sidebarSearchEl = document.getElementById("chat-sidebar-search") as HTMLInputElement;
+    this.sidebarSearchEl = document.getElementById(
+      "chat-sidebar-search",
+    ) as HTMLInputElement;
 
     this.sidebarSearchEl.addEventListener("input", () => {
       this.sidebarFilter = this.sidebarSearchEl.value.toLowerCase();
@@ -139,9 +143,11 @@ export class ChatPanel {
     );
 
     // Update sidebar active state
-    this.sidebarListEl.querySelectorAll<HTMLElement>(".af-chat-agent-row").forEach((row) => {
-      row.classList.toggle("active", row.dataset["name"] === agent.name);
-    });
+    this.sidebarListEl
+      .querySelectorAll<HTMLElement>(".af-chat-agent-row")
+      .forEach((row) => {
+        row.classList.toggle("active", row.dataset["name"] === agent.name);
+      });
 
     const alreadyOpen = this.panel.classList.contains("open");
     if (!alreadyOpen) {
@@ -254,7 +260,9 @@ export class ChatPanel {
 
   private renderSidebar(): void {
     const filtered = this.sidebarFilter
-      ? this.agentList.filter((a) => a.name.toLowerCase().includes(this.sidebarFilter))
+      ? this.agentList.filter((a) =>
+          a.name.toLowerCase().includes(this.sidebarFilter),
+        )
       : this.agentList;
 
     const sorted = [...filtered].sort((a, b) => {
@@ -263,28 +271,67 @@ export class ChatPanel {
       return a.name.localeCompare(b.name);
     });
 
-    this.sidebarListEl.innerHTML = "";
-    for (const agent of sorted) {
-      const dotColor =
-        typeof agent.state === "object" ? "#f87171" :
-        agent.state === "running" ? "#34d399" :
-        agent.state === "paused"  ? "#fbbf24" :
-        agent.state === "stopped" ? "#4b5563" : "#60a5fa";
-
-      const row = document.createElement("button");
-      row.className = `af-chat-agent-row${agent.name === this.activeAgentName ? " active" : ""}`;
-      row.dataset["name"] = agent.name;
-      row.innerHTML = `
-        <span class="af-chat-agent-dot" style="background:${dotColor}"></span>
-        <span class="af-chat-agent-name">${agent.name}</span>
-      `;
-      row.addEventListener("click", () => {
-        document.dispatchEvent(
-          new CustomEvent<{ agent: AgentInfo }>("agent-selected", { detail: { agent } }),
-        );
+    // Collect existing rows by name for diffing
+    const existing = new Map<string, HTMLElement>();
+    this.sidebarListEl
+      .querySelectorAll<HTMLElement>(".af-chat-agent-row")
+      .forEach((r) => {
+        if (r.dataset["name"]) existing.set(r.dataset["name"], r);
       });
-      this.sidebarListEl.appendChild(row);
-    }
+
+    const keep = new Set(sorted.map((a) => a.name));
+    // Remove rows for agents no longer in the list
+    existing.forEach((row, name) => {
+      if (!keep.has(name)) row.remove();
+    });
+
+    // Upsert rows in sorted order without touching unchanged rows
+    sorted.forEach((agent, idx) => {
+      const dotColor =
+        typeof agent.state === "object"
+          ? "#f87171"
+          : agent.state === "running"
+            ? "#34d399"
+            : agent.state === "paused"
+              ? "#fbbf24"
+              : agent.state === "stopped"
+                ? "#4b5563"
+                : "#60a5fa";
+      const isActive = agent.name === this.activeAgentName;
+
+      let row = existing.get(agent.name);
+      if (!row) {
+        row = document.createElement("button");
+        row.className = "af-chat-agent-row";
+        row.dataset["name"] = agent.name;
+        row.title = agent.name;
+        row.innerHTML = `
+          <span class="af-chat-agent-dot"></span>
+          <span class="af-chat-agent-name">${agent.name}</span>
+        `;
+        // Use delegated name lookup so the closure always reflects latest state
+        row.addEventListener("click", () => {
+          const a = this.agentList.find((x) => x.name === agent.name);
+          if (!a) return;
+          document.dispatchEvent(
+            new CustomEvent<{ agent: AgentInfo }>("agent-selected", {
+              detail: { agent: a },
+            }),
+          );
+        });
+      }
+
+      // Patch only what may have changed
+      row.classList.toggle("active", isActive);
+      const dot = row.querySelector<HTMLElement>(".af-chat-agent-dot");
+      if (dot && dot.style.background !== dotColor)
+        dot.style.background = dotColor;
+
+      // Ensure correct position without re-inserting if already there
+      const sibling = this.sidebarListEl.children[idx];
+      if (sibling !== row)
+        this.sidebarListEl.insertBefore(row, sibling ?? null);
+    });
   }
 
   get activeAgent(): AgentInfo | null {
@@ -347,8 +394,8 @@ export class ChatPanel {
     this._streamBody.innerHTML = renderMarkdown(this._streamText);
     this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
 
-    // Store in thread history
-    const key = this.activeAgentName ?? "main-actor";
+    // Store in thread history under the actual sender, not the active panel
+    const key = this._streamFrom ?? this.activeAgentName ?? "main-actor";
     const msg: ChatMessage = {
       id: `stream-${Date.now()}`,
       from: this._streamFrom,

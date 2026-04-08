@@ -12,7 +12,7 @@
     :root{
       --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
       --border:#1a2140;--border-hi:#2a3560;
-      --blue:#4f8ef7;--cyan:#00d4ff;
+      --blue:#4f8ef7;--cyan:#00d4ff;--green:#4ade80;--yellow:#fbbf24;--orange:#fb923c;--purple:#a78bfa;
       --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
       --mono:'JetBrains Mono',monospace;
       --display:'Chakra Petch',sans-serif;
@@ -22,75 +22,79 @@
     ::-webkit-scrollbar{width:5px}
     ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
 
-    /* ── Nav bar ── */
     .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
     .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
     .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
     .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
     .topbar-links{display:flex;gap:.1rem}
     .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
-    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+    .topbar-links a:hover{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
 
-    /* ── Layout ── */
     .layout{display:flex;flex:1}
 
-    /* ── Sidebar ── */
     .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
     .sidebar-group{margin-bottom:1.25rem}
     .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
     .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
     .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
     .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
-    .sidebar a.external{color:var(--muted);font-size:.76rem}
+    .sidebar-sub{padding-left:.5rem;font-size:.75rem}
 
-    /* ── Content ── */
-    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
-
-    /* ── Typography ── */
-    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:900px;min-width:0}
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:.5rem;line-height:1.15}
+    .content .subtitle{color:var(--muted-hi);margin-bottom:2rem;font-size:.85rem}
     .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
-    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
-    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:2rem 0 .5rem;display:flex;align-items:center;gap:.6rem}
+    .content h4{font-family:var(--display);font-size:.82rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem;letter-spacing:.06em;text-transform:uppercase}
     .content p{margin-bottom:1rem;color:var(--text)}
     .content a{color:var(--blue);text-decoration:none}
     .content a:hover{text-decoration:underline}
     .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
-    .content li{margin:.25rem 0}
+    .content li{margin:.3rem 0;color:var(--muted-hi)}
+    .content li strong{color:var(--text)}
     .content strong{color:#fff;font-weight:500}
-    .content em{color:var(--muted-hi)}
-    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
-
-    /* ── Code ── */
+    .content hr{border:none;border-top:1px solid var(--border);margin:2.5rem 0}
     .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
-    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
-    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
-
-    /* ── Pygments syntax highlight overrides ── */
-    .highlight .hll{background:#1a2140}
-    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
-    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
-    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
-    .highlight .n{color:var(--text)}
-    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
-    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
-    .highlight .o,.highlight .ow{color:#89ddff}
-    .highlight .p{color:var(--text)}
-
-    /* ── Blockquote / admonition ── */
-    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
-
-    /* ── Tables ── */
-    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
-    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
-    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.8}
+    .content table{width:100%;border-collapse:collapse;margin:.75rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.55rem 1rem;border:1px solid var(--border);text-align:left;font-family:var(--display);font-size:.78rem;letter-spacing:.04em}
+    .content td{padding:.45rem 1rem;border:1px solid var(--border);color:var(--muted-hi);vertical-align:top}
+    .content td code{font-size:.8em}
     .content tr:hover td{background:rgba(79,142,247,.03)}
 
-    /* ── Footer ── */
+    /* ── Tags ── */
+    .tag{display:inline-block;font-size:.63rem;padding:.1em .45em;border-radius:2px;font-family:var(--display);letter-spacing:.07em;text-transform:uppercase;vertical-align:middle;margin-left:.1rem}
+    .tag-core{background:rgba(79,142,247,.15);color:var(--blue);border:1px solid rgba(79,142,247,.3)}
+    .tag-dynamic{background:rgba(74,222,128,.12);color:var(--green);border:1px solid rgba(74,222,128,.25)}
+    .tag-catalog{background:rgba(251,191,36,.12);color:var(--yellow);border:1px solid rgba(251,191,36,.25)}
+    .tag-llm{background:rgba(167,139,250,.12);color:var(--purple);border:1px solid rgba(167,139,250,.25)}
+
+    /* ── Callout ── */
+    .callout{border-left:3px solid var(--blue);margin:1.25rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);border-radius:0 4px 4px 0}
+    .callout.tip{border-color:var(--green);background:rgba(74,222,128,.05)}
+    .callout.warn{border-color:var(--yellow);background:rgba(251,191,36,.05)}
+    .callout-title{font-family:var(--display);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--blue);margin-bottom:.25rem}
+    .callout.tip  .callout-title{color:var(--green)}
+    .callout.warn .callout-title{color:var(--yellow)}
+    .callout p{margin:0;color:var(--muted-hi);font-size:.85rem}
+
+    /* ── Agent section card ── */
+    .agent-section{border:1px solid var(--border);border-radius:5px;margin:1.5rem 0 2.5rem;overflow:hidden}
+    .agent-section-header{background:var(--bg3);border-bottom:1px solid var(--border);padding:.75rem 1.25rem;display:flex;align-items:center;justify-content:space-between;gap:1rem}
+    .agent-section-name{font-family:var(--display);font-size:.95rem;font-weight:600;color:#fff}
+    .agent-section-file{font-family:var(--mono);font-size:.73rem;color:var(--muted)}
+    .agent-section-body{padding:1.25rem 1.5rem}
+    .agent-section-body p:last-child{margin-bottom:0}
+
+    /* ── Meta row ── */
+    .meta{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;margin:.5rem 0 1rem;font-size:.78rem;color:var(--muted-hi)}
+    .meta span{display:flex;align-items:center;gap:.35rem}
+    .meta-label{color:var(--muted);font-size:.72rem;text-transform:uppercase;font-family:var(--display);letter-spacing:.06em}
+
     footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
     footer a{color:var(--muted-hi);text-decoration:none}
-    footer a:hover{color:var(--text)}
 
-    /* ── Responsive ── */
     @media(max-width:768px){
       .sidebar{display:none}
       .content{padding:2rem 1.25rem 4rem}
@@ -98,15 +102,15 @@
   </style>
 </head>
 <body>
+
 <header class="topbar">
   <a href="../index.html" class="topbar-logo">
     <div class="logo-mark"></div>Wactorz
   </a>
   <nav class="topbar-links">
+    <a href="../guide/development.html">Docs</a>
     <a href="https://github.com/waldiez/wactorz" target="_blank" rel="noopener">GitHub</a>
     <a href="https://pypi.org/project/wactorz/" target="_blank" rel="noopener">PyPI</a>
-    <a href="../api/rust/" target="_blank">Rust Docs</a>
-    <a href="../api/js/" target="_blank">JS Docs</a>
   </nav>
 </header>
 
@@ -114,337 +118,460 @@
   <aside class="sidebar">
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
-      <a href="../guide/development.html" class="">Installation</a>
-      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/installation.html">Installation</a>
+      <a href="../guide/architecture.html">Architecture</a>
       <a href="../guide/agents.html" class="active">Agents</a>
-      <a href="../guide/deployment.html" class="">Deployment</a>
-      <a href="../guide/windows.html" class="">Windows</a>
+      <a href="../guide/interfaces.html">Interfaces</a>
+      <a href="../guide/pipelines.html">Pipelines</a>
+      <a href="../guide/catalog.html">Catalog</a>
+      <a href="../guide/windows.html">Windows</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">On this page</div>
+      <a href="#core" class="sidebar-sub">Core agents</a>
+      <a href="#mainactor" class="sidebar-sub">→ MainActor</a>
+      <a href="#planner" class="sidebar-sub">→ PlannerAgent</a>
+      <a href="#monitor" class="sidebar-sub">→ MonitorAgent</a>
+      <a href="#io" class="sidebar-sub">→ IOAgent</a>
+      <a href="#installer" class="sidebar-sub">→ InstallerAgent</a>
+      <a href="#catalog-agent" class="sidebar-sub">→ CatalogAgent</a>
+      <a href="#ha-agent" class="sidebar-sub">→ HomeAssistantAgent</a>
+      <a href="#ha-bridge" class="sidebar-sub">→ HA State Bridge</a>
+      <a href="#ha-map" class="sidebar-sub">→ HA Map Agent</a>
+      <a href="#dynamic" class="sidebar-sub">Dynamic agents</a>
+      <a href="#llm-agent" class="sidebar-sub">LLMAgent base</a>
+      <a href="#catalog-recipes" class="sidebar-sub">Catalog recipes</a>
+      <a href="#new-agent" class="sidebar-sub">Writing an agent</a>
     </div>
     <div class="sidebar-group">
       <div class="sidebar-label">Reference</div>
-      <a href="../reference/api.html" class="">REST & WebSocket API</a>
-      <a href="../reference/mqtt_topics.html" class="">MQTT Topics</a>
-      <a href="../reference/python-api.html" class="">Python API</a>
+      <a href="../reference/mqtt_topics.html">MQTT Topics</a>
+      <a href="../reference/python-api.html">Python API</a>
+      <a href="../reference/config.html">Config</a>
     </div>
-    <a href="https://waldiez.github.io/wactorz/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
-    <a href="https://waldiez.github.io/wactorz/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
   </aside>
+
   <main class="content">
-<h1 id="agents">Agents</h1>
-<p>All agents are Python classes implementing the <code>Actor</code> protocol.  They communicate exclusively via MQTT — no direct function calls between agents.  A Rust implementation mirrors the same actor model and may run in sync as an optional performance layer.</p>
-<hr />
-<h2 id="core-protected-agents">Core (protected) agents</h2>
-<p>These agents are marked <code>protected: true</code> and cannot be stopped or deleted from the dashboard.</p>
-<h3 id="mainactor">MainActor</h3>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Name</strong></td>
-<td><code>main-actor</code></td>
-</tr>
-<tr>
-<td><strong>Type</strong></td>
-<td><code>orchestrator</code></td>
-</tr>
-<tr>
-<td><strong>Topic</strong></td>
-<td><code>agents/{id}/chat</code></td>
-</tr>
-</tbody>
-</table>
-<p>The LLM brain of the system.  Receives user messages, calls the configured LLM (Anthropic / OpenAI / Ollama), and parses <code>&lt;spawn&gt;</code> directives in the response to dynamically create new agents.</p>
-<p><strong>Spawn syntax</strong> (in LLM response):</p>
-<div class="highlight"><pre><span></span><code><span class="nt">&lt;spawn</span><span class="w"> </span><span class="na">agent-type=</span><span class="s">&quot;dynamic&quot;</span><span class="w"> </span><span class="na">name=</span><span class="s">&quot;my-agent&quot;</span><span class="nt">&gt;</span>
-<span class="w">  </span>//<span class="w"> </span>Rhai<span class="w"> </span>script<span class="w"> </span>body
-<span class="w">  </span>fn<span class="w"> </span>handle(msg)<span class="w"> </span>{<span class="w"> </span>...<span class="w"> </span>}
-<span class="nt">&lt;/spawn&gt;</span>
-</code></pre></div>
+    <h1>Agents</h1>
+    <p class="subtitle">All agents are Python classes that extend <code>Actor</code>. They communicate exclusively via MQTT — no direct calls between agents at runtime.</p>
 
-<p><strong>Configuration</strong> (<code>.env</code>):</p>
-<div class="highlight"><pre><span></span><code>LLM_PROVIDER=anthropic        # anthropic | openai | ollama
-LLM_MODEL=claude-sonnet-4-6   # any model ID
-LLM_API_KEY=sk-ant-...
-</code></pre></div>
+    <hr id="core"/>
 
-<hr />
-<h3 id="monitoragent">MonitorAgent</h3>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Name</strong></td>
-<td><code>monitor-agent</code></td>
-</tr>
-<tr>
-<td><strong>Type</strong></td>
-<td><code>monitor</code></td>
-</tr>
-<tr>
-<td><strong>Publishes</strong></td>
-<td><code>system/health</code>, <code>agents/{id}/alert</code></td>
-</tr>
-</tbody>
-</table>
-<p>Polls all registered actors every heartbeat cycle.  Raises a <code>severity: error</code> alert if any actor's last heartbeat is older than 60 seconds.  Publishes a <code>system/health</code> digest on every tick.</p>
-<hr />
-<h3 id="qaagent">QAAgent</h3>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Name</strong></td>
-<td><code>qa-agent</code></td>
-</tr>
-<tr>
-<td><strong>Type</strong></td>
-<td><code>qa</code></td>
-</tr>
-<tr>
-<td><strong>Listens</strong></td>
-<td>all <code>*/chat</code> messages (via MQTT router)</td>
-</tr>
-</tbody>
-</table>
-<p>Passively inspects every chat message flowing through the broker.  Flags content that matches harmful patterns (prompt injection, PII, profanity).  Publishes a <code>system/alert</code> if a policy is violated.</p>
-<hr />
-<h2 id="standard-agents">Standard agents</h2>
-<h3 id="ioagent">IOAgent</h3>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Name</strong></td>
-<td><code>io-agent</code></td>
-</tr>
-<tr>
-<td><strong>Type</strong></td>
-<td><code>gateway</code></td>
-</tr>
-<tr>
-<td><strong>Listens</strong></td>
-<td><code>io/chat</code> (fixed topic — no ID discovery needed)</td>
-</tr>
-</tbody>
-</table>
-<p>Bridges the frontend IO bar to the actor system.</p>
-<ul>
-<li><code>@agent-name text</code> → routes <code>text</code> to the named agent's mailbox</li>
-<li>No <code>@</code> prefix → routes to <code>main-actor</code></li>
-</ul>
-<hr />
-<h3 id="nautilusagent">NautilusAgent</h3>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Name</strong></td>
-<td><code>nautilus-agent</code></td>
-</tr>
-<tr>
-<td><strong>Type</strong></td>
-<td><code>transfer</code></td>
-</tr>
-</tbody>
-</table>
-<p>Named after the <em>nautilus</em> shell (SSH = <strong>Secure Shell</strong>) and Jules Verne's submarine.  Bridges remote filesystem operations into the chat interface.</p>
-<p><strong>Commands:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Command</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>ping &lt;user@host&gt;</code></td>
-<td>Test SSH connectivity</td>
-</tr>
-<tr>
-<td><code>exec &lt;user@host&gt; &lt;cmd [args…]&gt;</code></td>
-<td>Run a command over SSH</td>
-</tr>
-<tr>
-<td><code>sync &lt;[user@]host:src&gt; &lt;dst&gt;</code></td>
-<td>rsync pull from remote</td>
-</tr>
-<tr>
-<td><code>push &lt;src&gt; &lt;[user@]host:dst&gt;</code></td>
-<td>rsync push to remote</td>
-</tr>
-<tr>
-<td><code>help</code></td>
-<td>List available commands</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Examples</strong> (from the IO bar):</p>
-<div class="highlight"><pre><span></span><code><span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">ping</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="n">com</span>
-<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="k">exec</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="n">com</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">-</span><span class="n">h</span>
-<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">push</span><span class="w"> </span><span class="p">.</span><span class="o">/</span><span class="n">frontend</span><span class="o">/</span><span class="n">dist</span><span class="o">/</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="nl">com</span><span class="p">:</span><span class="o">/</span><span class="n">opt</span><span class="o">/</span><span class="n">wactorz</span><span class="o">/</span><span class="n">frontend</span><span class="o">/</span><span class="n">dist</span><span class="o">/</span>
-<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="k">exec</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@myserver</span><span class="p">.</span><span class="n">com</span><span class="w"> </span><span class="n">sudo</span><span class="w"> </span><span class="n">systemctl</span><span class="w"> </span><span class="n">restart</span><span class="w"> </span><span class="n">wactorz</span>
-</code></pre></div>
+    <h2>Core agents</h2>
+    <p>Core agents are started by the Supervisor on launch and managed with <code>ONE_FOR_ONE</code> restart policies. They are <strong>protected</strong> — they cannot be stopped or deleted from the dashboard.</p>
 
-<p><strong>Security</strong>: arguments are never passed through a shell — each token is a discrete <code>Command::arg()</code>, preventing injection attacks.</p>
-<p><strong>Configuration</strong> (<code>.env</code>):</p>
-<div class="highlight"><pre><span></span><code>NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy
-NAUTILUS_STRICT_HOST_KEYS=0
-NAUTILUS_CONNECT_TIMEOUT=10
-NAUTILUS_EXEC_TIMEOUT=120
-NAUTILUS_RSYNC_FLAGS=
-</code></pre></div>
+    <!-- ── MainActor ── -->
+    <div class="agent-section" id="mainactor">
+      <div class="agent-section-header">
+        <span class="agent-section-name">MainActor <span class="tag tag-core">core</span> <span class="tag tag-llm">LLM</span></span>
+        <span class="agent-section-file">wactorz/agents/main_actor.py</span>
+      </div>
+      <div class="agent-section-body">
+        <div class="meta">
+          <span><span class="meta-label">name</span> <code>main</code></span>
+          <span><span class="meta-label">restarts</span> 10</span>
+          <span><span class="meta-label">persists</span> <code>state/main/state.pkl</code></span>
+        </div>
+        <p>The LLM brain of the system. Every user message — from any interface — passes through MainActor. It classifies intent with a single LLM call (<code>HA</code> / <code>PIPELINE</code> / <code>OTHER</code>), routes to the right agent, and streams replies back.</p>
 
-<hr />
-<h3 id="udxagent">UDXAgent</h3>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Name</strong></td>
-<td><code>udx-agent</code></td>
-</tr>
-<tr>
-<td><strong>Type</strong></td>
-<td><code>expert</code></td>
-</tr>
-</tbody>
-</table>
-<p>User and Developer Xpert.  Zero-LLM, always-available knowledge agent.  Answers questions about Wactorz instantly from a built-in knowledge base — no API key needed.</p>
-<p><strong>Commands:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Command</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>help [topic]</code></td>
-<td>Overview or topic-specific help</td>
-</tr>
-<tr>
-<td><code>docs &lt;topic&gt;</code></td>
-<td>In-depth documentation</td>
-</tr>
-<tr>
-<td><code>explain &lt;concept&gt;</code></td>
-<td>Explain a concept</td>
-</tr>
-<tr>
-<td><code>agents</code></td>
-<td>List all live agents (queries registry)</td>
-</tr>
-<tr>
-<td><code>status</code></td>
-<td>System health snapshot</td>
-</tr>
-<tr>
-<td><code>version</code></td>
-<td>Build info</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Topics</strong>: <code>architecture</code>, <code>agents</code>, <code>chat</code>, <code>dashboard</code>, <code>api</code>, <code>mqtt</code>, <code>deploy</code></p>
-<p><strong>Concepts</strong>: <code>actor-model</code>, <code>mqtt</code>, <code>hlc-wid</code>, <code>rust</code>, <code>babylon</code>, <code>nautilus</code>, <code>io</code>, <code>qa</code>, <code>monitor</code>, <code>dynamic</code>, <code>main</code>, <code>udx</code></p>
-<p><strong>Example</strong> (from the IO bar):</p>
-<div class="highlight"><pre><span></span><code><span class="nv">@udx</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">help</span>
-<span class="nv">@udx</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">explain</span><span class="w"> </span><span class="n">mqtt</span>
-<span class="nv">@udx</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">docs</span><span class="w"> </span><span class="n">deployment</span>
-<span class="nv">@udx</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">status</span>
-</code></pre></div>
+        <h4>Intent routing</h4>
+        <table>
+          <thead><tr><th>Intent</th><th>Routed to</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>HA</code></td><td><code>home-assistant-agent</code></td><td>"turn off the living room lights"</td></tr>
+            <tr><td><code>PIPELINE</code></td><td>a new <code>PlannerAgent</code></td><td>"notify me on Discord when the door opens"</td></tr>
+            <tr><td><code>OTHER</code></td><td><code>main.chat()</code></td><td>"what's the weather like?"</td></tr>
+            <tr><td><code>@mention</code></td><td>named actor directly</td><td><code>@my-agent {"action": "status"}</code></td></tr>
+          </tbody>
+        </table>
 
-<hr />
-<h3 id="dynamicagent">DynamicAgent</h3>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Name</strong></td>
-<td><code>dynamic-{uuid}</code> (generated)</td>
-</tr>
-<tr>
-<td><strong>Type</strong></td>
-<td><code>dynamic</code></td>
-</tr>
-</tbody>
-</table>
-<p>Spawned on-demand by <code>MainActor</code> when the LLM response contains a <code>&lt;spawn&gt;</code> directive.  Executes Rhai scripts generated at runtime.  Enables the LLM to extend the system with new capabilities without a server restart.</p>
-<hr />
-<h3 id="mlagent">MlAgent</h3>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Type</strong></td>
-<td><code>ml</code></td>
-</tr>
-</tbody>
-</table>
-<p>Base struct for ML-inference agents.  ONNX and Candle backends are currently stubbed (<code>anyhow::bail!</code> placeholders) pending full implementation.</p>
-<hr />
-<h2 id="adding-a-new-agent">Adding a new agent</h2>
-<ol>
-<li>Create <code>rust/crates/wactorz-agents/src/my_agent.rs</code> — implement <code>Actor</code> trait (copy <code>io_agent.rs</code> as a template)</li>
-<li>Export in <code>lib.rs</code>:
-   <code>rust
-   pub mod my_agent;
-   pub use my_agent::MyAgent;</code></li>
-<li>Spawn in <code>main.rs</code>:
-   <code>rust
-   let cfg = ActorConfig::new("my-agent");
-   let agent = Box::new(MyAgent::new(cfg).with_publisher(publisher.clone()));
-   system.spawn_actor(agent).await?;</code></li>
-<li>Add mock responses in <code>scripts/mock-agents.mjs</code> for dev-mode testing</li>
-<li>Add cover gradient + bioline in <code>frontend/src/ui/SocialDashboard.ts</code> if desired</li>
-</ol>
+        <h4>Memory</h4>
+        <p>After every exchange, a background LLM task extracts durable facts (HA URLs, entity IDs, webhook URLs, preferences) into <code>_user_facts</code>, which are injected into the system prompt on the next call. Rolling summarisation kicks in when conversation history exceeds 30 messages.</p>
+
+        <h4>Spawn registry</h4>
+        <p>Every DynamicAgent spawned during the session is saved to <code>state/main/state.pkl</code> under <code>_spawned_agents</code>. On restart, MainActor re-spawns every entry so pipelines survive reboots.</p>
+
+        <h4>Commands</h4>
+        <pre><code>/rules                    — list active pipeline rules
+/rules delete &lt;id&gt;       — stop agents and remove rule
+/memory                   — show user facts and conversation summary
+/memory clear             — wipe all memory
+/memory forget &lt;key&gt;     — remove one fact
+/webhook discord &lt;url&gt;   — store a Discord webhook URL
+/webhook                  — list stored webhooks</code></pre>
+      </div>
+    </div>
+
+    <!-- ── PlannerAgent ── -->
+    <div class="agent-section" id="planner">
+      <div class="agent-section-header">
+        <span class="agent-section-name">PlannerAgent <span class="tag tag-core">core</span> <span class="tag tag-llm">LLM</span></span>
+        <span class="agent-section-file">wactorz/agents/planner_agent.py</span>
+      </div>
+      <div class="agent-section-body">
+        <div class="meta">
+          <span><span class="meta-label">name</span> <code>planner-{hash}</code> (ephemeral)</span>
+          <span><span class="meta-label">lifetime</span> per-request</span>
+        </div>
+        <p>Spawned by MainActor for every <code>PIPELINE</code>-classified request. The planner queries <code>home-assistant-agent</code> for the full list of real entity IDs, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is either a <code>dynamic</code> agent (Python code string) or an <code>ha_actuator</code> agent (declarative HA service call). The planner spawns all agents, registers the pipeline rule with main, and exits.</p>
+
+        <h4>Supported patterns</h4>
+        <ul>
+          <li><strong>HA sensor → HA action</strong> — e.g. motion sensor turns on light</li>
+          <li><strong>HA sensor → notification</strong> — e.g. door opens → Discord message</li>
+          <li><strong>Webcam detection → HA action</strong> — e.g. person detected → unlock door</li>
+          <li><strong>Webcam detection → notification</strong> — e.g. cat detected → Telegram photo</li>
+          <li><strong>Timer → HA action</strong> — e.g. every day at 07:00 turn on coffee maker</li>
+        </ul>
+
+        <div class="callout">
+          <div class="callout-title">ℹ MQTT topic rule</div>
+          <p>All generated agents always subscribe to <code>homeassistant/state_changes/#</code> (wildcard) and filter by <code>entity_id</code> in the payload — never by topic path. This works regardless of the <code>HA_STATE_BRIDGE_PER_ENTITY</code> setting.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── MonitorAgent ── -->
+    <div class="agent-section" id="monitor">
+      <div class="agent-section-header">
+        <span class="agent-section-name">MonitorAgent <span class="tag tag-core">core</span></span>
+        <span class="agent-section-file">wactorz/agents/monitor_agent.py</span>
+      </div>
+      <div class="agent-section-body">
+        <div class="meta">
+          <span><span class="meta-label">name</span> <code>monitor</code></span>
+          <span><span class="meta-label">check interval</span> 15 s</span>
+          <span><span class="meta-label">heartbeat timeout</span> 60 s</span>
+        </div>
+        <p>Tracks heartbeat timestamps from every registered actor. If an actor's last heartbeat is older than <code>heartbeat_timeout</code> seconds it publishes an alert to <code>agents/{monitor_id}/alert</code> and notifies MainActor directly. Does <em>not</em> auto-restart actors — restart policy belongs to the Supervisor.</p>
+      </div>
+    </div>
+
+    <!-- ── IOAgent ── -->
+    <div class="agent-section" id="io">
+      <div class="agent-section-header">
+        <span class="agent-section-name">IOAgent <span class="tag tag-core">core</span></span>
+        <span class="agent-section-file">wactorz/agents/io_agent.py</span>
+      </div>
+      <div class="agent-section-body">
+        <div class="meta">
+          <span><span class="meta-label">name</span> <code>io-agent</code></span>
+          <span><span class="meta-label">subscribes</span> <code>io/chat</code></span>
+        </div>
+        <p>MQTT ↔ interface gateway. Bridges incoming messages from the web dashboard to MainActor and relays responses back. The CLI, Discord, WhatsApp, and Telegram interfaces bypass IOAgent and call <code>main_actor.process_user_input()</code> directly.</p>
+      </div>
+    </div>
+
+    <!-- ── InstallerAgent ── -->
+    <div class="agent-section" id="installer">
+      <div class="agent-section-header">
+        <span class="agent-section-name">InstallerAgent <span class="tag tag-core">core</span></span>
+        <span class="agent-section-file">wactorz/agents/installer_agent.py</span>
+      </div>
+      <div class="agent-section-body">
+        <div class="meta">
+          <span><span class="meta-label">name</span> <code>installer</code></span>
+          <span><span class="meta-label">restarts</span> 3</span>
+        </div>
+        <p>Runs <code>pip install</code> in a subprocess on request. Called automatically by <code>CatalogAgent</code> before spawning a recipe that declares an <code>"install": [...]</code> list. Replies with a result dict so the caller can gate on success before proceeding.</p>
+        <pre><code>@installer {"action": "install", "packages": ["httpx", "aiomqtt"]}</code></pre>
+      </div>
+    </div>
+
+    <!-- ── CatalogAgent ── -->
+    <div class="agent-section" id="catalog-agent">
+      <div class="agent-section-header">
+        <span class="agent-section-name">CatalogAgent <span class="tag tag-core">core</span> <span class="tag tag-catalog">catalog</span></span>
+        <span class="agent-section-file">wactorz/agents/catalog_agent.py</span>
+      </div>
+      <div class="agent-section-body">
+        <div class="meta">
+          <span><span class="meta-label">name</span> <code>catalog</code></span>
+          <span><span class="meta-label">restarts</span> 10</span>
+          <span><span class="meta-label">recipes dir</span> <code>catalogue_agents/</code></span>
+        </div>
+        <p>Pre-built agent recipe library. On startup it loads every <code>AGENT_CODE</code> string from <code>catalogue_agents/*.py</code> and injects a manifest for each recipe into MainActor so the LLM is aware of what can be spawned. When asked to spawn a recipe it first asks InstallerAgent to install any declared dependencies, then creates a DynamicAgent with the recipe code.</p>
+
+        <h4>Usage</h4>
+        <pre><code>@catalog list
+@catalog info discord-notify-agent
+@catalog spawn discord-notify-agent
+@catalog spawn ha-actuator-agent</code></pre>
+
+        <p>See the <a href="#catalog-recipes">Catalog recipes</a> section below for available recipes.</p>
+      </div>
+    </div>
+
+    <!-- ── HomeAssistantAgent ── -->
+    <div class="agent-section" id="ha-agent">
+      <div class="agent-section-header">
+        <span class="agent-section-name">HomeAssistantAgent <span class="tag tag-core">core</span> <span class="tag tag-llm">LLM</span></span>
+        <span class="agent-section-file">wactorz/agents/home_assistant_agent.py</span>
+      </div>
+      <div class="agent-section-body">
+        <div class="meta">
+          <span><span class="meta-label">name</span> <code>home-assistant-agent</code></span>
+          <span><span class="meta-label">restarts</span> 5</span>
+        </div>
+        <p>Wraps the Home Assistant REST API. Uses multiple internal LLM calls to classify the user's intent and generate the appropriate API call.</p>
+
+        <h4>Supported actions</h4>
+        <table>
+          <thead><tr><th>Action</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>list_entities</code></td><td>Fetch all entities (used by Planner)</td></tr>
+            <tr><td><code>call_service</code></td><td>Turn on/off lights, switches, climate, covers, scripts…</td></tr>
+            <tr><td><code>create_automation</code></td><td>Generate and POST a YAML automation via HA API</td></tr>
+            <tr><td><code>delete_entity</code></td><td>Remove an entity or automation</td></tr>
+            <tr><td><code>get_state</code></td><td>Read current state of one or more entities</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Configuration</h4>
+        <pre><code>HA_URL=http://homeassistant.local:8123
+HA_TOKEN=eyJ...   # Long-lived access token</code></pre>
+      </div>
+    </div>
+
+    <!-- ── HA State Bridge ── -->
+    <div class="agent-section" id="ha-bridge">
+      <div class="agent-section-header">
+        <span class="agent-section-name">HomeAssistantStateBridgeAgent <span class="tag tag-core">core</span></span>
+        <span class="agent-section-file">wactorz/agents/home_assistant_state_bridge_agent.py</span>
+      </div>
+      <div class="agent-section-body">
+        <div class="meta">
+          <span><span class="meta-label">name</span> <code>home-assistant-state-bridge</code></span>
+          <span><span class="meta-label">restarts</span> 5</span>
+        </div>
+        <p>Subscribes to the Home Assistant WebSocket API and republishes every state-change event to MQTT so pipeline agents can react to device events without polling HA directly.</p>
+
+        <h4>Topic format</h4>
+        <table>
+          <thead><tr><th>Config</th><th>Topic published</th></tr></thead>
+          <tbody>
+            <tr><td><code>HA_STATE_BRIDGE_PER_ENTITY=0</code> (default)</td><td><code>homeassistant/state_changes</code> — all entities on one flat topic</td></tr>
+            <tr><td><code>HA_STATE_BRIDGE_PER_ENTITY=1</code></td><td><code>homeassistant/state_changes/{domain}/{entity_id}</code></td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout warn">
+          <div class="callout-title">⚠ Always use the wildcard</div>
+          <p>Subscribe to <code>homeassistant/state_changes/#</code> and filter by <code>entity_id</code> in the payload. Never hardcode the per-entity topic path — it may not exist depending on configuration.</p>
+        </div>
+
+        <h4>Payload</h4>
+        <pre><code>{
+  "entity_id": "light.wiz_rgbw_tunable_02cba0",
+  "domain":    "light",
+  "new_state": {"state": "on", "attributes": {...}},
+  "old_state": {"state": "off", "attributes": {...}}
+}</code></pre>
+      </div>
+    </div>
+
+    <!-- ── HA Map Agent ── -->
+    <div class="agent-section" id="ha-map">
+      <div class="agent-section-header">
+        <span class="agent-section-name">HomeAssistantMapAgent <span class="tag tag-core">core</span></span>
+        <span class="agent-section-file">wactorz/agents/home_assistant_map_agent.py</span>
+      </div>
+      <div class="agent-section-body">
+        <div class="meta">
+          <span><span class="meta-label">name</span> <code>home-assistant-map-agent</code></span>
+          <span><span class="meta-label">restarts</span> 5</span>
+        </div>
+        <p>Maintains a live map of entity IDs to friendly names and domains. Used by PlannerAgent to resolve user-friendly device names ("the living room lamp") to actual HA entity IDs before generating pipeline code.</p>
+      </div>
+    </div>
+
+    <hr id="dynamic"/>
+
+    <h2>DynamicAgent</h2>
+
+    <div class="agent-section">
+      <div class="agent-section-header">
+        <span class="agent-section-name">DynamicAgent <span class="tag tag-dynamic">dynamic</span></span>
+        <span class="agent-section-file">wactorz/agents/dynamic_agent.py</span>
+      </div>
+      <div class="agent-section-body">
+        <div class="meta">
+          <span><span class="meta-label">name</span> set at spawn time</span>
+          <span><span class="meta-label">spawned by</span> MainActor, PlannerAgent, CatalogAgent</span>
+        </div>
+        <p>The core extensibility primitive. DynamicAgent compiles and runs a Python code string at runtime — the LLM writes the code, Wactorz executes it. Three optional functions can be defined:</p>
+
+        <table>
+          <thead><tr><th>Function</th><th>When called</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>async def setup(agent)</code></td><td>Once at start</td><td>Always runs as a background <code>asyncio.create_task</code> — never blocks the heartbeat loop. Long-running MQTT subscription loops go here.</td></tr>
+            <tr><td><code>async def process(agent)</code></td><td>Every <code>poll_interval</code> seconds</td><td>For periodic work. Only started after <code>setup()</code> returns (or immediately if no setup).</td></tr>
+            <tr><td><code>async def handle_task(agent, payload)</code></td><td>On every inbound TASK message</td><td>Must return a dict. Used for command/response interactions.</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Agent API (<code>agent</code> object inside generated code)</h4>
+        <table>
+          <thead><tr><th>Method</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>await agent.publish(topic, payload)</code></td><td>Publish a dict to any MQTT topic</td></tr>
+            <tr><td><code>agent.subscribe(topic, callback)</code></td><td>Subscribe to MQTT topic; callback is <code>async def cb(payload: dict)</code>. Runs as background task — setup() returns immediately.</td></tr>
+            <tr><td><code>await agent.send_to(name, payload)</code></td><td>Send a TASK message to another actor by name</td></tr>
+            <tr><td><code>await agent.log(message)</code></td><td>Publish to the agent's log stream (visible in dashboard)</td></tr>
+            <tr><td><code>await agent.alert(message, level)</code></td><td>Publish an alert. Levels: <code>info</code>, <code>warning</code>, <code>error</code></td></tr>
+            <tr><td><code>agent.persist(key, value)</code></td><td>Write a value to the agent's pickle state (survives restarts)</td></tr>
+            <tr><td><code>agent.recall(key)</code></td><td>Read a persisted value</td></tr>
+            <tr><td><code>agent.state</code></td><td>In-memory dict (not persisted)</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Minimal example — MQTT subscription</h4>
+        <pre><code>async def setup(agent):
+    async def on_state(payload):
+        if payload.get("entity_id") != "light.my_lamp":
+            return
+        if payload.get("new_state", {}).get("state") == "on":
+            import httpx
+            async with httpx.AsyncClient() as c:
+                await c.post(
+                    "https://discord.com/api/webhooks/...",
+                    json={"content": "Lamp turned on!"}
+                )
+            await agent.log("Discord notification sent")
+
+    # Wildcard subscription — works with any HA_STATE_BRIDGE_PER_ENTITY setting
+    agent.subscribe("homeassistant/state_changes/#", on_state)</code></pre>
+
+        <h4>Minimal example — periodic polling</h4>
+        <pre><code>async def setup(agent):
+    agent.state["count"] = int(agent.recall("count") or 0)
+
+async def process(agent):
+    agent.state["count"] += 1
+    agent.persist("count", agent.state["count"])
+    await agent.publish("custom/counter", {"count": agent.state["count"]})</code></pre>
+      </div>
+    </div>
+
+    <hr id="llm-agent"/>
+
+    <h2>LLMAgent base class</h2>
+
+    <div class="agent-section">
+      <div class="agent-section-header">
+        <span class="agent-section-name">LLMAgent <span class="tag tag-llm">LLM</span></span>
+        <span class="agent-section-file">wactorz/agents/llm_agent.py</span>
+      </div>
+      <div class="agent-section-body">
+        <p>Base class for all LLM-backed agents. Manages conversation history, rolling summarisation (compresses the oldest half of history when the message count exceeds <code>summarize_threshold=30</code>), and cost tracking.</p>
+
+        <h4>Providers</h4>
+        <table>
+          <thead><tr><th>Class</th><th>Flag</th><th>Env var</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>AnthropicProvider</code></td><td><code>--llm anthropic</code></td><td><code>ANTHROPIC_API_KEY</code></td><td>Default. Streaming supported.</td></tr>
+            <tr><td><code>OpenAIProvider</code></td><td><code>--llm openai</code></td><td><code>OPENAI_API_KEY</code></td><td>Any OpenAI-compatible endpoint via <code>--openai-base-url</code>.</td></tr>
+            <tr><td><code>OllamaProvider</code></td><td><code>--llm ollama --ollama-model llama3</code></td><td>—</td><td>Local. No cost tracking.</td></tr>
+            <tr><td><code>NIMProvider</code></td><td><code>--llm nim --nim-model meta/llama-3.3-70b-instruct</code></td><td><code>NIM_API_KEY</code></td><td>NVIDIA NIM. Free tier: 1000 req/month per model.</td></tr>
+            <tr><td><code>GeminiProvider</code></td><td><code>--llm gemini --gemini-model gemini-2.5-flash</code></td><td><code>GEMINI_API_KEY</code></td><td>Google Gemini via <code>google-generativeai</code> SDK. Free tier available.</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Cost tracking</h4>
+        <p>All providers track token usage and compute cost in USD per call. Costs are accumulated in <code>LLMAgent.metrics</code> and published with every heartbeat. The <code>PRICING</code> dict in <code>llm_agent.py</code> covers all major model variants — add new entries there to track custom models.</p>
+      </div>
+    </div>
+
+    <hr id="catalog-recipes"/>
+
+    <h2>Catalog recipes</h2>
+    <p>Recipes live in <code>catalogue_agents/</code> as plain Python files exporting an <code>AGENT_CODE</code> string. They are loaded by <code>CatalogAgent</code> at startup and spawned on demand as DynamicAgents.</p>
+
+    <table>
+      <thead><tr><th>Recipe name</th><th>File</th><th>Description</th><th>Deps</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>discord-notify-agent</code></td>
+          <td><code>discord_notify_agent.py</code></td>
+          <td>Subscribes to any MQTT topic and posts a message to a Discord webhook when a triggering event arrives. Configurable cooldown, trigger key/value filter, and message template.</td>
+          <td><code>aiohttp</code>, <code>aiomqtt</code></td>
+        </tr>
+        <tr>
+          <td><code>ha-actuator-agent</code></td>
+          <td><code>ha_actuator_agent.py</code></td>
+          <td>Subscribes to an MQTT topic and calls a Home Assistant service when a detection filter matches the payload. Used as the action side of HA pipelines.</td>
+          <td><code>aiomqtt</code></td>
+        </tr>
+        <tr>
+          <td><code>image-gen-agent</code></td>
+          <td><code>image_gen_agent.py</code></td>
+          <td>Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns the absolute path to the saved PNG.</td>
+          <td><code>requests</code></td>
+        </tr>
+        <tr>
+          <td><code>doc-to-pptx-agent</code></td>
+          <td><code>doc_to_pptx_agent.py</code></td>
+          <td>Converts PDF or TXT documents into PowerPoint presentations. Extracts embedded images from PDF; optionally uses NIM FLUX for slides without images.</td>
+          <td><code>pymupdf</code>, <code>pdfplumber</code>, <code>pillow</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout tip">
+      <div class="callout-title">Adding a recipe</div>
+      <p>Create <code>catalogue_agents/my_agent.py</code> exporting <code>AGENT_CODE = r'''...'''</code>, then add an entry to <code>_build_catalog()</code> in <code>catalog_agent.py</code>. The recipe is available on the next restart without any other changes.</p>
+    </div>
+
+    <hr id="new-agent"/>
+
+    <h2>Writing a new core agent</h2>
+    <p>For agents that need to be part of the supervision tree (always running, not spawnable from chat), subclass <code>Actor</code> directly:</p>
+
+    <pre><code>from wactorz.core.actor import Actor, Message, MessageType
+
+class MyAgent(Actor):
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("name", "my-agent")
+        super().__init__(**kwargs)
+
+    async def on_start(self):
+        # Long-running work must be a background task
+        asyncio.create_task(self._my_loop())
+
+    async def handle_message(self, msg: Message):
+        if msg.type != MessageType.TASK:
+            return
+        result = {"echo": msg.payload}
+        # Echo _task_id so caller futures resolve
+        if isinstance(msg.payload, dict):
+            result["_task_id"] = msg.payload.get("_task_id")
+        await self.send(msg.reply_to or msg.sender_id, MessageType.RESULT, result)
+
+    async def _my_loop(self):
+        while True:
+            await self._mqtt_publish("custom/my-agent/tick", {"ts": time.time()})
+            await asyncio.sleep(10)</code></pre>
+
+    <p>Then register it in <code>cli.py</code> inside <code>build_system()</code>:</p>
+
+    <pre><code>from wactorz.agents.my_agent import MyAgent
+
+def make_my_agent():
+    return MyAgent(name="my-agent", persistence_dir="./state")
+
+system.supervisor.supervise(
+    "my-agent", make_my_agent,
+    strategy=SupervisorStrategy.ONE_FOR_ONE,
+    max_restarts=5, restart_delay=1.0
+)</code></pre>
+
   </main>
 </div>
 
 <footer>
-  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
-  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+  <span>Wactorz &mdash; Python asyncio actor-model framework</span>
+  <span><a href="https://github.com/waldiez/wactorz">GitHub</a></span>
 </footer>
 </body>
 </html>

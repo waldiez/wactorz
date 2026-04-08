@@ -43,11 +43,11 @@ export class GraphNode extends AgentNodeBase {
     info: AgentInfo,
     scene: Scene,
     position: Vector3,
-    isMainActor: boolean,
+    isMainWactor: boolean,
   ) {
-    super(info, scene, isMainActor);
+    super(info, scene, isMainWactor);
 
-    const radius = isMainActor ? 0.7 : 0.35;
+    const radius = isMainWactor ? 0.7 : 0.35;
     this.mesh = MeshBuilder.CreateSphere(
       `node-${info.id}`,
       { diameter: radius * 2, segments: 16 },
@@ -57,7 +57,7 @@ export class GraphNode extends AgentNodeBase {
 
     // ── Material ──────────────────────────────────────────────────────────────
     this.material = new StandardMaterial(`mat-${info.id}`, scene);
-    this.material.emissiveColor = isMainActor
+    this.material.emissiveColor = isMainWactor
       ? new Color3(1.0, 0.65, 0.1) // amber/gold
       : new Color3(0.1, 0.7, 1.0); // cyan
     this.material.disableLighting = true;
@@ -65,11 +65,11 @@ export class GraphNode extends AgentNodeBase {
 
     // ── Point light halo ──────────────────────────────────────────────────────
     this.halo = new PointLight(`halo-${info.id}`, position.clone(), scene);
-    this.halo.diffuse = isMainActor
+    this.halo.diffuse = isMainWactor
       ? new Color3(1.0, 0.7, 0.3)
       : new Color3(0.2, 0.6, 1.0);
-    this.halo.intensity = isMainActor ? 1.5 : 0.6;
-    this.halo.range = isMainActor ? 8 : 4;
+    this.halo.intensity = isMainWactor ? 1.5 : 0.6;
+    this.halo.range = isMainWactor ? 8 : 4;
 
     // Keep halo tracking mesh
     scene.onBeforeRenderObservable.add(() => {
@@ -97,10 +97,10 @@ export class GraphNode extends AgentNodeBase {
       this.material.emissiveColor = new Color3(1.0, 0.2, 0.2);
       this.halo.diffuse = new Color3(1, 0.1, 0.1);
     } else {
-      this.material.emissiveColor = this.isMainActor
+      this.material.emissiveColor = this.isMainWactor
         ? new Color3(1.0, 0.65, 0.1)
         : new Color3(0.1, 0.7, 1.0);
-      this.halo.intensity = this.isMainActor ? 1.5 : 0.6;
+      this.halo.intensity = this.isMainWactor ? 1.5 : 0.6;
     }
   }
 

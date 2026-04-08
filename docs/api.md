@@ -10,6 +10,21 @@ Base URL: `http://host/api/` (proxied by nginx from `:8080`)
 
 ### Actors
 
+#### `GET /api/metrics`
+
+Return Prometheus-formatted metrics for the Python Wactorz runtime.
+
+**Response** `200 OK` with `Content-Type: text/plain; version=0.0.4; charset=utf-8`
+
+This endpoint includes:
+
+- HTTP request/response metrics for the Python REST interface
+- actor runtime metrics from the Python registry
+- LLM token and cost metrics
+- process/runtime metrics from `prometheus_client`
+
+---
+
 #### `GET /api/actors`
 
 List all registered actors.
@@ -76,6 +91,32 @@ Send a message to an actor.
 ```
 
 **Response** `202 Accepted` — message queued.  The reply arrives asynchronously via MQTT `agents/{id}/chat`.
+
+---
+
+### Home Assistant Map
+
+#### `GET /ha-map`
+
+Return the latest cached Home Assistant device map snapshot from `HomeAssistantMapAgent`.
+
+**Response** `200 OK`
+```json
+{
+  "type": "home_assistant_map_update",
+  "event_type": "entity_registry_updated",
+  "timestamp": 1234567890.0,
+  "event": {},
+  "devices": []
+}
+```
+
+**Response** `404 Not Found`
+```json
+{
+  "error": "Home Assistant map snapshot not available"
+}
+```
 
 ---
 

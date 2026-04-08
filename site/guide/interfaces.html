@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Interfaces — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;--green:#4ade80;--yellow:#fbbf24;--orange:#fb923c;--purple:#a78bfa;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
+    .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    .layout{display:flex;flex:1}
+
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar-sub{padding-left:.5rem;font-size:.75rem}
+
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:900px;min-width:0}
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:.5rem;line-height:1.15}
+    .content .subtitle{color:var(--muted-hi);margin-bottom:2rem;font-size:.85rem}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:2rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.82rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem;letter-spacing:.06em;text-transform:uppercase}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.3rem 0;color:var(--muted-hi)}
+    .content li strong{color:var(--text)}
+    .content strong{color:#fff;font-weight:500}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2.5rem 0}
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.8}
+    .content table{width:100%;border-collapse:collapse;margin:.75rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.55rem 1rem;border:1px solid var(--border);text-align:left;font-family:var(--display);font-size:.78rem;letter-spacing:.04em}
+    .content td{padding:.45rem 1rem;border:1px solid var(--border);color:var(--muted-hi);vertical-align:top}
+    .content td code{font-size:.8em}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    .tag{display:inline-block;font-size:.63rem;padding:.1em .45em;border-radius:2px;font-family:var(--display);letter-spacing:.07em;text-transform:uppercase;vertical-align:middle;margin-left:.1rem}
+    .tag-core{background:rgba(79,142,247,.15);color:var(--blue);border:1px solid rgba(79,142,247,.3)}
+    .tag-ext{background:rgba(251,191,36,.12);color:var(--yellow);border:1px solid rgba(251,191,36,.25)}
+
+    .callout{border-left:3px solid var(--blue);margin:1.25rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);border-radius:0 4px 4px 0}
+    .callout.tip{border-color:var(--green);background:rgba(74,222,128,.05)}
+    .callout.warn{border-color:var(--yellow);background:rgba(251,191,36,.05)}
+    .callout-title{font-family:var(--display);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--blue);margin-bottom:.25rem}
+    .callout.tip  .callout-title{color:var(--green)}
+    .callout.warn .callout-title{color:var(--yellow)}
+    .callout p{margin:0;color:var(--muted-hi);font-size:.85rem}
+
+    .iface-section{border:1px solid var(--border);border-radius:5px;margin:1.5rem 0 2.5rem;overflow:hidden}
+    .iface-header{background:var(--bg3);border-bottom:1px solid var(--border);padding:.75rem 1.25rem;display:flex;align-items:center;justify-content:space-between;gap:1rem}
+    .iface-name{font-family:var(--display);font-size:.95rem;font-weight:600;color:#fff}
+    .iface-flag{font-family:var(--mono);font-size:.73rem;color:var(--muted)}
+    .iface-body{padding:1.25rem 1.5rem}
+    .iface-body p:last-child{margin-bottom:0}
+
+    .meta{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;margin:.5rem 0 1rem;font-size:.78rem;color:var(--muted-hi)}
+    .meta-label{color:var(--muted);font-size:.72rem;text-transform:uppercase;font-family:var(--display);letter-spacing:.06em}
+
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">
+    <div class="logo-mark"></div>Wactorz
+  </a>
+  <nav class="topbar-links">
+    <a href="../guide/installation.html">Docs</a>
+    <a href="https://github.com/waldiez/wactorz" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/" target="_blank" rel="noopener">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-label">Guide</div>
+      <a href="../guide/installation.html">Installation</a>
+      <a href="../guide/architecture.html">Architecture</a>
+      <a href="../guide/agents.html">Agents</a>
+      <a href="../guide/interfaces.html" class="active">Interfaces</a>
+      <a href="../guide/pipelines.html">Pipelines</a>
+      <a href="../guide/catalog.html">Catalog</a>
+      <a href="../guide/windows.html">Windows</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">On this page</div>
+      <a href="#overview" class="sidebar-sub">Overview</a>
+      <a href="#cli" class="sidebar-sub">→ CLI</a>
+      <a href="#rest" class="sidebar-sub">→ REST</a>
+      <a href="#discord" class="sidebar-sub">→ Discord</a>
+      <a href="#whatsapp" class="sidebar-sub">→ WhatsApp</a>
+      <a href="#telegram" class="sidebar-sub">→ Telegram</a>
+      <a href="#web-ui" class="sidebar-sub">→ Web UI</a>
+      <a href="#adding" class="sidebar-sub">Adding an interface</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Reference</div>
+      <a href="../reference/mqtt_topics.html">MQTT Topics</a>
+      <a href="../reference/python-api.html">Python API</a>
+      <a href="../reference/config.html">Config</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <h1>Interfaces</h1>
+    <p class="subtitle">Wactorz supports multiple user-facing interfaces simultaneously. All of them funnel messages into the same <code>MainActor.process_user_input()</code> pipeline — switching interface only changes how you reach the system, not how it behaves.</p>
+
+    <h2 id="overview">Overview</h2>
+
+    <table>
+      <thead><tr><th>Interface</th><th>Flag</th><th>Extra dep</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><strong>CLI</strong></td><td><code>--interface cli</code></td><td>—</td><td>Default. Interactive terminal with streaming.</td></tr>
+        <tr><td><strong>REST</strong></td><td><code>--interface rest</code></td><td>—</td><td>HTTP API, suitable for programmatic access.</td></tr>
+        <tr><td><strong>Discord</strong></td><td><code>--interface discord</code></td><td><code>wactorz[discord]</code></td><td>Bot responds in channels and DMs.</td></tr>
+        <tr><td><strong>WhatsApp</strong></td><td><code>--interface whatsapp</code></td><td><code>wactorz[whatsapp]</code></td><td>Via Twilio Messaging.</td></tr>
+        <tr><td><strong>Telegram</strong></td><td><code>--interface telegram</code></td><td>—</td><td>Bot API, polling mode.</td></tr>
+        <tr><td><strong>Web UI</strong></td><td>(always on)</td><td>—</td><td>Dashboard at <code>localhost:8888</code>. Disable with <code>--no-monitor</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout tip">
+      <div class="callout-title">Multiple interfaces</div>
+      <p>Only one chat interface can be active at a time (set via <code>--interface</code>), but the Web UI dashboard always runs alongside it unless disabled.</p>
+    </div>
+
+    <hr/>
+
+    <!-- ── CLI ── -->
+    <div class="iface-section" id="cli">
+      <div class="iface-header">
+        <span class="iface-name">CLI <span class="tag tag-core">built-in</span></span>
+        <span class="iface-flag">--interface cli</span>
+      </div>
+      <div class="iface-body">
+        <div class="meta">
+          <span><span class="meta-label">default</span> yes</span>
+          <span><span class="meta-label">streaming</span> yes</span>
+          <span><span class="meta-label">class</span> <code>CLIInterface</code></span>
+        </div>
+        <p>The default interface. Starts an interactive terminal session where you type messages and receive streamed responses. Supports all Wactorz commands and <code>@agent-name</code> mentions.</p>
+
+        <pre><code>wactorz
+wactorz --interface cli --llm gemini</code></pre>
+
+        <h4>Special commands</h4>
+        <pre><code>/help                    — list available commands
+/rules                   — show active pipeline rules
+/rules delete &lt;id&gt;      — stop and remove a pipeline rule
+/memory                  — show stored user facts
+/memory clear            — wipe memory
+/webhook discord &lt;url&gt;  — store a Discord webhook URL
+@agent-name &lt;payload&gt;   — send directly to a named agent</code></pre>
+      </div>
+    </div>
+
+    <!-- ── REST ── -->
+    <div class="iface-section" id="rest">
+      <div class="iface-header">
+        <span class="iface-name">REST API <span class="tag tag-core">built-in</span></span>
+        <span class="iface-flag">--interface rest</span>
+      </div>
+      <div class="iface-body">
+        <div class="meta">
+          <span><span class="meta-label">default port</span> <code>8080</code></span>
+          <span><span class="meta-label">class</span> <code>RESTInterface</code></span>
+          <span><span class="meta-label">auth</span> optional API key</span>
+        </div>
+        <p>Exposes Wactorz as an HTTP API. Suitable for integrating with other services, running automated tests, or building custom frontends.</p>
+
+        <pre><code>wactorz --interface rest --port 8080</code></pre>
+
+        <h4>Endpoints</h4>
+        <table>
+          <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST</code></td><td><code>/chat</code></td><td>Send a message. Body: <code>{"message": "..."}</code>. Returns streamed or buffered response.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/agents</code></td><td>List all registered agents with their status.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/health</code></td><td>System health check.</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Authentication</h4>
+        <p>Set <code>API_KEY</code> in your <code>.env</code> to require a bearer token on all requests:</p>
+        <pre><code>API_KEY=my-secret-key</code></pre>
+        <pre><code>curl -X POST http://localhost:8080/chat \
+  -H "Authorization: Bearer my-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "turn off the lights"}'</code></pre>
+      </div>
+    </div>
+
+    <!-- ── Discord ── -->
+    <div class="iface-section" id="discord">
+      <div class="iface-header">
+        <span class="iface-name">Discord <span class="tag tag-ext">requires extra</span></span>
+        <span class="iface-flag">--interface discord</span>
+      </div>
+      <div class="iface-body">
+        <div class="meta">
+          <span><span class="meta-label">dep</span> <code>pip install wactorz[discord]</code></span>
+          <span><span class="meta-label">class</span> <code>DiscordInterface</code></span>
+        </div>
+        <p>Runs Wactorz as a Discord bot. The bot responds to messages in any channel it has access to, and supports DMs. All Wactorz commands and <code>@agent-name</code> routing work identically to the CLI.</p>
+
+        <pre><code>wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN</code></pre>
+
+        <h4>Setup</h4>
+        <ol>
+          <li>Go to <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">discord.com/developers</a> → New Application → Bot</li>
+          <li>Enable <strong>Message Content Intent</strong> under Bot → Privileged Gateway Intents</li>
+          <li>Copy the bot token and set it as <code>DISCORD_BOT_TOKEN</code> in your <code>.env</code></li>
+          <li>Invite the bot to your server using the OAuth2 URL generator with <code>bot</code> scope and <code>Send Messages</code> + <code>Read Message History</code> permissions</li>
+        </ol>
+
+        <h4>Configuration</h4>
+        <pre><code>DISCORD_BOT_TOKEN=MTI4...
+DISCORD_PREFIX=!        # optional command prefix, default: none (mention or DM)</code></pre>
+
+        <div class="callout tip">
+          <div class="callout-title">Webhook notifications</div>
+          <p>Pipelines can post to Discord independently of the bot using webhook URLs. Store a webhook with <code>/webhook discord https://discord.com/api/webhooks/...</code> and the planner will inject it into generated notification agents automatically.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── WhatsApp ── -->
+    <div class="iface-section" id="whatsapp">
+      <div class="iface-header">
+        <span class="iface-name">WhatsApp <span class="tag tag-ext">requires extra</span></span>
+        <span class="iface-flag">--interface whatsapp</span>
+      </div>
+      <div class="iface-body">
+        <div class="meta">
+          <span><span class="meta-label">dep</span> <code>pip install wactorz[whatsapp]</code></span>
+          <span><span class="meta-label">class</span> <code>WhatsAppInterface</code></span>
+          <span><span class="meta-label">provider</span> Twilio</span>
+        </div>
+        <p>Connects Wactorz to WhatsApp via the Twilio Messaging API. Incoming WhatsApp messages are forwarded to MainActor and replies are sent back to the user's number.</p>
+
+        <pre><code>wactorz --interface whatsapp</code></pre>
+
+        <h4>Setup</h4>
+        <ol>
+          <li>Create a <a href="https://www.twilio.com" target="_blank" rel="noopener">Twilio</a> account and enable the WhatsApp sandbox (or a production number)</li>
+          <li>Set the webhook URL in the Twilio console to your public endpoint (e.g. via ngrok during development): <code>https://your-host/whatsapp/incoming</code></li>
+          <li>Add credentials to <code>.env</code></li>
+        </ol>
+
+        <h4>Configuration</h4>
+        <pre><code>TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=your_auth_token
+TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886</code></pre>
+      </div>
+    </div>
+
+    <!-- ── Telegram ── -->
+    <div class="iface-section" id="telegram">
+      <div class="iface-header">
+        <span class="iface-name">Telegram <span class="tag tag-core">built-in</span></span>
+        <span class="iface-flag">--interface telegram</span>
+      </div>
+      <div class="iface-body">
+        <div class="meta">
+          <span><span class="meta-label">class</span> <code>TelegramInterface</code></span>
+          <span><span class="meta-label">mode</span> long polling</span>
+        </div>
+        <p>Runs Wactorz as a Telegram bot using the Bot API in long-polling mode — no public webhook endpoint required. Works behind NAT and firewalls out of the box.</p>
+
+        <pre><code>wactorz --interface telegram --telegram-token $TELEGRAM_BOT_TOKEN</code></pre>
+
+        <h4>Setup</h4>
+        <ol>
+          <li>Message <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> on Telegram → <code>/newbot</code></li>
+          <li>Copy the token and set it as <code>TELEGRAM_BOT_TOKEN</code> in your <code>.env</code></li>
+          <li>Start Wactorz — the bot is immediately reachable in any chat or group it's added to</li>
+        </ol>
+
+        <h4>Configuration</h4>
+        <pre><code>TELEGRAM_BOT_TOKEN=1234567890:AAF...
+TELEGRAM_ALLOWED_USERS=123456789,987654321   # optional: restrict to user IDs</code></pre>
+      </div>
+    </div>
+
+    <!-- ── Web UI ── -->
+    <div class="iface-section" id="web-ui">
+      <div class="iface-header">
+        <span class="iface-name">Web UI Dashboard <span class="tag tag-core">built-in</span></span>
+        <span class="iface-flag">localhost:8888</span>
+      </div>
+      <div class="iface-body">
+        <div class="meta">
+          <span><span class="meta-label">default port</span> <code>8888</code></span>
+          <span><span class="meta-label">server</span> <code>aiohttp</code> (monitor_server.py)</span>
+        </div>
+        <p>The web dashboard starts automatically alongside whichever chat interface is active. It provides a real-time view of the running system and a chat interface accessible from any browser — no CLI needed.</p>
+
+        <h4>Features</h4>
+        <ul>
+          <li><strong>Agent status</strong> — live heartbeat grid showing every registered actor, its state, and last-seen time</li>
+          <li><strong>Log stream</strong> — real-time log output from all agents via WebSocket</li>
+          <li><strong>Chat</strong> — full conversation interface, equivalent to the CLI</li>
+          <li><strong>Docs</strong> — this documentation, served at <code>/docs/</code></li>
+        </ul>
+
+        <pre><code># Change dashboard port
+wactorz --monitor-port 9000
+
+# Disable dashboard entirely
+wactorz --no-monitor</code></pre>
+      </div>
+    </div>
+
+    <hr/>
+
+    <h2 id="adding">Adding a custom interface</h2>
+    <p>All interfaces implement the same minimal pattern — call <code>process_user_input()</code> and stream or return the result. The simplest possible interface:</p>
+
+    <pre><code>class MyInterface:
+    def __init__(self, main_actor):
+        self.main = main_actor
+
+    async def run(self):
+        async for message in self._receive_messages():
+            # Streaming response
+            async for chunk in self.main.process_user_input_stream(message):
+                await self._send(chunk)
+
+
+# Register in cli.py alongside the other interfaces
+elif interface == "my-interface":
+    iface = MyInterface(main_actor)
+    await asyncio.gather(iface.run(), system.run_forever())</code></pre>
+
+    <p>Both <code>process_user_input(text)</code> (returns full reply string) and <code>process_user_input_stream(text)</code> (async generator of chunks) are available on MainActor.</p>
+
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Python asyncio actor-model framework</span>
+  <span><a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+</footer>
+</body>
+</html>

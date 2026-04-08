@@ -3,15 +3,20 @@ asyncio-mqtt>=0.16.0
 aiomqtt>=1.0.0
 psutil>=5.9.0
 aiohttp>=3.9.0
+prometheus-client>=0.24.0
 
 # LLM Providers (install as needed)
 anthropic>=0.25.0          # pip install anthropic
 openai>=1.0.0              # pip install openai
+google-generativeai>=0.8.0 # pip install google-generativeai
 # ollama runs locally, no package needed beyond aiohttp
 
 # Chat Interfaces (install as needed)
 discord.py>=2.3.0          # pip install discord.py
 twilio>=8.0.0              # pip install twilio
+
+# Remote nodes
+asyncssh>=2.14.0
 
 # ML/DL (install as needed)
 # ultralytics>=8.0.0       # pip install ultralytics  (YOLO)

@@ -20,6 +20,7 @@ from ..core.actor import Actor, ActorState, Message, MessageType
 logger = logging.getLogger(__name__)
 
 IO_CHAT_TOPIC = "io/chat"
+IO_CHAT_REPLY_TOPIC = "io/chat/response"  # stable topic the UI always subscribes to
 
 
 class IOAgent(Actor):
@@ -43,14 +44,15 @@ class IOAgent(Actor):
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
             {
-                "agentId":   self.actor_id,
-                "agentName": self.name,
-                "agentType": "gateway",
-                "timestamp": time.time(),
+                "agentId":        self.actor_id,
+                "agentName":      self.name,
+                "agentType":      "gateway",
+                "replyTopic":     IO_CHAT_REPLY_TOPIC,   # tell UI which topic to subscribe to
+                "timestamp":      time.time(),
             },
         )
         self._tasks.append(asyncio.create_task(self._io_chat_listener()))
-        logger.info(f"[{self.name}] started — listening on '{IO_CHAT_TOPIC}'")
+        logger.info(f"[{self.name}] started — listening on '{IO_CHAT_TOPIC}', replying on '{IO_CHAT_REPLY_TOPIC}'")
 
     # ── MQTT subscriber ────────────────────────────────────────────────────
 
@@ -65,7 +67,7 @@ class IOAgent(Actor):
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe(IO_CHAT_TOPIC)
+                    await client.subscribe(IO_CHAT_TOPIC, qos=1)
                     async for mqtt_msg in client.messages:
                         if self.state in (ActorState.STOPPED, ActorState.FAILED):
                             break
@@ -163,6 +165,11 @@ class IOAgent(Actor):
         return "main-actor", content
 
     async def _reply(self, content: str):
+        await self._mqtt_publish(
+            IO_CHAT_REPLY_TOPIC,
+            {"from": self.name, "to": "user", "content": content, "timestamp": time.time()},
+        )
+        # Also publish to the actor_id topic for any legacy subscribers
         await self._mqtt_publish(
             f"agents/{self.actor_id}/chat",
             {"from": self.name, "to": "user", "content": content, "timestamp": time.time()},

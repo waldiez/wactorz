@@ -2,10 +2,10 @@
 resolver = "2"
 members = [
     "rust/crates/wactorz-core",
-    # "rust/crates/wactorz-mqtt",
+    "rust/crates/wactorz-mqtt",
     "rust/crates/wactorz-agents",
     "rust/crates/wactorz-interfaces",
-    # "rust/crates/wactorz-server",
+    "rust/crates/wactorz-server",
 ]
 
 [workspace.package]

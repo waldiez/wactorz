@@ -9,6 +9,8 @@ import os
 from typing import Any
 from typing import TYPE_CHECKING
 
+from ..monitoring import PrometheusMonitor
+
 if TYPE_CHECKING:
     from ..agents.main_actor import MainActor
 
@@ -520,16 +522,76 @@ class DiscordInterface:
                 return
             if self.channel_id and message.channel.id != self.channel_id:
                 return
-            if not message.content.startswith("!"):
-                return  # Only respond to commands prefixed with !
+            if not client.user.mentioned_in(message):
+                return  # Only respond when the bot is mentioned
 
-            text = message.content[1:].strip()
+            text = message.content.replace(f'<@{client.user.id}>', '').replace(f'<@!{client.user.id}>', '').strip()
             async with message.channel.typing():
                 response = await self.agent.process_user_input(text)
-            await message.channel.send(response)
+            for i in range(0, len(response), 2000):
+                await message.channel.send(response[i:i + 2000])
 
         await client.start(self.token)
 
+
+# ─── Telegram Interface ─────────────────────────────────────────────────────
+
+class TelegramInterface:
+    def __init__(self, main_actor: "MainActor", token: str, allowed_user_id: int | None = None):
+        self.agent = main_actor
+        self.token = token
+        self.allowed_user_id = allowed_user_id
+
+    async def run(self):
+        try:
+            from telegram import Update
+            from telegram.constants import ChatAction
+            from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
+        except ImportError:
+            logger.error("python-telegram-bot not installed. Run: pip install python-telegram-bot")
+            return
+
+        async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            user = update.effective_user
+            await update.message.reply_text(
+                f"Hi {user.first_name if user else ''}. Telegram interface is online.\n"
+                f"Your Telegram user id is: {user.id if user else 'unknown'}"
+            )
+
+        async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            if not update.message or not update.message.text:
+                return
+
+            user = update.effective_user
+            if not user:
+                return
+
+            logger.info("[Telegram] Message from id=%s username=%s: %s",
+                        user.id, user.username, update.message.text[:60])
+
+            if self.allowed_user_id and user.id != self.allowed_user_id:
+                logger.warning("[Telegram] Rejected message from user %s", user.id)
+                return
+
+            text = update.message.text.strip()
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+
+            response = await self.agent.process_user_input(text)
+            response = response or "(no response)"
+
+            for i in range(0, len(response), 4096):
+                await update.message.reply_text(response[i:i + 4096])
+
+        app = Application.builder().token(self.token).build()
+        app.add_handler(CommandHandler("start", start_cmd))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logger.info("[Telegram] Bot starting (polling)...")
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+        await asyncio.Event().wait()
 
 # ─── WhatsApp Interface (via Twilio) ───────────────────────────────────────
 
@@ -601,6 +663,7 @@ class RESTInterface:
         self.agent = main_actor
         self.port = port
         self.api_key = api_key
+        self._monitor = PrometheusMonitor(lambda: getattr(self.agent, "_registry", None))
 
     @staticmethod
     def _normalize_state(state: str) -> str:
@@ -629,6 +692,21 @@ class RESTInterface:
             "llm_output_tokens": 0,
             "llm_cost_usd": 0.0,
         }
+
+    def _latest_ha_map_payload(self) -> dict | None:
+        registry = getattr(self.agent, "_registry", None)
+        if registry is None:
+            return None
+        actor = registry.find_by_name("home-assistant-map-agent")
+        if actor is None:
+            return None
+        if hasattr(actor, "get_latest_map_payload"):
+            payload = actor.get_latest_map_payload()
+        elif hasattr(actor, "recall"):
+            payload = actor.recall("latest_map_payload", None)
+        else:
+            payload = None
+        return payload if isinstance(payload, dict) else None
 
     async def run(self):
         try:
@@ -739,8 +817,19 @@ class RESTInterface:
         async def health_endpoint(request):
             return web.json_response({"status": "ok"})
 
-        app = web.Application()
+        async def prometheus_metrics_endpoint(request):
+            return self._monitor.metrics_response()
+
+        async def ha_map_latest_endpoint(request):
+            payload = self._latest_ha_map_payload()
+            if payload is None:
+                return web.json_response({"error": "Home Assistant map snapshot not available"}, status=404)
+            return web.json_response(payload)
+
+        app = web.Application(middlewares=[self._monitor.middleware])
         app.router.add_get("/health", health_endpoint)
+        app.router.add_get("/metrics", prometheus_metrics_endpoint)
+        app.router.add_get("/ha-map", ha_map_latest_endpoint)
         app.router.add_get("/actors", agents_endpoint)
         app.router.add_get("/actors/{actor_id}", actor_endpoint)
         app.router.add_post("/actors/{actor_id}/message", actor_message_endpoint)

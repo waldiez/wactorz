@@ -1,171 +1,253 @@
 # Architecture
 
+Wactorz is a Python-first asyncio actor-model framework for building multi-agent AI systems. Agents communicate via MQTT and run in a single process — start everything with one command.
+
 ## Overview
 
-Wactorz is an async, multi-agent orchestration system built on the **Actor Model** with **MQTT** as the communication backbone.  Every agent is an independent actor with its own message inbox; no shared mutable state exists between actors.
+The framework is built on three ideas: every agent is an independent **actor** with its own message loop; **MQTT** is the universal communication bus (between agents, to the dashboard, and to external systems); and **DynamicAgent** allows the LLM to write and spawn new agents at runtime without restarting the process.
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│  Browser                                                           │
-│  Babylon.js SPA  ←──WebSocket──►  nginx  ←─── /ws  ──►           │
-│                  ←──REST──────►          ←─── /api/ ──►           │
-│                  ←──MQTT/WS───►          ←─── /mqtt ──►           │
-└──────────────────────────────────────────────────────────────────┘
-                                    │
-                             nginx  │  (single public entry point)
-                              /:80  │
-                                    │
-          ┌─────────────────────────┼──────────────────────────────┐
-          │                         │                              │
-          ▼                         ▼                              ▼
-  wactorz (Python)        Mosquitto (MQTT)              Fuseki (RDF)
-  :8080 REST                :1883 TCP / :9001 WS          :3030 SPARQL
-  :8081 WS bridge
-  ┆ Rust in-sync ┆
-          │
-          │  pub/sub via MQTT
-          ├── MainActor        (LLM orchestrator)
-          ├── MonitorAgent     (health watchdog)
-          ├── IOAgent          (UI gateway)
-          ├── QAAgent          (safety observer)
-          ├── NautilusAgent    (SSH / rsync bridge)
-          ├── UDXAgent         (built-in knowledge base)
-          └── DynamicAgent*   (LLM-generated scripts, spawned at runtime)
+┌─────────────────────────────────────────────────────────────────┐
+│  User interfaces                                                 │
+│  CLI  ·  REST  ·  Discord  ·  WhatsApp  ·  Telegram             │
+│  Web UI (port 8888)                                              │
+└────────────────────────┬────────────────────────────────────────┘
+                         │  asyncio  (single Python process)
+                         ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│  ActorSystem  (wactorz/core/registry.py)                               │
+│                                                                        │
+│  Supervisor  ──  ONE_FOR_ONE restart strategy per actor                │
+│  ActorRegistry  ──  name → actor lookup, MQTT publisher                │
+│                                                                        │
+│  MainActor           LLM orchestrator, intent routing, spawn registry  │
+│  MonitorAgent        heartbeat watchdog, alerts main on failure        │
+│  IOAgent             MQTT↔UI gateway, routes chat to main             │
+│  CatalogAgent        pre-built recipe library, spawns on request       │
+│  InstallerAgent      pip installs deps for dynamic agents              │
+│  HomeAssistantAgent  HA REST API — entities, services, automations     │
+│  PlannerAgent        spawned per-request, builds multi-agent pipelines │
+│  DynamicAgent*       LLM-generated Python, spawned at runtime         │
+└────────────────────────────┬───────────────────────────────────────────┘
+                             │  pub / sub
+                             ▼
+                    MQTT broker  (embedded, starts with wactorz)
+                    :1883 TCP  (default)
+                             │
+              ┌──────────────┴──────────────┐
+              ▼                             ▼
+   Home Assistant              External systems via MQTT
+   WebSocket API               custom topics, any device or service
 ```
+
+> **💡 One command to start** — Running `wactorz` starts everything — the actor system, and the web dashboard. Note a separate MQTT broker process needed.
 
 ---
 
 ## Components
 
-### wactorz backend
+### Core — `wactorz/core/`
 
-The backend is **Python-first**: the Python implementation is the primary runtime.  A Rust implementation mirrors the same actor model and API contract and may run in sync alongside Python, but it is not required.
+| File | Responsibility |
+|------|----------------|
+| `actor.py` | `Actor` base class — message loop, heartbeat, persistence (`pickle`), supervisor strategy enum |
+| `registry.py` | `ActorSystem`, `ActorRegistry`, `Supervisor`, `_MQTTPublisher` (shared aiomqtt connection) |
 
-#### Python backend
+### Built-in Agents — `wactorz/agents/`
 
-`run.sh` starts the Python backend by default (`WACTORZ_BACKEND=python`).
+See the [Agents reference](agents.md) for full documentation. A summary of the core actors:
 
-#### Rust backend (optional, in-sync)
-
-The single `wactorz` Rust binary exposes the same REST + WebSocket interface.
-
-| Crate | Role |
-|---|---|
-| `wactorz-core` | `Actor` trait, `ActorRegistry`, message types, `EventPublisher` |
-| `wactorz-agents` | All concrete agent implementations |
-| `wactorz-mqtt` | MQTT client wrapper + topic constants |
-| `wactorz-interfaces` | REST API (axum), WebSocket bridge, interactive CLI |
-| `wactorz-server` | Binary entry point — wires everything together |
-
-### Mosquitto
-
-The MQTT broker.  All inter-actor and actor-to-frontend communication passes through it.  In the full Docker stack, Mosquitto is not exposed directly — all traffic is proxied through nginx.
-
-### nginx
-
-The single public HTTP entry point.
-
-| Path | Proxied to |
-|---|---|
-| `/` | `static/app/` (static SPA) |
-| `/api/` | `wactorz:8080` (REST) |
-| `/ws` | `wactorz:8081` (WebSocket bridge) |
-| `/mqtt` | `mosquitto:9001` (MQTT over WebSocket) |
-| `/fuseki/` | `fuseki:3030` (SPARQL, path-stripped) |
-
-### Fuseki (optional)
-
-Apache Jena Fuseki for RDF/SPARQL storage.  Not required for basic operation.
-
-### Babylon.js SPA
-
-A Vite + TypeScript single-page application.  Connects to the backend via:
-
-- **MQTT over WebSocket** (`/mqtt`) — receives every MQTT message in real time
-- **REST** (`/api/`) — agent lifecycle control (pause, resume, stop, delete)
-- **WebSocket** (`/ws`) — an alternative MQTT re-broadcast endpoint
+| Agent | Role |
+|-------|------|
+| **MainActor** | LLM orchestrator. Classifies intent, routes messages, manages the spawn registry and user memory. |
+| **PlannerAgent** | Spawned per pipeline request. Generates a multi-agent plan and spawns the required DynamicAgents. |
+| **DynamicAgent** | Executes LLM-generated Python at runtime from a `setup()` / `process()` / `handle_task()` code string. |
+| **CatalogAgent** | Pre-built recipe library. Loads agents from `catalogue_agents/` and spawns them on request. |
+| **HomeAssistantAgent** | Wraps the HA REST API — entities, services, automations. Uses internal LLM calls for classification. |
+| **HomeAssistantStateBridgeAgent** | Streams HA state changes to MQTT so pipeline agents can react to device events in real time. |
+| **MonitorAgent** | Tracks heartbeats from all actors. Alerts main when an agent is unresponsive for >60 s. |
+| **InstallerAgent** | Runs `pip install` in a subprocess. Called automatically before spawning a recipe with declared dependencies. |
+| **LLMAgent** | Base class for LLM-backed agents. Handles conversation history, rolling summarisation, and cost tracking across all providers. |
 
 ---
 
-## Actor Model
+## Actor Lifecycle
 
-Each agent implements the `Actor` protocol.  The Python implementation is the primary definition; the Rust trait mirrors it.
+Every actor in Wactorz follows the same asyncio lifecycle:
 
-### Rust mirror (in-sync)
+```python
+class MyAgent(Actor):
+    async def on_start(self):
+        # Called once when the actor starts.
+        # Long-running work (MQTT subscriptions, polling loops)
+        # must be launched as asyncio.create_task() — never awaited directly.
+        asyncio.create_task(self._my_loop())
 
-```rust
-#[async_trait]
-pub trait Actor: Send {
-    fn id(&self)       -> String;
-    fn name(&self)     -> &str;
-    fn state(&self)    -> ActorState;
-    fn mailbox(&self)  -> mpsc::Sender<Message>;
+    async def handle_message(self, msg: Message):
+        # Called for every message in the inbox.
+        # msg.type is TASK, RESULT, HEARTBEAT, ERROR, or COMMAND.
+        if msg.type == MessageType.TASK:
+            result = await self._do_work(msg.payload)
+            await self.send(msg.reply_to, MessageType.RESULT, result)
 
-    async fn on_start(&mut self)                   -> Result<()>;
-    async fn handle_message(&mut self, msg: Message) -> Result<()>;
-    async fn on_heartbeat(&mut self)               -> Result<()>;
-    async fn on_stop(&mut self)                    -> Result<()> { Ok(()) }
-    async fn run(&mut self)                        -> Result<()>;
-}
+    async def on_stop(self):
+        # Optional cleanup.
+        pass
 ```
 
-`ActorSystem::spawn_actor(box)` registers the actor in the `ActorRegistry` and calls `tokio::spawn(actor.run())`.  The `run()` loop is a `tokio::select!` over the mailbox channel and a heartbeat interval.
+The Supervisor wraps each actor with a `ONE_FOR_ONE` restart policy. If an actor crashes, only that actor is restarted — others keep running. `max_restarts` and `restart_delay` are configurable per actor.
+
+---
+
+## Persistence
+
+Each actor persists state as a `pickle` file at `state/{actor_name}/state.pkl`. The `Actor.persist(key, value)` method writes synchronously to disk on every call. `Actor.recall(key)` reads from the in-memory dict (loaded at startup from the pickle).
+
+> **Cross-agent reads** — Agents can read another agent's pickle directly by navigating to the sibling state directory — useful when two agents need to share large datasets without going through MQTT.
+
+The spawn registry is stored in `state/main/state.pkl` under `_spawned_agents`. On restart, MainActor re-spawns every entry in the registry so dynamic agents and catalog agents survive reboots.
+
+---
+
+## MQTT Topics
+
+| Topic pattern | Publisher | Subscriber | Payload |
+|---------------|-----------|------------|---------|
+| `io/chat` | IOAgent / UI | main | `{from, content}` |
+| `agents/{id}/chat` | any actor | UI / IOAgent | `{role, content, interface}` |
+| `agents/{id}/heartbeat` | every actor | MonitorAgent | `{name, state, ts, ...}` |
+| `agents/{id}/logs` | any actor | dashboard | `{type, message, ts}` |
+| `agents/{id}/manifest` | any actor | main | capabilities, input/output schema |
+| `homeassistant/state_changes/#` | HA state bridge | pipeline agents | `{entity_id, domain, new_state, old_state}` |
+
+> **State bridge topic format** — When `HA_STATE_BRIDGE_PER_ENTITY=1` the bridge publishes to `homeassistant/state_changes/{domain}/{entity_id}`. When `=0` (default) it publishes everything to the flat topic `homeassistant/state_changes`. Always subscribe to the wildcard `#` and filter by `entity_id` in the payload.
 
 ---
 
 ## Message Flow
 
-### User → Agent
+### User → Agent (any interface)
 
 ```
-Browser IO bar
-  │  publishes  io/chat  { from: "user", content: "@agent-name text" }
+User types:  "@my-agent {"action": "status"}"
+  │
+  ▼
+Interface (CLIInterface / DiscordInterface / RESTInterface / WhatsAppInterface / TelegramInterface)
+  │  calls main_actor.process_user_input(text)
+  ▼
+MainActor._classify_intent()     ← one LLM call: HA | PIPELINE | OTHER
+  │
+  ├── OTHER  →  main.chat()       ← conversational reply
+  ├── HA     →  send to home-assistant-agent
+  └── @mention detected  →  send directly to named actor
+          │
+          ▼
+      target-agent.handle_message(msg)
+          │
+          ▼
+      handle_task(agent, payload)  →  returns dict result
+          │
+          ▼
+      main receives RESULT, formats, returns to user
+```
+
+### Pipeline (HA state → Discord notification)
+
+```
+HA state changes (lamp turns on)
+  │
+  ▼
+HomeAssistantStateBridgeAgent
+  │  publishes homeassistant/state_changes  (flat topic, per_entity=0)
   ▼
 Mosquitto
-  │  subscribed by wactorz-server
-  ▼
-MQTT event loop  →  IOAgent mailbox
   │
   ▼
-IOAgent.handle_message()
-  │  parses @mention, looks up registry
+lamp-on-discord-notify (DynamicAgent)
+  │  setup(): agent.subscribe("homeassistant/state_changes/#", on_state)
+  │  on_state(): if entity_id == "light.wiz_..." and new_state["state"] == "on":
+  │      httpx.post(discord_webhook, {"content": "Lamp is on!"})
   ▼
-target actor mailbox  →  handle_message()  →  LLM call
-  │
-  ▼
-actor publishes  agents/{id}/chat  { from: actor, to: "user", content: … }
-  │
-  ▼
-Mosquitto  →  WebSocket bridge  →  Browser
+Discord channel
 ```
 
-### Agent Lifecycle Events
+---
 
-Every agent publishes to its own MQTT topics on lifecycle events:
+## LLM Providers
 
-| Event | Topic | Triggered by |
-|---|---|---|
-| Spawn | `agents/{id}/spawn` | `on_start()` |
-| Heartbeat | `agents/{id}/heartbeat` | periodic tick |
-| State change | `agents/{id}/status` | state mutation |
-| Alert | `agents/{id}/alert` | error condition |
-| Chat reply | `agents/{id}/chat` | `handle_message()` |
+| Provider | Flag | Env var | Default model |
+|----------|------|---------|---------------|
+| `AnthropicProvider` | `--llm anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
+| `OpenAIProvider` | `--llm openai` | `OPENAI_API_KEY` | `gpt-4o` |
+| `OllamaProvider` | `--llm ollama --ollama-model llama3` | — | local |
+| `NIMProvider` | `--llm nim --nim-model meta/llama-3.3-70b-instruct` | `NIM_API_KEY` | free tier |
+| `GeminiProvider` | `--llm gemini --gemini-model gemini-2.5-flash` | `GEMINI_API_KEY` | `gemini-2.5-flash` |
+
+All providers implement `complete(messages, system) → (text, usage)` and `stream(messages, system) → AsyncGenerator`. Cost tracking (USD per 1M tokens) is built into every provider and accumulated in `LLMAgent.metrics`.
 
 ---
 
-## IDs
+## Supervision Tree
 
-All actor IDs use **HLC-WIDs** (Hybrid Logical Clock Wide IDs) from the [`waldiez-wid`](https://github.com/waldiez/wid) crate.  They are time-ordered, globally unique, and human-readable.
+The supervisor is configured in `cli.py` inside `build_system()`. Each actor is registered with a factory function (called fresh on each restart), a strategy, and restart limits:
 
-Message IDs use simpler **WIDs**.
+```python
+system.supervisor
+  .supervise("main",     make_main,     strategy=ONE_FOR_ONE, max_restarts=10)
+  .supervise("monitor",  make_monitor,  strategy=ONE_FOR_ONE, max_restarts=10)
+  .supervise("catalog",  make_catalog,  strategy=ONE_FOR_ONE, max_restarts=10)
+  .supervise("home-assistant-agent", make_ha_agent, max_restarts=5)
+  # ... etc
+```
+
+Dynamic agents (spawned by main or planner) are **not** in the supervision tree — they are managed by the spawn registry. On restart, main re-spawns them from the saved code in `state/main/state.pkl`.
 
 ---
 
-## Deployment Modes
+## Running Wactorz
 
-| Mode | Docker containers | Binary |
-|---|---|---|
-| **Full Docker** (`compose.yaml`) | wactorz + nginx + mosquitto + fuseki + HA | inside container |
-| **Native binary** (`compose.native.yaml`) | nginx + mosquitto only | runs on host OS |
+The `wactorz` command starts everything — the actor system, an embedded MQTT broker, and the web dashboard. No separate broker process is needed.
 
-See [deployment.md](deployment.md) for full instructions.
+```bash
+# Start with Anthropic Claude (default interface: CLI)
+wactorz
+
+# Choose a different LLM provider
+wactorz --llm gemini --gemini-model gemini-2.5-flash
+wactorz --llm openai
+wactorz --llm ollama --ollama-model llama3
+wactorz --llm nim --nim-model meta/llama-3.3-70b-instruct
+
+# Hot-reload in dev (restarts on source file changes)
+wactorz --reload
+
+# Discord bot
+wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN
+
+# WhatsApp (via Twilio)
+wactorz --interface whatsapp
+
+# Telegram
+wactorz --interface telegram --telegram-token $TELEGRAM_BOT_TOKEN
+
+# REST API
+wactorz --interface rest --port 8080
+
+# Custom MQTT broker (external)
+wactorz --mqtt-broker 192.168.1.10 --mqtt-port 1883
+
+# Disable web dashboard
+wactorz --no-monitor
+```
+
+### Interfaces
+
+| Interface | Flag | Notes |
+|-----------|------|-------|
+| **CLI** | `--interface cli` | Default. Interactive terminal with streaming responses. |
+| **REST** | `--interface rest` | HTTP API on `--port` (default 8080). POST `/chat`, GET `/agents`. |
+| **Discord** | `--interface discord` | Bot responds in channels and DMs. Requires `DISCORD_BOT_TOKEN`. |
+| **WhatsApp** | `--interface whatsapp` | Via Twilio. Requires `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER`. |
+| **Telegram** | `--interface telegram` | Bot API. Requires `TELEGRAM_BOT_TOKEN`. |
+
+The web dashboard starts automatically on `http://localhost:8888` regardless of which interface is active, unless `--no-monitor` is passed. It shows live agent status, heartbeats, logs, and a chat interface.

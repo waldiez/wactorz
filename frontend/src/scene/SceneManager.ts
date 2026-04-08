@@ -32,9 +32,7 @@ import { GraphTheme } from "./themes/GraphTheme";
 import { CardDashboard } from "../ui/CardDashboard";
 import { SocialDashboard } from "../ui/SocialDashboard";
 
-export type ThemeName =
-  | "cards"
-  | "social";
+export type ThemeName = "cards" | "social";
 
 // ── NullTheme — minimal placeholder used when HTML overlays are active ─────────
 
@@ -119,9 +117,12 @@ export class SceneManager {
     // Skip if the right dashboard is already running.
     if (
       this.activeTheme.name === name &&
-      !((name === "cards" && !this.cardDashboard) ||
-        (name === "social" && !this.socialDashboard))
-    ) return;
+      !(
+        (name === "cards" && !this.cardDashboard) ||
+        (name === "social" && !this.socialDashboard)
+      )
+    )
+      return;
 
     this.activeTheme.teardown();
 
@@ -146,11 +147,11 @@ export class SceneManager {
       this.socialDashboard = new SocialDashboard();
       this.socialDashboard.show([...this.agents.values()]);
     } else {
-        this.activeTheme = new GraphTheme(this.scene);
-        this.activeTheme.setup();
-        for (const agent of this.agents.values()) {
-          this.activeTheme.addAgent(agent);
-        }
+      this.activeTheme = new GraphTheme(this.scene);
+      this.activeTheme.setup();
+      for (const agent of this.agents.values()) {
+        this.activeTheme.addAgent(agent);
+      }
     }
   }
 

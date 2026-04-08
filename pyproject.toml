@@ -30,39 +30,43 @@ classifiers = [
 
 # Core runtime — always required
 dependencies = [
-    "aiomqtt>=1.0.0",
-    "aiohttp>=3.9.0",
-    "psutil>=5.9.0",
-    "python-dotenv>=1.0.0",
-    "websockets>=12.0",
+    "aiomqtt>=2.5.1",
+    "aiohttp>=3.13.3",
+    "psutil>=7.2.2",
+    "prometheus-client>=0.24.0",
+    "python-dotenv>=1.2.2",
+    "websockets>=15.0",
+    "asyncssh>=2.14.0"
 ]
 
 [project.optional-dependencies]
-anthropic = ["anthropic>=0.25.0"]
-openai    = ["openai>=1.0.0"]
-discord   = ["discord.py>=2.3.0"]
-whatsapp  = ["twilio>=8.0.0"]
+anthropic = ["anthropic>=0.86.0"]
+openai    = ["openai>=2.29.0"]
+google    = ["google-generativeai>=0.8.0"]  # <--- Add this
+discord   = ["discord.py>=2.7.1"]
+whatsapp  = ["twilio>=9.10.4"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
 docs      = [
-    "markdown>=3.5",
-    "pygments>=2.17",
-    "watchdog>=5.0.0",
-    "pdoc>=14.0",
+    "markdown>=3.10.2",
+    "pygments>=2.19.2",
+    "watchdog>=6.0.0",
+    "pdoc>=16.0.0",
 ]
 # Note: docs extras are only needed to *rebuild* site/ (run build_docs.py).
 # The pre-built site/ is committed to the repo and bundled into the wheel as-is.
 dev       = [
     "wactorz[docs]",
-    "pre-commit>=3.0.0",
-    "coverage>=7.0.0",
-    "twine>=5.0.0",
-    "watchdog>=5.0.0",
+    "pre-commit>=4.5.1",
+    "coverage>=7.13.5",
+    "twine>=6.2.0",
+    "watchdog>=6.0.0",
 ]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
 all = [
     "wactorz[anthropic]",
     "wactorz[openai]",
+    "wactorz[google]",
     "wactorz[discord]",
     "wactorz[whatsapp]",
 ]
@@ -70,6 +74,7 @@ all = [
 [project.scripts]
 wactorz         = "wactorz.cli:main"
 wactorz-monitor = "wactorz.monitor_server:cli_main"
+wactorz-fuseki  = "wactorz.fuseki:_cli_main"
 
 [project.urls]
 Homepage      = "https://waldiez.github.io/wactorz/"

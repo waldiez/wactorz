@@ -141,6 +141,11 @@ class InstallerAgent(Actor):
             # payload: {host, user, node_name, broker, password (opt), key_path (opt)}
             return await self._node_deploy(payload)
 
+        if action == "node_install_for_agent":
+            # Install packages needed by a specific agent on its remote node
+            # payload: {host, user, packages, agent_name, password (opt), key_path (opt)}
+            return await self._node_install(payload)
+
         if action == "node_run":
             # Run an arbitrary command on a remote node via SSH
             # payload: {host, user, command, password (opt), key_path (opt)}
@@ -297,17 +302,61 @@ class InstallerAgent(Actor):
     # ── Remote node helpers (SSH via asyncssh) ──────────────────────────────
 
     def _ssh_kwargs(self, payload: dict) -> dict:
-        """Build asyncssh connection kwargs from a task payload."""
+        """
+        Build asyncssh connection kwargs from a task payload.
+        Falls back to persisted credentials from a previous node_deploy
+        so callers don't need to pass password/key_path every time.
+        """
+        host      = payload["host"]
+        user      = payload.get("user", "pi")
+        password  = payload.get("password")
+        key_path  = payload.get("key_path")
+
+        # Fall back to persisted credentials if not in payload
+        # Try to find node_name from host
+        if not password and not key_path:
+            for key in self._state.keys() if hasattr(self, "_state") else []:
+                pass
+            # Scan persisted node credentials by matching host
+            node_name = payload.get("node_name") or payload.get("node")
+            if not node_name:
+                # Try to find node by host
+                for k, v in (self.recall("_node_credentials") or {}).items():
+                    if v.get("host") == host:
+                        node_name = k
+                        break
+            if node_name:
+                creds    = (self.recall("_node_credentials") or {}).get(node_name, {})
+                password = password or creds.get("password")
+                key_path = key_path or creds.get("key_path")
+                user     = user or creds.get("user", "pi")
+
         kwargs = dict(
-            host        = payload["host"],
-            username    = payload.get("user", "pi"),
+            host        = host,
+            username    = user,
             known_hosts = None,   # disable host key checking for LAN deploys
         )
-        if payload.get("password"):
-            kwargs["password"] = payload["password"]
-        if payload.get("key_path"):
-            kwargs["client_keys"] = [payload["key_path"]]
+        if password:
+            kwargs["password"] = password
+        if key_path:
+            kwargs["client_keys"] = [key_path]
         return kwargs
+
+    def _persist_node_credentials(self, node_name: str, host: str, user: str,
+                                   password: str = None, key_path: str = None):
+        """Store SSH credentials for a node so future connections don't need them passed explicitly."""
+        creds = self.recall("_node_credentials") or {}
+        creds[node_name] = {
+            "host":     host,
+            "user":     user,
+            "password": password or "",
+            "key_path": key_path or "",
+        }
+        self.persist("_node_credentials", creds)
+        # Also persist individually for backward compat with _spawn_remote lookups
+        self.persist(f"node_host_{node_name}", host)
+        self.persist(f"node_user_{node_name}", user)
+        logger.info(f"[{self.name}] Persisted SSH credentials for node '{node_name}'")
 
     async def _ssh_run(self, conn, command: str) -> tuple[bool, str]:
         """Run a single command over an open SSH connection. Returns (ok, output)."""
@@ -352,10 +401,30 @@ class InstallerAgent(Actor):
 
         try:
             async with asyncssh.connect(**self._ssh_kwargs(payload)) as conn:
-                ok, output = await self._ssh_run(
-                    conn,
-                    f"pip install {pkg_str} --break-system-packages -q 2>&1"
+                # Detect the right pip to use:
+                # 1. Venv at ~/wactorz/venv (created by node_deploy) — always prefer this
+                # 2. Fall back to python3 -m pip with --break-system-packages
+                ok, venv_check = await self._ssh_run(
+                    conn, "test -f ~/wactorz/venv/bin/pip && echo yes || echo no"
                 )
+                if venv_check.strip() == "yes":
+                    pip_cmd = f"~/wactorz/venv/bin/pip install {pkg_str} -q 2>&1"
+                    self._log_remote(f"Using venv pip at ~/wactorz/venv/bin/pip")
+                else:
+                    # No venv — try to create one first
+                    self._log_remote("No venv found — creating ~/wactorz/venv first...")
+                    await self._ssh_run(conn, "mkdir -p ~/wactorz && python3 -m venv ~/wactorz/venv")
+                    ok, venv_check2 = await self._ssh_run(
+                        conn, "test -f ~/wactorz/venv/bin/pip && echo yes || echo no"
+                    )
+                    if venv_check2.strip() == "yes":
+                        pip_cmd = f"~/wactorz/venv/bin/pip install {pkg_str} -q 2>&1"
+                        self._log_remote("Venv created successfully")
+                    else:
+                        pip_cmd = f"python3 -m pip install {pkg_str} --break-system-packages -q 2>&1"
+                        self._log_remote("Venv creation failed — falling back to system pip")
+
+                ok, output = await self._ssh_run(conn, pip_cmd)
                 if ok:
                     self._log_remote(f"✓ {pkg_str} installed on {host}")
                     return {"success": True, "host": host, "packages": packages, "output": output[-300:]}
@@ -426,32 +495,46 @@ class InstallerAgent(Actor):
                     await sftp.put(str(runner_path), f"/home/{user}/wactorz/remote_runner.py")
                 self._log_remote(f"[{node_name}] remote_runner.py uploaded.")
 
-                # 3. Install the only required dependency
+                # 3. Create venv if it doesn't exist — avoids all --break-system-packages issues
                 ok, out = await self._ssh_run(
-                    conn, "pip install aiomqtt --break-system-packages -q 2>&1"
+                    conn, "test -d ~/wactorz/venv && echo exists || python3 -m venv ~/wactorz/venv && echo created"
+                )
+                self._log_remote(f"[{node_name}] venv: {out.strip()}")
+
+                # 4. Install aiomqtt into the venv
+                ok, out = await self._ssh_run(
+                    conn, "~/wactorz/venv/bin/pip install aiomqtt psutil -q 2>&1"
                 )
                 if not ok:
                     self._log_remote(f"[{node_name}] pip install warning: {out[:150]}")
                 else:
-                    self._log_remote(f"[{node_name}] aiomqtt installed.")
+                    self._log_remote(f"[{node_name}] aiomqtt installed into venv.")
 
-                # 4. Kill any existing instance with this node name
+                # 5. Kill any existing instance with this node name
                 await self._ssh_run(
                     conn,
                     f"pkill -f 'remote_runner.py.*--name {node_name}' 2>/dev/null; true"
                 )
 
-                # 5. Start runner in the background
+                # 6. Start runner using venv python in the background
                 cmd = (
-                    f"nohup python3 ~/wactorz/remote_runner.py "
+                    f"nohup ~/wactorz/venv/bin/python ~/wactorz/remote_runner.py "
                     f"--broker {broker} --port {mqtt_port} --name {node_name} "
                     f"> ~/wactorz/{node_name}.log 2>&1 &"
                 )
                 await self._ssh_run(conn, cmd)
-                self._log_remote(f"[{node_name}] Runner started.")
+                self._log_remote(f"[{node_name}] Runner started with venv python.")
 
             self._log_remote(
                 f"[{node_name}] Deploy complete! Node will appear in /nodes within 15s."
+            )
+            # Persist SSH credentials so future installs don't need them passed again
+            self._persist_node_credentials(
+                node_name = node_name,
+                host      = host,
+                user      = user,
+                password  = payload.get("password"),
+                key_path  = payload.get("key_path"),
             )
             return {
                 "success":   True,

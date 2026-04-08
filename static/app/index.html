@@ -528,7 +528,7 @@
       }
       .cd-root.cd-visible { display: flex; }
 
-      /* ── AgentFlow Workers header / body / iobar ─────────────────────────── */
+      /* ── Wactorz header / body / iobar ─────────────────────────── */
       .af-header {
         display: flex; align-items: center; gap: 12px;
         padding: 8px 14px;
@@ -587,7 +587,7 @@
       .af-panel-head h3 { margin: 0; font-size: 14px; color: rgba(255,255,255,0.92); }
       .af-panel-head span { font-size: 11px; color: rgba(255,255,255,0.45); }
 
-      /* ── Worker card additions (controls use af-mini-btn) ── */
+      /* ── Wactor card additions (controls use af-mini-btn) ── */
       .af-card-task {
         margin-top: 8px; font-size: 11px; color: rgba(255,255,255,0.5);
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 16px;
@@ -768,6 +768,30 @@
       .af-card-btn-danger { border-color: rgba(248,113,113,0.25); color: rgba(248,113,113,0.75); }
       .af-card-btn-danger:hover:not(:disabled) { background: rgba(248,113,113,0.1); color: #f87171; }
       .af-card-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+      /* HA Custom Components */
+      input[type="range"] {
+        -webkit-appearance: none;
+        height: 4px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 2px;
+        outline: none;
+      }
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 12px;
+        height: 12px;
+        background: #34d399;
+        border-radius: 50%;
+        cursor: pointer;
+      }
+      input[type="color"]::-webkit-color-swatch-wrapper {
+        padding: 0;
+      }
+      input[type="color"]::-webkit-color-swatch {
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 4px;
+      }
 
       /* Status dot colours */
       .af-dot-running      { background: #34d399; }
@@ -1468,6 +1492,122 @@
         .fin-spark   { opacity: 1; }
       }
 
+      /* ── Fuseki / Knowledge Graph view ────────────────────────────── */
+      .af-fuseki-ds-badge {
+        display: inline-flex; align-items: center;
+        background: rgba(56,189,248,0.15); color: #38bdf8;
+        border: 1px solid rgba(56,189,248,0.35);
+        border-radius: 12px; padding: 2px 10px;
+        font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
+      }
+      .af-fuseki-sidebar {
+        display: flex; flex-direction: column; gap: 6px;
+        width: 170px; flex-shrink: 0;
+        overflow-y: auto; padding-right: 4px;
+      }
+      .af-fuseki-preset-btn {
+        display: flex; align-items: center; gap: 8px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 8px; padding: 8px 10px;
+        font-size: 12px; color: rgba(255,255,255,0.75);
+        cursor: pointer; text-align: left;
+        transition: background 0.15s, border-color 0.15s;
+        width: 100%;
+      }
+      .af-fuseki-preset-btn:hover {
+        background: rgba(56,189,248,0.12);
+        border-color: rgba(56,189,248,0.4);
+        color: #fff;
+      }
+      .af-fuseki-preset-icon {
+        font-size: 14px; flex-shrink: 0; width: 18px; text-align: center;
+      }
+      .af-fuseki-editor {
+        flex: 1; min-width: 0; resize: none;
+        background: rgba(0,0,0,0.35);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 8px; padding: 10px 12px;
+        font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+        font-size: 12px; color: rgba(255,255,255,0.88);
+        line-height: 1.55; outline: none;
+        transition: border-color 0.15s;
+        tab-size: 2;
+      }
+      .af-fuseki-editor:focus {
+        border-color: rgba(56,189,248,0.5);
+        box-shadow: 0 0 0 2px rgba(56,189,248,0.08);
+      }
+      .af-fuseki-run-btn {
+        flex-shrink: 0; align-self: flex-start;
+        padding: 7px 16px; font-size: 12px; font-weight: 600;
+        background: rgba(56,189,248,0.2);
+        border: 1px solid rgba(56,189,248,0.45);
+        color: #38bdf8; border-radius: 8px;
+        cursor: pointer; white-space: nowrap;
+        transition: background 0.15s;
+      }
+      .af-fuseki-run-btn:hover { background: rgba(56,189,248,0.32); }
+      .af-fuseki-status {
+        font-size: 11px; color: rgba(255,255,255,0.38);
+        padding: 0 2px; flex-shrink: 0; min-height: 16px;
+      }
+      .af-fuseki-results {
+        flex: 1; min-height: 0; overflow: auto;
+        background: rgba(0,0,0,0.25);
+        border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 8px; padding: 8px;
+      }
+      .af-fuseki-table {
+        width: 100%; border-collapse: collapse;
+        font-size: 12px; color: rgba(255,255,255,0.82);
+      }
+      .af-fuseki-table th {
+        position: sticky; top: 0; z-index: 1;
+        background: rgba(15,23,42,0.92);
+        padding: 6px 10px; text-align: left;
+        font-size: 11px; font-weight: 600; color: #38bdf8;
+        border-bottom: 1px solid rgba(56,189,248,0.25);
+        white-space: nowrap;
+      }
+      .af-fuseki-table td {
+        padding: 5px 10px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        vertical-align: top; max-width: 360px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .af-fuseki-table tr:hover td { background: rgba(255,255,255,0.03); }
+      .af-fuseki-uri {
+        color: #7dd3fc; font-family: monospace; font-size: 11px;
+      }
+      .af-fuseki-error {
+        color: #f87171; font-size: 12px; margin: 0;
+        white-space: pre-wrap; word-break: break-word;
+        font-family: monospace;
+      }
+      .af-fuseki-empty {
+        color: rgba(255,255,255,0.28); font-size: 13px;
+        text-align: center; padding: 32px 0;
+      }
+      .af-cfg-input {
+        background: rgba(0,0,0,0.3);
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 7px; padding: 7px 10px;
+        font-size: 12px; color: rgba(255,255,255,0.88);
+        outline: none; transition: border-color 0.15s;
+        width: 100%; box-sizing: border-box;
+      }
+      .af-cfg-input:focus {
+        border-color: rgba(56,189,248,0.55);
+        box-shadow: 0 0 0 2px rgba(56,189,248,0.08);
+      }
+      .af-mini-btn.danger {
+        background: rgba(239,68,68,0.15);
+        border-color: rgba(239,68,68,0.4);
+        color: #f87171;
+      }
+      .af-mini-btn.danger:hover { background: rgba(239,68,68,0.28); }
+
       /* ── Responsive: tablet ───────────────────────────────────────── */
       @media (max-width: 1023px) {
         .fin-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; padding: 12px 16px; }
@@ -1482,10 +1622,10 @@
         .fin-metric-val { font-size: 15px; }
       }
     </style>
-    <script type="module" crossorigin src="./assets/index-BjYK2PK4.js"></script>
+    <script type="module" crossorigin src="./assets/index-CgtdB7zF.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-lhHHWwHU.js">
     <link rel="modulepreload" crossorigin href="./assets/babylon-core-DMXg9r-F.js">
-    <link rel="modulepreload" crossorigin href="./assets/vendor-Do2CHnry.js">
+    <link rel="modulepreload" crossorigin href="./assets/vendor-Ont4bZT0.js">
   </head>
   <body>
     <!-- 3D canvas -->

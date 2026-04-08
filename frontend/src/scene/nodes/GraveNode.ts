@@ -58,13 +58,13 @@ export class GraveNode extends AgentNodeBase {
     info: AgentInfo,
     scene: Scene,
     position: Vector3,
-    isMainActor: boolean,
+    isMainWactor: boolean,
   ) {
-    super(info, scene, isMainActor);
+    super(info, scene, isMainWactor);
     this.bobPhase = Math.random() * Math.PI * 2;
 
     // ── Mesh ─────────────────────────────────────────────────────────────────
-    if (isMainActor) {
+    if (isMainWactor) {
       // Boss: a large sphere (skull)
       this.mesh = MeshBuilder.CreateSphere(
         `grave-${info.id}`,
@@ -84,7 +84,7 @@ export class GraveNode extends AgentNodeBase {
 
     // ── Material ─────────────────────────────────────────────────────────────
     this.mat = new StandardMaterial(`grave-mat-${info.id}`, scene);
-    if (isMainActor) {
+    if (isMainWactor) {
       this.mat.emissiveColor = BLOOD_RED;
       this.mat.diffuseColor = new Color3(0.3, 0.02, 0.02);
     } else {
@@ -102,9 +102,9 @@ export class GraveNode extends AgentNodeBase {
       position.clone(),
       scene,
     );
-    this.eyeLight.diffuse = isMainActor ? BLOOD_RED : DECAY_GREEN;
-    this.eyeLight.intensity = isMainActor ? 1.8 : 0.5;
-    this.eyeLight.range = isMainActor ? 10 : 4;
+    this.eyeLight.diffuse = isMainWactor ? BLOOD_RED : DECAY_GREEN;
+    this.eyeLight.intensity = isMainWactor ? 1.8 : 0.5;
+    this.eyeLight.range = isMainWactor ? 10 : 4;
 
     // Keep light at mesh position
     scene.onBeforeRenderObservable.add(() => {
@@ -124,13 +124,13 @@ export class GraveNode extends AgentNodeBase {
       this.bobPhase += 0.018;
       this.mesh.position.y = this.baseY + 0.15 * Math.sin(this.bobPhase);
       // Tombstones also sway slightly on the Z axis
-      if (!isMainActor) {
+      if (!isMainWactor) {
         this.mesh.rotation.z = 0.05 * Math.sin(this.bobPhase * 0.7 + 1.2);
       }
     });
 
     this.registerClick();
-    this.createLabel(isMainActor ? 0.95 : 0.75);
+    this.createLabel(isMainWactor ? 0.95 : 0.75);
   }
 
   /** Called by GraveTheme's layout to update horizontal position. */
@@ -151,11 +151,11 @@ export class GraveNode extends AgentNodeBase {
         this.eyeLight.intensity = 1.5;
       }
     } else {
-      const col = this.isMainActor ? BLOOD_RED : DECAY_GREEN;
+      const col = this.isMainWactor ? BLOOD_RED : DECAY_GREEN;
       this.mat.emissiveColor = col.scale(0.4);
       if (this.eyeLight) {
         this.eyeLight.diffuse = col;
-        this.eyeLight.intensity = this.isMainActor ? 1.8 : 0.5;
+        this.eyeLight.intensity = this.isMainWactor ? 1.8 : 0.5;
       }
     }
   }

@@ -399,6 +399,23 @@ class PlannerAgent(Actor):
         ha_section = ha_entities_text if ha_entities_text else \
             "  (HA not reachable — use entity IDs provided by the user)"
 
+        # ── Fetch TopicBus context (live data flows + wiring opportunities) ─
+        topic_bus_section = ""
+        try:
+            from ..core.topic_bus import get_topic_bus
+            bus = get_topic_bus()
+            if bus and bus.registry.all_contracts():
+                topic_bus_section = bus.to_planner_context()
+                logger.info(f"[{self.name}] TopicBus: {len(bus.registry.all_contracts())} contracts")
+            else:
+                topic_bus_section = (
+                    "No topic contracts registered yet.\n"
+                    "Agents can declare contracts via agent.declare_contract() in setup().\n"
+                    "Once declared, the planner can wire agents automatically by topic compatibility."
+                )
+        except Exception as e:
+            topic_bus_section = f"TopicBus unavailable: {e}"
+
         # ── Fetch stored notification URLs from main ──────────────────────
         notification_urls: dict = {}
         if self._registry:
@@ -620,6 +637,19 @@ class PlannerAgent(Actor):
             "- If user provides a Discord webhook URL, use it directly in code",
             "- If user provides a condition threshold (e.g. 'above 28 degrees'), encode it in the filter agent code",
             "- Dynamic agent code must be a single string with actual \\n newlines (not literal backslash-n)",
+            "- TOPIC-BASED WIRING: if LIVE DATA FLOWS shows an agent already publishing relevant data,",
+            "  subscribe to that topic instead of spawning a duplicate agent.",
+            "  Example: if 'person-detector' publishes 'rpi-kitchen/camera/detections',",
+            "  a notification agent should subscribe to that topic, not spawn its own camera agent.",
+            "- Use agent.declare_contract() in setup() to declare what topics an agent publishes/subscribes.",
+            "  This makes the agent discoverable for future auto-wiring.",
+            "- Use agent.window(topic, seconds=N) for temporal reasoning:",
+            "  'if motion detected 3+ times in 5 minutes' → agent.window('motion/events', seconds=300).event_count() >= 3",
+            "- Use agent.read_world_state(topic) to read retained shared state without subscribing.",
+            "- Use agent.publish_world_state(key, data) to share state that other agents can read.",
+            "",
+            "═══ LIVE DATA FLOWS (topic contracts) ═══",
+            topic_bus_section,
             "",
             "═══ HOME ASSISTANT ENTITIES ═══",
             ha_section,

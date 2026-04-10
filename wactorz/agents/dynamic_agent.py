@@ -613,11 +613,35 @@ class _AgentAPI:
     # ── MQTT ───────────────────────────────────────────────────────────────
 
     async def publish(self, topic: str, data: Any):
-        """Publish data to an MQTT topic. Auto-registers topic in capability manifest."""
+        """Publish data to an MQTT topic. Auto-registers topic in capability manifest
+        and TopicBus contract so the agent is discoverable without explicit declare_contract()."""
         await self._actor._mqtt_publish(topic, data)
         if topic not in self._published_topics:
             self._published_topics.add(topic)
             await self._publish_manifest()
+            # Auto-register in TopicBus so planner can discover this data flow
+            # even if the agent never called declare_contract() explicitly
+            try:
+                from ..core.topic_bus import TopicContract, get_topic_bus
+                bus = get_topic_bus()
+                if bus:
+                    existing = bus.registry.get(self.name)
+                    if existing:
+                        # Update existing contract with new topic
+                        if topic not in existing.publishes:
+                            existing.publishes.append(topic)
+                            bus.registry.register(existing)
+                    else:
+                        # Create minimal contract from published topics
+                        contract = TopicContract(
+                            name      = self.name,
+                            publishes = list(self._published_topics),
+                            actor_id  = self.actor_id,
+                            node      = getattr(self._actor, "_node", None),
+                        )
+                        bus.register_contract(contract)
+            except Exception:
+                pass  # TopicBus unavailable — not fatal
 
     def subscribe(self, topic: str, callback):
         """
@@ -662,6 +686,27 @@ class _AgentAPI:
         task = asyncio.create_task(_listener())
         actor._tasks.append(task)
 
+        # Auto-register subscription in TopicBus
+        try:
+            from ..core.topic_bus import TopicContract, get_topic_bus
+            bus = get_topic_bus()
+            if bus:
+                existing = bus.registry.get(self.name)
+                if existing:
+                    if topic not in existing.subscribes:
+                        existing.subscribes.append(topic)
+                        bus.registry.register(existing)
+                else:
+                    contract = TopicContract(
+                        name       = self.name,
+                        subscribes = [topic],
+                        actor_id   = self.actor_id,
+                        node       = getattr(actor, "_node", None),
+                    )
+                    bus.register_contract(contract)
+        except Exception:
+            pass  # TopicBus unavailable — not fatal
+
     async def publish_detection(self, data: Any):
         """Convenience: publish to agents/{id}/detections"""
         await self._actor._mqtt_publish(f"agents/{self._actor.actor_id}/detections", data)
@@ -671,19 +716,30 @@ class _AgentAPI:
         await self._actor._mqtt_publish(f"agents/{self._actor.actor_id}/result", data)
 
     async def _publish_manifest(self):
-        """Publish retained capability manifest so main/planner can discover this agent's topics."""
+        """
+        Publish retained capability manifest so main/planner can discover this agent.
+        Now includes full TopicContract (publishes, subscribes, triggers_when, schemas)
+        so the planner can wire agents by data compatibility, not just by name.
+        """
         import time as _t
         actor = self._actor
+        # Include TopicContract fields if declared
+        contract = getattr(actor, "_topic_contract", None)
         manifest = {
-            "name":          self.name,
-            "actor_id":      self.actor_id,
-            "node":          getattr(actor, "_node", None),
-            "description":   getattr(actor, "description", ""),
-            "capabilities":  [],
-            "input_schema":  getattr(actor, "input_schema",  {}),
-            "output_schema": getattr(actor, "output_schema", {}),
-            "publishes":     sorted(self._published_topics),
-            "timestamp":     _t.time(),
+            "name":            self.name,
+            "actor_id":        self.actor_id,
+            "node":            getattr(actor, "_node", None),
+            "description":     getattr(actor, "description", ""),
+            "capabilities":    [],
+            "input_schema":    getattr(actor, "input_schema",  {}),
+            "output_schema":   getattr(actor, "output_schema", {}),
+            "publishes":       sorted(self._published_topics),
+            # TopicContract fields — populated via declare_contract()
+            "subscribes":      contract.subscribes      if contract else [],
+            "triggers_when":   contract.triggers_when   if contract else {},
+            "produces_schema": contract.produces_schema if contract else {},
+            "consumes_schema": contract.consumes_schema if contract else {},
+            "timestamp":       _t.time(),
         }
         await actor._mqtt_publish(
             f"agents/{self.actor_id}/manifest", manifest, retain=True
@@ -906,6 +962,127 @@ class _AgentAPI:
         except asyncio.TimeoutError:
             pass
         return result[0] if result else None
+
+    # ── Topic Bus API ───────────────────────────────────────────────────────
+
+    def window(self, topic: str, seconds: float = 300,
+               max_size: int = 1000):
+        """
+        Create a sliding time window over an MQTT topic stream.
+
+        Returns a StreamWindow that buffers the last N seconds of messages
+        and provides temporal reasoning methods (rising, falling, stable,
+        absent_for, event_count, mean, min, max).
+
+        Usage:
+            async def setup(agent):
+                agent.state['temp_window'] = agent.window('sensors/temp', seconds=600)
+
+            async def process(agent):
+                w = agent.state['temp_window']
+                if w.rising(threshold=3.0):
+                    await agent.alert('Temperature rising fast!')
+                if w.absent_for(60):
+                    await agent.alert('Sensor stopped publishing!')
+                avg = w.mean('value')
+                count = w.event_count('motion', True, seconds=300)
+        """
+        from ..core.topic_bus import get_topic_bus, StreamWindow
+        bus = get_topic_bus()
+        if bus:
+            return bus.make_window(topic, seconds=seconds, max_size=max_size)
+        # Fallback: standalone window without bus
+        w = StreamWindow(topic, seconds=seconds, max_size=max_size)
+        w.start(self._actor._mqtt_broker, self._actor._mqtt_port)
+        return w
+
+    def declare_contract(self, publishes: list = None, subscribes: list = None,
+                         triggers_when: dict = None, produces_schema: dict = None,
+                         consumes_schema: dict = None):
+        """
+        Declare this agent's topic contract — what it produces and consumes.
+
+        Call from setup() to make this agent discoverable by the planner
+        and other agents via topic-based auto-wiring.
+
+        Usage:
+            async def setup(agent):
+                agent.declare_contract(
+                    publishes    = ['rpi-kitchen/camera/detections'],
+                    subscribes   = ['homeassistant/state_changes/#'],
+                    triggers_when= {'person_detected': True},
+                    produces_schema = {'person_detected': 'bool', 'confidence': 'float'},
+                )
+        """
+        from ..core.topic_bus import TopicContract, get_topic_bus
+        contract = TopicContract(
+            name            = self.name,
+            publishes       = publishes or list(self._published_topics),
+            subscribes      = subscribes or [],
+            triggers_when   = triggers_when or {},
+            produces_schema = produces_schema or {},
+            consumes_schema = consumes_schema or {},
+            actor_id        = self.actor_id,
+            node            = getattr(self._actor, "_node", None),
+        )
+        bus = get_topic_bus()
+        if bus:
+            bus.register_contract(contract)
+        # Also include in manifest so remote agents and planner can see it
+        self._actor._topic_contract = contract
+        asyncio.ensure_future(self._publish_manifest())
+
+    async def publish_world_state(self, key: str, data: Any, retain: bool = True):
+        """
+        Publish a piece of world state to the shared retained state hub.
+        Other agents can read this without making a request — it's always there.
+
+        Topic: agents/{agent_name}/data/{key}
+
+        Usage:
+            await agent.publish_world_state('person_present', {'present': True, 'zone': 'kitchen'})
+            await agent.publish_world_state('energy', {'kwh': 2.3, 'cost': 0.45})
+        """
+        from ..core.topic_bus import get_topic_bus
+        bus = get_topic_bus()
+        if bus:
+            await bus.state_hub.publish_agent_data(self.name, key, data)
+        else:
+            topic = f"agents/{self.name}/data/{key}"
+            await self.publish(topic, data)
+
+    async def read_world_state(self, topic: str, timeout: float = 2.0) -> Optional[Any]:
+        """
+        Read a retained world state topic — returns immediately if cached,
+        otherwise waits up to timeout seconds for the retained message.
+
+        Usage:
+            presence = await agent.read_world_state('home/presence/kitchen')
+            energy   = await agent.read_world_state('home/energy/current')
+            ha_state = await agent.read_world_state('home/state/light/light.living_room')
+        """
+        return await self.mqtt_get(topic, timeout=timeout)
+
+    def wiring_opportunities(self) -> list[dict]:
+        """
+        Return a list of other agents this agent can be auto-wired to,
+        based on topic contract compatibility.
+
+        Usage:
+            opps = agent.wiring_opportunities()
+            for o in opps:
+                print(f"Can receive data from {o['producer']} via {o['topic']}")
+        """
+        from ..core.topic_bus import get_topic_bus
+        bus = get_topic_bus()
+        if not bus:
+            return []
+        pairs = bus.registry.find_wiring_opportunities()
+        return [
+            {"producer": p.name, "consumer": c.name, "topic": t}
+            for p, c, t in pairs
+            if p.name == self.name or c.name == self.name
+        ]
 
     # ── Metrics ────────────────────────────────────────────────────────────
 

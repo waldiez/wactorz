@@ -1059,6 +1059,8 @@ class MainActor(LLMAgent):
                 "  /nodes                — list remote nodes and their agents",
                 "  /topics               — list MQTT topics published by known agents",
                 "  /topics <keyword>     — filter topics by keyword",
+                "  /bus                  — TopicBus registry: contracts, data flows, wiring pairs",
+                "  /mqtt                 — MQTT publisher status (connected, queue depth, outbox)",
                 "  /help                 — show this help",
             ])
         if stripped in ("main.list_nodes", "list_nodes", "/nodes"):
@@ -1089,6 +1091,62 @@ class MainActor(LLMAgent):
                 )
                 lines.append(f"  {t['topic']:40s} ← {agent_strs}")
             return note_prefix + "\n".join(lines)
+            
+        if stripped == "/mqtt":
+            client = self._mqtt_client
+            if client is None:
+                return note_prefix + "MQTT publisher not initialised."
+            connected   = getattr(client, "connected",   False)
+            queue_depth = getattr(client, "queue_depth", 0)
+            client_id   = getattr(client, "_client_id",  "?")
+            db_path     = getattr(client, "_db_path",    "?")
+            status_icon = "🟢" if connected else "🔴"
+            lines = [
+                f"MQTT Publisher Status:",
+                f"  {status_icon} connected   : {connected}",
+                f"  client_id   : {client_id}",
+                f"  queue_depth : {queue_depth} message(s) pending",
+                f"  outbox_db   : {db_path}",
+                f"  QoS 1 topics: nodes/*, agents/by-name/*",
+                f"  QoS 0 topics: */logs, */metrics, */status, */heartbeat",
+            ]
+            if queue_depth > 0:
+                lines.append(f"  ⚠️  {queue_depth} message(s) queued — will deliver when reconnected")
+            return note_prefix + "\n".join(lines)
+
+        if stripped == "/bus":
+            try:
+                from ..core.topic_bus import get_topic_bus
+                bus = get_topic_bus()
+                if not bus:
+                    return note_prefix + "TopicBus not initialised."
+                summary = bus.registry.summary()
+                lines = [
+                    f"TopicBus — Reactive Pub/Sub Registry",
+                    f"  agents with contracts : {summary['total_agents']}",
+                    f"  published topics      : {summary['total_published']}",
+                    f"  subscribed topics     : {summary['total_subscribed']}",
+                    f"  auto-wiring pairs     : {summary['wiring_pairs']}",
+                    "",
+                ]
+                for c in sorted(summary["agents"], key=lambda x: x["name"]):
+                    lines.append(f"  [{c['name']}]" + (f" on {c['node']}" if c.get("node") else ""))
+                    if c["publishes"]:
+                        lines.append(f"    publishes : {', '.join(c['publishes'])}")
+                    if c["subscribes"]:
+                        lines.append(f"    subscribes: {', '.join(c['subscribes'])}")
+                    if c.get("triggers_when"):
+                        lines.append(f"    triggers  : {c['triggers_when']}")
+                pairs = bus.registry.find_wiring_opportunities()
+                if pairs:
+                    lines.append("\nAuto-wiring opportunities:")
+                    for prod, cons, topic in pairs:
+                        lines.append(f"  {prod.name} → {cons.name}  via {topic}")
+                return note_prefix + "\n".join(lines)
+            except Exception as e:
+                return note_prefix + f"TopicBus error: {e}"
+
+
 
         # ── Webhook / notification URL management ───────────────────────────
         if stripped.startswith("/memory"):
@@ -1991,6 +2049,20 @@ class MainActor(LLMAgent):
             llm_provider=self.llm,
             persistence_dir=str(self._persistence_dir.parent),
         )
+        
+        # Register TopicContract if spawn config declares pub/sub topics
+        if actor and (config.get("publishes") or config.get("subscribes")):
+            try:
+                from ..core.topic_bus import TopicContract, get_topic_bus
+                contract = TopicContract.from_spawn_config({**config, "actor_id": actor.actor_id})
+                bus = get_topic_bus()
+                if bus:
+                    bus.register_contract(contract)
+                    logger.info(f"[{self.name}] Registered TopicContract for '{name}': "
+                                f"pub={contract.publishes} sub={contract.subscribes}")
+            except Exception as e:
+                logger.debug(f"[{self.name}] TopicContract registration skipped: {e}")
+                
         return actor
 
     async def _install_packages(self, packages: list[str]):

@@ -648,12 +648,37 @@ class _AgentAPI:
         Subscribe to an MQTT topic and call callback(payload_dict) for each message.
         Runs as a background task — setup() returns immediately.
 
-        Usage in setup(agent):
+        IMPORTANT: callback is REQUIRED and must be an async function.
+        subscribe() is NOT awaitable and does NOT return data.
+        For a one-shot read use: data = await agent.mqtt_get(topic)
+
+        Correct usage in setup(agent):
             async def on_message(payload):
-                if payload.get("new_state", {}).get("state") == "on":
-                    await agent.publish("custom/triggers/slug", {"triggered": True})
-            agent.subscribe("homeassistant/state_changes/light/light.xyz", on_message)
+                agent.state['latest'] = payload.get('value')
+            agent.subscribe('sensors/temperature', on_message)
         """
+        if callback is None or not callable(callback):
+            raise TypeError(
+                f"agent.subscribe('{topic}', callback) requires a callable callback. "
+                f"Got: {type(callback).__name__}. "
+                f"Define: async def on_msg(payload): ... then call agent.subscribe('{topic}', on_msg). "
+                f"For a one-shot read use: data = await agent.mqtt_get('{topic}')"
+            )
+
+        # Validate callback accepts exactly one argument (the payload)
+        import inspect
+        try:
+            sig = inspect.signature(callback)
+            params = [p for p in sig.parameters.values()
+                      if p.default is inspect.Parameter.empty]
+            if len(params) == 0:
+                raise TypeError(
+                    f"Subscribe callback must accept one argument (the payload dict). "
+                    f"Got a function with no required parameters. "
+                    f"Fix: async def {callback.__name__}(payload): ..."
+                )
+        except (TypeError, ValueError):
+            pass  # Can't inspect — proceed and let runtime catch it
         import asyncio, json
         actor = self._actor
 
@@ -970,31 +995,64 @@ class _AgentAPI:
         """
         Create a sliding time window over an MQTT topic stream.
 
-        Returns a StreamWindow that buffers the last N seconds of messages
-        and provides temporal reasoning methods (rising, falling, stable,
-        absent_for, event_count, mean, min, max).
+        IMPORTANT: window() is synchronous — do NOT use await.
+        CORRECT:  agent.state['w'] = agent.window('sensors/temp', seconds=60)
+        WRONG:    agent.state['w'] = await agent.window(...)  # TypeError!
+
+        Returns a StreamWindow with methods: mean, min, max, rising, falling,
+        stable, absent_for, event_count, latest, count, values.
 
         Usage:
             async def setup(agent):
-                agent.state['temp_window'] = agent.window('sensors/temp', seconds=600)
+                agent.state['w'] = agent.window('sensors/temp', seconds=60)  # NO await
 
             async def process(agent):
-                w = agent.state['temp_window']
+                w = agent.state['w']
+                avg = w.mean('value')
+                mn  = w.min('value')
+                mx  = w.max('value')
                 if w.rising(threshold=3.0):
                     await agent.alert('Temperature rising fast!')
                 if w.absent_for(60):
                     await agent.alert('Sensor stopped publishing!')
-                avg = w.mean('value')
-                count = w.event_count('motion', True, seconds=300)
         """
         from ..core.topic_bus import get_topic_bus, StreamWindow
-        bus = get_topic_bus()
-        if bus:
-            return bus.make_window(topic, seconds=seconds, max_size=max_size)
-        # Fallback: standalone window without bus
-        w = StreamWindow(topic, seconds=seconds, max_size=max_size)
-        w.start(self._actor._mqtt_broker, self._actor._mqtt_port)
-        return w
+
+        class _UnawaatableWindow:
+            """Wraps StreamWindow and raises a clear error if accidentally awaited."""
+            def __init__(self, inner):
+                self._inner = inner
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+            def __repr__(self):
+                return f"StreamWindow(topic={getattr(self._inner, 'topic', '?')}, seconds={getattr(self._inner, 'seconds', '?')})"
+            def __await__(self):
+                raise TypeError(
+                    "agent.window() is not a coroutine — do not use 'await'. "
+                    "Correct: agent.state['w'] = agent.window('topic', seconds=60)  # no await"
+                )
+                return
+                yield  # make this a generator so __await__ is valid syntax
+
+        try:
+            bus = get_topic_bus()
+            if bus:
+                w = bus.make_window(topic, seconds=seconds, max_size=max_size)
+            else:
+                w = StreamWindow(topic, seconds=seconds, max_size=max_size)
+                w.start(self._actor._mqtt_broker, self._actor._mqtt_port)
+            if w is None:
+                raise ValueError("StreamWindow construction returned None")
+            return _UnawaatableWindow(w)
+        except Exception as e:
+            # Last resort fallback — return a minimal no-op window that won't crash
+            logger.error(f"[{self.name}] agent.window() failed: {e} — returning fallback window")
+            w = StreamWindow(topic, seconds=seconds, max_size=max_size)
+            try:
+                w.start(self._actor._mqtt_broker, self._actor._mqtt_port)
+            except Exception:
+                pass
+            return _UnawaatableWindow(w)
 
     def declare_contract(self, publishes: list = None, subscribes: list = None,
                          triggers_when: dict = None, produces_schema: dict = None,

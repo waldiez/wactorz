@@ -219,9 +219,27 @@ Inside your code, the `agent` object provides:
   agent.recall(key)                   — load from disk
   agent.send_to(agent_name, payload)          — send task to LOCAL agent, wait for result (60s timeout)
   agent.send_to_many([(name, payload), ...])  — send to multiple LOCAL agents IN PARALLEL, returns list
-  agent.mqtt_get(topic, timeout=10)   — wait for one MQTT message on topic, returns parsed payload
-                                        USE THIS to read data from remote/Pi agents instead of send_to()
+
+  agent.subscribe(topic, callback)    — subscribe to MQTT topic, call callback(payload) for each message
+                                        ALWAYS runs as background task — setup() returns immediately
+                                        callback MUST be an async function WITH ONE ARGUMENT (payload)
+                                        CORRECT usage:
+                                          async def on_message(payload):        # ← exactly one argument
+                                              agent.state['latest'] = payload.get('value')
+                                          agent.subscribe('sensors/temperature', on_message)
+                                        WRONG signatures:
+                                          async def on_message():               # ← missing payload arg → ERROR
+                                          async def on_message(topic, payload): # ← too many args → ERROR
+                                          def on_message(payload):              # ← not async → will fail silently
+                                        WRONG call patterns:
+                                          data = await agent.subscribe('sensors/temperature')  # WRONG - not awaitable
+                                          agent.subscribe('sensors/temperature')               # WRONG - missing callback
+
+  agent.mqtt_get(topic, timeout=10)   — wait for ONE message on topic and return it (one-shot read)
+                                        USE THIS when you need a single current value, not a stream
+                                        USE agent.subscribe() when you need continuous updates
                                         Example: stats = await agent.mqtt_get('rpi-room/cpu')
+
   agent.topics(keyword="")            — list all MQTT topics published by known agents
                                         Example: agent.topics("temp") → topics with "temp" in name
                                         Returns: [{"topic": str, "agents": [{"name", "node"}]}, ...]
@@ -234,12 +252,94 @@ Inside your code, the `agent` object provides:
                                         "running": false, "spawnable": true → catalog recipe, will be
                                           auto-spawned the first time you route a task to it with @agent-name
 
+  agent.window(topic, seconds=300)    — sliding time window over a topic stream for temporal reasoning
+                                        Returns a StreamWindow object synchronously. NOT a coroutine.
+                                        NEVER use await with window() — it is NOT awaitable.
+                                        CORRECT:   agent.state['w'] = agent.window('sensors/temp', seconds=60)
+                                        WRONG:     agent.state['w'] = await agent.window(...)  # TypeError!
+                                        Store in setup(), read in process():
+                                          async def setup(agent):
+                                              agent.state['w'] = agent.window('sensors/temp', seconds=60)
+                                          async def process(agent):
+                                              w = agent.state['w']
+                                              avg  = w.mean('value')       # mean over window
+                                              mn   = w.min('value')        # minimum
+                                              mx   = w.max('value')        # maximum
+                                              up   = w.rising(threshold=2) # rose by 2+ degrees
+                                              gone = w.absent_for(60)      # no data for 60s
+                                              n    = w.event_count('motion', True, seconds=300)
+                                              last = w.latest()            # most recent entry dict
+                                              cnt  = w.count()             # number of entries
+                                        Methods: mean, min, max, rising, falling, stable, absent_for,
+                                                 event_count, latest, count, values
+
+  agent.publish_world_state(key, data) — publish retained shared state readable by any agent
+                                         Topic: agents/{name}/data/{key}
+                                         Example: await agent.publish_world_state('presence', {'zone': 'kitchen', 'present': True})
+  agent.read_world_state(topic)        — read a retained world state topic (one-shot)
+                                         Example: state = await agent.read_world_state('home/presence/kitchen')
+
+  agent.declare_contract(publishes, subscribes, triggers_when, produces_schema)
+                                       — declare this agent's topic contract for auto-wiring
+                                         Call from setup() to make agent discoverable by planner
+                                         Example:
+                                           agent.declare_contract(
+                                               publishes=['rpi/camera/detections'],
+                                               subscribes=['homeassistant/state_changes/#'],
+                                               triggers_when={'person_detected': True},
+                                           )
+
   agent.llm                           — pre-configured LLM (same as main, already authenticated)
   agent.llm.chat(prompt, system="")   — single-turn LLM call, returns string
   agent.llm.complete(messages, system="") — multi-turn LLM call with full history
 
   The LLM provider is set at startup (Anthropic / OpenAI / Ollama / NVIDIA NIM).
   Agents always use the same provider as main — no configuration needed inside agent code.
+
+== SUBSCRIBE vs MQTT_GET — CRITICAL DISTINCTION ==
+  agent.subscribe(topic, callback)  — CONTINUOUS stream. Callback called for EVERY message.
+                                      Use for: sensor streams, state changes, ongoing monitoring.
+                                      NOT awaitable. Does NOT return data. Callback is required.
+  agent.mqtt_get(topic, timeout=N)  — ONE-SHOT read. Returns ONE message then stops.
+                                      Use for: reading current value once, polling on demand.
+                                      IS awaitable. Returns the payload dict.
+
+  Common mistake — DO NOT do this:
+    data = await agent.subscribe('sensors/temp')           # WRONG: subscribe is not awaitable
+    agent.subscribe('sensors/temp')                        # WRONG: callback missing
+    data = agent.mqtt_get('sensors/temp')                  # WRONG: mqtt_get must be awaited
+
+  Correct patterns:
+    # Pattern A: continuous subscription (use in setup, read state in process)
+    # callback MUST be async AND accept exactly one argument called 'payload'
+    async def setup(agent):
+        async def on_temp(payload):        # ← async, exactly ONE arg
+            agent.state['temp'] = payload.get('value', 0)
+        agent.subscribe('sensors/temperature', on_temp)  # ← no await
+
+    async def process(agent):
+        temp = agent.state.get('temp')
+        if temp and temp > 30:
+            await agent.alert('Too hot!')
+
+    # Pattern B: one-shot read (use in process or handle_task)
+    async def process(agent):
+        data = await agent.mqtt_get('sensors/temperature', timeout=5)
+        if data:
+            await agent.log(f"Current temp: {data.get('value')}")
+
+    # Pattern C: sliding window (best for temporal patterns — NO await on window())
+    async def setup(agent):
+        agent.state['window'] = agent.window('sensors/temperature', seconds=300)  # NO await
+
+    async def process(agent):
+        w = agent.state['window']
+        if w.rising(threshold=3.0):
+            await agent.alert('Temperature rising fast!')
+        avg = w.mean('value')
+        mn  = w.min('value')
+        mx  = w.max('value')
+        await agent.log(f'Temp stats: avg={avg:.1f} min={mn:.1f} max={mx:.1f}')
 
 == LLM USAGE — READ THIS CAREFULLY ==
 The agent already has a working LLM via agent.llm. DO NOT set up your own LLM.

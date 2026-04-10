@@ -216,9 +216,11 @@ class PlannerAgent(Actor):
 
     async def _run_pipeline(self, task: str, workers: list[dict]) -> str:
         """
-        Builds and spawns persistent reactive agents for if/when/whenever rules.
+        Builds and spawns persistent reactive agents for if/when/wherever rules.
 
         Flow:
+          0. Topic resolution — resolve vague data references to concrete MQTT topics
+             using TopicRegistry + HA entity search. Enriches the task with specifics.
           1. _decompose_pipeline queries HomeAssistantAgent for real entity IDs
           2. LLM produces spawn configs (ha_actuator for HA actions, dynamic for everything else)
           3. Each agent is spawned and registered in main's spawn registry
@@ -227,6 +229,14 @@ class PlannerAgent(Actor):
 
         Multiple rules in one request are fully supported.
         """
+        # ── Step 0: Topic resolution ───────────────────────────────────────
+        # Before planning, resolve vague data references ("temperature", "motion",
+        # "energy") to concrete MQTT topics or HA entities. This lets the user
+        # say "react to temperature" without knowing the exact topic name.
+        task, resolution_note = await self._resolve_data_references(task)
+        if resolution_note:
+            await self._log(f"Topic resolution: {resolution_note}")
+
         plan = await self._decompose_pipeline(task, workers)
 
         if not plan:
@@ -321,12 +331,229 @@ class PlannerAgent(Actor):
             return "Pipeline plan generated but no agents could be spawned. Check logs."
 
         out = ["Pipeline active! Here's what I set up:\n"]
+        if resolution_note:
+            out.insert(0, f"📡 **Data source resolved:** {resolution_note}\n")
         out += [f"{i+1}. {w}" for i, w in enumerate(wired)]
         out.append("\nThese agents run continuously and react to events automatically.")
         out.append("Use `/rules` to see all active pipeline rules.")
         if spawned:
             out.append(f"\nSpawned: {', '.join(spawned)} — will auto-restore on restart.")
         return "\n".join(out)
+
+    async def _resolve_data_references(self, task: str) -> tuple[str, str]:
+        """
+        Resolve vague data references in a task to concrete MQTT topics or HA entities.
+
+        Examples:
+          "log when temperature > 22"
+            → finds sensors/test/temperature in TopicRegistry
+            → enriches: "log when temperature > 22 [subscribe to: sensors/test/temperature]"
+
+          "alert when motion detected"
+            → finds rpi-kitchen/camera/detections in TopicRegistry
+            → enriches: "alert when motion detected [subscribe to: rpi-kitchen/camera/detections]"
+
+          "log when temperature > 22"  (no registered topics)
+            → falls back to HA entity search
+            → finds sensor.living_room_temperature
+            → enriches: "log when temperature > 22 [HA entity: sensor.living_room_temperature]"
+
+          "log when temperature > 22"  (ambiguous — multiple sources)
+            → returns the task unchanged + a note listing candidates
+            → planner LLM receives the candidates and picks the best one
+
+        Returns: (enriched_task, resolution_note)
+          enriched_task   — task with concrete topic/entity appended as context
+          resolution_note — human-readable summary of what was found (shown to user)
+        """
+        import re
+
+        # ── Data concept keywords → search terms ──────────────────────────
+        # Maps natural language concepts to TopicRegistry search keywords
+        CONCEPT_MAP = {
+            r"\btemp(erature)?\b":   ["temperature", "temp", "thermal"],
+            r"\bhumid(ity)?\b":      ["humidity", "humid"],
+            r"\bmotion\b":           ["motion", "pir", "presence", "detect"],
+            r"\bpresence\b":         ["presence", "motion", "occupancy"],
+            r"\benergy\b":           ["energy", "power", "kwh", "watt"],
+            r"\bcpu\b":              ["cpu", "processor"],
+            r"\bmemory\b":           ["memory", "ram"],
+            r"\bco2\b":              ["co2", "carbon"],
+            r"\bair quality\b":      ["air", "quality", "voc", "pm25"],
+            r"\blight level\b":      ["light", "lux", "illumin"],
+            r"\bnoise\b":            ["noise", "sound", "db"],
+            r"\bdetect(ion)?\b":     ["detect", "yolo", "camera", "vision"],
+            r"\bdoor\b":             ["door", "entry", "contact"],
+            r"\bwindow\b":           ["window", "contact"],
+            r"\bwater\b":            ["water", "flood", "leak"],
+            r"\bgas\b":              ["gas", "methane", "smoke"],
+            r"\bvoltage\b":          ["voltage", "power", "electric"],
+        }
+
+        task_lower = task.lower()
+
+        # Find which concepts are mentioned in the task
+        matched_concepts = []
+        for pattern, keywords in CONCEPT_MAP.items():
+            if re.search(pattern, task_lower):
+                matched_concepts.extend(keywords)
+
+        if not matched_concepts:
+            return task, ""  # No vague data references found
+
+        # ── Search TopicRegistry first ─────────────────────────────────────
+        try:
+            from ..core.topic_bus import get_topic_bus
+            bus = get_topic_bus()
+            if bus:
+                # Deduplicate and search
+                seen = set()
+                candidates = []
+                for kw in matched_concepts:
+                    if kw in seen:
+                        continue
+                    seen.add(kw)
+                    for contract in bus.registry.find_by_capability(kw):
+                        for topic in contract.publishes:
+                            if not any(c["topic"] == topic for c in candidates):
+                                candidates.append({
+                                    "topic":   topic,
+                                    "agent":   contract.name,
+                                    "node":    contract.node,
+                                    "schema":  contract.produces_schema,
+                                    "source":  "topic_registry",
+                                })
+
+                if len(candidates) == 1:
+                    # Unambiguous — auto-resolve
+                    c = candidates[0]
+                    node_str = f" on {c['node']}" if c.get("node") else ""
+                    enriched = (
+                        f"{task} "
+                        f"[DATA SOURCE: subscribe to MQTT topic '{c['topic']}' "
+                        f"published by {c['agent']}{node_str}. "
+                        f"Use agent.subscribe('{c['topic']}', callback) in setup().]"
+                    )
+                    note = (
+                        f"Found `{c['topic']}` from **{c['agent']}**{node_str} "
+                        f"— using this as the data source."
+                    )
+                    return enriched, note
+
+                if len(candidates) > 1:
+                    # Multiple matches — give all to LLM, let it pick best
+                    sources = ", ".join(
+                        f"'{c['topic']}' ({c['agent']})" for c in candidates[:5]
+                    )
+                    enriched = (
+                        f"{task} "
+                        f"[MULTIPLE DATA SOURCES FOUND: {sources}. "
+                        f"Pick the most relevant topic based on the user's intent. "
+                        f"Use agent.subscribe(chosen_topic, callback) in setup().]"
+                    )
+                    note = (
+                        f"Found {len(candidates)} matching topics: "
+                        + ", ".join(f"`{c['topic']}`" for c in candidates[:3])
+                        + (" and more" if len(candidates) > 3 else "")
+                        + " — planner will pick the most relevant."
+                    )
+                    return enriched, note
+
+        except Exception as e:
+            logger.debug(f"[{self.name}] TopicRegistry search failed: {e}")
+
+        # ── Fallback: search HA entities ───────────────────────────────────
+        # No registered agent topics found — check if HA has relevant sensors
+        try:
+            if self._registry:
+                ha_agent = self._registry.find_by_name("home-assistant-agent")
+                if ha_agent:
+                    import uuid as _uuid
+                    task_id = f"resolve_{_uuid.uuid4().hex[:6]}"
+                    future = asyncio.get_running_loop().create_future()
+                    self._result_futures[task_id] = future
+                    await self.send(ha_agent.actor_id, MessageType.TASK, {
+                        "text":     "list entities",
+                        "_task_id": task_id,
+                        "task":     task_id,
+                    })
+                    try:
+                        result = await asyncio.wait_for(future, timeout=8.0)
+                        devices = result.get("devices", []) or result.get("result", [])
+                        if isinstance(devices, str):
+                            devices = []
+                    except (asyncio.TimeoutError, Exception):
+                        devices = []
+                    finally:
+                        self._result_futures.pop(task_id, None)
+
+                    # Search device list for relevant entities
+                    ha_candidates = []
+                    for device in devices:
+                        for entity in device.get("entities", []):
+                            eid   = entity.get("entity_id", "")
+                            ename = entity.get("friendly_name", "") or entity.get("name", "")
+                            combined = (eid + " " + ename).lower()
+                            if any(kw in combined for kw in matched_concepts):
+                                ha_candidates.append({
+                                    "entity_id": eid,
+                                    "name":      ename,
+                                    "state":     entity.get("state", ""),
+                                    "source":    "home_assistant",
+                                })
+
+                    if len(ha_candidates) == 1:
+                        c = ha_candidates[0]
+                        enriched = (
+                            f"{task} "
+                            f"[DATA SOURCE: Home Assistant entity '{c['entity_id']}' "
+                            f"(name: {c['name']}, current state: {c['state']}). "
+                            f"Subscribe to homeassistant/state_changes/# and filter "
+                            f"by payload.get('entity_id') == '{c['entity_id']}'. "
+                            f"The value is in payload.get('new_state', {{}}).get('state').]"
+                        )
+                        note = (
+                            f"No MQTT topic found — using HA entity "
+                            f"**{c['name']}** (`{c['entity_id']}`, currently: {c['state']})."
+                        )
+                        return enriched, note
+
+                    if len(ha_candidates) > 1:
+                        sources = ", ".join(
+                            f"'{c['entity_id']}' ({c['name']})"
+                            for c in ha_candidates[:4]
+                        )
+                        enriched = (
+                            f"{task} "
+                            f"[MULTIPLE HA ENTITIES FOUND: {sources}. "
+                            f"Pick the most relevant. Subscribe to homeassistant/state_changes/# "
+                            f"and filter by entity_id in the payload.]"
+                        )
+                        note = (
+                            f"No MQTT topic found — found {len(ha_candidates)} HA entities: "
+                            + ", ".join(f"`{c['entity_id']}`" for c in ha_candidates[:3])
+                            + (" and more" if len(ha_candidates) > 3 else "")
+                            + " — planner will pick the most relevant."
+                        )
+                        return enriched, note
+
+        except Exception as e:
+            logger.debug(f"[{self.name}] HA entity search failed: {e}")
+
+        # ── Nothing found — return task unchanged with a note ──────────────
+        concepts_str = ", ".join(set(matched_concepts[:4]))
+        enriched = (
+            f"{task} "
+            f"[NOTE: No registered MQTT topics or HA entities found matching: {concepts_str}. "
+            f"If the user has a sensor agent running, it may not have published yet. "
+            f"Ask the user to specify the exact MQTT topic or HA entity ID, "
+            f"or check agent.topics() for available data streams.]"
+        )
+        note = (
+            f"No data source found for: {concepts_str}. "
+            f"You may need to specify the exact topic or entity."
+        )
+        return enriched, note
 
     async def _decompose_pipeline(self, task: str, workers: list[dict]) -> list[dict]:
         """

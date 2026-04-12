@@ -29,6 +29,29 @@ from ..core.actor import Actor, Message, MessageType, ActorState
 logger = logging.getLogger(__name__)
 
 
+class _AwaitableNone:
+    """
+    Sentinel that can be safely awaited (returns None) or used in bool context (False).
+
+    LLMs writing async code inside DynamicAgent frequently add `await` to sync API
+    calls like agent.subscribe(), agent.window(), agent.persist(), etc.  Returning
+    this instead of bare None prevents 'TypeError: object NoneType can't be used
+    in await expression' — the #1 runtime failure in LLM-generated agent code.
+    """
+
+    def __await__(self):
+        return iter([])        # completes immediately, yields None
+
+    def __bool__(self):
+        return False
+
+    def __repr__(self):
+        return "None"
+
+
+_AWAITABLE_NONE = _AwaitableNone()
+
+
 class DynamicAgent(Actor):
     """
     Generic actor shell. Core behavior is provided as Python source code strings.
@@ -256,7 +279,21 @@ class DynamicAgent(Actor):
             result.append(line)
             i += 1
 
-        return "\n".join(result)
+        sanitized = "\n".join(result)
+
+        # ── Strip spurious `await` on known synchronous agent API methods ──
+        # LLMs write `await agent.subscribe(...)` because setup() is async.
+        # These methods already return _AwaitableNone so the code won't crash,
+        # but stripping `await` keeps the code clean and avoids confusion.
+        _SYNC_METHODS = (
+            "subscribe", "window", "persist", "recall",
+            "declare_contract", "agents", "nodes", "topics",
+            "capabilities", "increment_processed", "increment_errors",
+        )
+        _sync_pat = r"\bawait\s+(agent\.(?:" + "|".join(_SYNC_METHODS) + r")\s*\()"
+        sanitized = re.sub(_sync_pat, r"\1", sanitized)
+
+        return sanitized
 
 
 
@@ -349,27 +386,154 @@ class DynamicAgent(Actor):
 
     # ── Setup wrapper ───────────────────────────────────────────────────────
 
+    # Max times _run_setup will ask the LLM to fix a runtime error before giving up
+    _MAX_SETUP_RETRIES = 2
+
     async def _run_setup(self):
         """
-        Run setup() as a background task.
-        - Errors in setup() are published as fatal errors (agent won't restart).
+        Run setup() as a background task with LLM self-correction on failure.
+
+        If setup() raises a runtime error (e.g. TypeError from await on sync call,
+        NameError, AttributeError), the LLM is asked to fix the code and the whole
+        compile-then-setup cycle is retried up to _MAX_SETUP_RETRIES times.
+
         - If process() is also defined, it is started AFTER setup() returns.
           For agents whose setup() never returns (e.g. aiomqtt subscription loops),
           process() is simply not started — the subscription loop IS the process.
         """
-        try:
-            await self._fn_setup(self._api)
-            logger.info(f"[{self.name}] setup() completed.")
-        except asyncio.CancelledError:
-            return
-        except Exception as e:
+        current_code = self._code
+        last_error   = None
+
+        for attempt in range(1 + self._MAX_SETUP_RETRIES):
+            try:
+                await self._fn_setup(self._api)
+                if attempt > 0:
+                    logger.info(f"[{self.name}] setup() succeeded after {attempt} fix(es).")
+                    await self._mqtt_publish(
+                        f"agents/{self.actor_id}/logs",
+                        {"type": "log",
+                         "message": f"setup() runtime error fixed by LLM after {attempt} attempt(s).",
+                         "timestamp": time.time()},
+                    )
+                else:
+                    logger.info(f"[{self.name}] setup() completed.")
+                last_error = None
+                break
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                last_error = e
+                err = traceback.format_exc()
+                logger.error(f"[{self.name}] setup() failed (attempt {attempt + 1}): {e}")
+
+                if attempt >= self._MAX_SETUP_RETRIES:
+                    break  # exhausted retries
+
+                # Ask LLM to fix the runtime error
+                fixed = await self._fix_runtime_with_llm(current_code, str(e), err)
+                if fixed is None:
+                    logger.warning(f"[{self.name}] LLM unavailable — cannot fix setup() error")
+                    break
+
+                # Recompile the fixed code
+                self._ns = {}
+                compile_err = self._compile_code(fixed)
+                if compile_err:
+                    logger.warning(f"[{self.name}] LLM fix introduced compile error: {compile_err}")
+                    # Try to fix the compile error too
+                    fixed2 = await self._fix_syntax_with_llm(fixed, compile_err)
+                    if fixed2:
+                        self._ns = {}
+                        compile_err2 = self._compile_code(fixed2)
+                        if compile_err2:
+                            break  # can't fix compile error either
+                        fixed = fixed2
+                    else:
+                        break
+                else:
+                    # compile_err is None — code is good
+                    pass
+
+                self._code   = fixed
+                current_code = fixed
+                logger.info(f"[{self.name}] Retrying setup() with LLM-fixed code (attempt {attempt + 1})...")
+
+        if last_error is not None:
             err = traceback.format_exc()
-            logger.error(f"[{self.name}] setup() failed: {e}\n{err}")
-            await self._publish_error(phase="setup", error=e, traceback_str=err, fatal=True)
+            logger.error(f"[{self.name}] setup() failed permanently: {last_error}")
+            await self._publish_error(
+                phase="setup", error=last_error, traceback_str=err, fatal=True
+            )
             return
+
         # setup() returned cleanly — start process() loop if defined
         if self._fn_process and self.state not in (ActorState.STOPPED, ActorState.FAILED):
             self._tasks.append(asyncio.create_task(self._process_loop()))
+
+    async def _fix_runtime_with_llm(
+        self, code: str, error_msg: str, traceback_str: str
+    ) -> Optional[str]:
+        """
+        Ask the LLM to fix a runtime error in agent code (setup/process).
+
+        Similar to _fix_syntax_with_llm but provides the traceback and
+        explicit guidance about the agent API (sync vs async methods).
+        """
+        if self._llm_provider is None:
+            return None
+
+        prompt = (
+            "The following Python code raised a RUNTIME ERROR when executed.\n\n"
+            f"Error: {error_msg}\n"
+            f"Traceback (last 800 chars):\n{traceback_str[-800:]}\n\n"
+            "IMPORTANT API RULES — these are the most common mistakes:\n"
+            "  - agent.subscribe(topic, callback) is SYNCHRONOUS — do NOT use await\n"
+            "  - agent.window(topic, seconds=N) is SYNCHRONOUS — do NOT use await\n"
+            "  - agent.persist(key, val) is SYNCHRONOUS — do NOT use await\n"
+            "  - agent.recall(key) is SYNCHRONOUS — do NOT use await\n"
+            "  - agent.declare_contract(...) is SYNCHRONOUS — do NOT use await\n"
+            "  - agent.agents() is SYNCHRONOUS — do NOT use await\n"
+            "  - await agent.publish(topic, data) — this IS async, use await\n"
+            "  - await agent.log(msg) — this IS async, use await\n"
+            "  - await agent.alert(msg) — this IS async, use await\n"
+            "  - await agent.send_to(name, payload) — this IS async, use await\n"
+            "  - await agent.mqtt_get(topic) — this IS async, use await\n\n"
+            "Fix the error. Return ONLY the corrected Python code — no explanations, "
+            "no markdown fences, no commentary.\n\n"
+            f"```python\n{code}\n```"
+        )
+        logger.info(f"[{self.name}] Asking LLM to fix runtime error: {error_msg[:120]}")
+        await self._mqtt_publish(
+            f"agents/{self.actor_id}/logs",
+            {"type": "log",
+             "message": f"Runtime error — asking LLM to fix: {error_msg[:120]}",
+             "timestamp": time.time()},
+        )
+        try:
+            response, usage = await self._llm_provider.complete(
+                messages=[{"role": "user", "content": prompt}],
+                system=(
+                    "You are a Python runtime-error expert for an async agent framework. "
+                    "Return only valid Python code."
+                ),
+                max_tokens=4096,
+            )
+            if hasattr(self, "total_input_tokens"):
+                self.total_input_tokens  += usage.get("input_tokens", 0)
+                self.total_output_tokens += usage.get("output_tokens", 0)
+                self.total_cost_usd      += usage.get("cost_usd", 0.0)
+
+            fixed = response.strip()
+            if fixed.startswith("```"):
+                fixed = "\n".join(
+                    l for l in fixed.split("\n")
+                    if not l.strip().startswith("```")
+                ).strip()
+            return fixed
+
+        except Exception as e:
+            logger.warning(f"[{self.name}] LLM runtime-fix call failed: {e}")
+            return None
 
     # ── Process loop ───────────────────────────────────────────────────────
 
@@ -614,34 +778,56 @@ class _AgentAPI:
 
     async def publish(self, topic: str, data: Any):
         """Publish data to an MQTT topic. Auto-registers topic in capability manifest
-        and TopicBus contract so the agent is discoverable without explicit declare_contract()."""
+        and TopicBus contract so the agent is discoverable without explicit declare_contract().
+        On every publish, captures the actual payload schema (field names + types)
+        so the planner and other agents know the real field names — not guesses."""
         await self._actor._mqtt_publish(topic, data)
-        if topic not in self._published_topics:
+
+        is_new_topic = topic not in self._published_topics
+
+        # ── Auto-capture observed schema from real payloads ────────────────
+        # This solves the "temp" vs "temperature" vocabulary mismatch:
+        # the schema reflects what the code ACTUALLY publishes.
+        # Uses TopicContract.update_observed() — a proper dataclass field,
+        # not monkey-patched attributes.
+        try:
+            from ..core.topic_bus import TopicContract, get_topic_bus
+            bus = get_topic_bus()
+            if bus:
+                existing = bus.registry.get(self.name)
+                if existing:
+                    if is_new_topic and topic not in existing.publishes:
+                        existing.publishes.append(topic)
+                    # Record actual field names on every publish (first call
+                    # per topic populates; subsequent calls are no-ops if
+                    # fields haven't changed, but cheap either way)
+                    if isinstance(data, dict):
+                        existing.update_observed(topic, data)
+                        # Also keep produces_schema in sync
+                        for k, v in existing.observed_samples.get(topic, {}).get("fields", {}).items():
+                            existing.produces_schema[k] = v
+                    bus.registry.register(existing)
+                elif is_new_topic:
+                    # Create minimal contract from published topics
+                    contract = TopicContract(
+                        name            = self.name,
+                        publishes       = list(self._published_topics | {topic}),
+                        actor_id        = self.actor_id,
+                        node            = getattr(self._actor, "_node", None),
+                    )
+                    if isinstance(data, dict):
+                        contract.update_observed(topic, data)
+                        # Bootstrap produces_schema from observed
+                        contract.produces_schema = dict(
+                            contract.observed_samples.get(topic, {}).get("fields", {})
+                        )
+                    bus.register_contract(contract)
+        except Exception:
+            pass  # TopicBus unavailable — not fatal
+
+        if is_new_topic:
             self._published_topics.add(topic)
             await self._publish_manifest()
-            # Auto-register in TopicBus so planner can discover this data flow
-            # even if the agent never called declare_contract() explicitly
-            try:
-                from ..core.topic_bus import TopicContract, get_topic_bus
-                bus = get_topic_bus()
-                if bus:
-                    existing = bus.registry.get(self.name)
-                    if existing:
-                        # Update existing contract with new topic
-                        if topic not in existing.publishes:
-                            existing.publishes.append(topic)
-                            bus.registry.register(existing)
-                    else:
-                        # Create minimal contract from published topics
-                        contract = TopicContract(
-                            name      = self.name,
-                            publishes = list(self._published_topics),
-                            actor_id  = self.actor_id,
-                            node      = getattr(self._actor, "_node", None),
-                        )
-                        bus.register_contract(contract)
-            except Exception:
-                pass  # TopicBus unavailable — not fatal
 
     def subscribe(self, topic: str, callback):
         """
@@ -682,6 +868,27 @@ class _AgentAPI:
         import asyncio, json
         actor = self._actor
 
+        # Wrap the callback so `await None` errors from LLM-generated code
+        # (e.g. `await agent.persist(...)`) don't crash the listener.
+        # We log the first occurrence, then silently suppress subsequent ones.
+        _await_warned = False
+
+        async def _safe_invoke(cb, payload):
+            nonlocal _await_warned
+            try:
+                await cb(payload)
+            except TypeError as e:
+                if "NoneType" in str(e) and "await" in str(e):
+                    if not _await_warned:
+                        logger.warning(
+                            f"[{actor.name}] subscribe callback has "
+                            f"'await None' error (suppressed): {e}"
+                        )
+                        _await_warned = True
+                    # Swallow: a sync API method was awaited, harmless
+                else:
+                    raise
+
         async def _listener():
             try:
                 import aiomqtt
@@ -699,7 +906,7 @@ class _AgentAPI:
                             except Exception:
                                 payload = {"raw": msg.payload.decode()}
                             try:
-                                await callback(payload)
+                                await _safe_invoke(callback, payload)
                             except Exception as e:
                                 logger.error(f"[{actor.name}] subscribe callback error: {e}")
                 except asyncio.CancelledError:
@@ -731,6 +938,10 @@ class _AgentAPI:
                     bus.register_contract(contract)
         except Exception:
             pass  # TopicBus unavailable — not fatal
+
+        # Return an awaitable no-op so `await agent.subscribe(...)` doesn't crash.
+        # LLMs frequently add `await` because setup() is async — this makes it safe.
+        return _AWAITABLE_NONE
 
     async def publish_detection(self, data: Any):
         """Convenience: publish to agents/{id}/detections"""
@@ -764,6 +975,8 @@ class _AgentAPI:
             "triggers_when":   contract.triggers_when   if contract else {},
             "produces_schema": contract.produces_schema if contract else {},
             "consumes_schema": contract.consumes_schema if contract else {},
+            # Observed payload schemas — auto-captured from real publishes
+            "observed_samples": contract.observed_samples if contract else {},
             "timestamp":       _t.time(),
         }
         await actor._mqtt_publish(
@@ -810,9 +1023,11 @@ class _AgentAPI:
 
     def persist(self, key: str, value: Any):
         self._actor.persist(key, value)
+        return _AWAITABLE_NONE           # safe to await
 
     def recall(self, key: str) -> Any:
-        return self._actor.recall(key)
+        val = self._actor.recall(key)
+        return val if val is not None else _AWAITABLE_NONE  # safe to await
 
     # ── Inter-agent messaging ──────────────────────────────────────────────
 
@@ -1027,12 +1242,12 @@ class _AgentAPI:
             def __repr__(self):
                 return f"StreamWindow(topic={getattr(self._inner, 'topic', '?')}, seconds={getattr(self._inner, 'seconds', '?')})"
             def __await__(self):
-                raise TypeError(
-                    "agent.window() is not a coroutine — do not use 'await'. "
-                    "Correct: agent.state['w'] = agent.window('topic', seconds=60)  # no await"
+                logger.warning(
+                    f"agent.window() was awaited — this is unnecessary but not fatal. "
+                    f"Correct: agent.state['w'] = agent.window('topic', seconds=60)  # no await"
                 )
-                return
-                yield  # make this a generator so __await__ is valid syntax
+                yield self._inner   # return the window object itself
+                return self._inner
 
         try:
             bus = get_topic_bus()
@@ -1054,14 +1269,20 @@ class _AgentAPI:
                 pass
             return _UnawaatableWindow(w)
 
-    def declare_contract(self, publishes: list = None, subscribes: list = None,
+    def declare_contract(self, publishes=None, subscribes=None,
                          triggers_when: dict = None, produces_schema: dict = None,
-                         consumes_schema: dict = None):
+                         consumes_schema: dict = None, **kwargs):
         """
         Declare this agent's topic contract — what it produces and consumes.
 
         Call from setup() to make this agent discoverable by the planner
         and other agents via topic-based auto-wiring.
+
+        Accepts common LLM kwarg variants:
+          schema → produces_schema
+          output_schema → produces_schema
+          input_schema → consumes_schema
+          topics → publishes
 
         Usage:
             async def setup(agent):
@@ -1072,6 +1293,32 @@ class _AgentAPI:
                     produces_schema = {'person_detected': 'bool', 'confidence': 'float'},
                 )
         """
+        # ── Accept common LLM kwarg aliases ────────────────────────────────
+        if produces_schema is None:
+            produces_schema = (
+                kwargs.get("schema")
+                or kwargs.get("output_schema")
+                or kwargs.get("produce_schema")
+                or {}
+            )
+        if consumes_schema is None:
+            consumes_schema = (
+                kwargs.get("input_schema")
+                or kwargs.get("consume_schema")
+                or {}
+            )
+        if publishes is None:
+            publishes = kwargs.get("topics") or kwargs.get("publish")
+        if subscribes is None:
+            subscribes = kwargs.get("subscribe")
+
+        # ── Coerce strings to single-element lists ─────────────────────────
+        # LLMs often write publishes="topic" instead of publishes=["topic"]
+        if isinstance(publishes, str):
+            publishes = [publishes]
+        if isinstance(subscribes, str):
+            subscribes = [subscribes]
+
         from ..core.topic_bus import TopicContract, get_topic_bus
         contract = TopicContract(
             name            = self.name,
@@ -1089,6 +1336,7 @@ class _AgentAPI:
         # Also include in manifest so remote agents and planner can see it
         self._actor._topic_contract = contract
         asyncio.ensure_future(self._publish_manifest())
+        return _AWAITABLE_NONE           # safe to await
 
     async def publish_world_state(self, key: str, data: Any, retain: bool = True):
         """

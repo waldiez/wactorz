@@ -1056,6 +1056,61 @@ class MainActor(LLMAgent):
 
         from .one_off_actuator_agent import OneOffActuatorAgent
 
+        # ── Enrich the request with HA entity context ──────────────────────
+        # The OneOffActuatorAgent needs to resolve "lamp" → "light.wiz_rgbw_tunable_02cba0".
+        # Without entity context, it fails with "couldn't identify a matching device".
+        # Fetch entities via the home-assistant-agent (cached + fast) and inject
+        # the relevant matches into the request so the LLM can pick the right one.
+        enriched_text = text
+        try:
+            if self._registry:
+                ha_agent = self._registry.find_by_name("home-assistant-agent")
+                if ha_agent:
+                    # Use a unique task_id so the future resolves correctly
+                    _ha_task_id = f"actuate_entities_{uuid.uuid4().hex[:8]}"
+                    _ha_future: asyncio.Future = asyncio.get_running_loop().create_future()
+                    self._result_futures[_ha_task_id] = _ha_future
+                    await self.send(ha_agent.actor_id, MessageType.TASK, {
+                        "text": "list_entities",
+                        "_task_id": _ha_task_id,
+                        "task": _ha_task_id,
+                        "reply_to": self.actor_id,
+                    })
+                    try:
+                        ha_result = await asyncio.wait_for(_ha_future, timeout=10.0)
+                    except asyncio.TimeoutError:
+                        ha_result = None
+                    finally:
+                        self._result_futures.pop(_ha_task_id, None)
+
+                    entities = []
+                    if ha_result and isinstance(ha_result, dict):
+                        entities = ha_result.get("entities", []) or ha_result.get("result", [])
+                    if isinstance(entities, list) and entities:
+                        # Build a compact entity summary for the LLM
+                        entity_lines = []
+                        for e in entities[:300]:
+                            eid = e.get("entity_id", "")
+                            name = e.get("name", "") or e.get("friendly_name", "")
+                            if eid:
+                                entry = eid
+                                if name and name != eid:
+                                    entry += f" ({name})"
+                                entity_lines.append(entry)
+                        if entity_lines:
+                            enriched_text = (
+                                f"{text}\n\n"
+                                f"[AVAILABLE HA ENTITIES — match the user's device to one of these:\n"
+                                + "\n".join(f"  {e}" for e in entity_lines)
+                                + "\n]"
+                            )
+                            logger.info(
+                                f"[{self.name}] Enriched actuate request with "
+                                f"{len(entity_lines)} HA entities"
+                            )
+        except Exception as e:
+            logger.warning(f"[{self.name}] Could not fetch HA entities for actuate: {e}")
+
         task_id = f"actuate_{uuid.uuid4().hex[:8]}"
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._result_futures[task_id] = future
@@ -1063,7 +1118,7 @@ class MainActor(LLMAgent):
         try:
             await self.spawn(
                 OneOffActuatorAgent,
-                request=text,
+                request=enriched_text,
                 llm_provider=self.llm,
                 task_id=task_id,
                 reply_to_id=self.actor_id,

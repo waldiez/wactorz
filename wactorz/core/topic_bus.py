@@ -81,6 +81,11 @@ class TopicContract:
       - Discover what data is available without hardcoding agent names
       - Auto-wire: if agent A publishes X and agent B subscribes to X, connect them
       - Build pipelines by topic compatibility, not by name knowledge
+
+    observed_samples is auto-populated from real publish() calls and contains
+    the ACTUAL field names the code uses (e.g. {"temp": "float"} not
+    {"temperature": "float"}). This is authoritative over produces_schema
+    when wiring consumers.
     """
     name:            str
     publishes:       list[str]       = field(default_factory=list)
@@ -91,6 +96,36 @@ class TopicContract:
     node:            Optional[str]   = None
     actor_id:        Optional[str]   = None
     timestamp:       float           = field(default_factory=time.time)
+
+    # ── Observed payload schemas ───────────────────────────────────────────
+    # Auto-captured from real publish() calls. Maps topic → {fields, example}.
+    # Unlike produces_schema (declared by LLM, may use wrong field names),
+    # observed_samples reflect what the code ACTUALLY publishes.
+    #
+    # Example:
+    #   {"sensors/data": {
+    #       "fields":  {"temp": "float", "humidity": "float"},
+    #       "example": {"temp": 30.5, "humidity": 47.7}
+    #   }}
+    observed_samples: dict           = field(default_factory=dict)
+
+    def __post_init__(self):
+        """
+        Guard against LLM mistakes:
+          - Coerce bare strings to single-element lists
+          - Filter out bogus entries like literal "publishes"/"subscribes" that
+            leak from LLM code passing kwarg names as values
+        """
+        if isinstance(self.publishes, str):
+            self.publishes = [self.publishes]
+        if isinstance(self.subscribes, str):
+            self.subscribes = [self.subscribes]
+        # Strip entries that are clearly kwarg names, not real topics
+        _BOGUS = {"publishes", "subscribes", "publish", "subscribe",
+                  "topics", "topic", "produces_schema", "consumes_schema",
+                  "schema", "triggers_when", "name", "description", "type"}
+        self.publishes  = [t for t in self.publishes  if t not in _BOGUS]
+        self.subscribes = [t for t in self.subscribes if t not in _BOGUS]
 
     def matches_topic(self, topic: str) -> bool:
         """Check if this agent subscribes to a given topic (supports # and + wildcards)."""
@@ -106,31 +141,55 @@ class TopicContract:
                 return True
         return False
 
+    def update_observed(self, topic: str, payload: dict):
+        """
+        Record the actual field names and types from a real published message.
+        Called automatically by _AgentAPI.publish() — agents don't need to
+        call this themselves.
+
+        This is what solves "temp" vs "temperature": the schema reflects
+        what the code ACTUALLY publishes, not what the LLM declared.
+        """
+        if not isinstance(payload, dict):
+            return
+        fields = {
+            k: type(v).__name__
+            for k, v in payload.items()
+            if not k.startswith("_")
+        }
+        self.observed_samples[topic] = {
+            "fields":  fields,
+            "example": {k: v for k, v in payload.items()
+                        if not k.startswith("_")},
+        }
+
     def to_dict(self) -> dict:
         return {
-            "name":            self.name,
-            "publishes":       self.publishes,
-            "subscribes":      self.subscribes,
-            "triggers_when":   self.triggers_when,
-            "produces_schema": self.produces_schema,
-            "consumes_schema": self.consumes_schema,
-            "node":            self.node,
-            "actor_id":        self.actor_id,
-            "timestamp":       self.timestamp,
+            "name":             self.name,
+            "publishes":        self.publishes,
+            "subscribes":       self.subscribes,
+            "triggers_when":    self.triggers_when,
+            "produces_schema":  self.produces_schema,
+            "consumes_schema":  self.consumes_schema,
+            "node":             self.node,
+            "actor_id":         self.actor_id,
+            "timestamp":        self.timestamp,
+            "observed_samples": self.observed_samples,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "TopicContract":
         return cls(
-            name            = d.get("name", ""),
-            publishes       = d.get("publishes", []),
-            subscribes      = d.get("subscribes", []),
-            triggers_when   = d.get("triggers_when", {}),
-            produces_schema = d.get("produces_schema", {}),
-            consumes_schema = d.get("consumes_schema", {}),
-            node            = d.get("node"),
-            actor_id        = d.get("actor_id"),
-            timestamp       = d.get("timestamp", time.time()),
+            name             = d.get("name", ""),
+            publishes        = d.get("publishes", []),
+            subscribes       = d.get("subscribes", []),
+            triggers_when    = d.get("triggers_when", {}),
+            produces_schema  = d.get("produces_schema", {}),
+            consumes_schema  = d.get("consumes_schema", {}),
+            node             = d.get("node"),
+            actor_id         = d.get("actor_id"),
+            timestamp        = d.get("timestamp", time.time()),
+            observed_samples = d.get("observed_samples", {}),
         )
 
     @classmethod
@@ -258,7 +317,8 @@ class TopicRegistry:
     def to_planner_context(self) -> str:
         """
         Format the registry as context for the planner LLM prompt.
-        Shows what data flows are available and who can be wired to whom.
+        Shows what data flows are available, who can be wired to whom,
+        and the ACTUAL payload schemas observed from real messages.
         """
         if not self._contracts:
             return "No topic contracts registered yet."
@@ -274,6 +334,15 @@ class TopicRegistry:
                 lines.append(f"    produces  : {c.produces_schema}")
             if c.triggers_when:
                 lines.append(f"    triggers  : {c.triggers_when}")
+            # ── Observed payload samples (authoritative field names) ────
+            if c.observed_samples:
+                for topic, info in c.observed_samples.items():
+                    fields  = info.get("fields", {})
+                    example = info.get("example", {})
+                    lines.append(
+                        f"    OBSERVED on '{topic}': "
+                        f"fields={fields}  example={example}"
+                    )
 
         pairs = self.find_wiring_opportunities()
         if pairs:

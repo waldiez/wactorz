@@ -138,6 +138,10 @@ class PlannerAgent(Actor):
         """
         Detect reactive/persistent pipeline requests vs one-shot tasks.
         Pipelines use conditional/temporal language: if/when/whenever/monitor/watch/notify.
+        Also catches explicit spawn/continuous-agent requests like:
+          "spawn an agent to log the mean..."
+          "create an agent that subscribes to..."
+          "I want an agent to send to a topic random temp..."
         """
         import re
         lowered = task.lower()
@@ -164,6 +168,16 @@ class PlannerAgent(Actor):
             # camera/detect + action = pipeline
             r"\b(camera|detect|yolo|webcam)\b.*\b(turn|open|send|notify|alert)\b",
             r"\b(person|motion|object)\b.*\bdetect.*\b(turn|open|light|send)\b",
+            # ── Spawn / continuous agent requests ──
+            # "spawn an agent to...", "create an agent that...", "I want an agent to..."
+            r"\b(spawn|create|make|start|run|launch|deploy)\b.*\bagent\b",
+            r"\b(i\s+want|i\s+need)\b.*\bagent\b.*\b(to|that|which)\b",
+            # Periodic / continuous language
+            r"\bevery\s+\d+\s*(sec|min|hour|s\b|m\b|h\b)",
+            r"\bcontinuously\b", r"\bconstantly\b", r"\bperiodically\b",
+            r"\bkeep\s+(running|publishing|logging|sending|checking)\b",
+            r"\b(subscribe|listen)\s+(to|for|on)\b",
+            r"\blog\s+(the|every|each|all)\b",
         ]
         return any(re.search(p, lowered) for p in patterns)
 
@@ -555,6 +569,99 @@ class PlannerAgent(Actor):
         )
         return enriched, note
 
+    async def _sample_live_topics(self, bus) -> list[str]:
+        """
+        Peek at one live MQTT message from each registered publish topic.
+        Returns formatted lines with actual field names and an example value.
+
+        This is the fallback when observed_samples haven't been captured yet
+        (e.g. the producer started before the schema-capture code was deployed).
+
+        Uses a single MQTT connection with a short per-topic timeout so it
+        doesn't block planning. Topics that don't publish within the window
+        are silently skipped.
+        """
+        import json as _json
+
+        try:
+            import aiomqtt
+        except ImportError:
+            return []
+
+        sample_lines = []
+        topics_to_sample: list[tuple[str, str]] = []  # (topic, agent_name)
+
+        for contract in bus.registry.all_contracts():
+            for topic in (contract.publishes or [])[:5]:
+                if not any(t == topic for t, _ in topics_to_sample):
+                    topics_to_sample.append((topic, contract.name))
+            if len(topics_to_sample) >= 10:
+                break
+
+        if not topics_to_sample:
+            return []
+
+        broker = getattr(self, "_mqtt_broker", "localhost")
+        port   = getattr(self, "_mqtt_port", 1883)
+
+        # Subscribe to ALL topics on one connection, collect first message per topic
+        # with a global timeout so we never hang.
+        received: dict[str, dict] = {}   # topic → payload
+
+        async def _collect():
+            try:
+                async with aiomqtt.Client(broker, port) as client:
+                    for topic, _ in topics_to_sample:
+                        await client.subscribe(topic)
+                    async for msg in client.messages:
+                        t = str(msg.topic)
+                        if t not in received:
+                            try:
+                                payload = _json.loads(msg.payload.decode())
+                            except Exception:
+                                payload = msg.payload.decode()
+                            if isinstance(payload, dict):
+                                received[t] = payload
+                        # Stop once we have a sample for every topic
+                        if len(received) >= len(topics_to_sample):
+                            return
+            except Exception as e:
+                logger.debug(f"[{self.name}] _sample_live_topics connection error: {e}")
+
+        # Wait at most N seconds total (not per-topic) — covers the common case
+        # where producers publish every few seconds.  Stale topics just get skipped.
+        max_wait = min(15.0, 5.0 + 2.0 * len(topics_to_sample))
+        try:
+            await asyncio.wait_for(_collect(), timeout=max_wait)
+        except asyncio.TimeoutError:
+            pass  # we'll use whatever we collected so far
+
+        # Build sample lines and store back into contracts
+        topic_to_agent = {t: a for t, a in topics_to_sample}
+        for topic, payload in received.items():
+            agent_name = topic_to_agent.get(topic, "?")
+            fields = {
+                k: type(v).__name__
+                for k, v in payload.items()
+                if not k.startswith("_")
+            }
+            # Persist into contract for future calls (no repeated sampling)
+            for contract in bus.registry.all_contracts():
+                if topic in (contract.publishes or []):
+                    contract.update_observed(topic, payload)
+                    break
+            sample_lines.append(
+                f"  Topic: {topic}  (published by {agent_name})\n"
+                f"    Fields: {fields}\n"
+                f"    Example payload: {payload}"
+            )
+
+        if sample_lines:
+            logger.info(
+                f"[{self.name}] Sampled {len(sample_lines)} live topic(s) for schema introspection"
+            )
+        return sample_lines
+
     async def _decompose_pipeline(self, task: str, workers: list[dict]) -> list[dict]:
         """
         Decomposes a reactive pipeline request into persistent agent spawn configs.
@@ -628,12 +735,40 @@ class PlannerAgent(Actor):
 
         # ── Fetch TopicBus context (live data flows + wiring opportunities) ─
         topic_bus_section = ""
+        topic_samples_section = ""
         try:
             from ..core.topic_bus import get_topic_bus
             bus = get_topic_bus()
             if bus and bus.registry.all_contracts():
                 topic_bus_section = bus.to_planner_context()
                 logger.info(f"[{self.name}] TopicBus: {len(bus.registry.all_contracts())} contracts")
+
+                # ── Sample live payloads from registered topics ────────────
+                # Captures ACTUAL field names so the LLM uses "temp" not "temperature"
+                sample_lines = []
+                for contract in bus.registry.all_contracts():
+                    samples = contract.observed_samples or {}
+                    if samples:
+                        for topic, info in samples.items():
+                            example = info.get("example", {})
+                            fields  = info.get("fields", {})
+                            sample_lines.append(
+                                f"  Topic: {topic}  (published by {contract.name})\n"
+                                f"    Fields: {fields}\n"
+                                f"    Example payload: {example}"
+                            )
+
+                # If no observed_samples yet, try to peek at one live message
+                # from each published topic via MQTT (fast — 3s timeout each)
+                if not sample_lines:
+                    sample_lines = await self._sample_live_topics(bus)
+
+                if sample_lines:
+                    topic_samples_section = (
+                        "LIVE TOPIC SAMPLES (actual payloads — use THESE field names in code):\n"
+                        + "\n".join(sample_lines)
+                    )
+
             else:
                 topic_bus_section = (
                     "No topic contracts registered yet.\n"
@@ -757,14 +892,21 @@ class PlannerAgent(Actor):
             "    async def setup(agent)   — runs once on start, good for subscriptions and init",
             "    async def process(agent) — runs in a loop every poll_interval seconds",
             "  Available APIs (ONLY these — no other agent methods exist):",
-            '    await agent.log("message")                        — structured log',
-            '    await agent.publish("topic", {dict})              — publish to MQTT',
-            '    agent.subscribe("topic", async_callback)          — subscribe to MQTT, callback(payload_dict) per message',
-            '                                                        IMPORTANT: runs as background task, setup() returns immediately',
-            '    agent.recall("key")                               — load persisted value',
-            '    agent.persist("key", value)                       — save persisted value',
+            '    await agent.log("message")                        — structured log (ASYNC, must await)',
+            '    await agent.publish("topic", {dict})              — publish to MQTT (ASYNC, must await)',
+            '    await agent.alert("message")                      — trigger alert (ASYNC, must await)',
+            '    await agent.send_to("name", payload)              — delegate to agent (ASYNC, must await)',
+            '    await agent.mqtt_get("topic")                     — one-shot MQTT read (ASYNC, must await)',
+            '    agent.subscribe("topic", async_callback)          — subscribe to MQTT (SYNC, NO await!)',
+            '                                                        callback(payload_dict) per message',
+            '                                                        runs as background task, setup() returns immediately',
+            '    agent.window("topic", seconds=N)                  — sliding window (SYNC, NO await!)',
+            '    agent.recall("key")                               — load persisted value (SYNC, NO await!)',
+            '    agent.persist("key", value)                       — save persisted value (SYNC, NO await!)',
+            '    agent.declare_contract(...)                        — register topic contract (SYNC, NO await!)',
             '    agent.state["key"]                                — in-memory dict (cleared on restart)',
             "  CRITICAL RULES FOR DYNAMIC AGENT CODE:",
+            "    NEVER use await on agent.subscribe(), agent.window(), agent.persist(), agent.recall(), agent.declare_contract()",
             "    NEVER import or use aiomqtt directly — use agent.subscribe() instead",
             "    NEVER hardcode MQTT broker hostnames or ports — agent.subscribe() handles this automatically",
             "    NEVER use asyncio.create_task() for MQTT — agent.subscribe() already creates the background task",
@@ -847,9 +989,52 @@ class PlannerAgent(Actor):
             "    poll_interval: 60",
             "  Agent 2 (ha_actuator): subscribes to custom/triggers/<slug>",
             "",
+            "PATTERN 6 — MQTT sensor data + condition → HA action (e.g. 'if temp > 20 turn off lamp'):",
+            "  This combines multiple data sources and triggers an HA action. NEVER use httpx for HA!",
+            "  Agent 1 (dynamic, name: '<slug>-monitor'):",
+            "    setup(agent): subscribe to relevant MQTT topics using agent.subscribe()",
+            "      In callback: check conditions, if met → await agent.publish('custom/triggers/<slug>', {'triggered': True})",
+            "    Example: subscribe to sensor topic AND HA state topic, check both conditions",
+            "  Agent 2 (ha_actuator, name: '<slug>-actuator'):",
+            "    mqtt_topics: ['custom/triggers/<slug>']",
+            "    detection_filter: {'triggered': True}",
+            "    actions: [{'domain': 'light', 'service': 'turn_off', 'entity_id': 'light.xxx'}]",
+            "  PATTERN 6 CODE TEMPLATE:",
+            "    async def setup(agent):",
+            "        agent.state['lamp_on'] = False",
+            "        agent.state['temp'] = 0",
+            "        async def on_temp(payload):",
+            "            agent.state['temp'] = payload.get('temp', 0)  # use EXACT field name from OBSERVED samples",
+            "            await check_and_trigger()",
+            "        async def on_lamp(payload):",
+            "            agent.state['lamp_on'] = payload.get('state') == 'on'",
+            "            await check_and_trigger()",
+            "        async def check_and_trigger():",
+            "            if agent.state['lamp_on'] and agent.state['temp'] > 20:",
+            "                await agent.publish('custom/triggers/lamp-temp', {'triggered': True})",
+            "                await agent.log('Condition met! Trigger published.')",
+            "        agent.subscribe('custom/sensors/temp_humidity', on_temp)",
+            "        agent.subscribe('lamp/status', on_lamp)",
+            "",
             "═══ GENERAL RULES ═══",
+            "",
+            "╔══════════════════════════════════════════════════════════════════╗",
+            "║  CRITICAL — HOME ASSISTANT ACTIONS                              ║",
+            "║  NEVER call HA REST API directly from dynamic agent code!       ║",
+            "║  NEVER use httpx/requests to POST to /api/services/*.           ║",
+            "║  ALWAYS use an ha_actuator agent for ANY HA service call.       ║",
+            "║                                                                 ║",
+            "║  CORRECT: dynamic agent publishes trigger → ha_actuator acts    ║",
+            "║  WRONG:   dynamic agent calls httpx.post('http://ha/api/...')   ║",
+            "╚══════════════════════════════════════════════════════════════════╝",
+            "",
+            "  If a dynamic agent needs to turn on/off a light, switch, or any HA device:",
+            "    1. The dynamic agent publishes a trigger: await agent.publish('custom/triggers/<slug>', {'triggered': True})",
+            "    2. A SEPARATE ha_actuator agent subscribes to that trigger and executes the HA service call",
+            "  This is Patterns 1 and 5 — ALWAYS follow this two-agent pattern for HA actions.",
+            "",
             "- Use EXACT entity_id values from the HA entities list — never invent entity IDs",
-            "- For HA service calls: look up the correct domain and service for the entity type",
+            "- For HA service calls (in ha_actuator config, NOT in dynamic agent code):",
             "  light → light.turn_on / light.turn_off",
             "  switch → switch.turn_on / switch.turn_off",
             "  climate → climate.set_temperature / climate.set_hvac_mode",
@@ -878,6 +1063,19 @@ class PlannerAgent(Actor):
             "═══ LIVE DATA FLOWS (topic contracts) ═══",
             topic_bus_section,
             "",
+            *(  # Include live topic samples if available
+                [
+                    "═══ LIVE TOPIC SAMPLES (use EXACTLY these field names in code!) ═══",
+                    topic_samples_section,
+                    "",
+                    "CRITICAL: When subscribing to a topic listed above, use the EXACT field names",
+                    "from the sample payload. For example if the sample shows {'temp': 30.5},",
+                    "use payload['temp'] — NOT payload['temperature']. The field names in the",
+                    "samples are authoritative.",
+                    "",
+                ]
+                if topic_samples_section else []
+            ),
             "═══ HOME ASSISTANT ENTITIES ═══",
             ha_section,
             "",
@@ -932,9 +1130,19 @@ class PlannerAgent(Actor):
         Currently catches:
           - Raw aiomqtt.Client() usage (should use agent.subscribe() instead)
           - Hardcoded MQTT broker hostnames
+          - `await` on synchronous agent API methods (subscribe, window, persist, etc.)
         Logs warnings so the user knows what was fixed.
         """
         import re as _re
+
+        # Synchronous agent API methods that must NOT be awaited
+        _SYNC_METHODS = (
+            "subscribe", "window", "persist", "recall",
+            "declare_contract", "agents", "nodes", "topics",
+            "capabilities", "increment_processed", "increment_errors",
+        )
+        _sync_pat = r"\bawait\s+(agent\.(?:" + "|".join(_SYNC_METHODS) + r")\s*\()"
+
         for step in plan:
             sc = step.get("spawn_config", {})
             if sc.get("type") != "dynamic":
@@ -944,6 +1152,13 @@ class PlannerAgent(Actor):
                 continue
 
             issues = []
+
+            # Strip `await` on sync agent methods
+            fixed_code, n_subs = _re.subn(_sync_pat, r"\1", code)
+            if n_subs:
+                issues.append(f"removed {n_subs} spurious await(s) on sync agent methods")
+                sc["code"] = fixed_code
+                code = fixed_code
 
             # Detect raw aiomqtt.Client() — LLM should use agent.subscribe()
             if "aiomqtt.Client(" in code or "aiomqtt.connect(" in code:
@@ -959,6 +1174,27 @@ class PlannerAgent(Actor):
                         sc["code"] = fixed
                         code = fixed
                         logger.info(f"[{self.name}] Auto-fixed raw aiomqtt in '{step.get('name')}' → agent.subscribe('{topic}')")
+
+            # Detect direct HA REST API calls — should use ha_actuator instead
+            _ha_api_patterns = [
+                r'/api/services/',
+                r'/api/states/',
+                r'httpx.*api/services',
+                r'requests\.(post|put|get).*api/services',
+                r'aiohttp.*api/services',
+            ]
+            for pat in _ha_api_patterns:
+                if _re.search(pat, code):
+                    issues.append(
+                        f"DIRECT HA API CALL detected ('{pat[:30]}...') — "
+                        f"should use ha_actuator agent instead"
+                    )
+                    logger.warning(
+                        f"[{self.name}] '{step.get('name')}' calls HA API directly! "
+                        f"This will likely fail. Should use ha_actuator pattern: "
+                        f"dynamic agent publishes trigger → ha_actuator executes HA service call."
+                    )
+                    break
 
             if issues:
                 logger.warning(
@@ -1097,6 +1333,8 @@ class PlannerAgent(Actor):
                 "capabilities":  manifest.get("capabilities", []),
                 "input_schema":  manifest.get("input_schema",  {}),
                 "output_schema": manifest.get("output_schema", {}),
+                "publishes":     manifest.get("publishes", []),
+                "observed_samples": manifest.get("observed_samples", {}),
             })
         return workers
 
@@ -1115,16 +1353,50 @@ class PlannerAgent(Actor):
                 lines.append(f"    input_schema : {w['input_schema']}")
             if w.get("output_schema"):
                 lines.append(f"    output_schema: {w['output_schema']}")
+            if w.get("publishes"):
+                lines.append(f"    publishes: {w['publishes']}")
+            if w.get("observed_samples"):
+                for topic, info in w["observed_samples"].items():
+                    fields = info.get("fields", {})
+                    example = info.get("example", {})
+                    lines.append(f"    topic '{topic}' payload fields: {fields}  example: {example}")
             return "\n".join(lines)
 
         workers_desc = "\n".join(_fmt_worker(w) for w in workers)
+
+        # ── Gather live topic samples for schema context ──────────────────
+        topic_schema_ctx = ""
+        try:
+            from ..core.topic_bus import get_topic_bus
+            bus = get_topic_bus()
+            if bus:
+                sample_lines = []
+                for contract in bus.registry.all_contracts():
+                    samples = contract.observed_samples or {}
+                    for topic, info in samples.items():
+                        example = info.get("example", {})
+                        fields  = info.get("fields", {})
+                        sample_lines.append(
+                            f"  {topic} (by {contract.name}): fields={fields}  example={example}"
+                        )
+                if not sample_lines:
+                    sample_lines = await self._sample_live_topics(bus)
+                if sample_lines:
+                    topic_schema_ctx = (
+                        "\n\nLIVE TOPIC SCHEMAS (use EXACTLY these field names in generated code):\n"
+                        + "\n".join(sample_lines)
+                        + "\nCRITICAL: Use the exact field names from the samples above. "
+                        "If a sample shows 'temp', use payload['temp'] — NOT payload['temperature'].\n"
+                    )
+        except Exception:
+            pass
 
         prompt = f"""You are a task planner for a multi-agent system.
 Break the task into steps. Each step is handled by one agent.
 
 AVAILABLE AGENTS (with input/output contracts):
 {workers_desc}
-
+{topic_schema_ctx}
 TASK: {task}
 
 OUTPUT RULES:
@@ -1145,8 +1417,41 @@ OUTPUT RULES:
   AGENT TYPE RULES:
     Use "llm" ONLY for pure conversation/Q&A/explanation agents (no external APIs or tools).
     Use "dynamic" for anything that fetches data, calls APIs, runs searches, or uses libraries.
-    In dynamic agent code ALWAYS use: await agent.log(msg), await agent.publish(topic, dict), agent.state dict, agent.recall(key), agent.persist(key, val).
+
+    CRITICAL — sync vs async agent API methods:
+      SYNCHRONOUS (NO await):
+        agent.subscribe(topic, callback)  — fire-and-forget background task
+        agent.window(topic, seconds=N)    — returns StreamWindow immediately
+        agent.persist(key, val)           — save to disk
+        agent.recall(key)                 — load from disk
+        agent.declare_contract(...)       — register topic contract
+        agent.agents()                    — list running agents
+        agent.topics(keyword)             — list known topics
+      ASYNC (MUST await):
+        await agent.publish(topic, data)  — publish to MQTT
+        await agent.log(msg)              — log a message
+        await agent.alert(msg)            — trigger alert
+        await agent.send_to(name, payload)— delegate to another agent
+        await agent.mqtt_get(topic)       — one-shot MQTT read
+
     NEVER use agent.logger — it does not exist. Use await agent.log(msg) instead.
+
+    CRITICAL — HOME ASSISTANT ACTIONS:
+      NEVER call HA REST API directly from dynamic agent code (no httpx/requests to /api/services/).
+      For ANY HA device action (turn on/off lights, switches, climate, etc.):
+        Use "type": "ha_actuator" — NOT a dynamic agent with httpx.
+        If a condition must be checked first, use TWO agents:
+          1. Dynamic agent checks condition → publishes trigger to custom/triggers/<slug>
+          2. ha_actuator agent subscribes to trigger → executes HA service call
+      ha_actuator spawn_config example:
+      {{
+        "name": "lamp-off-actuator",
+        "type": "ha_actuator",
+        "description": "Turns off the lamp when triggered",
+        "mqtt_topics": ["custom/triggers/lamp-temp"],
+        "detection_filter": {{"triggered": true}},
+        "actions": [{{"domain": "light", "service": "turn_off", "entity_id": "light.wiz_rgbw_tunable_02cba0"}}]
+      }}
   LLM agent example:
   {{
     "name": "translator-agent",
@@ -1205,6 +1510,10 @@ Example:
         """
         For any step with a spawn_config, spawn the agent if it's not running.
         Updates the plan with the actual agent name once spawned.
+
+        Continuous agents (those with a process() loop or subscribe-based setup)
+        are marked with _spawn_only=True so _execute_step skips delegation —
+        spawning them WAS the action.
         """
         if not self._registry:
             return plan
@@ -1228,6 +1537,28 @@ Example:
                 if actor:
                     step["agent"] = agent_name
                     self._spawned_by_planner.append(agent_name)
+
+                    # Detect if this is a continuous/persistent agent.
+                    # If the code has a process() loop or uses agent.subscribe(),
+                    # delegation via TASK would just timeout — spawning IS the action.
+                    code = spawn_config.get("code", "")
+                    is_continuous = bool(
+                        spawn_config.get("type") == "dynamic"
+                        and code
+                        and (
+                            "def process(" in code
+                            or "agent.subscribe(" in code
+                            or "agent.window(" in code
+                        )
+                        # Only if there's no meaningful handle_task that does work
+                        and "def handle_task(" not in code
+                    )
+                    if is_continuous:
+                        step["_spawn_only"] = True
+                        await self._log(
+                            f"'{agent_name}' is continuous — spawn is the action, skipping delegation"
+                        )
+
                     # Brief pause to let agent initialise
                     await asyncio.sleep(1.0)
                     await self._log(f"'{agent_name}' ready.")
@@ -1374,6 +1705,16 @@ Example:
         task_text  = step.get("task", "")
         depends_on = step.get("depends_on") or []
 
+        # Continuous agents (process loop / subscribe-based) were already started
+        # by _ensure_agents — spawning them WAS the action. Don't send a TASK
+        # that would just timeout because there's no handle_task to respond.
+        if step.get("_spawn_only"):
+            await self._log(f"  ✓ @{agent_name}: spawned and running (continuous agent)")
+            return {
+                "result": f"Agent '{agent_name}' spawned and running continuously.",
+                "spawned": True,
+            }
+
         # Inject context from prior steps
         if depends_on:
             ctx = []
@@ -1436,6 +1777,24 @@ Example:
     # ── Synthesis ──────────────────────────────────────────────────────────
 
     async def _synthesize(self, task: str, plan: list[dict], results: dict) -> str:
+        # If every step was a spawn-only continuous agent, skip LLM synthesis
+        # and return a clean confirmation — no need to "summarize" spawns.
+        all_spawned = all(
+            isinstance(results.get(s["step"]), dict)
+            and results[s["step"]].get("spawned")
+            for s in plan
+        )
+        if all_spawned:
+            agents = [s["agent"] for s in plan]
+            lines = [f"Done! Spawned {len(agents)} continuous agent(s):\n"]
+            for s in plan:
+                desc = ""
+                sc = s.get("spawn_config") or {}
+                desc = sc.get("description", s.get("task", ""))
+                lines.append(f"• **{s['agent']}** — {desc}")
+            lines.append("\nThey're running now and will auto-restore on restart.")
+            return "\n".join(lines)
+
         if not self.llm:
             parts = []
             for s in plan:

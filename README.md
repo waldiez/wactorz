@@ -16,15 +16,17 @@ _Technical Reference & Developer Guide_
 7. [Persistence & State](#7-persistence--state)
 8. [Memory & User Facts](#8-memory--user-facts)
 9. [Reactive Pipelines](#9-reactive-pipelines)
-10. [LLM Cost Tracking](#10-llm-cost-tracking)
-11. [Interfaces](#11-interfaces)
-12. [MQTT Topic Reference](#12-mqtt-topic-reference)
-13. [Built-in Specialist Agents](#13-built-in-specialist-agents)
-14. [Catalog Agent — Pre-built Recipe Library](#14-catalog-agent--pre-built-recipe-library)
-15. [Remote Nodes & Edge Deployment](#15-remote-nodes--edge-deployment)
-16. [Installation & Configuration](#16-installation--configuration)
-17. [Troubleshooting](#17-troubleshooting)
-18. [File Structure](#appendix-file-structure)
+10. [TopicBus — Reactive Pub/Sub Coordination](#10-topicbus--reactive-pubsub-coordination)
+11. [Code Safety & Validation](#11-code-safety--validation)
+12. [LLM Cost Tracking](#10-llm-cost-tracking)
+13. [Interfaces](#11-interfaces)
+14. [MQTT Topic Reference](#12-mqtt-topic-reference)
+15. [Built-in Specialist Agents](#13-built-in-specialist-agents)
+16. [Catalog Agent — Pre-built Recipe Library](#14-catalog-agent--pre-built-recipe-library)
+17. [Remote Nodes & Edge Deployment](#15-remote-nodes--edge-deployment)
+18. [Installation & Configuration](#16-installation--configuration)
+19. [Troubleshooting](#17-troubleshooting)
+20. [File Structure](#appendix-file-structure)
 
 ---
 
@@ -86,6 +88,7 @@ This replaces all previous keyword heuristics with a single LLM classification s
 |------|-------|------|
 | `core/actor.py` | Core | Base Actor class — mailbox, lifecycle, heartbeat, spawn, send, persist/recall |
 | `core/registry.py` | Core | ActorSystem & ActorRegistry — actor registration, message routing, broadcast |
+| `core/topic_bus.py` | Core | TopicBus — reactive pub/sub coordination layer: TopicContract with observed schema introspection, TopicRegistry for topic-based agent discovery, SharedStateHub for retained world state, StreamWindow for temporal reasoning |
 | `agents/main_actor.py` | Agent | The LLM orchestrator — intent classification, spawns agents, routes requests, memory & user facts |
 | `agents/monitor_agent.py` | Agent | Health watcher — detects crashes, fires recovery actions, notifies user |
 | `agents/llm_agent.py` | Agent | Base LLM agent with rolling history summarization, cost tracking, streaming, and 4 providers |
@@ -283,9 +286,24 @@ async def handle_task(agent, payload):
 
 Wactorz has a four-layer error handling system. Errors are first-class events, not just log lines.
 
-### Layer 1 — DynamicAgent: Structured Error Events
+## UPDATE: Section 6 — Health Monitoring & Error Recovery
+ 
+Replace the existing "Layer 1" content with this expanded version that includes the self-healing layers:
+ 
+---
+ 
+### Layer 1 — DynamicAgent: 5-Layer Self-Healing
+ 
+See [Section 11 — Code Safety & Validation](#11-code-safety--validation) for the full breakdown. In summary:
+ 
+1. **Prompt** — LLM is told which methods are sync vs async
+2. **Sanitizer** — `await` on sync methods is stripped at compile time
+3. **`_AwaitableNone`** — sync methods return an awaitable sentinel
+4. **Callback wrapper** — `TypeError` in subscribe callbacks is caught and suppressed
+5. **LLM self-correction** — runtime errors in `setup()` trigger automatic fix + retry (2x)
+ 
+Additionally, a **pre-exec safety validator** blocks dangerous code patterns (shell execution, file deletion, eval), and **timeout guards** prevent runaway `process()` and `handle_task()` calls.
 
-Every error site (`compile`, `setup`, `process`, `handle_task`) publishes a structured error event with `phase`, `severity`, `traceback`, and `consecutive` error count. After 3 consecutive errors the agent is marked `degraded`. Exponential backoff kicks in for `process()` errors (2s → 4s → 8s → max 30s). The error count resets after any successful operation.
 
 ### Layer 2 — MonitorAgent: Error Registry & Recovery
 
@@ -423,6 +441,7 @@ The pipeline builder uses five canonical patterns:
 | 3 | Webcam object detection | HA service call | dynamic YOLO agent + `ha_actuator` |
 | 4 | Webcam object detection | Discord/webhook notification | dynamic YOLO agent + dynamic notify agent |
 | 5 | Timer/schedule | HA service call | dynamic timer agent + `ha_actuator` |
+| 6 | MQTT sensor data + condition (e.g. temp > 20 AND lamp is on) | HA service call | dynamic monitor agent + `ha_actuator` |
 
 Pattern 1 requires a dynamic filter agent because HA state is nested under `new_state.state` — the `ha_actuator`'s `detection_filter` only matches top-level payload keys, so the filter agent extracts the state and re-publishes a clean trigger.
 
@@ -462,7 +481,185 @@ Detection filter values can be plain literals (equality) or operator dicts such 
 
 ---
 
-## 10. LLM Cost Tracking
+
+## 10. TopicBus — Reactive Pub/Sub Coordination
+ 
+The TopicBus is Wactorz's shift from name-based RPC to topic-based reactive coordination. Instead of the planner hardcoding which agent to call by name, agents declare what data they **produce** and **consume** — and the system wires them automatically by topic compatibility.
+ 
+### Components
+ 
+| Component | Role |
+| --- | --- |
+| `TopicContract` | What an agent declares it produces/consumes — topics, schemas, triggers |
+| `TopicRegistry` | Global index of all live contracts, queryable by topic pattern or keyword |
+| `SharedStateHub` | Retained MQTT topics for world state (HA entities, presence, energy) |
+| `StreamWindow` | Sliding time window over a topic stream for temporal reasoning |
+| `TopicBus` | Ties everything together — registry, state hub, auto-wiring |
+ 
+### Topic Namespaces
+ 
+| Topic Pattern | Description |
+| --- | --- |
+| `home/state/{domain}/{entity_id}` | HA entity states (retained, updated by bridge) |
+| `home/presence/{zone}` | Occupancy/presence per zone (retained) |
+| `home/energy/current` | Current energy consumption (retained) |
+| `agents/{name}/data/{key}` | Agent-published data (retained world state) |
+| `custom/{agent}/{stream}` | Agent-to-agent data streams |
+| `wactorz/intents/{id}` | Planner-published task intents |
+| `wactorz/results/{id}` | Agent-published results to planner intents |
+ 
+### Observed Schema Introspection
+ 
+The #1 failure mode when wiring LLM-generated agents together is the **vocabulary mismatch**: a producer publishes `{"temp": 30.5}` but the consumer reads `payload["temperature"]`. The field names are semantically identical but syntactically different — resulting in a `KeyError` at runtime.
+ 
+Wactorz solves this with **observed_samples** — a first-class field on `TopicContract` that auto-captures the actual field names from real published messages:
+ 
+**Auto-capture on publish:** Every time `agent.publish(topic, data)` is called with a dict payload, `TopicContract.update_observed()` records the real field names and types. This happens automatically — agents don't need to call anything extra.
+ 
+```python
+# Producer publishes:
+await agent.publish('sensors/data', {'temp': 30.5, 'humidity': 47.7})
+ 
+# TopicContract auto-captures:
+# observed_samples = {
+#   'sensors/data': {
+#     'fields':  {'temp': 'float', 'humidity': 'float'},
+#     'example': {'temp': 30.5, 'humidity': 47.7}
+#   }
+# }
+```
+ 
+**Planner reads before generating:** Before writing consumer code, the planner checks `observed_samples` on registered contracts. If none exist yet, it falls back to `_sample_live_topics()` — a single MQTT connection subscribes to all known topics with a global timeout and captures one real message per topic.
+ 
+The result is injected into the LLM prompt:
+ 
+```
+═══ LIVE TOPIC SAMPLES (use EXACTLY these field names in code!) ═══
+  Topic: sensors/data  (published by temp-simulator)
+    Fields: {'temp': 'float', 'humidity': 'float'}
+    Example payload: {'temp': 30.5, 'humidity': 47.7}
+ 
+CRITICAL: Use payload['temp'] — NOT payload['temperature'].
+```
+ 
+### TopicContract Safety Guards
+ 
+| Guard | What It Catches |
+| --- | --- |
+| String → List coercion | `publishes="topic"` becomes `["topic"]` in `__post_init__`. Prevents char-by-char iteration that would register 32 single-character "topics" |
+| Bogus topic filter | Strips entries like `"publishes"`, `"subscribes"` that leak from LLM kwarg name/value confusion |
+| Kwarg aliases in `declare_contract()` | `schema=...` maps to `produces_schema`. Also accepts `output_schema`, `topics`, `subscribe`, etc. |
+| Manifest propagation | `observed_samples` included in the agent's retained MQTT manifest so the planner has schema data even across restarts |
+ 
+### Auto-Wiring
+ 
+The TopicBus automatically detects wiring opportunities when contracts are registered:
+ 
+```
+[TopicBus] Auto-wiring opportunity: temp-simulator → mean-logger via sensors/data
+```
+ 
+The planner's `/bus` command shows the full registry:
+ 
+```
+TopicBus — Reactive Pub/Sub Registry
+  agents with contracts : 2
+  published topics      : 1
+  subscribed topics     : 1
+  auto-wiring pairs     : 1
+ 
+  [temp-simulator]
+    publishes : sensors/data
+    OBSERVED on 'sensors/data': fields={'temp': 'float', 'humidity': 'float'}
+  [mean-logger]
+    subscribes: sensors/data
+ 
+Auto-wiring opportunities:
+  temp-simulator → mean-logger  via sensors/data
+```
+ 
+### StreamWindow
+ 
+Agents can create sliding time windows over MQTT topic streams for temporal reasoning — without implementing their own ring buffers:
+ 
+```python
+async def setup(agent):
+    agent.state['w'] = agent.window('sensors/temp', seconds=300)  # NO await
+ 
+async def process(agent):
+    w = agent.state['w']
+    if w.rising(threshold=3.0):
+        await agent.alert('Temperature rising fast!')
+    if w.absent_for(60):
+        await agent.alert('Sensor stopped publishing!')
+    avg = w.mean('value')
+```
+ 
+Available methods: `mean`, `min`, `max`, `count`, `rising`, `falling`, `stable`, `absent_for`, `event_count`, `latest`, `values`.
+ 
+
+## 11. Code Safety & Validation
+ 
+LLM-generated code compiles but frequently fails at runtime. Wactorz uses a **5-layer defense** to catch and recover from these failures, plus a **pre-exec safety validator** and **timeout guards** to prevent dangerous or runaway code.
+ 
+### 5-Layer Self-Healing Defense
+ 
+Each layer catches what the previous one missed:
+ 
+| Layer | Where It Runs | What It Does | Coverage |
+| --- | --- | --- | --- |
+| **1. Prompt Engineering** | Planner LLM prompt | Explicitly lists sync vs async methods with `(SYNC, NO await!)` labels | ~70% — LLM may ignore instructions |
+| **2. Code Sanitizer** (`_sanitize_code`) | DynamicAgent compile time | Regex strips `await` from `agent.subscribe()`, `.persist()`, `.recall()`, etc. Also removes LLM self-setup blocks (openai/anthropic imports, API key assignments) | ~95% — misses dynamic patterns |
+| **3. `_AwaitableNone` sentinel** | Every sync API method | Sync methods return a sentinel whose `__await__` completes immediately. `await agent.subscribe(...)` silently works instead of crashing | Catches anything the sanitizer missed |
+| **4. Callback wrapper** (`_safe_invoke`) | Subscribe listener | Catches `TypeError` from `await None` inside callbacks, logs once, suppresses for all subsequent messages | Prevents infinite error spam |
+| **5. LLM self-correction** (`_run_setup`) | Setup phase | If `setup()` raises a runtime error, the traceback + API docs are sent to the LLM, code is fixed, recompiled, and retried (up to 2 attempts) | Last resort — works for most fixable errors |
+ 
+### Pre-Exec Safety Validator
+ 
+`_validate_code_safety()` runs after sanitization but before `exec()`. It scans for dangerous patterns in two tiers:
+ 
+**Blocked (code won't run):**
+ 
+| Pattern | Reason |
+| --- | --- |
+| `os.system()`, `os.popen()`, `os.exec*()` | Shell execution |
+| `os.remove()`, `os.rmdir()`, `shutil.rmtree()` | File/directory deletion |
+| `subprocess` with `rm` | Destructive shell commands |
+| `eval()`, `__import__()` | Arbitrary code execution |
+| `open()` in write mode | Use `agent.persist()` instead |
+| Raw `socket.socket()` | Use httpx or `agent.publish` |
+ 
+**Warned (runs but logged):**
+ 
+| Pattern | Reason |
+| --- | --- |
+| `subprocess` usage | Ensure necessary |
+| `ctypes` | Low-level C interface |
+| `pickle.loads` | Deserialization risk if data is untrusted |
+| `while True:` without `await` | May block event loop |
+ 
+This is a best-effort blocklist, not a sandbox. For true isolation in multi-tenant scenarios, run DynamicAgents in a subprocess with seccomp or Docker.
+ 
+### Planner Code Validator
+ 
+`_validate_pipeline_code()` runs on every plan right after the LLM generates it and before any agents are spawned:
+ 
+| Check | Action |
+| --- | --- |
+| `await` on sync methods | Strips `await` from `agent.subscribe()`, `.persist()`, `.recall()`, etc. |
+| Raw `aiomqtt.Client()` | Rewrites to `agent.subscribe()` pattern |
+| Direct HA REST API calls | Flags `/api/services/` patterns — should use `ha_actuator` instead |
+ 
+### Timeout Guards
+ 
+| Guard | Timeout | What Happens on Timeout |
+| --- | --- | --- |
+| `process()` loop | 120 seconds | Logs "likely a blocking call without `run_in_executor`", publishes error, continues with backoff |
+| `handle_task()` | 60 seconds | Returns error result to caller so the planner doesn't hang waiting |
+ 
+---
+
+## 12. LLM Cost Tracking
 
 Every LLM call across every agent accumulates token usage into three counters: `total_input_tokens`, `total_output_tokens`, and `total_cost_usd`. These are visible per-agent in the dashboard and via `/cost` in the CLI.
 
@@ -481,8 +678,9 @@ Cost is tracked for all five providers (Anthropic, OpenAI, Ollama free, NIM free
 Pro models charge 2x for prompts above 200K tokens. Get a free API key at [aistudio.google.com](https://aistudio.google.com).
 
 ---
+ 
 
-## 11. Interfaces
+## 13. Interfaces
 
 ### CLI (Streaming)
 
@@ -563,7 +761,7 @@ Start `monitor_server.py` alongside wactorz. Open `monitor.html` in a browser. T
 
 ---
 
-## 12. MQTT Topic Reference
+## 14. MQTT Topic Reference
 
 | Topic | Description |
 |-------|-------------|
@@ -575,6 +773,8 @@ Start `monitor_server.py` alongside wactorz. Open `monitor.html` in a browser. T
 | `agents/{id}/completed` | Task completion notification with result preview |
 | `agents/{id}/actuations` | Fired by `HomeAssistantActuatorAgent` on each HA service call |
 | `agents/by-name/{name}/task` | Address a task to an agent by name (used by remote agents) |
+| `agents/{id}/manifest` | Retained capability manifest — publishes, subscribes, schemas, observed samples |
+| `agents/{name}/data/{key}` | Agent-published world state (retained, via SharedStateHub) |
 | `system/health` | Global health snapshot every 15s — running/stopped/failed counts |
 | `homeassistant/state_changes/{domain}/{entity_id}` | HA state changes (published by StateBridgeAgent) |
 | `homeassistant/map/entities_with_location` | Live entity/location map (published by MapAgent) |
@@ -589,7 +789,7 @@ Start `monitor_server.py` alongside wactorz. Open `monitor.html` in a browser. T
 
 ---
 
-## 13. Built-in Specialist Agents
+## 15. Built-in Specialist Agents
 
 ### ManualAgent — PDF Specialist
 
@@ -682,7 +882,7 @@ Pre-built agents for code execution and ML inference. `CodeAgent` runs arbitrary
 
 ---
 
-## 14. Catalog Agent — Pre-built Recipe Library
+## 16. Catalog Agent — Pre-built Recipe Library
 
 The `CatalogAgent` is a built-in agent that starts with the system and holds a library of ready-made agent recipes. Instead of writing spawn code from scratch, you ask the catalog to spawn a named agent for you — it handles everything including injecting the code, schemas, and capabilities into main's existing spawn pipeline.
 
@@ -803,7 +1003,7 @@ Slides that received a real PDF image skip NIM generation. Slides without one fa
 
 ---
 
-## 15. Remote Nodes & Edge Deployment
+## 17. Remote Nodes & Edge Deployment
 
 Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. The edge node only needs a single file and one pip package.
 
@@ -950,7 +1150,7 @@ All three accept `host`, `user`, and either `password` or `key_path` for SSH aut
 
 ---
 
-## 16. Installation & Configuration
+## 18. Installation & Configuration
 
 ### Quick Start
 
@@ -1015,7 +1215,7 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-host` and
 
 ---
 
-## 17. Troubleshooting
+## 19. Troubleshooting
 
 ### Conversation history corruption (400 Bad Request loop)
 
@@ -1067,7 +1267,9 @@ wactorz/
 │
 ├── core/
 │   ├── actor.py                               Base Actor — mailbox, lifecycle, heartbeat, spawn, supervisor
-│   └── registry.py                            ActorSystem, ActorRegistry, Supervisor — routing & OTP restarts
+│   ├── registry.py                            ActorSystem, ActorRegistry, Supervisor — routing & OTP restarts
+│   └── topic_bus.py                           TopicBus — reactive pub/sub coordination, schema introspection,
+│                                              TopicContract, TopicRegistry, SharedStateHub, StreamWindow
 │
 ├── agents/
 │   ├── llm_agent.py                           LLMAgent — 4 providers, rolling summarization, cost tracking

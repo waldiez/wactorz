@@ -301,9 +301,61 @@ class DynamicAgent(Actor):
     # Max times on_start will ask the LLM to fix a syntax error before giving up
     _MAX_COMPILE_RETRIES = 2
 
+    # ── Pre-exec safety validator ──────────────────────────────────────────
+    # Scans sanitized code for dangerous patterns BEFORE exec().
+    # This is NOT a sandbox — it's a best-effort blocklist.
+    # For true isolation, run DynamicAgents in a subprocess or container.
+
+    _BLOCKED_PATTERNS = [
+        # System-level access
+        (r'\bos\.system\s*\(',              "os.system() — use subprocess instead or avoid shell commands"),
+        (r'\bos\.popen\s*\(',               "os.popen() — use subprocess instead"),
+        (r'\bos\.exec[a-z]*\s*\(',          "os.exec*() — direct process replacement not allowed"),
+        (r'\bos\.remove\s*\(',              "os.remove() — file deletion not allowed in agent code"),
+        (r'\bos\.rmdir\s*\(',               "os.rmdir() — directory deletion not allowed"),
+        (r'\bshutil\.rmtree\s*\(',          "shutil.rmtree() — recursive deletion not allowed"),
+        (r'\bsubprocess\.(?:call|run|Popen)\s*\(.{0,20}rm\s',
+                                            "subprocess with rm — destructive shell command"),
+        # Network abuse
+        (r'\bsocket\.socket\s*\(',          "raw socket creation — use httpx or agent.publish instead"),
+        # Code execution / eval
+        (r'\beval\s*\(',                    "eval() — arbitrary code execution not allowed"),
+        (r'\b__import__\s*\(',              "__import__() — use regular import statements"),
+        # File system writes outside agent scope
+        (r'\bopen\s*\([^)]*["\'][wab]["\']', "open() in write mode — use agent.persist() instead"),
+    ]
+
+    # Patterns that are suspicious but allowed — just logged as warnings
+    _WARN_PATTERNS = [
+        (r'\bsubprocess\b',                 "subprocess usage — ensure this is necessary"),
+        (r'\bctypes\b',                     "ctypes — low-level C interface, use with caution"),
+        (r'\bpickle\.loads?\b',             "pickle — deserialization risk if data is untrusted"),
+        (r'\bwhile\s+True\s*:(?!.*await)',  "tight while-True loop without await — may block event loop"),
+    ]
+
+    def _validate_code_safety(self, code: str) -> Optional[str]:
+        """
+        Scan sanitized code for dangerous patterns before exec().
+
+        Returns an error message string if blocked, None if OK.
+        Warnings are logged but don't block execution.
+        """
+        import re
+
+        for pattern, reason in self._BLOCKED_PATTERNS:
+            if re.search(pattern, code):
+                logger.warning(f"[{self.name}] BLOCKED dangerous code pattern: {reason}")
+                return f"Code blocked for safety: {reason}"
+
+        for pattern, reason in self._WARN_PATTERNS:
+            if re.search(pattern, code):
+                logger.warning(f"[{self.name}] Safety warning: {reason}")
+
+        return None  # OK
+
     def _compile_code(self, code: Optional[str] = None) -> Optional[str]:
         """
-        Sanitize then compile LLM-generated code into self._ns.
+        Sanitize, validate safety, then compile LLM-generated code into self._ns.
 
         Returns the error message string if compilation fails, None on success.
         Callers use the error string to ask the LLM to fix the code and retry
@@ -311,6 +363,11 @@ class DynamicAgent(Actor):
         """
         source = code if code is not None else self._code
         clean  = self._sanitize_code(source)
+
+        # ── Safety check before exec ───────────────────────────────────────
+        safety_error = self._validate_code_safety(clean)
+        if safety_error:
+            return safety_error
 
         # Pre-inject the LLM shim so generated code can call agent.llm directly
         def _get_llm_shim(*args, **kwargs):
@@ -537,6 +594,11 @@ class DynamicAgent(Actor):
 
     # ── Process loop ───────────────────────────────────────────────────────
 
+    # Max time a single process() or handle_task() call can take before
+    # we assume it's stuck in a blocking call and cancel it.
+    _PROCESS_TIMEOUT = 120.0    # seconds
+    _HANDLE_TASK_TIMEOUT = 60.0
+
     async def _process_loop(self):
         """Continuously call the generated process() function."""
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
@@ -544,8 +606,26 @@ class DynamicAgent(Actor):
                 await asyncio.sleep(self.poll_interval)
                 continue
             try:
-                await self._fn_process(self._api)
+                await asyncio.wait_for(
+                    self._fn_process(self._api),
+                    timeout=self._PROCESS_TIMEOUT,
+                )
                 self._reset_error_count()
+            except asyncio.TimeoutError:
+                self.metrics.errors += 1
+                logger.error(
+                    f"[{self.name}] process() timed out after {self._PROCESS_TIMEOUT}s "
+                    f"— likely a blocking call without run_in_executor"
+                )
+                await self._publish_error(
+                    phase="process",
+                    error=TimeoutError(f"process() exceeded {self._PROCESS_TIMEOUT}s"),
+                    traceback_str=f"process() did not return within {self._PROCESS_TIMEOUT}s. "
+                                  f"Wrap blocking calls (cv2, torch) in: "
+                                  f"await asyncio.get_event_loop().run_in_executor(None, fn)",
+                )
+                backoff = min(2 ** self._consecutive_errors, 30)
+                await asyncio.sleep(backoff)
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -564,9 +644,28 @@ class DynamicAgent(Actor):
             self.metrics.messages_processed += 1
             if self._fn_handle_task:
                 try:
-                    result = await self._fn_handle_task(self._api, msg.payload or {})
+                    result = await asyncio.wait_for(
+                        self._fn_handle_task(self._api, msg.payload or {}),
+                        timeout=self._HANDLE_TASK_TIMEOUT,
+                    )
                     if msg.sender_id and result is not None:
                         await self.send(msg.sender_id, MessageType.RESULT, result)
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"[{self.name}] handle_task() timed out after "
+                        f"{self._HANDLE_TASK_TIMEOUT}s"
+                    )
+                    await self._publish_error(
+                        phase="handle_task",
+                        error=TimeoutError(f"handle_task() exceeded {self._HANDLE_TASK_TIMEOUT}s"),
+                        traceback_str="",
+                    )
+                    if msg.sender_id:
+                        await self.send(msg.sender_id, MessageType.RESULT, {
+                            "error": f"handle_task() timed out after {self._HANDLE_TASK_TIMEOUT}s",
+                            "error_phase": "handle_task",
+                            "agent": self.name,
+                        })
                 except Exception as e:
                     tb = traceback.format_exc()
                     logger.error(f"[{self.name}] handle_task() error: {e}\n{tb}")

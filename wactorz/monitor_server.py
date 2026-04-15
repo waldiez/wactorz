@@ -505,8 +505,9 @@ def parse_topic(topic: str, payload_str: str):
         if metric == "status":
             update_agent(agent_id, "status", data)
             if isinstance(data, dict):
-                if "name"  in data: state["agents"][agent_id]["name"]  = data["name"]
-                if "state" in data: state["agents"][agent_id]["state"] = data["state"]
+                if "name"      in data: state["agents"][agent_id]["name"]      = data["name"]
+                if "state"     in data: state["agents"][agent_id]["state"]     = data["state"]
+                if "protected" in data: state["agents"][agent_id]["protected"] = data["protected"]
             add_log({"type": "status", "agent_id": agent_id, "status": data, "timestamp": time.time()})
 
         elif metric == "heartbeat":

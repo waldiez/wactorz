@@ -264,7 +264,33 @@ class TopicRegistry:
                      f"pub={contract.publishes} sub={contract.subscribes}")
 
     def unregister(self, name: str):
-        self._contracts.pop(name, None)
+        removed = self._contracts.pop(name, None)
+        if removed:
+            logger.info(f"[TopicRegistry] Unregistered '{name}' | "
+                        f"pub={removed.publishes} sub={removed.subscribes}")
+
+    def prune_stale(self, live_agent_names: set[str]) -> list[str]:
+        """
+        Remove contracts for agents that are no longer running.
+
+        Call this before plan generation to ensure the planner doesn't wire
+        against topics from stopped/deleted/replaced agents. Returns the
+        list of pruned agent names.
+
+        Usage:
+            if registry:
+                live = {a.name for a in registry.all_actors()}
+                pruned = bus.registry.prune_stale(live)
+        """
+        stale = [
+            name for name in self._contracts
+            if name not in live_agent_names
+        ]
+        for name in stale:
+            self.unregister(name)
+        if stale:
+            logger.info(f"[TopicRegistry] Pruned {len(stale)} stale contract(s): {stale}")
+        return stale
 
     def get(self, name: str) -> Optional[TopicContract]:
         return self._contracts.get(name)

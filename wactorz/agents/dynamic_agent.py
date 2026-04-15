@@ -154,6 +154,18 @@ class DynamicAgent(Actor):
         await self._api._publish_manifest()
 
     async def on_stop(self):
+        # ── Unregister from TopicBus so stale contracts don't accumulate ───
+        # Without this, stopped/deleted/replaced agents remain in the registry
+        # and the planner may try to wire against topics from dead agents.
+        try:
+            from ..core.topic_bus import get_topic_bus
+            bus = get_topic_bus()
+            if bus:
+                bus.unregister(self.name)
+                logger.debug(f"[{self.name}] Unregistered from TopicBus")
+        except Exception:
+            pass  # TopicBus unavailable — not fatal
+
         # Give generated code a chance to clean up
         cleanup = self._ns.get("cleanup")
         if cleanup:
@@ -1125,8 +1137,20 @@ class _AgentAPI:
         return _AWAITABLE_NONE           # safe to await
 
     def recall(self, key: str) -> Any:
-        val = self._actor.recall(key)
-        return val if val is not None else _AWAITABLE_NONE  # safe to await
+        """
+        Load a persisted value. Returns None if the key doesn't exist.
+
+        Note: recall() is synchronous — do NOT use await.
+        The sanitizer strips `await agent.recall(...)` at compile time.
+        If an accidental `await` slips through, the _safe_invoke callback
+        wrapper (layer 4) will catch the TypeError.
+
+        The return value is always the real persisted value (or None).
+        We do NOT substitute _AWAITABLE_NONE here because that would break
+        the `if agent.recall('key') is None:` idiom that existing agent
+        code relies on.
+        """
+        return self._actor.recall(key)
 
     # ── Inter-agent messaging ──────────────────────────────────────────────
 
@@ -1333,7 +1357,18 @@ class _AgentAPI:
         from ..core.topic_bus import get_topic_bus, StreamWindow
 
         class _UnawaatableWindow:
-            """Wraps StreamWindow and raises a clear error if accidentally awaited."""
+            """
+            Wraps StreamWindow and raises a clear TypeError if accidentally awaited.
+
+            We do NOT implement __await__ here. Yielding a StreamWindow from
+            __await__ violates the awaitable protocol and causes
+            `RuntimeError: Task got bad yield` in CPython's event loop.
+
+            Instead, accidental `await agent.window(...)` is handled by:
+              - Layer 2 (sanitizer): strips `await` from `agent.window()` at compile time
+              - Layer 4 (_safe_invoke): catches TypeError in subscribe callbacks
+            This wrapper exists solely for a clear error message if those layers miss it.
+            """
             def __init__(self, inner):
                 self._inner = inner
             def __getattr__(self, name):
@@ -1341,12 +1376,13 @@ class _AgentAPI:
             def __repr__(self):
                 return f"StreamWindow(topic={getattr(self._inner, 'topic', '?')}, seconds={getattr(self._inner, 'seconds', '?')})"
             def __await__(self):
-                logger.warning(
-                    f"agent.window() was awaited — this is unnecessary but not fatal. "
-                    f"Correct: agent.state['w'] = agent.window('topic', seconds=60)  # no await"
+                raise TypeError(
+                    "agent.window() is not a coroutine — do not use 'await'. "
+                    "Correct: agent.state['w'] = agent.window('topic', seconds=60)  # no await"
                 )
-                yield self._inner   # return the window object itself
-                return self._inner
+                # Make this a generator so __await__ is syntactically valid
+                return
+                yield  # pragma: no cover
 
         try:
             bus = get_topic_bus()

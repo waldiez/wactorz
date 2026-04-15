@@ -185,6 +185,20 @@ class PlannerAgent(Actor):
         workers = self._discover_workers()
         await self._log(f"Workers available: {[w['name'] for w in workers]}")
 
+        # ── Prune stale TopicBus contracts ────────────────────────────────
+        # Remove contracts for agents that are no longer running so the
+        # planner doesn't wire against dead topics.
+        try:
+            from ..core.topic_bus import get_topic_bus
+            bus = get_topic_bus()
+            if bus and self._registry:
+                live = {a.name for a in self._registry.all_actors()}
+                pruned = bus.registry.prune_stale(live)
+                if pruned:
+                    await self._log(f"Pruned {len(pruned)} stale TopicBus contract(s): {pruned}")
+        except Exception:
+            pass
+
         # Detect pipeline vs one-shot
         is_pipeline = PlannerAgent._is_pipeline_request(task)
         if is_pipeline:
@@ -493,28 +507,54 @@ class PlannerAgent(Actor):
                     })
                     try:
                         result = await asyncio.wait_for(future, timeout=8.0)
-                        devices = result.get("devices", []) or result.get("result", [])
-                        if isinstance(devices, str):
-                            devices = []
+                        # home-assistant-agent returns {"entities": [...]} — a flat list
+                        # of entity dicts with entity_id, name, state, etc.
+                        # NOT a nested devices→entities structure.
+                        entities_raw = (
+                            result.get("entities", [])
+                            or result.get("result", [])
+                            or result.get("devices", [])  # legacy fallback
+                        )
+                        if isinstance(entities_raw, str):
+                            entities_raw = []
                     except (asyncio.TimeoutError, Exception):
-                        devices = []
+                        entities_raw = []
                     finally:
                         self._result_futures.pop(task_id, None)
 
-                    # Search device list for relevant entities
+                    # Search entity list for relevant matches
                     ha_candidates = []
-                    for device in devices:
-                        for entity in device.get("entities", []):
+                    for entity in entities_raw:
+                        if not isinstance(entity, dict):
+                            continue
+                        # Handle both flat entity format and nested device format
+                        if "entity_id" in entity:
+                            # Flat format: {"entity_id": "sensor.temp", "name": "..."}
                             eid   = entity.get("entity_id", "")
                             ename = entity.get("friendly_name", "") or entity.get("name", "")
+                            state = entity.get("state", "")
                             combined = (eid + " " + ename).lower()
                             if any(kw in combined for kw in matched_concepts):
                                 ha_candidates.append({
                                     "entity_id": eid,
                                     "name":      ename,
-                                    "state":     entity.get("state", ""),
+                                    "state":     state,
                                     "source":    "home_assistant",
                                 })
+                        elif "entities" in entity:
+                            # Nested device format (legacy): {"entities": [...]}
+                            for sub in entity.get("entities", []):
+                                eid   = sub.get("entity_id", "")
+                                ename = sub.get("friendly_name", "") or sub.get("name", "")
+                                state = sub.get("state", "")
+                                combined = (eid + " " + ename).lower()
+                                if any(kw in combined for kw in matched_concepts):
+                                    ha_candidates.append({
+                                        "entity_id": eid,
+                                        "name":      ename,
+                                        "state":     state,
+                                        "source":    "home_assistant",
+                                    })
 
                     if len(ha_candidates) == 1:
                         c = ha_candidates[0]

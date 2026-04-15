@@ -7,9 +7,9 @@ export default defineConfig({
     port: 3000,
     open: true,
     proxy: {
-      // Proxy REST API calls to the Rust server
+      // Proxy REST API calls to the wactorz REST interface (port 8000)
       "/api": {
-        target: "http://localhost:8080",
+        target: "http://localhost:8000",
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
       // Proxy WebSocket upgrade for the Wactorz WS bridge

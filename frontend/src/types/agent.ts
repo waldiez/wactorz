@@ -83,6 +83,7 @@ export interface StatusPayload {
   agentId: string;
   agentName: string;
   state: AgentState;
+  protected?: boolean;
   messagesReceived: number;
   messagesProcessed: number;
   messagesFailed: number;
@@ -103,6 +104,7 @@ export interface SpawnPayload {
   agentName: string;
   agentType: string;
   timestampMs: number;
+  protected?: boolean;
 }
 
 /** Chat message (user → agent or agent → user). */

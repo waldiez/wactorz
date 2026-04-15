@@ -505,8 +505,9 @@ def parse_topic(topic: str, payload_str: str):
         if metric == "status":
             update_agent(agent_id, "status", data)
             if isinstance(data, dict):
-                if "name"  in data: state["agents"][agent_id]["name"]  = data["name"]
-                if "state" in data: state["agents"][agent_id]["state"] = data["state"]
+                if "name"      in data: state["agents"][agent_id]["name"]      = data["name"]
+                if "state"     in data: state["agents"][agent_id]["state"]     = data["state"]
+                if "protected" in data: state["agents"][agent_id]["protected"] = data["protected"]
             add_log({"type": "status", "agent_id": agent_id, "status": data, "timestamp": time.time()})
 
         elif metric == "heartbeat":
@@ -822,6 +823,25 @@ def _actor_payload(ag: dict) -> dict:
 
 async def actors_handler(request):
     from aiohttp import web
+    # Prefer the live registry (injected by cli.py) — actor objects carry the
+    # authoritative protected flag.  Fall back to MQTT-derived state dict when
+    # the registry is unavailable (standalone monitor_server mode).
+    if registry is not None:
+        result = []
+        for actor in registry.all_actors():
+            ag = state["agents"].get(actor.actor_id, {})
+            result.append({
+                "id":                actor.actor_id,
+                "name":              actor.name,
+                "state":             ag.get("state", "unknown"),
+                "protected":         bool(getattr(actor, "protected", False)),
+                "cpu":               ag.get("cpu"),
+                "mem":               ag.get("mem"),
+                "task":              ag.get("task"),
+                "messagesProcessed": ag.get("messages_processed"),
+                "costUsd":           ag.get("cost_usd"),
+            })
+        return web.json_response(result)
     return web.json_response([_actor_payload(ag) for ag in state["agents"].values()])
 
 

@@ -9,8 +9,12 @@ if [ -f .env ]; then
   export $(grep -v '^#' .env | xargs)
 fi
 
-# Default to python
-DEFAULT_BACKEND="python"
+# Default to rust if not set
+if [[ "${WACTORZ_DEV_MODE:-0}" =~ ^(1|true|TRUE|yes|YES|on|ON|dev|DEV)$ ]]; then
+    DEFAULT_BACKEND="python"
+else
+    DEFAULT_BACKEND="rust"
+fi
 
 BACKEND=${WACTORZ_BACKEND:-$DEFAULT_BACKEND}
 RUST_BIN="./rust/target/release/wactorz-server"

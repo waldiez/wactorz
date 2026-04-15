@@ -870,6 +870,7 @@ async def config_handler(request):
         "mqtt": {
             "host": MQTT_BROKER,
             "port": MQTT_PORT,
+            "url":  f"ws://{MQTT_BROKER}:{MQTT_WS_PORT}",
         },
         "llm": {
             "provider": CONFIG.llm_provider,

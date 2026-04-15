@@ -2163,12 +2163,17 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
       { key: "wactorz-fuseki-pass",    label: "Password", placeholder: "",                      type: "password" },
     ]));
 
+    el.appendChild(this._buildSettingsSection("📡 MQTT Broker", [
+      { key: "wactorz-mqtt-url", label: "WebSocket URL", placeholder: "ws://localhost:9001", type: "text" },
+    ], "⚠ Changes require a page reload"));
+
     return el;
   }
 
   private _buildSettingsSection(
     heading: string,
     fields: { key: string; label: string; placeholder: string; type: string }[],
+    note?: string,
   ): HTMLElement {
     const section = document.createElement("div");
     section.className = "af-settings-section";
@@ -2215,6 +2220,13 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
     });
 
     section.appendChild(grid);
+
+    if (note) {
+      const noteEl = document.createElement("p");
+      noteEl.className = "af-settings-note";
+      noteEl.textContent = note;
+      section.appendChild(noteEl);
+    }
 
     // Action row
     const actions = document.createElement("div");

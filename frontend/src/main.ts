@@ -56,9 +56,11 @@ scene.setTheme("cards");
 // ── MQTT ──────────────────────────────────────────────────────────────────────
 
 const _wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+const _mqttDefault = `${_wsProto}//${window.location.host}/mqtt`;
 const MQTT_BROKER =
-  (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) ??
-  `${_wsProto}//${window.location.host}/mqtt`;
+  localStorage.getItem("wactorz-mqtt-url") ||
+  (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) ||
+  _mqttDefault;
 const mqtt = new MQTTClient(MQTT_BROKER);
 
 // ── UI ────────────────────────────────────────────────────────────────────────
@@ -159,6 +161,7 @@ fetch("/api/config")
     setIfMissing("wactorz-ha-token",     cfg.ha?.token ?? "");
     setIfMissing("wactorz-fuseki-url",   cfg.fuseki?.url ?? "");
     setIfMissing("wactorz-fuseki-dataset", cfg.fuseki?.dataset ?? "");
+    if (cfg.mqtt?.url) setIfMissing("wactorz-mqtt-url", cfg.mqtt.url);
   })
   .catch(() => {});
 

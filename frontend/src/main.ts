@@ -215,7 +215,7 @@ mqtt.on("status", (payload) => {
     id: payload.agentId,
     name: payload.agentName,
     state: payload.state,
-    protected: false,
+    protected: payload.protected ?? false,
     messagesProcessed: payload.messagesProcessed,
   });
   chatPanel.updateAgentList(scene.getAgents());

@@ -881,19 +881,28 @@ export class CardDashboard {
     sorted.forEach((agent, idx) => {
       const color = stateColor(agent.state);
       const isActive = agent.name === this.chatTarget;
+      // Protected agents other than main-actor are system internals —
+      // all user messages route through main-actor; mark them non-interactive.
+      const isDisabled = agent.protected && agent.name !== "main-actor";
 
       let row = existing.get(agent.name);
       if (!row) {
         row = document.createElement("button");
         row.dataset["name"] = agent.name;
-        row.title = agent.name;
         const dot = document.createElement("span");
         dot.className = "af-chat-agent-dot";
         const nm = document.createElement("span");
         nm.className = "af-chat-agent-name";
         nm.textContent = agent.name;
-        row.append(dot, nm);
+        const lock = document.createElement("span");
+        lock.className = "af-chat-agent-lock";
+        lock.setAttribute("aria-hidden", "true");
+        row.append(dot, nm, lock);
         row.addEventListener("click", () => {
+          const latest = [...this.agents.values()].find(
+            (a) => a.name === agent.name,
+          );
+          if (latest?.protected && latest.name !== "main-actor") return;
           this.chatTarget = agent.name;
           this._renderSidebar();
           this._renderChatPaneHeader();
@@ -903,9 +912,17 @@ export class CardDashboard {
       }
 
       // Patch only what may have changed
-      row.className = `af-chat-agent-row${isActive ? " active" : ""}`;
+      const cls = ["af-chat-agent-row"];
+      if (isActive) cls.push("active");
+      if (isDisabled) cls.push("protected-agent");
+      row.className = cls.join(" ");
+      row.title = isDisabled
+        ? `${agent.name} — system agent, not directly reachable`
+        : agent.name;
       const dot = row.querySelector<HTMLElement>(".af-chat-agent-dot");
       if (dot && dot.style.background !== color) dot.style.background = color;
+      const lock = row.querySelector<HTMLElement>(".af-chat-agent-lock");
+      if (lock) lock.textContent = isDisabled ? "🔒" : "";
 
       const sibling = list.children[idx];
       if (sibling !== row) list.insertBefore(row, sibling ?? null);

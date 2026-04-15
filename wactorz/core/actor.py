@@ -469,6 +469,7 @@ class Actor(ABC):
             "actor_id": self.actor_id,
             "name": self.name,
             "state": self.state.value,
+            "protected": self.protected,
             "uptime": self.metrics.uptime,
             "messages_processed": self.metrics.messages_processed,
             "restart_count": self.metrics.restart_count,

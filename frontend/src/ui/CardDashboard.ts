@@ -916,6 +916,7 @@ export class CardDashboard {
       if (isActive) cls.push("active");
       if (isDisabled) cls.push("protected-agent");
       row.className = cls.join(" ");
+      (row as HTMLButtonElement).disabled = isDisabled;
       row.title = isDisabled
         ? `${agent.name} — system agent, not directly reachable`
         : agent.name;
@@ -1088,6 +1089,7 @@ export class CardDashboard {
   private _populateSelect(select: HTMLSelectElement): void {
     select.innerHTML = "";
     [...this.agents.values()]
+      .filter((a) => !(a.protected && a.name !== "main-actor"))
       .sort((a, b) => {
         if (a.name === "main-actor") return -1;
         if (b.name === "main-actor") return 1;

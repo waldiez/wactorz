@@ -278,6 +278,7 @@ export class ChatPanel {
       if (isActive) cls.push("active");
       if (isDisabled) cls.push("protected-agent");
       row.className = cls.join(" ");
+      (row as HTMLButtonElement).disabled = isDisabled;
       row.title = isDisabled
         ? `${agent.name} — system agent, not directly reachable`
         : agent.name;

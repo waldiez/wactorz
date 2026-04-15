@@ -2214,7 +2214,20 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
         badge.textContent = input.value ? "●" : "○";
       });
 
-      lbl.append(span, input, badge);
+      if (type === "password") {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "af-settings-eye";
+        toggle.title = "Show / hide";
+        toggle.textContent = "👁";
+        toggle.addEventListener("click", () => {
+          input.type = input.type === "password" ? "text" : "password";
+          toggle.textContent = input.type === "password" ? "👁" : "🙈";
+        });
+        lbl.append(span, input, toggle, badge);
+      } else {
+        lbl.append(span, input, badge);
+      }
       grid.appendChild(lbl);
       inputs.set(key, input);
     });

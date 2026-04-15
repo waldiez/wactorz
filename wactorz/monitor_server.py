@@ -854,6 +854,33 @@ async def actor_handler(request):
     return web.json_response(_actor_payload(ag))
 
 
+async def config_handler(request):
+    """Expose non-secret runtime config so the frontend can seed its defaults."""
+    from aiohttp import web
+    from .config import CONFIG
+    return web.json_response({
+        "ha": {
+            "url":   CONFIG.ha_url,
+            "token": CONFIG.ha_token,
+        },
+        "fuseki": {
+            "url":     CONFIG.fuseki_url,
+            "dataset": CONFIG.fuseki_dataset,
+        },
+        "mqtt": {
+            "host": MQTT_BROKER,
+            "port": MQTT_PORT,
+        },
+        "llm": {
+            "provider": CONFIG.llm_provider,
+            "model":    CONFIG.llm_model,
+        },
+        "weather": {
+            "defaultLocation": CONFIG.weather_default_location,
+        },
+    })
+
+
 # ── Entry point ────────────────────────────────────────────────────────────
 
 async def main(exit_on_failure: bool = False):
@@ -878,6 +905,7 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/mqtt",                  mqtt_proxy_handler)
     app.router.add_get("/api/actors",            actors_handler)
     app.router.add_get("/api/actors/{actor_id}", actor_handler)
+    app.router.add_get("/api/config",            config_handler)
     app.router.add_get("/docs",  lambda r: web.HTTPFound("/docs/"))
     app.router.add_get("/docs/",             docs_handler)
     app.router.add_get("/docs/{path:.+}",    docs_handler)

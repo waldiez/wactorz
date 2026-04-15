@@ -1503,6 +1503,47 @@
         .fin-spark   { opacity: 1; }
       }
 
+      /* ── Settings view ────────────────────────────────────────────── */
+      .af-settings {
+        padding: 24px 28px; max-width: 680px; display: flex;
+        flex-direction: column; gap: 28px; overflow-y: auto; height: 100%;
+      }
+      .af-settings-title {
+        font-size: 16px; font-weight: 700; color: rgba(255,255,255,0.9);
+        margin: 0;
+      }
+      .af-settings-section {
+        display: flex; flex-direction: column; gap: 14px;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 10px; padding: 18px 20px;
+      }
+      .af-settings-section-heading {
+        font-size: 13px; font-weight: 600;
+        color: rgba(255,255,255,0.75); margin: 0;
+      }
+      .af-settings-grid {
+        display: flex; flex-direction: column; gap: 10px;
+      }
+      .af-settings-field {
+        display: flex; align-items: center; gap: 10px;
+        font-size: 12px; cursor: default;
+      }
+      .af-settings-label {
+        width: 90px; flex-shrink: 0; color: rgba(255,255,255,0.5);
+        font-size: 11px;
+      }
+      .af-settings-field .af-cfg-input { flex: 1; }
+      .af-settings-origin {
+        font-size: 11px; flex-shrink: 0; color: rgba(255,255,255,0.2);
+        transition: color 0.15s;
+      }
+      .af-settings-origin.set { color: #34d399; }
+      .af-settings-actions {
+        display: flex; align-items: center; gap: 12px; margin-top: 2px;
+      }
+      .af-settings-msg { font-size: 11px; }
+
       /* ── Fuseki / Knowledge Graph view ────────────────────────────── */
       .af-fuseki-ds-badge {
         display: inline-flex; align-items: center;

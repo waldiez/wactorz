@@ -60,7 +60,7 @@ function relTime(ms: number): string {
   return `${Math.floor(s / 60)}m ago`;
 }
 
-type View = "overview" | "feed" | "chat" | "ha" | "fuseki";
+type View = "overview" | "feed" | "chat" | "ha" | "fuseki" | "settings";
 type ConnState = "live" | "connecting" | "demo";
 
 // ── CardDashboard ─────────────────────────────────────────────────────────────
@@ -381,6 +381,7 @@ export class CardDashboard {
     else if (this.view === "feed") body.appendChild(this._buildFeedView());
     else if (this.view === "ha") body.appendChild(this._buildHAView());
     else if (this.view === "fuseki") body.appendChild(this._buildFusekiView());
+    else if (this.view === "settings") body.appendChild(this._buildSettingsView());
     else if (this.view === "chat") {
       body.appendChild(this._buildChatView());
       // _render* calls inside _buildChatView() run before the element is in
@@ -1712,6 +1713,7 @@ export class CardDashboard {
 
     views.push({ key: "ha", label: "🏠 Devices" });
     views.push({ key: "fuseki", label: "⬡ Graph" });
+    views.push({ key: "settings", label: "⚙ Settings" });
 
     views.forEach(({ key, label }) => {
       const btn = document.createElement("button");
@@ -2136,5 +2138,109 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
     });
 
     return form;
+  }
+
+  // ── Private: settings view ────────────────────────────────────────────────
+
+  private _buildSettingsView(): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "af-settings";
+
+    const title = document.createElement("h2");
+    title.className = "af-settings-title";
+    title.textContent = "Settings";
+    el.appendChild(title);
+
+    el.appendChild(this._buildSettingsSection("🏠 Home Assistant", [
+      { key: "wactorz-ha-url",   label: "URL",   placeholder: "http://homeassistant.local:8123", type: "text" },
+      { key: "wactorz-ha-token", label: "Token", placeholder: "Long-lived access token",          type: "password" },
+    ]));
+
+    el.appendChild(this._buildSettingsSection("⬡ Knowledge Graph (Fuseki)", [
+      { key: "wactorz-fuseki-url",     label: "URL",      placeholder: "http://localhost:3030", type: "text" },
+      { key: "wactorz-fuseki-dataset", label: "Dataset",  placeholder: "wactorz",              type: "text" },
+      { key: "wactorz-fuseki-user",    label: "Username", placeholder: "admin",                 type: "text" },
+      { key: "wactorz-fuseki-pass",    label: "Password", placeholder: "",                      type: "password" },
+    ]));
+
+    return el;
+  }
+
+  private _buildSettingsSection(
+    heading: string,
+    fields: { key: string; label: string; placeholder: string; type: string }[],
+  ): HTMLElement {
+    const section = document.createElement("div");
+    section.className = "af-settings-section";
+
+    const h = document.createElement("h3");
+    h.className = "af-settings-section-heading";
+    h.textContent = heading;
+    section.appendChild(h);
+
+    const grid = document.createElement("div");
+    grid.className = "af-settings-grid";
+
+    const inputs = new Map<string, HTMLInputElement>();
+
+    fields.forEach(({ key, label, placeholder, type }) => {
+      const lbl = document.createElement("label");
+      lbl.className = "af-settings-field";
+
+      const span = document.createElement("span");
+      span.className = "af-settings-label";
+      span.textContent = label;
+
+      const input = document.createElement("input");
+      input.type = type;
+      input.className = "af-cfg-input";
+      input.placeholder = placeholder;
+      input.value = localStorage.getItem(key) ?? "";
+
+      // Show origin badge
+      const badge = document.createElement("span");
+      badge.className = `af-settings-origin${input.value ? " set" : ""}`;
+      badge.title = input.value ? "Value is set" : "Not configured";
+      badge.textContent = input.value ? "●" : "○";
+
+      input.addEventListener("input", () => {
+        badge.className = `af-settings-origin${input.value ? " set" : ""}`;
+        badge.title = input.value ? "Value is set" : "Not configured";
+        badge.textContent = input.value ? "●" : "○";
+      });
+
+      lbl.append(span, input, badge);
+      grid.appendChild(lbl);
+      inputs.set(key, input);
+    });
+
+    section.appendChild(grid);
+
+    // Action row
+    const actions = document.createElement("div");
+    actions.className = "af-settings-actions";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "af-mini-btn";
+    saveBtn.style.cssText = "padding:6px 18px;font-size:12px;";
+    saveBtn.textContent = "Save";
+
+    const msg = document.createElement("span");
+    msg.className = "af-settings-msg";
+
+    saveBtn.addEventListener("click", () => {
+      inputs.forEach((input, key) => {
+        if (input.value.trim()) localStorage.setItem(key, input.value.trim());
+        else localStorage.removeItem(key);
+      });
+      msg.textContent = "Saved.";
+      msg.style.color = "#34d399";
+      setTimeout(() => (msg.textContent = ""), 2000);
+    });
+
+    actions.append(saveBtn, msg);
+    section.appendChild(actions);
+
+    return section;
   }
 }

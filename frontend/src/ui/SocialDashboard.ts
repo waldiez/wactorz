@@ -304,8 +304,10 @@ export class SocialDashboard {
     const deleteBtn = card.querySelector<HTMLButtonElement>(
       '[data-action="delete"]',
     );
-    if (pauseBtn) pauseBtn.style.display = !prot && st === "running" ? "" : "none";
-    if (resumeBtn) resumeBtn.style.display = !prot && st === "paused" ? "" : "none";
+    if (pauseBtn)
+      pauseBtn.style.display = !prot && st === "running" ? "" : "none";
+    if (resumeBtn)
+      resumeBtn.style.display = !prot && st === "paused" ? "" : "none";
     if (stopBtn) {
       stopBtn.style.display = !prot && st !== "stopped" ? "" : "none";
     }

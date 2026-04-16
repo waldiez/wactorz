@@ -248,21 +248,23 @@ export class ChatPanel {
                 ? "#4b5563"
                 : "#60a5fa";
       const isActive = agent.name === this.activeAgentName;
+      // Protected agents other than main-actor are system internals;
+      // show them as non-interactive so users know they can't be messaged directly.
+      const isDisabled = agent.protected && agent.name !== "main-actor";
 
       let row = existing.get(agent.name);
       if (!row) {
         row = document.createElement("button");
-        row.className = "af-chat-agent-row";
         row.dataset["name"] = agent.name;
-        row.title = agent.name;
         row.innerHTML = `
           <span class="af-chat-agent-dot"></span>
           <span class="af-chat-agent-name">${agent.name}</span>
+          <span class="af-chat-agent-lock" aria-hidden="true"></span>
         `;
         // Use delegated name lookup so the closure always reflects latest state
         row.addEventListener("click", () => {
           const a = this.agentList.find((x) => x.name === agent.name);
-          if (!a) return;
+          if (!a || (a.protected && a.name !== "main-actor")) return;
           document.dispatchEvent(
             new CustomEvent<{ agent: AgentInfo }>("agent-selected", {
               detail: { agent: a },
@@ -272,10 +274,19 @@ export class ChatPanel {
       }
 
       // Patch only what may have changed
-      row.classList.toggle("active", isActive);
+      const cls = ["af-chat-agent-row"];
+      if (isActive) cls.push("active");
+      if (isDisabled) cls.push("protected-agent");
+      row.className = cls.join(" ");
+      (row as HTMLButtonElement).disabled = isDisabled;
+      row.title = isDisabled
+        ? `${agent.name} — system agent, not directly reachable`
+        : agent.name;
       const dot = row.querySelector<HTMLElement>(".af-chat-agent-dot");
       if (dot && dot.style.background !== dotColor)
         dot.style.background = dotColor;
+      const lock = row.querySelector<HTMLElement>(".af-chat-agent-lock");
+      if (lock) lock.textContent = isDisabled ? "🔒" : "";
 
       // Ensure correct position without re-inserting if already there
       const sibling = this.sidebarListEl.children[idx];

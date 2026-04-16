@@ -60,7 +60,7 @@ function relTime(ms: number): string {
   return `${Math.floor(s / 60)}m ago`;
 }
 
-type View = "overview" | "feed" | "chat" | "ha" | "fuseki";
+type View = "overview" | "feed" | "chat" | "ha" | "fuseki" | "settings";
 type ConnState = "live" | "connecting" | "demo";
 
 // ── CardDashboard ─────────────────────────────────────────────────────────────
@@ -72,7 +72,6 @@ export class CardDashboard {
   private feedItems: FeedItem[] = [];
   private chatMessages: ChatMessage[] = [];
   private chatTarget: string = "main-actor";
-  private _lastSentTarget: string = "main-actor";
   private view: View = "overview";
   private connState: ConnState = "connecting";
   private tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -252,12 +251,11 @@ export class CardDashboard {
 
     this._evChat = (e) => {
       const msg = (e as CustomEvent<{ msg: ChatMessage }>).detail.msg;
-      // Tag io-gateway / system replies with the target of the last sent
-      // message so they land in the correct thread even if the user has
-      // switched to a different agent in the sidebar since sending.
+      // Tag io-gateway / system replies with the active chatTarget so they
+      // only appear in the thread where the user sent the triggering message.
       const stored: ChatMessage =
         msg.from === "io-gateway" || msg.from === "system"
-          ? { ...msg, to: this._lastSentTarget }
+          ? { ...msg, to: this.chatTarget }
           : msg;
       this.chatMessages.push(stored);
       if (this.chatMessages.length > 200) this.chatMessages.shift();
@@ -268,17 +266,13 @@ export class CardDashboard {
     };
 
     this._evChunk = (e) => {
+      if (this.view !== "chat") return;
       const { chunk, from } = (
         e as CustomEvent<{ chunk: string; from: string }>
       ).detail;
-      // Always accumulate text so _evEnd can save it regardless of active view
-      if (!this._streamFrom) {
+      if (!this._streamRow) {
         this._streamFrom = from;
         this._streamText = "";
-      }
-      this._streamText += chunk;
-      if (this.view !== "chat") return;
-      if (!this._streamRow) {
         const thread = this.root.querySelector<HTMLElement>(".af-chat-thread");
         if (!thread) return;
         const row = document.createElement("div");
@@ -294,6 +288,7 @@ export class CardDashboard {
         this._streamRow = row;
         this._streamBody = bubble;
       }
+      this._streamText += chunk;
       if (this._streamBody) this._streamBody.textContent = this._streamText;
       this._scrollThread();
     };
@@ -303,7 +298,7 @@ export class CardDashboard {
         const msg: ChatMessage = {
           id: `stream-${Date.now()}`,
           from: this._streamFrom,
-          to: this._lastSentTarget,
+          to: this.chatTarget, // tag with active context for thread filtering
           content: this._streamText,
           timestampMs: Date.now(),
         };
@@ -386,6 +381,7 @@ export class CardDashboard {
     else if (this.view === "feed") body.appendChild(this._buildFeedView());
     else if (this.view === "ha") body.appendChild(this._buildHAView());
     else if (this.view === "fuseki") body.appendChild(this._buildFusekiView());
+    else if (this.view === "settings") body.appendChild(this._buildSettingsView());
     else if (this.view === "chat") {
       body.appendChild(this._buildChatView());
       // _render* calls inside _buildChatView() run before the element is in
@@ -402,6 +398,13 @@ export class CardDashboard {
         btn.classList.toggle("active", btn.dataset["view"] === this.view);
       });
     this._renderHealth();
+    // Only show the agent-target dropdown in the chat view
+    const select =
+      this.root.querySelector<HTMLSelectElement>("#af-target-select");
+    if (select) {
+      select.style.display = this.view === "chat" ? "" : "none";
+      if (this.view === "chat") select.value = this.chatTarget;
+    }
   }
 
   /** Ensure chatTarget is a live agent, defaulting to "main" → "main-actor" → first. */
@@ -679,14 +682,14 @@ export class CardDashboard {
 
   private _appendActionBtns(controls: HTMLElement, agent: AgentInfo): void {
     const status = stateLabel(agent.state);
-    if (!agent.protected && status === "running") {
+    if (status === "running") {
       const b = document.createElement("button");
       b.className = "af-mini-btn";
       b.textContent = "Pause";
       b.dataset.action = "pause";
       controls.appendChild(b);
     }
-    if (!agent.protected && status === "paused") {
+    if (status === "paused") {
       const b = document.createElement("button");
       b.className = "af-mini-btn";
       b.textContent = "Resume";
@@ -879,19 +882,28 @@ export class CardDashboard {
     sorted.forEach((agent, idx) => {
       const color = stateColor(agent.state);
       const isActive = agent.name === this.chatTarget;
+      // Protected agents other than main-actor are system internals —
+      // all user messages route through main-actor; mark them non-interactive.
+      const isDisabled = agent.protected && agent.name !== "main-actor";
 
       let row = existing.get(agent.name);
       if (!row) {
         row = document.createElement("button");
         row.dataset["name"] = agent.name;
-        row.title = agent.name;
         const dot = document.createElement("span");
         dot.className = "af-chat-agent-dot";
         const nm = document.createElement("span");
         nm.className = "af-chat-agent-name";
         nm.textContent = agent.name;
-        row.append(dot, nm);
+        const lock = document.createElement("span");
+        lock.className = "af-chat-agent-lock";
+        lock.setAttribute("aria-hidden", "true");
+        row.append(dot, nm, lock);
         row.addEventListener("click", () => {
+          const latest = [...this.agents.values()].find(
+            (a) => a.name === agent.name,
+          );
+          if (latest?.protected && latest.name !== "main-actor") return;
           this.chatTarget = agent.name;
           this._renderSidebar();
           this._renderChatPaneHeader();
@@ -901,9 +913,18 @@ export class CardDashboard {
       }
 
       // Patch only what may have changed
-      row.className = `af-chat-agent-row${isActive ? " active" : ""}`;
+      const cls = ["af-chat-agent-row"];
+      if (isActive) cls.push("active");
+      if (isDisabled) cls.push("protected-agent");
+      row.className = cls.join(" ");
+      (row as HTMLButtonElement).disabled = isDisabled;
+      row.title = isDisabled
+        ? `${agent.name} — system agent, not directly reachable`
+        : agent.name;
       const dot = row.querySelector<HTMLElement>(".af-chat-agent-dot");
       if (dot && dot.style.background !== color) dot.style.background = color;
+      const lock = row.querySelector<HTMLElement>(".af-chat-agent-lock");
+      if (lock) lock.textContent = isDisabled ? "🔒" : "";
 
       const sibling = list.children[idx];
       if (sibling !== row) list.insertBefore(row, sibling ?? null);
@@ -1037,6 +1058,11 @@ export class CardDashboard {
     const bar = document.createElement("div");
     bar.className = "af-iobar";
 
+    const select = document.createElement("select");
+    select.className = "af-target-select";
+    select.id = "af-target-select";
+    this._populateSelect(select);
+
     const input = document.createElement("input");
     input.className = "af-iobar-input";
     input.id = "af-iobar-input";
@@ -1044,29 +1070,57 @@ export class CardDashboard {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        this._sendMessage(input);
+        this._sendMessage(input, select);
       }
+    });
+    select.addEventListener("change", () => {
+      this.chatTarget = select.value;
+      input.placeholder = `Message @${select.value}…`;
     });
 
     const sendBtn = document.createElement("button");
     sendBtn.className = "af-send-btn";
     sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`;
-    sendBtn.addEventListener("click", () => this._sendMessage(input));
+    sendBtn.addEventListener("click", () => this._sendMessage(input, select));
 
-    bar.append(input, sendBtn);
+    bar.append(select, input, sendBtn);
     return bar;
   }
 
+  private _populateSelect(select: HTMLSelectElement): void {
+    select.innerHTML = "";
+    [...this.agents.values()]
+      .filter((a) => !(a.protected && a.name !== "main-actor"))
+      .sort((a, b) => {
+        if (a.name === "main-actor") return -1;
+        if (b.name === "main-actor") return 1;
+        return a.name.localeCompare(b.name);
+      })
+      .forEach((agent) => {
+        const opt = document.createElement("option");
+        opt.value = agent.name;
+        opt.textContent = `@${agent.name}`;
+        select.appendChild(opt);
+      });
+    // Keep dropdown in sync with chatTarget
+    select.value = this.chatTarget;
+  }
+
   private _updateTargetSelect(): void {
+    const select =
+      this.root.querySelector<HTMLSelectElement>("#af-target-select");
+    if (select) this._populateSelect(select);
     const input = this.root.querySelector<HTMLInputElement>("#af-iobar-input");
     if (input) input.placeholder = `Message @${this.chatTarget}…`;
   }
 
-  private _sendMessage(input: HTMLInputElement): void {
+  private _sendMessage(
+    input: HTMLInputElement,
+    select: HTMLSelectElement,
+  ): void {
     const content = input.value.trim();
     if (!content) return;
-    const target = this.chatTarget || "main-actor";
-    this._lastSentTarget = target;
+    const target = select.value || "main-actor";
     const msg: ChatMessage = {
       id: `user-${Date.now()}`,
       from: "user",
@@ -1075,7 +1129,10 @@ export class CardDashboard {
       timestampMs: Date.now(),
     };
     this.chatMessages.push(msg);
-    if (this.view === "chat") {
+    if (this.view !== "chat") {
+      this.view = "chat";
+      this._renderView();
+    } else {
       this._appendChatMsgEl(msg);
       this._scrollThread();
     }
@@ -1659,6 +1716,7 @@ export class CardDashboard {
 
     views.push({ key: "ha", label: "🏠 Devices" });
     views.push({ key: "fuseki", label: "⬡ Graph" });
+    views.push({ key: "settings", label: "⚙ Settings" });
 
     views.forEach(({ key, label }) => {
       const btn = document.createElement("button");
@@ -1752,31 +1810,10 @@ export class CardDashboard {
 } ORDER BY ?entity LIMIT 200`,
       },
       {
-        label: "Agent services",
-        icon: "⬡",
-        sparql: `SELECT ?name ?desc ?prop ?propLabel ?propType WHERE {
-  GRAPH <urn:wactorz:agents> {
-    ?agent a <https://synapse.waldiez.io/ns#Agent> ;
-           rdfs:label ?name .
-    OPTIONAL { ?agent <http://purl.org/dc/terms/description> ?desc . }
-    OPTIONAL {
-      ?agent <http://www.w3.org/ns/ssn/hasProperty> ?prop .
-      ?prop rdfs:label ?propLabel ;
-            a ?propType .
-      FILTER(?propType IN (
-        <http://www.w3.org/ns/sosa/ActuatableProperty>,
-        <http://www.w3.org/ns/sosa/ObservableProperty>,
-        <https://synapse.waldiez.io/ns#Action>
-      ))
-    }
-  }
-} ORDER BY ?name ?propType ?propLabel`,
-      },
-      {
         label: "Graph sizes",
         icon: "∑",
         sparql: `SELECT ?g (COUNT(*) AS ?triples) WHERE {
-  VALUES ?g { <urn:ha:current> <urn:ha:history> <urn:ha:devices> <urn:wactorz:agents> }
+  VALUES ?g { <urn:ha:current> <urn:ha:history> <urn:ha:devices> }
   GRAPH ?g { ?s ?p ?o }
 } GROUP BY ?g ORDER BY ?g`,
       },
@@ -2104,5 +2141,134 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
     });
 
     return form;
+  }
+
+  // ── Private: settings view ────────────────────────────────────────────────
+
+  private _buildSettingsView(): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "af-settings";
+
+    const title = document.createElement("h2");
+    title.className = "af-settings-title";
+    title.textContent = "Settings";
+    el.appendChild(title);
+
+    el.appendChild(this._buildSettingsSection("🏠 Home Assistant", [
+      { key: "wactorz-ha-url",   label: "URL",   placeholder: "http://homeassistant.local:8123", type: "text" },
+      { key: "wactorz-ha-token", label: "Token", placeholder: "Long-lived access token",          type: "password" },
+    ]));
+
+    el.appendChild(this._buildSettingsSection("⬡ Knowledge Graph (Fuseki)", [
+      { key: "wactorz-fuseki-url",     label: "URL",      placeholder: "http://localhost:3030", type: "text" },
+      { key: "wactorz-fuseki-dataset", label: "Dataset",  placeholder: "wactorz",              type: "text" },
+      { key: "wactorz-fuseki-user",    label: "Username", placeholder: "admin",                 type: "text" },
+      { key: "wactorz-fuseki-pass",    label: "Password", placeholder: "",                      type: "password" },
+    ]));
+
+    el.appendChild(this._buildSettingsSection("📡 MQTT Broker", [
+      { key: "wactorz-mqtt-url", label: "WebSocket URL", placeholder: "ws://localhost:9001", type: "text" },
+    ], "⚠ Changes require a page reload"));
+
+    return el;
+  }
+
+  private _buildSettingsSection(
+    heading: string,
+    fields: { key: string; label: string; placeholder: string; type: string }[],
+    note?: string,
+  ): HTMLElement {
+    const section = document.createElement("div");
+    section.className = "af-settings-section";
+
+    const h = document.createElement("h3");
+    h.className = "af-settings-section-heading";
+    h.textContent = heading;
+    section.appendChild(h);
+
+    const grid = document.createElement("div");
+    grid.className = "af-settings-grid";
+
+    const inputs = new Map<string, HTMLInputElement>();
+
+    fields.forEach(({ key, label, placeholder, type }) => {
+      const lbl = document.createElement("label");
+      lbl.className = "af-settings-field";
+
+      const span = document.createElement("span");
+      span.className = "af-settings-label";
+      span.textContent = label;
+
+      const input = document.createElement("input");
+      input.type = type;
+      input.className = "af-cfg-input";
+      input.placeholder = placeholder;
+      input.value = localStorage.getItem(key) ?? "";
+
+      // Show origin badge
+      const badge = document.createElement("span");
+      badge.className = `af-settings-origin${input.value ? " set" : ""}`;
+      badge.title = input.value ? "Value is set" : "Not configured";
+      badge.textContent = input.value ? "●" : "○";
+
+      input.addEventListener("input", () => {
+        badge.className = `af-settings-origin${input.value ? " set" : ""}`;
+        badge.title = input.value ? "Value is set" : "Not configured";
+        badge.textContent = input.value ? "●" : "○";
+      });
+
+      if (type === "password") {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "af-settings-eye";
+        toggle.title = "Show / hide";
+        toggle.textContent = "👁";
+        toggle.addEventListener("click", () => {
+          input.type = input.type === "password" ? "text" : "password";
+          toggle.textContent = input.type === "password" ? "👁" : "🙈";
+        });
+        lbl.append(span, input, toggle, badge);
+      } else {
+        lbl.append(span, input, badge);
+      }
+      grid.appendChild(lbl);
+      inputs.set(key, input);
+    });
+
+    section.appendChild(grid);
+
+    if (note) {
+      const noteEl = document.createElement("p");
+      noteEl.className = "af-settings-note";
+      noteEl.textContent = note;
+      section.appendChild(noteEl);
+    }
+
+    // Action row
+    const actions = document.createElement("div");
+    actions.className = "af-settings-actions";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "af-mini-btn";
+    saveBtn.style.cssText = "padding:6px 18px;font-size:12px;";
+    saveBtn.textContent = "Save";
+
+    const msg = document.createElement("span");
+    msg.className = "af-settings-msg";
+
+    saveBtn.addEventListener("click", () => {
+      inputs.forEach((input, key) => {
+        if (input.value.trim()) localStorage.setItem(key, input.value.trim());
+        else localStorage.removeItem(key);
+      });
+      msg.textContent = "Saved.";
+      msg.style.color = "#34d399";
+      setTimeout(() => (msg.textContent = ""), 2000);
+    });
+
+    actions.append(saveBtn, msg);
+    section.appendChild(actions);
+
+    return section;
   }
 }

@@ -183,6 +183,9 @@ export class SceneManager {
     const existing = this.agents.get(agent.id);
     // Merge: keep existing metric fields if the incoming update doesn't include them.
     const merged: AgentInfo = existing ? { ...existing, ...agent } : agent;
+    // protected:true is sticky — MQTT partial updates (spawn/heartbeat/status)
+    // may carry false as a placeholder; never let them overwrite a confirmed true.
+    if (existing?.protected) merged.protected = true;
     this.agents.set(agent.id, merged);
     if (this.cardDashboard) {
       existing
@@ -262,7 +265,7 @@ export class SceneManager {
       id: payload.agentId,
       name: payload.agentName,
       state: "initializing",
-      protected: false,
+      protected: payload.protected ?? false,
       agentType: payload.agentType,
     });
     if (!this.cardDashboard && !this.socialDashboard) {

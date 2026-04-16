@@ -56,9 +56,11 @@ scene.setTheme("cards");
 // ── MQTT ──────────────────────────────────────────────────────────────────────
 
 const _wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+const _mqttDefault = `${_wsProto}//${window.location.host}/mqtt`;
 const MQTT_BROKER =
-  (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) ??
-  `${_wsProto}//${window.location.host}/mqtt`;
+  localStorage.getItem("wactorz-mqtt-url") ||
+  (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) ||
+  _mqttDefault;
 const mqtt = new MQTTClient(MQTT_BROKER);
 
 // ── UI ────────────────────────────────────────────────────────────────────────
@@ -145,6 +147,23 @@ wsChat.onStatePatch((agents, deletedId) => {
 
 wsChat.connect(`${_wsProto}//${window.location.host}/ws`);
 
+// ── Seed localStorage from backend config (only for unset keys) ───────────────
+// Backend config (.env) provides defaults; a user-set localStorage value wins.
+fetch("/api/config")
+  .then((r) => (r.ok ? r.json() : null))
+  .then((cfg) => {
+    if (!cfg) return;
+    const setIfMissing = (key: string, value: string) => {
+      if (value && !localStorage.getItem(key)) localStorage.setItem(key, value);
+    };
+    setIfMissing("wactorz-ha-url", cfg.ha?.url ?? "");
+    setIfMissing("wactorz-ha-token", cfg.ha?.token ?? "");
+    setIfMissing("wactorz-fuseki-url", cfg.fuseki?.url ?? "");
+    setIfMissing("wactorz-fuseki-dataset", cfg.fuseki?.dataset ?? "");
+    if (cfg.mqtt?.url) setIfMissing("wactorz-mqtt-url", cfg.mqtt.url);
+  })
+  .catch(() => {});
+
 // MentionPopup needs the textarea and the agent list from SceneManager
 const textInput = document.getElementById("text-input") as HTMLTextAreaElement;
 new MentionPopup(textInput, () => scene.getAgents());
@@ -215,7 +234,7 @@ mqtt.on("status", (payload) => {
     id: payload.agentId,
     name: payload.agentName,
     state: payload.state,
-    protected: false,
+    protected: payload.protected ?? false,
     messagesProcessed: payload.messagesProcessed,
   });
   chatPanel.updateAgentList(scene.getAgents());

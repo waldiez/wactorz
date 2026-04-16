@@ -1129,7 +1129,10 @@ export class CardDashboard {
       timestampMs: Date.now(),
     };
     this.chatMessages.push(msg);
-    if (this.view === "chat") {
+    if (this.view !== "chat") {
+      this.view = "chat";
+      this._renderView();
+    } else {
       this._appendChatMsgEl(msg);
       this._scrollThread();
     }

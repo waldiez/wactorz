@@ -114,10 +114,10 @@ def get_args():
 	                    default="gemini-2.5-flash",
 	                    help="Google Gemini model (default: gemini-2.5-flash). Options: gemini-2.5-flash-lite, gemini-2.5-pro, gemini-3.1-pro")
 	parser.add_argument("--discord-token")
-	parser.add_argument("--telegram-token")
-	parser.add_argument("--telegram-allowed-user-id", type=int)
 	parser.add_argument("--mqtt-broker")
 	parser.add_argument("--mqtt-port", type=int)
+	parser.add_argument("--telegram-token")
+	parser.add_argument("--telegram-allowed-user-id", type=int)
 	parser.add_argument("--monitor-port", type=int,
 	                    default=int(os.getenv("MONITOR_PORT", str(CONFIG.ws_port))),
 	                    help="Port for the background web UI / monitor server (default: 8888)")
@@ -197,11 +197,27 @@ async def build_system(args: argparse.Namespace):
     system = ActorSystem(
         mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
         mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
+        state_dir="./state",
     )
     # MQTT client must exist before factories run so injected actors can publish
     system._mqtt_client = await __import__(
         "wactorz.core.registry", fromlist=["_MQTTPublisher"]
-    )._MQTTPublisher.create(args.mqtt_broker or CONFIG.mqtt_host, args.mqtt_port or CONFIG.mqtt_port)
+    )._MQTTPublisher.create(
+        args.mqtt_broker or CONFIG.mqtt_host,
+        args.mqtt_port or CONFIG.mqtt_port,
+        db_path="./state/mqtt_outbox.db",
+    )
+
+    # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────────────
+    # Must be done here because cli bypasses system.start() and goes directly
+    # to system.supervisor.start() — so we initialise the bus manually.
+    from wactorz.core.topic_bus import init_topic_bus
+    system.topic_bus = init_topic_bus(
+        mqtt_client  = system._mqtt_client,
+        mqtt_broker  = args.mqtt_broker or CONFIG.mqtt_host,
+        mqtt_port    = args.mqtt_port or CONFIG.mqtt_port,
+    )
+    logger.info("TopicBus initialised")
 
     # ── Factory helpers (called fresh on each (re)start by the Supervisor) ────
     def make_provider():
@@ -217,6 +233,7 @@ async def build_system(args: argparse.Namespace):
 
     def make_installer():
         return InstallerAgent(name="installer", persistence_dir="./state")
+
 
     def make_manual_agent():
         return ManualAgent(llm_provider=make_provider(), name="manual-agent",
@@ -269,57 +286,58 @@ async def build_system(args: argparse.Namespace):
 
 
 async def app():
-	args = get_args()
-	if args.reload:
-	    _start_reloader()
-	system, main_actor = await build_system(args)
+    args = get_args()
+    if args.reload:
+        _start_reloader()
+    
+    system, main_actor = await build_system(args)
 
-	if not args.no_monitor:
-	    await _start_web_ui(
-	        port=args.monitor_port,
-	        mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
-	        mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
-	        actor_registry=system.registry,
-	    )
+    if not args.no_monitor:
+        await _start_web_ui(
+            port=args.monitor_port,
+            mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
+            mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
+            actor_registry=system.registry,
+        )
 
-	from wactorz.interfaces.chat_interfaces import (
-	    CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface, TelegramInterface
-	)
+    from wactorz.interfaces.chat_interfaces import (
+        CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface, TelegramInterface
+    )
 
-	interface = args.interface or CONFIG.interface
-	if interface == "cli":
-	    iface = CLIInterface(main_actor)
-	    await asyncio.gather(iface.run(), system.run_forever())
-	elif interface == "rest":
-	    port = args.port or CONFIG.port
-	    iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)
-	    await asyncio.gather(iface.run(), system.run_forever())
-	elif interface == "discord":
-	    discord_token = args.discord_token or CONFIG.discord_token
-	    if not discord_token:
-	        logger.error("DISCORD_BOT_TOKEN not set.")
-	        sys.exit(1)
-	    iface = DiscordInterface(main_actor, token=discord_token)
-	    await asyncio.gather(iface.run(), system.run_forever())
-	elif interface == "whatsapp":
-	    port = args.port or CONFIG.port
-	    iface = WhatsAppInterface(
-	        main_actor,
-	        account_sid=CONFIG.twilio_account_sid,
-	        auth_token=CONFIG.twilio_auth_token,
-	        from_number=CONFIG.twilio_whatsapp_number,
-	        port=port,
-	    )
-	    await asyncio.gather(iface.run(), system.run_forever())
-	elif interface == "telegram":
-	    telegram_token = args.telegram_token or CONFIG.telegram_token
-	    if not telegram_token:
-	        logger.error("TELEGRAM_BOT_TOKEN not set.")
-	        sys.exit(1)
-	    allowed_user_id = args.telegram_allowed_user_id or CONFIG.telegram_allowed_user_id or None
-	    iface = TelegramInterface(main_actor, token=telegram_token, allowed_user_id=allowed_user_id)
-	    await asyncio.gather(iface.run(), system.run_forever())
-
+    interface = args.interface or CONFIG.interface
+    
+    if interface == "cli":
+        iface = CLIInterface(main_actor)
+        await asyncio.gather(iface.run(), system.run_forever())
+    elif interface == "rest":
+        port = args.port or CONFIG.port
+        iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)
+        await asyncio.gather(iface.run(), system.run_forever())
+    elif interface == "discord":
+        discord_token = args.discord_token or CONFIG.discord_token
+        if not discord_token:
+            logger.error("DISCORD_BOT_TOKEN not set.")
+            sys.exit(1)
+        iface = DiscordInterface(main_actor, token=discord_token)
+        await asyncio.gather(iface.run(), system.run_forever())
+    elif interface == "whatsapp":
+        port = args.port or CONFIG.port
+        iface = WhatsAppInterface(
+            main_actor,
+            account_sid=CONFIG.twilio_account_sid,
+            auth_token=CONFIG.twilio_auth_token,
+            from_number=CONFIG.twilio_whatsapp_number,
+            port=port,
+        )
+        await asyncio.gather(iface.run(), system.run_forever())
+    elif interface == "telegram":
+        telegram_token = args.telegram_token or CONFIG.telegram_token
+        if not telegram_token:
+            logger.error("TELEGRAM_BOT_TOKEN not set.")
+            sys.exit(1)
+        allowed_user_id = args.telegram_allowed_user_id or CONFIG.telegram_allowed_user_id or None
+        iface = TelegramInterface(main_actor, token=telegram_token, allowed_user_id=allowed_user_id)
+        await asyncio.gather(iface.run(), system.run_forever())
 
 def main():
 	asyncio.run(app())

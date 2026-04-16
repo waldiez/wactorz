@@ -219,9 +219,27 @@ Inside your code, the `agent` object provides:
   agent.recall(key)                   — load from disk
   agent.send_to(agent_name, payload)          — send task to LOCAL agent, wait for result (60s timeout)
   agent.send_to_many([(name, payload), ...])  — send to multiple LOCAL agents IN PARALLEL, returns list
-  agent.mqtt_get(topic, timeout=10)   — wait for one MQTT message on topic, returns parsed payload
-                                        USE THIS to read data from remote/Pi agents instead of send_to()
+
+  agent.subscribe(topic, callback)    — subscribe to MQTT topic, call callback(payload) for each message
+                                        ALWAYS runs as background task — setup() returns immediately
+                                        callback MUST be an async function WITH ONE ARGUMENT (payload)
+                                        CORRECT usage:
+                                          async def on_message(payload):        # ← exactly one argument
+                                              agent.state['latest'] = payload.get('value')
+                                          agent.subscribe('sensors/temperature', on_message)
+                                        WRONG signatures:
+                                          async def on_message():               # ← missing payload arg → ERROR
+                                          async def on_message(topic, payload): # ← too many args → ERROR
+                                          def on_message(payload):              # ← not async → will fail silently
+                                        WRONG call patterns:
+                                          data = await agent.subscribe('sensors/temperature')  # WRONG - not awaitable
+                                          agent.subscribe('sensors/temperature')               # WRONG - missing callback
+
+  agent.mqtt_get(topic, timeout=10)   — wait for ONE message on topic and return it (one-shot read)
+                                        USE THIS when you need a single current value, not a stream
+                                        USE agent.subscribe() when you need continuous updates
                                         Example: stats = await agent.mqtt_get('rpi-room/cpu')
+
   agent.topics(keyword="")            — list all MQTT topics published by known agents
                                         Example: agent.topics("temp") → topics with "temp" in name
                                         Returns: [{"topic": str, "agents": [{"name", "node"}]}, ...]
@@ -234,12 +252,94 @@ Inside your code, the `agent` object provides:
                                         "running": false, "spawnable": true → catalog recipe, will be
                                           auto-spawned the first time you route a task to it with @agent-name
 
+  agent.window(topic, seconds=300)    — sliding time window over a topic stream for temporal reasoning
+                                        Returns a StreamWindow object synchronously. NOT a coroutine.
+                                        NEVER use await with window() — it is NOT awaitable.
+                                        CORRECT:   agent.state['w'] = agent.window('sensors/temp', seconds=60)
+                                        WRONG:     agent.state['w'] = await agent.window(...)  # TypeError!
+                                        Store in setup(), read in process():
+                                          async def setup(agent):
+                                              agent.state['w'] = agent.window('sensors/temp', seconds=60)
+                                          async def process(agent):
+                                              w = agent.state['w']
+                                              avg  = w.mean('value')       # mean over window
+                                              mn   = w.min('value')        # minimum
+                                              mx   = w.max('value')        # maximum
+                                              up   = w.rising(threshold=2) # rose by 2+ degrees
+                                              gone = w.absent_for(60)      # no data for 60s
+                                              n    = w.event_count('motion', True, seconds=300)
+                                              last = w.latest()            # most recent entry dict
+                                              cnt  = w.count()             # number of entries
+                                        Methods: mean, min, max, rising, falling, stable, absent_for,
+                                                 event_count, latest, count, values
+
+  agent.publish_world_state(key, data) — publish retained shared state readable by any agent
+                                         Topic: agents/{name}/data/{key}
+                                         Example: await agent.publish_world_state('presence', {'zone': 'kitchen', 'present': True})
+  agent.read_world_state(topic)        — read a retained world state topic (one-shot)
+                                         Example: state = await agent.read_world_state('home/presence/kitchen')
+
+  agent.declare_contract(publishes, subscribes, triggers_when, produces_schema)
+                                       — declare this agent's topic contract for auto-wiring
+                                         Call from setup() to make agent discoverable by planner
+                                         Example:
+                                           agent.declare_contract(
+                                               publishes=['rpi/camera/detections'],
+                                               subscribes=['homeassistant/state_changes/#'],
+                                               triggers_when={'person_detected': True},
+                                           )
+
   agent.llm                           — pre-configured LLM (same as main, already authenticated)
   agent.llm.chat(prompt, system="")   — single-turn LLM call, returns string
   agent.llm.complete(messages, system="") — multi-turn LLM call with full history
 
   The LLM provider is set at startup (Anthropic / OpenAI / Ollama / NVIDIA NIM).
   Agents always use the same provider as main — no configuration needed inside agent code.
+
+== SUBSCRIBE vs MQTT_GET — CRITICAL DISTINCTION ==
+  agent.subscribe(topic, callback)  — CONTINUOUS stream. Callback called for EVERY message.
+                                      Use for: sensor streams, state changes, ongoing monitoring.
+                                      NOT awaitable. Does NOT return data. Callback is required.
+  agent.mqtt_get(topic, timeout=N)  — ONE-SHOT read. Returns ONE message then stops.
+                                      Use for: reading current value once, polling on demand.
+                                      IS awaitable. Returns the payload dict.
+
+  Common mistake — DO NOT do this:
+    data = await agent.subscribe('sensors/temp')           # WRONG: subscribe is not awaitable
+    agent.subscribe('sensors/temp')                        # WRONG: callback missing
+    data = agent.mqtt_get('sensors/temp')                  # WRONG: mqtt_get must be awaited
+
+  Correct patterns:
+    # Pattern A: continuous subscription (use in setup, read state in process)
+    # callback MUST be async AND accept exactly one argument called 'payload'
+    async def setup(agent):
+        async def on_temp(payload):        # ← async, exactly ONE arg
+            agent.state['temp'] = payload.get('value', 0)
+        agent.subscribe('sensors/temperature', on_temp)  # ← no await
+
+    async def process(agent):
+        temp = agent.state.get('temp')
+        if temp and temp > 30:
+            await agent.alert('Too hot!')
+
+    # Pattern B: one-shot read (use in process or handle_task)
+    async def process(agent):
+        data = await agent.mqtt_get('sensors/temperature', timeout=5)
+        if data:
+            await agent.log(f"Current temp: {data.get('value')}")
+
+    # Pattern C: sliding window (best for temporal patterns — NO await on window())
+    async def setup(agent):
+        agent.state['window'] = agent.window('sensors/temperature', seconds=300)  # NO await
+
+    async def process(agent):
+        w = agent.state['window']
+        if w.rising(threshold=3.0):
+            await agent.alert('Temperature rising fast!')
+        avg = w.mean('value')
+        mn  = w.min('value')
+        mx  = w.max('value')
+        await agent.log(f'Temp stats: avg={avg:.1f} min={mn:.1f} max={mx:.1f}')
 
 == LLM USAGE — READ THIS CAREFULLY ==
 The agent already has a working LLM via agent.llm. DO NOT set up your own LLM.
@@ -956,6 +1056,61 @@ class MainActor(LLMAgent):
 
         from .one_off_actuator_agent import OneOffActuatorAgent
 
+        # ── Enrich the request with HA entity context ──────────────────────
+        # The OneOffActuatorAgent needs to resolve "lamp" → "light.wiz_rgbw_tunable_02cba0".
+        # Without entity context, it fails with "couldn't identify a matching device".
+        # Fetch entities via the home-assistant-agent (cached + fast) and inject
+        # the relevant matches into the request so the LLM can pick the right one.
+        enriched_text = text
+        try:
+            if self._registry:
+                ha_agent = self._registry.find_by_name("home-assistant-agent")
+                if ha_agent:
+                    # Use a unique task_id so the future resolves correctly
+                    _ha_task_id = f"actuate_entities_{uuid.uuid4().hex[:8]}"
+                    _ha_future: asyncio.Future = asyncio.get_running_loop().create_future()
+                    self._result_futures[_ha_task_id] = _ha_future
+                    await self.send(ha_agent.actor_id, MessageType.TASK, {
+                        "text": "list_entities",
+                        "_task_id": _ha_task_id,
+                        "task": _ha_task_id,
+                        "reply_to": self.actor_id,
+                    })
+                    try:
+                        ha_result = await asyncio.wait_for(_ha_future, timeout=10.0)
+                    except asyncio.TimeoutError:
+                        ha_result = None
+                    finally:
+                        self._result_futures.pop(_ha_task_id, None)
+
+                    entities = []
+                    if ha_result and isinstance(ha_result, dict):
+                        entities = ha_result.get("entities", []) or ha_result.get("result", [])
+                    if isinstance(entities, list) and entities:
+                        # Build a compact entity summary for the LLM
+                        entity_lines = []
+                        for e in entities[:300]:
+                            eid = e.get("entity_id", "")
+                            name = e.get("name", "") or e.get("friendly_name", "")
+                            if eid:
+                                entry = eid
+                                if name and name != eid:
+                                    entry += f" ({name})"
+                                entity_lines.append(entry)
+                        if entity_lines:
+                            enriched_text = (
+                                f"{text}\n\n"
+                                f"[AVAILABLE HA ENTITIES — match the user's device to one of these:\n"
+                                + "\n".join(f"  {e}" for e in entity_lines)
+                                + "\n]"
+                            )
+                            logger.info(
+                                f"[{self.name}] Enriched actuate request with "
+                                f"{len(entity_lines)} HA entities"
+                            )
+        except Exception as e:
+            logger.warning(f"[{self.name}] Could not fetch HA entities for actuate: {e}")
+
         task_id = f"actuate_{uuid.uuid4().hex[:8]}"
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._result_futures[task_id] = future
@@ -963,7 +1118,7 @@ class MainActor(LLMAgent):
         try:
             await self.spawn(
                 OneOffActuatorAgent,
-                request=text,
+                request=enriched_text,
                 llm_provider=self.llm,
                 task_id=task_id,
                 reply_to_id=self.actor_id,
@@ -1059,6 +1214,8 @@ class MainActor(LLMAgent):
                 "  /nodes                — list remote nodes and their agents",
                 "  /topics               — list MQTT topics published by known agents",
                 "  /topics <keyword>     — filter topics by keyword",
+                "  /bus                  — TopicBus registry: contracts, data flows, wiring pairs",
+                "  /mqtt                 — MQTT publisher status (connected, queue depth, outbox)",
                 "  /help                 — show this help",
             ])
         if stripped in ("main.list_nodes", "list_nodes", "/nodes"):
@@ -1089,6 +1246,62 @@ class MainActor(LLMAgent):
                 )
                 lines.append(f"  {t['topic']:40s} ← {agent_strs}")
             return note_prefix + "\n".join(lines)
+            
+        if stripped == "/mqtt":
+            client = self._mqtt_client
+            if client is None:
+                return note_prefix + "MQTT publisher not initialised."
+            connected   = getattr(client, "connected",   False)
+            queue_depth = getattr(client, "queue_depth", 0)
+            client_id   = getattr(client, "_client_id",  "?")
+            db_path     = getattr(client, "_db_path",    "?")
+            status_icon = "🟢" if connected else "🔴"
+            lines = [
+                f"MQTT Publisher Status:",
+                f"  {status_icon} connected   : {connected}",
+                f"  client_id   : {client_id}",
+                f"  queue_depth : {queue_depth} message(s) pending",
+                f"  outbox_db   : {db_path}",
+                f"  QoS 1 topics: nodes/*, agents/by-name/*",
+                f"  QoS 0 topics: */logs, */metrics, */status, */heartbeat",
+            ]
+            if queue_depth > 0:
+                lines.append(f"  ⚠️  {queue_depth} message(s) queued — will deliver when reconnected")
+            return note_prefix + "\n".join(lines)
+
+        if stripped == "/bus":
+            try:
+                from ..core.topic_bus import get_topic_bus
+                bus = get_topic_bus()
+                if not bus:
+                    return note_prefix + "TopicBus not initialised."
+                summary = bus.registry.summary()
+                lines = [
+                    f"TopicBus — Reactive Pub/Sub Registry",
+                    f"  agents with contracts : {summary['total_agents']}",
+                    f"  published topics      : {summary['total_published']}",
+                    f"  subscribed topics     : {summary['total_subscribed']}",
+                    f"  auto-wiring pairs     : {summary['wiring_pairs']}",
+                    "",
+                ]
+                for c in sorted(summary["agents"], key=lambda x: x["name"]):
+                    lines.append(f"  [{c['name']}]" + (f" on {c['node']}" if c.get("node") else ""))
+                    if c["publishes"]:
+                        lines.append(f"    publishes : {', '.join(c['publishes'])}")
+                    if c["subscribes"]:
+                        lines.append(f"    subscribes: {', '.join(c['subscribes'])}")
+                    if c.get("triggers_when"):
+                        lines.append(f"    triggers  : {c['triggers_when']}")
+                pairs = bus.registry.find_wiring_opportunities()
+                if pairs:
+                    lines.append("\nAuto-wiring opportunities:")
+                    for prod, cons, topic in pairs:
+                        lines.append(f"  {prod.name} → {cons.name}  via {topic}")
+                return note_prefix + "\n".join(lines)
+            except Exception as e:
+                return note_prefix + f"TopicBus error: {e}"
+
+
 
         # ── Webhook / notification URL management ───────────────────────────
         if stripped.startswith("/memory"):
@@ -1991,6 +2204,20 @@ class MainActor(LLMAgent):
             llm_provider=self.llm,
             persistence_dir=str(self._persistence_dir.parent),
         )
+        
+        # Register TopicContract if spawn config declares pub/sub topics
+        if actor and (config.get("publishes") or config.get("subscribes")):
+            try:
+                from ..core.topic_bus import TopicContract, get_topic_bus
+                contract = TopicContract.from_spawn_config({**config, "actor_id": actor.actor_id})
+                bus = get_topic_bus()
+                if bus:
+                    bus.register_contract(contract)
+                    logger.info(f"[{self.name}] Registered TopicContract for '{name}': "
+                                f"pub={contract.publishes} sub={contract.subscribes}")
+            except Exception as e:
+                logger.debug(f"[{self.name}] TopicContract registration skipped: {e}")
+                
         return actor
 
     async def _install_packages(self, packages: list[str]):

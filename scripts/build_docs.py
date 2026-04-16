@@ -43,9 +43,11 @@ NAV = [
         ("Installation", "development.md"),
         ("Architecture", "architecture.md"),
         ("Agents",       "agents.md"),
+        ("Auto-Wiring",       "mqtt_auto_wiring.md"),
         ("Interfaces",   "interfaces.md"),
         ("Pipelines",      "pipelines.md"),
         ("Remote Nodes",      "remote-nodes.md"),
+        ("Prometheus",       "prometheus.md"),
     ]),
     #("Reference", "reference", [
     #    ("REST & WebSocket API", "api.md"),

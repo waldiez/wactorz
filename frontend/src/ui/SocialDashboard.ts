@@ -304,15 +304,15 @@ export class SocialDashboard {
     const deleteBtn = card.querySelector<HTMLButtonElement>(
       '[data-action="delete"]',
     );
-    if (pauseBtn) pauseBtn.style.display = st === "running" ? "" : "none";
-    if (resumeBtn) resumeBtn.style.display = st === "paused" ? "" : "none";
+    if (pauseBtn)
+      pauseBtn.style.display = !prot && st === "running" ? "" : "none";
+    if (resumeBtn)
+      resumeBtn.style.display = !prot && st === "paused" ? "" : "none";
     if (stopBtn) {
-      stopBtn.style.display = st !== "stopped" ? "" : "none";
-      stopBtn.disabled = prot;
+      stopBtn.style.display = !prot && st !== "stopped" ? "" : "none";
     }
     if (deleteBtn) {
-      deleteBtn.disabled = prot;
-      deleteBtn.title = prot ? "Protected" : "Delete";
+      deleteBtn.style.display = prot ? "none" : "";
     }
   }
 

@@ -150,16 +150,15 @@ wsChat.connect(`${_wsProto}//${window.location.host}/ws`);
 // ── Seed localStorage from backend config (only for unset keys) ───────────────
 // Backend config (.env) provides defaults; a user-set localStorage value wins.
 fetch("/api/config")
-  .then((r) => r.ok ? r.json() : null)
+  .then((r) => (r.ok ? r.json() : null))
   .then((cfg) => {
     if (!cfg) return;
     const setIfMissing = (key: string, value: string) => {
-      if (value && !localStorage.getItem(key))
-        localStorage.setItem(key, value);
+      if (value && !localStorage.getItem(key)) localStorage.setItem(key, value);
     };
-    setIfMissing("wactorz-ha-url",       cfg.ha?.url ?? "");
-    setIfMissing("wactorz-ha-token",     cfg.ha?.token ?? "");
-    setIfMissing("wactorz-fuseki-url",   cfg.fuseki?.url ?? "");
+    setIfMissing("wactorz-ha-url", cfg.ha?.url ?? "");
+    setIfMissing("wactorz-ha-token", cfg.ha?.token ?? "");
+    setIfMissing("wactorz-fuseki-url", cfg.fuseki?.url ?? "");
     setIfMissing("wactorz-fuseki-dataset", cfg.fuseki?.dataset ?? "");
     if (cfg.mqtt?.url) setIfMissing("wactorz-mqtt-url", cfg.mqtt.url);
   })

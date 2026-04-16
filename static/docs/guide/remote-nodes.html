@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Remote Nodes — Wactorz</title>
   <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
   <style>
@@ -12,7 +13,7 @@
     :root{
       --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
       --border:#1a2140;--border-hi:#2a3560;
-      --blue:#4f8ef7;--cyan:#00d4ff;--green:#4ade80;--yellow:#fbbf24;--orange:#fb923c;
+      --blue:#4f8ef7;--cyan:#00d4ff;
       --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
       --mono:'JetBrains Mono',monospace;
       --display:'Chakra Petch',sans-serif;
@@ -21,324 +22,445 @@
     body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
     ::-webkit-scrollbar{width:5px}
     ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
     .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
     .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
     .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
     .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
     .topbar-links{display:flex;gap:.1rem}
     .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
-    .topbar-links a:hover{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
     .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
     .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
     .sidebar-group{margin-bottom:1.25rem}
     .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
     .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
     .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
     .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
-    .sidebar-sub{padding-left:.5rem;font-size:.75rem}
-    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:900px;min-width:0}
-    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:.5rem;line-height:1.15}
-    .content .subtitle{color:var(--muted-hi);margin-bottom:2rem;font-size:.85rem}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
     .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
     .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
-    .content h4{font-family:var(--display);font-size:.82rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem;letter-spacing:.06em;text-transform:uppercase}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
     .content p{margin-bottom:1rem;color:var(--text)}
     .content a{color:var(--blue);text-decoration:none}
     .content a:hover{text-decoration:underline}
     .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
-    .content li{margin:.3rem 0;color:var(--muted-hi)}
-    .content li strong{color:var(--text)}
+    .content li{margin:.25rem 0}
     .content strong{color:#fff;font-weight:500}
-    .content hr{border:none;border-top:1px solid var(--border);margin:2.5rem 0}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
     .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
-    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem}
-    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.8}
-    .content table{width:100%;border-collapse:collapse;margin:.75rem 0 1.5rem;font-size:.83rem}
-    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.55rem 1rem;border:1px solid var(--border);text-align:left;font-family:var(--display);font-size:.78rem;letter-spacing:.04em}
-    .content td{padding:.45rem 1rem;border:1px solid var(--border);color:var(--muted-hi);vertical-align:top}
-    .content td code{font-size:.8em}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
     .content tr:hover td{background:rgba(79,142,247,.03)}
-    .callout{border-left:3px solid var(--blue);margin:1.25rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);border-radius:0 4px 4px 0}
-    .callout.tip{border-color:var(--green);background:rgba(74,222,128,.05)}
-    .callout.warn{border-color:var(--yellow);background:rgba(251,191,36,.05)}
-    .callout-title{font-family:var(--display);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--blue);margin-bottom:.25rem}
-    .callout.tip  .callout-title{color:var(--green)}
-    .callout.warn .callout-title{color:var(--yellow)}
-    .callout p{margin:0;color:var(--muted-hi);font-size:.85rem}
-    .flow{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;font-size:.8rem;line-height:1.8;color:var(--muted-hi);overflow-x:auto;margin:1rem 0 1.25rem}
-    .flow .hi{color:var(--cyan)}
-    .flow .grn{color:var(--green)}
-    .flow .muted{color:var(--muted)}
-    .flow .ylw{color:var(--yellow)}
+
+    /* ── Footer ── */
     footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
     footer a{color:var(--muted-hi);text-decoration:none}
-    @media(max-width:768px){.sidebar{display:none}.content{padding:2rem 1.25rem 4rem}}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
   </style>
 </head>
 <body>
 <header class="topbar">
-  <a href="../index.html" class="topbar-logo"><div class="logo-mark"></div>Wactorz</a>
+  <a href="../index.html" class="topbar-logo">
+    <div class="logo-mark"></div>Wactorz
+  </a>
   <nav class="topbar-links">
-    <a href="../guide/installation.html">Docs</a>
-    <a href="https://github.com/waldiez/wactorz" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://pypi.org/project/wactorz/" target="_blank" rel="noopener">PyPI</a>
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
   </nav>
 </header>
+
 <div class="layout">
   <aside class="sidebar">
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
-      <a href="../guide/installation.html">Installation</a>
-      <a href="../guide/architecture.html">Architecture</a>
-      <a href="../guide/agents.html">Agents</a>
-      <a href="../guide/interfaces.html">Interfaces</a>
-      <a href="../guide/pipelines.html">Pipelines</a>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
       <a href="../guide/remote-nodes.html" class="active">Remote Nodes</a>
-    </div>
-    <div class="sidebar-group">
-      <div class="sidebar-label">On this page</div>
-      <a href="#overview" class="sidebar-sub">Overview</a>
-      <a href="#setup" class="sidebar-sub">Setup on the edge device</a>
-      <a href="#spawning" class="sidebar-sub">Spawning remote agents</a>
-      <a href="#deploy" class="sidebar-sub">Automated deploy</a>
-      <a href="#mqtt-topics" class="sidebar-sub">MQTT topics</a>
-      <a href="#supervisor" class="sidebar-sub">Supervisor behaviour</a>
-      <a href="#agent-api" class="sidebar-sub">Agent API on edge</a>
-      <a href="#migration" class="sidebar-sub">Agent migration</a>
-      <a href="#debugging" class="sidebar-sub">Debugging</a>
-    </div>
-    <div class="sidebar-group">
-      <div class="sidebar-label">Reference</div>
-      <a href="../reference/mqtt_topics.html">MQTT Topics</a>
     </div>
   </aside>
   <main class="content">
-    <h1>Remote Nodes</h1>
-    <p class="subtitle">Deploy a single file to any machine — Raspberry Pi, VM, edge device — and spawn agents on it from the main Wactorz chat. Remote agents heartbeat back to the central dashboard exactly like local ones.</p>
+<h1 id="remote-nodes">Remote Nodes</h1>
+<p>Deploy a single file to any machine — Raspberry Pi, VM, edge device — and spawn agents on it from the main Wactorz chat. Remote agents heartbeat back to the central dashboard exactly like local ones.</p>
+<h2 id="overview">Overview</h2>
+<p>The remote node system is built around a single self-contained script: <code>remote_runner.py</code>. It requires no Wactorz installation on the edge device — only Python 3 and three pip packages. It connects to the shared MQTT broker, listens for spawn commands from the main machine, and runs DynamicAgents locally with the same supervisor semantics.</p>
+<div class="highlight"><pre><span></span><code><span class="k">[Main machine]                        [Edge device — Raspberry Pi, VM, etc.]</span>
 
-    <h2 id="overview">Overview</h2>
-    <p>The remote node system is built around a single self-contained script: <code>remote_runner.py</code>. It requires no Wactorz installation on the edge device — only Python 3 and three pip packages. It connects to the shared MQTT broker, listens for spawn commands from the main machine, and runs DynamicAgents locally with the same supervisor semantics.</p>
+<span class="na">MainActor  ──MQTT──►  nodes/{name}/spawn  ──►  remote_runner.py</span>
+<span class="w">                                                   </span><span class="na">│  compiles + runs agent</span>
+<span class="w">                                                   </span><span class="na">│  local ONE_FOR_ONE supervisor</span>
+<span class="na">Dashboard  ◄──MQTT──  agents/{id}/heartbeat  ◄──┘  heartbeats every 10 s</span>
+</code></pre></div>
 
-    <div class="flow"><pre><span class="muted">[Main machine]                        [Edge device — Raspberry Pi, VM, etc.]</span>
+<p>Remote agents appear in the central dashboard alongside local agents. The only visual difference is a <code>node</code> field in their heartbeat payload showing which machine they run on.</p>
+<hr />
+<h2 id="setup-on-the-edge-device">Setup on the edge device</h2>
+<h4 id="1-install-dependencies-minimal">1. Install dependencies (minimal)</h4>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>aiomqtt<span class="w"> </span>psutil<span class="w"> </span>aiohttp<span class="w"> </span>--break-system-packages
+</code></pre></div>
 
-<span class="hi">MainActor</span>  ──MQTT──►  <span class="grn">nodes/{name}/spawn</span>  ──►  <span class="hi">remote_runner.py</span>
-                                                       │  compiles + runs agent
-                                                       │  local ONE_FOR_ONE supervisor
-<span class="hi">Dashboard</span>  ◄──MQTT──  <span class="grn">agents/{id}/heartbeat</span>  ◄──┘  heartbeats every 10 s</pre></div>
+<h4 id="2-copy-remote_runnerpy-to-the-device">2. Copy <code>remote_runner.py</code> to the device</h4>
+<div class="highlight"><pre><span></span><code>scp<span class="w"> </span>remote_runner.py<span class="w"> </span>pi@raspberrypi.local:~/
+</code></pre></div>
 
-    <p>Remote agents appear in the central dashboard alongside local agents. The only visual difference is a <code>node</code> field in their heartbeat payload showing which machine they run on.</p>
+<h4 id="3-start-the-runner">3. Start the runner</h4>
+<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>remote_runner.py<span class="w"> </span>--broker<span class="w"> </span><span class="m">192</span>.168.1.10<span class="w"> </span>--name<span class="w"> </span>rpi-livingroom
+</code></pre></div>
 
-    <hr/>
+<p>Replace <code>192.168.1.10</code> with the IP of the machine running the MQTT broker. The <code>--name</code> is the node identifier — it must be unique across all nodes and is used to address this device when spawning agents.</p>
+<h4 id="command-line-options">Command-line options</h4>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--broker</code></td>
+<td><code>localhost</code></td>
+<td>MQTT broker hostname or IP. Also reads <code>$AGENTFLOW_BROKER</code>.</td>
+</tr>
+<tr>
+<td><code>--port</code></td>
+<td><code>1883</code></td>
+<td>MQTT broker port.</td>
+</tr>
+<tr>
+<td><code>--name</code> / <code>--node</code></td>
+<td>random</td>
+<td>Unique node name. Also reads <code>$AGENTFLOW_NODE</code>.</td>
+</tr>
+<tr>
+<td><code>--loglevel</code></td>
+<td><code>INFO</code></td>
+<td><code>DEBUG</code> | <code>INFO</code> | <code>WARNING</code> | <code>ERROR</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="run-as-a-service-systemd">Run as a service (systemd)</h4>
+<div class="highlight"><pre><span></span><code><span class="k">[Unit]</span>
+<span class="na">Description</span><span class="o">=</span><span class="s">Wactorz remote node</span>
+<span class="na">After</span><span class="o">=</span><span class="s">network.target</span>
 
-    <h2 id="setup">Setup on the edge device</h2>
+<span class="k">[Service]</span>
+<span class="na">ExecStart</span><span class="o">=</span><span class="s">/usr/bin/python3 /home/pi/remote_runner.py --broker 192.168.1.10 --name rpi-livingroom</span>
+<span class="na">Restart</span><span class="o">=</span><span class="s">always</span>
+<span class="na">RestartSec</span><span class="o">=</span><span class="s">5</span>
+<span class="na">Environment</span><span class="o">=</span><span class="s">AGENTFLOW_BROKER=192.168.1.10</span>
 
-    <h4>1. Install dependencies (minimal)</h4>
-    <pre><code>pip install aiomqtt psutil aiohttp --break-system-packages</code></pre>
+<span class="k">[Install]</span>
+<span class="na">WantedBy</span><span class="o">=</span><span class="s">multi-user.target</span>
+</code></pre></div>
 
-    <h4>2. Copy <code>remote_runner.py</code> to the device</h4>
-    <pre><code>scp remote_runner.py pi@raspberrypi.local:~/</code></pre>
+<blockquote>
+<p><strong>💡 Self-test</strong> — Run <code>python3 remote_runner.py --test</code> to execute the built-in supervisor test suite without needing a broker. Useful to verify the script works on a new device before connecting it.</p>
+</blockquote>
+<hr />
+<h2 id="spawning-agents-on-a-remote-node">Spawning agents on a remote node</h2>
+<p>From the main Wactorz chat, add a <code>"node"</code> field to any spawn request. The planner and main_actor both support this — or you can do it manually.</p>
+<h4 id="natural-language-via-planner">Natural language (via planner)</h4>
+<div class="highlight"><pre><span></span><code>&quot;deploy a temperature sensor agent to rpi-livingroom&quot;
+&quot;spawn an agent on rpi-bedroom that reads the door sensor every 30 seconds&quot;
+</code></pre></div>
 
-    <h4>3. Start the runner</h4>
-    <pre><code>python3 remote_runner.py --broker 192.168.1.10 --name rpi-livingroom</code></pre>
+<h4 id="manual-spawn-via-chat">Manual spawn via chat</h4>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w">          </span><span class="s2">&quot;temp-sensor-agent&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;node&quot;</span><span class="p">:</span><span class="w">          </span><span class="s2">&quot;rpi-livingroom&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w">          </span><span class="s2">&quot;dynamic&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w">   </span><span class="s2">&quot;Reads temperature from DHT22 sensor&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;poll_interval&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;max_restarts&quot;</span><span class="p">:</span><span class="w">  </span><span class="mi">5</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;restart_delay&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">3.0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;install&quot;</span><span class="p">:</span><span class="w">       </span><span class="p">[</span><span class="s2">&quot;adafruit-circuitpython-dht&quot;</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;</span>
+<span class="s2">    async def setup(agent):</span>
+<span class="s2">        await agent.log(&#39;DHT22 sensor agent ready&#39;)</span>
 
-    <p>Replace <code>192.168.1.10</code> with the IP of the machine running the MQTT broker. The <code>--name</code> is the node identifier — it must be unique across all nodes and is used to address this device when spawning agents.</p>
+<span class="s2">    async def process(agent):</span>
+<span class="s2">        import random   # replace with real adafruit_dht read</span>
+<span class="s2">        temp = round(20 + random.uniform(-2, 2), 1)</span>
+<span class="s2">        await agent.publish(&#39;sensors/temperature&#39;, {&#39;value&#39;: temp, &#39;unit&#39;: &#39;C&#39;, &#39;node&#39;: agent.node})</span>
+<span class="s2">        await agent.log(f&#39;Temperature: {temp}C&#39;)</span>
+<span class="s2">  &quot;</span>
+<span class="p">}</span>
+</code></pre></div>
 
-    <h4>Command-line options</h4>
-    <table>
-      <thead><tr><th>Flag</th><th>Default</th><th>Description</th></tr></thead>
-      <tbody>
-        <tr><td><code>--broker</code></td><td><code>localhost</code></td><td>MQTT broker hostname or IP. Also reads <code>$AGENTFLOW_BROKER</code>.</td></tr>
-        <tr><td><code>--port</code></td><td><code>1883</code></td><td>MQTT broker port.</td></tr>
-        <tr><td><code>--name</code> / <code>--node</code></td><td>random</td><td>Unique node name. Also reads <code>$AGENTFLOW_NODE</code>.</td></tr>
-        <tr><td><code>--loglevel</code></td><td><code>INFO</code></td><td><code>DEBUG</code> | <code>INFO</code> | <code>WARNING</code> | <code>ERROR</code></td></tr>
-      </tbody>
-    </table>
+<p>The main machine publishes this config to <code>nodes/rpi-livingroom/spawn</code>. The runner picks it up, installs any declared <code>"install"</code> packages, compiles the code, and starts the agent under a local supervisor.</p>
+<blockquote>
+<p><strong>ℹ replace flag</strong> — If an agent with the same name is already running on the node, the spawn is ignored by default. Pass <code>"replace": true</code> in the config to stop the old instance and spawn fresh.</p>
+</blockquote>
+<hr />
+<h2 id="automated-deploy-from-chat">Automated deploy from chat</h2>
+<p>MainActor can deploy <code>remote_runner.py</code> to a new machine automatically via a devops agent that uses SSH. From the chat:</p>
+<div class="highlight"><pre><span></span><code><span class="s">&quot;deploy node rpi-bedroom to pi@192.168.1.52 with broker 192.168.1.10&quot;</span>
+</code></pre></div>
 
-    <h4>Run as a service (systemd)</h4>
-    <pre><code">[Unit]
-Description=Wactorz remote node
-After=network.target
+<p>This spawns a devops agent that SSHes into the target machine, creates <code>~/agentflow/</code>, uploads <code>remote_runner.py</code>, installs the dependencies, and starts the runner as a background process. After that, the node is immediately available for agent spawning.</p>
+<hr />
+<h2 id="mqtt-topics">MQTT topics</h2>
+<p>The runner subscribes to a set of control topics scoped to its node name, and publishes heartbeats for itself and all its agents.</p>
+<table>
+<thead>
+<tr>
+<th>Topic</th>
+<th>Direction</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>nodes/{name}/spawn</code></td>
+<td>→ runner</td>
+<td>Spawn a new agent. Payload: full agent config dict. Published with <code>retain=true</code>; runner clears retain after processing.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/stop</code></td>
+<td>→ runner</td>
+<td>Stop a named agent. Payload: <code>{"name": "agent-name"}</code>.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/stop_all</code></td>
+<td>→ runner</td>
+<td>Stop all agents and shut down the runner.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/list</code></td>
+<td>→ runner</td>
+<td>Request the list of running agents. Response on <code>nodes/{name}/agents</code>.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/agents</code></td>
+<td>← runner</td>
+<td>Response to <code>list</code>. Contains agent names and actor IDs.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/heartbeat</code></td>
+<td>← runner</td>
+<td>Runner heartbeat every 10 s. Contains node name, agent count, broker address.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/migrate</code></td>
+<td>→ runner</td>
+<td>Migrate a running agent to another node. Payload: <code>{"name": "...", "target_node": "..."}</code>.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/migrate_result</code></td>
+<td>← runner</td>
+<td>Result of a migration request.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/reply/{id}</code></td>
+<td>← runner</td>
+<td>Reply routing for <code>agent.send_to()</code> calls originating on this node.</td>
+</tr>
+<tr>
+<td><code>agents/{id}/heartbeat</code></td>
+<td>← agent</td>
+<td>Per-agent heartbeat every 10 s. Includes <code>"node": "{name}"</code> field.</td>
+</tr>
+<tr>
+<td><code>agents/{id}/logs</code></td>
+<td>← agent</td>
+<td>Log messages from <code>agent.log()</code> and <code>agent.alert()</code>.</td>
+</tr>
+<tr>
+<td><code>agents/by-name/{name}/task</code></td>
+<td>→ agent</td>
+<td>Task addressed to a named agent on any node. Runner routes to local agents by name.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="supervisor-behaviour">Supervisor behaviour</h2>
+<p>Each agent on a remote node runs under a local <strong>ONE_FOR_ONE</strong> supervisor — identical semantics to the main machine. If an agent crashes, the supervisor restarts it with exponential back-off:</p>
+<div class="highlight"><pre><span></span><code><span class="n">delay</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">restart_delay</span> <span class="o">*</span> <span class="p">(</span><span class="mi">2</span> <span class="o">**</span> <span class="p">(</span><span class="n">restart_count</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span> <span class="mf">60.0</span><span class="p">)</span>
+<span class="c1"># restart_delay=3.0: 3s → 6s → 12s → 24s → 48s → 60s (cap)</span>
+</code></pre></div>
 
-[Service]
-ExecStart=/usr/bin/python3 /home/pi/remote_runner.py --broker 192.168.1.10 --name rpi-livingroom
-Restart=always
-RestartSec=5
-Environment=AGENTFLOW_BROKER=192.168.1.10
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Crash in <code>process()</code></td>
+<td>Back-off, restart. After 5 consecutive failures in one run, escalates to supervisor for a clean restart.</td>
+</tr>
+<tr>
+<td>Crash in <code>setup()</code></td>
+<td>Fatal — supervisor stops. Broken code won't fix itself on retry.</td>
+</tr>
+<tr>
+<td>Compile error</td>
+<td>Fatal — supervisor stops immediately.</td>
+</tr>
+<tr>
+<td>Restart budget exhausted (<code>max_restarts</code>)</td>
+<td>Agent is marked <code>failed</code>, removed from the registry, and a fatal event is published.</td>
+</tr>
+<tr>
+<td>10 consecutive successful <code>process()</code> calls</td>
+<td>One restart token is credited back (gradual budget recovery).</td>
+</tr>
+<tr>
+<td>Deliberate <code>stop</code> command</td>
+<td>No restart — clean shutdown.</td>
+</tr>
+</tbody>
+</table>
+<p>Default values: <code>max_restarts=5</code>, <code>restart_delay=3.0</code>. Override per agent in the spawn config.</p>
+<hr />
+<h2 id="agent-api-on-the-edge">Agent API on the edge</h2>
+<p>The <code>agent</code> object available inside remote agent code mirrors the local DynamicAgent API. All of the following work identically:</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>await agent.publish(topic, data)</code></td>
+<td>Publish to any MQTT topic via the shared broker.</td>
+</tr>
+<tr>
+<td><code>await agent.log(message)</code></td>
+<td>Log to <code>agents/{id}/logs</code> — visible in the central dashboard.</td>
+</tr>
+<tr>
+<td><code>await agent.alert(message, severity)</code></td>
+<td>Publish an alert. Levels: <code>info</code>, <code>warning</code>, <code>error</code>.</td>
+</tr>
+<tr>
+<td><code>agent.persist(key, value)</code></td>
+<td>Write to <code>/tmp/agentflow_{name}_state.json</code> (JSON, not pickle — portable).</td>
+</tr>
+<tr>
+<td><code>agent.recall(key)</code></td>
+<td>Read a persisted value.</td>
+</tr>
+<tr>
+<td><code>agent.state</code></td>
+<td>In-memory dict, not persisted.</td>
+</tr>
+<tr>
+<td><code>await agent.send_to(name, payload)</code></td>
+<td>Send a task to any agent (local or remote) via MQTT request/reply. Times out after 30 s by default.</td>
+</tr>
+<tr>
+<td><code>agent.node</code></td>
+<td>The node name this agent is running on (e.g. <code>"rpi-livingroom"</code>).</td>
+</tr>
+<tr>
+<td><code>agent.agents()</code></td>
+<td>List of all agents running on this node.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>⚠ No <code>agent.subscribe()</code> on edge</strong> — The remote runner does not implement <code>agent.subscribe()</code>. For MQTT subscriptions in remote agents, open an <code>aiomqtt.Client</code> directly inside <code>setup()</code> — the broker address is available as the machine's IP passed to <code>--broker</code>.</p>
+</blockquote>
+<hr />
+<h2 id="agent-migration">Agent migration</h2>
+<p>A running agent can be moved from one node to another without stopping it manually. The runner on the source node captures the agent's config, publishes it as a spawn command to the target node, then stops the local instance.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># From the main machine, publish to MQTT:</span>
+mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;nodes/rpi-livingroom/migrate&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-m<span class="w"> </span><span class="s1">&#39;{&quot;name&quot;: &quot;temp-sensor-agent&quot;, &quot;target_node&quot;: &quot;rpi-bedroom&quot;}&#39;</span>
+</code></pre></div>
 
-[Install]
-WantedBy=multi-user.target</code></pre>
+<p>Or trigger it from agent code using <code>agent.send_to()</code> if you build a migration manager. The result is published to <code>nodes/{source_node}/migrate_result</code>.</p>
+<hr />
+<h2 id="debugging">Debugging</h2>
+<h4 id="verbose-diagnostics">Verbose diagnostics</h4>
+<p>The runner has a built-in diagnostics logger that prints startup checks, connection events, and every published message to stderr — even if logging is misconfigured. Run with <code>--loglevel DEBUG</code> to see everything:</p>
+<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>remote_runner.py<span class="w"> </span>--broker<span class="w"> </span><span class="m">192</span>.168.1.10<span class="w"> </span>--name<span class="w"> </span>rpi-test<span class="w"> </span>--loglevel<span class="w"> </span>DEBUG
+</code></pre></div>
 
-    <div class="callout tip">
-      <div class="callout-title">Self-test</div>
-      <p>Run <code>python3 remote_runner.py --test</code> to execute the built-in supervisor test suite without needing a broker. Useful to verify the script works on a new device before connecting it.</p>
-    </div>
+<p>On startup it prints:</p>
+<ul>
+<li>Whether <code>aiomqtt</code>, <code>psutil</code>, <code>aiohttp</code> are installed</li>
+<li>Whether the broker is TCP-reachable (5 s timeout)</li>
+<li>Every subscribe, publish, and received message with counts</li>
+</ul>
+<h4 id="self-test-no-broker-needed">Self-test (no broker needed)</h4>
+<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>remote_runner.py<span class="w"> </span>--test
+</code></pre></div>
 
-    <hr/>
+<p>Runs 7 supervisor tests: stable agent, crash + restart, budget exhaustion, deliberate stop, health credit, compile error, setup failure. All should pass.</p>
+<h4 id="watch-node-traffic-from-the-main-machine">Watch node traffic from the main machine</h4>
+<div class="highlight"><pre><span></span><code>mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;nodes/#&#39;</span><span class="w"> </span>-v
+mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;agents/+/heartbeat&#39;</span><span class="w"> </span>-v
+</code></pre></div>
 
-    <h2 id="spawning">Spawning agents on a remote node</h2>
-    <p>From the main Wactorz chat, add a <code>"node"</code> field to any spawn request. The planner and main_actor both support this — or you can do it manually.</p>
+<h4 id="list-agents-on-a-node">List agents on a node</h4>
+<div class="highlight"><pre><span></span><code>mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;nodes/rpi-livingroom/list&quot;</span><span class="w"> </span>-m<span class="w"> </span><span class="s1">&#39;{}&#39;</span>
+mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;nodes/rpi-livingroom/agents&quot;</span><span class="w"> </span>-C<span class="w"> </span><span class="m">1</span>
+</code></pre></div>
 
-    <h4>Natural language (via planner)</h4>
-    <pre><code>"deploy a temperature sensor agent to rpi-livingroom"
-"spawn an agent on rpi-bedroom that reads the door sensor every 30 seconds"</code></pre>
+<h4 id="stop-a-specific-remote-agent">Stop a specific remote agent</h4>
+<div class="highlight"><pre><span></span><code>mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;nodes/rpi-livingroom/stop&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-m<span class="w"> </span><span class="s1">&#39;{&quot;name&quot;: &quot;temp-sensor-agent&quot;}&#39;</span>
+</code></pre></div>
 
-    <h4>Manual spawn via chat</h4>
-    <pre><code>{
-  "name":         "temp-sensor-agent",
-  "node":         "rpi-livingroom",
-  "type":         "dynamic",
-  "description":  "Reads temperature from DHT22 sensor",
-  "poll_interval": 30,
-  "max_restarts":  5,
-  "restart_delay": 3.0,
-  "install":      ["adafruit-circuitpython-dht"],
-  "code": "
-    async def setup(agent):
-        await agent.log('DHT22 sensor agent ready')
-
-    async def process(agent):
-        import random   # replace with real adafruit_dht read
-        temp = round(20 + random.uniform(-2, 2), 1)
-        await agent.publish('sensors/temperature', {'value': temp, 'unit': 'C', 'node': agent.node})
-        await agent.log(f'Temperature: {temp}C')
-  "
-}</code></pre>
-
-    <p>The main machine publishes this config to <code>nodes/rpi-livingroom/spawn</code>. The runner picks it up, installs any declared <code>"install"</code> packages, compiles the code, and starts the agent under a local supervisor.</p>
-
-    <div class="callout">
-      <div class="callout-title">ℹ replace flag</div>
-      <p>If an agent with the same name is already running on the node, the spawn is ignored by default. Pass <code>"replace": true</code> in the config to stop the old instance and spawn fresh.</p>
-    </div>
-
-    <hr/>
-
-    <h2 id="deploy">Automated deploy from chat</h2>
-    <p>MainActor can deploy <code>remote_runner.py</code> to a new machine automatically via a devops agent that uses SSH. From the chat:</p>
-
-    <pre><code>"deploy node rpi-bedroom to pi@192.168.1.52 with broker 192.168.1.10"</code></pre>
-
-    <p>This spawns a devops agent that SSHes into the target machine, creates <code>~/agentflow/</code>, uploads <code>remote_runner.py</code>, installs the dependencies, and starts the runner as a background process. After that, the node is immediately available for agent spawning.</p>
-
-    <hr/>
-
-    <h2 id="mqtt-topics">MQTT topics</h2>
-    <p>The runner subscribes to a set of control topics scoped to its node name, and publishes heartbeats for itself and all its agents.</p>
-
-    <table>
-      <thead><tr><th>Topic</th><th>Direction</th><th>Description</th></tr></thead>
-      <tbody>
-        <tr><td><code>nodes/{name}/spawn</code></td><td>→ runner</td><td>Spawn a new agent. Payload: full agent config dict. Published with <code>retain=true</code>; runner clears retain after processing.</td></tr>
-        <tr><td><code>nodes/{name}/stop</code></td><td>→ runner</td><td>Stop a named agent. Payload: <code>{"name": "agent-name"}</code>.</td></tr>
-        <tr><td><code>nodes/{name}/stop_all</code></td><td>→ runner</td><td>Stop all agents and shut down the runner.</td></tr>
-        <tr><td><code>nodes/{name}/list</code></td><td>→ runner</td><td>Request the list of running agents. Response on <code>nodes/{name}/agents</code>.</td></tr>
-        <tr><td><code>nodes/{name}/agents</code></td><td>← runner</td><td>Response to <code>list</code>. Contains agent names and actor IDs.</td></tr>
-        <tr><td><code>nodes/{name}/heartbeat</code></td><td>← runner</td><td>Runner heartbeat every 10 s. Contains node name, agent count, broker address.</td></tr>
-        <tr><td><code>nodes/{name}/migrate</code></td><td>→ runner</td><td>Migrate a running agent to another node. Payload: <code>{"name": "...", "target_node": "..."}</code>.</td></tr>
-        <tr><td><code>nodes/{name}/migrate_result</code></td><td>← runner</td><td>Result of a migration request.</td></tr>
-        <tr><td><code>nodes/{name}/reply/{id}</code></td><td>← runner</td><td>Reply routing for <code>agent.send_to()</code> calls originating on this node.</td></tr>
-        <tr><td><code>agents/{id}/heartbeat</code></td><td>← agent</td><td>Per-agent heartbeat every 10 s. Includes <code>"node": "{name}"</code> field.</td></tr>
-        <tr><td><code>agents/{id}/logs</code></td><td>← agent</td><td>Log messages from <code>agent.log()</code> and <code>agent.alert()</code>.</td></tr>
-        <tr><td><code>agents/by-name/{name}/task</code></td><td>→ agent</td><td>Task addressed to a named agent on any node. Runner routes to local agents by name.</td></tr>
-      </tbody>
-    </table>
-
-    <hr/>
-
-    <h2 id="supervisor">Supervisor behaviour</h2>
-    <p>Each agent on a remote node runs under a local <strong>ONE_FOR_ONE</strong> supervisor — identical semantics to the main machine. If an agent crashes, the supervisor restarts it with exponential back-off:</p>
-
-    <pre><code>delay = min(restart_delay * (2 ** (restart_count - 1)), 60.0)
-# restart_delay=3.0: 3s → 6s → 12s → 24s → 48s → 60s (cap)</code></pre>
-
-    <table>
-      <thead><tr><th>Scenario</th><th>Behaviour</th></tr></thead>
-      <tbody>
-        <tr><td>Crash in <code>process()</code></td><td>Back-off, restart. After 5 consecutive failures in one run, escalates to supervisor for a clean restart.</td></tr>
-        <tr><td>Crash in <code>setup()</code></td><td>Fatal — supervisor stops. Broken code won't fix itself on retry.</td></tr>
-        <tr><td>Compile error</td><td>Fatal — supervisor stops immediately.</td></tr>
-        <tr><td>Restart budget exhausted (<code>max_restarts</code>)</td><td>Agent is marked <code>failed</code>, removed from the registry, and a fatal event is published.</td></tr>
-        <tr><td>10 consecutive successful <code>process()</code> calls</td><td>One restart token is credited back (gradual budget recovery).</td></tr>
-        <tr><td>Deliberate <code>stop</code> command</td><td>No restart — clean shutdown.</td></tr>
-      </tbody>
-    </table>
-
-    <p>Default values: <code>max_restarts=5</code>, <code>restart_delay=3.0</code>. Override per agent in the spawn config.</p>
-
-    <hr/>
-
-    <h2 id="agent-api">Agent API on the edge</h2>
-    <p>The <code>agent</code> object available inside remote agent code mirrors the local DynamicAgent API. All of the following work identically:</p>
-
-    <table>
-      <thead><tr><th>Method</th><th>Description</th></tr></thead>
-      <tbody>
-        <tr><td><code>await agent.publish(topic, data)</code></td><td>Publish to any MQTT topic via the shared broker.</td></tr>
-        <tr><td><code>await agent.log(message)</code></td><td>Log to <code>agents/{id}/logs</code> — visible in the central dashboard.</td></tr>
-        <tr><td><code>await agent.alert(message, severity)</code></td><td>Publish an alert. Levels: <code>info</code>, <code>warning</code>, <code>error</code>.</td></tr>
-        <tr><td><code>agent.persist(key, value)</code></td><td>Write to <code>/tmp/agentflow_{name}_state.json</code> (JSON, not pickle — portable).</td></tr>
-        <tr><td><code>agent.recall(key)</code></td><td>Read a persisted value.</td></tr>
-        <tr><td><code>agent.state</code></td><td>In-memory dict, not persisted.</td></tr>
-        <tr><td><code>await agent.send_to(name, payload)</code></td><td>Send a task to any agent (local or remote) via MQTT request/reply. Times out after 30 s by default.</td></tr>
-        <tr><td><code>agent.node</code></td><td>The node name this agent is running on (e.g. <code>"rpi-livingroom"</code>).</td></tr>
-        <tr><td><code>agent.agents()</code></td><td>List of all agents running on this node.</td></tr>
-      </tbody>
-    </table>
-
-    <div class="callout warn">
-      <div class="callout-title">⚠ No agent.subscribe() on edge</div>
-      <p>The remote runner does not implement <code>agent.subscribe()</code>. For MQTT subscriptions in remote agents, open an <code>aiomqtt.Client</code> directly inside <code>setup()</code> — the broker address is available as the machine's IP passed to <code>--broker</code>.</p>
-    </div>
-
-    <hr/>
-
-    <h2 id="migration">Agent migration</h2>
-    <p>A running agent can be moved from one node to another without stopping it manually. The runner on the source node captures the agent's config, publishes it as a spawn command to the target node, then stops the local instance.</p>
-
-    <pre><code># From the main machine, publish to MQTT:
-mosquitto_pub -h localhost -t "nodes/rpi-livingroom/migrate" \
-  -m '{"name": "temp-sensor-agent", "target_node": "rpi-bedroom"}'</code></pre>
-
-    <p>Or trigger it from agent code using <code>agent.send_to()</code> if you build a migration manager. The result is published to <code>nodes/{source_node}/migrate_result</code>.</p>
-
-    <hr/>
-
-    <h2 id="debugging">Debugging</h2>
-
-    <h4>Verbose diagnostics</h4>
-    <p>The runner has a built-in diagnostics logger that prints startup checks, connection events, and every published message to stderr — even if logging is misconfigured. Run with <code>--loglevel DEBUG</code> to see everything:</p>
-    <pre><code>python3 remote_runner.py --broker 192.168.1.10 --name rpi-test --loglevel DEBUG</code></pre>
-
-    <p>On startup it prints:</p>
-    <ul>
-      <li>Whether <code>aiomqtt</code>, <code>psutil</code>, <code>aiohttp</code> are installed</li>
-      <li>Whether the broker is TCP-reachable (5 s timeout)</li>
-      <li>Every subscribe, publish, and received message with counts</li>
-    </ul>
-
-    <h4>Self-test (no broker needed)</h4>
-    <pre><code>python3 remote_runner.py --test</code></pre>
-    <p>Runs 7 supervisor tests: stable agent, crash + restart, budget exhaustion, deliberate stop, health credit, compile error, setup failure. All should pass.</p>
-
-    <h4>Watch node traffic from the main machine</h4>
-    <pre><code">mosquitto_sub -h localhost -t 'nodes/#' -v
-mosquitto_sub -h localhost -t 'agents/+/heartbeat' -v</code></pre>
-
-    <h4>List agents on a node</h4>
-    <pre><code>mosquitto_pub -h localhost -t "nodes/rpi-livingroom/list" -m '{}'
-mosquitto_sub -h localhost -t "nodes/rpi-livingroom/agents" -C 1</code></pre>
-
-    <h4>Stop a specific remote agent</h4>
-    <pre><code>mosquitto_pub -h localhost -t "nodes/rpi-livingroom/stop" \
-  -m '{"name": "temp-sensor-agent"}'</code></pre>
-
-    <h4>Stop the entire runner</h4>
-    <pre><code>mosquitto_pub -h localhost -t "nodes/rpi-livingroom/stop_all" -m '{}'</code></pre>
+<h4 id="stop-the-entire-runner">Stop the entire runner</h4>
+<div class="highlight"><pre><span></span><code>mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;nodes/rpi-livingroom/stop_all&quot;</span><span class="w"> </span>-m<span class="w"> </span><span class="s1">&#39;{}&#39;</span>
+</code></pre></div>
   </main>
 </div>
+
 <footer>
-  <span>Wactorz &mdash; Python asyncio actor-model framework</span>
-  <span><a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
 </footer>
 </body>
 </html>

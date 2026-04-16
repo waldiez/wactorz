@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+*.log
+.env
+myenv/
+node_modules/
+frontend/node_modules/
+rust/
+.git/
+state/

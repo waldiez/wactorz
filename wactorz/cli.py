@@ -118,7 +118,8 @@ def get_args():
 	parser.add_argument("--telegram-allowed-user-id", type=int)
 	parser.add_argument("--mqtt-broker")
 	parser.add_argument("--mqtt-port", type=int)
-	parser.add_argument("--monitor-port", type=int, default=8888,
+	parser.add_argument("--monitor-port", type=int,
+	                    default=int(os.getenv("MONITOR_PORT", str(CONFIG.ws_port))),
 	                    help="Port for the background web UI / monitor server (default: 8888)")
 	parser.add_argument("--no-monitor", action="store_true",
 	                    help="Disable the background web UI server")

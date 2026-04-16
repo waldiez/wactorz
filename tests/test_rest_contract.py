@@ -1,5 +1,29 @@
+import sys
 import types
 import unittest
+
+from prometheus_client import CONTENT_TYPE_LATEST
+
+
+def _install_aiohttp_web_stub() -> None:
+    class _Response:
+        def __init__(self, *, body=b"", headers=None, content_type=None, status=200):
+            self.body = body
+            self.status = status
+            self.headers = dict(headers or {})
+            if content_type is not None:
+                self.headers.setdefault("Content-Type", content_type)
+
+    web = types.SimpleNamespace(
+        Request=type("Request", (), {}),
+        HTTPException=type("HTTPException", (Exception,), {"status": 500}),
+        Response=_Response,
+        middleware=lambda fn: fn,
+    )
+    sys.modules["aiohttp"] = types.SimpleNamespace(web=web)
+
+
+_install_aiohttp_web_stub()
 
 from wactorz.interfaces.chat_interfaces import RESTInterface
 
@@ -66,3 +90,8 @@ class RestContractTest(unittest.TestCase):
         registry = _FakeRegistry(map_actor=_FakeMapActor(expected))
         iface = RESTInterface(main_actor=types.SimpleNamespace(_registry=registry), port=8080)
         self.assertEqual(iface._latest_ha_map_payload(), expected)
+
+    def test_prometheus_monitor_returns_prometheus_content_type(self):
+        iface = RESTInterface(main_actor=types.SimpleNamespace(), port=8080)
+        response = iface._monitor.metrics_response()
+        self.assertEqual(response.headers["Content-Type"], CONTENT_TYPE_LATEST)

@@ -5,16 +5,25 @@
 #   Then run:  wactorz
 #
 # Profiles:
-#   rust  — also starts the Rust API server + nginx dashboard
-#           docker compose --profile rust up -d
-#   full  — rust + Fuseki + Home Assistant
-#           docker compose --profile full up -d
+#   python      — Python multi-agent app (REST on :8000, monitor on :8888)
+#                 docker compose --profile python up -d
+#   python-full — Python app + Fuseki
+#                 docker compose --profile python-full up -d
+#   rust        — Rust API server + nginx dashboard
+#                 docker compose --profile rust up -d
+#   full        — rust + Fuseki + Home Assistant
+#                 docker compose --profile full up -d
 #
-# External ports:
-#   :1883  → MQTT TCP
-#   :9001  → MQTT WebSocket
-#   :80    → Dashboard SPA, /api/, /ws, /mqtt, /fuseki/  (rust/full profile)
-#   :8123  → Home Assistant proxy                         (full profile)
+# External ports (defaults, override via .env):
+#   :1883  → MQTT TCP                  MQTT_EXTERNAL_PORT
+#   :9001  → MQTT WebSocket            MQTT_WS_EXTERNAL_PORT
+#   :8000  → Python REST API           REST_EXTERNAL_PORT       (python/python-full)
+#   :8888  → Python monitor Web UI     MONITOR_EXTERNAL_PORT    (python/python-full)
+#   :9090  → Prometheus UI            (python/python-full profile)
+#   :3030  → Fuseki                    FUSEKI_EXTERNAL_PORT     (python-full/full)
+#   :80    → Dashboard SPA + proxy     DASHBOARD_EXTERNAL_PORT  (rust/full)
+#   :8080  → Rust API                  API_EXTERNAL_PORT        (rust/full)
+#   :8123  → Home Assistant                                      (full)
 #
 # Copy .env.example → .env and fill in secrets before running.
 
@@ -29,9 +38,7 @@ services:
     restart: unless-stopped
     hostname: mosquitto
     ports:
-      - "${MQTT_EXTERNAL_PORT:-1883}:1883"   # TCP — IoT devices / external agents
-      # WebSocket (port 9001) is routed through nginx at /mqtt — no host port needed.
-      # Uncomment to expose directly for debugging:
+      - "${MQTT_EXTERNAL_PORT:-1883}:1883"
       - "${MQTT_WS_EXTERNAL_PORT:-9001}:9001"
     volumes:
       - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
@@ -45,18 +52,126 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Wactorz Python app ───────────────────────────────────────────────────────
+  # docker compose --profile python up -d
+  # docker compose --profile python-full up -d   (includes Fuseki + bridge)
+  wactorz-python:
+    profiles: [python, python-full]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wactorz-python:latest
+    container_name: wactorz-python
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      FUSEKI_URL: http://fuseki:3030
+      INTERFACE: "${INTERFACE:-rest}"
+    networks:
+      - wactorz-net
+    ports:
+      - "${REST_EXTERNAL_PORT:-8000}:8000"     # REST API
+      - "${MONITOR_EXTERNAL_PORT:-8888}:8888"  # Web UI monitor
+    volumes:
+      - ./state:/app/state
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8888"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Wactorz Fuseki bridge ─────────────────────────────────────────────────────
+  # Subscribes to agents/+/manifest MQTT and pushes RDF to Fuseki.
+  # Only started with python-full (requires Fuseki).
+  wactorz-fuseki:
+    profiles: [python-full]
+    image: wactorz-python:latest
+    container_name: wactorz-fuseki-bridge
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MQTT_BROKER: mosquitto
+      MQTT_PORT: "1883"
+      FUSEKI_URL: http://fuseki:3030
+      FUSEKI_USER: "${FUSEKI_USER:-admin}"
+      FUSEKI_PASSWORD: "${FUSEKI_PASSWORD:-admin}"
+    networks:
+      - wactorz-net
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      fuseki:
+        condition: service_healthy
+    command: ["wactorz-fuseki"]
+
+  prometheus:
+    profiles: [python, python-full]
+    image: prom/prometheus:v2.54.1
+    container_name: wactorz-prometheus
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -ec
+    environment:
+      PROMETHEUS_SCRAPE_INTERVAL: "${PROMETHEUS_SCRAPE_INTERVAL:-15s}"
+      PROMETHEUS_PYTHON_TARGET: "${PROMETHEUS_PYTHON_TARGET:-wactorz-python}"
+      PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
+      PROMETHEUS_MONITOR_FUSEKI: "${PROMETHEUS_MONITOR_FUSEKI:-0}"
+    ports:
+      - "${PROMETHEUS_EXTERNAL_PORT:-9090}:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml.template:ro
+      - ./infra/prometheus/render-config.sh:/etc/prometheus/render-config.sh:ro
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - |
+        export PROMETHEUS_TEMPLATE_FILE=/etc/prometheus/prometheus.yml.template
+        sh /etc/prometheus/render-config.sh /etc/prometheus/prometheus.yml
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --web.console.libraries=/etc/prometheus/console_libraries \
+          --web.console.templates=/etc/prometheus/consoles
+    depends_on:
+      wactorz-python:
+        condition: service_started
+      blackbox-exporter:
+        condition: service_started
+    networks:
+      - wactorz-net
+  blackbox-exporter:
+    profiles: [python, python-full]
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: wactorz-blackbox
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/blackbox_exporter/config.yml
+    volumes:
+      - ./infra/prometheus/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    networks:
+      - wactorz-net
+
   # ── Apache Jena Fuseki ───────────────────────────────────────────────────────
-  # Optional — only started with: docker compose --profile full up -d
+  # docker compose --profile python-full up -d
+  # docker compose --profile full up -d
   fuseki:
-    profiles: [full]
+    profiles: [full, python-full]
     container_name: wactorz-fuseki
     image: wactorz-fuseki
-    #build:
-    #  context: config/fuseki-container
-    #  dockerfile: Containerfile
+    build:
+      context: config/fuseki-container
+      dockerfile: Containerfile
     restart: unless-stopped
-    # Port 3030 accessible internally; routed via nginx /fuseki/ externally.
-    # Uncomment to expose directly for debugging:
     ports:
       - "${FUSEKI_EXTERNAL_PORT:-3030}:3030"
     environment:
@@ -73,8 +188,6 @@ services:
       - ./infra/fuseki/ontology:/fuseki/ontology:ro
     networks:
       - wactorz-net
-    command: >
-      /jena-fuseki/fuseki-server --update --mem /wactorz
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3030/$/ping"]
       interval: 15s
@@ -83,26 +196,19 @@ services:
       start_period: 10s
 
   # ── Home Assistant ───────────────────────────────────────────────────────────
-  # Optional — only started with: docker compose --profile full up -d
+  # docker compose --profile full up -d
   homeassistant:
     profiles: [full]
     image: homeassistant/home-assistant:stable
     container_name: wactorz-homeassistant
     restart: unless-stopped
     privileged: true
-    # network_mode: host is NOT used here — it is unreliable on Docker Desktop for Mac
-    # (the VM layer breaks mDNS/UPnP anyway) and prevents nginx from reaching HA.
-    # On a bare-metal Linux host you can re-enable it for LAN device discovery:
-    #   network_mode: host     # also remove the networks: block below
     networks:
       - wactorz-net
     environment:
       TZ: "${TZ:-UTC}"
     volumes:
       - ./infra/homeassistant:/config
-    # HA is reachable at http://<host>:8123 via the nginx transparent proxy.
-    # Ports are NOT exposed here; nginx exposes :8123 instead.
-    # Uncomment if you want HA directly accessible (bypasses nginx):
     ports:
       - "8123:8123"
     healthcheck:
@@ -112,8 +218,9 @@ services:
       retries: 5
       start_period: 60s
 
-  # ── Wactorz Rust server ────────────────────────────────────────────────────
-  # Optional — only started with: docker compose --profile rust up -d
+  # ── Wactorz Rust server ──────────────────────────────────────────────────────
+  # docker compose --profile rust up -d
+  # docker compose --profile full up -d
   wactorz:
     profiles: [rust, full]
     build:
@@ -123,8 +230,6 @@ services:
     image: wactorz-server:latest
     container_name: wactorz-server
     restart: unless-stopped
-    # Ports 8080/8081 accessible internally; routed via nginx /api/ and /ws.
-    # Uncomment to expose directly for debugging:
     ports:
       - "${API_EXTERNAL_PORT:-8080}:8080"
       - "${WS_EXTERNAL_PORT:-8081}:8081"
@@ -150,26 +255,21 @@ services:
       retries: 5
 
   # ── nginx — Dashboard + reverse proxy ────────────────────────────────────────
-  # Single external entry point for all HTTP services.
-  # Port 80:   Dashboard SPA, /api/ (REST), /ws (WS bridge), /mqtt (MQTT WS), /fuseki/
-  # Port 8123: Home Assistant transparent proxy (HA served at root; SPA paths intact)
-  # Optional — only started with: docker compose --profile rust up -d
+  # docker compose --profile rust up -d
+  # docker compose --profile full up -d
   dashboard:
     profiles: [rust, full]
     image: nginx:1.27-alpine
     container_name: wactorz-dashboard
     restart: unless-stopped
     ports:
-      - "${DASHBOARD_EXTERNAL_PORT:-80}:80"    # Main entry point
-      # - "${HA_EXTERNAL_PORT:-8123}:8123"       # Home Assistant proxy
+      - "${DASHBOARD_EXTERNAL_PORT:-80}:80"
     volumes:
       - ./static/app:/usr/share/nginx/html:ro
       - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - wactorz-net
     depends_on:
-      # homeassistant:  # with profile: ["full"] (otherwise "homeassistant" is not known)
-      #   condition: service_healthy
       wactorz:
         condition: service_healthy
     healthcheck:
@@ -180,9 +280,9 @@ services:
 
 networks:
   wactorz-net:
-    # driver: bridge
 
 volumes:
   mosquitto-data:
   mosquitto-logs:
   fuseki-data:
+  prometheus-data:

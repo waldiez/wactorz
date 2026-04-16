@@ -20,6 +20,26 @@ PRICING = {
     "claude-sonnet-4-6":      ( 3.00, 15.00),
     "claude-haiku-4-5":       ( 0.80,  4.00),
     # OpenAI
+    "gpt-5.4-pro":            (30.00, 180.00),
+    "gpt-5.4-mini":           ( 0.75,   4.50),
+    "gpt-5.4-nano":           ( 0.20,   1.25),
+    "gpt-5.4":                ( 2.50,  15.00),
+    "gpt-5.2-pro":            (21.00, 168.00),
+    "gpt-5.2-chat-latest":    ( 1.75,  14.00),
+    "gpt-5.2-codex":          ( 1.75,  14.00),
+    "gpt-5.2":                ( 1.75,  14.00),
+    "gpt-5.1-codex-max":      ( 1.25,  10.00),
+    "gpt-5.1-codex-mini":     ( 0.25,   2.00),
+    "gpt-5.1-chat-latest":    ( 1.25,  10.00),
+    "gpt-5.1-codex":          ( 1.25,  10.00),
+    "gpt-5.1":                ( 1.25,  10.00),
+    "gpt-5-search-api":       ( 1.25,  10.00),
+    "gpt-5-pro":              (15.00, 120.00),
+    "gpt-5-chat-latest":      ( 1.25,  10.00),
+    "gpt-5-codex":            ( 1.25,  10.00),
+    "gpt-5-mini":             ( 0.25,   2.00),
+    "gpt-5-nano":             ( 0.05,   0.40),
+    "gpt-5":                  ( 1.25,  10.00),
     "gpt-4o":                 ( 2.50, 10.00),
     "gpt-4o-mini":            ( 0.15,  0.60),
     "gpt-4-turbo":            (10.00, 30.00),
@@ -113,11 +133,22 @@ class OpenAIProvider(LLMProvider):
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=full_messages,
-            max_completion_tokens=kwargs.get("max_tokens", 4096),
-        )
+        params = {
+            "model": self.model,
+            "messages": full_messages,
+            "max_completion_tokens": kwargs.get("max_tokens", 4096),
+        }
+        reasoning_effort = kwargs.get("reasoning_effort")
+        if reasoning_effort:
+            params["reasoning_effort"] = reasoning_effort
+        try:
+            response = await self.client.chat.completions.create(**params)
+        except Exception as exc:
+            if reasoning_effort and "reasoning_effort" in str(exc):
+                params.pop("reasoning_effort", None)
+                response = await self.client.chat.completions.create(**params)
+            else:
+                raise
         text = response.choices[0].message.content
         usage = {
             "input_tokens":  response.usage.prompt_tokens,
@@ -132,13 +163,25 @@ class OpenAIProvider(LLMProvider):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
         input_tokens = output_tokens = 0
-        async with await self.client.chat.completions.create(
-            model=self.model,
-            messages=full_messages,
-            max_completion_tokens=kwargs.get("max_tokens", 4096),
-            stream=True,
-            stream_options={"include_usage": True},
-        ) as s:
+        params = {
+            "model": self.model,
+            "messages": full_messages,
+            "max_completion_tokens": kwargs.get("max_tokens", 4096),
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        reasoning_effort = kwargs.get("reasoning_effort")
+        if reasoning_effort:
+            params["reasoning_effort"] = reasoning_effort
+        try:
+            stream = await self.client.chat.completions.create(**params)
+        except Exception as exc:
+            if reasoning_effort and "reasoning_effort" in str(exc):
+                params.pop("reasoning_effort", None)
+                stream = await self.client.chat.completions.create(**params)
+            else:
+                raise
+        async with stream as s:
             async for chunk in s:
                 delta = chunk.choices[0].delta.content if chunk.choices else None
                 if delta:

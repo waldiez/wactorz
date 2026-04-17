@@ -19,6 +19,11 @@ import { HAClient, type HAEntity } from "../io/HAClient";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+function nameFromWid(raw: string): string {
+  const m = raw.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
+  return m?.[1] ?? raw;
+}
+
 function stateColor(state: AgentState): string {
   if (typeof state === "object") return "#f87171";
   switch (state as string) {
@@ -76,6 +81,7 @@ export class CardDashboard {
   private connState: ConnState = "connecting";
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private sidebarFilter: string = "";
+  private hideHeartbeats: boolean = true;
 
   private haClient: HAClient | null = null;
 
@@ -732,27 +738,53 @@ export class CardDashboard {
   // ── Private: feed view ────────────────────────────────────────────────────
 
   private _buildFeedView(): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "af-feed-wrap";
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "af-feed-toolbar";
+
+    const hbBtn = document.createElement("button");
+    hbBtn.className = `af-mini-btn${this.hideHeartbeats ? "" : " active"}`;
+    hbBtn.style.cssText = "font-size:11px;padding:3px 10px;";
+    hbBtn.title = "Toggle heartbeat events";
+    hbBtn.textContent = this.hideHeartbeats ? "♥ heartbeats: off" : "♥ heartbeats: on";
+    hbBtn.addEventListener("click", () => {
+      this.hideHeartbeats = !this.hideHeartbeats;
+      hbBtn.textContent = this.hideHeartbeats ? "♥ heartbeats: off" : "♥ heartbeats: on";
+      hbBtn.className = `af-mini-btn${this.hideHeartbeats ? "" : " active"}`;
+      const feed = wrap.querySelector<HTMLElement>("#af-feed-view")!;
+      feed.querySelectorAll<HTMLElement>(".af-feed-heartbeat").forEach((el) => {
+        el.hidden = this.hideHeartbeats;
+      });
+    });
+    toolbar.appendChild(hbBtn);
+    wrap.appendChild(toolbar);
+
     const feed = document.createElement("div");
     feed.className = "af-feed";
     feed.id = "af-feed-view";
 
-    if (this.feedItems.length === 0) {
+    const visible = this.feedItems.filter(
+      (i) => !(this.hideHeartbeats && (i.type === "heartbeat" || i.type === "health")),
+    );
+    if (visible.length === 0) {
       const empty = document.createElement("div");
       empty.className = "af-feed-empty";
       empty.textContent = "No events yet.";
       feed.appendChild(empty);
     } else {
-      this.feedItems.forEach((item) => this._feedItemEl(feed, item));
+      visible.forEach((item) => this._feedItemEl(feed, item));
     }
-    setTimeout(() => {
-      feed.scrollTop = feed.scrollHeight;
-    }, 0);
-    return feed;
+    wrap.appendChild(feed);
+    setTimeout(() => { feed.scrollTop = feed.scrollHeight; }, 0);
+    return wrap;
   }
 
   private _appendFeedItemToView(item: FeedItem): void {
     const feed = this.root.querySelector<HTMLElement>("#af-feed-view");
     if (!feed) return;
+    if (this.hideHeartbeats && (item.type === "heartbeat" || item.type === "health")) return;
     feed.querySelector(".af-feed-empty")?.remove();
     this._feedItemEl(feed, item);
     feed.scrollTop = feed.scrollHeight;
@@ -796,7 +828,7 @@ export class CardDashboard {
 
     const agent = document.createElement("span");
     agent.className = "af-feed-agent";
-    agent.textContent = item.agentName;
+    agent.textContent = nameFromWid(item.agentName);
 
     const text = document.createElement("span");
     text.className = "af-feed-text";

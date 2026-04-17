@@ -249,7 +249,7 @@ export class ChatPanel {
                 : "#60a5fa";
       const isActive = agent.name === this.activeAgentName;
       // Only main-actor, home-assistant-agent, and catalog are directly messageable.
-      const isDisabled = !["main-actor", "home-assistant-agent", "catalog"].includes(agent.name);
+      const isDisabled = !["main", "main-actor", "home-assistant-agent", "catalog"].includes(agent.name);
 
       let row = existing.get(agent.name);
       if (!row) {

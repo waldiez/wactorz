@@ -883,7 +883,7 @@ export class CardDashboard {
       const color = stateColor(agent.state);
       const isActive = agent.name === this.chatTarget;
       // Only main-actor, home-assistant-agent, and catalog are directly messageable.
-      const isDisabled = !["main-actor", "home-assistant-agent", "catalog"].includes(agent.name);
+      const isDisabled = !["main", "main-actor", "home-assistant-agent", "catalog"].includes(agent.name);
 
       let row = existing.get(agent.name);
       if (!row) {

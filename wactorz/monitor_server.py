@@ -914,6 +914,9 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/api/actors",            actors_handler)
     app.router.add_get("/api/actors/{actor_id}", actor_handler)
     app.router.add_get("/api/config",            config_handler)
+    from .fuseki_proxy import fuseki_proxy_handler
+    app.router.add_post("/api/fuseki/{dataset}/sparql",  fuseki_proxy_handler)
+    app.router.add_post("/api/fuseki/{dataset}/update",  fuseki_proxy_handler)
     app.router.add_get("/docs",  lambda r: web.HTTPFound("/docs/"))
     app.router.add_get("/docs/",             docs_handler)
     app.router.add_get("/docs/{path:.+}",    docs_handler)

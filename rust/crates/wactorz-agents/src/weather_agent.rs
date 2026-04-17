@@ -37,6 +37,9 @@ pub struct WeatherAgent {
     mailbox_rx: Option<mpsc::Receiver<Message>>,
     publisher: Option<EventPublisher>,
     http: reqwest::Client,
+    /// Default location used when no argument is given. Falls back to the
+    /// `WEATHER_DEFAULT_LOCATION` env var, then to `"London"`.
+    configured_default_location: Option<String>,
 }
 
 impl WeatherAgent {
@@ -55,11 +58,22 @@ impl WeatherAgent {
             mailbox_rx: Some(rx),
             publisher: None,
             http,
+            configured_default_location: None,
         }
     }
 
     pub fn with_publisher(mut self, p: EventPublisher) -> Self {
         self.publisher = Some(p);
+        self
+    }
+
+    /// Override the default weather location instead of relying on the
+    /// `WEATHER_DEFAULT_LOCATION` environment variable.
+    pub fn with_default_location(mut self, location: impl Into<String>) -> Self {
+        let loc = location.into();
+        if !loc.is_empty() {
+            self.configured_default_location = Some(loc);
+        }
         self
     }
 
@@ -70,7 +84,10 @@ impl WeatherAgent {
             .as_millis() as u64
     }
 
-    fn default_location() -> String {
+    fn default_location(&self) -> String {
+        if let Some(loc) = &self.configured_default_location {
+            return loc.clone();
+        }
         std::env::var(DEFAULT_LOCATION_ENV)
             .unwrap_or_else(|_| DEFAULT_LOCATION_FALLBACK.to_string())
     }
@@ -244,7 +261,7 @@ impl Actor for WeatherAgent {
 
         match arg.to_lowercase().as_str() {
             "" => {
-                let loc = Self::default_location();
+                let loc = self.default_location();
                 let typing = format!("🌦 Fetching weather for **{loc}**…");
                 self.reply(&typing);
                 match self.fetch_weather(&loc).await {
@@ -253,7 +270,7 @@ impl Actor for WeatherAgent {
                 }
             }
             "help" => {
-                let default = Self::default_location();
+                let default = self.default_location();
                 self.reply(&format!(
                     "**WeatherAgent** — current conditions via wttr.in (no API key needed)\n\n\
                      ```\n\

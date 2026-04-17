@@ -54,6 +54,19 @@ impl HomeAssistantAgent {
         self
     }
 
+    /// Override the HA URL and token instead of relying on environment variables.
+    pub fn with_ha_config(mut self, url: impl Into<String>, token: impl Into<String>) -> Self {
+        let url = url.into();
+        let token = token.into();
+        if !url.is_empty() {
+            self.ha_url = url;
+        }
+        if !token.is_empty() {
+            self.ha_token = token;
+        }
+        self
+    }
+
     pub fn with_llm(mut self, llm_config: LlmConfig) -> Self {
         let llm_cfg = ActorConfig::new(format!("{}-llm", self.config.name));
         self.llm = Some(LlmAgent::new(llm_cfg, llm_config));

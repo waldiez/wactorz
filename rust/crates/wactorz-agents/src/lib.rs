@@ -4,6 +4,7 @@
 //!
 //! - [`LlmAgent`] — wraps Anthropic / OpenAI / Ollama APIs
 //! - [`MainActor`] — LLM orchestrator; parses `<spawn>` directives
+//! - [`CatalogAgent`] — pre-built agent recipe library; spawns DynamicAgents on request
 //! - [`DynamicAgent`] — executes Rhai scripts generated at runtime
 //! - [`MonitorAgent`] — health monitor; raises alerts on stale actors
 //! - [`IOAgent`] — UI gateway; routes `io/chat` messages to actors
@@ -18,6 +19,7 @@
 //! - [`WisAgent`] — sound expert: music log, theory (chord/scale/bpm), tips  [nato: whiskey]
 //! - [`WikAgent`] — key manager: LLM failover, provider rotation, usage tracking [nato: kilo]
 
+pub mod catalog;
 pub mod dynamic_agent;
 pub mod fuseki_agent;
 pub mod home_assistant_agent;
@@ -41,6 +43,7 @@ pub mod wik_agent;
 pub mod wis_agent;
 pub mod wme_agent;
 
+pub use catalog::CatalogAgent;
 pub use dynamic_agent::DynamicAgent;
 pub use fuseki_agent::FusekiAgent;
 pub use home_assistant_agent::HomeAssistantAgent;

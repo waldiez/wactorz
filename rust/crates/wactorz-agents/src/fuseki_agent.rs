@@ -53,6 +53,23 @@ impl FusekiAgent {
         self
     }
 
+    /// Override the Fuseki URL and dataset instead of relying on environment variables.
+    pub fn with_fuseki_config(
+        mut self,
+        url: impl Into<String>,
+        dataset: impl Into<String>,
+    ) -> Self {
+        let url = url.into();
+        let dataset = dataset.into();
+        if !url.is_empty() {
+            self.fuseki_url = url;
+        }
+        if !dataset.is_empty() {
+            self.dataset = dataset;
+        }
+        self
+    }
+
     pub fn with_llm(mut self, llm_config: LlmConfig) -> Self {
         let llm_cfg = ActorConfig::new(format!("{}-llm", self.config.name));
         self.llm = Some(LlmAgent::new(llm_cfg, llm_config));

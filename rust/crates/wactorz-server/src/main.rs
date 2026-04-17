@@ -17,8 +17,8 @@ use std::sync::Arc;
 use tracing::info;
 
 use wactorz_agents::{
-    DynamicAgent, HomeAssistantAgent, IOAgent, InstallerAgent, LlmConfig, LlmProvider, MainActor,
-    ManualAgent, MonitorAgent,
+    CatalogAgent, DynamicAgent, FusekiAgent, HomeAssistantAgent, IOAgent, InstallerAgent,
+    LlmConfig, LlmProvider, MainActor, ManualAgent, MonitorAgent, WeatherAgent,
 };
 use wactorz_core::{ActorConfig, ActorSystem, EventPublisher, Supervisor, SupervisorStrategy};
 use wactorz_interfaces::ws::WsEnvelope;
@@ -257,6 +257,9 @@ async fn main() -> Result<()> {
     if let Err(e) = mqtt_client.subscribe("system/llm/#").await {
         tracing::warn!("MQTT subscribe system/llm/# failed: {e}");
     }
+    if let Err(e) = mqtt_client.subscribe("nodes/#").await {
+        tracing::warn!("MQTT subscribe nodes/# failed: {e}");
+    }
 
     // Publisher bridge task: drain pub_rx → MQTT
     let mqtt_for_bridge = Arc::clone(&mqtt_client);
@@ -387,11 +390,56 @@ async fn main() -> Result<()> {
     }
     {
         let pub_ = publisher.clone();
+        let ha_url = args.ha_url.clone();
+        let ha_token = args.ha_token.clone();
         sup.supervise(
             "home-assistant-agent",
             Arc::new(move || {
                 let c = ActorConfig::new_with_node("home-assistant-agent", "golf");
-                Box::new(HomeAssistantAgent::new(c).with_publisher(pub_.clone()))
+                Box::new(
+                    HomeAssistantAgent::new(c)
+                        .with_ha_config(ha_url.clone(), ha_token.clone())
+                        .with_publisher(pub_.clone()),
+                )
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            2.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        let weather_location = args.weather_default_location.clone();
+        sup.supervise(
+            "weather-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("weather-agent", "hotel");
+                Box::new(
+                    WeatherAgent::new(c)
+                        .with_default_location(weather_location.clone())
+                        .with_publisher(pub_.clone()),
+                )
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
+        );
+    }
+    {
+        let pub_ = publisher.clone();
+        let fuseki_url = args.fuseki_url.clone();
+        let fuseki_dataset = args.fuseki_dataset.clone();
+        sup.supervise(
+            "fuseki-agent",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("fuseki-agent", "india");
+                Box::new(
+                    FusekiAgent::new(c)
+                        .with_fuseki_config(fuseki_url.clone(), fuseki_dataset.clone())
+                        .with_publisher(pub_.clone()),
+                )
             }),
             SupervisorStrategy::OneForOne,
             5,
@@ -400,9 +448,24 @@ async fn main() -> Result<()> {
         );
     }
 
+    {
+        let pub_ = publisher.clone();
+        sup.supervise(
+            "catalog",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("catalog", "juliet").protected();
+                Box::new(CatalogAgent::new(c).with_publisher(pub_.clone()))
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            1.0,
+        );
+    }
+
     sup.start().await?;
     info!(
-        "Supervisor started — 7 agents (main, monitor, io, installer, code, manual, home-assistant)"
+        "Supervisor started — 10 agents (main, monitor, io, installer, code, manual, home-assistant, weather, fuseki, catalog)"
     );
 
     // ── REST server ───────────────────────────────────────────────────────────

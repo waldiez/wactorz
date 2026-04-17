@@ -50,7 +50,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, broadcast, mpsc};
 
 use wactorz_mqtt::MqttClient;
 
@@ -399,10 +399,23 @@ impl WsBridge {
 
     /// Spawn a background task that:
     ///
-    /// 1. Consumes raw MQTT envelopes from the broadcast channel.
-    /// 2. Updates [`MonitorState`].
-    /// 3. Broadcasts Python-compatible JSON patches to all `/ws` clients.
+    /// 1. Subscribes to `nodes/#` so remote-node heartbeats reach the bridge.
+    /// 2. Consumes raw MQTT envelopes from the broadcast channel.
+    /// 3. Updates [`MonitorState`].
+    /// 4. Broadcasts Python-compatible JSON patches to all `/ws` clients.
     pub fn spawn_monitor_task(&self) {
+        // Subscribe to nodes/# so remote node heartbeats are received.
+        // agents/# and system/# are subscribed in main.rs; nodes/# is the
+        // bridge's own concern.
+        let mqtt_for_sub = Arc::clone(&self.state.mqtt_client);
+        tokio::spawn(async move {
+            if let Err(e) = mqtt_for_sub.subscribe("nodes/#").await {
+                tracing::warn!("[ws-bridge] nodes/# subscribe failed (broker may not be running): {e}");
+            } else {
+                tracing::info!("[ws-bridge] subscribed to nodes/#");
+            }
+        });
+
         let mut rx = self.state.mqtt_tx.subscribe();
         let monitor = Arc::clone(&self.state.monitor);
         let monitor_tx = self.state.monitor_tx.clone();
@@ -464,26 +477,146 @@ async fn handle_ws_socket(socket: WebSocket, state: BridgeState) {
         return;
     }
 
-    // Forward broadcast patches to this client
+    // Per-client direct-reply channel: slash command responses bypass the
+    // broadcast and go only to this specific connection.
+    let (reply_tx, mut reply_rx) = mpsc::channel::<String>(32);
+
+    // Send task: merges broadcast patches and per-client direct replies.
     let send_task = tokio::spawn(async move {
-        while let Ok(json) = monitor_rx.recv().await {
-            if ws_send.send(Message::Text(json)).await.is_err() {
-                break;
+        loop {
+            tokio::select! {
+                Ok(json) = monitor_rx.recv() => {
+                    if ws_send.send(Message::Text(json)).await.is_err() {
+                        break;
+                    }
+                }
+                Some(json) = reply_rx.recv() => {
+                    if ws_send.send(Message::Text(json)).await.is_err() {
+                        break;
+                    }
+                }
+                else => break,
             }
         }
     });
 
-    // Handle inbound messages (commands from the browser)
+    // Handle inbound messages (commands and slash commands from the browser)
     while let Some(Ok(msg)) = ws_recv.next().await {
         match msg {
             Message::Close(_) => break,
             Message::Text(text) => {
-                handle_browser_command(&text, &state).await;
+                let trimmed = text.trim();
+                if trimmed.starts_with('/') {
+                    // Slash command — reply only to this client
+                    let reply = handle_slash_command(trimmed, &state).await;
+                    let _ = reply_tx.send(reply).await;
+                } else {
+                    handle_browser_command(trimmed, &state).await;
+                }
             }
             _ => {}
         }
     }
     send_task.abort();
+}
+
+/// Handle a slash command sent by a browser client over `/ws`.
+///
+/// Mirrors the Python `handle_slash` dispatcher in `monitor_server.py`.
+/// Returns a JSON string to send back to that specific client only.
+async fn handle_slash_command(text: &str, state: &BridgeState) -> String {
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    let cmd = parts.first().map(|s| s.to_lowercase()).unwrap_or_default();
+
+    let content = match cmd.as_str() {
+        "/help" | "/h" => {
+            "Commands:\n\
+             \x20 /agents                        list all active agents\n\
+             \x20 /nodes                         list remote nodes\n\
+             \x20 /help                          show this help\n\n\
+             Everything else is forwarded to the main orchestrator."
+                .to_string()
+        }
+
+        "/agents" => {
+            let st = state.monitor.lock().await;
+            if st.agents.is_empty() {
+                "No agents running.".to_string()
+            } else {
+                let mut lines = vec!["Agents:".to_string()];
+                let mut names: Vec<&str> = st
+                    .agents
+                    .values()
+                    .filter_map(|a| a.get("name").and_then(|v| v.as_str()))
+                    .collect();
+                names.sort_unstable();
+                for name in names {
+                    // Find the full agent entry for this name
+                    let entry = st.agents.values().find(|a| {
+                        a.get("name").and_then(|v| v.as_str()) == Some(name)
+                    });
+                    let state_str = entry
+                        .and_then(|a| a.get("state"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    let agent_id = entry
+                        .and_then(|a| a.get("agent_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let id_short = &agent_id[..agent_id.len().min(8)];
+                    lines.push(format!("  [{state_str:8}] @{name:<22} {id_short}"));
+                }
+                lines.join("\n")
+            }
+        }
+
+        "/nodes" => {
+            let st = state.monitor.lock().await;
+            let mut lines = vec!["Nodes:".to_string()];
+            if st.nodes.is_empty() {
+                lines.push("  (no remote nodes)".to_string());
+            } else {
+                let mut node_names: Vec<&str> = st.nodes.keys().map(|s| s.as_str()).collect();
+                node_names.sort_unstable();
+                for node_name in node_names {
+                    if let Some(nd) = st.nodes.get(node_name) {
+                        let online = nd
+                            .get("online")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let status = if online { "online" } else { "OFFLINE" };
+                        let agents: Vec<String> = nd
+                            .get("agents")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str())
+                                    .map(|s| format!("@{s}"))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let agent_list = if agents.is_empty() {
+                            "(no agents)".to_string()
+                        } else {
+                            agents.join(", ")
+                        };
+                        lines.push(format!("  {node_name:<20} {status:<6}   {agent_list}"));
+                    }
+                }
+            }
+            lines.join("\n")
+        }
+
+        _ => format!("Unknown command: {cmd}. Type /help for available commands."),
+    };
+
+    serde_json::to_string(&json!({
+        "type":      "chat",
+        "from":      "monitor",
+        "content":   content,
+        "timestamp": now_secs(),
+    }))
+    .unwrap_or_default()
 }
 
 async fn handle_browser_command(text: &str, state: &BridgeState) {

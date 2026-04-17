@@ -17,7 +17,8 @@ use std::sync::Arc;
 use tracing::info;
 
 use wactorz_agents::{
-    CatalogAgent, DynamicAgent, FusekiAgent, HomeAssistantAgent, IOAgent, InstallerAgent,
+    CatalogAgent, DynamicAgent, FusekiAgent, HomeAssistantActuatorAgent,
+    HomeAssistantAgent, HomeAssistantStateBridgeAgent, IOAgent, InstallerAgent,
     LlmConfig, LlmProvider, MainActor, ManualAgent, MonitorAgent, WeatherAgent,
 };
 use wactorz_core::{ActorConfig, ActorSystem, EventPublisher, Supervisor, SupervisorStrategy};
@@ -89,6 +90,46 @@ pub struct Args {
     /// Disable interactive CLI (useful for container deployments)
     #[arg(long, default_value_t = false, env = "NO_CLI")]
     pub no_cli: bool,
+
+    /// Discord bot token
+    #[arg(long, default_value = "", env = "DISCORD_TOKEN")]
+    pub discord_token: String,
+
+    /// Telegram bot token
+    #[arg(long, default_value = "", env = "TELEGRAM_TOKEN")]
+    pub telegram_token: String,
+
+    /// Telegram allowed user ID
+    #[arg(long, default_value = "", env = "TELEGRAM_ALLOWED_USER_ID")]
+    pub telegram_allowed_user_id: String,
+
+    /// Twilio account SID
+    #[arg(long, default_value = "", env = "TWILIO_ACCOUNT_SID")]
+    pub twilio_account_sid: String,
+
+    /// Twilio auth token
+    #[arg(long, default_value = "", env = "TWILIO_AUTH_TOKEN")]
+    pub twilio_auth_token: String,
+
+    /// Twilio WhatsApp number (e.g. whatsapp:+14155238886)
+    #[arg(long, default_value = "", env = "TWILIO_WHATSAPP_NUMBER")]
+    pub twilio_whatsapp_number: String,
+
+    /// REST API key for authentication
+    #[arg(long, default_value = "", env = "API_KEY")]
+    pub api_key: String,
+
+    /// Path to the built frontend assets directory (served at / and /static/*)
+    #[arg(long, default_value = "static/app", env = "STATIC_DIR")]
+    pub static_dir: String,
+
+    /// MQTT output topic for the HA state-bridge agent
+    #[arg(long, default_value = "ha/state", env = "HA_STATE_BRIDGE_OUTPUT_TOPIC")]
+    pub ha_state_bridge_topic: String,
+
+    /// Comma-separated domain allow-list for the HA state-bridge agent (empty = all)
+    #[arg(long, default_value = "", env = "HA_STATE_BRIDGE_DOMAINS")]
+    pub ha_state_bridge_domains: String,
 }
 
 #[tokio::main]
@@ -293,9 +334,10 @@ async fn main() -> Result<()> {
 
     // ── Supervisor + agents ───────────────────────────────────────────────────.
     // NATO node names:
-    //   alpha=main-actor  bravo=monitor  charlie=io
-    //   delta=installer   echo=code-agent (DynamicAgent)
-    //   foxtrot=manual    golf=home-assistant
+    //   alpha=main-actor  bravo=monitor    charlie=io
+    //   delta=installer   echo=code-agent  foxtrot=manual
+    //   golf=home-assistant  hotel=weather  india=fuseki  juliet=catalog
+    //   kilo=ha-actuator  lima=ha-state-bridge
 
     let mut sup = Supervisor::new(system.clone());
 
@@ -463,14 +505,69 @@ async fn main() -> Result<()> {
         );
     }
 
+    {
+        let pub_ = publisher.clone();
+        let ha_url = args.ha_url.clone();
+        let ha_token = args.ha_token.clone();
+        sup.supervise(
+            "ha-actuator",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("ha-actuator", "kilo");
+                Box::new(
+                    HomeAssistantActuatorAgent::new(c)
+                        .with_ha_config(ha_url.clone(), ha_token.clone())
+                        .with_publisher(pub_.clone()),
+                )
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            2.0,
+        );
+    }
+
+    {
+        let pub_ = publisher.clone();
+        let ha_url = args.ha_url.clone();
+        let ha_token = args.ha_token.clone();
+        let output_topic = args.ha_state_bridge_topic.clone();
+        let domains: Vec<String> = args
+            .ha_state_bridge_domains
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        sup.supervise(
+            "ha-state-bridge",
+            Arc::new(move || {
+                let c = ActorConfig::new_with_node("ha-state-bridge", "lima");
+                Box::new(
+                    HomeAssistantStateBridgeAgent::new(c)
+                        .with_ha_config(
+                            ha_url.clone(),
+                            ha_token.clone(),
+                            output_topic.clone(),
+                            domains.clone(),
+                        )
+                        .with_publisher(pub_.clone()),
+                )
+            }),
+            SupervisorStrategy::OneForOne,
+            5,
+            60.0,
+            2.0,
+        );
+    }
+
     sup.start().await?;
     info!(
-        "Supervisor started — 10 agents (main, monitor, io, installer, code, manual, home-assistant, weather, fuseki, catalog)"
+        "Supervisor started — 12 agents (main, monitor, io, installer, code, manual, home-assistant, weather, fuseki, catalog, ha-actuator, ha-state-bridge)"
     );
 
     // ── REST server ───────────────────────────────────────────────────────────
     let rest_addr: SocketAddr = args.api_addr;
     let system_for_rest = system.clone();
+    let static_dir = args.static_dir.clone();
     let runtime_cfg = RuntimeConfig {
         ha_url: args.ha_url.clone(),
         ha_token: args.ha_token.clone(),
@@ -484,7 +581,7 @@ async fn main() -> Result<()> {
         llm_model: args.llm_model.clone(),
     };
     tokio::spawn(async move {
-        let server = RestServer::new(system_for_rest, rest_addr, runtime_cfg);
+        let server = RestServer::new(system_for_rest, rest_addr, runtime_cfg, static_dir);
         if let Err(e) = server.serve().await {
             tracing::error!("REST error: {e}");
         }

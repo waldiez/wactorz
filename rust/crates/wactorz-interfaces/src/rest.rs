@@ -25,6 +25,7 @@ use axum::{
 use serde::Deserialize;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use wactorz_core::ActorSystem;
@@ -71,18 +72,30 @@ pub struct ChatRequest {
 pub struct RestServer {
     state: AppState,
     addr: SocketAddr,
+    /// Path to the built frontend assets directory (e.g. "static/app").
+    static_dir: String,
 }
 
 impl RestServer {
-    pub fn new(system: ActorSystem, addr: SocketAddr, config: RuntimeConfig) -> Self {
+    pub fn new(
+        system: ActorSystem,
+        addr: SocketAddr,
+        config: RuntimeConfig,
+        static_dir: String,
+    ) -> Self {
         Self {
             state: AppState { system, config },
             addr,
+            static_dir,
         }
     }
 
     /// Build the axum `Router`.
     pub fn router(&self) -> Router {
+        let index_html = format!("{}/index.html", self.static_dir);
+        let serve_dir =
+            ServeDir::new(&self.static_dir).fallback(ServeFile::new(&index_html));
+
         Router::new()
             .route("/health", get(health_handler))
             // Native paths
@@ -103,6 +116,7 @@ impl RestServer {
             .route("/api/actors/:id/pause", post(pause_actor_handler))
             .route("/api/actors/:id/resume", post(resume_actor_handler))
             .route("/api/actors/:id/metrics", get(get_metrics_handler))
+            .fallback_service(serve_dir)
             .layer(CorsLayer::permissive())
             .layer(TraceLayer::new_for_http())
             .with_state(self.state.clone())

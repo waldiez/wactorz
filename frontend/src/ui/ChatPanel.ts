@@ -248,9 +248,8 @@ export class ChatPanel {
                 ? "#4b5563"
                 : "#60a5fa";
       const isActive = agent.name === this.activeAgentName;
-      // Protected agents other than main-actor are system internals;
-      // show them as non-interactive so users know they can't be messaged directly.
-      const isDisabled = agent.protected && agent.name !== "main-actor";
+      // Only main-actor, home-assistant-agent, and catalog are directly messageable.
+      const isDisabled = !["main-actor", "home-assistant-agent", "catalog"].includes(agent.name);
 
       let row = existing.get(agent.name);
       if (!row) {

@@ -882,9 +882,8 @@ export class CardDashboard {
     sorted.forEach((agent, idx) => {
       const color = stateColor(agent.state);
       const isActive = agent.name === this.chatTarget;
-      // Protected agents other than main-actor are system internals —
-      // all user messages route through main-actor; mark them non-interactive.
-      const isDisabled = agent.protected && agent.name !== "main-actor";
+      // Only main-actor, home-assistant-agent, and catalog are directly messageable.
+      const isDisabled = !["main-actor", "home-assistant-agent", "catalog"].includes(agent.name);
 
       let row = existing.get(agent.name);
       if (!row) {

@@ -4,10 +4,9 @@
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish \
         dev-rust dev-rust-full dev-rust-down dev-rust-check
 
-COMPOSE          := docker compose
-COMPOSE_DEV      := $(COMPOSE) -f compose.dev.yaml
-COMPOSE_RUST_DEV := $(COMPOSE) -f compose.rust-dev.yaml
-RUST_API         := http://localhost:8080
+COMPOSE      := docker compose
+COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
+RUST_API     := http://localhost:8080
 FRONTEND_DIR := frontend
 RUST_DIR     := rust
 PKG_MGR      := $(shell command -v bun /dev/null 2>/dev/null || (command -v pnpm 2>/dev/null && echo pnpm) || echo npm)
@@ -34,17 +33,17 @@ dev-backend-rust: ## Start the Rust backend while keeping dev-mode defaults else
 # ── Rust isolated dev ────────────────────────────────────────────────────────
 
 dev-rust: ## Start mosquitto + run Rust server natively (REST :8080, WS :8081)
-	$(COMPOSE_RUST_DEV) up -d --wait mosquitto
+	$(COMPOSE_DEV) up -d --wait mosquitto
 	cargo run -p wactorz-server -- --no-cli
 
 dev-rust-full: ## Start mosquitto + fuseki + run Rust server natively
-	$(COMPOSE_RUST_DEV) --profile full up -d --wait
+	$(COMPOSE_DEV) up -d --wait mosquitto fuseki
 	cargo run -p wactorz-server -- --no-cli \
 	  --fuseki-url http://localhost:3030 \
 	  --fuseki-dataset wactorz
 
-dev-rust-down: ## Stop the Rust dev infrastructure
-	$(COMPOSE_RUST_DEV) --profile full down
+dev-rust-down: ## Stop the Rust dev infrastructure (mosquitto + fuseki)
+	$(COMPOSE_DEV) stop mosquitto fuseki
 
 dev-rust-check: ## Smoke-test a running Rust server (health, actors, config)
 	@echo "── /health ──────────────────────────────"

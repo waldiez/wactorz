@@ -644,16 +644,19 @@ export class CardDashboard {
     const controls = document.createElement("div");
     controls.className = "af-card-controls";
 
-    const chatBtn = document.createElement("button");
-    chatBtn.className = "af-mini-btn af-chat-btn";
-    chatBtn.textContent = "Chat";
-    chatBtn.hidden = stateLabel(agent.state) === "stopped";
-    chatBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.chatTarget = agent.name;
-      this._setView("chat");
-    });
-    controls.appendChild(chatBtn);
+    const canMessage = ["main", "main-actor", "home-assistant-agent", "catalog"].includes(agent.name);
+    if (canMessage) {
+      const chatBtn = document.createElement("button");
+      chatBtn.className = "af-mini-btn af-chat-btn";
+      chatBtn.textContent = "Chat";
+      chatBtn.hidden = stateLabel(agent.state) === "stopped";
+      chatBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.chatTarget = agent.name;
+        this._setView("chat");
+      });
+      controls.appendChild(chatBtn);
+    }
     this._appendActionBtns(controls, agent);
     controls.addEventListener("click", (e) => {
       const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
@@ -681,6 +684,8 @@ export class CardDashboard {
   }
 
   private _appendActionBtns(controls: HTMLElement, agent: AgentInfo): void {
+    const isSystem = !["main", "main-actor", "home-assistant-agent", "catalog"].includes(agent.name);
+    if (isSystem) return;
     const status = stateLabel(agent.state);
     if (status === "running") {
       const b = document.createElement("button");

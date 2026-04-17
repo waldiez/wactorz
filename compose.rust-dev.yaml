@@ -1,0 +1,65 @@
+# Wactorz — Rust backend dev stack
+#
+# Provides the infrastructure services the Rust binary needs.
+# The Rust binary itself runs on the host via cargo so it can be
+# rebuilt and restarted quickly without rebuilding a container.
+#
+# Usage:
+#   make dev-rust          # mosquitto only + cargo run (REST :8080, WS :8081)
+#   make dev-rust-full     # mosquitto + fuseki + cargo run
+#   make dev-rust-check    # smoke-test a running Rust server
+
+name: wactorz-rust-dev
+
+services:
+
+  # ── MQTT broker ───────────────────────────────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: wactorz-rust-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-logs:/mosquitto/log
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "hc-rust", "-W", "3"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Apache Jena Fuseki (optional — only used by dev-rust-full) ────────────────
+  fuseki:
+    profiles: ["full"]
+    container_name: wactorz-rust-fuseki
+    image: wactorz-fuseki
+    build:
+      context: config/fuseki-container
+      dockerfile: Containerfile
+    restart: unless-stopped
+    ports:
+      - "${FUSEKI_EXTERNAL_PORT:-3030}:3030"
+    environment:
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=admin
+      - JVM_ARGS=-Xmx2g
+      - FUSEKI_CREATE_DATASETS=true
+      - FUSEKI_DATASET_1=wactorz
+      - FUSEKI_DATASET_2=synapse
+    volumes:
+      - fuseki-data:/fuseki/databases
+      - ./infra/fuseki/ontology:/fuseki/ontology:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3030/$/ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  mosquitto-data:
+  mosquitto-logs:
+  fuseki-data:

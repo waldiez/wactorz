@@ -1,10 +1,13 @@
 .PHONY: help dev dev-full dev-backend dev-backend-rust precommit-install precommit-run build build-rust build-frontend check fmt lint clean \
         up down logs shell release release-full release-native release-source \
         run run-py test test-py test-rust parity coverage coverage-py coverage-rust ci \
-        install install-py install-docs install-dev install-frontend docs-serve docs-build publish
+        install install-py install-docs install-dev install-frontend docs-serve docs-build publish \
+        dev-rust dev-rust-full dev-rust-down dev-rust-check
 
-COMPOSE      := docker compose
-COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
+COMPOSE          := docker compose
+COMPOSE_DEV      := $(COMPOSE) -f compose.dev.yaml
+COMPOSE_RUST_DEV := $(COMPOSE) -f compose.rust-dev.yaml
+RUST_API         := http://localhost:8080
 FRONTEND_DIR := frontend
 RUST_DIR     := rust
 PKG_MGR      := $(shell command -v bun /dev/null 2>/dev/null || (command -v pnpm 2>/dev/null && echo pnpm) || echo npm)
@@ -27,6 +30,34 @@ dev-backend: ## Start the backend in dev mode (defaults to Python REST on :8080)
 
 dev-backend-rust: ## Start the Rust backend while keeping dev-mode defaults elsewhere
 	WACTORZ_DEV_MODE=1 WACTORZ_BACKEND=rust ./run.sh
+
+# ── Rust isolated dev ────────────────────────────────────────────────────────
+
+dev-rust: ## Start mosquitto + run Rust server natively (REST :8080, WS :8081)
+	$(COMPOSE_RUST_DEV) up -d --wait mosquitto
+	cargo run -p wactorz-server -- --no-cli
+
+dev-rust-full: ## Start mosquitto + fuseki + run Rust server natively
+	$(COMPOSE_RUST_DEV) --profile full up -d --wait
+	cargo run -p wactorz-server -- --no-cli \
+	  --fuseki-url http://localhost:3030 \
+	  --fuseki-dataset wactorz
+
+dev-rust-down: ## Stop the Rust dev infrastructure
+	$(COMPOSE_RUST_DEV) --profile full down
+
+dev-rust-check: ## Smoke-test a running Rust server (health, actors, config)
+	@echo "── /health ──────────────────────────────"
+	@curl -sf $(RUST_API)/health | python3 -m json.tool
+	@echo "── /api/actors ──────────────────────────"
+	@curl -sf $(RUST_API)/api/actors | python3 -m json.tool
+	@echo "── /api/config ──────────────────────────"
+	@curl -sf $(RUST_API)/api/config | python3 -m json.tool
+	@echo "── diff vs Python (:8000) ───────────────"
+	@diff \
+	  <(curl -sf $(RUST_API)/api/config | python3 -m json.tool 2>/dev/null) \
+	  <(curl -sf http://localhost:8000/api/config | python3 -m json.tool 2>/dev/null) \
+	  && echo "configs match ✓" || echo "(diff shown above)"
 
 # ── Development ─────────────────────────────────────────────────────────────
 

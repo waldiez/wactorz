@@ -19,6 +19,11 @@ import { HAClient, type HAEntity } from "../io/HAClient";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+const DIRECT_MSG_NAMES = new Set(["main", "main-actor", "home-assistant-agent", "catalog"]);
+function canDirectMessage(agent: { name: string; protected?: boolean }): boolean {
+  return DIRECT_MSG_NAMES.has(agent.name) || !agent.protected;
+}
+
 function nameFromWid(raw: string): string {
   const m = raw.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
   return m?.[1] ?? raw;
@@ -650,7 +655,7 @@ export class CardDashboard {
     const controls = document.createElement("div");
     controls.className = "af-card-controls";
 
-    const canMessage = ["main", "main-actor", "home-assistant-agent", "catalog"].includes(agent.name);
+    const canMessage = canDirectMessage(agent);
     if (canMessage) {
       const chatBtn = document.createElement("button");
       chatBtn.className = "af-mini-btn af-chat-btn";
@@ -690,8 +695,7 @@ export class CardDashboard {
   }
 
   private _appendActionBtns(controls: HTMLElement, agent: AgentInfo): void {
-    const isSystem = !["main", "main-actor", "home-assistant-agent", "catalog"].includes(agent.name);
-    if (isSystem) return;
+    if (!canDirectMessage(agent)) return;
     const status = stateLabel(agent.state);
     if (status === "running") {
       const b = document.createElement("button");
@@ -919,8 +923,7 @@ export class CardDashboard {
     sorted.forEach((agent, idx) => {
       const color = stateColor(agent.state);
       const isActive = agent.name === this.chatTarget;
-      // Only main-actor, home-assistant-agent, and catalog are directly messageable.
-      const isDisabled = !["main", "main-actor", "home-assistant-agent", "catalog"].includes(agent.name);
+      const isDisabled = !canDirectMessage(agent);
 
       let row = existing.get(agent.name);
       if (!row) {
@@ -1124,14 +1127,17 @@ export class CardDashboard {
   }
 
   private _populateSelect(select: HTMLSelectElement): void {
-    const ALLOWED = ["main", "main-actor", "home-assistant-agent", "catalog"];
+    const PRIORITY = ["main", "main-actor", "home-assistant-agent", "catalog"];
     select.innerHTML = "";
     [...this.agents.values()]
-      .filter((a) => ALLOWED.includes(a.name))
+      .filter(canDirectMessage)
       .sort((a, b) => {
-        const ai = ALLOWED.indexOf(a.name);
-        const bi = ALLOWED.indexOf(b.name);
-        return ai - bi;
+        const ai = PRIORITY.indexOf(a.name);
+        const bi = PRIORITY.indexOf(b.name);
+        if (ai !== -1 && bi !== -1) return ai - bi;
+        if (ai !== -1) return -1;
+        if (bi !== -1) return 1;
+        return a.name.localeCompare(b.name);
       })
       .forEach((agent) => {
         const opt = document.createElement("option");

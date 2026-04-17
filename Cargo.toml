@@ -17,7 +17,7 @@ repository = "https://github.com/waldiez/wactorz"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.52.1", features = ["full"] }
 tokio-stream = "0.1"
 
 # Serialization
@@ -35,20 +35,21 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 
 # Error handling
-thiserror = "1"
+thiserror = "2.0.18"
 anyhow = "1"
+dotenvy = "0.15"
 
 # MQTT
-rumqttc = { version = "0.24", features = ["use-rustls"] }
+rumqttc = { version = "0.25.1", features = ["use-rustls"] }
 
 # HTTP / WebSocket
-axum = { version = "0.7", features = ["ws"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
-tokio-tungstenite = "0.21"
+axum = { version = "0.8.9", features = ["ws"] }
+tower = "0.5.3"
+tower-http = { version = "0.6.8", features = ["cors", "trace", "fs"] }
+tokio-tungstenite = "0.29.0"
 
 # HTTP client (LLM calls)
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.13.2", features = ["json"] }
 
 # Async stream utilities
 futures-util = "0.3"
@@ -60,10 +61,10 @@ rhai = { version = "1", features = ["sync", "serde"] }
 urlencoding = "2"
 
 # UUID (supervisor)
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1.23.1", features = ["v4"] }
 
 # CLI
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4.6.1", features = ["derive", "env"] }
 
 # Internal crates
 wactorz-core = { path = "rust/crates/wactorz-core" }

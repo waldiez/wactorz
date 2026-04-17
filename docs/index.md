@@ -22,6 +22,7 @@ pip install wactorz[all]
 - **[Guide](development.md)** — Installation, configuration, deployment
 - **[Architecture](architecture.md)** — Actor model, supervision trees, message flow
 - **[Agents](agents.md)** — Built-in and custom agent reference
+- **[Auto-Wiring](mqtt_auto_wiring.md)** — Built-in and custom agent reference
 - **[Interfaces](interfaces.md)** — HTTP endpoints and WebSocket protocol
 - **[Prometheus Monitoring](prometheus.md)** — Python metrics, Prometheus, and optional dependency probes
 - **[Pipelines](pipelines.md)** — Full topic reference with payload schemas

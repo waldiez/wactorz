@@ -47,6 +47,8 @@ class AppConfig:
     weather_default_location: str
     fuseki_url: str
     fuseki_dataset: str
+    fuseki_user: str
+    fuseki_password: str
 
 
 CONFIG = AppConfig(
@@ -76,6 +78,8 @@ CONFIG = AppConfig(
     nautilus_ssh_key=os.getenv("NAUTILUS_SSH_KEY", ""),
     nautilus_strict_host_keys=os.getenv("NAUTILUS_STRICT_HOST_KEYS", "0"),
     weather_default_location=os.getenv("WEATHER_DEFAULT_LOCATION", "London"),
-    fuseki_url=os.getenv("FUSEKI_URL", "http://fuseki:3030"),
-    fuseki_dataset=os.getenv("FUSEKI_DATASET", "/ds")
+    fuseki_url=os.getenv("FUSEKI_URL", "http://localhost:3030"),
+    fuseki_dataset=os.getenv("FUSEKI_DATASET", "wactorz"),
+    fuseki_user=os.getenv("FUSEKI_USER", "admin"),
+    fuseki_password=os.getenv("FUSEKI_PASSWORD", "admin")
 )

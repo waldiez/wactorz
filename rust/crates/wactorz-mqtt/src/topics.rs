@@ -9,6 +9,12 @@
 /// Subscribe to all agent events (wildcard).
 pub const AGENTS_ALL: &str = "agents/#";
 
+/// Subscribe to all node events (wildcard).
+pub const NODES_ALL: &str = "nodes/#";
+
+/// Node heartbeat topic pattern — `nodes/{name}/heartbeat`.
+pub const NODES_HEARTBEAT: &str = "nodes/heartbeat";
+
 /// System-wide health topic.
 pub const SYSTEM_HEALTH: &str = "system/health";
 

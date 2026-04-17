@@ -183,6 +183,9 @@ export class SceneManager {
     const existing = this.agents.get(agent.id);
     // Merge: keep existing metric fields if the incoming update doesn't include them.
     const merged: AgentInfo = existing ? { ...existing, ...agent } : agent;
+    // protected:true is sticky — MQTT partial updates (spawn/heartbeat/status)
+    // may carry false as a placeholder; never let them overwrite a confirmed true.
+    if (existing?.protected) merged.protected = true;
     this.agents.set(agent.id, merged);
     if (this.cardDashboard) {
       existing
@@ -204,6 +207,14 @@ export class SceneManager {
     if (this.cardDashboard) this.cardDashboard.removeAgent(id);
     else if (this.socialDashboard) this.socialDashboard.removeAgent(id);
     else this.activeTheme.removeAgent(id);
+  }
+
+  reconcileAgents(liveAgents: AgentInfo[]): void {
+    const liveIds = new Set(liveAgents.map((agent) => agent.id));
+    for (const id of this.agents.keys()) {
+      if (!liveIds.has(id)) this.removeAgent(id);
+    }
+    liveAgents.forEach((agent) => this.addOrUpdateAgent(agent));
   }
 
   onHeartbeat(payload: HeartbeatPayload): void {
@@ -262,7 +273,7 @@ export class SceneManager {
       id: payload.agentId,
       name: payload.agentName,
       state: "initializing",
-      protected: false,
+      protected: payload.protected ?? false,
       agentType: payload.agentType,
     });
     if (!this.cardDashboard && !this.socialDashboard) {

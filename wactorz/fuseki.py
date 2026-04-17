@@ -784,6 +784,48 @@ class HAFusekiBridge:
         await fuseki.append_graph(GRAPH_HISTORY, _ttl(hist_body))
 
 
+# ── Agent registry seed ──────────────────────────────────────────────────────
+
+async def seed_agent_registry(
+    actors: list[Any],
+    fuseki_url: str,
+    fuseki_dataset: str,
+    fuseki_user: str = "",
+    fuseki_password: str = "",
+) -> None:
+    """One-shot: write all currently registered actors to urn:wactorz:agents graph."""
+    if not fuseki_url or not fuseki_dataset:
+        return
+    auth = aiohttp.BasicAuth(fuseki_user, fuseki_password) if fuseki_user else None
+    lines: list[str] = [TTL_PREFIXES]
+    lines.append(
+        "<urn:wactorz:bridge:agent-registry>\n"
+        '  rdfs:label "wactorz agent registry bridge" .\n'
+    )
+    for actor in actors:
+        name = getattr(actor, "name", "unknown")
+        actor_id = getattr(actor, "actor_id", name)
+        state = str(getattr(actor, "state", "running"))
+        protected = getattr(actor, "protected", False)
+        iri = f"<urn:wactorz:agent:{_safe(name)}>"
+        lines.append(
+            f"{iri}\n"
+            f"  rdfs:label {_literal(name)} ;\n"
+            f"  syn:actorId {_literal(actor_id)} ;\n"
+            f"  syn:state {_literal(state)} ;\n"
+            f'  syn:protected "{str(protected).lower()}"^^xsd:boolean .\n'
+        )
+    ttl = "\n".join(lines)
+    connector = aiohttp.TCPConnector(ssl=False, force_close=True)
+    try:
+        async with aiohttp.ClientSession(connector=connector) as http:
+            fuseki = FusekiClient(fuseki_url, fuseki_dataset, http, auth)
+            await fuseki.replace_graph(GRAPH_AGENTS, ttl)
+            log.info("Agent registry seeded: %d actors → Fuseki", len(actors))
+    except Exception as exc:
+        log.warning("Agent registry seed failed (Fuseki not ready?): %s", exc)
+
+
 # ── Agent manifest bridge ────────────────────────────────────────────────────
 
 class AgentManifestBridge:

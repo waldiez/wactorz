@@ -4,6 +4,7 @@
 //!
 //! - [`LlmAgent`] — wraps Anthropic / OpenAI / Ollama APIs
 //! - [`MainActor`] — LLM orchestrator; parses `<spawn>` directives
+//! - [`CatalogAgent`] — pre-built agent recipe library; spawns DynamicAgents on request
 //! - [`DynamicAgent`] — executes Rhai scripts generated at runtime
 //! - [`MonitorAgent`] — health monitor; raises alerts on stale actors
 //! - [`IOAgent`] — UI gateway; routes `io/chat` messages to actors
@@ -17,9 +18,14 @@
 //! - [`WmeAgent`] — media expert: watch/read log, queue, binge calc, tips
 //! - [`WisAgent`] — sound expert: music log, theory (chord/scale/bpm), tips  [nato: whiskey]
 //! - [`WikAgent`] — key manager: LLM failover, provider rotation, usage tracking [nato: kilo]
+//! - [`HomeAssistantActuatorAgent`] — MQTT-triggered actuator; calls HA services [nato: kilo]
+//! - [`HomeAssistantStateBridgeAgent`] — bridges HA state_changed events to MQTT [nato: lima]
 
+pub mod catalog;
 pub mod dynamic_agent;
 pub mod fuseki_agent;
+pub mod ha_actuator;
+pub mod ha_state_bridge;
 pub mod home_assistant_agent;
 pub mod installer_agent;
 pub mod io_agent;
@@ -30,6 +36,7 @@ pub mod ml_agent;
 pub mod monitor_agent;
 pub mod nautilus_agent;
 pub mod news_agent;
+pub mod one_off_actuator;
 pub mod planner_agent;
 pub mod qa_agent;
 pub mod smart_cities_agent;
@@ -41,8 +48,11 @@ pub mod wik_agent;
 pub mod wis_agent;
 pub mod wme_agent;
 
+pub use catalog::CatalogAgent;
 pub use dynamic_agent::DynamicAgent;
 pub use fuseki_agent::FusekiAgent;
+pub use ha_actuator::HomeAssistantActuatorAgent;
+pub use ha_state_bridge::HomeAssistantStateBridgeAgent;
 pub use home_assistant_agent::HomeAssistantAgent;
 pub use installer_agent::InstallerAgent;
 pub use io_agent::IOAgent;
@@ -53,6 +63,7 @@ pub use ml_agent::MlAgent;
 pub use monitor_agent::MonitorAgent;
 pub use nautilus_agent::{NautilusAgent, NautilusConfig};
 pub use news_agent::NewsAgent;
+pub use one_off_actuator::OneOffActuatorAgent;
 pub use planner_agent::PlannerAgent;
 pub use qa_agent::QAAgent;
 pub use smart_cities_agent::SmartCitiesAgent;

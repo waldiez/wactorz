@@ -505,8 +505,9 @@ def parse_topic(topic: str, payload_str: str):
         if metric == "status":
             update_agent(agent_id, "status", data)
             if isinstance(data, dict):
-                if "name"  in data: state["agents"][agent_id]["name"]  = data["name"]
-                if "state" in data: state["agents"][agent_id]["state"] = data["state"]
+                if "name"      in data: state["agents"][agent_id]["name"]      = data["name"]
+                if "state"     in data: state["agents"][agent_id]["state"]     = data["state"]
+                if "protected" in data: state["agents"][agent_id]["protected"] = data["protected"]
             add_log({"type": "status", "agent_id": agent_id, "status": data, "timestamp": time.time()})
 
         elif metric == "heartbeat":
@@ -829,6 +830,25 @@ def _actor_payload(ag: dict) -> dict:
 
 async def actors_handler(request):
     from aiohttp import web
+    # Prefer the live registry (injected by cli.py) — actor objects carry the
+    # authoritative protected flag.  Fall back to MQTT-derived state dict when
+    # the registry is unavailable (standalone monitor_server mode).
+    if registry is not None:
+        result = []
+        for actor in registry.all_actors():
+            ag = state["agents"].get(actor.actor_id, {})
+            result.append({
+                "id":                actor.actor_id,
+                "name":              actor.name,
+                "state":             ag.get("state", "unknown"),
+                "protected":         bool(getattr(actor, "protected", False)),
+                "cpu":               ag.get("cpu"),
+                "mem":               ag.get("mem"),
+                "task":              ag.get("task"),
+                "messagesProcessed": ag.get("messages_processed"),
+                "costUsd":           ag.get("cost_usd"),
+            })
+        return web.json_response(result)
     return web.json_response([_actor_payload(ag) for ag in state["agents"].values()])
 
 
@@ -839,6 +859,34 @@ async def actor_handler(request):
     if ag is None:
         return web.json_response({"error": "actor not found"}, status=404)
     return web.json_response(_actor_payload(ag))
+
+
+async def config_handler(request):
+    """Expose non-secret runtime config so the frontend can seed its defaults."""
+    from aiohttp import web
+    from .config import CONFIG
+    return web.json_response({
+        "ha": {
+            "url":   CONFIG.ha_url,
+            "token": CONFIG.ha_token,
+        },
+        "fuseki": {
+            "url":     CONFIG.fuseki_url,
+            "dataset": CONFIG.fuseki_dataset,
+        },
+        "mqtt": {
+            "host": MQTT_BROKER,
+            "port": MQTT_PORT,
+            "url":  f"ws://{MQTT_BROKER}:{WS_PORT}/mqtt",
+        },
+        "llm": {
+            "provider": CONFIG.llm_provider,
+            "model":    CONFIG.llm_model,
+        },
+        "weather": {
+            "defaultLocation": CONFIG.weather_default_location,
+        },
+    })
 
 
 # ── Entry point ────────────────────────────────────────────────────────────
@@ -865,6 +913,10 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/mqtt",                  mqtt_proxy_handler)
     app.router.add_get("/api/actors",            actors_handler)
     app.router.add_get("/api/actors/{actor_id}", actor_handler)
+    app.router.add_get("/api/config",            config_handler)
+    from .fuseki_proxy import fuseki_proxy_handler
+    app.router.add_post("/api/fuseki/{dataset}/sparql",  fuseki_proxy_handler)
+    app.router.add_post("/api/fuseki/{dataset}/update",  fuseki_proxy_handler)
     app.router.add_get("/docs",  lambda r: web.HTTPFound("/docs/"))
     app.router.add_get("/docs/",             docs_handler)
     app.router.add_get("/docs/{path:.+}",    docs_handler)

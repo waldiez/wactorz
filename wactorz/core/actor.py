@@ -178,7 +178,18 @@ class Actor(ABC):
         await self.on_stop()                  # on_stop() calls persist() first
         await self._save_persistent_state()   # THEN save to disk
         await self._publish_status()
+        # ── Unregister from TopicBus ───────────────────────────────────
+        # Remove this agent's TopicContract so the planner doesn't wire
+        # against topics from stopped/deleted/replaced agents.
+        try:
+            from .topic_bus import get_topic_bus
+            bus = get_topic_bus()
+            if bus:
+                bus.unregister(self.name)
+        except Exception:
+            pass  # TopicBus not initialised or unavailable — not fatal
         logger.info(f"[{self.name}] Actor stopped.")
+ 
 
     async def pause(self):
         self.state = ActorState.PAUSED
@@ -477,6 +488,7 @@ class Actor(ABC):
             "actor_id": self.actor_id,
             "name": self.name,
             "state": self.state.value,
+            "protected": self.protected,
             "uptime": self.metrics.uptime,
             "messages_processed": self.metrics.messages_processed,
             "restart_count": self.metrics.restart_count,

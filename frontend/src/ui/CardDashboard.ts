@@ -19,6 +19,25 @@ import { HAClient, type HAEntity } from "../io/HAClient";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+const SYSTEM_AGENT_NAMES: Set<any> = new Set([
+  "io-agent",
+  "monitor-agent",
+  "manual-agent",
+  "home-assistant-state-bridge",
+  "home-assistant-map-agent",
+]);
+const ALWAYS_MESSAGEABLE = new Set(["main", "main-actor", "home-assistant-agent", "catalog"]);
+function canDirectMessage(agent: { name: string; protected?: boolean }): boolean {
+  if (ALWAYS_MESSAGEABLE.has(agent.name)) return true;
+  if (SYSTEM_AGENT_NAMES.has(agent.name)) return false;
+  return !agent.protected;
+}
+
+function nameFromWid(raw: string): string {
+  const m = raw.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
+  return m?.[1] ?? raw;
+}
+
 function stateColor(state: AgentState): string {
   if (typeof state === "object") return "#f87171";
   switch (state as string) {
@@ -60,7 +79,7 @@ function relTime(ms: number): string {
   return `${Math.floor(s / 60)}m ago`;
 }
 
-type View = "overview" | "feed" | "chat" | "ha" | "fuseki";
+type View = "overview" | "feed" | "chat" | "ha" | "fuseki" | "settings";
 type ConnState = "live" | "connecting" | "demo";
 
 // ── CardDashboard ─────────────────────────────────────────────────────────────
@@ -72,11 +91,11 @@ export class CardDashboard {
   private feedItems: FeedItem[] = [];
   private chatMessages: ChatMessage[] = [];
   private chatTarget: string = "main-actor";
-  private _lastSentTarget: string = "main-actor";
   private view: View = "overview";
   private connState: ConnState = "connecting";
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private sidebarFilter: string = "";
+  private hideHeartbeats: boolean = true;
 
   private haClient: HAClient | null = null;
 
@@ -84,7 +103,9 @@ export class CardDashboard {
   private _streamRow: HTMLElement | null = null;
   private _streamBody: HTMLElement | null = null;
   private _streamFrom: string | null = null;
+  private _streamTarget: string | null = null;
   private _streamText: string = "";
+  private _lastSentTarget: string = "main-actor";
 
   // Event listeners (stored for cleanup)
   private _evFeed: ((e: Event) => void) | null = null;
@@ -252,9 +273,9 @@ export class CardDashboard {
 
     this._evChat = (e) => {
       const msg = (e as CustomEvent<{ msg: ChatMessage }>).detail.msg;
-      // Tag io-gateway / system replies with the target of the last sent
-      // message so they land in the correct thread even if the user has
-      // switched to a different agent in the sidebar since sending.
+      // Tag io-gateway / system replies with the most recent outbound target
+      // so thread membership stays stable if the user switches sidebar rows
+      // before the reply arrives.
       const stored: ChatMessage =
         msg.from === "io-gateway" || msg.from === "system"
           ? { ...msg, to: this._lastSentTarget }
@@ -268,17 +289,14 @@ export class CardDashboard {
     };
 
     this._evChunk = (e) => {
+      if (this.view !== "chat") return;
       const { chunk, from } = (
         e as CustomEvent<{ chunk: string; from: string }>
       ).detail;
-      // Always accumulate text so _evEnd can save it regardless of active view
-      if (!this._streamFrom) {
-        this._streamFrom = from;
-        this._streamText = "";
-      }
-      this._streamText += chunk;
-      if (this.view !== "chat") return;
       if (!this._streamRow) {
+        this._streamFrom = from;
+        this._streamTarget = this._lastSentTarget;
+        this._streamText = "";
         const thread = this.root.querySelector<HTMLElement>(".af-chat-thread");
         if (!thread) return;
         const row = document.createElement("div");
@@ -294,6 +312,7 @@ export class CardDashboard {
         this._streamRow = row;
         this._streamBody = bubble;
       }
+      this._streamText += chunk;
       if (this._streamBody) this._streamBody.textContent = this._streamText;
       this._scrollThread();
     };
@@ -303,7 +322,7 @@ export class CardDashboard {
         const msg: ChatMessage = {
           id: `stream-${Date.now()}`,
           from: this._streamFrom,
-          to: this._lastSentTarget,
+          to: this._streamTarget ?? this._lastSentTarget,
           content: this._streamText,
           timestampMs: Date.now(),
         };
@@ -312,6 +331,7 @@ export class CardDashboard {
       this._streamRow = null;
       this._streamBody = null;
       this._streamFrom = null;
+      this._streamTarget = null;
       this._streamText = "";
     };
 
@@ -386,6 +406,7 @@ export class CardDashboard {
     else if (this.view === "feed") body.appendChild(this._buildFeedView());
     else if (this.view === "ha") body.appendChild(this._buildHAView());
     else if (this.view === "fuseki") body.appendChild(this._buildFusekiView());
+    else if (this.view === "settings") body.appendChild(this._buildSettingsView());
     else if (this.view === "chat") {
       body.appendChild(this._buildChatView());
       // _render* calls inside _buildChatView() run before the element is in
@@ -402,6 +423,13 @@ export class CardDashboard {
         btn.classList.toggle("active", btn.dataset["view"] === this.view);
       });
     this._renderHealth();
+    // Only show the agent-target dropdown in the chat view
+    const select =
+      this.root.querySelector<HTMLSelectElement>("#af-target-select");
+    if (select) {
+      select.style.display = this.view === "chat" ? "" : "none";
+      if (this.view === "chat") select.value = this.chatTarget;
+    }
   }
 
   /** Ensure chatTarget is a live agent, defaulting to "main" → "main-actor" → first. */
@@ -641,16 +669,19 @@ export class CardDashboard {
     const controls = document.createElement("div");
     controls.className = "af-card-controls";
 
-    const chatBtn = document.createElement("button");
-    chatBtn.className = "af-mini-btn af-chat-btn";
-    chatBtn.textContent = "Chat";
-    chatBtn.hidden = stateLabel(agent.state) === "stopped";
-    chatBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.chatTarget = agent.name;
-      this._setView("chat");
-    });
-    controls.appendChild(chatBtn);
+    const canMessage = canDirectMessage(agent);
+    if (canMessage) {
+      const chatBtn = document.createElement("button");
+      chatBtn.className = "af-mini-btn af-chat-btn";
+      chatBtn.textContent = "Chat";
+      chatBtn.hidden = stateLabel(agent.state) === "stopped";
+      chatBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.chatTarget = agent.name;
+        this._setView("chat");
+      });
+      controls.appendChild(chatBtn);
+    }
     this._appendActionBtns(controls, agent);
     controls.addEventListener("click", (e) => {
       const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
@@ -678,15 +709,16 @@ export class CardDashboard {
   }
 
   private _appendActionBtns(controls: HTMLElement, agent: AgentInfo): void {
+    if (!canDirectMessage(agent)) return;
     const status = stateLabel(agent.state);
-    if (!agent.protected && status === "running") {
+    if (status === "running") {
       const b = document.createElement("button");
       b.className = "af-mini-btn";
       b.textContent = "Pause";
       b.dataset.action = "pause";
       controls.appendChild(b);
     }
-    if (!agent.protected && status === "paused") {
+    if (status === "paused") {
       const b = document.createElement("button");
       b.className = "af-mini-btn";
       b.textContent = "Resume";
@@ -724,27 +756,56 @@ export class CardDashboard {
   // ── Private: feed view ────────────────────────────────────────────────────
 
   private _buildFeedView(): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "af-feed-wrap";
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "af-feed-toolbar";
+
+    const hbBtn = document.createElement("button");
+    hbBtn.className = `af-mini-btn${this.hideHeartbeats ? "" : " active"}`;
+    hbBtn.style.cssText = "font-size:11px;padding:3px 10px;";
+    hbBtn.title = "Toggle heartbeat events";
+    hbBtn.textContent = this.hideHeartbeats ? "♥ heartbeats: off" : "♥ heartbeats: on";
+    hbBtn.addEventListener("click", () => {
+      this.hideHeartbeats = !this.hideHeartbeats;
+      hbBtn.textContent = this.hideHeartbeats ? "♥ heartbeats: off" : "♥ heartbeats: on";
+      hbBtn.className = `af-mini-btn${this.hideHeartbeats ? "" : " active"}`;
+      const feed = wrap.querySelector<HTMLElement>("#af-feed-view")!;
+      feed.querySelectorAll<HTMLElement>(".af-feed-heartbeat").forEach((el) => {
+        el.hidden = this.hideHeartbeats;
+      });
+    });
+    toolbar.appendChild(hbBtn);
+    wrap.appendChild(toolbar);
+
     const feed = document.createElement("div");
     feed.className = "af-feed";
     feed.id = "af-feed-view";
 
-    if (this.feedItems.length === 0) {
+    const visible = this.feedItems.filter(
+      (i) =>
+        !(this.hideHeartbeats && (i.type === "heartbeat" || i.type === "health")) &&
+        !SYSTEM_AGENT_NAMES.has(nameFromWid(i.agentName)),
+    );
+    if (visible.length === 0) {
       const empty = document.createElement("div");
       empty.className = "af-feed-empty";
       empty.textContent = "No events yet.";
       feed.appendChild(empty);
     } else {
-      this.feedItems.forEach((item) => this._feedItemEl(feed, item));
+      visible.forEach((item) => this._feedItemEl(feed, item));
     }
-    setTimeout(() => {
-      feed.scrollTop = feed.scrollHeight;
-    }, 0);
-    return feed;
+    wrap.appendChild(feed);
+    setTimeout(() => { feed.scrollTop = feed.scrollHeight; }, 0);
+    return wrap;
   }
 
   private _appendFeedItemToView(item: FeedItem): void {
     const feed = this.root.querySelector<HTMLElement>("#af-feed-view");
     if (!feed) return;
+    if (this.hideHeartbeats && (item.type === "heartbeat" || item.type === "health")) return;
+    if (SYSTEM_AGENT_NAMES.has(nameFromWid(item.agentName))) return;
     feed.querySelector(".af-feed-empty")?.remove();
     this._feedItemEl(feed, item);
     feed.scrollTop = feed.scrollHeight;
@@ -788,7 +849,7 @@ export class CardDashboard {
 
     const agent = document.createElement("span");
     agent.className = "af-feed-agent";
-    agent.textContent = item.agentName;
+    agent.textContent = nameFromWid(item.agentName);
 
     const text = document.createElement("span");
     text.className = "af-feed-text";
@@ -879,19 +940,26 @@ export class CardDashboard {
     sorted.forEach((agent, idx) => {
       const color = stateColor(agent.state);
       const isActive = agent.name === this.chatTarget;
+      const isDisabled = !canDirectMessage(agent);
 
       let row = existing.get(agent.name);
       if (!row) {
         row = document.createElement("button");
         row.dataset["name"] = agent.name;
-        row.title = agent.name;
         const dot = document.createElement("span");
         dot.className = "af-chat-agent-dot";
         const nm = document.createElement("span");
         nm.className = "af-chat-agent-name";
         nm.textContent = agent.name;
-        row.append(dot, nm);
+        const lock = document.createElement("span");
+        lock.className = "af-chat-agent-lock";
+        lock.setAttribute("aria-hidden", "true");
+        row.append(dot, nm, lock);
         row.addEventListener("click", () => {
+          const latest = [...this.agents.values()].find(
+            (a) => a.name === agent.name,
+          );
+          if (!latest || !canDirectMessage(latest)) return;
           this.chatTarget = agent.name;
           this._renderSidebar();
           this._renderChatPaneHeader();
@@ -901,9 +969,18 @@ export class CardDashboard {
       }
 
       // Patch only what may have changed
-      row.className = `af-chat-agent-row${isActive ? " active" : ""}`;
+      const cls = ["af-chat-agent-row"];
+      if (isActive) cls.push("active");
+      if (isDisabled) cls.push("protected-agent");
+      row.className = cls.join(" ");
+      (row as HTMLButtonElement).disabled = isDisabled;
+      row.title = isDisabled
+        ? `${agent.name} — infrastructure agent, not directly reachable`
+        : agent.name;
       const dot = row.querySelector<HTMLElement>(".af-chat-agent-dot");
       if (dot && dot.style.background !== color) dot.style.background = color;
+      const lock = row.querySelector<HTMLElement>(".af-chat-agent-lock");
+      if (lock) lock.textContent = isDisabled ? "🔒" : "";
 
       const sibling = list.children[idx];
       if (sibling !== row) list.insertBefore(row, sibling ?? null);
@@ -933,13 +1010,6 @@ export class CardDashboard {
       st.textContent = stateLabel(agent.state);
       hdr.appendChild(st);
     }
-    if (this.chatTarget !== "main-actor") {
-      const via = document.createElement("span");
-      via.className = "af-chat-pane-via";
-      via.title = "Context filter — all messages go to @main-actor.";
-      via.textContent = "context · all msgs → @main-actor";
-      hdr.appendChild(via);
-    }
   }
 
   /** True when `msg` belongs to the currently open agent thread. */
@@ -964,8 +1034,8 @@ export class CardDashboard {
       empty.innerHTML =
         this.chatTarget === "main-actor"
           ? `<p>Say hello to <strong>@main-actor</strong> — the system orchestrator.</p>`
-          : `<p>No messages in <strong>@${this.chatTarget}</strong> context yet.</p>
-           <p style="font-size:11px;opacity:0.5">Messages go to @main-actor.</p>`;
+          : `<p>No messages with <strong>@${this.chatTarget}</strong> yet.</p>
+           <p style="font-size:11px;opacity:0.5">New messages will be sent directly to this agent.</p>`;
       thread.appendChild(empty);
     } else {
       msgs.forEach((m) => this._appendChatMsgEl(m, thread));
@@ -1037,6 +1107,11 @@ export class CardDashboard {
     const bar = document.createElement("div");
     bar.className = "af-iobar";
 
+    const select = document.createElement("select");
+    select.className = "af-target-select";
+    select.id = "af-target-select";
+    this._populateSelect(select);
+
     const input = document.createElement("input");
     input.className = "af-iobar-input";
     input.id = "af-iobar-input";
@@ -1044,28 +1119,61 @@ export class CardDashboard {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        this._sendMessage(input);
+        this._sendMessage(input, select);
       }
+    });
+    select.addEventListener("change", () => {
+      this.chatTarget = select.value;
+      input.placeholder = `Message @${select.value}…`;
     });
 
     const sendBtn = document.createElement("button");
     sendBtn.className = "af-send-btn";
     sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`;
-    sendBtn.addEventListener("click", () => this._sendMessage(input));
+    sendBtn.addEventListener("click", () => this._sendMessage(input, select));
 
-    bar.append(input, sendBtn);
+    bar.append(select, input, sendBtn);
     return bar;
   }
 
+  private _populateSelect(select: HTMLSelectElement): void {
+    const PRIORITY = ["main", "main-actor", "home-assistant-agent", "catalog"];
+    select.innerHTML = "";
+    [...this.agents.values()]
+      .filter(canDirectMessage)
+      .sort((a, b) => {
+        const ai = PRIORITY.indexOf(a.name);
+        const bi = PRIORITY.indexOf(b.name);
+        if (ai !== -1 && bi !== -1) return ai - bi;
+        if (ai !== -1) return -1;
+        if (bi !== -1) return 1;
+        return a.name.localeCompare(b.name);
+      })
+      .forEach((agent) => {
+        const opt = document.createElement("option");
+        opt.value = agent.name;
+        opt.textContent = `@${agent.name}`;
+        select.appendChild(opt);
+      });
+    select.value = this.chatTarget;
+  }
+
   private _updateTargetSelect(): void {
+    const select =
+      this.root.querySelector<HTMLSelectElement>("#af-target-select");
+    if (select) this._populateSelect(select);
     const input = this.root.querySelector<HTMLInputElement>("#af-iobar-input");
     if (input) input.placeholder = `Message @${this.chatTarget}…`;
   }
 
-  private _sendMessage(input: HTMLInputElement): void {
+  private _sendMessage(
+    input: HTMLInputElement,
+    select: HTMLSelectElement,
+  ): void {
     const content = input.value.trim();
     if (!content) return;
-    const target = this.chatTarget || "main-actor";
+    const target = select.value || "main-actor";
+    this.chatTarget = target;
     this._lastSentTarget = target;
     const msg: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -1075,7 +1183,10 @@ export class CardDashboard {
       timestampMs: Date.now(),
     };
     this.chatMessages.push(msg);
-    if (this.view === "chat") {
+    if (this.view !== "chat") {
+      this.view = "chat";
+      this._renderView();
+    } else {
       this._appendChatMsgEl(msg);
       this._scrollThread();
     }
@@ -1659,6 +1770,7 @@ export class CardDashboard {
 
     views.push({ key: "ha", label: "🏠 Devices" });
     views.push({ key: "fuseki", label: "⬡ Graph" });
+    views.push({ key: "settings", label: "⚙ Settings" });
 
     views.forEach(({ key, label }) => {
       const btn = document.createElement("button");
@@ -1709,68 +1821,92 @@ export class CardDashboard {
     // ── Preset queries ─────────────────────────────────────────────────────
     const PRESETS: { label: string; icon: string; sparql: string }[] = [
       {
+        label: "All graphs",
+        icon: "◌",
+        sparql: `SELECT ?g (COUNT(*) AS ?triples) WHERE {
+  GRAPH ?g { ?s ?p ?o }
+} GROUP BY ?g ORDER BY ?g`,
+      },
+      {
+        label: "Top predicates",
+        icon: "≡",
+        sparql: `SELECT ?p (COUNT(*) AS ?count) WHERE {
+  GRAPH ?g { ?s ?p ?o }
+} GROUP BY ?p ORDER BY DESC(?count) LIMIT 50`,
+      },
+      {
+        label: "Sample triples",
+        icon: "⋯",
+        sparql: `SELECT ?g ?s ?p ?o WHERE {
+  GRAPH ?g { ?s ?p ?o }
+} LIMIT 50`,
+      },
+      {
         label: "Current states",
         icon: "◉",
-        sparql: `SELECT ?entity ?state ?unit WHERE {
-  GRAPH <urn:ha:current> {
-    ?entity syn:state ?state .
-    OPTIONAL { ?entity syn:unit ?unit . }
+        sparql: `SELECT ?g ?entity ?state ?unit WHERE {
+  VALUES ?g { <urn:ha:current> <urn:wactorz:current> }
+  GRAPH ?g {
+    ?entity ?statePred ?state .
+    FILTER(?statePred IN (syn:state, saref:hasState))
+    OPTIONAL {
+      ?entity ?unitPred ?unit .
+      FILTER(?unitPred IN (syn:unit, saref:hasUnitOfMeasure))
+    }
   }
 } ORDER BY ?entity LIMIT 200`,
       },
       {
         label: "Recent observations",
         icon: "⏱",
-        sparql: `SELECT ?obs ?entity ?result ?ts WHERE {
-  GRAPH <urn:ha:history> {
-    ?obs a sosa:Observation ;
-         sosa:madeBySensor ?entity ;
-         sosa:hasSimpleResult ?result ;
-         sosa:resultTime ?ts .
+        sparql: `SELECT ?g ?obs ?entity ?result ?ts WHERE {
+  VALUES ?g { <urn:ha:history> <urn:wactorz:history> }
+  GRAPH ?g {
+    ?obs a sosa:Observation .
+    OPTIONAL { ?obs sosa:madeBySensor ?entity . }
+    OPTIONAL { ?obs sosa:hasSimpleResult ?result . }
+    OPTIONAL { ?obs sosa:resultTime ?ts . }
   }
 } ORDER BY DESC(?ts) LIMIT 100`,
       },
       {
         label: "Device catalog",
         icon: "⊡",
-        sparql: `SELECT ?entity ?label WHERE {
-  GRAPH <urn:ha:devices> {
+        sparql: `SELECT ?g ?entity ?label WHERE {
+  VALUES ?g { <urn:ha:devices> <urn:wactorz:devices> <urn:wactorz:agents> }
+  GRAPH ?g {
     ?entity rdfs:label ?label .
     FILTER(?entity != <urn:ha:bridge:wactorz>)
   }
 } ORDER BY ?label LIMIT 200`,
       },
       {
-        label: "Sensors with units",
-        icon: "📡",
-        sparql: `SELECT ?entity ?state ?unit WHERE {
-  GRAPH <urn:ha:current> {
-    ?entity a sosa:Sensor ;
-            syn:state ?state .
-    OPTIONAL { ?entity syn:unit ?unit . }
+        label: "Agents",
+        icon: "⚙",
+        sparql: `SELECT ?entity ?label ?state ?protected ?actorId WHERE {
+  GRAPH <urn:wactorz:agents> {
+    ?entity rdfs:label ?label .
+    OPTIONAL { ?entity syn:state ?state . }
+    OPTIONAL { ?entity syn:protected ?protected . }
+    OPTIONAL { ?entity syn:actorId ?actorId . }
   }
-} ORDER BY ?entity LIMIT 200`,
+} ORDER BY ?label LIMIT 200`,
       },
       {
-        label: "Agent services",
-        icon: "⬡",
-        sparql: `SELECT ?name ?desc ?prop ?propLabel ?propType WHERE {
-  GRAPH <urn:wactorz:agents> {
-    ?agent a <https://synapse.waldiez.io/ns#Agent> ;
-           rdfs:label ?name .
-    OPTIONAL { ?agent <http://purl.org/dc/terms/description> ?desc . }
+        label: "Sensors with units",
+        icon: "📡",
+        sparql: `SELECT ?g ?entity ?state ?unit WHERE {
+  VALUES ?g { <urn:ha:current> <urn:wactorz:current> }
+  GRAPH ?g {
+    ?entity a sosa:Sensor ;
+            ?statePred ?state .
+    FILTER(?statePred IN (syn:state, saref:hasState))
     OPTIONAL {
-      ?agent <http://www.w3.org/ns/ssn/hasProperty> ?prop .
-      ?prop rdfs:label ?propLabel ;
-            a ?propType .
-      FILTER(?propType IN (
-        <http://www.w3.org/ns/sosa/ActuatableProperty>,
-        <http://www.w3.org/ns/sosa/ObservableProperty>,
-        <https://synapse.waldiez.io/ns#Action>
-      ))
+      ?entity ?unitPred ?unit .
+      FILTER(?unitPred IN (syn:unit, saref:hasUnitOfMeasure))
     }
   }
-} ORDER BY ?name ?propType ?propLabel`,
+} ORDER BY ?entity LIMIT 200`,
       },
       {
         label: "Graph sizes",
@@ -1797,8 +1933,36 @@ export class CardDashboard {
       <a href="${base}" target="_blank" rel="noopener"
          style="font-size:11px;opacity:0.4;color:inherit;text-decoration:none;margin-left:2px;">${base} ↗</a>
       <div style="flex:1;"></div>
+      <button id="fsk-seed-demo" class="af-mini-btn" style="font-size:10px;">Seed Demo Data</button>
       <button id="fsk-reconfigure" class="af-mini-btn" style="font-size:10px;">⚙ Configure</button>
     `;
+    const demoSeedQuery = `INSERT DATA {
+  GRAPH <urn:ha:devices> {
+    <urn:ha:entity:demo_sensor_temperature> rdfs:label "Demo temperature sensor" .
+    <urn:ha:entity:demo_switch_lamp> rdfs:label "Demo lamp" .
+  }
+  GRAPH <urn:ha:current> {
+    <urn:ha:entity:demo_sensor_temperature>
+      a sosa:Sensor ;
+      syn:state "21.5" ;
+      syn:unit "degC" .
+    <urn:ha:entity:demo_switch_lamp>
+      a sosa:Actuator ;
+      syn:state "on" .
+  }
+  GRAPH <urn:ha:history> {
+    <urn:ha:observation:demo_sensor_temperature:1>
+      a sosa:Observation ;
+      sosa:madeBySensor <urn:ha:entity:demo_sensor_temperature> ;
+      sosa:hasSimpleResult "21.1" ;
+      sosa:resultTime "2026-04-17T12:00:00Z"^^xsd:dateTime .
+    <urn:ha:observation:demo_sensor_temperature:2>
+      a sosa:Observation ;
+      sosa:madeBySensor <urn:ha:entity:demo_sensor_temperature> ;
+      sosa:hasSimpleResult "21.5" ;
+      sosa:resultTime "2026-04-17T12:15:00Z"^^xsd:dateTime .
+  }
+}`;
     hdr
       .querySelector("#fsk-reconfigure")
       ?.addEventListener("click", () => {
@@ -1806,6 +1970,13 @@ export class CardDashboard {
         wrapper.appendChild(this._buildFusekiConfigForm());
       });
     wrapper.appendChild(hdr);
+
+    const hint = document.createElement("div");
+    hint.style.cssText =
+      "font-size:12px;line-height:1.45;color:rgba(255,255,255,0.6);padding:10px 12px;border:1px solid rgba(255,255,255,0.08);border-radius:10px;background:rgba(255,255,255,0.03);";
+    hint.innerHTML =
+      "This panel only shows data already stored in Fuseki. If the dataset is empty, all presets return 0 rows even when the endpoint is reachable. Use Seed Demo Data if you want to verify the graph view without Home Assistant.";
+    wrapper.appendChild(hint);
 
     // ── Presets + editor row ───────────────────────────────────────────────
     const mainRow = document.createElement("div");
@@ -1864,8 +2035,9 @@ export class CardDashboard {
     el.appendChild(wrapper);
 
     // ── SPARQL runner ──────────────────────────────────────────────────────
-    const sparqlUrl = `${base}/${ds}/sparql`;
-    const updateUrl = `${base}/${ds}/update`;
+    const datasetPath = encodeURIComponent(ds);
+    const sparqlUrl = `/api/fuseki/${datasetPath}/sparql`;
+    const updateUrl = `/api/fuseki/${datasetPath}/update`;
 
     const SPARQL_PREFIXES = `PREFIX syn:    <https://synapse.waldiez.io/ns#>
 PREFIX sosa:   <http://www.w3.org/ns/sosa/>
@@ -1956,7 +2128,11 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
         status.style.color = "rgba(255,255,255,0.45)";
 
         if (bindings.length === 0) {
-          results.innerHTML = `<div class="af-fuseki-empty">No results.</div>`;
+          const looksLikeHaGraphQuery =
+            /urn:ha:(current|history|devices)/i.test(trimmed);
+          results.innerHTML = looksLikeHaGraphQuery
+            ? `<div class="af-fuseki-empty">No results.<br><span style="opacity:0.65">Fuseki is reachable, but the expected HA graphs appear empty.</span></div>`
+            : `<div class="af-fuseki-empty">No results.</div>`;
           return;
         }
 
@@ -1998,6 +2174,13 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
         results.innerHTML = `<pre class="af-fuseki-error">${String(err)}</pre>`;
       }
     };
+
+    hdr.querySelector("#fsk-seed-demo")?.addEventListener("click", async () => {
+      editor.value = demoSeedQuery;
+      await runQuery(demoSeedQuery);
+      editor.value = PRESETS[4]?.sparql ?? PRESETS[0]?.sparql ?? "";
+      await runQuery(editor.value);
+    });
 
     runBtn.addEventListener("click", () => void runQuery(editor.value));
     editor.addEventListener("keydown", (e) => {
@@ -2104,5 +2287,134 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
     });
 
     return form;
+  }
+
+  // ── Private: settings view ────────────────────────────────────────────────
+
+  private _buildSettingsView(): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "af-settings";
+
+    const title = document.createElement("h2");
+    title.className = "af-settings-title";
+    title.textContent = "Settings";
+    el.appendChild(title);
+
+    el.appendChild(this._buildSettingsSection("🏠 Home Assistant", [
+      { key: "wactorz-ha-url",   label: "URL",   placeholder: "http://homeassistant.local:8123", type: "text" },
+      { key: "wactorz-ha-token", label: "Token", placeholder: "Long-lived access token",          type: "password" },
+    ]));
+
+    el.appendChild(this._buildSettingsSection("⬡ Knowledge Graph (Fuseki)", [
+      { key: "wactorz-fuseki-url",     label: "URL",      placeholder: "http://localhost:3030", type: "text" },
+      { key: "wactorz-fuseki-dataset", label: "Dataset",  placeholder: "wactorz",              type: "text" },
+      { key: "wactorz-fuseki-user",    label: "Username", placeholder: "admin",                 type: "text" },
+      { key: "wactorz-fuseki-pass",    label: "Password", placeholder: "",                      type: "password" },
+    ]));
+
+    el.appendChild(this._buildSettingsSection("📡 MQTT Broker", [
+      { key: "wactorz-mqtt-url", label: "WebSocket URL", placeholder: "ws://localhost:9001", type: "text" },
+    ], "⚠ Changes require a page reload"));
+
+    return el;
+  }
+
+  private _buildSettingsSection(
+    heading: string,
+    fields: { key: string; label: string; placeholder: string; type: string }[],
+    note?: string,
+  ): HTMLElement {
+    const section = document.createElement("div");
+    section.className = "af-settings-section";
+
+    const h = document.createElement("h3");
+    h.className = "af-settings-section-heading";
+    h.textContent = heading;
+    section.appendChild(h);
+
+    const grid = document.createElement("div");
+    grid.className = "af-settings-grid";
+
+    const inputs = new Map<string, HTMLInputElement>();
+
+    fields.forEach(({ key, label, placeholder, type }) => {
+      const lbl = document.createElement("label");
+      lbl.className = "af-settings-field";
+
+      const span = document.createElement("span");
+      span.className = "af-settings-label";
+      span.textContent = label;
+
+      const input = document.createElement("input");
+      input.type = type;
+      input.className = "af-cfg-input";
+      input.placeholder = placeholder;
+      input.value = localStorage.getItem(key) ?? "";
+
+      // Show origin badge
+      const badge = document.createElement("span");
+      badge.className = `af-settings-origin${input.value ? " set" : ""}`;
+      badge.title = input.value ? "Value is set" : "Not configured";
+      badge.textContent = input.value ? "●" : "○";
+
+      input.addEventListener("input", () => {
+        badge.className = `af-settings-origin${input.value ? " set" : ""}`;
+        badge.title = input.value ? "Value is set" : "Not configured";
+        badge.textContent = input.value ? "●" : "○";
+      });
+
+      if (type === "password") {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "af-settings-eye";
+        toggle.title = "Show / hide";
+        toggle.textContent = "👁";
+        toggle.addEventListener("click", () => {
+          input.type = input.type === "password" ? "text" : "password";
+          toggle.textContent = input.type === "password" ? "👁" : "🙈";
+        });
+        lbl.append(span, input, toggle, badge);
+      } else {
+        lbl.append(span, input, badge);
+      }
+      grid.appendChild(lbl);
+      inputs.set(key, input);
+    });
+
+    section.appendChild(grid);
+
+    if (note) {
+      const noteEl = document.createElement("p");
+      noteEl.className = "af-settings-note";
+      noteEl.textContent = note;
+      section.appendChild(noteEl);
+    }
+
+    // Action row
+    const actions = document.createElement("div");
+    actions.className = "af-settings-actions";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "af-mini-btn";
+    saveBtn.style.cssText = "padding:6px 18px;font-size:12px;";
+    saveBtn.textContent = "Save";
+
+    const msg = document.createElement("span");
+    msg.className = "af-settings-msg";
+
+    saveBtn.addEventListener("click", () => {
+      inputs.forEach((input, key) => {
+        if (input.value.trim()) localStorage.setItem(key, input.value.trim());
+        else localStorage.removeItem(key);
+      });
+      msg.textContent = "Saved.";
+      msg.style.color = "#34d399";
+      setTimeout(() => (msg.textContent = ""), 2000);
+    });
+
+    actions.append(saveBtn, msg);
+    section.appendChild(actions);
+
+    return section;
   }
 }

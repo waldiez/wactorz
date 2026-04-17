@@ -56,9 +56,11 @@ scene.setTheme("cards");
 // ── MQTT ──────────────────────────────────────────────────────────────────────
 
 const _wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+const _mqttDefault = `${_wsProto}//${window.location.host}/mqtt`;
 const MQTT_BROKER =
-  (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) ??
-  `${_wsProto}//${window.location.host}/mqtt`;
+  localStorage.getItem("wactorz-mqtt-url") ||
+  (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) ||
+  _mqttDefault;
 const mqtt = new MQTTClient(MQTT_BROKER);
 
 // ── UI ────────────────────────────────────────────────────────────────────────
@@ -75,6 +77,36 @@ const feed = new ActivityFeed();
 // ── Direct WebSocket chat (bypasses MQTT/IOAgent when server has registry) ────
 
 const wsChat = new WSChatClient();
+let liveSyncInFlight = false;
+
+function syncAgentViews(): void {
+  chatPanel.updateAgentList(scene.getAgents());
+  hud.setAgentCount(scene.getAgents().length);
+  refreshStats();
+}
+
+function refreshLiveActors(): void {
+  if (liveSyncInFlight) return;
+  liveSyncInFlight = true;
+  fetch("/api/actors")
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+    .then((actors: AgentInfo[]) => {
+      scene.reconcileAgents(
+        actors.map((a) => ({
+          ...a,
+          name: resolveAgentName(a.name, a.id),
+        })),
+      );
+      syncAgentViews();
+      console.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
+    })
+    .catch(() => {
+      // Dev mode without a running server — ignore silently.
+    })
+    .finally(() => {
+      liveSyncInFlight = false;
+    });
+}
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
 wsChat.onChat((content, from, timestampMs) => {
@@ -138,12 +170,29 @@ wsChat.onStatePatch((agents, deletedId) => {
     if (a.agent_type != null) update.agentType = a.agent_type;
     scene.addOrUpdateAgent(update);
   });
-  chatPanel.updateAgentList(scene.getAgents());
-  hud.setAgentCount(scene.getAgents().length);
-  refreshStats();
+  syncAgentViews();
 });
 
 wsChat.connect(`${_wsProto}//${window.location.host}/ws`);
+refreshLiveActors();
+window.setInterval(refreshLiveActors, 15000);
+
+// ── Seed localStorage from backend config (only for unset keys) ───────────────
+// Backend config (.env) provides defaults; a user-set localStorage value wins.
+fetch("/api/config")
+  .then((r) => (r.ok ? r.json() : null))
+  .then((cfg) => {
+    if (!cfg) return;
+    const setIfMissing = (key: string, value: string) => {
+      if (value && !localStorage.getItem(key)) localStorage.setItem(key, value);
+    };
+    setIfMissing("wactorz-ha-url", cfg.ha?.url ?? "");
+    setIfMissing("wactorz-ha-token", cfg.ha?.token ?? "");
+    setIfMissing("wactorz-fuseki-url", cfg.fuseki?.url ?? "");
+    setIfMissing("wactorz-fuseki-dataset", cfg.fuseki?.dataset ?? "");
+    if (cfg.mqtt?.url) setIfMissing("wactorz-mqtt-url", cfg.mqtt.url);
+  })
+  .catch(() => {});
 
 // MentionPopup needs the textarea and the agent list from SceneManager
 const textInput = document.getElementById("text-input") as HTMLTextAreaElement;
@@ -170,9 +219,7 @@ mqtt.on("heartbeat", (payload) => {
 
 mqtt.on("spawn", (payload) => {
   scene.onSpawn(payload);
-  chatPanel.updateAgentList(scene.getAgents());
-  hud.setAgentCount(scene.getAgents().length);
-  refreshStats();
+  syncAgentViews();
   pushFeed({
     type: "spawn",
     label: `spawned (${payload.agentType ?? "agent"})`,
@@ -209,20 +256,17 @@ mqtt.on("chat", (msg) => {
 });
 
 mqtt.on("status", (payload) => {
-  // Keep stopped agents visible — they show with only a Delete button.
-  // Removal happens only when the user explicitly deletes (delete_agent WS message).
   scene.addOrUpdateAgent({
     id: payload.agentId,
     name: payload.agentName,
     state: payload.state,
-    protected: false,
+    protected: payload.protected ?? false,
     messagesProcessed: payload.messagesProcessed,
   });
-  chatPanel.updateAgentList(scene.getAgents());
-  hud.setAgentCount(scene.getAgents().length);
-  refreshStats();
+  syncAgentViews();
   chatPanel.updateAgentStatus(payload.agentId, String(payload.state));
   if (payload.state === "stopped") {
+    window.setTimeout(() => refreshLiveActors(), 1000);
     pushFeed({
       type: "stopped",
       label: "stopped",
@@ -255,23 +299,7 @@ mqtt.on("connected", () => {
 
   // Startup spawn events are published before the browser connects.
   // Fetch the current actor list from REST so they appear immediately.
-  fetch("/api/actors")
-    .then((r) => r.json())
-    .then((actors: AgentInfo[]) => {
-      actors.forEach((a) =>
-        scene.addOrUpdateAgent({
-          ...a,
-          name: resolveAgentName(a.name, a.id),
-        }),
-      );
-      chatPanel.updateAgentList(scene.getAgents());
-      hud.setAgentCount(scene.getAgents().length);
-      refreshStats();
-      console.info(`[Dashboard] seeded ${actors.length} actors from REST`);
-    })
-    .catch(() => {
-      // Dev mode without a running server — ignore silently
-    });
+  refreshLiveActors();
 });
 
 mqtt.on("qa-flag", (payload) => {
@@ -286,11 +314,12 @@ mqtt.on("qa-flag", (payload) => {
 mqtt.on("metrics", (payload) => {
   // Merge cost/message metrics into the agent record so dashboards can display them.
   const existing = scene.getAgents().find((a) => a.id === payload.agentId);
+  if (!existing) return;
   const update: AgentInfo = {
     id: payload.agentId,
-    name: payload.agentName,
-    state: existing?.state ?? "running",
-    protected: existing?.protected ?? false,
+    name: existing.name,
+    state: existing.state,
+    protected: existing.protected,
   };
   if (payload.messagesProcessed !== undefined)
     update.messagesProcessed = payload.messagesProcessed;

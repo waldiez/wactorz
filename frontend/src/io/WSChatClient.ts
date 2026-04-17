@@ -112,9 +112,11 @@ export class WSChatClient {
    * Send a chat message over the WebSocket.
    * Returns false when the socket is not open (caller can fall back to MQTT).
    */
-  send(content: string): boolean {
+  send(content: string, agentName = "main-actor"): boolean {
     if (!this.connected) return false;
-    this.ws!.send(JSON.stringify({ type: "chat", content }));
+    this.ws!.send(
+      JSON.stringify({ type: "chat", content, agent_name: agentName }),
+    );
     return true;
   }
 

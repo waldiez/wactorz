@@ -20,9 +20,19 @@ import { tts } from "./TTSManager";
 
 const _widGen = new HLCWidGen({ node: "browser", W: 4 });
 
+function _feedPush(item: {
+  type: string;
+  label: string;
+  agentName: string;
+  timestamp: number;
+}): void {
+  document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
+}
+
 export class IOManager {
   /** Tracks the last typing key so we can clear it when any reply arrives. */
   private _lastTypingKey = "";
+  private _lastStreamFrom = "";
   private _ws: WSChatClient | null = null;
 
   constructor(
@@ -35,8 +45,8 @@ export class IOManager {
     this._ws = ws;
 
     ws.onStreamChunk((chunk, from) => {
+      this._lastStreamFrom = from;
       this.chatPanel.streamChunk(chunk, from);
-      // Also dispatch DOM event so CardDashboard (and any other view) receives the stream
       document.dispatchEvent(
         new CustomEvent("af-stream-chunk", { detail: { chunk, from } }),
       );
@@ -45,8 +55,14 @@ export class IOManager {
     ws.onStreamEnd(() => {
       this.chatPanel.hideTyping(this._lastTypingKey);
       this.chatPanel.finalizeStream();
-      const thread = this.chatPanel.lastStreamedText;
-      if (thread) tts.notify(thread);
+      const text = this.chatPanel.lastStreamedText;
+      if (text) tts.notify(text);
+      _feedPush({
+        type: "chat",
+        label: text?.slice(0, 60) ?? "(stream)",
+        agentName: this._lastStreamFrom || "main",
+        timestamp: Date.now(),
+      });
       document.dispatchEvent(new CustomEvent("af-stream-end"));
     });
   }
@@ -73,8 +89,13 @@ export class IOManager {
       timestampMs: Date.now(),
     };
 
-    // Check if user is asking for the reply to be spoken aloud
     tts.checkUserIntent(text);
+    _feedPush({
+      type: "chat",
+      label: text.slice(0, 60),
+      agentName: "user",
+      timestamp: msg.timestampMs,
+    });
 
     // Make the panel visible before appending so the user sees the message
     this.chatPanel.ensureOpen(agent?.name ?? "main-actor");
@@ -90,7 +111,7 @@ export class IOManager {
     // direct_ws mode: send over WebSocket only — never fall back to MQTT.
     // Falling back would let IOAgent pick up the message and double-handle it.
     if (this._ws?.chatMode === "direct_ws") {
-      const sent = this._ws.send(content);
+      const sent = this._ws.send(content, agent?.name ?? "main-actor");
       if (!sent) {
         setTimeout(() => {
           this.chatPanel.hideTyping(typingKey);

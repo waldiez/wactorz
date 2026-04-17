@@ -176,7 +176,7 @@ services:
       - "${FUSEKI_EXTERNAL_PORT:-3030}:3030"
     environment:
       - ADMIN_USER=${FUSEKI_USER:-admin}
-      - ADMIN_PASSWORD="${FUSEKI_ADMIN_PASSWORD:-admin}"
+      - ADMIN_PASSWORD="${FUSEKI_PASSWORD:-${FUSEKI_ADMIN_PASSWORD:-admin}}"
       - JVM_ARGS=-Xmx2g
       - TBD=2
       - FUSEKI_CREATE_DATASETS=true
@@ -230,6 +230,8 @@ services:
     image: wactorz-server:latest
     container_name: wactorz-server
     restart: unless-stopped
+    env_file:
+      - .env
     ports:
       - "${API_EXTERNAL_PORT:-8080}:8080"
       - "${WS_EXTERNAL_PORT:-8081}:8081"
@@ -238,6 +240,12 @@ services:
       MQTT_PORT: 1883
       API_ADDR: "0.0.0.0:8080"
       WS_ADDR: "0.0.0.0:8081"
+      HA_URL: "${HA_URL:-http://homeassistant:8123}"
+      HA_TOKEN: "${HA_TOKEN:-}"
+      FUSEKI_URL: "${FUSEKI_URL:-http://fuseki:3030}"
+      FUSEKI_DATASET: "${FUSEKI_DATASET:-wactorz}"
+      FUSEKI_USER: "${FUSEKI_USER:-admin}"
+      FUSEKI_PASSWORD: "${FUSEKI_PASSWORD:-${FUSEKI_ADMIN_PASSWORD:-admin}}"
       LLM_PROVIDER: "${LLM_PROVIDER:-anthropic}"
       LLM_MODEL: "${LLM_MODEL:-claude-sonnet-4-6}"
       LLM_API_KEY: "${LLM_API_KEY:-LLM_API_KEY_NOT_SET}"
@@ -247,6 +255,8 @@ services:
       - wactorz-net
     depends_on:
       mosquitto:
+        condition: service_healthy
+      fuseki:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]

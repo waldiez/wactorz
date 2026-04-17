@@ -45,8 +45,8 @@ services:
     ports:
       - "${FUSEKI_EXTERNAL_PORT:-3030}:3030"
     environment:
-      - ADMIN_USER=admin
-      - ADMIN_PASSWORD=admin
+      - ADMIN_USER=${FUSEKI_USER:-admin}
+      - ADMIN_PASSWORD=${FUSEKI_PASSWORD:-${FUSEKI_ADMIN_PASSWORD:-admin}}
       - JVM_ARGS=-Xmx2g
       - TBD=2
       - FUSEKI_CREATE_DATASETS=true
@@ -79,7 +79,10 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      FUSEKI_URL: http://fuseki:3030
+      FUSEKI_URL: "${FUSEKI_URL:-http://fuseki:3030}"
+      FUSEKI_DATASET: "${FUSEKI_DATASET:-wactorz}"
+      FUSEKI_USER: "${FUSEKI_USER:-admin}"
+      FUSEKI_PASSWORD: "${FUSEKI_PASSWORD:-${FUSEKI_ADMIN_PASSWORD:-admin}}"
       INTERFACE: rest
     networks:
       - wactorz-net

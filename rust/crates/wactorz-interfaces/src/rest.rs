@@ -17,23 +17,44 @@
 use anyhow::Result;
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{Path, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use wactorz_core::ActorSystem;
 use wactorz_core::message::{ActorCommand, Message};
 
+/// Runtime config exposed via /api/config (mirrors Python's config_handler).
+#[derive(Clone, Debug, Default)]
+pub struct RuntimeConfig {
+    pub ha_url: String,
+    pub ha_token: String,
+    pub fuseki_url: String,
+    pub fuseki_dataset: String,
+    pub fuseki_user: String,
+    pub fuseki_password: String,
+    pub weather_default_location: String,
+    pub mqtt_host: String,
+    pub mqtt_port: u16,
+    pub mqtt_ws_port: u16,
+    pub llm_provider: String,
+    pub llm_model: String,
+}
+
 /// Shared application state injected into axum handlers.
 #[derive(Clone)]
 pub struct AppState {
     pub system: ActorSystem,
+    pub config: RuntimeConfig,
+    pub http: reqwest::Client,
 }
 
 /// JSON body for POST /actors/{id}/message
@@ -55,31 +76,75 @@ pub struct ChatRequest {
 pub struct RestServer {
     state: AppState,
     addr: SocketAddr,
+    /// Path to the built frontend assets directory (e.g. "static/app").
+    static_dir: String,
+    /// Optional WsBridge router merged onto the same port (Python-compatible single-port setup).
+    ws_router: Option<axum::Router>,
 }
 
 impl RestServer {
-    pub fn new(system: ActorSystem, addr: SocketAddr) -> Self {
+    pub fn new(
+        system: ActorSystem,
+        addr: SocketAddr,
+        config: RuntimeConfig,
+        static_dir: String,
+    ) -> Self {
         Self {
-            state: AppState { system },
+            state: AppState {
+                system,
+                config,
+                http: reqwest::Client::new(),
+            },
             addr,
+            static_dir,
+            ws_router: None,
         }
+    }
+
+    /// Merge a WsBridge router so /ws and /mqtt are served on the same port.
+    pub fn with_ws(mut self, ws_router: axum::Router) -> Self {
+        self.ws_router = Some(ws_router);
+        self
     }
 
     /// Build the axum `Router`.
     pub fn router(&self) -> Router {
-        Router::new()
+        let index_html = format!("{}/index.html", self.static_dir);
+        let serve_dir = ServeDir::new(&self.static_dir).fallback(ServeFile::new(&index_html));
+
+        let mut r = Router::new()
             .route("/health", get(health_handler))
+            // Native paths
             .route("/actors", get(list_actors_handler))
-            .route("/actors/:id", get(get_actor_handler))
-            .route("/actors/:id/message", post(send_message_handler))
-            .route("/actors/:id", delete(stop_actor_handler))
-            .route("/actors/:id/pause", post(pause_actor_handler))
-            .route("/actors/:id/resume", post(resume_actor_handler))
-            .route("/actors/:id/metrics", get(get_metrics_handler))
+            .route("/actors/{id}", get(get_actor_handler))
+            .route("/actors/{id}/message", post(send_message_handler))
+            .route("/actors/{id}", delete(stop_actor_handler))
+            .route("/actors/{id}/pause", post(pause_actor_handler))
+            .route("/actors/{id}/resume", post(resume_actor_handler))
+            .route("/actors/{id}/metrics", get(get_metrics_handler))
             .route("/chat", post(chat_handler))
+            // /api/* aliases — match paths the Python backend and frontend expect
+            .route("/api/config", get(config_handler))
+            .route("/api/actors", get(list_actors_handler))
+            .route("/api/actors/{id}", get(get_actor_handler))
+            .route("/api/actors/{id}/message", post(send_message_handler))
+            .route("/api/actors/{id}", delete(stop_actor_handler))
+            .route("/api/actors/{id}/pause", post(pause_actor_handler))
+            .route("/api/actors/{id}/resume", post(resume_actor_handler))
+            .route("/api/actors/{id}/metrics", get(get_metrics_handler))
+            .route("/api/fuseki/{dataset}/sparql", post(fuseki_sparql_handler))
+            .route("/api/fuseki/{dataset}/update", post(fuseki_update_handler))
+            .with_state(self.state.clone());
+
+        // Merge /ws and /mqtt onto the same port so the frontend can reach
+        // them via window.location.host (Python-compatible single-port layout).
+        if let Some(ws) = &self.ws_router {
+            r = r.merge(ws.clone());
+        }
+
+        r.fallback_service(serve_dir)
             .layer(CorsLayer::permissive())
             .layer(TraceLayer::new_for_http())
-            .with_state(self.state.clone())
     }
 
     /// Start listening and serving.
@@ -211,6 +276,128 @@ async fn resume_actor_handler(
         )
             .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn config_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let c = &state.config;
+    Json(serde_json::json!({
+        "ha": { "url": c.ha_url, "token": c.ha_token },
+        "fuseki": { "url": c.fuseki_url, "dataset": c.fuseki_dataset },
+        "mqtt": {
+            "host": c.mqtt_host,
+            "port": c.mqtt_port,
+            "url": format!("ws://{}:{}", c.mqtt_host, c.mqtt_ws_port),
+        },
+        "llm": { "provider": c.llm_provider, "model": c.llm_model },
+        "weather": { "defaultLocation": c.weather_default_location },
+    }))
+}
+
+async fn fuseki_sparql_handler(
+    State(state): State<AppState>,
+    Path(dataset): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    fuseki_proxy_request(state, dataset, "sparql", headers, body).await
+}
+
+async fn fuseki_update_handler(
+    State(state): State<AppState>,
+    Path(dataset): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    fuseki_proxy_request(state, dataset, "update", headers, body).await
+}
+
+async fn fuseki_proxy_request(
+    state: AppState,
+    dataset: String,
+    operation: &'static str,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let base = state.config.fuseki_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Fuseki is not configured on the Rust server"
+            })),
+        )
+            .into_response();
+    }
+
+    let target = format!("{base}/{dataset}/{operation}");
+    let mut request = state.http.post(&target);
+    tracing::info!(
+        "Fuseki proxy {} dataset={} target={} auth={}",
+        operation,
+        dataset,
+        target,
+        if headers.get(header::AUTHORIZATION).is_some() || !state.config.fuseki_user.is_empty() {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+
+    if let Some(value) = headers.get(header::AUTHORIZATION) {
+        request = request.header(header::AUTHORIZATION, value);
+    } else if !state.config.fuseki_user.is_empty() {
+        request = request.basic_auth(
+            &state.config.fuseki_user,
+            Some(&state.config.fuseki_password),
+        );
+    }
+    if let Some(value) = headers.get(header::ACCEPT) {
+        request = request.header(header::ACCEPT, value);
+    }
+    if let Some(value) = headers.get(header::CONTENT_TYPE) {
+        request = request.header(header::CONTENT_TYPE, value);
+    }
+
+    let upstream = match request.body(body.to_vec()).send().await {
+        Ok(resp) => resp,
+        Err(err) => {
+            tracing::warn!("Fuseki proxy error for {target}: {err}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": format!("Fuseki proxy request failed: {err}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    tracing::info!(
+        "Fuseki proxy {} target={} status={}",
+        operation,
+        target,
+        status
+    );
+    let mut response_headers = HeaderMap::new();
+    if let Some(value) = upstream.headers().get(header::CONTENT_TYPE) {
+        response_headers.insert(header::CONTENT_TYPE, value.clone());
+    }
+
+    match upstream.bytes().await {
+        Ok(bytes) => (status, response_headers, bytes).into_response(),
+        Err(err) => {
+            tracing::warn!("Fuseki proxy body read error for {target}: {err}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": format!("Fuseki proxy response read failed: {err}")
+                })),
+            )
+                .into_response()
+        }
     }
 }
 

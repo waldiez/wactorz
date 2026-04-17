@@ -1124,13 +1124,14 @@ export class CardDashboard {
   }
 
   private _populateSelect(select: HTMLSelectElement): void {
+    const ALLOWED = ["main", "main-actor", "home-assistant-agent", "catalog"];
     select.innerHTML = "";
     [...this.agents.values()]
-      .filter((a) => !(a.protected && a.name !== "main-actor"))
+      .filter((a) => ALLOWED.includes(a.name))
       .sort((a, b) => {
-        if (a.name === "main-actor") return -1;
-        if (b.name === "main-actor") return 1;
-        return a.name.localeCompare(b.name);
+        const ai = ALLOWED.indexOf(a.name);
+        const bi = ALLOWED.indexOf(b.name);
+        return ai - bi;
       })
       .forEach((agent) => {
         const opt = document.createElement("option");
@@ -1138,7 +1139,6 @@ export class CardDashboard {
         opt.textContent = `@${agent.name}`;
         select.appendChild(opt);
       });
-    // Keep dropdown in sync with chatTarget
     select.value = this.chatTarget;
   }
 

@@ -19,6 +19,8 @@ pub struct FusekiAgent {
     config: ActorConfig,
     fuseki_url: String,
     dataset: String,
+    fuseki_user: String,
+    fuseki_password: String,
     http: reqwest::Client,
     llm: Option<LlmAgent>,
     state: ActorState,
@@ -29,15 +31,31 @@ pub struct FusekiAgent {
 }
 
 impl FusekiAgent {
+    fn dataset_base_url(&self) -> String {
+        let base = self.fuseki_url.trim_end_matches('/');
+        let dataset = self.dataset.trim();
+        if dataset.is_empty() {
+            base.to_string()
+        } else if dataset.starts_with('/') {
+            format!("{base}{dataset}")
+        } else {
+            format!("{base}/{dataset}")
+        }
+    }
+
     pub fn new(config: ActorConfig) -> Self {
         let fuseki_url =
             std::env::var("FUSEKI_URL").unwrap_or_else(|_| "http://fuseki:3030".into());
         let dataset = std::env::var("FUSEKI_DATASET").unwrap_or_else(|_| "/ds".into());
+        let fuseki_user = std::env::var("FUSEKI_USER").unwrap_or_default();
+        let fuseki_password = std::env::var("FUSEKI_PASSWORD").unwrap_or_default();
         let (tx, rx) = mpsc::channel(config.mailbox_capacity);
         Self {
             config,
             fuseki_url,
             dataset,
+            fuseki_user,
+            fuseki_password,
             http: reqwest::Client::new(),
             llm: None,
             state: ActorState::Initializing,
@@ -70,6 +88,16 @@ impl FusekiAgent {
         self
     }
 
+    pub fn with_fuseki_auth(
+        mut self,
+        user: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Self {
+        self.fuseki_user = user.into();
+        self.fuseki_password = password.into();
+        self
+    }
+
     pub fn with_llm(mut self, llm_config: LlmConfig) -> Self {
         let llm_cfg = ActorConfig::new(format!("{}-llm", self.config.name));
         self.llm = Some(LlmAgent::new(llm_cfg, llm_config));
@@ -78,15 +106,16 @@ impl FusekiAgent {
 
     /// Execute a SPARQL SELECT query; returns JSON results.
     async fn sparql_query(&self, query: &str) -> Result<serde_json::Value> {
-        let url = format!("{}{}/query", self.fuseki_url, self.dataset);
-        let resp = self
+        let url = format!("{}/query", self.dataset_base_url());
+        let mut req = self
             .http
             .post(&url)
             .header("Content-Type", "application/sparql-query")
-            .header("Accept", "application/sparql-results+json")
-            .body(query.to_string())
-            .send()
-            .await?;
+            .header("Accept", "application/sparql-results+json");
+        if !self.fuseki_user.is_empty() {
+            req = req.basic_auth(&self.fuseki_user, Some(&self.fuseki_password));
+        }
+        let resp = req.body(query.to_string()).send().await?;
         if !resp.status().is_success() {
             let s = resp.status();
             let t = resp.text().await.unwrap_or_default();
@@ -97,14 +126,15 @@ impl FusekiAgent {
 
     /// Execute a SPARQL UPDATE statement.
     async fn sparql_update(&self, update: &str) -> Result<()> {
-        let url = format!("{}{}/update", self.fuseki_url, self.dataset);
-        let resp = self
+        let url = format!("{}/update", self.dataset_base_url());
+        let mut req = self
             .http
             .post(&url)
-            .header("Content-Type", "application/sparql-update")
-            .body(update.to_string())
-            .send()
-            .await?;
+            .header("Content-Type", "application/sparql-update");
+        if !self.fuseki_user.is_empty() {
+            req = req.basic_auth(&self.fuseki_user, Some(&self.fuseki_password));
+        }
+        let resp = req.body(update.to_string()).send().await?;
         if !resp.status().is_success() {
             let s = resp.status();
             let t = resp.text().await.unwrap_or_default();
@@ -116,6 +146,7 @@ impl FusekiAgent {
     async fn process(&mut self, text: &str) -> String {
         // If input looks like SPARQL, run it directly
         let trimmed = text.trim().to_uppercase();
+        let endpoint = self.dataset_base_url();
         if trimmed.starts_with("SELECT")
             || trimmed.starts_with("ASK")
             || trimmed.starts_with("CONSTRUCT")
@@ -137,19 +168,19 @@ impl FusekiAgent {
             }
         } else if let Some(llm) = &mut self.llm {
             let prompt = format!(
-                "You are a SPARQL/RDF expert connected to a Fuseki endpoint at {}{}\n\
+                "You are a SPARQL/RDF expert connected to a Fuseki endpoint at {}\n\
                  The user asked: \"{text}\"\n\
                  Generate a SPARQL query or respond helpfully. \
                  If you generate a query, wrap it in ```sparql ... ``` fences.",
-                self.fuseki_url, self.dataset
+                endpoint
             );
             llm.complete(&prompt)
                 .await
                 .unwrap_or_else(|e| format!("LLM error: {e}"))
         } else {
             format!(
-                "Provide a SPARQL query (SELECT/ASK/INSERT/DELETE) to execute against {}{}",
-                self.fuseki_url, self.dataset
+                "Provide a SPARQL query (SELECT/ASK/INSERT/DELETE) to execute against {}",
+                endpoint
             )
         }
     }
@@ -183,10 +214,9 @@ impl Actor for FusekiAgent {
     async fn on_start(&mut self) -> Result<()> {
         self.state = ActorState::Running;
         tracing::info!(
-            "[{}] Fuseki agent → {}{}",
+            "[{}] Fuseki agent → {}",
             self.config.name,
-            self.fuseki_url,
-            self.dataset
+            self.dataset_base_url()
         );
         if let Some(pub_) = &self.publisher {
             pub_.publish(

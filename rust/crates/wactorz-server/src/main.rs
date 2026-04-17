@@ -12,14 +12,15 @@
 
 use anyhow::Result;
 use clap::Parser;
+use dotenvy::dotenv;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
 
 use wactorz_agents::{
-    CatalogAgent, DynamicAgent, FusekiAgent, HomeAssistantActuatorAgent,
-    HomeAssistantAgent, HomeAssistantStateBridgeAgent, IOAgent, InstallerAgent,
-    LlmConfig, LlmProvider, MainActor, ManualAgent, MonitorAgent, WeatherAgent,
+    CatalogAgent, DynamicAgent, FusekiAgent, HomeAssistantActuatorAgent, HomeAssistantAgent,
+    HomeAssistantStateBridgeAgent, IOAgent, InstallerAgent, LlmConfig, LlmProvider, MainActor,
+    ManualAgent, MonitorAgent, WeatherAgent,
 };
 use wactorz_core::{ActorConfig, ActorSystem, EventPublisher, Supervisor, SupervisorStrategy};
 use wactorz_interfaces::ws::WsEnvelope;
@@ -83,6 +84,14 @@ pub struct Args {
     #[arg(long, default_value = "", env = "FUSEKI_DATASET")]
     pub fuseki_dataset: String,
 
+    /// Fuseki username
+    #[arg(long, default_value = "", env = "FUSEKI_USER")]
+    pub fuseki_user: String,
+
+    /// Fuseki password
+    #[arg(long, default_value = "", env = "FUSEKI_PASSWORD")]
+    pub fuseki_password: String,
+
     /// Default weather location
     #[arg(long, default_value = "", env = "WEATHER_DEFAULT_LOCATION")]
     pub weather_default_location: String,
@@ -132,8 +141,50 @@ pub struct Args {
     pub ha_state_bridge_domains: String,
 }
 
+fn normalize_fuseki_endpoint(url: &str, dataset: &str) -> (String, String) {
+    let mut base = url.trim().trim_end_matches('/').to_string();
+    let mut ds = dataset.trim().trim_matches('/').to_string();
+
+    if base.is_empty() {
+        return (base, ds);
+    }
+
+    let split_idx = base.find("://").map(|idx| idx + 3).unwrap_or(0);
+    let path_start = base[split_idx..].find('/').map(|idx| split_idx + idx);
+
+    if let Some(path_start) = path_start {
+        let host = &base[..path_start];
+        let path = &base[path_start..];
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        if let Some(last) = segments.last() {
+            if ds.is_empty() {
+                ds = (*last).to_string();
+                let parent = &segments[..segments.len().saturating_sub(1)];
+                base = if parent.is_empty() {
+                    host.to_string()
+                } else {
+                    format!("{}/{}", host, parent.join("/"))
+                };
+            } else if *last == ds {
+                let parent = &segments[..segments.len().saturating_sub(1)];
+                base = if parent.is_empty() {
+                    host.to_string()
+                } else {
+                    format!("{}/{}", host, parent.join("/"))
+                };
+            }
+        }
+    }
+
+    (base, ds)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    match dotenv() {
+        Ok(path) => info!("Loaded .env from {}", path.display()),
+        Err(err) => info!("No .env loaded ({err})"),
+    }
     // ── Logging ───────────────────────────────────────────────────────────────
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -144,6 +195,14 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     info!("Starting AgentFlow server");
+    let (fuseki_url, fuseki_dataset) =
+        normalize_fuseki_endpoint(&args.fuseki_url, &args.fuseki_dataset);
+    if !fuseki_url.is_empty() || !fuseki_dataset.is_empty() {
+        info!(
+            "Fuseki config normalized to base='{}' dataset='{}'",
+            fuseki_url, fuseki_dataset
+        );
+    }
 
     // ── Publisher channel ─────────────────────────────────────────────────────
     let (publisher, mut pub_rx) = EventPublisher::channel();
@@ -471,8 +530,10 @@ async fn main() -> Result<()> {
     }
     {
         let pub_ = publisher.clone();
-        let fuseki_url = args.fuseki_url.clone();
-        let fuseki_dataset = args.fuseki_dataset.clone();
+        let fuseki_url = fuseki_url.clone();
+        let fuseki_dataset = fuseki_dataset.clone();
+        let fuseki_user = args.fuseki_user.clone();
+        let fuseki_password = args.fuseki_password.clone();
         sup.supervise(
             "fuseki-agent",
             Arc::new(move || {
@@ -480,6 +541,7 @@ async fn main() -> Result<()> {
                 Box::new(
                     FusekiAgent::new(c)
                         .with_fuseki_config(fuseki_url.clone(), fuseki_dataset.clone())
+                        .with_fuseki_auth(fuseki_user.clone(), fuseki_password.clone())
                         .with_publisher(pub_.clone()),
                 )
             }),
@@ -528,8 +590,13 @@ async fn main() -> Result<()> {
 
     {
         let pub_ = publisher.clone();
+        let sys = system.clone();
         let ha_url = args.ha_url.clone();
         let ha_token = args.ha_token.clone();
+        let fuseki_url = fuseki_url.clone();
+        let fuseki_dataset = fuseki_dataset.clone();
+        let fuseki_user = args.fuseki_user.clone();
+        let fuseki_password = args.fuseki_password.clone();
         let output_topic = args.ha_state_bridge_topic.clone();
         let domains: Vec<String> = args
             .ha_state_bridge_domains
@@ -543,12 +610,15 @@ async fn main() -> Result<()> {
                 let c = ActorConfig::new_with_node("ha-state-bridge", "lima");
                 Box::new(
                     HomeAssistantStateBridgeAgent::new(c)
+                        .with_system(sys.clone())
                         .with_ha_config(
                             ha_url.clone(),
                             ha_token.clone(),
                             output_topic.clone(),
                             domains.clone(),
                         )
+                        .with_fuseki_config(fuseki_url.clone(), fuseki_dataset.clone())
+                        .with_fuseki_auth(fuseki_user.clone(), fuseki_password.clone())
                         .with_publisher(pub_.clone()),
                 )
             }),
@@ -571,8 +641,10 @@ async fn main() -> Result<()> {
     let runtime_cfg = RuntimeConfig {
         ha_url: args.ha_url.clone(),
         ha_token: args.ha_token.clone(),
-        fuseki_url: args.fuseki_url.clone(),
-        fuseki_dataset: args.fuseki_dataset.clone(),
+        fuseki_url: fuseki_url.clone(),
+        fuseki_dataset: fuseki_dataset.clone(),
+        fuseki_user: args.fuseki_user.clone(),
+        fuseki_password: args.fuseki_password.clone(),
         weather_default_location: args.weather_default_location.clone(),
         mqtt_host: args.mqtt_host.clone(),
         mqtt_port: args.mqtt_port,
@@ -583,7 +655,13 @@ async fn main() -> Result<()> {
     // Merge WsBridge (/ws + /mqtt) onto the same port as REST so the frontend
     // can reach all endpoints via window.location.host — same as Python's
     // single-port layout.
-    let ws_bridge = WsBridge::new(ws_tx, mqtt_client, args.mqtt_host, args.mqtt_ws_port);
+    let ws_bridge = WsBridge::new(
+        ws_tx,
+        mqtt_client,
+        system.clone(),
+        args.mqtt_host,
+        args.mqtt_ws_port,
+    );
     tokio::spawn(async move {
         let server = RestServer::new(system_for_rest, rest_addr, runtime_cfg, static_dir)
             .with_ws(ws_bridge.router());

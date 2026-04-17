@@ -52,7 +52,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
+use wactorz_core::{ActorSystem, Message as ActorMessage};
 use wactorz_mqtt::MqttClient;
+
+const AGENT_STALE_SECS: f64 = 90.0;
+const TERMINAL_AGENT_GRACE_SECS: f64 = 15.0;
 
 // ── Internal MQTT envelope (Rust MQTT loop → WS state aggregator) ─────────────
 
@@ -84,8 +88,25 @@ pub struct MonitorState {
 }
 
 impl MonitorState {
+    fn prune_stale(&mut self) {
+        let now = now_secs();
+        self.agents.retain(|_, agent| {
+            let last_update = agent
+                .get("last_update")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(now);
+            let state = agent.get("state").and_then(|v| v.as_str()).unwrap_or("");
+            let max_age = match state {
+                "stopped" | "failed" => TERMINAL_AGENT_GRACE_SECS,
+                _ => AGENT_STALE_SECS,
+            };
+            now - last_update <= max_age
+        });
+    }
+
     /// Serialisable snapshot sent to browser clients.
-    pub fn snapshot(&self) -> Value {
+    pub fn snapshot(&mut self) -> Value {
+        self.prune_stale();
         let agents: Vec<Value> = self.agents.values().cloned().collect();
         let nodes: Vec<Value> = self.nodes.values().cloned().collect();
         let total_cost: f64 = self
@@ -365,6 +386,8 @@ pub struct BridgeState {
     pub monitor_tx: broadcast::Sender<String>,
     /// MQTT client for publishing commands received from the browser.
     pub mqtt_client: Arc<MqttClient>,
+    /// Live actor registry used for direct browser -> actor chat routing.
+    pub system: ActorSystem,
     /// Mosquitto WebSocket host (for `/mqtt` proxy).
     pub mqtt_host: String,
     /// Mosquitto WebSocket port (for `/mqtt` proxy, default 9001).
@@ -381,6 +404,7 @@ impl WsBridge {
     pub fn new(
         mqtt_tx: broadcast::Sender<WsEnvelope>,
         mqtt_client: Arc<MqttClient>,
+        system: ActorSystem,
         mqtt_host: String,
         mqtt_ws_port: u16,
     ) -> Self {
@@ -391,6 +415,7 @@ impl WsBridge {
                 monitor: Arc::new(Mutex::new(MonitorState::default())),
                 monitor_tx,
                 mqtt_client,
+                system,
                 mqtt_host,
                 mqtt_ws_port,
             },
@@ -410,7 +435,9 @@ impl WsBridge {
         let mqtt_for_sub = Arc::clone(&self.state.mqtt_client);
         tokio::spawn(async move {
             if let Err(e) = mqtt_for_sub.subscribe("nodes/#").await {
-                tracing::warn!("[ws-bridge] nodes/# subscribe failed (broker may not be running): {e}");
+                tracing::warn!(
+                    "[ws-bridge] nodes/# subscribe failed (broker may not be running): {e}"
+                );
             } else {
                 tracing::info!("[ws-bridge] subscribed to nodes/#");
             }
@@ -466,7 +493,7 @@ async fn handle_ws_socket(socket: WebSocket, state: BridgeState) {
 
     // Send a full state snapshot immediately on connect (mirrors Python behaviour)
     let snap_json = {
-        let st = state.monitor.lock().await;
+        let mut st = state.monitor.lock().await;
         serde_json::to_string(&json!({
             "type":  "full_snapshot",
             "state": st.snapshot(),
@@ -474,6 +501,18 @@ async fn handle_ws_socket(socket: WebSocket, state: BridgeState) {
         .unwrap_or_default()
     };
     if ws_send.send(Message::Text(snap_json.into())).await.is_err() {
+        return;
+    }
+    let config_json = serde_json::to_string(&json!({
+        "type": "config",
+        "chat_mode": "direct_ws",
+    }))
+    .unwrap_or_default();
+    if ws_send
+        .send(Message::Text(config_json.into()))
+        .await
+        .is_err()
+    {
         return;
     }
 
@@ -511,7 +550,7 @@ async fn handle_ws_socket(socket: WebSocket, state: BridgeState) {
                     let reply = handle_slash_command(trimmed, &state).await;
                     let _ = reply_tx.send(reply).await;
                 } else {
-                    handle_browser_command(trimmed, &state).await;
+                    handle_browser_message(trimmed, &state).await;
                 }
             }
             _ => {}
@@ -529,14 +568,12 @@ async fn handle_slash_command(text: &str, state: &BridgeState) -> String {
     let cmd = parts.first().map(|s| s.to_lowercase()).unwrap_or_default();
 
     let content = match cmd.as_str() {
-        "/help" | "/h" => {
-            "Commands:\n\
+        "/help" | "/h" => "Commands:\n\
              \x20 /agents                        list all active agents\n\
              \x20 /nodes                         list remote nodes\n\
              \x20 /help                          show this help\n\n\
              Everything else is forwarded to the main orchestrator."
-                .to_string()
-        }
+            .to_string(),
 
         "/agents" => {
             let st = state.monitor.lock().await;
@@ -552,9 +589,10 @@ async fn handle_slash_command(text: &str, state: &BridgeState) -> String {
                 names.sort_unstable();
                 for name in names {
                     // Find the full agent entry for this name
-                    let entry = st.agents.values().find(|a| {
-                        a.get("name").and_then(|v| v.as_str()) == Some(name)
-                    });
+                    let entry = st
+                        .agents
+                        .values()
+                        .find(|a| a.get("name").and_then(|v| v.as_str()) == Some(name));
                     let state_str = entry
                         .and_then(|a| a.get("state"))
                         .and_then(|v| v.as_str())
@@ -580,10 +618,7 @@ async fn handle_slash_command(text: &str, state: &BridgeState) -> String {
                 node_names.sort_unstable();
                 for node_name in node_names {
                     if let Some(nd) = st.nodes.get(node_name) {
-                        let online = nd
-                            .get("online")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
+                        let online = nd.get("online").and_then(|v| v.as_bool()).unwrap_or(false);
                         let status = if online { "online" } else { "OFFLINE" };
                         let agents: Vec<String> = nd
                             .get("agents")
@@ -619,14 +654,42 @@ async fn handle_slash_command(text: &str, state: &BridgeState) -> String {
     .unwrap_or_default()
 }
 
-async fn handle_browser_command(text: &str, state: &BridgeState) {
+async fn handle_browser_message(text: &str, state: &BridgeState) {
     let Ok(cmd) = serde_json::from_str::<Value>(text) else {
         return;
     };
-    if cmd.get("type").and_then(|v| v.as_str()) != Some("command") {
-        return;
+    match cmd.get("type").and_then(|v| v.as_str()) {
+        Some("command") => handle_browser_command(cmd, state).await,
+        Some("chat") => handle_browser_chat(cmd, state).await,
+        _ => {}
     }
+}
 
+async fn handle_browser_chat(cmd: Value, state: &BridgeState) {
+    let Some(content) = cmd.get("content").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let target_name = cmd
+        .get("agent_name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("main-actor");
+
+    let Some(entry) = state.system.registry.get_by_name(target_name).await else {
+        tracing::warn!("[ws] chat target not found: {target_name}");
+        return;
+    };
+    let msg = ActorMessage::text(
+        Some("user".to_string()),
+        Some(entry.id.clone()),
+        content.to_string(),
+    );
+    if let Err(err) = state.system.registry.send(&entry.id, msg).await {
+        tracing::warn!("[ws] chat route failed for {target_name}: {err}");
+    }
+}
+
+async fn handle_browser_command(cmd: Value, state: &BridgeState) {
     let Some(command) = cmd.get("command").and_then(|v| v.as_str()) else {
         return;
     };
@@ -722,22 +785,26 @@ async fn mqtt_proxy_handler(
 async fn proxy_to_mosquitto(socket: WebSocket, state: BridgeState, proto: Option<String>) {
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::Message as TMsg;
-    use tokio_tungstenite::tungstenite::http::Request;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
     let upstream_url = format!("ws://{}:{}/", state.mqtt_host, state.mqtt_ws_port);
 
-    // Build upstream WS request, forwarding the MQTT sub-protocol header
+    // Build a proper client handshake request, then add the MQTT sub-protocol.
     let request = {
-        let mut builder = Request::builder().uri(&upstream_url);
-        let p = proto.as_deref().unwrap_or("mqtt");
-        builder = builder.header("Sec-WebSocket-Protocol", p);
-        match builder.body(()) {
+        let mut request = match upstream_url.as_str().into_client_request() {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("[mqtt-proxy] bad request: {e}");
+                tracing::warn!("[mqtt-proxy] bad upstream request: {e}");
                 return;
             }
+        };
+        let p = proto.as_deref().unwrap_or("mqtt");
+        if let Ok(value) = p.parse() {
+            request
+                .headers_mut()
+                .insert("Sec-WebSocket-Protocol", value);
         }
+        request
     };
 
     let upstream = match connect_async(request).await {
@@ -759,9 +826,7 @@ async fn proxy_to_mosquitto(socket: WebSocket, state: BridgeState, proto: Option
         while let Some(Ok(msg)) = up_recv.next().await {
             let out = match msg {
                 TMsg::Binary(b) => Message::Binary(b),
-                TMsg::Text(t) => {
-                    Message::Text(t.as_str().into())
-                },
+                TMsg::Text(t) => Message::Text(t.as_str().into()),
                 TMsg::Close(_) => break,
                 _ => continue,
             };

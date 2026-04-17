@@ -17,9 +17,10 @@
 use anyhow::Result;
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{Path, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use serde::Deserialize;
@@ -38,6 +39,8 @@ pub struct RuntimeConfig {
     pub ha_token: String,
     pub fuseki_url: String,
     pub fuseki_dataset: String,
+    pub fuseki_user: String,
+    pub fuseki_password: String,
     pub weather_default_location: String,
     pub mqtt_host: String,
     pub mqtt_port: u16,
@@ -51,6 +54,7 @@ pub struct RuntimeConfig {
 pub struct AppState {
     pub system: ActorSystem,
     pub config: RuntimeConfig,
+    pub http: reqwest::Client,
 }
 
 /// JSON body for POST /actors/{id}/message
@@ -86,7 +90,11 @@ impl RestServer {
         static_dir: String,
     ) -> Self {
         Self {
-            state: AppState { system, config },
+            state: AppState {
+                system,
+                config,
+                http: reqwest::Client::new(),
+            },
             addr,
             static_dir,
             ws_router: None,
@@ -102,8 +110,7 @@ impl RestServer {
     /// Build the axum `Router`.
     pub fn router(&self) -> Router {
         let index_html = format!("{}/index.html", self.static_dir);
-        let serve_dir =
-            ServeDir::new(&self.static_dir).fallback(ServeFile::new(&index_html));
+        let serve_dir = ServeDir::new(&self.static_dir).fallback(ServeFile::new(&index_html));
 
         let mut r = Router::new()
             .route("/health", get(health_handler))
@@ -125,6 +132,8 @@ impl RestServer {
             .route("/api/actors/{id}/pause", post(pause_actor_handler))
             .route("/api/actors/{id}/resume", post(resume_actor_handler))
             .route("/api/actors/{id}/metrics", get(get_metrics_handler))
+            .route("/api/fuseki/{dataset}/sparql", post(fuseki_sparql_handler))
+            .route("/api/fuseki/{dataset}/update", post(fuseki_update_handler))
             .with_state(self.state.clone());
 
         // Merge /ws and /mqtt onto the same port so the frontend can reach
@@ -283,6 +292,113 @@ async fn config_handler(State(state): State<AppState>) -> impl IntoResponse {
         "llm": { "provider": c.llm_provider, "model": c.llm_model },
         "weather": { "defaultLocation": c.weather_default_location },
     }))
+}
+
+async fn fuseki_sparql_handler(
+    State(state): State<AppState>,
+    Path(dataset): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    fuseki_proxy_request(state, dataset, "sparql", headers, body).await
+}
+
+async fn fuseki_update_handler(
+    State(state): State<AppState>,
+    Path(dataset): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    fuseki_proxy_request(state, dataset, "update", headers, body).await
+}
+
+async fn fuseki_proxy_request(
+    state: AppState,
+    dataset: String,
+    operation: &'static str,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let base = state.config.fuseki_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Fuseki is not configured on the Rust server"
+            })),
+        )
+            .into_response();
+    }
+
+    let target = format!("{base}/{dataset}/{operation}");
+    let mut request = state.http.post(&target);
+    tracing::info!(
+        "Fuseki proxy {} dataset={} target={} auth={}",
+        operation,
+        dataset,
+        target,
+        if headers.get(header::AUTHORIZATION).is_some() || !state.config.fuseki_user.is_empty() {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+
+    if let Some(value) = headers.get(header::AUTHORIZATION) {
+        request = request.header(header::AUTHORIZATION, value);
+    } else if !state.config.fuseki_user.is_empty() {
+        request = request.basic_auth(
+            &state.config.fuseki_user,
+            Some(&state.config.fuseki_password),
+        );
+    }
+    if let Some(value) = headers.get(header::ACCEPT) {
+        request = request.header(header::ACCEPT, value);
+    }
+    if let Some(value) = headers.get(header::CONTENT_TYPE) {
+        request = request.header(header::CONTENT_TYPE, value);
+    }
+
+    let upstream = match request.body(body.to_vec()).send().await {
+        Ok(resp) => resp,
+        Err(err) => {
+            tracing::warn!("Fuseki proxy error for {target}: {err}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": format!("Fuseki proxy request failed: {err}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    tracing::info!(
+        "Fuseki proxy {} target={} status={}",
+        operation,
+        target,
+        status
+    );
+    let mut response_headers = HeaderMap::new();
+    if let Some(value) = upstream.headers().get(header::CONTENT_TYPE) {
+        response_headers.insert(header::CONTENT_TYPE, value.clone());
+    }
+
+    match upstream.bytes().await {
+        Ok(bytes) => (status, response_headers, bytes).into_response(),
+        Err(err) => {
+            tracing::warn!("Fuseki proxy body read error for {target}: {err}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": format!("Fuseki proxy response read failed: {err}")
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn chat_handler(

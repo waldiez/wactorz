@@ -2,7 +2,8 @@
         up down logs shell release release-full release-native release-source \
         run run-py test test-py test-rust parity coverage coverage-py coverage-rust ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish \
-        dev-rust dev-rust-full dev-rust-down dev-rust-check
+        dev-rust dev-rust-full dev-rust-down dev-rust-check \
+        dev-desktop build-desktop
 
 COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
@@ -73,6 +74,12 @@ dev-full: ## Start full stack in dev mode (Python + mock agents + Vite)
 
 dev-ui: ## Start Vite dev server only (needs mosquitto running)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run dev
+
+dev-desktop: ## Start Tauri desktop app in dev mode (hot-reload)
+	cd $(FRONTEND_DIR) && cargo tauri dev
+
+build-desktop: ## Build Tauri desktop app (release bundle)
+	cd $(FRONTEND_DIR) && cargo tauri build
 
 # ── Build ───────────────────────────────────────────────────────────────────
 

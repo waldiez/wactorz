@@ -194,3 +194,7 @@ wactorz/**/*.pyc
 
 myenv/
 coverage/
+
+# Tauri
+frontend/src-tauri/target/
+frontend/src-tauri/gen/

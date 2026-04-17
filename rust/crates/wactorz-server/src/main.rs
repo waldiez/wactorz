@@ -22,7 +22,7 @@ use wactorz_agents::{
 };
 use wactorz_core::{ActorConfig, ActorSystem, EventPublisher, Supervisor, SupervisorStrategy};
 use wactorz_interfaces::ws::WsEnvelope;
-use wactorz_interfaces::{RestServer, WsBridge};
+use wactorz_interfaces::{RestServer, RuntimeConfig, WsBridge};
 use wactorz_mqtt::{MqttClient, MqttConfig};
 
 /// AgentFlow: async multi-agent orchestration framework
@@ -61,6 +61,30 @@ pub struct Args {
     /// Implies --llm-provider nim when set.
     #[arg(long, env = "NIM_MODEL")]
     pub nim_model: Option<String>,
+
+    /// MQTT WebSocket port (used by frontend MQTT.js client)
+    #[arg(long, default_value_t = 9001, env = "MQTT_WS_PORT")]
+    pub mqtt_ws_port: u16,
+
+    /// Home Assistant base URL
+    #[arg(long, default_value = "", env = "HA_URL")]
+    pub ha_url: String,
+
+    /// Home Assistant long-lived access token
+    #[arg(long, default_value = "", env = "HA_TOKEN")]
+    pub ha_token: String,
+
+    /// Apache Jena Fuseki URL
+    #[arg(long, default_value = "", env = "FUSEKI_URL")]
+    pub fuseki_url: String,
+
+    /// Fuseki dataset name
+    #[arg(long, default_value = "", env = "FUSEKI_DATASET")]
+    pub fuseki_dataset: String,
+
+    /// Default weather location
+    #[arg(long, default_value = "", env = "WEATHER_DEFAULT_LOCATION")]
+    pub weather_default_location: String,
 
     /// Disable interactive CLI (useful for container deployments)
     #[arg(long, default_value_t = false, env = "NO_CLI")]
@@ -384,8 +408,20 @@ async fn main() -> Result<()> {
     // ── REST server ───────────────────────────────────────────────────────────
     let rest_addr: SocketAddr = args.api_addr;
     let system_for_rest = system.clone();
+    let runtime_cfg = RuntimeConfig {
+        ha_url: args.ha_url.clone(),
+        ha_token: args.ha_token.clone(),
+        fuseki_url: args.fuseki_url.clone(),
+        fuseki_dataset: args.fuseki_dataset.clone(),
+        weather_default_location: args.weather_default_location.clone(),
+        mqtt_host: args.mqtt_host.clone(),
+        mqtt_port: args.mqtt_port,
+        mqtt_ws_port: args.mqtt_ws_port,
+        llm_provider: args.llm_provider.clone(),
+        llm_model: args.llm_model.clone(),
+    };
     tokio::spawn(async move {
-        let server = RestServer::new(system_for_rest, rest_addr);
+        let server = RestServer::new(system_for_rest, rest_addr, runtime_cfg);
         if let Err(e) = server.serve().await {
             tracing::error!("REST error: {e}");
         }
@@ -393,7 +429,7 @@ async fn main() -> Result<()> {
 
     // ── WebSocket bridge ──────────────────────────────────────────────────────
     let ws_addr: SocketAddr = args.ws_addr;
-    let ws_bridge = WsBridge::new(ws_tx, mqtt_client, args.mqtt_host, args.mqtt_port);
+    let ws_bridge = WsBridge::new(ws_tx, mqtt_client, args.mqtt_host, args.mqtt_ws_port);
     tokio::spawn(async move {
         let router = ws_bridge.router();
         match tokio::net::TcpListener::bind(ws_addr).await {

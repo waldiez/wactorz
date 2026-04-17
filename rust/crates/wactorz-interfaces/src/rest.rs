@@ -30,10 +30,26 @@ use tower_http::trace::TraceLayer;
 use wactorz_core::ActorSystem;
 use wactorz_core::message::{ActorCommand, Message};
 
+/// Runtime config exposed via /api/config (mirrors Python's config_handler).
+#[derive(Clone, Debug, Default)]
+pub struct RuntimeConfig {
+    pub ha_url: String,
+    pub ha_token: String,
+    pub fuseki_url: String,
+    pub fuseki_dataset: String,
+    pub weather_default_location: String,
+    pub mqtt_host: String,
+    pub mqtt_port: u16,
+    pub mqtt_ws_port: u16,
+    pub llm_provider: String,
+    pub llm_model: String,
+}
+
 /// Shared application state injected into axum handlers.
 #[derive(Clone)]
 pub struct AppState {
     pub system: ActorSystem,
+    pub config: RuntimeConfig,
 }
 
 /// JSON body for POST /actors/{id}/message
@@ -58,9 +74,9 @@ pub struct RestServer {
 }
 
 impl RestServer {
-    pub fn new(system: ActorSystem, addr: SocketAddr) -> Self {
+    pub fn new(system: ActorSystem, addr: SocketAddr, config: RuntimeConfig) -> Self {
         Self {
-            state: AppState { system },
+            state: AppState { system, config },
             addr,
         }
     }
@@ -69,6 +85,7 @@ impl RestServer {
     pub fn router(&self) -> Router {
         Router::new()
             .route("/health", get(health_handler))
+            // Native paths
             .route("/actors", get(list_actors_handler))
             .route("/actors/:id", get(get_actor_handler))
             .route("/actors/:id/message", post(send_message_handler))
@@ -77,6 +94,15 @@ impl RestServer {
             .route("/actors/:id/resume", post(resume_actor_handler))
             .route("/actors/:id/metrics", get(get_metrics_handler))
             .route("/chat", post(chat_handler))
+            // /api/* aliases — match paths the Python backend and frontend expect
+            .route("/api/config", get(config_handler))
+            .route("/api/actors", get(list_actors_handler))
+            .route("/api/actors/:id", get(get_actor_handler))
+            .route("/api/actors/:id/message", post(send_message_handler))
+            .route("/api/actors/:id", delete(stop_actor_handler))
+            .route("/api/actors/:id/pause", post(pause_actor_handler))
+            .route("/api/actors/:id/resume", post(resume_actor_handler))
+            .route("/api/actors/:id/metrics", get(get_metrics_handler))
             .layer(CorsLayer::permissive())
             .layer(TraceLayer::new_for_http())
             .with_state(self.state.clone())
@@ -212,6 +238,21 @@ async fn resume_actor_handler(
             .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+async fn config_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let c = &state.config;
+    Json(serde_json::json!({
+        "ha": { "url": c.ha_url, "token": c.ha_token },
+        "fuseki": { "url": c.fuseki_url, "dataset": c.fuseki_dataset },
+        "mqtt": {
+            "host": c.mqtt_host,
+            "port": c.mqtt_port,
+            "url": format!("ws://{}:{}", c.mqtt_host, c.mqtt_ws_port),
+        },
+        "llm": { "provider": c.llm_provider, "model": c.llm_model },
+        "weather": { "defaultLocation": c.weather_default_location },
+    }))
 }
 
 async fn chat_handler(

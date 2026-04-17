@@ -10,5 +10,5 @@ pub mod cli;
 pub mod rest;
 pub mod ws;
 
-pub use rest::RestServer;
+pub use rest::{RestServer, RuntimeConfig};
 pub use ws::WsBridge;

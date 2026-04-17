@@ -19,9 +19,18 @@ import { HAClient, type HAEntity } from "../io/HAClient";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const NON_CHAT_AGENT_NAMES = new Set(["io-agent", "monitor-agent"]);
+const SYSTEM_AGENT_NAMES: Set<any> = new Set([
+  "io-agent",
+  "monitor-agent",
+  "manual-agent",
+  "home-assistant-state-bridge",
+  "home-assistant-map-agent",
+]);
+const ALWAYS_MESSAGEABLE = new Set(["main", "main-actor", "home-assistant-agent", "catalog"]);
 function canDirectMessage(agent: { name: string; protected?: boolean }): boolean {
-  return !NON_CHAT_AGENT_NAMES.has(agent.name);
+  if (ALWAYS_MESSAGEABLE.has(agent.name)) return true;
+  if (SYSTEM_AGENT_NAMES.has(agent.name)) return false;
+  return !agent.protected;
 }
 
 function nameFromWid(raw: string): string {
@@ -775,7 +784,9 @@ export class CardDashboard {
     feed.id = "af-feed-view";
 
     const visible = this.feedItems.filter(
-      (i) => !(this.hideHeartbeats && (i.type === "heartbeat" || i.type === "health")),
+      (i) =>
+        !(this.hideHeartbeats && (i.type === "heartbeat" || i.type === "health")) &&
+        !SYSTEM_AGENT_NAMES.has(nameFromWid(i.agentName)),
     );
     if (visible.length === 0) {
       const empty = document.createElement("div");
@@ -794,6 +805,7 @@ export class CardDashboard {
     const feed = this.root.querySelector<HTMLElement>("#af-feed-view");
     if (!feed) return;
     if (this.hideHeartbeats && (item.type === "heartbeat" || item.type === "health")) return;
+    if (SYSTEM_AGENT_NAMES.has(nameFromWid(item.agentName))) return;
     feed.querySelector(".af-feed-empty")?.remove();
     this._feedItemEl(feed, item);
     feed.scrollTop = feed.scrollHeight;

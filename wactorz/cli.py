@@ -152,6 +152,18 @@ async def _start_web_ui(port: int, mqtt_broker: str, mqtt_port: int, actor_regis
         logger.info("Docs   →  http://localhost:%d/docs/", port)
 
 
+async def _seed_fuseki_registry(registry) -> None:
+    await asyncio.sleep(2)  # let agents finish registering
+    from wactorz.fuseki import seed_agent_registry
+    await seed_agent_registry(
+        actors=registry.all_actors(),
+        fuseki_url=CONFIG.fuseki_url,
+        fuseki_dataset=CONFIG.fuseki_dataset,
+        fuseki_user=CONFIG.fuseki_user,
+        fuseki_password=CONFIG.fuseki_password,
+    )
+
+
 async def build_system(args: argparse.Namespace):
     from wactorz.core.registry import ActorSystem
     from wactorz.core.actor import SupervisorStrategy
@@ -278,6 +290,8 @@ async def build_system(args: argparse.Namespace):
     )
 
     await system.supervisor.start()
+
+    asyncio.create_task(_seed_fuseki_registry(system.registry))
 
     main_actor = system.registry.find_by_name("main")
 

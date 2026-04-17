@@ -209,6 +209,14 @@ export class SceneManager {
     else this.activeTheme.removeAgent(id);
   }
 
+  reconcileAgents(liveAgents: AgentInfo[]): void {
+    const liveIds = new Set(liveAgents.map((agent) => agent.id));
+    for (const id of this.agents.keys()) {
+      if (!liveIds.has(id)) this.removeAgent(id);
+    }
+    liveAgents.forEach((agent) => this.addOrUpdateAgent(agent));
+  }
+
   onHeartbeat(payload: HeartbeatPayload): void {
     const agent = this.agents.get(payload.agentId);
     if (agent) {

@@ -19,9 +19,9 @@ import { HAClient, type HAEntity } from "../io/HAClient";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const DIRECT_MSG_NAMES = new Set(["main", "main-actor", "home-assistant-agent", "catalog"]);
+const NON_CHAT_AGENT_NAMES = new Set(["io-agent", "monitor-agent"]);
 function canDirectMessage(agent: { name: string; protected?: boolean }): boolean {
-  return DIRECT_MSG_NAMES.has(agent.name) || !agent.protected;
+  return !NON_CHAT_AGENT_NAMES.has(agent.name);
 }
 
 function nameFromWid(raw: string): string {
@@ -94,7 +94,9 @@ export class CardDashboard {
   private _streamRow: HTMLElement | null = null;
   private _streamBody: HTMLElement | null = null;
   private _streamFrom: string | null = null;
+  private _streamTarget: string | null = null;
   private _streamText: string = "";
+  private _lastSentTarget: string = "main-actor";
 
   // Event listeners (stored for cleanup)
   private _evFeed: ((e: Event) => void) | null = null;
@@ -262,11 +264,12 @@ export class CardDashboard {
 
     this._evChat = (e) => {
       const msg = (e as CustomEvent<{ msg: ChatMessage }>).detail.msg;
-      // Tag io-gateway / system replies with the active chatTarget so they
-      // only appear in the thread where the user sent the triggering message.
+      // Tag io-gateway / system replies with the most recent outbound target
+      // so thread membership stays stable if the user switches sidebar rows
+      // before the reply arrives.
       const stored: ChatMessage =
         msg.from === "io-gateway" || msg.from === "system"
-          ? { ...msg, to: this.chatTarget }
+          ? { ...msg, to: this._lastSentTarget }
           : msg;
       this.chatMessages.push(stored);
       if (this.chatMessages.length > 200) this.chatMessages.shift();
@@ -283,6 +286,7 @@ export class CardDashboard {
       ).detail;
       if (!this._streamRow) {
         this._streamFrom = from;
+        this._streamTarget = this._lastSentTarget;
         this._streamText = "";
         const thread = this.root.querySelector<HTMLElement>(".af-chat-thread");
         if (!thread) return;
@@ -309,7 +313,7 @@ export class CardDashboard {
         const msg: ChatMessage = {
           id: `stream-${Date.now()}`,
           from: this._streamFrom,
-          to: this.chatTarget, // tag with active context for thread filtering
+          to: this._streamTarget ?? this._lastSentTarget,
           content: this._streamText,
           timestampMs: Date.now(),
         };
@@ -318,6 +322,7 @@ export class CardDashboard {
       this._streamRow = null;
       this._streamBody = null;
       this._streamFrom = null;
+      this._streamTarget = null;
       this._streamText = "";
     };
 
@@ -942,7 +947,7 @@ export class CardDashboard {
           const latest = [...this.agents.values()].find(
             (a) => a.name === agent.name,
           );
-          if (latest?.protected && latest.name !== "main-actor") return;
+          if (!latest || !canDirectMessage(latest)) return;
           this.chatTarget = agent.name;
           this._renderSidebar();
           this._renderChatPaneHeader();
@@ -958,7 +963,7 @@ export class CardDashboard {
       row.className = cls.join(" ");
       (row as HTMLButtonElement).disabled = isDisabled;
       row.title = isDisabled
-        ? `${agent.name} — system agent, not directly reachable`
+        ? `${agent.name} — infrastructure agent, not directly reachable`
         : agent.name;
       const dot = row.querySelector<HTMLElement>(".af-chat-agent-dot");
       if (dot && dot.style.background !== color) dot.style.background = color;
@@ -993,13 +998,6 @@ export class CardDashboard {
       st.textContent = stateLabel(agent.state);
       hdr.appendChild(st);
     }
-    if (this.chatTarget !== "main-actor") {
-      const via = document.createElement("span");
-      via.className = "af-chat-pane-via";
-      via.title = "Context filter — all messages go to @main-actor.";
-      via.textContent = "context · all msgs → @main-actor";
-      hdr.appendChild(via);
-    }
   }
 
   /** True when `msg` belongs to the currently open agent thread. */
@@ -1024,8 +1022,8 @@ export class CardDashboard {
       empty.innerHTML =
         this.chatTarget === "main-actor"
           ? `<p>Say hello to <strong>@main-actor</strong> — the system orchestrator.</p>`
-          : `<p>No messages in <strong>@${this.chatTarget}</strong> context yet.</p>
-           <p style="font-size:11px;opacity:0.5">Messages go to @main-actor.</p>`;
+          : `<p>No messages with <strong>@${this.chatTarget}</strong> yet.</p>
+           <p style="font-size:11px;opacity:0.5">New messages will be sent directly to this agent.</p>`;
       thread.appendChild(empty);
     } else {
       msgs.forEach((m) => this._appendChatMsgEl(m, thread));
@@ -1163,6 +1161,8 @@ export class CardDashboard {
     const content = input.value.trim();
     if (!content) return;
     const target = select.value || "main-actor";
+    this.chatTarget = target;
+    this._lastSentTarget = target;
     const msg: ChatMessage = {
       id: `user-${Date.now()}`,
       from: "user",
@@ -1809,45 +1809,90 @@ export class CardDashboard {
     // ── Preset queries ─────────────────────────────────────────────────────
     const PRESETS: { label: string; icon: string; sparql: string }[] = [
       {
+        label: "All graphs",
+        icon: "◌",
+        sparql: `SELECT ?g (COUNT(*) AS ?triples) WHERE {
+  GRAPH ?g { ?s ?p ?o }
+} GROUP BY ?g ORDER BY ?g`,
+      },
+      {
+        label: "Top predicates",
+        icon: "≡",
+        sparql: `SELECT ?p (COUNT(*) AS ?count) WHERE {
+  GRAPH ?g { ?s ?p ?o }
+} GROUP BY ?p ORDER BY DESC(?count) LIMIT 50`,
+      },
+      {
+        label: "Sample triples",
+        icon: "⋯",
+        sparql: `SELECT ?g ?s ?p ?o WHERE {
+  GRAPH ?g { ?s ?p ?o }
+} LIMIT 50`,
+      },
+      {
         label: "Current states",
         icon: "◉",
-        sparql: `SELECT ?entity ?state ?unit WHERE {
-  GRAPH <urn:ha:current> {
-    ?entity syn:state ?state .
-    OPTIONAL { ?entity syn:unit ?unit . }
+        sparql: `SELECT ?g ?entity ?state ?unit WHERE {
+  VALUES ?g { <urn:ha:current> <urn:wactorz:current> }
+  GRAPH ?g {
+    ?entity ?statePred ?state .
+    FILTER(?statePred IN (syn:state, saref:hasState))
+    OPTIONAL {
+      ?entity ?unitPred ?unit .
+      FILTER(?unitPred IN (syn:unit, saref:hasUnitOfMeasure))
+    }
   }
 } ORDER BY ?entity LIMIT 200`,
       },
       {
         label: "Recent observations",
         icon: "⏱",
-        sparql: `SELECT ?obs ?entity ?result ?ts WHERE {
-  GRAPH <urn:ha:history> {
-    ?obs a sosa:Observation ;
-         sosa:madeBySensor ?entity ;
-         sosa:hasSimpleResult ?result ;
-         sosa:resultTime ?ts .
+        sparql: `SELECT ?g ?obs ?entity ?result ?ts WHERE {
+  VALUES ?g { <urn:ha:history> <urn:wactorz:history> }
+  GRAPH ?g {
+    ?obs a sosa:Observation .
+    OPTIONAL { ?obs sosa:madeBySensor ?entity . }
+    OPTIONAL { ?obs sosa:hasSimpleResult ?result . }
+    OPTIONAL { ?obs sosa:resultTime ?ts . }
   }
 } ORDER BY DESC(?ts) LIMIT 100`,
       },
       {
         label: "Device catalog",
         icon: "⊡",
-        sparql: `SELECT ?entity ?label WHERE {
-  GRAPH <urn:ha:devices> {
+        sparql: `SELECT ?g ?entity ?label WHERE {
+  VALUES ?g { <urn:ha:devices> <urn:wactorz:devices> <urn:wactorz:agents> }
+  GRAPH ?g {
     ?entity rdfs:label ?label .
     FILTER(?entity != <urn:ha:bridge:wactorz>)
   }
 } ORDER BY ?label LIMIT 200`,
       },
       {
+        label: "Agents",
+        icon: "⚙",
+        sparql: `SELECT ?entity ?label ?state ?protected ?actorId WHERE {
+  GRAPH <urn:wactorz:agents> {
+    ?entity rdfs:label ?label .
+    OPTIONAL { ?entity syn:state ?state . }
+    OPTIONAL { ?entity syn:protected ?protected . }
+    OPTIONAL { ?entity syn:actorId ?actorId . }
+  }
+} ORDER BY ?label LIMIT 200`,
+      },
+      {
         label: "Sensors with units",
         icon: "📡",
-        sparql: `SELECT ?entity ?state ?unit WHERE {
-  GRAPH <urn:ha:current> {
+        sparql: `SELECT ?g ?entity ?state ?unit WHERE {
+  VALUES ?g { <urn:ha:current> <urn:wactorz:current> }
+  GRAPH ?g {
     ?entity a sosa:Sensor ;
-            syn:state ?state .
-    OPTIONAL { ?entity syn:unit ?unit . }
+            ?statePred ?state .
+    FILTER(?statePred IN (syn:state, saref:hasState))
+    OPTIONAL {
+      ?entity ?unitPred ?unit .
+      FILTER(?unitPred IN (syn:unit, saref:hasUnitOfMeasure))
+    }
   }
 } ORDER BY ?entity LIMIT 200`,
       },
@@ -1855,7 +1900,7 @@ export class CardDashboard {
         label: "Graph sizes",
         icon: "∑",
         sparql: `SELECT ?g (COUNT(*) AS ?triples) WHERE {
-  VALUES ?g { <urn:ha:current> <urn:ha:history> <urn:ha:devices> }
+  VALUES ?g { <urn:ha:current> <urn:ha:history> <urn:ha:devices> <urn:wactorz:agents> }
   GRAPH ?g { ?s ?p ?o }
 } GROUP BY ?g ORDER BY ?g`,
       },
@@ -1876,8 +1921,36 @@ export class CardDashboard {
       <a href="${base}" target="_blank" rel="noopener"
          style="font-size:11px;opacity:0.4;color:inherit;text-decoration:none;margin-left:2px;">${base} ↗</a>
       <div style="flex:1;"></div>
+      <button id="fsk-seed-demo" class="af-mini-btn" style="font-size:10px;">Seed Demo Data</button>
       <button id="fsk-reconfigure" class="af-mini-btn" style="font-size:10px;">⚙ Configure</button>
     `;
+    const demoSeedQuery = `INSERT DATA {
+  GRAPH <urn:ha:devices> {
+    <urn:ha:entity:demo_sensor_temperature> rdfs:label "Demo temperature sensor" .
+    <urn:ha:entity:demo_switch_lamp> rdfs:label "Demo lamp" .
+  }
+  GRAPH <urn:ha:current> {
+    <urn:ha:entity:demo_sensor_temperature>
+      a sosa:Sensor ;
+      syn:state "21.5" ;
+      syn:unit "degC" .
+    <urn:ha:entity:demo_switch_lamp>
+      a sosa:Actuator ;
+      syn:state "on" .
+  }
+  GRAPH <urn:ha:history> {
+    <urn:ha:observation:demo_sensor_temperature:1>
+      a sosa:Observation ;
+      sosa:madeBySensor <urn:ha:entity:demo_sensor_temperature> ;
+      sosa:hasSimpleResult "21.1" ;
+      sosa:resultTime "2026-04-17T12:00:00Z"^^xsd:dateTime .
+    <urn:ha:observation:demo_sensor_temperature:2>
+      a sosa:Observation ;
+      sosa:madeBySensor <urn:ha:entity:demo_sensor_temperature> ;
+      sosa:hasSimpleResult "21.5" ;
+      sosa:resultTime "2026-04-17T12:15:00Z"^^xsd:dateTime .
+  }
+}`;
     hdr
       .querySelector("#fsk-reconfigure")
       ?.addEventListener("click", () => {
@@ -1885,6 +1958,13 @@ export class CardDashboard {
         wrapper.appendChild(this._buildFusekiConfigForm());
       });
     wrapper.appendChild(hdr);
+
+    const hint = document.createElement("div");
+    hint.style.cssText =
+      "font-size:12px;line-height:1.45;color:rgba(255,255,255,0.6);padding:10px 12px;border:1px solid rgba(255,255,255,0.08);border-radius:10px;background:rgba(255,255,255,0.03);";
+    hint.innerHTML =
+      "This panel only shows data already stored in Fuseki. If the dataset is empty, all presets return 0 rows even when the endpoint is reachable. Use Seed Demo Data if you want to verify the graph view without Home Assistant.";
+    wrapper.appendChild(hint);
 
     // ── Presets + editor row ───────────────────────────────────────────────
     const mainRow = document.createElement("div");
@@ -1943,8 +2023,9 @@ export class CardDashboard {
     el.appendChild(wrapper);
 
     // ── SPARQL runner ──────────────────────────────────────────────────────
-    const sparqlUrl = `${base}/${ds}/sparql`;
-    const updateUrl = `${base}/${ds}/update`;
+    const datasetPath = encodeURIComponent(ds);
+    const sparqlUrl = `/api/fuseki/${datasetPath}/sparql`;
+    const updateUrl = `/api/fuseki/${datasetPath}/update`;
 
     const SPARQL_PREFIXES = `PREFIX syn:    <https://synapse.waldiez.io/ns#>
 PREFIX sosa:   <http://www.w3.org/ns/sosa/>
@@ -2035,7 +2116,11 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
         status.style.color = "rgba(255,255,255,0.45)";
 
         if (bindings.length === 0) {
-          results.innerHTML = `<div class="af-fuseki-empty">No results.</div>`;
+          const looksLikeHaGraphQuery =
+            /urn:ha:(current|history|devices)/i.test(trimmed);
+          results.innerHTML = looksLikeHaGraphQuery
+            ? `<div class="af-fuseki-empty">No results.<br><span style="opacity:0.65">Fuseki is reachable, but the expected HA graphs appear empty.</span></div>`
+            : `<div class="af-fuseki-empty">No results.</div>`;
           return;
         }
 
@@ -2077,6 +2162,13 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
         results.innerHTML = `<pre class="af-fuseki-error">${String(err)}</pre>`;
       }
     };
+
+    hdr.querySelector("#fsk-seed-demo")?.addEventListener("click", async () => {
+      editor.value = demoSeedQuery;
+      await runQuery(demoSeedQuery);
+      editor.value = PRESETS[4]?.sparql ?? PRESETS[0]?.sparql ?? "";
+      await runQuery(editor.value);
+    });
 
     runBtn.addEventListener("click", () => void runQuery(editor.value));
     editor.addEventListener("keydown", (e) => {

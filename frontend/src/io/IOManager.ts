@@ -90,7 +90,7 @@ export class IOManager {
     // direct_ws mode: send over WebSocket only — never fall back to MQTT.
     // Falling back would let IOAgent pick up the message and double-handle it.
     if (this._ws?.chatMode === "direct_ws") {
-      const sent = this._ws.send(content);
+      const sent = this._ws.send(content, agent?.name ?? "main-actor");
       if (!sent) {
         setTimeout(() => {
           this.chatPanel.hideTyping(typingKey);

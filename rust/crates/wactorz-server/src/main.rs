@@ -580,26 +580,15 @@ async fn main() -> Result<()> {
         llm_provider: args.llm_provider.clone(),
         llm_model: args.llm_model.clone(),
     };
-    tokio::spawn(async move {
-        let server = RestServer::new(system_for_rest, rest_addr, runtime_cfg, static_dir);
-        if let Err(e) = server.serve().await {
-            tracing::error!("REST error: {e}");
-        }
-    });
-
-    // ── WebSocket bridge ──────────────────────────────────────────────────────
-    let ws_addr: SocketAddr = args.ws_addr;
+    // Merge WsBridge (/ws + /mqtt) onto the same port as REST so the frontend
+    // can reach all endpoints via window.location.host — same as Python's
+    // single-port layout.
     let ws_bridge = WsBridge::new(ws_tx, mqtt_client, args.mqtt_host, args.mqtt_ws_port);
     tokio::spawn(async move {
-        let router = ws_bridge.router();
-        match tokio::net::TcpListener::bind(ws_addr).await {
-            Ok(listener) => {
-                tracing::info!("WS bridge listening on {ws_addr}");
-                if let Err(e) = axum::serve(listener, router).await {
-                    tracing::error!("WS bridge error: {e}");
-                }
-            }
-            Err(e) => tracing::error!("WS bind error: {e}"),
+        let server = RestServer::new(system_for_rest, rest_addr, runtime_cfg, static_dir)
+            .with_ws(ws_bridge.router());
+        if let Err(e) = server.serve().await {
+            tracing::error!("REST+WS error: {e}");
         }
     });
 

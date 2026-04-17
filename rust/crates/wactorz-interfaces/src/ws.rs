@@ -473,7 +473,7 @@ async fn handle_ws_socket(socket: WebSocket, state: BridgeState) {
         }))
         .unwrap_or_default()
     };
-    if ws_send.send(Message::Text(snap_json)).await.is_err() {
+    if ws_send.send(Message::Text(snap_json.into())).await.is_err() {
         return;
     }
 
@@ -486,12 +486,12 @@ async fn handle_ws_socket(socket: WebSocket, state: BridgeState) {
         loop {
             tokio::select! {
                 Ok(json) = monitor_rx.recv() => {
-                    if ws_send.send(Message::Text(json)).await.is_err() {
+                    if ws_send.send(Message::Text(json.into())).await.is_err() {
                         break;
                     }
                 }
                 Some(json) = reply_rx.recv() => {
-                    if ws_send.send(Message::Text(json)).await.is_err() {
+                    if ws_send.send(Message::Text(json.into())).await.is_err() {
                         break;
                     }
                 }
@@ -759,7 +759,9 @@ async fn proxy_to_mosquitto(socket: WebSocket, state: BridgeState, proto: Option
         while let Some(Ok(msg)) = up_recv.next().await {
             let out = match msg {
                 TMsg::Binary(b) => Message::Binary(b),
-                TMsg::Text(t) => Message::Text(t),
+                TMsg::Text(t) => {
+                    Message::Text(t.as_str().into())
+                },
                 TMsg::Close(_) => break,
                 _ => continue,
             };
@@ -773,7 +775,7 @@ async fn proxy_to_mosquitto(socket: WebSocket, state: BridgeState, proto: Option
     while let Some(Ok(msg)) = cl_recv.next().await {
         let fwd = match msg {
             Message::Binary(b) => TMsg::Binary(b),
-            Message::Text(t) => TMsg::Text(t),
+            Message::Text(t) => TMsg::Text(t.as_str().into()),
             Message::Close(_) => break,
             _ => continue,
         };

@@ -74,6 +74,8 @@ pub struct RestServer {
     addr: SocketAddr,
     /// Path to the built frontend assets directory (e.g. "static/app").
     static_dir: String,
+    /// Optional WsBridge router merged onto the same port (Python-compatible single-port setup).
+    ws_router: Option<axum::Router>,
 }
 
 impl RestServer {
@@ -87,7 +89,14 @@ impl RestServer {
             state: AppState { system, config },
             addr,
             static_dir,
+            ws_router: None,
         }
+    }
+
+    /// Merge a WsBridge router so /ws and /mqtt are served on the same port.
+    pub fn with_ws(mut self, ws_router: axum::Router) -> Self {
+        self.ws_router = Some(ws_router);
+        self
     }
 
     /// Build the axum `Router`.
@@ -96,7 +105,7 @@ impl RestServer {
         let serve_dir =
             ServeDir::new(&self.static_dir).fallback(ServeFile::new(&index_html));
 
-        Router::new()
+        let mut r = Router::new()
             .route("/health", get(health_handler))
             // Native paths
             .route("/actors", get(list_actors_handler))
@@ -116,10 +125,17 @@ impl RestServer {
             .route("/api/actors/{id}/pause", post(pause_actor_handler))
             .route("/api/actors/{id}/resume", post(resume_actor_handler))
             .route("/api/actors/{id}/metrics", get(get_metrics_handler))
-            .fallback_service(serve_dir)
+            .with_state(self.state.clone());
+
+        // Merge /ws and /mqtt onto the same port so the frontend can reach
+        // them via window.location.host (Python-compatible single-port layout).
+        if let Some(ws) = &self.ws_router {
+            r = r.merge(ws.clone());
+        }
+
+        r.fallback_service(serve_dir)
             .layer(CorsLayer::permissive())
             .layer(TraceLayer::new_for_http())
-            .with_state(self.state.clone())
     }
 
     /// Start listening and serving.

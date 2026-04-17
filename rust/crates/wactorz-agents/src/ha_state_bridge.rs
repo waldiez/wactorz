@@ -5,14 +5,11 @@
 //! events on a configurable MQTT output topic.
 //!
 //! Configuration mirrors the Python implementation:
-//! - `ha_url`        — Home Assistant base URL
-//! - `ha_token`      — Long-lived access token
+//! - `ha_url`  — Home Assistant base URL
+//! - `ha_token`  — Long-lived access token
 //! - `output_topic`  — Base MQTT topic (default: `ha/state`)
-//! - `domains`       — Optional allow-list of entity domains
-//!                     (e.g. `["light", "switch", "sensor"]`).  Empty = all.
-//! - `per_entity`    — When `true` events are published to
-//!                     `{output_topic}/{domain}/{entity_id}`; otherwise
-//!                     everything goes to `{output_topic}`.
+//! - `domains`  — Optional allow-list of entity domains  (e.g. `  ["light", "switch", "sensor"]  `).  Empty = all.
+//! - `per_entity`  — When `true` events are published to `{output_topic}/{domain}/{entity_id}`; otherwise everything goes to `{output_topic}`.
 //!
 //! # Current status
 //!

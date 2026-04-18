@@ -12,9 +12,6 @@ init: false
 homeassistant_api: true
 hassio_api: true
 hassio_role: admin
-ingress: true
-ingress_port: 8888
-ingress_stream: true
 panel_icon: mdi:robot-outline
 panel_title: Wactorz
 webui: http://[HOST]:[PORT:8888]

@@ -9,7 +9,6 @@ RUN apk add --no-cache \
     gcc \
     musl-dev \
     linux-headers \
-    python3-dev \
     libffi-dev \
     openssl-dev
 

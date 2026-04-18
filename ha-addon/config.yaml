@@ -1,5 +1,5 @@
 name: Wactorz
-version: "0.3.1"
+version: "0.3.2"
 slug: wactorz
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
 url: https://github.com/waldiez/wactorz
@@ -13,12 +13,20 @@ startup: application
 boot: auto
 init: false
 homeassistant_api: false
+ingress: true
+ingress_port: 8888
+ingress_stream: true
+panel_icon: mdi:robot-outline
+panel_title: Wactorz
+webui: http://[HOST]:[PORT:8000]
 
 # ── Ports ──────────────────────────────────────────────────────────────────────
 ports:
   8000/tcp: 8000
+  8888/tcp: 8888
 ports_description:
   8000/tcp: Wactorz REST + WebSocket API
+  8888/tcp: Wactorz Monitor UI
 
 # ── Persistent state ───────────────────────────────────────────────────────────
 map:

@@ -697,6 +697,12 @@ def _with_no_cache(response):
 
 async def index_handler(request):
     from aiohttp import web
+    # Also handle favicon.svg if it's requested at root
+    if request.path.endswith("favicon.svg"):
+        for candidate in [FRONTEND_PUBLIC / "favicon.svg", FRONTEND_DIST / "favicon.svg"]:
+            if candidate.exists():
+                return _with_no_cache(web.FileResponse(candidate))
+
     for candidate in [
         FRONTEND_DIST / "index.html",
         _find_dir("frontend") / "index.html",
@@ -936,6 +942,7 @@ async def main(exit_on_failure: bool = False):
     
     app.router.add_get("/api/config",            config_handler)
     app.router.add_get("/config",                config_handler)
+    app.router.add_get("/favicon.svg",           index_handler)
     from .fuseki_proxy import fuseki_proxy_handler
     app.router.add_post("/api/fuseki/{dataset}/sparql",  fuseki_proxy_handler)
     app.router.add_post("/api/fuseki/{dataset}/update",  fuseki_proxy_handler)

@@ -45,16 +45,21 @@ export MQTT_PORT=$(get_config_safe 'mqtt_port' '1883')
 export MQTT_WS_PORT=$(get_config_safe 'mqtt_ws_port' '8083')
 
 # Home Assistant Config
-HA_URL=$(get_config_safe 'ha_url' 'http://supervisor/core')
-HA_TOKEN=$(get_config_safe 'ha_token' "${SUPERVISOR_TOKEN:-}")
+HA_URL=$(get_config_safe 'ha_url' '')
+HA_TOKEN=$(get_config_safe 'ha_token' '')
 
-# If we still don't have a token, warn the user
+# If no token is provided, we MUST use the supervisor proxy with the supervisor token.
+# Port 8123 (the normal HA URL) will NOT accept the supervisor token.
 if [ -z "$HA_TOKEN" ] || [ "$HA_TOKEN" == "null" ]; then
-    bashio::log.warning "SUPERVISOR_TOKEN is missing. Ensure 'hassio_api: true' is in config.yaml and the addon was reinstalled."
+    export HA_URL="http://supervisor/core"
+    export HA_TOKEN="${SUPERVISOR_TOKEN:-}"
+    bashio::log.info "Using internal Supervisor proxy for Home Assistant connection."
+else
+    # User provided a custom token, so we can use their URL or fallback to the standard one.
+    export HA_URL="${HA_URL:-http://homeassistant:8123}"
+    export HA_TOKEN="$HA_TOKEN"
+    bashio::log.info "Using custom Home Assistant URL: ${HA_URL}"
 fi
-
-export HA_URL="${HA_URL:-http://supervisor/core}"
-export HA_TOKEN="${HA_TOKEN:-${SUPERVISOR_TOKEN:-}}"
 export HOME_ASSISTANT_URL="$HA_URL"
 export HOME_ASSISTANT_TOKEN="$HA_TOKEN"
 

@@ -43,6 +43,8 @@ MQTT_PORT="$(get_option 'mqtt_port' '1883')"
 export MQTT_PORT="${MQTT_PORT:-1883}"
 export HA_URL="$(get_option 'ha_url' 'http://homeassistant:8123')"
 export HA_TOKEN="$(get_option 'ha_token')"
+export HOME_ASSISTANT_URL="$HA_URL"
+export HOME_ASSISTANT_TOKEN="$HA_TOKEN"
 export FUSEKI_URL="$(get_option 'fuseki_url' 'http://localhost:3030')"
 export FUSEKI_DATASET="$(get_option 'fuseki_dataset' 'wactorz')"
 export FUSEKI_USER="$(get_option 'fuseki_user' 'admin')"
@@ -53,5 +55,13 @@ export TELEGRAM_ALLOWED_USER_ID="$(get_option 'telegram_allowed_user_id' '0')"
 
 export INTERFACE=rest
 export PORT=8000
+
+if [ -n "$HA_TOKEN" ]; then
+  ha_token_state="set"
+else
+  ha_token_state="empty"
+fi
+
+bashio::log.info "Resolved config: mqtt_host='${MQTT_HOST}' mqtt_port='${MQTT_PORT}' ha_url='${HA_URL}' ha_token=${ha_token_state} llm_provider='${LLM_PROVIDER}'"
 
 exec wactorz

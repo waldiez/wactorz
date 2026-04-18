@@ -1,5 +1,5 @@
 name: Wactorz
-version: "0.3.0"
+version: "0.3.1"
 slug: wactorz
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
 url: https://github.com/waldiez/wactorz

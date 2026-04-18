@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Wactorz MQTT Topics Reference — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
+    .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">
+    <div class="logo-mark"></div>Wactorz
+  </a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+    <a href="../api/rust/" target="_blank" rel="noopener">Rust Docs</a>
+    <a href="../api/js/" target="_blank" rel="noopener">JS Docs</a>
+    <a href="../api/python/" target="_blank" rel="noopener">Python Docs</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-label">Guide</div>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+      <a href="../guide/windows.html" class="">Windows</a>
+    </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Reference</div>
+      <a href="../reference/api.html" class="">REST & WebSocket API</a>
+      <a href="../reference/mqtt_topics.html" class="active">MQTT Topics</a>
+      <a href="../reference/python-api.html" class="">Python API</a>
+    </div>
+    <a href="https://waldiez.github.io/wactorz/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
+    <a href="https://waldiez.github.io/wactorz/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
+    <a href="https://waldiez.github.io/wactorz/api/python/" class="external" target="_blank" rel="noopener">Python Docs ↗</a>
+  </aside>
+  <main class="content">
+<h1 id="wactorz-mqtt-topics-reference">Wactorz MQTT Topics Reference</h1>
+<p>All topics use <code>localhost:1883</code> by default (configurable via <code>--mqtt-broker</code> and <code>--mqtt-port</code>).</p>
+<hr />
+<h2 id="agent-topics">Agent Topics</h2>
+<p>Every agent publishes to its own namespace: <code>agents/{actor_id}/...</code></p>
+<blockquote>
+<p><strong>Note:</strong> <code>{actor_id}</code> is a deterministic UUID derived from the agent's name.<br />
+Example: <code>main</code> → <code>8070c998-1a59-510e-b64c-bc36b5522a19</code> (same every restart)</p>
+</blockquote>
+<hr />
+<h3 id="agentsidheartbeat"><code>agents/{id}/heartbeat</code></h3>
+<p><strong>Published by:</strong> Every agent<br />
+<strong>Interval:</strong> Every 10 seconds<br />
+<strong>Purpose:</strong> Liveness signal. If absent for 60s, monitor raises an alert.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;actor_id&quot;</span><span class="p">:</span><span class="w">   </span><span class="s2">&quot;8070c998-...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w">       </span><span class="s2">&quot;main&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w">  </span><span class="mf">1740000000.0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w">      </span><span class="s2">&quot;running&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;cpu&quot;</span><span class="p">:</span><span class="w">        </span><span class="mf">1.4</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;memory_mb&quot;</span><span class="p">:</span><span class="w">  </span><span class="mf">69.9</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;task&quot;</span><span class="p">:</span><span class="w">       </span><span class="s2">&quot;idle&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;protected&quot;</span><span class="p">:</span><span class="w">  </span><span class="kc">true</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="agentsidmetrics"><code>agents/{id}/metrics</code></h3>
+<p><strong>Published by:</strong> Every agent<br />
+<strong>Interval:</strong> Every 10 seconds + immediately after each LLM call<br />
+<strong>Purpose:</strong> Performance counters. LLM agents include cost fields.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;actor_id&quot;</span><span class="p">:</span><span class="w">           </span><span class="s2">&quot;8070c998-...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;messages_processed&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;errors&quot;</span><span class="p">:</span><span class="w">             </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;uptime&quot;</span><span class="p">:</span><span class="w">             </span><span class="mf">342.5</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;tasks_completed&quot;</span><span class="p">:</span><span class="w">    </span><span class="mi">5</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;tasks_failed&quot;</span><span class="p">:</span><span class="w">       </span><span class="mi">0</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>LLM agents additionally include:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;input_tokens&quot;</span><span class="p">:</span><span class="w">  </span><span class="mi">12480</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;output_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3210</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;cost_usd&quot;</span><span class="p">:</span><span class="w">      </span><span class="mf">0.085650</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong>Cost is published here</strong> — in <code>agents/{id}/metrics</code> alongside token counts.<br />
+Costs are accumulated per-agent and reset only when the agent restarts.</p>
+</blockquote>
+<hr />
+<h3 id="agentsidstatus"><code>agents/{id}/status</code></h3>
+<p><strong>Published by:</strong> Every agent<br />
+<strong>Trigger:</strong> On state change (start, stop, pause, resume)<br />
+<strong>Purpose:</strong> State transition events.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;actor_id&quot;</span><span class="p">:</span><span class="w">           </span><span class="s2">&quot;8070c998-...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w">               </span><span class="s2">&quot;main&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w">              </span><span class="s2">&quot;running&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;uptime&quot;</span><span class="p">:</span><span class="w">             </span><span class="mf">12.3</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;messages_processed&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="agentsidlogs"><code>agents/{id}/logs</code></h3>
+<p><strong>Published by:</strong> Every agent<br />
+<strong>Trigger:</strong> On user interaction, task completion, spawn events, custom log calls<br />
+<strong>Purpose:</strong> Event log entries visible in the dashboard.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user_interaction&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;input&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hello&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;response&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Hi there!&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;log&quot;</span><span class="p">,</span><span class="w">     </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Camera opened successfully&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1740000000.0</span><span class="w"> </span><span class="p">}</span>
+<span class="p">{</span><span class="w"> </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;spawned&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Spawned &#39;yolo-agent&#39; on node &#39;local&#39;&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;child_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;yolo-agent&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="agentsidalert"><code>agents/{id}/alert</code></h3>
+<p><strong>Published by:</strong> Monitor agent (on behalf of unresponsive agents)<br />
+<strong>Trigger:</strong> Agent missing heartbeat for &gt; 60 seconds<br />
+<strong>Purpose:</strong> Health alerts.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;actor_id&quot;</span><span class="p">:</span><span class="w">  </span><span class="s2">&quot;c0bb7985-...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w">      </span><span class="s2">&quot;code-agent&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w">   </span><span class="s2">&quot;code-agent unresponsive for 62s&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;severity&quot;</span><span class="p">:</span><span class="w">  </span><span class="s2">&quot;warning&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1740000000.0</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="agentsidcommands"><code>agents/{id}/commands</code></h3>
+<p><strong>Published by:</strong> Dashboard (via <code>monitor_server.py</code>) or any external client<br />
+<strong>Trigger:</strong> User clicks Pause / Resume / Stop / Delete in dashboard<br />
+<strong>Purpose:</strong> Remote control of agents.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="w"> </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pause&quot;</span><span class="w">  </span><span class="p">}</span>
+<span class="p">{</span><span class="w"> </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;resume&quot;</span><span class="w"> </span><span class="p">}</span>
+<span class="p">{</span><span class="w"> </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;stop&quot;</span><span class="w">   </span><span class="p">}</span>
+<span class="p">{</span><span class="w"> </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;delete&quot;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+
+<blockquote>
+<p>Protected agents (<code>main</code>, <code>monitor</code>) ignore <code>pause</code>, <code>stop</code>, and <code>delete</code> commands.</p>
+</blockquote>
+<hr />
+<h3 id="agentsidcompleted"><code>agents/{id}/completed</code></h3>
+<p><strong>Published by:</strong> LLM agents<br />
+<strong>Trigger:</strong> After completing a TASK message<br />
+<strong>Purpose:</strong> Task completion notification with result preview.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;result_preview&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Here is the bubble sort implementation...&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="agentsidspawned"><code>agents/{id}/spawned</code></h3>
+<p><strong>Published by:</strong> Parent actor when it spawns a child<br />
+<strong>Trigger:</strong> On successful spawn<br />
+<strong>Purpose:</strong> Spawn notification.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;child_id&quot;</span><span class="p">:</span><span class="w">   </span><span class="s2">&quot;f6601a20-...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;child_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;yolo-agent&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w">  </span><span class="mf">1740000000.0</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="agentsidresult"><code>agents/{id}/result</code></h3>
+<p><strong>Published by:</strong> ML agents, Dynamic agents<br />
+<strong>Trigger:</strong> After each continuous loop cycle (if no detections-specific topic)<br />
+<strong>Purpose:</strong> Generic inference result.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w">    </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1740000000.0</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="agentsiddetections"><code>agents/{id}/detections</code></h3>
+<p><strong>Published by:</strong> Vision agents (YOLO, webcam agents)<br />
+<strong>Trigger:</strong> After each frame inference<br />
+<strong>Purpose:</strong> Object detection results.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;detections&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;class&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;person&quot;</span><span class="p">,</span><span class="w">  </span><span class="nt">&quot;confidence&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.923</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;bbox&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">120.0</span><span class="p">,</span><span class="w"> </span><span class="mf">80.0</span><span class="p">,</span><span class="w"> </span><span class="mf">400.0</span><span class="p">,</span><span class="w"> </span><span class="mf">600.0</span><span class="p">]</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;class&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;laptop&quot;</span><span class="p">,</span><span class="w">  </span><span class="nt">&quot;confidence&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.871</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;bbox&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">200.0</span><span class="p">,</span><span class="w"> </span><span class="mf">300.0</span><span class="p">,</span><span class="w"> </span><span class="mf">500.0</span><span class="p">,</span><span class="w"> </span><span class="mf">580.0</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w">     </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">1740000000.0</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="agentsidanomaly"><code>agents/{id}/anomaly</code></h3>
+<p><strong>Published by:</strong> <code>AnomalyDetectorAgent</code><br />
+<strong>Trigger:</strong> When z-score exceeds threshold<br />
+<strong>Purpose:</strong> Statistical anomaly events.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;anomaly&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w">   </span><span class="mf">142.3</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;zscore&quot;</span><span class="p">:</span><span class="w">  </span><span class="mf">4.12</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;mean&quot;</span><span class="p">:</span><span class="w">    </span><span class="mf">98.5</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;stdev&quot;</span><span class="p">:</span><span class="w">   </span><span class="mf">10.6</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="system-topics">System Topics</h2>
+<h3 id="systemhealth"><code>system/health</code></h3>
+<p><strong>Published by:</strong> Monitor agent<br />
+<strong>Interval:</strong> Every check cycle (15 seconds)<br />
+<strong>Purpose:</strong> System-wide health summary.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w">    </span><span class="mf">1740000000.0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;total_agents&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;running&quot;</span><span class="p">:</span><span class="w">      </span><span class="mi">4</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;paused&quot;</span><span class="p">:</span><span class="w">       </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;stopped&quot;</span><span class="p">:</span><span class="w">      </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;failed&quot;</span><span class="p">:</span><span class="w">       </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;alerts&quot;</span><span class="p">:</span><span class="w">       </span><span class="p">[]</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h3 id="nodesnodespawn-experimental"><code>nodes/{node}/spawn</code>  <em>(experimental)</em></h3>
+<p><strong>Published by:</strong> Main actor (for remote node spawning)<br />
+<strong>Trigger:</strong> When spawning an agent on a remote node<br />
+<strong>Purpose:</strong> Distributed agent deployment.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w">         </span><span class="s2">&quot;yolo-agent&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w">         </span><span class="s2">&quot;async def setup(agent): ...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;poll_interval&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.5</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="subscribing-with-mqtt-explorer-cli">Subscribing with MQTT Explorer / CLI</h2>
+<div class="highlight"><pre><span></span><code><span class="c1"># Subscribe to everything from all agents</span>
+mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span><span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;agents/#&quot;</span>
+
+<span class="c1"># Subscribe to a specific agent&#39;s detections</span>
+mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span><span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;agents/+/detections&quot;</span>
+
+<span class="c1"># Subscribe to all alerts</span>
+mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span><span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;agents/+/alert&quot;</span>
+
+<span class="c1"># Subscribe to costs/metrics from all agents</span>
+mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span><span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;agents/+/metrics&quot;</span>
+
+<span class="c1"># System health</span>
+mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span><span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;system/#&quot;</span>
+
+<span class="c1"># Send a command to an agent (replace {actor_id} with actual UUID)</span>
+mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span><span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;agents/{actor_id}/commands&quot;</span><span class="w"> </span>-m<span class="w"> </span><span class="s1">&#39;{&quot;command&quot;:&quot;pause&quot;}&#39;</span>
+</code></pre></div>
+
+<hr />
+<h2 id="topic-summary">Topic Summary</h2>
+<table>
+<thead>
+<tr>
+<th>Topic</th>
+<th>Published by</th>
+<th>Interval / Trigger</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>agents/{id}/heartbeat</code></td>
+<td>Every agent</td>
+<td>Every 10s</td>
+</tr>
+<tr>
+<td><code>agents/{id}/metrics</code></td>
+<td>Every agent</td>
+<td>Every 10s + after LLM call</td>
+</tr>
+<tr>
+<td><code>agents/{id}/status</code></td>
+<td>Every agent</td>
+<td>On state change</td>
+</tr>
+<tr>
+<td><code>agents/{id}/logs</code></td>
+<td>Every agent</td>
+<td>On interaction / log call</td>
+</tr>
+<tr>
+<td><code>agents/{id}/alert</code></td>
+<td>Monitor agent</td>
+<td>On unresponsive detection</td>
+</tr>
+<tr>
+<td><code>agents/{id}/commands</code></td>
+<td>Dashboard / external</td>
+<td>On user action</td>
+</tr>
+<tr>
+<td><code>agents/{id}/completed</code></td>
+<td>LLM agents</td>
+<td>After task completion</td>
+</tr>
+<tr>
+<td><code>agents/{id}/spawned</code></td>
+<td>Parent actor</td>
+<td>On child spawn</td>
+</tr>
+<tr>
+<td><code>agents/{id}/result</code></td>
+<td>ML / Dynamic agents</td>
+<td>Per loop cycle</td>
+</tr>
+<tr>
+<td><code>agents/{id}/detections</code></td>
+<td>Vision agents</td>
+<td>Per frame</td>
+</tr>
+<tr>
+<td><code>agents/{id}/anomaly</code></td>
+<td>AnomalyDetectorAgent</td>
+<td>On anomaly detected</td>
+</tr>
+<tr>
+<td><code>system/health</code></td>
+<td>Monitor agent</td>
+<td>Every 15s</td>
+</tr>
+<tr>
+<td><code>nodes/{node}/spawn</code></td>
+<td>Main actor</td>
+<td>On remote spawn</td>
+</tr>
+</tbody>
+</table>
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

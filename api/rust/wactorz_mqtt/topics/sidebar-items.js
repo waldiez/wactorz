@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["AGENTS_ALL","IO_CHAT","NODES_ALL","NODES_HEARTBEAT","SYSTEM_HEALTH","SYSTEM_LLM_ERROR","SYSTEM_LLM_SWITCH","SYSTEM_SHUTDOWN"],"fn":["alert","chat","commands","detections","heartbeat","logs","parse_agent_topic","result","spawn","status"]};

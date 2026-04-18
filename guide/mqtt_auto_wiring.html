@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MQTT Auto-Wiring in Wactorz — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
+    .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">
+    <div class="logo-mark"></div>Wactorz
+  </a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-label">Guide</div>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/mqtt_auto_wiring.html" class="active">Auto-Wiring</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/prometheus.html" class="">Prometheus</a>
+    </div>
+  </aside>
+  <main class="content">
+<h1 id="mqtt-auto-wiring-in-wactorz">MQTT Auto-Wiring in Wactorz</h1>
+<p><strong>How agents discover, connect, and validate data flows — without hardcoded names</strong></p>
+<hr />
+<h2 id="the-problem">The Problem</h2>
+<p>In a multi-agent system where the LLM generates agent code at runtime, wiring agents together is fragile. The traditional approach — hardcoding agent names in routing logic — breaks the moment an agent is renamed, replaced, or spawned dynamically. Worse, when one LLM writes a producer and another writes a consumer, they frequently disagree on field names: one publishes <code>{"temp": 30.5}</code>, the other reads <code>payload["temperature"]</code>.</p>
+<p>Wactorz solves this with <strong>topic-based auto-wiring</strong>: agents declare what data they produce and consume via MQTT topics, and the system wires them by data compatibility — not by name.</p>
+<hr />
+<h2 id="architecture-overview">Architecture Overview</h2>
+<div class="highlight"><pre><span></span><code><span class="w">                    </span><span class="err">┌─────────────────────────────────┐</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">          </span><span class="n">TopicBus</span><span class="w">                </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="p">(</span><span class="n">singleton</span><span class="p">,</span><span class="w"> </span><span class="n">init</span><span class="w"> </span><span class="n">at</span><span class="w"> </span><span class="n">startup</span><span class="p">)</span><span class="w">    </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">                                  </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">┌───────────────────────────┐</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">│</span><span class="w">     </span><span class="n">TopicRegistry</span><span class="w">         </span><span class="err">│</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">name</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">TopicContract</span><span class="w">     </span><span class="err">│</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="o">+</span><span class="w"> </span><span class="n">observed_samples</span><span class="w">       </span><span class="err">│</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">└───────────────────────────┘</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">                                  </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">┌───────────────────────────┐</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">│</span><span class="w">    </span><span class="n">SharedStateHub</span><span class="w">         </span><span class="err">│</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">retained</span><span class="w"> </span><span class="n">MQTT</span><span class="w"> </span><span class="n">topics</span><span class="w">     </span><span class="err">│</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">└───────────────────────────┘</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">                                  </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">┌───────────────────────────┐</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">│</span><span class="w">   </span><span class="n">StreamWindow</span><span class="w"> </span><span class="n">factory</span><span class="w">    </span><span class="err">│</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">sliding</span><span class="w"> </span><span class="n">windows</span><span class="w"> </span><span class="n">over</span><span class="w">     </span><span class="err">│</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">topic</span><span class="w"> </span><span class="n">streams</span><span class="w">            </span><span class="err">│</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">│</span><span class="w">  </span><span class="err">└───────────────────────────┘</span><span class="w">   </span><span class="err">│</span>
+<span class="w">                    </span><span class="err">└────────────┬────────────────────┘</span>
+<span class="w">                                 </span><span class="err">│</span>
+<span class="w">           </span><span class="err">┌─────────────────────┼─────────────────────┐</span>
+<span class="w">           </span><span class="err">│</span><span class="w">                     </span><span class="err">│</span><span class="w">                     </span><span class="err">│</span>
+<span class="w">    </span><span class="err">┌──────▼──────┐</span><span class="w">      </span><span class="err">┌───────▼──────┐</span><span class="w">      </span><span class="err">┌──────▼──────┐</span>
+<span class="w">    </span><span class="err">│</span><span class="w">  </span><span class="n">Producer</span><span class="w">   </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w">   </span><span class="n">Planner</span><span class="w">    </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w">  </span><span class="n">Consumer</span><span class="w">   </span><span class="err">│</span>
+<span class="w">    </span><span class="err">│</span><span class="w">  </span><span class="n">Agent</span><span class="w">      </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w">   </span><span class="n">Agent</span><span class="w">      </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w">  </span><span class="n">Agent</span><span class="w">      </span><span class="err">│</span>
+<span class="w">    </span><span class="err">│</span><span class="w">             </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w">              </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w">             </span><span class="err">│</span>
+<span class="w">    </span><span class="err">│</span><span class="w"> </span><span class="n">publish</span><span class="p">()</span><span class="w">   </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="n">reads</span><span class="w">        </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="n">subscribe</span><span class="p">()</span><span class="w"> </span><span class="err">│</span>
+<span class="w">    </span><span class="err">│</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">auto</span><span class="o">-</span><span class="w">     </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="n">contracts</span><span class="w"> </span><span class="o">+</span><span class="w">  </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">wired</span><span class="w"> </span><span class="n">by</span><span class="w">  </span><span class="err">│</span>
+<span class="w">    </span><span class="err">│</span><span class="w">   </span><span class="n">registers</span><span class="w"> </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="n">observed</span><span class="w">     </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w">   </span><span class="n">planner</span><span class="w">   </span><span class="err">│</span>
+<span class="w">    </span><span class="err">│</span><span class="w">   </span><span class="n">contract</span><span class="w">  </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="n">schemas</span><span class="w">      </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w">   </span><span class="n">using</span><span class="w">     </span><span class="err">│</span>
+<span class="w">    </span><span class="err">│</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">captures</span><span class="w">  </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="n">before</span><span class="w"> </span><span class="n">code</span><span class="w">  </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w">   </span><span class="kt">real</span><span class="w">      </span><span class="err">│</span>
+<span class="w">    </span><span class="err">│</span><span class="w">   </span><span class="n">schema</span><span class="w">    </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w"> </span><span class="n">generation</span><span class="w">   </span><span class="err">│</span><span class="w">      </span><span class="err">│</span><span class="w">   </span><span class="n">field</span><span class="w">     </span><span class="err">│</span>
+<span class="w">    </span><span class="err">└─────────────┘</span><span class="w">      </span><span class="err">└──────────────┘</span><span class="w">      </span><span class="err">│</span><span class="w">   </span><span class="n">names</span><span class="w">     </span><span class="err">│</span>
+<span class="w">                                               </span><span class="err">└─────────────┘</span>
+</code></pre></div>
+
+<hr />
+<h2 id="step-1-topiccontract-what-an-agent-declares">Step 1: TopicContract — What an Agent Declares</h2>
+<p>Every agent that publishes or subscribes to MQTT topics has a <code>TopicContract</code> — a dataclass that declares its data interface:</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">TopicContract</span><span class="p">:</span>
+    <span class="n">name</span><span class="p">:</span>             <span class="nb">str</span>                    <span class="c1"># agent name</span>
+    <span class="n">publishes</span><span class="p">:</span>        <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>              <span class="c1"># topics this agent writes to</span>
+    <span class="n">subscribes</span><span class="p">:</span>       <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>              <span class="c1"># topics this agent reads from</span>
+    <span class="n">triggers_when</span><span class="p">:</span>    <span class="nb">dict</span>                   <span class="c1"># conditions that trigger action</span>
+    <span class="n">produces_schema</span><span class="p">:</span>  <span class="nb">dict</span>                   <span class="c1"># declared field names + types</span>
+    <span class="n">consumes_schema</span><span class="p">:</span>  <span class="nb">dict</span>                   <span class="c1"># expected input field names</span>
+    <span class="n">observed_samples</span><span class="p">:</span> <span class="nb">dict</span>                   <span class="c1"># AUTO-CAPTURED real payloads</span>
+    <span class="n">node</span><span class="p">:</span>             <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>          <span class="c1"># remote node name (if edge)</span>
+    <span class="n">actor_id</span><span class="p">:</span>         <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>          <span class="c1"># unique actor ID</span>
+</code></pre></div>
+
+<p>Contracts are registered in the <code>TopicRegistry</code> — a global in-memory index accessible from anywhere via <code>get_topic_bus().registry</code>.</p>
+<h3 id="how-contracts-get-registered">How Contracts Get Registered</h3>
+<p>Contracts are registered through three paths:</p>
+<p><strong>Path 1 — Implicit via <code>agent.publish()</code>:</strong>
+The first time a DynamicAgent publishes to a topic, <code>_AgentAPI.publish()</code> auto-creates a minimal contract:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Inside _AgentAPI.publish():</span>
+<span class="n">contract</span> <span class="o">=</span> <span class="n">TopicContract</span><span class="p">(</span>
+    <span class="n">name</span>      <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+    <span class="n">publishes</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_published_topics</span> <span class="o">|</span> <span class="p">{</span><span class="n">topic</span><span class="p">}),</span>
+    <span class="n">actor_id</span>  <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">actor_id</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+    <span class="n">contract</span><span class="o">.</span><span class="n">update_observed</span><span class="p">(</span><span class="n">topic</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>  <span class="c1"># capture real fields</span>
+<span class="n">bus</span><span class="o">.</span><span class="n">register_contract</span><span class="p">(</span><span class="n">contract</span><span class="p">)</span>
+</code></pre></div>
+
+<p><strong>Path 2 — Implicit via <code>agent.subscribe()</code>:</strong>
+When <code>agent.subscribe(topic, callback)</code> is called, the topic is added to the contract's <code>subscribes</code> list:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Inside _AgentAPI.subscribe():</span>
+<span class="n">existing</span> <span class="o">=</span> <span class="n">bus</span><span class="o">.</span><span class="n">registry</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">existing</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">topic</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">existing</span><span class="o">.</span><span class="n">subscribes</span><span class="p">:</span>
+        <span class="n">existing</span><span class="o">.</span><span class="n">subscribes</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">topic</span><span class="p">)</span>
+</code></pre></div>
+
+<p><strong>Path 3 — Explicit via <code>agent.declare_contract()</code>:</strong>
+Agents can declare their full contract in <code>setup()</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">setup</span><span class="p">(</span><span class="n">agent</span><span class="p">):</span>
+    <span class="n">agent</span><span class="o">.</span><span class="n">declare_contract</span><span class="p">(</span>
+        <span class="n">publishes</span>     <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;custom/detections/camera&#39;</span><span class="p">],</span>
+        <span class="n">subscribes</span>    <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;homeassistant/state_changes/#&#39;</span><span class="p">],</span>
+        <span class="n">triggers_when</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;person_detected&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+        <span class="n">produces_schema</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;detected&#39;</span><span class="p">:</span> <span class="s1">&#39;bool&#39;</span><span class="p">,</span> <span class="s1">&#39;confidence&#39;</span><span class="p">:</span> <span class="s1">&#39;float&#39;</span><span class="p">},</span>
+    <span class="p">)</span>
+</code></pre></div>
+
+<p><code>declare_contract()</code> accepts common LLM kwarg variants (<code>schema</code> → <code>produces_schema</code>, <code>topics</code> → <code>publishes</code>, etc.) and coerces bare strings to lists.</p>
+<hr />
+<h2 id="step-2-observed-schema-capture-the-vocabulary-solution">Step 2: Observed Schema Capture — The Vocabulary Solution</h2>
+<h3 id="the-problem-in-detail">The Problem in Detail</h3>
+<p>When the planner asks an LLM to write a producer agent, the LLM might use any reasonable field name:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Producer (written by LLM call #1):</span>
+<span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s1">&#39;sensors/data&#39;</span><span class="p">,</span> <span class="p">{</span><span class="s1">&#39;temp&#39;</span><span class="p">:</span> <span class="mf">30.5</span><span class="p">,</span> <span class="s1">&#39;humidity&#39;</span><span class="p">:</span> <span class="mf">47.7</span><span class="p">})</span>
+</code></pre></div>
+
+<p>Later, when the planner asks the LLM to write a consumer for that same topic, a different LLM call might use different names:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Consumer (written by LLM call #2):</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">on_message</span><span class="p">(</span><span class="n">payload</span><span class="p">):</span>
+    <span class="n">temperature</span> <span class="o">=</span> <span class="n">payload</span><span class="p">[</span><span class="s1">&#39;temperature&#39;</span><span class="p">]</span>  <span class="c1"># KeyError! Field is &#39;temp&#39;, not &#39;temperature&#39;</span>
+</code></pre></div>
+
+<p>The <code>produces_schema</code> declared in the contract doesn't help because it was also written by the LLM — it suffers the same vocabulary problem.</p>
+<h3 id="the-solution-observed_samples">The Solution: <code>observed_samples</code></h3>
+<p>Instead of trusting LLM-declared schemas, Wactorz captures the <strong>actual</strong> field names from real published messages:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># TopicContract.update_observed():</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">update_observed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">topic</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">payload</span><span class="p">:</span> <span class="nb">dict</span><span class="p">):</span>
+    <span class="n">fields</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">k</span><span class="p">:</span> <span class="nb">type</span><span class="p">(</span><span class="n">v</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">payload</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">k</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">)</span>
+    <span class="p">}</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">observed_samples</span><span class="p">[</span><span class="n">topic</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;fields&quot;</span><span class="p">:</span>  <span class="n">fields</span><span class="p">,</span>           <span class="c1"># {&#39;temp&#39;: &#39;float&#39;, &#39;humidity&#39;: &#39;float&#39;}</span>
+        <span class="s2">&quot;example&quot;</span><span class="p">:</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="o">...</span><span class="p">},</span>   <span class="c1"># {&#39;temp&#39;: 30.5, &#39;humidity&#39;: 47.7}</span>
+    <span class="p">}</span>
+</code></pre></div>
+
+<p>This is called automatically by <code>_AgentAPI.publish()</code> on every publish — no agent code changes needed.</p>
+<h3 id="the-data-flow">The Data Flow</h3>
+<div class="highlight"><pre><span></span><code><span class="mf">1.</span><span class="w"> </span><span class="n">Producer</span><span class="w"> </span><span class="n">publishes</span><span class="w"> </span><span class="p">{</span><span class="s1">&#39;temp&#39;</span><span class="p">:</span><span class="w"> </span><span class="mf">30.5</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;humidity&#39;</span><span class="p">:</span><span class="w"> </span><span class="mf">47.7</span><span class="p">}</span>
+<span class="w">          </span><span class="err">│</span>
+<span class="w">          </span><span class="err">▼</span>
+<span class="mf">2.</span><span class="w"> </span><span class="n">_AgentAPI</span><span class="o">.</span><span class="n">publish</span><span class="p">()</span><span class="w"> </span><span class="n">calls</span><span class="w"> </span><span class="n">contract</span><span class="o">.</span><span class="n">update_observed</span><span class="p">()</span>
+<span class="w">          </span><span class="err">│</span>
+<span class="w">          </span><span class="err">▼</span>
+<span class="mf">3.</span><span class="w"> </span><span class="n">TopicContract</span><span class="o">.</span><span class="n">observed_samples</span><span class="w"> </span><span class="n">now</span><span class="w"> </span><span class="n">contains</span><span class="p">:</span>
+<span class="w">   </span><span class="p">{</span><span class="s1">&#39;sensors/data&#39;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">       </span><span class="s1">&#39;fields&#39;</span><span class="p">:</span><span class="w">  </span><span class="p">{</span><span class="s1">&#39;temp&#39;</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;float&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;humidity&#39;</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;float&#39;</span><span class="p">},</span>
+<span class="w">       </span><span class="s1">&#39;example&#39;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="s1">&#39;temp&#39;</span><span class="p">:</span><span class="w"> </span><span class="mf">30.5</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;humidity&#39;</span><span class="p">:</span><span class="w"> </span><span class="mf">47.7</span><span class="p">}</span>
+<span class="w">   </span><span class="p">}}</span>
+<span class="w">          </span><span class="err">│</span>
+<span class="w">          </span><span class="err">▼</span>
+<span class="mf">4.</span><span class="w"> </span><span class="n">TopicRegistry</span><span class="o">.</span><span class="n">to_planner_context</span><span class="p">()</span><span class="w"> </span><span class="n">includes</span><span class="p">:</span>
+<span class="w">   </span><span class="s2">&quot;OBSERVED on &#39;sensors/data&#39;: fields={&#39;temp&#39;: &#39;float&#39;} example={&#39;temp&#39;: 30.5}&quot;</span>
+<span class="w">          </span><span class="err">│</span>
+<span class="w">          </span><span class="err">▼</span>
+<span class="mf">5.</span><span class="w"> </span><span class="n">Planner</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">sees</span><span class="w"> </span><span class="n">exact</span><span class="w"> </span><span class="n">field</span><span class="w"> </span><span class="n">names</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">its</span><span class="w"> </span><span class="n">prompt</span><span class="p">:</span>
+<span class="w">   </span><span class="s2">&quot;═══ LIVE TOPIC SAMPLES ═══</span>
+<span class="w">    </span><span class="n">Topic</span><span class="p">:</span><span class="w"> </span><span class="n">sensors</span><span class="o">/</span><span class="n">data</span><span class="w"> </span><span class="p">(</span><span class="n">published</span><span class="w"> </span><span class="n">by</span><span class="w"> </span><span class="n">temp</span><span class="o">-</span><span class="n">simulator</span><span class="p">)</span>
+<span class="w">      </span><span class="n">Fields</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="s1">&#39;temp&#39;</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;float&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;humidity&#39;</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;float&#39;</span><span class="p">}</span>
+<span class="w">      </span><span class="n">Example</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="s1">&#39;temp&#39;</span><span class="p">:</span><span class="w"> </span><span class="mf">30.5</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;humidity&#39;</span><span class="p">:</span><span class="w"> </span><span class="mf">47.7</span><span class="p">}</span>
+<span class="w">    </span><span class="n">CRITICAL</span><span class="p">:</span><span class="w"> </span><span class="n">Use</span><span class="w"> </span><span class="n">payload</span><span class="p">[</span><span class="s1">&#39;temp&#39;</span><span class="p">]</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="n">NOT</span><span class="w"> </span><span class="n">payload</span><span class="p">[</span><span class="s1">&#39;temperature&#39;</span><span class="p">]</span><span class="s2">&quot;</span>
+<span class="w">          </span><span class="err">│</span>
+<span class="w">          </span><span class="err">▼</span>
+<span class="mf">6.</span><span class="w"> </span><span class="n">Consumer</span><span class="w"> </span><span class="n">code</span><span class="w"> </span><span class="n">uses</span><span class="w"> </span><span class="n">correct</span><span class="w"> </span><span class="n">field</span><span class="w"> </span><span class="n">names</span><span class="p">:</span>
+<span class="w">   </span><span class="n">temperature</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">payload</span><span class="p">[</span><span class="s1">&#39;temp&#39;</span><span class="p">]</span><span class="w">  </span><span class="err">✓</span>
+</code></pre></div>
+
+<h3 id="fallback-live-topic-sampling">Fallback: Live Topic Sampling</h3>
+<p>If <code>observed_samples</code> is empty (the producer started before the schema-capture code was deployed, or the agent hasn't published yet), the planner falls back to <code>_sample_live_topics()</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">_sample_live_topics</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bus</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+    <span class="c1"># Single MQTT connection subscribes to ALL known publish topics</span>
+    <span class="c1"># Collects one real message per topic with a global timeout</span>
+    <span class="c1"># Stores results back into contracts for future calls</span>
+</code></pre></div>
+
+<p>This method:
+1. Gathers all publish topics from all registered contracts
+2. Opens one MQTT connection and subscribes to all of them
+3. Waits up to 15 seconds total (not per-topic) for messages to arrive
+4. Parses each payload, extracts field names and types
+5. Stores results back into the contracts via <code>contract.update_observed()</code>
+6. Returns formatted lines for the LLM prompt</p>
+<p>Stale topics (no active publisher) are silently skipped after the timeout.</p>
+<hr />
+<h2 id="step-3-auto-wiring-discovery">Step 3: Auto-Wiring Discovery</h2>
+<p>The <code>TopicRegistry</code> can find wiring opportunities — pairs of agents where one publishes a topic that another subscribes to:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">find_wiring_opportunities</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">]:</span>
+    <span class="k">for</span> <span class="n">producer</span> <span class="ow">in</span> <span class="n">contracts</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">pub_topic</span> <span class="ow">in</span> <span class="n">producer</span><span class="o">.</span><span class="n">publishes</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">consumer</span> <span class="ow">in</span> <span class="n">contracts</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">consumer</span><span class="o">.</span><span class="n">matches_topic</span><span class="p">(</span><span class="n">pub_topic</span><span class="p">):</span>
+                    <span class="n">opportunities</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">producer</span><span class="p">,</span> <span class="n">consumer</span><span class="p">,</span> <span class="n">pub_topic</span><span class="p">))</span>
+</code></pre></div>
+
+<p>MQTT wildcards (<code>#</code> and <code>+</code>) are supported:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Producer publishes: &#39;sensors/kitchen/temperature&#39;</span>
+<span class="c1"># Consumer subscribes: &#39;sensors/#&#39;</span>
+<span class="c1"># → Match! Auto-wiring opportunity detected.</span>
+</code></pre></div>
+
+<h3 id="when-wiring-is-logged">When Wiring is Logged</h3>
+<p>Every time a new contract is registered, the TopicBus checks for new wiring opportunities and logs them:</p>
+<div class="highlight"><pre><span></span><code><span class="o">[</span><span class="n">TopicBus</span><span class="o">]</span><span class="w"> </span><span class="n">Auto</span><span class="o">-</span><span class="n">wiring</span><span class="w"> </span><span class="nl">opportunity</span><span class="p">:</span><span class="w"> </span><span class="n">temp</span><span class="o">-</span><span class="n">simulator</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">mean</span><span class="o">-</span><span class="n">logger</span><span class="w"> </span><span class="n">via</span><span class="w"> </span><span class="n">sensors</span><span class="o">/</span><span class="k">data</span>
+<span class="o">[</span><span class="n">TopicBus</span><span class="o">]</span><span class="w"> </span><span class="n">Auto</span><span class="o">-</span><span class="n">wiring</span><span class="w"> </span><span class="nl">opportunity</span><span class="p">:</span><span class="w"> </span><span class="n">camera</span><span class="o">-</span><span class="n">detect</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">lamp</span><span class="o">-</span><span class="n">actuator</span><span class="w"> </span><span class="n">via</span><span class="w"> </span><span class="n">custom</span><span class="o">/</span><span class="n">detections</span><span class="o">/</span><span class="n">cam</span>
+</code></pre></div>
+
+<p>This is informational — the TopicBus doesn't force-wire agents. The actual wiring happens through:
+1. The planner reading the registry and designing the pipeline
+2. Or the user explicitly creating agents that subscribe to matching topics</p>
+<hr />
+<h2 id="step-4-planner-integration-how-it-all-comes-together">Step 4: Planner Integration — How It All Comes Together</h2>
+<p>When the planner receives a pipeline request like <em>"if temp &gt; 20 turn off the lamp"</em>, it goes through this sequence:</p>
+<h3 id="41-topic-resolution">4.1 Topic Resolution</h3>
+<p><code>_resolve_data_references()</code> scans the user's task for data-related keywords and searches the TopicRegistry:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># User says &quot;temperature&quot; → CONCEPT_MAP matches → search keywords: [&quot;temperature&quot;, &quot;temp&quot;, &quot;thermal&quot;]</span>
+<span class="c1"># TopicRegistry.find_by_capability(&quot;temp&quot;) → finds TopicContract for temp-simulator</span>
+<span class="c1"># Enriches task: &quot;if temp &gt; 20 turn off lamp [DATA SOURCE: subscribe to &#39;sensors/data&#39;]&quot;</span>
+</code></pre></div>
+
+<p>If multiple topics match, all candidates are provided to the LLM to pick the most relevant one. If none match, the task is enriched with a note and the planner proceeds anyway (it may create a new producer).</p>
+<h3 id="42-schema-context-injection">4.2 Schema Context Injection</h3>
+<p>Before generating code, the planner builds schema context from two sources:</p>
+<p><strong>Source A — <code>observed_samples</code> on contracts:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="k">for</span> <span class="n">contract</span> <span class="ow">in</span> <span class="n">bus</span><span class="o">.</span><span class="n">registry</span><span class="o">.</span><span class="n">all_contracts</span><span class="p">():</span>
+    <span class="n">samples</span> <span class="o">=</span> <span class="n">contract</span><span class="o">.</span><span class="n">observed_samples</span> <span class="ow">or</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">topic</span><span class="p">,</span> <span class="n">info</span> <span class="ow">in</span> <span class="n">samples</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="c1"># Add to prompt: &quot;Topic: sensors/data Fields: {&#39;temp&#39;: &#39;float&#39;} Example: {&#39;temp&#39;: 30.5}&quot;</span>
+</code></pre></div>
+
+<p><strong>Source B — Live sampling fallback:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="ow">not</span> <span class="n">sample_lines</span><span class="p">:</span>
+    <span class="n">sample_lines</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_sample_live_topics</span><span class="p">(</span><span class="n">bus</span><span class="p">)</span>
+</code></pre></div>
+
+<p><strong>Source C — Worker manifests:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># _discover_workers() includes observed_samples in each worker description</span>
+<span class="n">workers</span><span class="o">.</span><span class="n">append</span><span class="p">({</span>
+    <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="n">actor</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+    <span class="s2">&quot;observed_samples&quot;</span><span class="p">:</span> <span class="n">manifest</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;observed_samples&quot;</span><span class="p">,</span> <span class="p">{}),</span>
+    <span class="o">...</span>
+<span class="p">})</span>
+
+<span class="c1"># _fmt_worker() surfaces them in the prompt:</span>
+<span class="c1"># &quot;  - temp-simulator (DynamicAgent): Publishes random temp/humidity</span>
+<span class="c1">#      topic &#39;sensors/data&#39; payload fields: {&#39;temp&#39;: &#39;float&#39;}  example: {&#39;temp&#39;: 30.5}&quot;</span>
+</code></pre></div>
+
+<h3 id="43-code-generation-with-real-field-names">4.3 Code Generation with Real Field Names</h3>
+<p>The LLM prompt includes all three sources, plus an explicit instruction:</p>
+<div class="highlight"><pre><span></span><code><span class="err">═══</span><span class="w"> </span><span class="n">LIVE</span><span class="w"> </span><span class="n">TOPIC</span><span class="w"> </span><span class="n">SAMPLES</span><span class="w"> </span><span class="p">(</span><span class="n">use</span><span class="w"> </span><span class="n">EXACTLY</span><span class="w"> </span><span class="n">these</span><span class="w"> </span><span class="n">field</span><span class="w"> </span><span class="n">names</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">code</span><span class="o">!</span><span class="p">)</span><span class="w"> </span><span class="err">═══</span>
+<span class="w">  </span><span class="n">Topic</span><span class="p">:</span><span class="w"> </span><span class="n">sensors</span><span class="o">/</span><span class="n">data</span><span class="w">  </span><span class="p">(</span><span class="n">published</span><span class="w"> </span><span class="n">by</span><span class="w"> </span><span class="n">temp</span><span class="o">-</span><span class="n">simulator</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Fields</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="s1">&#39;temp&#39;</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;float&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;humidity&#39;</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;float&#39;</span><span class="p">}</span>
+<span class="w">    </span><span class="n">Example</span><span class="w"> </span><span class="n">payload</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="s1">&#39;temp&#39;</span><span class="p">:</span><span class="w"> </span><span class="mf">30.5</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;humidity&#39;</span><span class="p">:</span><span class="w"> </span><span class="mf">47.7</span><span class="p">}</span>
+
+<span class="n">CRITICAL</span><span class="p">:</span><span class="w"> </span><span class="n">When</span><span class="w"> </span><span class="n">subscribing</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">topic</span><span class="w"> </span><span class="n">listed</span><span class="w"> </span><span class="n">above</span><span class="p">,</span><span class="w"> </span><span class="n">use</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">EXACT</span><span class="w"> </span><span class="n">field</span><span class="w"> </span><span class="n">names</span>
+<span class="n">from</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">sample</span><span class="w"> </span><span class="n">payload</span><span class="o">.</span><span class="w"> </span><span class="n">For</span><span class="w"> </span><span class="n">example</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">sample</span><span class="w"> </span><span class="n">shows</span><span class="w"> </span><span class="p">{</span><span class="s1">&#39;temp&#39;</span><span class="p">:</span><span class="w"> </span><span class="mf">30.5</span><span class="p">},</span>
+<span class="n">use</span><span class="w"> </span><span class="n">payload</span><span class="p">[</span><span class="s1">&#39;temp&#39;</span><span class="p">]</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="n">NOT</span><span class="w"> </span><span class="n">payload</span><span class="p">[</span><span class="s1">&#39;temperature&#39;</span><span class="p">]</span><span class="o">.</span><span class="w"> </span><span class="n">The</span><span class="w"> </span><span class="n">field</span><span class="w"> </span><span class="n">names</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">the</span>
+<span class="n">samples</span><span class="w"> </span><span class="n">are</span><span class="w"> </span><span class="n">authoritative</span><span class="o">.</span>
+</code></pre></div>
+
+<p>The LLM then generates consumer code with the correct field names:</p>
+<div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">on_temp</span><span class="p">(</span><span class="n">payload</span><span class="p">):</span>
+    <span class="n">temp</span> <span class="o">=</span> <span class="n">payload</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;temp&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>     <span class="c1"># ← correct: matches observed schema</span>
+    <span class="k">if</span> <span class="n">temp</span> <span class="o">&gt;</span> <span class="mi">20</span><span class="p">:</span>
+        <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s1">&#39;custom/triggers/lamp-temp&#39;</span><span class="p">,</span> <span class="p">{</span><span class="s1">&#39;triggered&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
+</code></pre></div>
+
+<h3 id="44-post-generation-validation">4.4 Post-Generation Validation</h3>
+<p>After the LLM generates the plan, <code>_validate_pipeline_code()</code> scans each dynamic agent's code for common mistakes:</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>await agent.subscribe(...)</code></td>
+<td>Strip the <code>await</code> (subscribe is sync)</td>
+</tr>
+<tr>
+<td><code>await agent.persist(...)</code></td>
+<td>Strip the <code>await</code> (persist is sync)</td>
+</tr>
+<tr>
+<td><code>aiomqtt.Client()</code></td>
+<td>Rewrite to <code>agent.subscribe()</code> pattern</td>
+</tr>
+<tr>
+<td><code>httpx.post('/api/services/...')</code></td>
+<td>Flag — should use <code>ha_actuator</code> instead</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="step-5-runtime-how-the-wiring-holds-up">Step 5: Runtime — How the Wiring Holds Up</h2>
+<p>Once agents are spawned and running, the wiring is maintained through several mechanisms:</p>
+<h3 id="contract-updates-on-publish">Contract Updates on Publish</h3>
+<p>Every <code>publish()</code> call updates the contract's <code>observed_samples</code> and re-registers it in the TopicBus. This means:
+- If a producer changes its payload format, the contract is updated immediately
+- The next time the planner generates a consumer, it sees the new field names
+- Existing consumers are NOT automatically updated (they use the field names baked into their code)</p>
+<h3 id="manifest-propagation">Manifest Propagation</h3>
+<p>Each agent publishes a retained MQTT manifest at <code>agents/{id}/manifest</code> that includes <code>observed_samples</code>. This means:
+- MainActor's manifest listener picks it up and stores it in <code>_agent_manifests</code>
+- The planner can query manifests even for agents it didn't spawn
+- Schema data survives agent restarts (retained MQTT messages persist in the broker)</p>
+<h3 id="the-bus-command">The <code>/bus</code> Command</h3>
+<p>Users can inspect the full wiring state at any time:</p>
+<div class="highlight"><pre><span></span><code>/bus
+</code></pre></div>
+
+<p>Output:</p>
+<div class="highlight"><pre><span></span><code>TopicBus — Reactive Pub/Sub Registry
+  agents with contracts : 3
+  published topics      : 2
+  subscribed topics     : 2
+  auto-wiring pairs     : 2
+
+  [temp-simulator]
+    publishes : sensors/data
+    OBSERVED on &#39;sensors/data&#39;: fields={&#39;temp&#39;: &#39;float&#39;, &#39;humidity&#39;: &#39;float&#39;}
+                                example={&#39;temp&#39;: 30.5, &#39;humidity&#39;: 47.7}
+
+  [mean-logger]
+    subscribes: sensors/data
+
+  [lamp-monitor]
+    subscribes: sensors/data, lamp/status
+
+Auto-wiring opportunities:
+  temp-simulator → mean-logger   via sensors/data
+  temp-simulator → lamp-monitor  via sensors/data
+</code></pre></div>
+
+<hr />
+<h2 id="safety-guards">Safety Guards</h2>
+<h3 id="string-to-list-coercion">String-to-List Coercion</h3>
+<p>LLMs frequently write <code>publishes="custom/topic"</code> instead of <code>publishes=["custom/topic"]</code>. Iterating a string produces individual characters — so <code>"custom/topic"</code> would register 12 single-character "topics" (<code>c</code>, <code>u</code>, <code>s</code>, <code>t</code>, ...).</p>
+<p><code>TopicContract.__post_init__()</code> catches this:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">publishes</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">publishes</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">publishes</span><span class="p">]</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subscribes</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subscribes</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">subscribes</span><span class="p">]</span>
+</code></pre></div>
+
+<h3 id="bogus-topic-filter">Bogus Topic Filter</h3>
+<p>LLMs sometimes pass kwarg names as values: <code>declare_contract(subscribes="subscribes")</code>. The <code>__post_init__</code> filter strips known bogus entries:</p>
+<div class="highlight"><pre><span></span><code><span class="n">_BOGUS</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;publishes&quot;</span><span class="p">,</span> <span class="s2">&quot;subscribes&quot;</span><span class="p">,</span> <span class="s2">&quot;publish&quot;</span><span class="p">,</span> <span class="s2">&quot;subscribe&quot;</span><span class="p">,</span>
+           <span class="s2">&quot;topics&quot;</span><span class="p">,</span> <span class="s2">&quot;topic&quot;</span><span class="p">,</span> <span class="s2">&quot;produces_schema&quot;</span><span class="p">,</span> <span class="s2">&quot;consumes_schema&quot;</span><span class="p">,</span>
+           <span class="s2">&quot;schema&quot;</span><span class="p">,</span> <span class="s2">&quot;triggers_when&quot;</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">,</span> <span class="s2">&quot;type&quot;</span><span class="p">}</span>
+<span class="bp">self</span><span class="o">.</span><span class="n">publishes</span>  <span class="o">=</span> <span class="p">[</span><span class="n">t</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">publishes</span>  <span class="k">if</span> <span class="n">t</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_BOGUS</span><span class="p">]</span>
+<span class="bp">self</span><span class="o">.</span><span class="n">subscribes</span> <span class="o">=</span> <span class="p">[</span><span class="n">t</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">subscribes</span> <span class="k">if</span> <span class="n">t</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_BOGUS</span><span class="p">]</span>
+</code></pre></div>
+
+<h3 id="serialization-roundtrip">Serialization Roundtrip</h3>
+<p><code>observed_samples</code> is a proper <code>dataclass</code> field (not a monkey-patched attribute), so it survives <code>to_dict()</code> → <code>from_dict()</code> serialization:</p>
+<div class="highlight"><pre><span></span><code><span class="n">contract</span> <span class="o">=</span> <span class="n">TopicContract</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;test&quot;</span><span class="p">,</span> <span class="n">publishes</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;sensors/data&quot;</span><span class="p">])</span>
+<span class="n">contract</span><span class="o">.</span><span class="n">update_observed</span><span class="p">(</span><span class="s2">&quot;sensors/data&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;temp&quot;</span><span class="p">:</span> <span class="mf">30.5</span><span class="p">})</span>
+
+<span class="n">d</span> <span class="o">=</span> <span class="n">contract</span><span class="o">.</span><span class="n">to_dict</span><span class="p">()</span>          <span class="c1"># includes observed_samples</span>
+<span class="n">c2</span> <span class="o">=</span> <span class="n">TopicContract</span><span class="o">.</span><span class="n">from_dict</span><span class="p">(</span><span class="n">d</span><span class="p">)</span> <span class="c1"># preserves observed_samples</span>
+<span class="k">assert</span> <span class="n">c2</span><span class="o">.</span><span class="n">observed_samples</span> <span class="o">==</span> <span class="n">contract</span><span class="o">.</span><span class="n">observed_samples</span>  <span class="c1"># ✓</span>
+</code></pre></div>
+
+<hr />
+<h2 id="end-to-end-example">End-to-End Example</h2>
+<p>User says: <em>"spawn an agent to log the mean of the last 5 temperature values"</em></p>
+<div class="highlight"><pre><span></span><code><span class="mf">1.</span><span class="w"> </span><span class="n">MainActor</span><span class="w"> </span><span class="n">classifies</span><span class="w"> </span><span class="n">intent</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">PIPELINE</span>
+<span class="mf">2.</span><span class="w"> </span><span class="n">PlannerAgent</span><span class="w"> </span><span class="n">spawned</span>
+
+<span class="mf">3.</span><span class="w"> </span><span class="n">Topic</span><span class="w"> </span><span class="n">resolution</span><span class="o">:</span>
+<span class="w">   </span><span class="n">_resolve_data_references</span><span class="p">()</span><span class="w"> </span><span class="n">finds</span><span class="w"> </span><span class="s">&quot;temperature&quot;</span><span class="w"> </span><span class="n">keywords</span>
+<span class="w">   </span><span class="n">TopicRegistry</span><span class="p">.</span><span class="n">find_by_capability</span><span class="p">(</span><span class="s">&quot;temp&quot;</span><span class="p">)</span>
+<span class="w">   </span><span class="err">→</span><span class="w"> </span><span class="n">finds</span><span class="w"> </span><span class="n">TopicContract</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="err">&#39;</span><span class="n">temp</span><span class="o">-</span><span class="n">simulator</span><span class="err">&#39;</span><span class="w"> </span><span class="n">publishing</span><span class="w"> </span><span class="err">&#39;</span><span class="n">sensors</span><span class="o">/</span><span class="n">data</span><span class="err">&#39;</span>
+<span class="w">   </span><span class="err">→</span><span class="w"> </span><span class="n">enriches</span><span class="w"> </span><span class="n">task</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;...  [DATA SOURCE: subscribe to &#39;sensors/data&#39;]&quot;</span>
+
+<span class="mf">4.</span><span class="w"> </span><span class="n">Schema</span><span class="w"> </span><span class="n">sampling</span><span class="o">:</span>
+<span class="w">   </span><span class="n">contract</span><span class="p">.</span><span class="n">observed_samples</span><span class="p">[</span><span class="err">&#39;</span><span class="n">sensors</span><span class="o">/</span><span class="n">data</span><span class="err">&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">     </span><span class="err">&#39;</span><span class="n">fields</span><span class="err">&#39;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="err">&#39;</span><span class="n">temp</span><span class="err">&#39;</span><span class="o">:</span><span class="w"> </span><span class="err">&#39;</span><span class="kt">float</span><span class="err">&#39;</span><span class="p">,</span><span class="w"> </span><span class="err">&#39;</span><span class="n">humidity</span><span class="err">&#39;</span><span class="o">:</span><span class="w"> </span><span class="err">&#39;</span><span class="kt">float</span><span class="err">&#39;</span><span class="p">},</span>
+<span class="w">     </span><span class="err">&#39;</span><span class="n">example</span><span class="err">&#39;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="err">&#39;</span><span class="n">temp</span><span class="err">&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">30.5</span><span class="p">,</span><span class="w"> </span><span class="err">&#39;</span><span class="n">humidity</span><span class="err">&#39;</span><span class="o">:</span><span class="w"> </span><span class="mf">47.7</span><span class="p">}</span>
+<span class="w">   </span><span class="p">}</span>
+
+<span class="mf">5.</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">prompt</span><span class="w"> </span><span class="n">includes</span><span class="o">:</span>
+<span class="w">   </span><span class="s">&quot;OBSERVED on &#39;sensors/data&#39;: fields={&#39;temp&#39;: &#39;float&#39;, &#39;humidity&#39;: &#39;float&#39;}&quot;</span>
+<span class="w">   </span><span class="s">&quot;CRITICAL: Use payload[&#39;temp&#39;] — NOT payload[&#39;temperature&#39;]&quot;</span>
+
+<span class="mf">6.</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">generates</span><span class="w"> </span><span class="n">spawn</span><span class="w"> </span><span class="n">config</span><span class="o">:</span>
+<span class="w">   </span><span class="p">{</span>
+<span class="w">     </span><span class="s">&quot;name&quot;</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;temp-mean-logger&quot;</span><span class="p">,</span>
+<span class="w">     </span><span class="s">&quot;type&quot;</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;dynamic&quot;</span><span class="p">,</span>
+<span class="w">     </span><span class="s">&quot;code&quot;</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;</span>
+<span class="w">       </span><span class="n">async</span><span class="w"> </span><span class="n">def</span><span class="w"> </span><span class="n">setup</span><span class="p">(</span><span class="n">agent</span><span class="p">)</span><span class="o">:</span>
+<span class="w">           </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span>
+<span class="w">           </span><span class="n">async</span><span class="w"> </span><span class="n">def</span><span class="w"> </span><span class="n">on_temp</span><span class="p">(</span><span class="n">payload</span><span class="p">)</span><span class="o">:</span>
+<span class="w">               </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">].</span><span class="n">append</span><span class="p">(</span><span class="n">payload</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="err">&#39;</span><span class="n">temp</span><span class="err">&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span><span class="w">  </span><span class="err">#</span><span class="w"> </span><span class="err">←</span><span class="w"> </span><span class="n">correct</span><span class="w"> </span><span class="n">field</span><span class="w"> </span><span class="n">name</span>
+<span class="w">               </span><span class="k">if</span><span class="w"> </span><span class="n">len</span><span class="p">(</span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">])</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">5</span><span class="o">:</span>
+<span class="w">                   </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">][</span><span class="mi">-5</span><span class="o">:</span><span class="p">]</span>
+<span class="w">               </span><span class="k">if</span><span class="w"> </span><span class="n">len</span><span class="p">(</span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">])</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">5</span><span class="o">:</span>
+<span class="w">                   </span><span class="n">mean</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sum</span><span class="p">(</span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">])</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">5</span>
+<span class="w">                   </span><span class="n">await</span><span class="w"> </span><span class="n">agent</span><span class="p">.</span><span class="n">log</span><span class="p">(</span><span class="n">f</span><span class="err">&#39;</span><span class="n">Mean</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">last</span><span class="w"> </span><span class="mi">5</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="n">mean</span><span class="o">:</span><span class="mf">.2f</span><span class="p">}</span><span class="err">°</span><span class="n">C</span><span class="err">&#39;</span><span class="p">)</span>
+<span class="w">           </span><span class="n">agent</span><span class="p">.</span><span class="n">subscribe</span><span class="p">(</span><span class="err">&#39;</span><span class="n">sensors</span><span class="o">/</span><span class="n">data</span><span class="err">&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">on_temp</span><span class="p">)</span>
+<span class="w">     </span><span class="s">&quot;</span>
+<span class="w">   </span><span class="p">}</span>
+
+<span class="mf">7.</span><span class="w"> </span><span class="n">_validate_pipeline_code</span><span class="p">()</span><span class="o">:</span>
+<span class="w">   </span><span class="o">-</span><span class="w"> </span><span class="n">No</span><span class="w"> </span><span class="err">&#39;</span><span class="n">await</span><span class="w"> </span><span class="n">agent</span><span class="p">.</span><span class="n">subscribe</span><span class="err">&#39;</span><span class="w"> </span><span class="n">found</span><span class="w"> </span><span class="p">(</span><span class="n">already</span><span class="w"> </span><span class="n">correct</span><span class="w"> </span><span class="err">✓</span><span class="p">)</span>
+<span class="w">   </span><span class="o">-</span><span class="w"> </span><span class="n">No</span><span class="w"> </span><span class="n">raw</span><span class="w"> </span><span class="n">aiomqtt</span><span class="w"> </span><span class="err">✓</span>
+<span class="w">   </span><span class="o">-</span><span class="w"> </span><span class="n">No</span><span class="w"> </span><span class="n">direct</span><span class="w"> </span><span class="n">HA</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">calls</span><span class="w"> </span><span class="err">✓</span>
+
+<span class="mf">8.</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">spawned</span><span class="p">,</span><span class="w"> </span><span class="n">TopicBus</span><span class="w"> </span><span class="n">logs</span><span class="o">:</span>
+<span class="w">   </span><span class="p">[</span><span class="n">TopicBus</span><span class="p">]</span><span class="w"> </span><span class="n">Auto</span><span class="o">-</span><span class="n">wiring</span><span class="w"> </span><span class="n">opportunity</span><span class="o">:</span><span class="w"> </span><span class="n">temp</span><span class="o">-</span><span class="n">simulator</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">temp</span><span class="o">-</span><span class="n">mean</span><span class="o">-</span><span class="n">logger</span><span class="w"> </span><span class="n">via</span><span class="w"> </span><span class="n">sensors</span><span class="o">/</span><span class="n">data</span>
+
+<span class="mf">9.</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">receives</span><span class="w"> </span><span class="n">messages</span><span class="p">,</span><span class="w"> </span><span class="n">computes</span><span class="w"> </span><span class="n">means</span><span class="o">:</span>
+<span class="w">   </span><span class="p">[</span><span class="n">temp</span><span class="o">-</span><span class="n">mean</span><span class="o">-</span><span class="n">logger</span><span class="p">]</span><span class="w"> </span><span class="n">Temperature</span><span class="w"> </span><span class="n">received</span><span class="o">:</span><span class="w"> </span><span class="mf">30.5</span><span class="err">°</span><span class="n">C</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Buffer</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="mf">30.5</span><span class="p">]</span>
+<span class="w">   </span><span class="p">[</span><span class="n">temp</span><span class="o">-</span><span class="n">mean</span><span class="o">-</span><span class="n">logger</span><span class="p">]</span><span class="w"> </span><span class="n">Temperature</span><span class="w"> </span><span class="n">received</span><span class="o">:</span><span class="w"> </span><span class="mf">22.1</span><span class="err">°</span><span class="n">C</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Buffer</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="mf">30.5</span><span class="p">,</span><span class="w"> </span><span class="mf">22.1</span><span class="p">]</span>
+<span class="w">   </span><span class="p">...</span>
+<span class="w">   </span><span class="p">[</span><span class="n">temp</span><span class="o">-</span><span class="n">mean</span><span class="o">-</span><span class="n">logger</span><span class="p">]</span><span class="w"> </span><span class="n">Mean</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">last</span><span class="w"> </span><span class="mi">5</span><span class="o">:</span><span class="w"> </span><span class="mf">24.8</span><span class="err">°</span><span class="n">C</span>
+</code></pre></div>
+
+<hr />
+<h2 id="comparison-before-and-after-auto-wiring">Comparison: Before and After Auto-Wiring</h2>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>Before (name-based)</th>
+<th>After (topic-based)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Agent discovery</strong></td>
+<td>Planner must know agent names</td>
+<td>Planner queries TopicRegistry by data type</td>
+</tr>
+<tr>
+<td><strong>Field name matching</strong></td>
+<td>LLM guesses → frequent KeyError</td>
+<td>Real field names captured from live payloads</td>
+</tr>
+<tr>
+<td><strong>Adding a new producer</strong></td>
+<td>Must update all consumers</td>
+<td>New producer auto-appears in registry</td>
+</tr>
+<tr>
+<td><strong>Removing a producer</strong></td>
+<td>Consumers silently break</td>
+<td>TopicBus shows which consumers are orphaned</td>
+</tr>
+<tr>
+<td><strong>Schema documentation</strong></td>
+<td>Manual, always outdated</td>
+<td>Auto-captured from real messages</td>
+</tr>
+<tr>
+<td><strong>Multi-node</strong></td>
+<td>Requires name→node mapping</td>
+<td>Topics are node-agnostic (MQTT handles routing)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="file-reference">File Reference</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>What It Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>core/topic_bus.py</code></td>
+<td><code>TopicContract</code>, <code>TopicRegistry</code>, <code>SharedStateHub</code>, <code>StreamWindow</code>, <code>TopicBus</code></td>
+</tr>
+<tr>
+<td><code>agents/dynamic_agent.py</code></td>
+<td><code>_AgentAPI.publish()</code> — auto-registers contracts and captures schemas</td>
+</tr>
+<tr>
+<td><code>agents/dynamic_agent.py</code></td>
+<td><code>_AgentAPI.subscribe()</code> — auto-registers subscription in TopicBus</td>
+</tr>
+<tr>
+<td><code>agents/dynamic_agent.py</code></td>
+<td><code>_AgentAPI.declare_contract()</code> — explicit contract declaration with kwarg aliases</td>
+</tr>
+<tr>
+<td><code>agents/planner_agent.py</code></td>
+<td><code>_resolve_data_references()</code> — topic resolution from natural language</td>
+</tr>
+<tr>
+<td><code>agents/planner_agent.py</code></td>
+<td><code>_sample_live_topics()</code> — fallback MQTT sampling for schema capture</td>
+</tr>
+<tr>
+<td><code>agents/planner_agent.py</code></td>
+<td><code>_decompose_pipeline()</code> — injects schema context into LLM prompt</td>
+</tr>
+<tr>
+<td><code>agents/planner_agent.py</code></td>
+<td><code>_validate_pipeline_code()</code> — post-generation code validator</td>
+</tr>
+<tr>
+<td><code>agents/main_actor.py</code></td>
+<td><code>_manifest_listener()</code> — subscribes to <code>agents/+/manifest</code> for schema propagation</td>
+</tr>
+</tbody>
+</table>
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

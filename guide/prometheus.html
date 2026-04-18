@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Prometheus Monitoring — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
+    .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">
+    <div class="logo-mark"></div>Wactorz
+  </a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-label">Guide</div>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/prometheus.html" class="active">Prometheus</a>
+    </div>
+  </aside>
+  <main class="content">
+<h1 id="prometheus-monitoring">Prometheus Monitoring</h1>
+<p>This deliverable adds Prometheus-based monitoring for the <strong>Python</strong> Wactorz runtime.</p>
+<h2 id="scope">Scope</h2>
+<p>Included:</p>
+<ul>
+<li>Python REST API metrics at <code>/metrics</code></li>
+<li>actor health and runtime metrics from the Python registry</li>
+<li>process/runtime metrics from the Python process</li>
+<li>Prometheus in Docker Compose</li>
+<li>optional Mosquitto and Fuseki availability probes controlled by <code>.env</code></li>
+</ul>
+<h2 id="what-is-monitored">What Is Monitored</h2>
+<h3 id="python-app">Python app</h3>
+<p>Prometheus scrapes the Python REST service and records:</p>
+<ul>
+<li>HTTP request counts</li>
+<li>HTTP response counts by status</li>
+<li>HTTP request duration</li>
+<li>running actor count</li>
+<li>actor state</li>
+<li>actor heartbeat age</li>
+<li>actor restart count</li>
+<li>actor messages processed</li>
+<li>actor errors</li>
+<li>actor tasks completed and failed</li>
+<li>LLM input tokens</li>
+<li>LLM output tokens</li>
+<li>LLM cost in USD</li>
+<li>process/runtime metrics exported by <code>prometheus_client</code></li>
+</ul>
+<p>The app exposes these at:</p>
+<div class="highlight"><pre><span></span><code>GET /metrics
+</code></pre></div>
+
+<h3 id="mosquitto-and-fuseki">Mosquitto and Fuseki</h3>
+<p>Mosquitto and Fuseki are <strong>optional</strong> Prometheus targets.</p>
+<p>They are monitored with the Blackbox Exporter:</p>
+<ul>
+<li>Mosquitto: TCP connect probe to <code>mosquitto:1883</code></li>
+<li>Fuseki: HTTP probe to <code>http://fuseki:3030/$/ping</code></li>
+</ul>
+<p>This is availability monitoring, not deep service-specific exporter telemetry.</p>
+<h2 id="environment-flags">Environment Flags</h2>
+<p>Add or adjust these in <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code>PROMETHEUS_EXTERNAL_PORT=9090
+PROMETHEUS_SCRAPE_INTERVAL=15s
+PROMETHEUS_PYTHON_TARGET=wactorz-python
+PROMETHEUS_MONITOR_MOSQUITTO=0
+PROMETHEUS_MONITOR_FUSEKI=0
+</code></pre></div>
+
+<p>Notes:</p>
+<ul>
+<li><code>PROMETHEUS_PYTHON_TARGET</code> chooses what Prometheus scrapes for Python metrics.</li>
+<li>If Wactorz runs in Compose, use the service name such as <code>wactorz-python</code> or <code>wactorz</code>.</li>
+<li>If Wactorz runs from the terminal on the host, use <code>host.docker.internal</code>.</li>
+<li><code>PROMETHEUS_MONITOR_MOSQUITTO=1</code> enables the Mosquitto TCP probe.</li>
+<li><code>PROMETHEUS_MONITOR_FUSEKI=1</code> enables the Fuseki health probe.</li>
+</ul>
+<h2 id="docker-compose">Docker Compose</h2>
+<h3 id="main-stack">Main stack</h3>
+<p>Use the Python profiles:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<h3 id="development-stack">Development stack</h3>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<p>Prometheus is available at:</p>
+<div class="highlight"><pre><span></span><code>http://localhost:${PROMETHEUS_EXTERNAL_PORT:-9090}
+</code></pre></div>
+
+<h2 id="simple-ways-to-run-it">Simple Ways To Run It</h2>
+<h3 id="1-wactorz-in-compose-prometheus-in-compose">1. Wactorz in Compose, Prometheus in Compose</h3>
+<p>Leave:</p>
+<div class="highlight"><pre><span></span><code>PROMETHEUS_PYTHON_TARGET=wactorz-python
+</code></pre></div>
+
+<p>Then run:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>prometheus<span class="w"> </span>blackbox-exporter<span class="w"> </span>wactorz-python
+</code></pre></div>
+
+<h3 id="2-wactorz-from-terminal-prometheus-in-compose">2. Wactorz from terminal, Prometheus in Compose</h3>
+<p>Set:</p>
+<div class="highlight"><pre><span></span><code>PROMETHEUS_PYTHON_TARGET=host.docker.internal
+</code></pre></div>
+
+<p>Start Wactorz locally in REST mode, then run:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-deps<span class="w"> </span>prometheus<span class="w"> </span>blackbox-exporter
+</code></pre></div>
+
+<p>This starts only the monitoring containers and points Prometheus at the Wactorz process running on your host.</p>
+<h2 id="verification">Verification</h2>
+<h3 id="1-check-python-metrics-directly">1. Check Python metrics directly</h3>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-fsS<span class="w"> </span>http://localhost:8000/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>head
+</code></pre></div>
+
+<p>You should see Prometheus-formatted output such as <code>wactorz_actors_total</code>, <code>wactorz_http_requests_total</code>, and process metrics.</p>
+<h3 id="2-check-prometheus-targets">2. Check Prometheus targets</h3>
+<p>Open:</p>
+<div class="highlight"><pre><span></span><code>http://localhost:9090/targets
+</code></pre></div>
+
+<p>Expected:</p>
+<ul>
+<li><code>prometheus</code> is <code>UP</code></li>
+<li><code>wactorz-python</code> is <code>UP</code></li>
+<li>optional probe targets appear only when enabled in <code>.env</code></li>
+</ul>
+<h3 id="3-check-optional-probes">3. Check optional probes</h3>
+<p>When <code>PROMETHEUS_MONITOR_MOSQUITTO=1</code>, Prometheus should show a <code>mosquitto-blackbox</code> target.</p>
+<p>When <code>PROMETHEUS_MONITOR_FUSEKI=1</code>, Prometheus should show a <code>fuseki-blackbox</code> target.</p>
+<p>If a flagged dependency is not running, that target will correctly show as failing.</p>
+<h2 id="alert-rules">Alert Rules</h2>
+<p>Basic Prometheus alert rules are included for:</p>
+<ul>
+<li>Python app down</li>
+<li>actor heartbeat stale</li>
+<li>optional dependency probe failing</li>
+</ul>
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

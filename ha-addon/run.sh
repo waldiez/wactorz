@@ -11,9 +11,9 @@ get_config_safe() {
     local default="$2"
     local val=""
 
-    # Attempt 1: bashio (may fail with "forbidden")
-    if bashio::config.has_value "$key"; then
-        val=$(bashio::config "$key")
+    # Attempt 1: bashio (may fail with "forbidden", so we quiet it)
+    if bashio::config.has_value "$key" 2>/dev/null; then
+        val=$(bashio::config "$key" 2>/dev/null)
     fi
 
     # Attempt 2: Direct read from options.json if val is still empty/null

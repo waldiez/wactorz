@@ -918,11 +918,14 @@ async def config_handler(request):
     # Ingress support: HA sets X-Hassio-Ingress-Path
     ingress_path = request.headers.get("X-Hassio-Ingress-Path", "")
     
-    host = request.host
+    # Force the host to use port 8888 for WebSockets
+    raw_host = request.host.split(":")[0]
+    ws_host = f"{raw_host}:8888"
     protocol = "wss" if request.secure else "ws"
     
-    # We build the URL relative to the current ingress path if present
-    base_url = f"{protocol}://{host}{ingress_path}"
+    # WebSocket URLs go direct to 8888
+    mqtt_url = f"{protocol}://{ws_host}/mqtt"
+    ws_url   = f"{protocol}://{ws_host}/ws"
 
     return web.json_response({
         "ha": {
@@ -936,7 +939,7 @@ async def config_handler(request):
         "mqtt": {
             "host": MQTT_BROKER,
             "port": MQTT_PORT,
-            "url":  f"{base_url}/mqtt",  # Proxy-aware WebSocket URL
+            "url":  mqtt_url,
         },
         "llm": {
             "provider": CONFIG.llm_provider,
@@ -945,6 +948,7 @@ async def config_handler(request):
         "weather": {
             "defaultLocation": CONFIG.weather_default_location,
         },
+        "ws_url": ws_url,
     })
 
 

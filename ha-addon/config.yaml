@@ -51,8 +51,7 @@ options:
   mqtt_port: 1883
   mqtt_ws_port: 8083
 
-  # Home Assistant connection
- (used by HA agents inside Wactorz)
+  # Home Assistant connection (used by HA agents inside Wactorz)
   ha_url: "http://homeassistant:8123"
   ha_token: ""
 
@@ -68,23 +67,23 @@ options:
   telegram_allowed_user_id: 0
 
 schema:
-  api_key: str?
+  api_key: str
   llm_provider: list(anthropic|ollama|openai|gemini|nim)
   llm_model: str
-  llm_api_key: str?
+  llm_api_key: str
   ollama_url: url
   mqtt_host: str
   mqtt_port: port
   mqtt_ws_port: port
   ha_url: url
-  ha_token: str?
+  ha_token: str
   fuseki_url: url
   fuseki_dataset: str
   fuseki_user: str
   fuseki_password: str
-  discord_bot_token: str?
-  telegram_bot_token: str?
-  telegram_allowed_user_id: int?
+  discord_bot_token: str
+  telegram_bot_token: str
+  telegram_allowed_user_id: int
 
 # ── Environment variables injected into the container ─────────────────────────
 # The run.sh entrypoint reads OPTIONS_PATH and maps these to env vars.

@@ -25,8 +25,10 @@ webui: http://[HOST]:[PORT:8888]
 # ── Ports ──────────────────────────────────────────────────────────────────────
 ports:
   8000/tcp: 8000
+  8888/tcp: 8888
 ports_description:
   8000/tcp: Wactorz REST + WebSocket API
+  8888/tcp: Wactorz Monitor UI
 
 # ── Persistent state ───────────────────────────────────────────────────────────
 map:

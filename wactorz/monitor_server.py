@@ -736,17 +736,35 @@ async def index_handler(request):
 async def static_handler(request):
     from aiohttp import web
     rel = request.match_info["path"]
+    
     # Special case for favicon if it's requested at root
     if rel == "favicon.svg":
         for candidate in [FRONTEND_PUBLIC / "favicon.svg", FRONTEND_DIST / "favicon.svg"]:
             if candidate.exists():
                 return _with_no_cache(web.FileResponse(candidate))
 
+    ingress_path = request.headers.get("X-Hassio-Ingress-Path", "").rstrip("/")
+
     for base in [FRONTEND_DIST, FRONTEND_PUBLIC]:
         candidate = base / rel
         try:
             candidate = candidate.resolve()
             if candidate.is_file() and str(candidate).startswith(str(base.resolve())):
+                # If it's a JS file and we're behind Ingress, we must rewrite hardcoded absolute paths
+                if candidate.suffix == ".js" and ingress_path:
+                    content = candidate.read_text(encoding="utf-8")
+                    # Rewrite hardcoded paths from "/api/..." to "api/..." or prepending ingress_path
+                    # The frontend seems to use "/api/actors", "/api/config", etc.
+                    content = content.replace('"/api/', f'"{ingress_path}/api/')
+                    content = content.replace('"/config"', f'"{ingress_path}/config"')
+                    content = content.replace('"/actors"', f'"{ingress_path}/actors"')
+                    # FORCE the WebSocket to use port 8888 instead of HA's 8123
+                    content = content.replace('"ws://localhost:9001"', f'"ws://{request.host.split(":")[0]}:8888/mqtt"')
+                    content = content.replace('`ws://${location.host}/ws`', f'`ws://${{location.hostname}}:8888/ws`')
+                    content = content.replace('`ws://${location.host}/mqtt`', f'`ws://${{location.hostname}}:8888/mqtt`')
+                    
+                    return _with_no_cache(web.Response(text=content, content_type="application/javascript"))
+                
                 return _with_no_cache(web.FileResponse(candidate))
         except Exception:
             pass

@@ -711,6 +711,12 @@ async def index_handler(request):
 async def static_handler(request):
     from aiohttp import web
     rel = request.match_info["path"]
+    # Special case for favicon if it's requested at root
+    if rel == "favicon.svg":
+        for candidate in [FRONTEND_PUBLIC / "favicon.svg", FRONTEND_DIST / "favicon.svg"]:
+            if candidate.exists():
+                return _with_no_cache(web.FileResponse(candidate))
+
     for base in [FRONTEND_DIST, FRONTEND_PUBLIC]:
         candidate = base / rel
         try:
@@ -865,6 +871,11 @@ async def config_handler(request):
     """Expose non-secret runtime config so the frontend can seed its defaults."""
     from aiohttp import web
     from .config import CONFIG
+
+    # If behind a proxy (like HA Ingress), we must use the host/protocol from the request
+    host = request.host
+    protocol = "wss" if request.secure else "ws"
+
     return web.json_response({
         "ha": {
             "url":   CONFIG.ha_url,
@@ -877,7 +888,7 @@ async def config_handler(request):
         "mqtt": {
             "host": MQTT_BROKER,
             "port": MQTT_PORT,
-            "url":  f"ws://{MQTT_BROKER}:{WS_PORT}/mqtt",
+            "url":  f"{protocol}://{host}/mqtt",  # Proxy-aware WebSocket URL
         },
         "llm": {
             "provider": CONFIG.llm_provider,

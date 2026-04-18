@@ -45,7 +45,7 @@ export MQTT_PORT=$(get_config_safe 'mqtt_port' '1883')
 
 # Home Assistant Config
 HA_URL=$(get_config_safe 'ha_url' 'http://supervisor/core')
-HA_TOKEN=$(get_config_safe 'ha_token' "${SUPERVISOR_TOKEN}")
+HA_TOKEN=$(get_config_safe 'ha_token' "${SUPERVISOR_TOKEN:-}")
 
 # If we still don't have a token, warn the user
 if [ -z "$HA_TOKEN" ] || [ "$HA_TOKEN" == "null" ]; then
@@ -53,7 +53,7 @@ if [ -z "$HA_TOKEN" ] || [ "$HA_TOKEN" == "null" ]; then
 fi
 
 export HA_URL="${HA_URL:-http://supervisor/core}"
-export HA_TOKEN="${HA_TOKEN:-$SUPERVISOR_TOKEN}"
+export HA_TOKEN="${HA_TOKEN:-${SUPERVISOR_TOKEN:-}}"
 export HOME_ASSISTANT_URL="$HA_URL"
 export HOME_ASSISTANT_TOKEN="$HA_TOKEN"
 

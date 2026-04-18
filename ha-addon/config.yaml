@@ -54,7 +54,7 @@ options:
   mqtt_ws_port: 8083
 
   # Home Assistant connection (used by HA agents inside Wactorz)
-  ha_url: ""
+  ha_url: "http://homeassistant.local:8123"
   ha_token: ""
 
   # Fuseki / SPARQL triplestore (optional)

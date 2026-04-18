@@ -1,5 +1,5 @@
 ARG BUILD_FROM
-FROM $BUILD_FROM
+FROM alpine
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -22,7 +22,7 @@ COPY wactorz/ wactorz/
 COPY README.md .
 
 # Install dependencies and the package
-RUN pip install --no-cache-dir .[all]
+RUN pip install --no-cache-dir "wactorz[all] @ git+https://github.com/waldiez/wactorz.git@dev"
 
 # Setup the entrypoint
 COPY ha-addon/run.sh /run.sh

@@ -2,9 +2,6 @@ ARG BUILD_FROM
 FROM $BUILD_FROM
 
 # Install system dependencies
-# git: needed for pip install from git
-# jq: needed for run.sh config parsing
-# gcc/musl-dev/linux-headers: needed for psutil/aiohttp C extensions on alpine
 RUN apk add --no-cache \
     curl \
     git \
@@ -13,10 +10,15 @@ RUN apk add --no-cache \
     musl-dev \
     linux-headers
 
-# Install wactorz from source
-RUN pip install --no-cache-dir "wactorz[all] @ git+https://github.com/waldiez/wactorz.git"
+# Copy the local project into the container
+WORKDIR /app
+COPY . .
 
-COPY run.sh /run.sh
+# Install the local version of wactorz
+RUN pip install --no-cache-dir ".[all]"
+
+# Setup the entrypoint
+COPY ha-addon/run.sh /run.sh
 RUN chmod +x /run.sh
 
 CMD ["/run.sh"]

@@ -14,6 +14,7 @@ boot: auto
 init: false
 homeassistant_api: true
 hassio_api: true
+hassio_role: manager
 ingress: true
 ingress_port: 8888
 ingress_stream: true

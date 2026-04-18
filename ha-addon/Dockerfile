@@ -8,14 +8,21 @@ RUN apk add --no-cache \
     jq \
     gcc \
     musl-dev \
-    linux-headers
+    linux-headers \
+    python3-dev \
+    libffi-dev \
+    openssl-dev
 
-# Copy the local project into the container
 WORKDIR /app
-COPY . .
 
-# Install the local version of wactorz
-RUN pip install --no-cache-dir ".[all]"
+# Copy ONLY what is needed for the python package to install
+COPY pyproject.toml .
+COPY requirements.txt .
+COPY wactorz/ wactorz/
+COPY README.md .
+
+# Install dependencies and the package
+RUN pip install --no-cache-dir .[all]
 
 # Setup the entrypoint
 COPY ha-addon/run.sh /run.sh

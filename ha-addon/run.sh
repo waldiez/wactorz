@@ -42,6 +42,7 @@ export OLLAMA_URL=$(get_config_safe 'ollama_url' 'http://localhost:11434')
 # MQTT Config (CRITICAL: ensure never empty)
 export MQTT_HOST=$(get_config_safe 'mqtt_host' 'core-mosquitto')
 export MQTT_PORT=$(get_config_safe 'mqtt_port' '1883')
+export MQTT_WS_PORT=$(get_config_safe 'mqtt_ws_port' '8083')
 
 # Home Assistant Config
 HA_URL=$(get_config_safe 'ha_url' 'http://supervisor/core')

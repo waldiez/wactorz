@@ -872,9 +872,14 @@ async def config_handler(request):
     from aiohttp import web
     from .config import CONFIG
 
-    # If behind a proxy (like HA Ingress), we must use the host/protocol from the request
+    # Ingress support: HA sets X-Hassio-Ingress-Path
+    ingress_path = request.headers.get("X-Hassio-Ingress-Path", "")
+    
     host = request.host
     protocol = "wss" if request.secure else "ws"
+    
+    # We build the URL relative to the current ingress path if present
+    base_url = f"{protocol}://{host}{ingress_path}"
 
     return web.json_response({
         "ha": {
@@ -888,7 +893,7 @@ async def config_handler(request):
         "mqtt": {
             "host": MQTT_BROKER,
             "port": MQTT_PORT,
-            "url":  f"{protocol}://{host}/mqtt",  # Proxy-aware WebSocket URL
+            "url":  f"{base_url}/mqtt",  # Proxy-aware WebSocket URL
         },
         "llm": {
             "provider": CONFIG.llm_provider,
@@ -905,7 +910,7 @@ async def config_handler(request):
 async def main(exit_on_failure: bool = False):
     from aiohttp import web
 
-    # Startup checks
+    # ... (startup checks remain same) ...
     mqtt_ok = await _check_mqtt()
     port_ok = await _check_ws_port()
 
@@ -922,9 +927,15 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/",                      index_handler)
     app.router.add_get("/ws",                    ws_handler)
     app.router.add_get("/mqtt",                  mqtt_proxy_handler)
+    
+    # Add both /api and non-api versions to satisfy the frontend's different fetch patterns
     app.router.add_get("/api/actors",            actors_handler)
+    app.router.add_get("/actors",                actors_handler)
     app.router.add_get("/api/actors/{actor_id}", actor_handler)
+    app.router.add_get("/actors/{actor_id}",     actor_handler)
+    
     app.router.add_get("/api/config",            config_handler)
+    app.router.add_get("/config",                config_handler)
     from .fuseki_proxy import fuseki_proxy_handler
     app.router.add_post("/api/fuseki/{dataset}/sparql",  fuseki_proxy_handler)
     app.router.add_post("/api/fuseki/{dataset}/update",  fuseki_proxy_handler)

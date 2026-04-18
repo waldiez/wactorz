@@ -49,8 +49,10 @@ options:
   # MQTT broker — set to the Mosquitto addon host if using the official addon
   mqtt_host: core-mosquitto
   mqtt_port: 1883
+  mqtt_ws_port: 8083
 
-  # Home Assistant connection (used by HA agents inside Wactorz)
+  # Home Assistant connection
+ (used by HA agents inside Wactorz)
   ha_url: "http://homeassistant:8123"
   ha_token: ""
 
@@ -73,6 +75,7 @@ schema:
   ollama_url: url
   mqtt_host: str
   mqtt_port: port
+  mqtt_ws_port: port
   ha_url: url
   ha_token: str?
   fuseki_url: url

@@ -138,6 +138,7 @@ async def _start_web_ui(port: int, mqtt_broker: str, mqtt_port: int, actor_regis
     _ms.MQTT_BROKER  = mqtt_broker
     _ms.MQTT_PORT    = mqtt_port
     _ms.WS_PORT      = port
+    _ms.MQTT_WS_PORT = int(os.getenv("MQTT_WS_PORT", "9001"))
 
     # Wire the registry in so chat is routed directly — no IOAgent needed
     if actor_registry is not None:

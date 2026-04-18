@@ -2,66 +2,54 @@
 
 bashio::log.info "Starting Wactorz addon..."
 
-OPTIONS_FILE="${OPTIONS_PATH:-/data/options.json}"
+# Map addon options to environment variables using bashio.
+# These will use the values from /data/options.json (populated by HA)
+# or fallback to the defaults defined in config.yaml.
 
-get_option() {
-  local key="$1"
-  local default_value="${2:-}"
-  local value
+export API_KEY=$(bashio::config 'api_key')
+export LLM_PROVIDER=$(bashio::config 'llm_provider')
+export LLM_MODEL=$(bashio::config 'llm_model')
+export LLM_API_KEY=$(bashio::config 'llm_api_key')
+export OLLAMA_URL=$(bashio::config 'ollama_url')
 
-  value="$(python3 - "$OPTIONS_FILE" "$key" "$default_value" <<'PY'
-import json
-import sys
-from pathlib import Path
+export MQTT_HOST=$(bashio::config 'mqtt_host')
+export MQTT_PORT=$(bashio::config 'mqtt_port')
 
-options_file, key, default = sys.argv[1:4]
+# Home Assistant connection
+# If the user provided explicit URL/Token, use them; 
+# otherwise fallback to the supervisor-injected ones.
+HA_URL=$(bashio::config 'ha_url')
+HA_TOKEN=$(bashio::config 'ha_token')
 
-try:
-    data = json.loads(Path(options_file).read_text())
-except Exception:
-    print(default)
-    raise SystemExit(0)
+if [ -z "$HA_URL" ] || [ "$HA_URL" == "null" ]; then
+    export HA_URL="http://supervisor/core"
+fi
 
-value = data.get(key, default)
-if value is None:
-    value = default
-print(value)
-PY
-)"
+if [ -z "$HA_TOKEN" ] || [ "$HA_TOKEN" == "null" ]; then
+    export HA_TOKEN="${SUPERVISOR_TOKEN}"
+fi
 
-  printf '%s' "$value"
-}
-
-# Map addon options to environment variables from the local options file.
-export API_KEY="$(get_option 'api_key')"
-export LLM_PROVIDER="$(get_option 'llm_provider' 'anthropic')"
-export LLM_MODEL="$(get_option 'llm_model' 'claude-sonnet-4-6')"
-export LLM_API_KEY="$(get_option 'llm_api_key')"
-export OLLAMA_URL="$(get_option 'ollama_url' 'http://localhost:11434')"
-export MQTT_HOST="$(get_option 'mqtt_host' 'core-mosquitto')"
-MQTT_PORT="$(get_option 'mqtt_port' '1883')"
-export MQTT_PORT="${MQTT_PORT:-1883}"
-export HA_URL="$(get_option 'ha_url' 'http://homeassistant:8123')"
-export HA_TOKEN="$(get_option 'ha_token')"
 export HOME_ASSISTANT_URL="$HA_URL"
 export HOME_ASSISTANT_TOKEN="$HA_TOKEN"
-export FUSEKI_URL="$(get_option 'fuseki_url' 'http://localhost:3030')"
-export FUSEKI_DATASET="$(get_option 'fuseki_dataset' 'wactorz')"
-export FUSEKI_USER="$(get_option 'fuseki_user' 'admin')"
-export FUSEKI_PASSWORD="$(get_option 'fuseki_password' 'admin')"
-export DISCORD_BOT_TOKEN="$(get_option 'discord_bot_token')"
-export TELEGRAM_BOT_TOKEN="$(get_option 'telegram_bot_token')"
-export TELEGRAM_ALLOWED_USER_ID="$(get_option 'telegram_allowed_user_id' '0')"
 
+# Other integrations
+export FUSEKI_URL=$(bashio::config 'fuseki_url')
+export FUSEKI_DATASET=$(bashio::config 'fuseki_dataset')
+export FUSEKI_USER=$(bashio::config 'fuseki_user')
+export FUSEKI_PASSWORD=$(bashio::config 'fuseki_password')
+
+export DISCORD_BOT_TOKEN=$(bashio::config 'discord_bot_token')
+export TELEGRAM_BOT_TOKEN=$(bashio::config 'telegram_bot_token')
+export TELEGRAM_ALLOWED_USER_ID=$(bashio::config 'telegram_allowed_user_id')
+
+# Application settings
 export INTERFACE=rest
 export PORT=8000
 
-if [ -n "$HA_TOKEN" ]; then
-  ha_token_state="set"
-else
-  ha_token_state="empty"
-fi
+# Log the configuration for debugging (masking tokens)
+if [ -n "$HA_TOKEN" ]; then ha_token_state="set"; else ha_token_state="empty"; fi
+if [ -n "$LLM_API_KEY" ]; then llm_key_state="set"; else llm_key_state="empty"; fi
 
-bashio::log.info "Resolved config: mqtt_host='${MQTT_HOST}' mqtt_port='${MQTT_PORT}' ha_url='${HA_URL}' ha_token=${ha_token_state} llm_provider='${LLM_PROVIDER}'"
+bashio::log.info "Configured: mqtt_host='${MQTT_HOST}' mqtt_port='${MQTT_PORT}' ha_url='${HA_URL}' ha_token=${ha_token_state} llm_provider='${LLM_PROVIDER}' (key: ${llm_key_state})"
 
 exec wactorz

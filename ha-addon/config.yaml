@@ -12,21 +12,20 @@ arch:
 startup: application
 boot: auto
 init: false
-homeassistant_api: false
+homeassistant_api: true
+hassio_api: true
 ingress: true
 ingress_port: 8888
 ingress_stream: true
 panel_icon: mdi:robot-outline
 panel_title: Wactorz
-webui: http://[HOST]:[PORT:8000]
+webui: http://[HOST]:[PORT:8888]
 
 # ── Ports ──────────────────────────────────────────────────────────────────────
 ports:
   8000/tcp: 8000
-  8888/tcp: 8888
 ports_description:
   8000/tcp: Wactorz REST + WebSocket API
-  8888/tcp: Wactorz Monitor UI
 
 # ── Persistent state ───────────────────────────────────────────────────────────
 map:
@@ -66,22 +65,22 @@ options:
   telegram_allowed_user_id: 0
 
 schema:
-  api_key: str
-  llm_provider: list(anthropic|ollama|openai|google|nim|nvidia)
+  api_key: str?
+  llm_provider: list(anthropic|ollama|openai|gemini|nim)
   llm_model: str
-  llm_api_key: str
+  llm_api_key: str?
   ollama_url: url
   mqtt_host: str
   mqtt_port: port
   ha_url: url
-  ha_token: str
+  ha_token: str?
   fuseki_url: url
   fuseki_dataset: str
   fuseki_user: str
   fuseki_password: str
-  discord_bot_token: str
-  telegram_bot_token: str
-  telegram_allowed_user_id: int
+  discord_bot_token: str?
+  telegram_bot_token: str?
+  telegram_allowed_user_id: int?
 
 # ── Environment variables injected into the container ─────────────────────────
 # The run.sh entrypoint reads OPTIONS_PATH and maps these to env vars.

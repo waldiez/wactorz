@@ -8,6 +8,16 @@ def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "dev"}
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    value = value.strip()
+    if not value:
+        return default
+    return int(value)
+
+
 DEV_MODE = _env_truthy("WACTORZ_DEV_MODE")
 
 _env_file = Path(__file__).parent / ".env"
@@ -53,13 +63,13 @@ class AppConfig:
 
 CONFIG = AppConfig(
     interface=os.getenv("INTERFACE", "rest" if DEV_MODE else "cli"),
-    port=int(os.getenv("PORT", 8080 if DEV_MODE else 8000)),
+    port=_env_int("PORT", 8080 if DEV_MODE else 8000),
     llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
     llm_model=os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
     llm_api_key=os.getenv("LLM_API_KEY", ""),
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),
-    mqtt_port=int(os.getenv("MQTT_PORT", 1883)),
+    mqtt_port=_env_int("MQTT_PORT", 1883),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
     ha_state_bridge_output_topic=os.getenv("HA_STATE_BRIDGE_OUTPUT_TOPIC", "homeassistant/state_changes"),
@@ -67,8 +77,8 @@ CONFIG = AppConfig(
     ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0") not in ("0", "false", "no"),
     discord_token=os.getenv("DISCORD_BOT_TOKEN", ""),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-    telegram_allowed_user_id=int(os.getenv("TELEGRAM_ALLOWED_USER_ID") or 0),
-    ws_port=int(os.getenv("WS_PORT", 8888)),
+    telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
+    ws_port=_env_int("WS_PORT", 8888),
     nim_api_key=os.getenv("NIM_API_KEY", ""),
     nvidia_api_key=os.getenv("NVIDIA_API_KEY", ""),
     twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),

@@ -1,0 +1,81 @@
+name: Wactorz
+version: "0.3.0"
+slug: wactorz
+description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
+url: https://github.com/waldiez/wactorz
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+startup: application
+boot: auto
+init: false
+homeassistant_api: false
+
+# ── Ports ──────────────────────────────────────────────────────────────────────
+ports:
+  8000/tcp: 8000
+ports_description:
+  8000/tcp: Wactorz REST + WebSocket API
+
+# ── Persistent state ───────────────────────────────────────────────────────────
+map:
+  - config:rw
+  - share:rw
+
+# ── User-configurable options ──────────────────────────────────────────────────
+options:
+  # API access key for the Wactorz REST API (leave blank to disable auth)
+  api_key: ""
+
+  # LLM backend
+  llm_provider: anthropic
+  llm_model: claude-sonnet-4-6
+  llm_api_key: ""
+
+  # Ollama (local LLM alternative — set llm_provider: ollama)
+  ollama_url: "http://localhost:11434"
+
+  # MQTT broker — set to the Mosquitto addon host if using the official addon
+  mqtt_host: core-mosquitto
+  mqtt_port: 1883
+
+  # Home Assistant connection (used by HA agents inside Wactorz)
+  ha_url: "http://homeassistant:8123"
+  ha_token: ""
+
+  # Fuseki / SPARQL triplestore (optional)
+  fuseki_url: "http://localhost:3030"
+  fuseki_dataset: wactorz
+  fuseki_user: admin
+  fuseki_password: admin
+
+  # Optional extra integrations
+  discord_bot_token: ""
+  telegram_bot_token: ""
+  telegram_allowed_user_id: 0
+
+schema:
+  api_key: str
+  llm_provider: list(anthropic|ollama|openai|google|nim|nvidia)
+  llm_model: str
+  llm_api_key: str
+  ollama_url: url
+  mqtt_host: str
+  mqtt_port: port
+  ha_url: url
+  ha_token: str
+  fuseki_url: url
+  fuseki_dataset: str
+  fuseki_user: str
+  fuseki_password: str
+  discord_bot_token: str
+  telegram_bot_token: str
+  telegram_allowed_user_id: int
+
+# ── Environment variables injected into the container ─────────────────────────
+# The run.sh entrypoint reads OPTIONS_PATH and maps these to env vars.
+environment:
+  OPTIONS_PATH: /data/options.json

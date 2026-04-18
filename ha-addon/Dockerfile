@@ -1,21 +1,10 @@
-ARG BUILD_FROM
-FROM alpine
+ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.20
+FROM $BUILD_FROM
 
-# Install system dependencies
-RUN apk add --no-cache \
-    curl \
-    git \
-    jq \
-    gcc \
-    musl-dev \
-    linux-headers \
-    libffi-dev \
-    openssl-dev
+RUN apk add --no-cache curl git jq gcc musl-dev linux-headers libffi-dev openssl-dev
 
-# Install dependencies and the package
-RUN pip install --no-cache-dir "wactorz[all] @ git+https://github.com/waldiez/wactorz.git@dev"
+RUN pip3 install --no-cache-dir "wactorz[all] @ git+https://github.com/waldiez/wactorz.git@dev"
 
-# Setup the entrypoint
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 

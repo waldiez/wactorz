@@ -24,6 +24,7 @@ pip install wactorz[all]
 - **[Agents](agents.md)** — Built-in and custom agent reference
 - **[Auto-Wiring](mqtt_auto_wiring.md)** — Built-in and custom agent reference
 - **[Interfaces](interfaces.md)** — CLI, REST, MCP, chat platforms, and dashboard
+- **[External integrations](external-integrations.md)** — Weather, Google Calendar, Gmail (and the long-term plan for consuming external MCPs)
 - **[Prometheus Monitoring](prometheus.md)** — Python metrics, Prometheus, and optional dependency probes
 - **[Pipelines](pipelines.md)** — Full topic reference with payload schemas
 - **[Remote Nodes](remote-nodes.md)** — Auto-generated Python class reference

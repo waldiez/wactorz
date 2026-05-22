@@ -5,10 +5,13 @@ from .home_assistant_agent import HomeAssistantAgent
 from .home_assistant_map_agent import HomeAssistantMapAgent
 from .home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
 from .io_agent import IOAgent
+from .weather_agent import WeatherAgent
+from .calendar_agent import CalendarAgent
+from .gmail_agent import GmailAgent
 
 
 __all__ = [
-    
+
     "IOAgent",
     #
     "LLMAgent",
@@ -19,4 +22,7 @@ __all__ = [
     "MonitorActor",
     "HomeAssistantAgent",
     "HomeAssistantStateBridgeAgent",
+    "WeatherAgent",
+    "CalendarAgent",
+    "GmailAgent",
 ]

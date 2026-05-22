@@ -43,6 +43,11 @@ dependencies = [
 anthropic = ["anthropic>=0.86.0"]
 openai    = ["openai>=2.29.0"]
 google    = ["google-genai>=1.0.0"]
+google-api = [
+    "google-api-python-client>=2.120.0",
+    "google-auth>=2.30.0",
+    "google-auth-oauthlib>=1.2.0",
+]
 discord   = ["discord.py>=2.7.1"]
 whatsapp  = ["twilio>=9.10.4"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
@@ -78,6 +83,7 @@ all = [
     "wactorz[anthropic]",
     "wactorz[openai]",
     "wactorz[google]",
+    "wactorz[google-api]",
     "wactorz[discord]",
     "wactorz[whatsapp]",
     "wactorz[mcp]",

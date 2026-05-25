@@ -256,6 +256,49 @@ def _build_catalog() -> dict:
         }
         logger.info("[catalog] Loaded manual-agent recipe")
 
+    # ── reachy-body ──────────────────────────────────────────────────────────
+    code = _load_recipe("reachy_body_agent.py")
+    if code:
+        catalog["reachy-body"] = {
+            "name":         "reachy-body",
+            "type":         "dynamic",
+            "description":  "Reachy Mini embodied output channel (Wireless on WiFi or Lite on USB). MQTT-driven head/antenna/body motion, recorded-emotion playback, look_at gaze, and persistent reactive bindings (home/state → robot reacts).",
+            "capabilities": ["robot", "reachy", "reachy_mini", "embodied", "motion",
+                             "head", "antennas", "gaze", "emotion", "actuator",
+                             "expressive", "human_robot_interaction"],
+            "install":      ["reachy-mini", "numpy"],
+            "input_schema": {
+                "cmd":         "str  — wake|sleep|pose|antennas|look_at|look_pixel|emotion|set_pose|bind|unbind|list_emotions|stop",
+                "duration":    "float — motion duration in seconds (pose/antennas/look_at)",
+                "method":      "str  — interpolation: linear|minjerk|ease_in_out|cartoon (default minjerk)",
+                "yaw":         "float — head yaw, degrees by default",
+                "pitch":       "float — head pitch, degrees by default",
+                "roll":        "float — head roll, degrees by default",
+                "x":           "float — head x (mm) or look_at world x (m)",
+                "y":           "float — head y (mm) or look_at world y (m)",
+                "z":           "float — head z (mm) or look_at world z (m)",
+                "antennas":    "list  — [right, left] angles, degrees by default",
+                "left":        "float — antenna left (cmd=antennas convenience)",
+                "right":       "float — antenna right (cmd=antennas convenience)",
+                "u":           "int   — pixel u for look_pixel",
+                "v":           "int   — pixel v for look_pixel",
+                "name":        "str   — emotion clip name (e.g. curious1, success1)",
+                "topic":       "str   — MQTT topic to bind/unbind",
+                "when":        "dict  — dotted-path equality matcher for bindings",
+                "do":          "dict  — payload to dispatch when binding fires",
+                "id":          "str   — optional correlation id; ack on custom/reachy/cmd_result/{id}",
+            },
+            "output_schema": {
+                "ok":          "bool",
+                "cmd":         "str",
+                "duration_s":  "float — wall-clock motion time",
+                "error":       "str|null",
+            },
+            "poll_interval": 5,
+            "code":          code,
+        }
+        logger.info("[catalog] Loaded reachy-body recipe")
+
     return catalog
 
 

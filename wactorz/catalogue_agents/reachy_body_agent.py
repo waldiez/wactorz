@@ -159,17 +159,24 @@ async def setup(agent):
             last_err = e
             continue
 
-    if mini is None:
-        await agent.alert(
-            f"Could not open ReachyMini(). Robot powered on and on the same WiFi? "
-            f"Try `ping reachy-mini.local`. Apps must be stopped. Last error: {last_err}",
-            severity="critical",
-        )
-        raise RuntimeError(f"reachy connection failed: {last_err}")
-
-    agent.state["mini"] = mini
+    # Note: numpy + create_head_pose are stored regardless — they're pure helpers
+    # that the LLM-planning path doesn't actually need a live robot to use.
     agent.state["np"] = np
     agent.state["create_head_pose"] = create_head_pose
+    agent.state["last_connect_error"] = str(last_err) if mini is None else None
+
+    if mini is None:
+        # Stay alive in a "disconnected" mode so HA-only commands keep working
+        # and so users get a friendly "reachy not connected" instead of a crash
+        # loop. Setup() must NOT raise — the supervisor would auto-restart us.
+        agent.state["mini"] = None
+        await agent.log(
+            f"Reachy daemon unreachable. Agent will stay up and refuse robot "
+            f"commands with 'reachy not connected'. Last error: {last_err}",
+            level="warning",
+        )
+    else:
+        agent.state["mini"] = mini
 
     # ---- Optional: recorded emotion library (HF dataset) ----
     agent.state["moves"] = None
@@ -206,13 +213,14 @@ async def setup(agent):
     # Loaded from persistent state so they survive restarts.
     agent.state["bindings"] = agent.recall("bindings") or {}
 
-    # ---- Wake up so the robot is ready for commands ----
-    try:
-        await _do(mini.wake_up)
-        agent.state["awake"] = True
-        await agent.publish("custom/reachy/events", {"type": "wake", "ts": _time.time()})
-    except Exception as e:
-        await agent.alert(f"wake_up failed: {e}", severity="warning")
+    # ---- Wake up so the robot is ready for commands (skip if disconnected) ----
+    if mini is not None:
+        try:
+            await _do(mini.wake_up)
+            agent.state["awake"] = True
+            await agent.publish("custom/reachy/events", {"type": "wake", "ts": _time.time()})
+        except Exception as e:
+            await agent.alert(f"wake_up failed: {e}", severity="warning")
 
     # ---- Direct command bus ----
     async def on_cmd(payload):
@@ -263,7 +271,10 @@ async def setup(agent):
 async def process(agent):
     # Periodic heartbeat: republish the current state (retained) so dashboards
     # always show a fresh value. All actual work is callback-driven via subscribe().
+    connected, reason = _is_connected(agent)
     await agent.publish("custom/reachy/state", {
+        "connected": connected,
+        "reason":    reason,
         "awake":   agent.state.get("awake", False),
         "busy":    agent.state.get("busy", False),
         "last_cmd": agent.state.get("last_cmd"),
@@ -275,17 +286,90 @@ async def process(agent):
     })
 
 
+_NL_SYSTEM = """You drive a Reachy Mini robot AND a Home Assistant smart home.
+Convert the user's instruction to a JSON array of commands, executed in order.
+
+Robot commands:
+  {"cmd":"wake"}
+  {"cmd":"sleep"}
+  {"cmd":"stop"}
+  {"cmd":"pose","yaw":<deg>,"pitch":<deg>,"roll":<deg>,"duration":<sec>}
+  {"cmd":"antennas","left":<deg>,"right":<deg>,"duration":<sec>}
+  {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
+
+Home Assistant commands:
+  {"cmd":"ha","service":"light.turn_on","entity_id":"light.wiz_rgbw_tunable_3369ae"}
+  {"cmd":"ha","service":"light.turn_off","entity_id":"light.wiz_rgbw_tunable_3369ae"}
+  {"cmd":"ha","service":"switch.turn_on","entity_id":"switch.sonoff_s60zbtpf"}
+  {"cmd":"ha","service":"switch.turn_off","entity_id":"switch.sonoff_s60zbtpf"}
+
+Available HA entities:
+  light.wiz_rgbw_tunable_3369ae   - the lamp / the light
+  switch.sonoff_s60zbtpf          - smart plug / switch
+
+Expressive gestures (the robot has no speaker, express emotion through motion):
+- "happy noise" / "happy" -> antennas wiggle up (left:60,right:60 then left:30,right:30 then left:60,right:60), head tilt up (pitch:-10)
+- "sleepy noise" / "tired" -> head droop down slowly (pitch:25 duration:1.5), antennas droop (left:-30,right:-30 duration:1.2)
+- "curious" -> head tilt (roll:15), antennas up
+- "yes/nod" -> pitch up then down
+- "no/shake" -> yaw left then right
+
+Conventions:
+- yaw: left=+, right=-. pitch: down=+. All degrees.
+- Typical durations: 0.4 fast, 0.8 normal, 1.5 slow.
+- Pause/hold pose is implicit between commands.
+- Always start with wake unless told otherwise; always end with sleep unless told otherwise.
+- "open the lamp/light" means turn it ON. "close the lamp/light" means turn it OFF.
+- The "sleep" command animates a sleepy droop only — it does NOT power down or disconnect.
+
+Reply with ONLY the JSON array, no markdown, no prose."""
+
+
+async def _nl_to_commands(agent, text):
+    import json as _json
+    if agent.llm is None:
+        return None
+    raw = await agent.llm.chat(text, system=_NL_SYSTEM)
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        # Strip ```json ... ``` fences
+        parts = raw.split("```")
+        if len(parts) >= 2:
+            raw = parts[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+    raw = raw.strip()
+    # Try direct parse, else find the first JSON array in the response
+    try:
+        cmds = _json.loads(raw)
+    except Exception:
+        i = raw.find("[")
+        j = raw.rfind("]")
+        if i >= 0 and j > i:
+            try:
+                cmds = _json.loads(raw[i:j+1])
+            except Exception:
+                return None
+        else:
+            return None
+    if isinstance(cmds, list):
+        return cmds
+    if isinstance(cmds, dict):
+        return [cmds]
+    return None
+
+
 async def handle_task(agent, payload):
-    # Direct send_to(reachy-body, {...}) goes here — same dispatch as MQTT.
-    # Peel IOAgent envelope when the user types: @reachy-body {"cmd": "...", ...}
-    # IOAgent wraps as: {"text": "<your-json-string>", "from": ..., "reply_to": ...}
-    # We try to unwrap, fall back to natural-language parsing of simple verbs.
+    # Direct send_to(reachy-body, {...}) — same dispatch as MQTT.
+    # IOAgent wraps user text as: {"text": "...", "_task_id": ..., "reply_to": ...}
     payload = payload or {}
+    _tid = payload.get("_task_id") or payload.get("task")
+
     if "cmd" not in payload and "action" not in payload:
         text = payload.get("text") or payload.get("content") or payload.get("message")
         if isinstance(text, str):
             stripped = text.strip()
-            # Try JSON first
+            # Structured JSON object (preferred)
             if stripped.startswith("{") and stripped.endswith("}"):
                 import json as _json
                 try:
@@ -294,31 +378,87 @@ async def handle_task(agent, payload):
                         payload = parsed
                 except Exception:
                     pass
-            # Fall back: very simple natural-language verbs
             elif stripped:
                 low = stripped.lower()
+                # Single-verb shortcuts (no LLM call needed)
                 if   low in ("wake", "wake up"):           payload = {"cmd": "wake"}
                 elif low in ("sleep", "go to sleep"):      payload = {"cmd": "sleep"}
                 elif low in ("stop",):                     payload = {"cmd": "stop"}
                 elif low in ("list emotions", "emotions"): payload = {"cmd": "list_emotions"}
+                else:
+                    # Natural language — ask the LLM to plan a command sequence,
+                    # then execute it synchronously. handle_task has 60s budget;
+                    # an LLM call + a few short motions fits comfortably.
+                    cmds = await _nl_to_commands(agent, stripped)
+                    if not cmds:
+                        return {"ok": False, "error": "could not parse instruction", "text": stripped,
+                                "_task_id": _tid, "task": _tid}
+                    # If reachy is offline, skip robot commands but still run HA ones.
+                    ok_link, link_reason = _is_connected(agent)
+                    steps = []
+                    skipped = []
+                    for c in cmds:
+                        if not isinstance(c, dict):
+                            continue
+                        c_cmd = c.get("cmd") or c.get("action")
+                        if not ok_link and c_cmd not in ("ha", "list_emotions"):
+                            skipped.append(c_cmd)
+                            continue
+                        r = await _dispatch(agent, c_cmd, c, return_result=True)
+                        steps.append(r)
+                    result_msg = f"executed {len(steps)} commands"
+                    if skipped:
+                        result_msg += f" — skipped {len(skipped)} robot commands ({link_reason})"
+                    return {"ok": True, "cmd": "nl", "steps_run": len(steps),
+                            "skipped": skipped, "plan": cmds, "result": result_msg,
+                            "_task_id": _tid, "task": _tid}
     cmd = payload.get("cmd") or payload.get("action")
-    return await _dispatch(agent, cmd, payload, return_result=True)
+    # Friendly fail-fast for ROBOT commands when reachy isn't connected.
+    # HA-only commands ("ha") still work — that's the whole point of the
+    # "stay alive in disconnected mode" design.
+    if cmd not in ("ha", "list_emotions", None):
+        ok, reason = _is_connected(agent)
+        if not ok:
+            return {"ok": False, "error": reason, "result": reason,
+                    "cmd": cmd, "_task_id": _tid, "task": _tid}
+    result = await _dispatch(agent, cmd, payload, return_result=True)
+    if isinstance(result, dict):
+        result.setdefault("_task_id", _tid)
+        result.setdefault("task", _tid)
+    return result
 
 
 async def cleanup(agent):
     mini = agent.state.get("mini")
     if not mini:
         return
-    try:
-        await _do(mini.goto_sleep)
-    except Exception as e:
-        await agent.log(f"goto_sleep on cleanup failed: {e}", level="warning")
+    # NOTE: we intentionally do NOT call mini.goto_sleep() — it disables motors
+    # and the daemon often drops us, requiring a full restart on next spawn.
     try:
         mini.__exit__(None, None, None)
     except Exception as e:
         await agent.log(f"ReachyMini __exit__ failed: {e}", level="warning")
     # Persist bindings on graceful shutdown
     agent.persist("bindings", agent.state.get("bindings", {}))
+
+
+def _is_connected(agent):
+    """Quick check that the SDK handle is alive. Returns (ok, reason)."""
+    mini = agent.state.get("mini")
+    if mini is None:
+        return False, "reachy not connected (no SDK handle)"
+    # The SDK exposes _connected / _is_connected / ws on various versions — be tolerant.
+    for attr in ("_connected", "is_connected", "connected"):
+        v = getattr(mini, attr, None)
+        if callable(v):
+            try:
+                if not v():
+                    return False, "reachy not connected (daemon link dropped)"
+            except Exception:
+                pass
+        elif v is False:
+            return False, "reachy not connected (daemon link dropped)"
+    return True, None
 
 
 # ============================================================
@@ -347,6 +487,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "unbind":        result = await _unbind(agent, payload)
         elif cmd == "list_emotions": result = {"emotions": agent.state.get("emotion_names", [])}
         elif cmd == "stop":          result = await _stop(agent)
+        elif cmd == "ha":            result = await _ha_call(agent, payload)
         else:
             raise ValueError(f"unknown cmd: {cmd}")
 
@@ -388,15 +529,24 @@ async def _wake(agent):
 
 
 async def _sleep(agent):
+    """Animated 'sleep' — head droops, antennas fall. We DO NOT call mini.goto_sleep()
+    because that disables motors and often loses the daemon connection, requiring a
+    full agent restart. This is purely cosmetic."""
     mini = agent.state["mini"]
+    np   = agent.state["np"]
+    create_head_pose = agent.state["create_head_pose"]
     async with agent.state["motion_lock"]:
         agent.state["busy"] = True
         try:
-            await _do(mini.goto_sleep)
+            # Head droops down slowly
+            await _do(mini.goto_target,
+                      head=create_head_pose(pitch=25, degrees=True),
+                      antennas=np.deg2rad([-30, -30]),
+                      duration=1.5)
             agent.state["awake"] = False
         finally:
             agent.state["busy"] = False
-    return {}
+    return {"animated": True}
 
 
 async def _pose(agent, payload):
@@ -558,6 +708,36 @@ async def _stop(agent):
     create_head_pose = agent.state["create_head_pose"]
     await _do(mini.goto_target, head=create_head_pose(), duration=0.1)
     return {"stopped": True, "fallback": True}
+
+
+async def _ha_call(agent, payload):
+    """Call a Home Assistant service. payload = {service: 'light.turn_on', entity_id: '...'}.
+    Reads HA_URL and HA_TOKEN from process env (.env is loaded by wactorz at startup)."""
+    import os, aiohttp
+    service   = payload.get("service")    # e.g. "light.turn_on"
+    entity_id = payload.get("entity_id")
+    if not service or "." not in service:
+        raise ValueError("ha requires 'service' like 'light.turn_on'")
+    domain, action = service.split(".", 1)
+    ha_url   = os.environ.get("HA_URL")   or "http://192.168.0.105:8123"
+    ha_token = os.environ.get("HA_TOKEN")
+    if not ha_token:
+        raise RuntimeError("HA_TOKEN not set in environment")
+    url = f"{ha_url.rstrip('/')}/api/services/{domain}/{action}"
+    body = {}
+    if entity_id:
+        body["entity_id"] = entity_id
+    # Pass through any extra fields (brightness, color, etc.)
+    for k, v in (payload or {}).items():
+        if k not in ("cmd", "action", "service", "entity_id", "id", "_task_id", "task", "_verb"):
+            body[k] = v
+    headers = {"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=body, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as r:
+            text = await r.text()
+            if r.status >= 400:
+                raise RuntimeError(f"HA call {service} failed [{r.status}]: {text[:200]}")
+    return {"service": service, "entity_id": entity_id}
 
 
 # ============================================================

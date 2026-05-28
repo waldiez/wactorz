@@ -1757,6 +1757,19 @@ Break the task into steps. Each step is handled by one agent.
 AVAILABLE AGENTS (with input/output contracts):
 {workers_desc}
 {topic_schema_ctx}{sparql_ctx}
+DELEGATING TO EXISTING AGENTS — strongly preferred over raw MQTT:
+- When an existing agent has its own LLM/NL planner (look for phrases like
+  "internal LLM planner", "PREFERRED interface", or "send_to" in its description),
+  any new spawned agent should drive it by:
+    result = await agent.send_to('<agent-name>', '<natural language request>')
+  rather than guessing topic names and crafting raw {{"cmd":...}} payloads.
+- This is especially true for reachy-body: it owns motion params, HA entity
+  resolution, expressive gestures, and standing rules. A bare publish to
+  custom/reachy/cmd with {{"cmd":"antennas"}} and no params is a NO-OP.
+- Only fall back to raw publishes when you genuinely need a structured
+  payload (e.g. high-frequency control) AND the description gives you the
+  exact topic + full payload schema.
+
 TASK: {task}
 
 OUTPUT RULES:

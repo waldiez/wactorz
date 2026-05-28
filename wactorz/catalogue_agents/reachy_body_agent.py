@@ -444,19 +444,47 @@ async def handle_task(agent, payload):
     _tid = payload.get("_task_id") or payload.get("task")
 
     if "cmd" not in payload and "action" not in payload:
-        text = payload.get("text") or payload.get("content") or payload.get("message")
+        # Pull NL text from any common field. Planner-generated agents often send
+        # dicts like {"gesture":"shrug","description":"do a shrug"} — we accept
+        # anything that looks like a description so the NL planner can interpret it.
+        text = (payload.get("text") or payload.get("content") or payload.get("message")
+                or payload.get("query") or payload.get("description")
+                or payload.get("gesture") or payload.get("instruction"))
+        # If we have a dict with multiple text-ish fields, glue them — gives the
+        # LLM more context to decide what gesture was meant.
+        if not text and isinstance(payload, dict):
+            text_bits = [str(v) for k, v in payload.items()
+                         if k not in ("_task_id", "_reply_to", "task", "command", "name", "context", "source")
+                         and isinstance(v, str)]
+            if text_bits:
+                text = " ".join(text_bits)
         if isinstance(text, str):
             stripped = text.strip()
-            # Structured JSON object (preferred)
+            # Structured JSON object: if it has cmd/action, adopt as the new payload.
+            # If it's a payload-dict without cmd (e.g. planner-generated {gesture,
+            # description, context}), flatten its text-ish fields back to NL input
+            # so the LLM has something natural to work with.
             if stripped.startswith("{") and stripped.endswith("}"):
                 import json as _json
                 try:
                     parsed = _json.loads(stripped)
                     if isinstance(parsed, dict):
-                        payload = parsed
+                        if "cmd" in parsed or "action" in parsed:
+                            payload = parsed
+                        else:
+                            # Re-extract NL text from the inner dict
+                            inner = (parsed.get("description") or parsed.get("text")
+                                     or parsed.get("instruction") or parsed.get("gesture")
+                                     or parsed.get("message") or parsed.get("query"))
+                            if not inner:
+                                inner = " ".join(str(v) for k, v in parsed.items()
+                                                 if isinstance(v, str)
+                                                 and k not in ("_task_id", "_reply_to", "task",
+                                                               "command", "source", "context"))
+                            stripped = inner.strip() if isinstance(inner, str) else stripped
                 except Exception:
                     pass
-            elif stripped:
+            if "cmd" not in payload and "action" not in payload and stripped:
                 low = stripped.lower()
                 # Single-verb shortcuts (no LLM call needed)
                 if   low in ("wake", "wake up"):           payload = {"cmd": "wake"}

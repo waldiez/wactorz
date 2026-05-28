@@ -146,9 +146,16 @@ async def setup(agent):
     attempts.append({**base})                                                          # autodetect (default)
     attempts.append({**base, "connection_mode": "network"})                            # force network mode
 
+    # IMPORTANT: ReachyMini().__enter__() does blocking websocket / media handshakes
+    # that take 5–10 seconds. Running it directly here freezes the asyncio event
+    # loop long enough for MQTT keepalives to time out and the monitor server
+    # (port 8887) to fail to bind. Always run it in an executor.
+    loop = asyncio.get_event_loop()
+    def _open_sync(kw):
+        return ReachyMini(**kw).__enter__()
     for kwargs in attempts:
         try:
-            mini = ReachyMini(**kwargs).__enter__()
+            mini = await loop.run_in_executor(None, _open_sync, kwargs)
             await agent.log(f"Connected to Reachy via {kwargs or 'autodetect'}")
             break
         except TypeError as e:

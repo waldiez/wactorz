@@ -185,6 +185,11 @@ async def setup(agent):
     else:
         agent.state["mini"] = mini
 
+    # ---- Discover HA entities so the LLM uses the right IDs ----
+    # Without this the planner falls back to a hardcoded entity_id that may not
+    # exist on the user's HA (different network = different entities).
+    agent.state["ha_entities"] = await _fetch_ha_entities(agent)
+
     # ---- Optional: recorded emotion library (HF dataset) ----
     agent.state["moves"] = None
     agent.state["emotion_names"] = []
@@ -304,15 +309,11 @@ Robot commands:
   {"cmd":"antennas","left":<deg>,"right":<deg>,"duration":<sec>}
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
 
-Home Assistant commands:
-  {"cmd":"ha","service":"light.turn_on","entity_id":"light.wiz_rgbw_tunable_3369ae"}
-  {"cmd":"ha","service":"light.turn_off","entity_id":"light.wiz_rgbw_tunable_3369ae"}
-  {"cmd":"ha","service":"switch.turn_on","entity_id":"switch.sonoff_s60zbtpf"}
-  {"cmd":"ha","service":"switch.turn_off","entity_id":"switch.sonoff_s60zbtpf"}
-
-Available HA entities:
-  light.wiz_rgbw_tunable_3369ae   - the lamp / the light
-  switch.sonoff_s60zbtpf          - smart plug / switch
+Home Assistant commands (use the actual entity_id from the inventory below):
+  {"cmd":"ha","service":"light.turn_on","entity_id":"<light entity>"}
+  {"cmd":"ha","service":"light.turn_off","entity_id":"<light entity>"}
+  {"cmd":"ha","service":"switch.turn_on","entity_id":"<switch entity>"}
+  {"cmd":"ha","service":"switch.turn_off","entity_id":"<switch entity>"}
 
 Expressive gestures (the robot has no speaker, express emotion through motion):
 - "happy noise" / "happy" -> antennas wiggle up (left:60,right:60 then left:30,right:30 then left:60,right:60), head tilt up (pitch:-10)
@@ -335,16 +336,17 @@ Decision rules — CRITICAL:
 - ONLY add wake/sleep when the user asks for robot motion, an expression,
   or explicitly says wake/sleep. Pure HA requests do NOT need wake/sleep.
 
-Examples:
+Examples (pick the entity_id from the "Live HA inventory" section below — these
+examples use <LIGHT> / <SWITCH> as placeholders, substitute the real id):
 User: "turn on the light"
-  → [{"cmd":"ha","service":"light.turn_on","entity_id":"light.wiz_rgbw_tunable_3369ae"}]
+  → [{"cmd":"ha","service":"light.turn_on","entity_id":"<LIGHT>"}]
 
 User: "turn off the lamp"
-  → [{"cmd":"ha","service":"light.turn_off","entity_id":"light.wiz_rgbw_tunable_3369ae"}]
+  → [{"cmd":"ha","service":"light.turn_off","entity_id":"<LIGHT>"}]
 
 User: "wake up and turn on the light"
   → [{"cmd":"wake"},
-     {"cmd":"ha","service":"light.turn_on","entity_id":"light.wiz_rgbw_tunable_3369ae"}]
+     {"cmd":"ha","service":"light.turn_on","entity_id":"<LIGHT>"}]
 
 User: "wiggle your antennas"
   → [{"cmd":"wake"},
@@ -361,7 +363,18 @@ async def _nl_to_commands(agent, text):
     import json as _json
     if agent.llm is None:
         return None
-    raw = await agent.llm.chat(text, system=_NL_SYSTEM)
+    # Inject the live HA entity list so the LLM uses real IDs from THIS network.
+    ents = agent.state.get("ha_entities") or {}
+    lines = []
+    for kind, items in (("Lights", ents.get("lights", [])), ("Switches", ents.get("switches", []))):
+        if not items:
+            continue
+        lines.append(f"\n{kind} (use the exact entity_id):")
+        for it in items:
+            lines.append(f"  {it['entity_id']:50s}  ({it['name']})")
+    ha_section = "\n".join(lines) if lines else "\n(no HA entities discovered — ha commands will fail)"
+    system_with_ents = _NL_SYSTEM + "\n\nLive HA inventory:" + ha_section
+    raw = await agent.llm.chat(text, system=system_with_ents)
     raw = (raw or "").strip()
     if raw.startswith("```"):
         # Strip ```json ... ``` fences
@@ -754,6 +767,42 @@ async def _stop(agent):
     create_head_pose = agent.state["create_head_pose"]
     await _do(mini.goto_target, head=create_head_pose(), duration=0.1)
     return {"stopped": True, "fallback": True}
+
+
+async def _fetch_ha_entities(agent):
+    """Query HA /api/states once at startup. Returns {'lights': [...], 'switches': [...]}.
+    Used to inject the right entity IDs into the LLM system prompt — without this
+    the planner uses a hardcoded entity that may not exist on this network."""
+    import os, aiohttp
+    ha_url   = os.environ.get("HA_URL")   or "http://192.168.0.105:8123"
+    ha_token = os.environ.get("HA_TOKEN")
+    if not ha_token:
+        await agent.log("HA_TOKEN not set — skipping entity discovery", level="warning")
+        return {"lights": [], "switches": []}
+    headers = {"Authorization": f"Bearer {ha_token}"}
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{ha_url.rstrip('/')}/api/states", headers=headers,
+                             timeout=aiohttp.ClientTimeout(total=5)) as r:
+                if r.status != 200:
+                    await agent.log(f"HA states fetch returned {r.status}", level="warning")
+                    return {"lights": [], "switches": []}
+                states = await r.json()
+    except Exception as e:
+        await agent.log(f"HA entity discovery failed: {e}", level="warning")
+        return {"lights": [], "switches": []}
+    lights, switches = [], []
+    for s in states:
+        eid = s.get("entity_id", "")
+        if s.get("state") == "unavailable":
+            continue  # skip dead entities so the LLM doesn't try them
+        name = (s.get("attributes") or {}).get("friendly_name", eid)
+        if eid.startswith("light."):
+            lights.append({"entity_id": eid, "name": name})
+        elif eid.startswith("switch."):
+            switches.append({"entity_id": eid, "name": name})
+    await agent.log(f"HA entities discovered: {len(lights)} light(s), {len(switches)} switch(es)")
+    return {"lights": lights, "switches": switches}
 
 
 async def _ha_call(agent, payload):

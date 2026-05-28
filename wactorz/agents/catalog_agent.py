@@ -262,7 +262,23 @@ def _build_catalog() -> dict:
         catalog["reachy-body"] = {
             "name":         "reachy-body",
             "type":         "dynamic",
-            "description":  "Reachy Mini embodied output channel (Wireless on WiFi or Lite on USB). MQTT-driven head/antenna/body motion, recorded-emotion playback, look_at gaze, and persistent reactive bindings (home/state → robot reacts).",
+            "description":  (
+                "Reachy Mini embodied output channel (Wireless on WiFi or Lite on USB). "
+                "MQTT-driven head/antenna/body motion, recorded-emotion playback, look_at "
+                "gaze, and persistent reactive bindings (home/state -> robot reacts). "
+                "ALSO routes Home Assistant service calls via {cmd:ha,service:...,entity_id:...}.\n"
+                "\n"
+                "MQTT INTERFACE — agents that want to drive reachy must use these topics:\n"
+                "  publish to:  custom/reachy/cmd           payload: {\"cmd\":\"wake\"|\"sleep\"|\"pose\"|...}\n"
+                "  or:          custom/reachy/cmd/<verb>    payload: same minus the cmd key\n"
+                "  events on:   custom/reachy/events        payload: {type, ok, ts}\n"
+                "  state on:    custom/reachy/state         payload: {connected, awake, busy, ...}\n"
+                "\n"
+                "Note: do NOT make up topics like 'reachy/cmd/wake' — the only valid prefix is\n"
+                "'custom/reachy/cmd'. For HA-reactive behavior, prefer reachy-body's built-in\n"
+                "{cmd:bind, topic:..., when:{...}, do:{cmd:...}} instead of spawning a separate\n"
+                "agent — the binding lives inside reachy-body and persists across restarts."
+            ),
             "capabilities": ["robot", "reachy", "reachy_mini", "embodied", "motion",
                              "head", "antennas", "gaze", "emotion", "actuator",
                              "expressive", "human_robot_interaction"],

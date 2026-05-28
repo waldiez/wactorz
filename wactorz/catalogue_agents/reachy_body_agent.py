@@ -325,9 +325,34 @@ Conventions:
 - yaw: left=+, right=-. pitch: down=+. All degrees.
 - Typical durations: 0.4 fast, 0.8 normal, 1.5 slow.
 - Pause/hold pose is implicit between commands.
-- Always start with wake unless told otherwise; always end with sleep unless told otherwise.
-- "open the lamp/light" means turn it ON. "close the lamp/light" means turn it OFF.
-- The "sleep" command animates a sleepy droop only — it does NOT power down or disconnect.
+- "sleep" is a sleepy droop animation only — it does NOT power down.
+
+Decision rules — CRITICAL:
+- If the user mentions a light, lamp, switch, plug, or any smart home thing,
+  you MUST emit the matching {"cmd":"ha", ...} command. Do NOT skip it.
+- "turn on/off the light", "open/close the lamp", "lights on", "switch on"
+  → ALL mean an HA light.turn_on / light.turn_off call.
+- ONLY add wake/sleep when the user asks for robot motion, an expression,
+  or explicitly says wake/sleep. Pure HA requests do NOT need wake/sleep.
+
+Examples:
+User: "turn on the light"
+  → [{"cmd":"ha","service":"light.turn_on","entity_id":"light.wiz_rgbw_tunable_3369ae"}]
+
+User: "turn off the lamp"
+  → [{"cmd":"ha","service":"light.turn_off","entity_id":"light.wiz_rgbw_tunable_3369ae"}]
+
+User: "wake up and turn on the light"
+  → [{"cmd":"wake"},
+     {"cmd":"ha","service":"light.turn_on","entity_id":"light.wiz_rgbw_tunable_3369ae"}]
+
+User: "wiggle your antennas"
+  → [{"cmd":"wake"},
+     {"cmd":"antennas","left":60,"right":60,"duration":0.4},
+     {"cmd":"antennas","left":-30,"right":-30,"duration":0.4},
+     {"cmd":"antennas","left":60,"right":60,"duration":0.4},
+     {"cmd":"antennas","left":0,"right":0,"duration":0.4},
+     {"cmd":"sleep"}]
 
 Reply with ONLY the JSON array, no markdown, no prose."""
 
@@ -413,9 +438,23 @@ async def handle_task(agent, payload):
                             continue
                         r = await _dispatch(agent, c_cmd, c, return_result=True)
                         steps.append(r)
-                    result_msg = f"executed {len(steps)} commands"
+                    # Build a human-readable summary of what actually ran
+                    summary_parts = []
+                    for c in cmds:
+                        if not isinstance(c, dict):
+                            continue
+                        cc = c.get("cmd") or c.get("action") or "?"
+                        if cc == "ha":
+                            summary_parts.append(f"ha:{c.get('service','?')}")
+                        elif cc == "pose":
+                            summary_parts.append(f"pose(y={c.get('yaw',0)},p={c.get('pitch',0)})")
+                        elif cc == "antennas":
+                            summary_parts.append(f"antennas(l={c.get('left','?')},r={c.get('right','?')})")
+                        else:
+                            summary_parts.append(cc)
+                    result_msg = f"ran {len(steps)} of {len(cmds)}: [{' → '.join(summary_parts)}]"
                     if skipped:
-                        result_msg += f" — skipped {len(skipped)} robot commands ({link_reason})"
+                        result_msg += f"  (skipped {len(skipped)}: {link_reason})"
                     return {"ok": True, "cmd": "nl", "steps_run": len(steps),
                             "skipped": skipped, "plan": cmds, "result": result_msg,
                             "_task_id": _tid, "task": _tid}

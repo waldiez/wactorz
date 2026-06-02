@@ -1335,6 +1335,29 @@ class _AgentAPI:
         self._mqtt_broker = actor._mqtt_broker
         self._mqtt_port   = actor._mqtt_port
 
+    # ── Identity properties (parity with _RemoteAgentAPI) ──────────────────
+    # The remote API exposes `agent.node` as the node_name of the runner the
+    # agent is running on. Generated code uses this for topic prefixing
+    # patterns like f"{agent.node}/{agent.name}/detections" — common enough
+    # that the LLM emits it routinely. Without the same property on local
+    # _AgentAPI, agents that migrate from a remote node back to main crash
+    # immediately with "'_AgentAPI' object has no attribute 'node'".
+    #
+    # The canonical "this agent is local" value across the rest of the
+    # framework (spawn registry, desired_state, list_nodes filters) is the
+    # empty string "" — see main_actor's `is_target_local` check which
+    # treats ("", "local", "main") as equivalent. For *display* though, an
+    # empty string concatenated into a topic produces a malformed leading
+    # slash. We compromise by returning "local" so f-strings stay readable
+    # and topics stay valid; user code that compares against "" should be
+    # updated to also accept "local".
+    @property
+    def node(self) -> str:
+        node = getattr(self._actor, "_node", None)
+        if node:
+            return str(node)
+        return "local"
+
     # ── LLM convenience shims (parity with remote _RemoteAgentAPI) ─────────
     # The remote runner exposes agent.chat(messages, ...) directly on the
     # API object — generated code written on a remote node will use that

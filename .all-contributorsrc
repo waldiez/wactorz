@@ -1,0 +1,41 @@
+{
+  "projectName": "wactorz",
+  "projectOwner": "waldiez",
+  "repoType": "github",
+  "repoHost": "https://github.com",
+  "files": ["README.md"],
+  "imageSize": 100,
+  "commit": false,
+  "skipCi": true,
+  "contributorsPerLine": 7,
+  "contributors": [
+    {
+      "login": "ounospanas",
+      "name": "Panagiotis Kasnesis",
+      "avatar_url": "https://avatars.githubusercontent.com/u/29335277?v=4",
+      "profile": "https://github.com/ounospanas",
+      "contributions": ["projectManagement", "code"]
+    },
+    {
+      "login": "lazToum",
+      "name": "Lazaros Toumanidis",
+      "avatar_url": "https://avatars.githubusercontent.com/u/4764837?v=4",
+      "profile": "https://github.com/lazToum",
+      "contributions": ["code", "design"]
+    },
+    {
+      "login": "hchris0",
+      "name": "Chris",
+      "avatar_url": "https://avatars.githubusercontent.com/u/23460824?v=4",
+      "profile": "https://github.com/hchris0",
+      "contributions": ["code", "userTesting"]
+    },
+    {
+      "login": "amaliacontiero",
+      "name": "Amalia Contiero",
+      "avatar_url": "https://avatars.githubusercontent.com/u/29499343?v=4",
+      "profile": "https://github.com/amaliacontiero",
+      "contributions": ["code", "promotion"]
+    }
+  ]
+}

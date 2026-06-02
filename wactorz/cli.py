@@ -174,7 +174,6 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.monitor_agent import MonitorActor
     from wactorz.agents.installer_agent import InstallerAgent
     from wactorz.agents.io_agent import IOAgent
-    from wactorz.agents.manual_agent import ManualAgent
     from wactorz.agents.catalog_agent import CatalogAgent
     from wactorz.agents.llm_agent import (
         AnthropicProvider, OpenAIProvider, OllamaProvider,
@@ -271,10 +270,6 @@ async def build_system(args: argparse.Namespace):
         return _wire_persistence(
             InstallerAgent(name="installer", persistence_dir="./state"))
 
-    def make_manual_agent():
-        return _wire_persistence(
-            ManualAgent(llm_provider=make_provider(), name="manual-agent",
-                        persistence_dir="./state"))
 
     def make_ha_agent():
         return _wire_persistence(
@@ -322,7 +317,6 @@ async def build_system(args: argparse.Namespace):
         .supervise("monitor",                    make_monitor,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=1.0)
         .supervise("io-agent",                   make_io_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=1.0)
         .supervise("installer",                  make_installer,     strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=3,  restart_delay=2.0)
-        .supervise("manual-agent",               make_manual_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-agent",       make_ha_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-map-agent",   make_ha_map_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-state-bridge",make_ha_state_bridge, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)

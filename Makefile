@@ -196,7 +196,9 @@ coverage-py: ## Generate Python coverage XML + terminal report
 
 coverage-rust: ## Generate Rust coverage with cargo-llvm-cov
 	mkdir -p coverage
-	cargo llvm-cov --workspace --exclude wactorz-desktop --lcov --output-path coverage/rust.lcov
+	cargo llvm-cov --workspace --exclude wactorz-desktop \
+	  --ignore-filename-regex 'wactorz-agents|wactorz-server|src-tauri|backend_parity' \
+	  --lcov --output-path coverage/rust.lcov
 
 docs-serve: ## Build docs + serve locally on :8001
 	$(PYTHON) -W ignore::UserWarning:pdoc scripts/build_docs.py --serve

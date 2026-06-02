@@ -571,6 +571,429 @@ async fn watch_once(system: &ActorSystem, specs: &Mutex<Vec<(String, SpecEntry)>
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::actor::ActorConfig;
+    use crate::message::MessageType;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    // ── Minimal test actor ────────────────────────────────────────────────────
+
+    struct TestActor {
+        config: ActorConfig,
+        metrics: Arc<ActorMetrics>,
+        mailbox_tx: mpsc::Sender<Message>,
+        mailbox_rx: Option<mpsc::Receiver<Message>>,
+    }
+
+    impl TestActor {
+        fn new(name: &str) -> Self {
+            let config = ActorConfig::new(name);
+            let (tx, rx) = mpsc::channel(10);
+            Self { config, metrics: Arc::new(ActorMetrics::new()), mailbox_tx: tx, mailbox_rx: Some(rx) }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Actor for TestActor {
+        fn id(&self) -> String { self.config.id.clone() }
+        fn name(&self) -> &str { &self.config.name }
+        fn state(&self) -> ActorState { ActorState::Running }
+        fn metrics(&self) -> Arc<ActorMetrics> { self.metrics.clone() }
+        fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
+        async fn handle_message(&mut self, _: Message) -> anyhow::Result<()> { Ok(()) }
+        async fn run(&mut self) -> anyhow::Result<()> {
+            let mut rx = self.mailbox_rx.take().expect("run() called twice");
+            while let Some(msg) = rx.recv().await {
+                if let MessageType::Command { command: ActorCommand::Stop } = &msg.payload { break; }
+            }
+            Ok(())
+        }
+    }
+
+    fn make_entry(name: &str) -> ActorEntry {
+        let (tx, _rx) = mpsc::channel(10);
+        ActorEntry {
+            id: format!("{name}-id"),
+            name: name.to_string(),
+            state: ActorState::Running,
+            mailbox: tx,
+            protected: false,
+            metrics: Arc::new(ActorMetrics::new()),
+            supervisor_id: None,
+        }
+    }
+
+    // ── ActorRegistry ─────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn registry_register_and_get() {
+        let reg = ActorRegistry::new();
+        let entry = make_entry("alpha");
+        let id = entry.id.clone();
+        reg.register(entry).await;
+        let got = reg.get(&id).await.unwrap();
+        assert_eq!(got.name, "alpha");
+    }
+
+    #[tokio::test]
+    async fn registry_get_missing_returns_none() {
+        let reg = ActorRegistry::new();
+        assert!(reg.get("missing").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn registry_deregister() {
+        let reg = ActorRegistry::new();
+        let entry = make_entry("bravo");
+        let id = entry.id.clone();
+        reg.register(entry).await;
+        reg.deregister(&id).await;
+        assert!(reg.get(&id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn registry_get_by_name_found() {
+        let reg = ActorRegistry::new();
+        reg.register(make_entry("charlie")).await;
+        let found = reg.get_by_name("charlie").await.unwrap();
+        assert_eq!(found.name, "charlie");
+    }
+
+    #[tokio::test]
+    async fn registry_get_by_name_missing() {
+        let reg = ActorRegistry::new();
+        assert!(reg.get_by_name("nobody").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn registry_list_all() {
+        let reg = ActorRegistry::new();
+        reg.register(make_entry("delta")).await;
+        reg.register(make_entry("echo")).await;
+        assert_eq!(reg.list().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn registry_update_state() {
+        let reg = ActorRegistry::new();
+        let entry = make_entry("foxtrot");
+        let id = entry.id.clone();
+        reg.register(entry).await;
+        reg.update_state(&id, ActorState::Paused).await;
+        assert_eq!(reg.get(&id).await.unwrap().state, ActorState::Paused);
+    }
+
+    #[tokio::test]
+    async fn registry_update_state_missing_is_noop() {
+        let reg = ActorRegistry::new();
+        reg.update_state("missing-id", ActorState::Stopped).await; // must not panic
+    }
+
+    #[tokio::test]
+    async fn registry_send_delivers_message() {
+        let reg = ActorRegistry::new();
+        let (tx, mut rx) = mpsc::channel(10);
+        reg.register(ActorEntry { id: "golf-id".into(), name: "golf".into(), state: ActorState::Running, mailbox: tx, protected: false, metrics: Arc::new(ActorMetrics::new()), supervisor_id: None }).await;
+        reg.send("golf-id", Message::text(None, None, "ping")).await.unwrap();
+        assert!(rx.recv().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn registry_send_to_missing_errors() {
+        let reg = ActorRegistry::new();
+        assert!(reg.send("missing-id", Message::text(None, None, "x")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn registry_broadcast() {
+        let reg = ActorRegistry::new();
+        let (tx1, mut rx1) = mpsc::channel(10);
+        let (tx2, mut rx2) = mpsc::channel(10);
+        reg.register(ActorEntry { id: "h1".into(), name: "hotel".into(), state: ActorState::Running, mailbox: tx1, protected: false, metrics: Arc::new(ActorMetrics::new()), supervisor_id: None }).await;
+        reg.register(ActorEntry { id: "h2".into(), name: "india".into(), state: ActorState::Running, mailbox: tx2, protected: false, metrics: Arc::new(ActorMetrics::new()), supervisor_id: None }).await;
+        reg.broadcast(Message::text(None, None, "all")).await;
+        assert!(rx1.recv().await.is_some());
+        assert!(rx2.recv().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn registry_is_clone_sharing_state() {
+        let reg1 = ActorRegistry::default();
+        let reg2 = reg1.clone();
+        reg1.register(make_entry("juliet")).await;
+        assert_eq!(reg2.list().await.len(), 1); // same underlying Arc
+    }
+
+    // ── ActorSystem ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn system_new_and_default_are_empty() {
+        assert!(ActorSystem::new().registry.list().await.is_empty());
+        assert!(ActorSystem::default().registry.list().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn system_with_publisher_and_publisher_clone() {
+        let (pub_, _rx) = EventPublisher::channel();
+        let sys = ActorSystem::with_publisher(pub_);
+        let _p = sys.publisher();
+        assert!(sys.registry.list().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn system_spawn_actor_registers_it() {
+        let sys = ActorSystem::new();
+        let id = sys.spawn_actor(Box::new(TestActor::new("kilo"))).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(sys.registry.get(&id).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn system_stop_actor_sends_stop() {
+        let sys = ActorSystem::new();
+        sys.spawn_actor(Box::new(TestActor::new("lima"))).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(sys.stop_actor("lima").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn system_stop_missing_actor_errors() {
+        assert!(ActorSystem::new().stop_actor("nobody").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn system_stop_protected_actor_errors() {
+        let sys = ActorSystem::new();
+        let (tx, _rx) = mpsc::channel(10);
+        sys.registry.register(ActorEntry { id: "p-id".into(), name: "protected".into(), state: ActorState::Running, mailbox: tx, protected: true, metrics: Arc::new(ActorMetrics::new()), supervisor_id: None }).await;
+        assert!(sys.stop_actor("protected").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn system_shutdown_stops_unprotected() {
+        let sys = ActorSystem::new();
+        sys.spawn_actor(Box::new(TestActor::new("mike"))).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(sys.shutdown().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn system_shutdown_skips_protected() {
+        let sys = ActorSystem::new();
+        let (tx, _rx) = mpsc::channel(10);
+        sys.registry.register(ActorEntry { id: "prot".into(), name: "prot".into(), state: ActorState::Running, mailbox: tx, protected: true, metrics: Arc::new(ActorMetrics::new()), supervisor_id: None }).await;
+        assert!(sys.shutdown().await.is_ok());
+    }
+
+    // ── SupervisorStrategy ───────────────────────────────────────────────────
+
+    #[test]
+    fn strategy_default_is_one_for_one() {
+        assert_eq!(SupervisorStrategy::default(), SupervisorStrategy::OneForOne);
+    }
+
+    #[test]
+    fn strategy_eq_and_ne() {
+        assert_eq!(SupervisorStrategy::OneForAll, SupervisorStrategy::OneForAll);
+        assert_ne!(SupervisorStrategy::OneForOne, SupervisorStrategy::RestForOne);
+    }
+
+    #[test]
+    fn strategy_serde_roundtrip() {
+        for s in [SupervisorStrategy::OneForOne, SupervisorStrategy::OneForAll, SupervisorStrategy::RestForOne] {
+            let j = serde_json::to_string(&s).unwrap();
+            let s2: SupervisorStrategy = serde_json::from_str(&j).unwrap();
+            assert_eq!(s, s2);
+        }
+    }
+
+    // ── Supervisor ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn supervisor_new_status_is_empty() {
+        let sup = Supervisor::new(ActorSystem::new());
+        assert!(sup.status().is_empty());
+    }
+
+    #[tokio::test]
+    async fn supervisor_with_poll_interval() {
+        let sup = Supervisor::with_poll_interval(ActorSystem::new(), Duration::from_millis(100));
+        assert!(sup.status().is_empty());
+    }
+
+    #[tokio::test]
+    async fn supervisor_supervise_and_status() {
+        let mut sup = Supervisor::new(ActorSystem::new());
+        let factory: ActorFactory = Arc::new(|| Box::new(TestActor::new("november")));
+        sup.supervise("november", factory, SupervisorStrategy::OneForOne, 3, 60.0, 0.0);
+        let s = sup.status();
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0]["name"], "november");
+        assert_eq!(s[0]["max_restarts"], 3);
+        assert_eq!(s[0]["exhausted"], false);
+    }
+
+    #[tokio::test]
+    async fn supervisor_start_spawns_actor_and_stop_aborts_watch() {
+        let sys = ActorSystem::new();
+        let mut sup = Supervisor::with_poll_interval(sys.clone(), Duration::from_millis(50));
+        let factory: ActorFactory = Arc::new(|| Box::new(TestActor::new("oscar")));
+        sup.supervise("oscar", factory, SupervisorStrategy::OneForOne, 3, 60.0, 0.0);
+        sup.start().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!sys.registry.list().await.is_empty());
+        sup.stop().await;
+    }
+
+    // ── CrashingActor: actor that fails immediately ───────────────────────────
+
+    struct CrashingActor {
+        config: ActorConfig,
+        metrics: Arc<ActorMetrics>,
+        mailbox_tx: mpsc::Sender<Message>,
+        #[allow(dead_code)]
+        mailbox_rx: Option<mpsc::Receiver<Message>>,
+    }
+
+    impl CrashingActor {
+        fn new(name: &str) -> Self {
+            let config = ActorConfig::new(name);
+            let (tx, rx) = mpsc::channel(10);
+            Self { config, metrics: Arc::new(ActorMetrics::new()), mailbox_tx: tx, mailbox_rx: Some(rx) }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Actor for CrashingActor {
+        fn id(&self) -> String { self.config.id.clone() }
+        fn name(&self) -> &str { &self.config.name }
+        fn state(&self) -> ActorState { ActorState::Failed("crash".into()) }
+        fn metrics(&self) -> Arc<ActorMetrics> { self.metrics.clone() }
+        fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
+        async fn handle_message(&mut self, _: Message) -> anyhow::Result<()> { anyhow::bail!("crash") }
+        async fn run(&mut self) -> anyhow::Result<()> { anyhow::bail!("intentional crash") }
+    }
+
+    // ── SpecEntry unit tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn spec_entry_record_restart_tracks_budget() {
+        let factory: ActorFactory = Arc::new(|| Box::new(TestActor::new("t")));
+        let mut entry = SpecEntry {
+            factory,
+            strategy: SupervisorStrategy::OneForOne,
+            max_restarts: 3,
+            restart_window: Duration::from_secs(60),
+            restart_delay: Duration::ZERO,
+            actor_id: None,
+            restart_times: Vec::new(),
+            stopped: false,
+        };
+        assert!(!entry.exhausted());
+        assert!(entry.record_restart()); // 1 of 3 → within budget
+        assert!(entry.record_restart()); // 2 of 3
+        assert!(entry.record_restart()); // 3 of 3 → AT limit
+        assert!(entry.exhausted());      // now exhausted
+        assert!(!entry.record_restart()); // 4 > 3 → over budget
+    }
+
+    #[test]
+    fn spec_entry_exhausted_with_expired_window() {
+        let factory: ActorFactory = Arc::new(|| Box::new(TestActor::new("t")));
+        let mut entry = SpecEntry {
+            factory,
+            strategy: SupervisorStrategy::OneForOne,
+            max_restarts: 1,
+            restart_window: Duration::from_nanos(1), // window expires instantly
+            restart_delay: Duration::ZERO,
+            actor_id: None,
+            restart_times: Vec::new(),
+            stopped: false,
+        };
+        entry.record_restart();
+        // After window expires, old restarts are pruned → not exhausted again
+        std::thread::sleep(Duration::from_millis(1));
+        assert!(!entry.exhausted());
+    }
+
+    // ── Crash + restart coverage (exercises watch_once, restart_one, stop_one)
+
+    #[tokio::test]
+    async fn system_spawn_crashing_actor_is_deregistered_after_crash() {
+        let sys = ActorSystem::new();
+        let id = sys.spawn_actor(Box::new(CrashingActor::new("crash-test"))).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Actor runs and immediately fails → deregistered
+        assert!(sys.registry.get(&id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn supervisor_watch_once_restarts_crashed_actor_one_for_one() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let sys = ActorSystem::new();
+            let factory: ActorFactory = Arc::new(|| Box::new(CrashingActor::new("crash-sup")));
+            let mut sup = Supervisor::with_poll_interval(sys.clone(), Duration::from_millis(30));
+            sup.supervise("crash-sup", factory, SupervisorStrategy::OneForOne, 5, 60.0, 0.0);
+            sup.start().await.unwrap();
+            // Let actor crash and supervisor detect + restart it at least once
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            sup.stop().await;
+            // After stop, watch task is aborted
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn supervisor_watch_once_one_for_all_strategy() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let sys = ActorSystem::new();
+            let crash_factory: ActorFactory = Arc::new(|| Box::new(CrashingActor::new("crash-a")));
+            let stable_factory: ActorFactory = Arc::new(|| Box::new(TestActor::new("stable-b")));
+            let mut sup = Supervisor::with_poll_interval(sys.clone(), Duration::from_millis(30));
+            sup.supervise("crash-a", crash_factory, SupervisorStrategy::OneForAll, 5, 60.0, 0.0);
+            sup.supervise("stable-b", stable_factory, SupervisorStrategy::OneForAll, 5, 60.0, 0.0);
+            sup.start().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            sup.stop().await;
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn supervisor_watch_once_rest_for_one_strategy() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let sys = ActorSystem::new();
+            let stable_factory: ActorFactory = Arc::new(|| Box::new(TestActor::new("first")));
+            let crash_factory: ActorFactory = Arc::new(|| Box::new(CrashingActor::new("second")));
+            let mut sup = Supervisor::with_poll_interval(sys.clone(), Duration::from_millis(30));
+            sup.supervise("first", stable_factory, SupervisorStrategy::RestForOne, 5, 60.0, 0.0);
+            sup.supervise("second", crash_factory, SupervisorStrategy::RestForOne, 5, 60.0, 0.0);
+            sup.start().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            sup.stop().await;
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn system_inject_fn_is_identity() {
+        let sys = ActorSystem::new();
+        let f = sys._inject_fn();
+        let (tx, _rx) = mpsc::channel(10);
+        let entry = ActorEntry {
+            id: "test-id".into(),
+            name: "test".into(),
+            state: ActorState::Running,
+            mailbox: tx,
+            protected: false,
+            metrics: Arc::new(ActorMetrics::new()),
+            supervisor_id: None,
+        };
+        let result = f(entry);
+        assert_eq!(result.name, "test");
+    }
+}
+
 async fn stop_one(system: &ActorSystem, specs: &Mutex<Vec<(String, SpecEntry)>>, name: &str) {
     let actor_id = specs
         .lock()

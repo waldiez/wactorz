@@ -429,14 +429,6 @@ export class SocialDashboard {
     const parts: string[] = [];
     if (agent.task)
       parts.push(`<span class="sd-metric-task">${agent.task}</span>`);
-    if (agent.cpu != null)
-      parts.push(
-        `<span class="sd-metric-chip">${agent.cpu.toFixed(1)}% CPU</span>`,
-      );
-    if (agent.mem != null)
-      parts.push(
-        `<span class="sd-metric-chip">${agent.mem.toFixed(0)} MB</span>`,
-      );
     if (agent.messagesProcessed != null)
       parts.push(
         `<span class="sd-metric-chip">${agent.messagesProcessed} proc</span>`,

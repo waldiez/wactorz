@@ -11,7 +11,7 @@
 #   systemd/                systemd unit template
 #   scripts/                build-native.sh, mock-agents.mjs
 #   compose.native.yaml     Mosquitto-only Docker support
-#   .env.example
+#   .env.template
 #   setup.sh                One-shot build + deploy script for the target host
 #
 # Prerequisites (LOCAL build machine):
@@ -78,7 +78,7 @@ cp infra/mosquitto/mosquitto.conf      "${WORK_DIR}/infra/mosquitto/mosquitto.co
 # Compose, systemd, env template, helpers
 cp compose.native.yaml                "${WORK_DIR}/compose.native.yaml"
 cp systemd/wactorz.service          "${WORK_DIR}/systemd/wactorz.service"
-cp .env.example                       "${WORK_DIR}/.env.example"
+cp .env.template                       "${WORK_DIR}/.env.template"
 cp scripts/build-native.sh            "${WORK_DIR}/scripts/build-native.sh"
 cp scripts/mock-agents.mjs            "${WORK_DIR}/scripts/mock-agents.mjs"
 chmod +x "${WORK_DIR}/scripts/build-native.sh"
@@ -139,7 +139,7 @@ fi
 banner "Configuring environment…"
 
 if [ ! -f .env ]; then
-    cp .env.example .env
+    cp .env.template .env
     info "Created .env from template."
 fi
 
@@ -323,7 +323,7 @@ The wizard will:
 
 ```bash
 # 1. Configure env
-cp .env.example .env
+cp .env.template .env
 nano .env   # set LLM_API_KEY; MQTT_HOST must be 'localhost'
 
 # 2. Build

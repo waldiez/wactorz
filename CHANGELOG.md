@@ -1,11 +1,29 @@
 # Changelog
 
 All notable changes to Wactorz are documented here.
-Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Versioning follows [SemVer](https://semver.org/).
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
 ## [Unreleased]
+
+## [0.4.3] - 2026-06-01
+
+### Changed
+
+- **HomeAssistantAgent** — `create_automation` intent is temporarily disabled; requests are routed to `_recommend_hardware` instead.
+- **HomeAssistantAgent** — Edit automation flow refactored into three focused helpers (`_identify_automation`, `_get_automation_config`, `_generate_modified_automation_config`) with `AutomationEditError` for internal error propagation.
+- **HomeAssistantAgent** — All LLM system prompts extracted to `wactorz/agents/prompts/home_assistant_prompts.py`.
+- **ha_helper** — Type hints modernised (`Optional[str]` → `str | None`, `List[Dict]` → `list[dict]`); URL helpers reorganised; `get_automations` rewritten.
+
+### Fixed
+
+- **HomeAssistantAgent** — Non-dict LLM response no longer crashes the delete/edit path (guard ordering corrected).
+- **HomeAssistantAgent** — Stale `devices["devices"]` key corrected to `devices["data"]` throughout hardware recommendation and entity extraction helpers.
+
+### Tests
+
+- Comprehensive test suite added for `ha_helper` (`tests/test_ha_helper.py`) and `HomeAssistantAgent` (`tests/test_home_assistant_agent.py`).
 
 ## [0.4.2] - 2026-05-21
 

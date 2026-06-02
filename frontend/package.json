@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "fmt": "bun x prettier --write --list-different \"src/**/*.ts\"",
     "format": "bun fmt",
@@ -25,11 +26,11 @@
     "mqtt": "^5.15.0"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.5",
+    "@vitest/coverage-v8": "^4.1.7",
     "happy-dom": "^20.9.0",
     "typedoc": "^0.28.17",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.7"
   }
 }

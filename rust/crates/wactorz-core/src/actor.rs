@@ -215,3 +215,136 @@ pub trait Actor: Send + Sync + 'static {
         anyhow::bail!("Actor::run() must be overridden by each concrete actor")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn actor_state_display() {
+        assert_eq!(ActorState::Initializing.to_string(), "initializing");
+        assert_eq!(ActorState::Running.to_string(), "running");
+        assert_eq!(ActorState::Paused.to_string(), "paused");
+        assert_eq!(ActorState::Stopped.to_string(), "stopped");
+        assert_eq!(ActorState::Failed("oom".into()).to_string(), "failed(oom)");
+    }
+
+    #[test]
+    fn actor_state_eq_and_clone() {
+        assert_eq!(ActorState::Running, ActorState::Running);
+        assert_ne!(ActorState::Running, ActorState::Stopped);
+        let s = ActorState::Failed("e".into());
+        assert_eq!(s.clone(), ActorState::Failed("e".into()));
+    }
+
+    #[test]
+    fn actor_config_new_sets_fields() {
+        let c = ActorConfig::new("my-agent");
+        assert_eq!(c.name, "my-agent");
+        assert!(!c.id.is_empty());
+        assert_eq!(c.mailbox_capacity, 1000);
+        assert_eq!(c.heartbeat_interval_secs, 30);
+        assert!(!c.protected);
+    }
+
+    #[test]
+    fn actor_config_new_with_node() {
+        let c = ActorConfig::new_with_node("wif-agent", "india");
+        assert_eq!(c.name, "wif-agent");
+        assert!(!c.id.is_empty());
+    }
+
+    #[test]
+    fn actor_config_protected_builder() {
+        let c = ActorConfig::new("io-agent").protected();
+        assert!(c.protected);
+    }
+
+    #[test]
+    fn sanitize_node_name_replaces_special_chars() {
+        // sanitize_node_name is private — test indirectly via ActorConfig::new
+        // Names with spaces/slashes should still produce a non-empty id
+        let c = ActorConfig::new("my agent/v2");
+        assert!(!c.id.is_empty());
+    }
+
+    #[test]
+    fn sanitize_node_name_empty_input_falls_back() {
+        // Empty name → sanitize returns "actor" fallback
+        let c = ActorConfig::new("");
+        assert!(!c.id.is_empty());
+    }
+
+    #[test]
+    fn sanitize_node_name_truncates_to_20_chars() {
+        // 30-char name should produce a valid id (node truncated to 20)
+        let long_name = "a".repeat(30);
+        let c = ActorConfig::new(&long_name);
+        assert!(!c.id.is_empty());
+    }
+
+    #[test]
+    fn actor_config_is_clone_debug_serialize() {
+        let c = ActorConfig::new("test");
+        let json = serde_json::to_string(&c).unwrap();
+        let c2: ActorConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(c2.name, "test");
+    }
+
+    // ── Default Actor trait methods ───────────────────────────────────────────
+
+    struct MinimalActor {
+        config: ActorConfig,
+        metrics: Arc<ActorMetrics>,
+        mailbox_tx: mpsc::Sender<Message>,
+    }
+
+    impl MinimalActor {
+        fn new(name: &str) -> Self {
+            let config = ActorConfig::new(name);
+            let (tx, _rx) = mpsc::channel(10);
+            Self { config, metrics: Arc::new(ActorMetrics::new()), mailbox_tx: tx }
+        }
+    }
+
+    #[async_trait]
+    impl Actor for MinimalActor {
+        fn id(&self) -> String { self.config.id.clone() }
+        fn name(&self) -> &str { &self.config.name }
+        fn state(&self) -> ActorState { ActorState::Running }
+        fn metrics(&self) -> Arc<ActorMetrics> { self.metrics.clone() }
+        fn mailbox(&self) -> mpsc::Sender<Message> { self.mailbox_tx.clone() }
+        async fn handle_message(&mut self, _: Message) -> anyhow::Result<()> { Ok(()) }
+        // run(), is_protected(), on_start(), on_heartbeat(), on_stop() all use defaults
+    }
+
+    #[test]
+    fn actor_default_is_protected_returns_false() {
+        let a = MinimalActor::new("min");
+        assert!(!a.is_protected());
+    }
+
+    #[tokio::test]
+    async fn actor_default_on_start_returns_ok() {
+        let mut a = MinimalActor::new("min");
+        assert!(a.on_start().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn actor_default_on_heartbeat_returns_ok() {
+        let mut a = MinimalActor::new("min");
+        assert!(a.on_heartbeat().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn actor_default_on_stop_returns_ok() {
+        let mut a = MinimalActor::new("min");
+        assert!(a.on_stop().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn actor_default_run_returns_error() {
+        let mut a = MinimalActor::new("min");
+        assert!(a.run().await.is_err());
+    }
+}

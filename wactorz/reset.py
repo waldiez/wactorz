@@ -7,6 +7,7 @@ chat        chat_log rows + conversation_history / history_summary kv entries
 state       per-agent pickle file (state/<name>/state.pkl)
 metrics     cost and message-count kv entries
 spawns      spawn_registry table
+logs        truncate wactorz.log and monitor.log (safe while running)
 all         everything above
 
 Each function is safe to call while the system is down (offline reset) or
@@ -84,10 +85,41 @@ def reset_spawns(agent_name: Optional[str] = None, db_path: Optional[str] = None
                 f" for {agent_name!r}" if agent_name else "")
 
 
+def reset_logs(log_dir: Optional[str] = None) -> None:
+    """Truncate log files. Safe to call while the system is running."""
+    truncated: set[str] = set()
+
+    # Truncate any open FileHandlers in the running process first
+    for handler in logging.root.handlers:
+        if isinstance(handler, logging.FileHandler):
+            try:
+                handler.acquire()
+                handler.stream.truncate(0)
+                handler.stream.seek(0)
+                truncated.add(str(Path(handler.baseFilename).resolve()))
+                handler.release()
+            except Exception as exc:
+                logger.warning("[reset] could not truncate handler %s: %s",
+                               handler.baseFilename, exc)
+
+    # Also handle files by path (supports offline use)
+    base = Path(log_dir or ".")
+    for name in ("wactorz.log", "monitor.log"):
+        p = (base / name).resolve()
+        if p.exists() and str(p) not in truncated:
+            try:
+                p.write_text("")
+                logger.info("[reset] truncated log file: %s", p)
+            except Exception as exc:
+                logger.warning("[reset] could not truncate %s: %s", p, exc)
+
+    logger.info("[reset] logs cleared")
+
+
 def reset_all(agent_name: Optional[str] = None,
               db_path: Optional[str] = None,
               state_dir: Optional[str] = None) -> None:
-    """Full wipe: chat, metrics, spawns, and (if agent given) pickle state."""
+    """Full wipe: chat, metrics, spawns, pickle state, and log files."""
     reset_chat(agent_name, db_path)
     reset_metrics(agent_name, db_path)
     reset_spawns(agent_name, db_path)
@@ -95,6 +127,8 @@ def reset_all(agent_name: Optional[str] = None,
         reset_agent_state(agent_name, state_dir)
     else:
         _reset_all_pickles(state_dir)
+    if not agent_name:
+        reset_logs()
     logger.info("[reset] full wipe complete%s",
                 f" for {agent_name!r}" if agent_name else "")
 
@@ -124,7 +158,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--state",   action="store_true", help="Clear agent pickle state file(s)")
     p.add_argument("--metrics", action="store_true", help="Clear cost and message-count data")
     p.add_argument("--spawns",  action="store_true", help="Clear spawn registry")
-    p.add_argument("--all",     action="store_true", help="Clear everything")
+    p.add_argument("--logs",    action="store_true", help="Truncate wactorz.log and monitor.log")
+    p.add_argument("--all",     action="store_true", help="Clear everything (including logs)")
     p.add_argument("--agent",   metavar="NAME",       help="Limit to a single agent by name")
     p.add_argument("--db",      metavar="PATH",       help="Path to wactorz.db (default: from config)")
     p.add_argument("--state-dir", metavar="PATH",     help="Path to state/ dir (default: ./state)")
@@ -137,7 +172,7 @@ def main() -> None:
                         stream=sys.stdout)
     args = _build_parser().parse_args()
 
-    if not any([args.chat, args.state, args.metrics, args.spawns, args.all]):
+    if not any([args.chat, args.state, args.metrics, args.spawns, args.logs, args.all]):
         _build_parser().print_help()
         sys.exit(1)
 
@@ -160,6 +195,8 @@ def main() -> None:
         reset_metrics(agent, db_path)
     if args.spawns:
         reset_spawns(agent, db_path)
+    if args.logs:
+        reset_logs()
 
 
 if __name__ == "__main__":

@@ -1,8 +1,7 @@
 /**
  * IO bar (bottom of screen).
  *
- * - Mic button: PTT (hold to speak, release/VAD silence to send)
- * - Wake button: toggle always-on wake-word listening ("wactorz …")
+ * - Mic button: tap-to-toggle recording (click once to start, click again to stop)
  * - Textarea input: sends messages; Enter sends, Shift+Enter inserts newline
  * - Up/Down arrows: navigate message history (last 50 sent)
  * - Send button: morphs to spinner while awaiting response
@@ -46,16 +45,13 @@ export class IOBar {
 
     this.bindEvents();
 
-    // Hide voice buttons immediately if the API isn't available
-    if (!this.voiceInput.isAvailable) {
-      this.micBtn.style.display  = "none";
-      this.wakeBtn.style.display = "none";
-      (document.body as any).__voiceUnavailable = true;
-    }
+    // Always hide the wake button (deferred past 0.5)
+    this.wakeBtn.style.display = "none";
 
-    // Restore persistent wake-word state across page loads
-    if (this.voiceInput.isAvailable && localStorage.getItem(LS_WAKE_ACTIVE) === "1") {
-      this._toggleWake();
+    // Hide mic button if the API isn't available
+    if (!this.voiceInput.isAvailable) {
+      this.micBtn.style.display = "none";
+      (document.body as any).__voiceUnavailable = true;
     }
   }
 
@@ -83,14 +79,14 @@ export class IOBar {
 
     this.sendBtn.addEventListener("click", () => void this.send());
 
-    // Push-to-talk: hold to record, release (or VAD silence) to send
-    this.micBtn.addEventListener("pointerdown", (e) => {
-      e.preventDefault();
-      this.micBtn.setPointerCapture(e.pointerId);
-      void this.startMic();
+    // Tap-to-toggle: click once to start recording, click again to stop
+    this.micBtn.addEventListener("click", () => {
+      if (this.voiceInput.isRecording) {
+        this.stopMic();
+      } else {
+        void this.startMic();
+      }
     });
-    this.micBtn.addEventListener("pointerup",     () => this.stopMic());
-    this.micBtn.addEventListener("pointercancel", () => this.stopMic());
 
     // Wake-word toggle
     this.wakeBtn.addEventListener("click", () => this._toggleWake());
@@ -125,12 +121,12 @@ export class IOBar {
       }
     };
 
-    // Sync mic button when PTT ends
+    // Sync mic button when recording ends
     this.voiceInput.onStop = () => {
       this.micBtn.classList.remove("recording");
-      this.micBtn.title = "Hold to speak";
+      this.micBtn.title = "Tap to speak";
       const cdMic = document.getElementById("af-mic-btn-cd");
-      if (cdMic) { cdMic.classList.remove("recording"); cdMic.title = "Hold to speak"; }
+      if (cdMic) { cdMic.classList.remove("recording"); cdMic.title = "Tap to speak"; }
     };
 
     this.voiceInput.onError = (message) => {
@@ -271,7 +267,7 @@ export class IOBar {
     const started = await this.voiceInput.start();
     if (started) {
       this.micBtn.classList.add("recording");
-      this.micBtn.title = "Release to send";
+      this.micBtn.title = "Tap to stop";
     }
   }
 

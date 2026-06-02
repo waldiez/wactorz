@@ -174,6 +174,25 @@ describe("MentionPopup", () => {
     expect(ul().style.display).toBe("none");
   });
 
+  it("Enter when focusedIdx is out of bounds covers false branch of guard", () => {
+    new MentionPopup(input, agents);
+    triggerInput(input, "@"); // shows all 3, focusedIdx = 0
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+    // focusedIdx is now 1; clear popup items while popup stays visible
+    ul().innerHTML = ""; // items.length = 0
+    // focusedIdx (1) >= items.length (0) → false branch of the guard
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    expect(ul().style.display).toBe("block"); // popup still open
+  });
+
+  it("Enter when focused item has no data-name skips select()", () => {
+    new MentionPopup(input, agents);
+    triggerInput(input, "@al"); // shows alpha, focusedIdx = 0
+    ul().querySelector("li")!.removeAttribute("data-name"); // dataset["name"] undefined
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    expect(input.value).toBe("@al"); // value unchanged
+  });
+
   it("selection preserves text after cursor", () => {
     new MentionPopup(input, agents);
     input.value = "@al world";

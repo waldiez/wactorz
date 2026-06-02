@@ -80,7 +80,7 @@ git clone https://github.com/waldiez/wactorz
 cd wactorz
 
 # Copy the example env and set your LLM key
-copy .env.example .env
+copy .env.template .env
 notepad .env   # set LLM_API_KEY at minimum
 ```
 
@@ -152,7 +152,7 @@ The Rust binary runs directly on Windows. Only Mosquitto runs in Docker.
 ```powershell
 git clone https://github.com/waldiez/wactorz
 cd wactorz
-copy .env.example .env
+copy .env.template .env
 notepad .env   # set LLM_API_KEY and MQTT_HOST=localhost
 ```
 
@@ -469,7 +469,7 @@ wsl --install   # installs Ubuntu by default; reboot when prompted
 # 3. Clone the repo
 git clone https://github.com/waldiez/wactorz
 cd wactorz
-copy .env.example .env
+copy .env.template .env
 notepad .env   # set LLM_API_KEY
 
 # 4. Start the mock dev stack (no Rust build needed)

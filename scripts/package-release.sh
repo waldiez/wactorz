@@ -79,7 +79,7 @@ cp infra/mosquitto/mosquitto.conf "${WORK_DIR}/infra/mosquitto/mosquitto.conf"
 cp scripts/mock-agents.mjs "${WORK_DIR}/scripts/mock-agents.mjs"
 
 # Env template
-cp .env.example "${WORK_DIR}/.env.example"
+cp .env.template "${WORK_DIR}/.env.template"
 
 # Exported image
 mv /tmp/wactorz-server.tar.gz "${WORK_DIR}/wactorz-server.tar.gz"
@@ -275,7 +275,7 @@ fi
 banner "Configuring environment…"
 
 if [ ! -f .env ]; then
-    cp .env.example .env
+    cp .env.template .env
     echo "  Created .env from template."
 fi
 
@@ -366,7 +366,7 @@ http://<your-host-ip>/
 ## Manual setup (skip the wizard)
 
 ```bash
-cp .env.example .env
+cp .env.template .env
 # Edit .env — set LLM_API_KEY at minimum
 
 docker load < wactorz-server.tar.gz

@@ -949,10 +949,15 @@ class HAFusekiBridge:
             area_body_parts = [_bridge_agent_body()]
             for area in areas:
                 area_body_parts.append(_area_body(area))
-            await fuseki.replace_graph(
-                GRAPH_AREAS, _ttl("\n".join(area_body_parts))
-            )
-            log.info("Areas graph replaced (%d areas).", len(areas))
+            try:
+                await fuseki.replace_graph(
+                    GRAPH_AREAS, _ttl("\n".join(area_body_parts))
+                )
+                log.info("Areas graph replaced (%d areas).", len(areas))
+            except Exception as exc:
+                log.warning(
+                    "Fuseki unavailable — skipping areas graph: %s", exc
+                )
         else:
             log.info("No areas found — skipping areas graph.")
 
@@ -973,19 +978,30 @@ class HAFusekiBridge:
                 _device_body(eid, s, area_id=area_id, area_name=area_name)
             )
 
-        await fuseki.replace_graph(
-            GRAPH_DEVICES, _ttl("\n".join(catalog_body_parts))
-        )
-        log.info("Devices catalog replaced (%d entities).", len(wanted))
+        try:
+            await fuseki.replace_graph(
+                GRAPH_DEVICES, _ttl("\n".join(catalog_body_parts))
+            )
+            log.info("Devices catalog replaced (%d entities).", len(wanted))
+        except Exception as exc:
+            log.warning(
+                "Fuseki unavailable — skipping devices catalog: %s", exc
+            )
 
         # ── 5. Current-state graph (patch per entity) ─────────────────────────
         ts_ms = int(time.time() * 1000)
-        for s in wanted:
-            eid = s["entity_id"]
-            body = _current_obs_body(eid, s, ts_ms)
-            await fuseki.replace_entity_in_graph(GRAPH_CURRENT, eid, _ttl(body))
-
-        log.info("Current-state graph seeded.")
+        try:
+            for s in wanted:
+                eid = s["entity_id"]
+                body = _current_obs_body(eid, s, ts_ms)
+                await fuseki.replace_entity_in_graph(
+                    GRAPH_CURRENT, eid, _ttl(body)
+                )
+            log.info("Current-state graph seeded.")
+        except Exception as exc:
+            log.warning(
+                "Fuseki unavailable — skipping current-state seed: %s", exc
+            )
 
     # ── Live events ───────────────────────────────────────────────────────────
 
@@ -1212,23 +1228,28 @@ def _parse_domains(raw: str | None) -> frozenset[str] | None:
 
 
 async def _run_with_retry(coro_factory: Any, label: str) -> None:
-    """Run a bridge coroutine, reconnecting on error."""
+    """Run a bridge coroutine, reconnecting on error with exponential backoff."""
     _last_exc_str: str | None = None
+    _backoff = 5.0
     while True:
         try:
             await coro_factory()
-            _last_exc_str = None  # reset only after a successful run
+            _last_exc_str = None
+            _backoff = 5.0
         except KeyboardInterrupt:
             log.info("%s shutting down.", label)
             break
         except Exception as exc:
             exc_str = str(exc)
             if exc_str != _last_exc_str:
-                log.warning("%s error: %s — will retry every 10 s", label, exc)
+                log.warning(
+                    "%s error: %s — will retry in %.0f s", label, exc, _backoff
+                )
                 _last_exc_str = exc_str
             else:
-                log.debug("%s still unavailable — retrying …", label)
-            await asyncio.sleep(10)
+                log.debug("%s still unavailable — retrying in %.0f s …", label, _backoff)
+            await asyncio.sleep(_backoff)
+            _backoff = min(_backoff * 2, 120.0)
 
 
 async def _main() -> None:
@@ -1302,12 +1323,16 @@ def _cli_main() -> None:
     """Sync entry point for the ``wactorz-fuseki`` console script."""
     import sys
     if sys.platform == "win32":
-        # Python 3.10 on Windows defaults to ProactorEventLoop which does not
-        # support add_reader / add_writer.  aiohttp and aiomqtt both rely on
-        # these, so switch to SelectorEventLoop before starting the event loop.
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(_main())
-
+        loop = asyncio.SelectorEventLoop()
+        asyncio.set_event_loop(loop)
+    else:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    try:
+        loop.run_until_complete(_main())
+    finally:
+        loop.close()
 
 if __name__ == "__main__":
     _cli_main()

@@ -263,6 +263,73 @@ describe("HAClient control methods", () => {
     expect(msg2.id).toBe(msg1.id + 1);
   });
 
+  // ── _fetchRegistries / _request resolver ─────────────────────────────────
+
+  it("_fetchRegistries resolves and calls onRegistriesUpdate", async () => {
+    const regSpy = vi.fn();
+    const client = new HAClient("http://ha.local", "token");
+    client.onRegistriesUpdate = regSpy;
+    client.connect(vi.fn());
+    fakeWS.receive({ type: "auth_ok" });
+    // After auth_ok: get_states=id1, area=id2, entity=id3, device=id4, subscribe=id5
+    fakeWS.receive({ id: 2, type: "result", success: true, result: [{ area_id: "living", name: "Living Room" }] });
+    fakeWS.receive({ id: 3, type: "result", success: true, result: [] });
+    fakeWS.receive({ id: 4, type: "result", success: true, result: [] });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(regSpy).toHaveBeenCalledWith({
+      areas: [{ area_id: "living", name: "Living Room" }],
+      entityEntries: [],
+      deviceEntries: [],
+    });
+  });
+
+  it("_fetchRegistries catch fires and calls onRegistriesUpdate with empty arrays on rejection", async () => {
+    const regSpy = vi.fn();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const client = new HAClient("http://ha.local", "token");
+    client.onRegistriesUpdate = regSpy;
+    client.connect(vi.fn());
+    fakeWS.receive({ type: "auth_ok" });
+    // Reject first registry request → _request rejects → Promise.all rejects → catch
+    fakeWS.receive({ id: 2, type: "result", success: false, error: { message: "permission denied" } });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(regSpy).toHaveBeenCalledWith({ areas: [], entityEntries: [], deviceEntries: [] });
+    warnSpy.mockRestore();
+  });
+
+  it("onerror is handled without throwing", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const client = new HAClient("http://ha.local", "token");
+    client.connect(vi.fn());
+    expect(() => fakeWS.onerror?.(new Error("connection refused"))).not.toThrow();
+    errSpy.mockRestore();
+    void client;
+  });
+
+  it("connected returns true when WebSocket is open", () => {
+    const client = new HAClient("http://ha.local", "token");
+    client.connect(vi.fn());
+    expect(client.connected).toBe(true);
+  });
+
+  it("connected returns false before connect() is called", () => {
+    const client = new HAClient("http://ha.local", "token");
+    expect(client.connected).toBe(false);
+  });
+
+  it("_request rejects immediately when WebSocket is closed at auth_ok, catch fires with empty arrays", async () => {
+    const regSpy = vi.fn();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const client = new HAClient("http://ha.local", "token");
+    client.onRegistriesUpdate = regSpy;
+    client.connect(vi.fn());
+    fakeWS.readyState = 3; // CLOSED before auth_ok triggers _fetchRegistries
+    fakeWS.receive({ type: "auth_ok" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(regSpy).toHaveBeenCalledWith({ areas: [], entityEntries: [], deviceEntries: [] });
+    warnSpy.mockRestore();
+  });
+
   it("onclose resets authenticated flag", () => {
     const client = new HAClient("http://ha.local", "token");
     client.connect(vi.fn());

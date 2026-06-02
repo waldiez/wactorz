@@ -21,7 +21,21 @@ class MockAudioContext {
       connect: () => {},
     };
   }
+  createBufferSource() {
+    return {
+      buffer: null as any,
+      loop: false,
+      connect: () => {},
+      start: () => {},
+      stop: () => {},
+      onended: null as any,
+    };
+  }
+  decodeAudioData(_buf: ArrayBuffer): Promise<any> {
+    return Promise.resolve({});
+  }
   resume() { return Promise.resolve(); }
+  close()  { return Promise.resolve(); }
 }
 (globalThis as any).AudioContext = MockAudioContext;
 
@@ -42,3 +56,11 @@ globalThis.requestAnimationFrame = (cb: FrameRequestCallback) => {
   cb(0);
   return 0;
 };
+
+// Stub fetch — default 503 so TTS falls back to browser speech synthesis
+globalThis.fetch = vi.fn().mockResolvedValue({
+  ok: false,
+  status: 503,
+  json: () => Promise.resolve([]),
+  arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+});

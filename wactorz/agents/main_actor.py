@@ -441,7 +441,6 @@ You do NOT act as a middleman for agent conversations.
 - monitor                 : health monitoring
 - installer               : installs Python packages locally AND on remote nodes via SSH
                             Actions: install, node_deploy, node_install, node_run, check, history
-- manual-agent            : finds device manuals online and answers questions from PDFs (type: manual)
 - home-assistant-agent    : manages all Home Assistant operations (hardware recommendations, automation create/edit/delete/list)
 
 == INSTALLING PACKAGES ==
@@ -3757,8 +3756,6 @@ class MainActor(LLMAgent):
             actor = await self._spawn_ha_actuator(config, name)
         elif agent_type == "scheduled":
             actor = await self._spawn_scheduled_agent(config, name)
-        elif agent_type == "manual" or name == "manual-agent":
-            actor = await self._spawn_manual_agent(config, name)
         elif agent_type == "llm" or (not code and system_prompt):
             actor = await self._spawn_llm_agent(config, name)
         elif code:
@@ -3848,17 +3845,6 @@ class MainActor(LLMAgent):
             logger.error(f"[{self.name}] Failed to spawn ScheduledAgent '{name}': {e}")
             return None
 
-    async def _spawn_manual_agent(self, config: dict, name: str):
-        """Spawn the pre-defined ManualAgent — robust PDF manual search and Q&A."""
-        from .manual_agent import ManualAgent
-        logger.info(f"[{self.name}] Spawning ManualAgent '{name}'")
-        actor = await self.spawn(
-            ManualAgent,
-            name=name,
-            llm_provider=self.llm,
-            persistence_dir=str(self._persistence_dir.parent),
-        )
-        return actor
 
     async def _apply_initial_state(self, name: str, config: dict) -> None:
         """
@@ -4124,6 +4110,122 @@ class MainActor(LLMAgent):
         finally:
             self._result_futures.pop(task_id, None)
 
+    # Synthetic bridge code shipped with type:"llm" agents when they're spawned
+    # on a remote node. The runner compiles this and finds handle_task, so the
+    # agent can actually respond to tasks instead of returning the "no
+    # handle_task function" error.
+    #
+    # Design points:
+    #   - All persistence is via agent.persist / agent.recall (these write to
+    #     the remote node's JSON state file under conversation_history).
+    #     conversation_history shipped via _initial_state from main is picked
+    #     up by recall() on first use, so memory survives migrate-back too.
+    #   - LLM calls go through agent.chat(messages, system=...) — on the remote
+    #     side this is _RemoteAgentAPI.chat, which RPCs back to main via the
+    #     main/llm_request bridge. No API key leaves main.
+    #   - System prompt is interpolated as a string literal at synthesis time
+    #     so the agent code doesn't need to look it up from config at runtime.
+    #     We use json.dumps to safely escape quotes / newlines / backslashes.
+    #   - History gets bounded at max_history turns (32 by default, matches
+    #     LLMAgent's default) so the prompt doesn't grow without bound.
+    _LLM_BRIDGE_CODE_TEMPLATE = '''
+# ── Auto-generated LLM bridge (synthesized by main when this agent was spawned
+# remotely with type: "llm"). Do not edit; replace the agent if you need to
+# change behavior. ─────────────────────────────────────────────────────────
+import time as _t
+
+_SYSTEM_PROMPT = {system_prompt_literal}
+_MAX_HISTORY   = {max_history}
+
+async def setup(agent):
+    # Conversation history may have been shipped via _initial_state at spawn
+    # time — agent.recall() finds it. If this is a fresh spawn, default to
+    # an empty list.
+    agent.state["history"] = list(agent.recall("conversation_history", []) or [])
+
+async def handle_task(agent, payload):
+    # Accept the same shapes LLMAgent does: dict with text/task/message/query,
+    # or a bare string. Anything else gets str()'d so the LLM at least gets
+    # something to look at instead of crashing on a non-string.
+    if isinstance(payload, dict):
+        text = (
+            payload.get("text")
+            or payload.get("task")
+            or payload.get("message")
+            or payload.get("query")
+            or str(payload)
+        )
+    else:
+        text = str(payload) if payload is not None else ""
+
+    started = _t.time()
+    history = agent.state.setdefault("history", [])
+    history.append({{"role": "user", "content": text, "ts": started}})
+
+    # Keep the prompt bounded — only send the last _MAX_HISTORY turns to the LLM.
+    safe_history = [
+        {{"role": m["role"], "content": str(m["content"])}}
+        for m in history[-_MAX_HISTORY:]
+        if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+    ]
+
+    response = await agent.chat(safe_history, system=_SYSTEM_PROMPT)
+    duration = _t.time() - started
+
+    history.append({{"role": "assistant", "content": response, "ts": _t.time()}})
+    # Trim in-memory list too so it doesn't grow forever between persists.
+    if len(history) > _MAX_HISTORY * 2:
+        del history[: len(history) - _MAX_HISTORY * 2]
+    agent.persist("conversation_history", history)
+
+    return {{"text": response, "task": text[:60], "duration": duration}}
+'''
+
+    def _inject_llm_bridge_code(self, config: dict) -> dict:
+        """
+        If ``config`` is for an LLM-typed agent without code, return a copy
+        with synthesized bridge code so the remote runner can actually run it.
+
+        No-op (returns the original config) when:
+          - the config already has code (caller provided their own logic)
+          - the config isn't type "llm" (DynamicAgent, ha_actuator, etc. are
+            handled directly by the runner already)
+
+        Why a copy: callers may pass the same config dict for multiple writes
+        (spawn registry, desired_state, MQTT publish) and we don't want to
+        mutate it under their feet.
+        """
+        if not isinstance(config, dict):
+            return config
+        if (config.get("code") or "").strip():
+            return config
+        if (config.get("type") or "").strip().lower() != "llm":
+            return config
+
+        import json as _json
+        system_prompt = config.get("system_prompt", "You are a helpful assistant.")
+        max_history   = int(config.get("max_history", 32) or 32)
+        bridge = self._LLM_BRIDGE_CODE_TEMPLATE.format(
+            system_prompt_literal=_json.dumps(system_prompt),
+            max_history=max_history,
+        )
+
+        out = dict(config)
+        out["code"] = bridge
+        # description and capabilities are commonly already set by the LLM
+        # at spawn time; fill in sensible defaults if not so list_capabilities
+        # still works on the remote side.
+        out.setdefault("description",
+                       f"LLM-driven agent (remote bridge). System prompt: "
+                       f"{system_prompt[:80].rstrip()}{'...' if len(system_prompt) > 80 else ''}")
+        out.setdefault("input_schema",  {"text": "str — the question or request"})
+        out.setdefault("output_schema", {"text": "str — the LLM response"})
+        logger.info(
+            f"[{self.name}] Synthesized LLM bridge code for '{out.get('name')}': "
+            f"{len(bridge)} chars, max_history={max_history}"
+        )
+        return out
+
     async def _spawn_remote(self, config: dict, node: str, save: bool) -> None:
         """
         Publish a spawn command to a remote node via MQTT.
@@ -4138,8 +4240,16 @@ class MainActor(LLMAgent):
         remote node via SSH BEFORE the agent is spawned — so setup() won't fail
         with 'No module named X'.
         """
-        name     = config.get("name", "remote-agent")
-        packages = config.get("install", [])
+        # For LLM-type agents we ship a synthesized bridge code field over MQTT
+        # (the remote runner only knows how to run DynamicAgent-shaped code).
+        # We keep the registry-saved config CLEAN — just system_prompt, no code
+        # — so the bridge is re-synthesized fresh on every spawn / restart /
+        # migrate. This avoids carrying the bridge as dead baggage into local
+        # spawn configs on migrate-back, and keeps the spawn registry small.
+        wire_config = self._inject_llm_bridge_code(config)
+
+        name     = wire_config.get("name", "remote-agent")
+        packages = wire_config.get("install", [])
         if isinstance(packages, str):
             packages = [p.strip() for p in packages.replace(",", " ").split()]
 
@@ -4211,16 +4321,19 @@ class MainActor(LLMAgent):
                     f"Install manually: ssh into {node} and run: pip install {' '.join(packages)} --break-system-packages"
                 )
 
-        # Publish individual spawn (for immediate delivery)
+        # Publish individual spawn (for immediate delivery).
+        # Uses wire_config so any LLM-bridge synthesis is included on the wire.
         await self._mqtt_publish(
             f"nodes/{node}/spawn",
-            config,
+            wire_config,
             retain=True,
             qos=1,
         )
 
-        # Update desired state for the whole node (retained — survives Pi reboot)
-        await self._update_node_desired_state(node, config)
+        # Update desired state for the whole node (retained — survives Pi reboot).
+        # Also uses wire_config so the runner can reconcile the agent into
+        # existence with usable bridge code after a reboot.
+        await self._update_node_desired_state(node, wire_config)
 
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
@@ -4229,6 +4342,8 @@ class MainActor(LLMAgent):
         )
 
         if save:
+            # Persist the CLEAN config (no synthesized bridge code) so the
+            # registry stays small and bridge regenerates fresh per spawn.
             self._save_to_spawn_registry(config)
 
         return None
@@ -4253,9 +4368,19 @@ class MainActor(LLMAgent):
         if remove_name:
             agents.pop(remove_name, None)
 
+        # The spawn registry holds CLEAN configs (no synthesized bridge code).
+        # But the runner that consumes desired_state on reboot will compile
+        # whatever code field it finds and call handle_task() on it. So pass
+        # every config through _inject_llm_bridge_code() here, which is a
+        # no-op for non-llm-type agents and idempotent if code is already
+        # present. Without this, restarting a remote node would silently
+        # bring back all LLM agents in a non-functional state — same as the
+        # original "no handle_task" bug, just delayed by one reboot.
+        wire_agents = [self._inject_llm_bridge_code(cfg) for cfg in agents.values()]
+
         await self._mqtt_publish(
             f"nodes/{node}/desired_state",
-            {"node": node, "agents": list(agents.values()),
+            {"node": node, "agents": wire_agents,
              "timestamp": __import__("time").time()},
             retain=True,
             qos=1,
@@ -4374,11 +4499,13 @@ class MainActor(LLMAgent):
         # Imported lazily once — cheap on subsequent uses.
         from ..core.topic_bus import TopicContract, get_topic_bus
 
+        _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
                 async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("agents/+/manifest")
                     logger.info("[main] Subscribed to agent manifests.")
+                    _last_exc_str = None
                     async for msg in client.messages:
                         # ── Tombstone: empty payload means agent was deleted ──
                         raw_payload = msg.payload
@@ -4487,7 +4614,12 @@ class MainActor(LLMAgent):
                 break
             except Exception as e:
                 if self.state.value not in ("stopped", "failed"):
-                    logger.warning(f"[main] Manifest listener error: {e}. Reconnecting in 5s…")
+                    exc_str = str(e)
+                    if exc_str != _last_exc_str:
+                        logger.warning(f"[main] Manifest listener error: {e}. Reconnecting in 5s…")
+                        _last_exc_str = exc_str
+                    else:
+                        logger.debug("[main] Manifest listener still unavailable — retrying in 5s…")
                     await asyncio.sleep(5)
 
     async def _state_return_listener(self):
@@ -4520,11 +4652,13 @@ class MainActor(LLMAgent):
             return
 
         TOKEN_TTL_S = 300
+        _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
                 async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("nodes/+/state_return")
                     logger.info("[main] Subscribed to state_return topics.")
+                    _last_exc_str = None
                     async for msg in client.messages:
                         # Drop empty retained messages (cleanup tombstones)
                         raw = msg.payload
@@ -4576,6 +4710,17 @@ class MainActor(LLMAgent):
                         local_cfg["replace"] = True
                         local_cfg.setdefault("name", agent_name)
 
+                        # For LLM agents, drop the synthesized bridge code we
+                        # injected on the way out. Locally, type:"llm" routes
+                        # to LLMAgent and the code field is ignored anyway —
+                        # keeping it would just bloat the spawn registry and
+                        # confuse anyone inspecting it. Detect by the marker
+                        # comment in the synthesized template; user-written
+                        # code never carries this header.
+                        if (local_cfg.get("type") == "llm"
+                                and "Auto-generated LLM bridge" in (local_cfg.get("code") or "")):
+                            local_cfg.pop("code", None)
+
                         logger.info(
                             f"[main] Received state_return for '{agent_name}' "
                             f"from '{from_node}' "
@@ -4611,7 +4756,12 @@ class MainActor(LLMAgent):
                 break
             except Exception as e:
                 if self.state.value not in ("stopped", "failed"):
-                    logger.warning(f"[main] state_return listener error: {e}. Reconnecting in 5s…")
+                    exc_str = str(e)
+                    if exc_str != _last_exc_str:
+                        logger.warning(f"[main] state_return listener error: {e}. Reconnecting in 5s…")
+                        _last_exc_str = exc_str
+                    else:
+                        logger.debug("[main] state_return listener still unavailable — retrying in 5s…")
                     await asyncio.sleep(5)
 
     # ── Node deployment ────────────────────────────────────────────────────
@@ -5046,12 +5196,14 @@ class MainActor(LLMAgent):
             logger.warning("[main] aiomqtt not available — node heartbeat tracking disabled.")
             return
 
+        _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
                 async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("nodes/+/heartbeat")
                     await client.subscribe("nodes/+/migrate_result")
                     logger.info("[main] Subscribed to node heartbeats.")
+                    _last_exc_str = None
                     async for msg in client.messages:
                         topic = str(msg.topic)
                         try:
@@ -5187,7 +5339,12 @@ class MainActor(LLMAgent):
                 break
             except Exception as e:
                 if self.state.value not in ("stopped", "failed"):
-                    logger.warning(f"[main] Node heartbeat listener error: {e}. Reconnecting in 5s…")
+                    exc_str = str(e)
+                    if exc_str != _last_exc_str:
+                        logger.warning(f"[main] Node heartbeat listener error: {e}. Reconnecting in 5s…")
+                        _last_exc_str = exc_str
+                    else:
+                        logger.debug("[main] Node heartbeat listener still unavailable — retrying in 5s…")
                     await asyncio.sleep(5)
 
     async def _node_offline_watcher(self):
@@ -5283,11 +5440,13 @@ class MainActor(LLMAgent):
             logger.warning("[main] aiomqtt not available — LLM bridge disabled.")
             return
 
+        _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
                 async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("main/llm_request")
                     logger.info("[main] LLM bridge listening on main/llm_request")
+                    _last_exc_str = None
                     async for msg in client.messages:
                         try:
                             data = json.loads(msg.payload.decode())
@@ -5361,7 +5520,12 @@ class MainActor(LLMAgent):
                 break
             except Exception as e:
                 if self.state.value not in ("stopped", "failed"):
-                    logger.warning(f"[main] LLM bridge listener error: {e}. Reconnecting in 5s…")
+                    exc_str = str(e)
+                    if exc_str != _last_exc_str:
+                        logger.warning(f"[main] LLM bridge listener error: {e}. Reconnecting in 5s…")
+                        _last_exc_str = exc_str
+                    else:
+                        logger.debug("[main] LLM bridge listener still unavailable — retrying in 5s…")
                     await asyncio.sleep(5)
 
     async def _remote_observed_samples_listener(self):

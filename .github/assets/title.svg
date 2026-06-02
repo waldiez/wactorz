@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 68" width="320" height="68">
+  <defs>
+    <style>
+      <![CDATA[
+        @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@700&display=swap');
+      ]]>
+    </style>
+  </defs>
+  <text
+    x="160" y="52"
+    text-anchor="middle"
+    font-family="'Chakra Petch', monospace"
+    font-size="50"
+    font-weight="700"
+    letter-spacing="3"
+    fill="#a78bfa"
+  >Wactorz</text>
+</svg>

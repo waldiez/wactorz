@@ -10,7 +10,6 @@ COPY pyproject.toml .
 COPY README.md .
 COPY wactorz/ ./wactorz/
 COPY static/ ./static/
-COPY monitor.html ./monitor.html
 COPY scripts/ ./scripts/
 
 RUN pip install --no-cache-dir ".[all]"

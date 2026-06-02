@@ -850,11 +850,12 @@ def parse_topic(topic: str, payload_str: str):
                 uptime = float(uptime)
             except (TypeError, ValueError):
                 uptime = 0.0
-            if uptime < 10.0:
+            agent_state = data.get("state", "")
+            if uptime < 10.0 and agent_state not in ("stopped", "failed"):
                 _undelete(agent_id)
                 logger.info(
                     f"[MQTT] Re-admitting respawned agent {agent_id[:8]} "
-                    f"(uptime={uptime:.1f}s, previously deleted)"
+                    f"(uptime={uptime:.1f}s, state={agent_state}, previously deleted)"
                 )
 
         # If the agent was just deleted, update_agent() refuses to recreate
@@ -1425,30 +1426,29 @@ async def reset_handler(request):
     scope = body.get("scope", "")
     agent = body.get("agent") or None
 
-    valid = {"chat", "state", "metrics", "spawns", "all"}
+    valid = {"chat", "state", "metrics", "spawns", "logs", "all"}
     if scope not in valid:
         return web.json_response(
             {"error": f"scope must be one of {sorted(valid)}"}, status=400
         )
 
-    from wactorz.reset import (
-        reset_chat, reset_agent_state, reset_metrics, reset_spawns,
-        reset_all, _reset_all_pickles,
-    )
+    import wactorz.reset as _reset
 
     if scope == "all":
-        reset_all(agent)
+        _reset.reset_all(agent)
     elif scope == "chat":
-        reset_chat(agent)
+        _reset.reset_chat(agent)
     elif scope == "state":
         if agent:
-            reset_agent_state(agent)
+            _reset.reset_agent_state(agent)
         else:
-            _reset_all_pickles()
+            _reset._reset_all_pickles()
     elif scope == "metrics":
-        reset_metrics(agent)
+        _reset.reset_metrics(agent)
     elif scope == "spawns":
-        reset_spawns(agent)
+        _reset.reset_spawns(agent)
+    elif scope == "logs":
+        _reset.reset_logs()
 
     # Clear in-memory dashboard state for the affected agents
     if scope in ("all", "chat", "metrics"):
@@ -1554,6 +1554,12 @@ async def actors_handler(request):
     # Prefer the live registry (injected by cli.py) — actor objects carry the
     # authoritative protected flag.  Fall back to MQTT-derived state dict when
     # the registry is unavailable (standalone monitor_server mode).
+    #
+    # CONTRACT: the registry path intentionally excludes remote-runner agents
+    # (they are not in the local Python registry).  The frontend relies on this
+    # to distinguish local vs remote agents: any agent absent from this response
+    # but present via MQTT heartbeat with a "node" field is a remote agent and
+    # must NOT be evicted by the 15-second REST reconcile cycle.
     if registry is not None:
         result = []
         for actor in registry.all_actors():
@@ -1895,7 +1901,24 @@ async def main(exit_on_failure: bool = False):
             raise SystemExit(1)
         return
 
-    app = web.Application()
+    @web.middleware
+    async def _cors_middleware(request, handler):
+        if request.method == "OPTIONS":
+            return web.Response(headers={
+                "Access-Control-Allow-Origin":  "*",
+                "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            })
+        response = await handler(request)
+        try:
+            response.headers["Access-Control-Allow-Origin"]  = "*"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        except Exception:
+            pass
+        return response
+
+    app = web.Application(middlewares=[_cors_middleware])
     app.router.add_get("/",                      index_handler)
     app.router.add_get("/health",                health_handler)
     app.router.add_get("/api/cost",              cost_handler)

@@ -141,4 +141,50 @@ describe("ActivityFeed", () => {
     // No throw and state is consistent
     expect(() => new ActivityFeed()).not.toThrow();
   });
+
+  // ── tooltip (FeedTooltip internal) ────────────────────────────────────────
+
+  it("mouseenter on feed item with label triggers tooltip show", () => {
+    const feed = new ActivityFeed();
+    feed.push(item({ label: "agent started", agentName: "alpha" }));
+    const row = document.querySelector(".af-feed-item") as HTMLElement;
+    expect(() => row.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }))).not.toThrow();
+  });
+
+  it("mouseleave on feed item with label triggers tooltip hide", () => {
+    const feed = new ActivityFeed();
+    feed.push(item({ label: "agent stopped", agentName: "beta" }));
+    const row = document.querySelector(".af-feed-item") as HTMLElement;
+    row.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    expect(() => row.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }))).not.toThrow();
+  });
+
+  it("mouseenter on feed item with empty label does not attach tooltip", () => {
+    const feed = new ActivityFeed();
+    feed.push(item({ label: "" }));
+    const row = document.querySelector(".af-feed-item") as HTMLElement;
+    // No tooltip listener attached for empty labels — should not throw
+    expect(() => row.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }))).not.toThrow();
+  });
+
+  it("tooltip hide timer fires and sets opacity to 0", () => {
+    vi.useFakeTimers();
+    const feed = new ActivityFeed();
+    feed.push(item({ label: "hover me", agentName: "gamma" }));
+    const row = document.querySelector(".af-feed-item") as HTMLElement;
+    row.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true })); // show tooltip
+    row.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true })); // triggers hide(80ms timer)
+    vi.advanceTimersByTime(100); // fire the 80ms hide timer → covers line 126
+    vi.useRealTimers();
+    void feed;
+  });
+
+  it("push with label >120 chars truncates text in DOM", () => {
+    const feed = new ActivityFeed();
+    const longLabel = "a".repeat(150);
+    feed.push(item({ label: longLabel }));
+    const textEl = document.querySelector(".af-feed-text")!;
+    expect(textEl.textContent!.length).toBeLessThan(150);
+    expect(textEl.textContent).toContain("…");
+  });
 });

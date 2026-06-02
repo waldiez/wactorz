@@ -152,3 +152,95 @@ impl MqttClient {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_default_values() {
+        let c = MqttConfig::default();
+        assert_eq!(c.host, "localhost");
+        assert_eq!(c.port, 1883);
+        assert_eq!(c.ws_port, 9001);
+        assert_eq!(c.keep_alive_secs, 30);
+        assert!(c.username.is_none());
+        assert!(c.password.is_none());
+    }
+
+    #[test]
+    fn new_without_credentials_succeeds() {
+        let config = MqttConfig::default();
+        assert!(MqttClient::new(config).is_ok());
+    }
+
+    #[test]
+    fn new_with_credentials_sets_auth() {
+        let config = MqttConfig {
+            username: Some("user".into()),
+            password: Some("pass".into()),
+            ..Default::default()
+        };
+        assert!(MqttClient::new(config).is_ok());
+    }
+
+    #[tokio::test]
+    async fn publish_message_ok_with_live_event_loop() {
+        let config = MqttConfig::default();
+        let (client, _event_loop) = MqttClient::new(config).unwrap();
+        let msg = wactorz_core::Message::text(None, None, "hello");
+        assert!(client.publish_message("test/topic", &msg).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn publish_json_ok_with_live_event_loop() {
+        let config = MqttConfig::default();
+        let (client, _event_loop) = MqttClient::new(config).unwrap();
+        let payload = serde_json::json!({"key": "value"});
+        assert!(client.publish_json("test/json", &payload).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn publish_raw_ok_with_live_event_loop() {
+        let config = MqttConfig::default();
+        let (client, _event_loop) = MqttClient::new(config).unwrap();
+        assert!(client.publish_raw("test/raw", b"hello".to_vec()).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn subscribe_ok_with_live_event_loop() {
+        let config = MqttConfig::default();
+        let (client, _event_loop) = MqttClient::new(config).unwrap();
+        assert!(client.subscribe("agents/#").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_ok_with_live_event_loop() {
+        let config = MqttConfig::default();
+        let (client, _event_loop) = MqttClient::new(config).unwrap();
+        let _ = client.subscribe("agents/#").await;
+        assert!(client.unsubscribe("agents/#").await.is_ok());
+    }
+
+    #[test]
+    fn mqtt_event_debug() {
+        assert!(format!("{:?}", MqttEvent::Connected).contains("Connected"));
+        assert!(format!("{:?}", MqttEvent::Disconnected).contains("Disconnected"));
+        assert!(format!("{:?}", MqttEvent::Incoming { topic: "t".into(), payload: vec![] })
+            .contains("Incoming"));
+    }
+
+    #[tokio::test]
+    async fn run_event_loop_handles_connection_error() {
+        // Port 19999 is not listening → poll() returns connection error immediately.
+        let config = MqttConfig { host: "127.0.0.1".into(), port: 19999, ..Default::default() };
+        let (_, mut event_loop) = MqttClient::new(config).unwrap();
+        let handle = tokio::spawn(async move {
+            MqttClient::run_event_loop(&mut event_loop, |_evt| {}).await;
+        });
+        // Allow the error path to fire, then abort before the 2s retry sleep expires.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        handle.abort();
+        let _ = handle.await; // JoinError from abort is expected
+    }
+}

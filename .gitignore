@@ -26,6 +26,7 @@ eggs/
 .eggs/
 lib/
 lib64/
+!mobile/lib/
 parts/
 sdist/
 var/
@@ -151,6 +152,7 @@ pyrightconfig.json
 .vscode/
 .claude/
 .codex/
+CLAUDE.md
 .codex
 .gemini/
 __pycache__/

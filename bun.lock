@@ -4,7 +4,7 @@
   "workspaces": {
     "": {
       "dependencies": {
-        "@tauri-apps/cli": "^2.11.1",
+        "@tauri-apps/cli": "^2.10.1",
       },
     },
   },

@@ -71,6 +71,7 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
+      INTERFACE: rest
     ports:
       - "8000:8000"
       - "8888:8888"
@@ -150,10 +151,10 @@ Fill in at minimum your LLM key and provider. Make sure these Docker-specific va
 ```bash
 MQTT_HOST=wactorz-mosquitto
 PORT=8000
-MONITOR_PORT=8888
+WS_PORT=8888
 ```
 
-> **Port conflict?** On some Windows machines port `8888` is reserved by a system service. If the monitor UI is unreachable, change `MONITOR_PORT` to any free port (e.g. `8887`) and use that port in Step 4.
+> **Port conflict?** On some Windows machines port `8888` is reserved by a system service. If the monitor UI is unreachable, change `WS_PORT` to any free port (e.g. `8887`) and use that port in Step 4.
 
 ### Step 3 — Start Mosquitto
 

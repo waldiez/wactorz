@@ -103,6 +103,18 @@ mod tests {
     }
 
     #[test]
+    fn all_builder_functions_produce_correct_topics() {
+        let id = "test-id";
+        assert_eq!(status(id), "agents/test-id/status");
+        assert_eq!(logs(id), "agents/test-id/logs");
+        assert_eq!(alert(id), "agents/test-id/alert");
+        assert_eq!(result(id), "agents/test-id/result");
+        assert_eq!(detections(id), "agents/test-id/detections");
+        assert_eq!(chat(id), "agents/test-id/chat");
+        assert_eq!(spawn(id), "agents/test-id/spawn");
+    }
+
+    #[test]
     fn parse_valid_agent_topic() {
         assert_eq!(
             parse_agent_topic("agents/abc-123/heartbeat"),
@@ -111,8 +123,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_agent_topic_all_events() {
+        for event in &["status", "logs", "alert", "result", "chat", "spawn", "commands"] {
+            let topic = format!("agents/my-id/{event}");
+            assert_eq!(parse_agent_topic(&topic), Some(("my-id", *event)));
+        }
+    }
+
+    #[test]
     fn parse_invalid_topic_returns_none() {
         assert_eq!(parse_agent_topic("system/health"), None);
         assert_eq!(parse_agent_topic("agents/only-two"), None);
+        assert_eq!(parse_agent_topic(""), None);
+        assert_eq!(parse_agent_topic("nodes/x/heartbeat"), None);
+    }
+
+    #[test]
+    fn constants_have_expected_values() {
+        assert_eq!(AGENTS_ALL, "agents/#");
+        assert_eq!(NODES_ALL, "nodes/#");
+        assert_eq!(SYSTEM_HEALTH, "system/health");
+        assert_eq!(SYSTEM_SHUTDOWN, "system/shutdown");
+        assert_eq!(IO_CHAT, "io/chat");
     }
 }

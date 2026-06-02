@@ -75,7 +75,7 @@ running.  Click the tray icon to show/hide the window.
 
 | Tool | Version |
 |---|---|
-| [Rust](https://rustup.rs) | stable (≥ 1.77) |
+| [Rust](https://rustup.rs) | stable (≥ 1.85) |
 | [Bun](https://bun.sh) | ≥ 1.3 |
 | [Tauri CLI](https://tauri.app/start/create-project/) | v2 (`cargo install tauri-cli`) |
 | **Linux only** | `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf` |

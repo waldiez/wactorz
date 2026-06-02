@@ -30,7 +30,7 @@ pip install aiomqtt psutil aiohttp --break-system-packages
 #### 2. Copy `remote_runner.py` to the device
 
 ```bash
-scp remote_runner.py pi@raspberrypi.local:~/
+scp wactorz/remote_runner.py pi@raspberrypi.local:~/
 ```
 
 #### 3. Start the runner
@@ -45,9 +45,9 @@ Replace `192.168.1.10` with the IP of the machine running the MQTT broker. The `
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--broker` | `localhost` | MQTT broker hostname or IP. Also reads `$AGENTFLOW_BROKER`. |
+| `--broker` | `localhost` | MQTT broker hostname or IP. Also reads `$WACTORZ_BROKER`. |
 | `--port` | `1883` | MQTT broker port. |
-| `--name` / `--node` | random | Unique node name. Also reads `$AGENTFLOW_NODE`. |
+| `--name` / `--node` | random | Unique node name. Also reads `$WACTORZ_NODE`. |
 | `--loglevel` | `INFO` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` |
 
 #### Run as a service (systemd)
@@ -61,7 +61,7 @@ After=network.target
 ExecStart=/usr/bin/python3 /home/pi/remote_runner.py --broker 192.168.1.10 --name rpi-livingroom
 Restart=always
 RestartSec=5
-Environment=AGENTFLOW_BROKER=192.168.1.10
+Environment=WACTORZ_BROKER=192.168.1.10
 
 [Install]
 WantedBy=multi-user.target

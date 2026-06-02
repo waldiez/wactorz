@@ -115,9 +115,10 @@ const voice = new VoiceInput();
 const ioManager = new IOManager(mqtt, chatPanel);
 const ioBar = new IOBar(voice, ioManager);
 
-document.addEventListener("af-wake-toggle", () => ioBar.toggleWake());
-document.addEventListener("af-mic-start",   () => void ioBar.startMic());
-document.addEventListener("af-mic-stop",    () => ioBar.stopMic());
+document.addEventListener("af-mic-toggle", () => {
+  if (voice.isRecording) ioBar.stopMic();
+  else void ioBar.startMic();
+});
 
 const feed = new ActivityFeed();
 
@@ -236,7 +237,7 @@ wsChat.onStatePatch((agents, deletedId, stats) => {
 
 wsChat.connect(`${_wsBase}/ws`);
 refreshLiveActors();
-window.setInterval(refreshLiveActors, 15000);
+window.setInterval(() => { refreshLiveActors(); scene.pruneStaleRemoteAgents(); }, 15000);
 
 // ── WS log_feed → Activity Feed ───────────────────────────────────────────────
 // The server embeds its in-memory log_feed (spawned/status/logs/alerts) in
@@ -475,6 +476,8 @@ mqtt.on("connected", () => {
     new CustomEvent("af-connection-status", { detail: { status: "live" } }),
   );
 
+  scene.pruneStaleRemoteAgents();
+
   if (seeded) return;
   seeded = true;
 
@@ -542,6 +545,12 @@ mqtt.on("node-heartbeat", (payload) => {
 
 mqtt.on("system-health", () => {
   hud.setSystemHealth(true);
+});
+
+mqtt.on("host-stats", (stats) => {
+  if (stats.cpu !== undefined || stats.memUsedMb !== undefined) {
+    scene.setHostStats(stats.cpu ?? 0, stats.memUsedMb ?? 0, stats.memTotalMb);
+  }
 });
 
 mqtt.on("coin", (payload) => {

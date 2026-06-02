@@ -32,20 +32,40 @@ git clone https://github.com/waldiez/wactorz
 cd wactorz
 cp .env.template .env
 nano .env           # set LLM_API_KEY at minimum
-docker compose up -d
+
+# Python stack (recommended starting point)
+docker compose --profile python up -d
 ```
 
-Open `http://localhost/` (or `http://localhost:80/`).
+Open `http://localhost:8888` (monitor UI) or `http://localhost:8000` (REST API).
+
+For the Rust server + nginx dashboard instead:
+
+```bash
+docker compose --profile rust up -d
+# Open: http://localhost/
+```
 
 ### Services
 
-| Service | Internal address | Public path |
-|---|---|---|
-| nginx (dashboard + proxy) | — | `:80` |
-| wactorz | `wactorz:8080` / `:8081` | `/api/`, `/ws` |
-| mosquitto | `mosquitto:1883` / `:9001` | `/mqtt` |
-| fuseki | `fuseki:3030` | `/fuseki/` |
-| home-assistant | `homeassistant:8123` | `:8123` |
+Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring up more services.
+
+| Profile | Service | Internal address | External port |
+|---|---|---|---|
+| _(all)_ | mosquitto | `mosquitto:1883` / `:9001` | `:1883`, `:9001` |
+| `python` / `python-full` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
+| `python` / `python-full` | monitor UI | `wactorz-python:8888` | `:8888` |
+| `python` / `python-full` | prometheus | `wactorz-prometheus:9090` | `:9090` |
+| `python-full` / `full` | fuseki | `fuseki:3030` | `:3030` |
+| `rust` / `full` | wactorz-server (Rust) | `wactorz-server:8080` | `:8080` (API), `:8081` (WS) |
+| `rust` / `full` | nginx (dashboard) | — | `:80` |
+| `full` | home-assistant | `homeassistant:8123` | `:8123` |
+
+```bash
+# Python stack (most common)
+docker compose --profile python up -d
+# Open: http://localhost:8888  (monitor UI)  http://localhost:8000  (REST API)
+```
 
 ---
 
@@ -88,7 +108,7 @@ bash deploy-native.sh        # interactive wizard
 
 ```bash
 # 1. Configure .env
-cp .env.example .env
+cp .env.template .env
 nano .env
 # Set: LLM_API_KEY, DEPLOY_HOST, DEPLOY_PATH, NAUTILUS_SSH_KEY
 # If the remote already has nginx running (certbot/SSL), also set:
@@ -103,7 +123,7 @@ The wizard will:
 2. Build the frontend (`npm run build`)
 3. Build the binary via `cargo build --release` or Docker buildx
 4. rsync `static/app/` and the binary to the remote host
-5. Create `.env` from `.env.example` on the remote (preserves existing)
+5. Create `.env` from `.env.template` on the remote (preserves existing)
 6. Start Mosquitto via Docker + configure nginx (see modes below)
 7. Install + start the `wactorz` systemd service
 
@@ -181,19 +201,21 @@ The unit template at `systemd/wactorz.service` has comments for every field.
 
 ## Environment variables
 
-See `.env.example` for the full annotated list.  The most important ones:
+See `.env.template` for the full annotated list.  The most important ones:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `LLM_PROVIDER` | `anthropic` | `anthropic` / `openai` / `ollama` |
+| `LLM_PROVIDER` | `anthropic` | `anthropic` / `openai` / `ollama` / `gemini` / `nim` |
 | `LLM_MODEL` | `claude-sonnet-4-6` | Any model ID |
 | `LLM_API_KEY` | _(required for cloud providers)_ | API key — not needed for Ollama only |
 | `LLM_COST_LIMIT_USD` | `0` (disabled) | Hard spend cap per period — set `0` to disable |
 | `LLM_COST_LIMIT_PERIOD` | `monthly` | Reset period: `daily`, `weekly`, or `monthly` |
 | `MQTT_HOST` | `localhost` | Use `mosquitto` inside Docker |
 | `MQTT_PORT` | `1883` | |
-| `API_ADDR` | `0.0.0.0:8080` | REST listen address |
-| `WS_ADDR` | `0.0.0.0:8081` | WS bridge listen address |
+| `PORT` | `8000` | Python REST API listen port |
+| `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
+| `API_ADDR` | `0.0.0.0:8080` | Rust server REST listen address _(Rust only)_ |
+| `WS_ADDR` | `0.0.0.0:8081` | Rust server WS bridge listen address _(Rust only)_ |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
 | `PROMETHEUS_SCRAPE_INTERVAL` | `15s` | Global Prometheus scrape interval |
 | `PROMETHEUS_MONITOR_MOSQUITTO` | `1` | Enable Mosquitto TCP availability probe |
@@ -240,7 +262,7 @@ Wactorz can send REST commands to Home Assistant and receive automations.
 # infra/homeassistant/configuration.yaml
 rest_command:
   wactorz_chat:
-    url: "http://wactorz:8080/api/chat"
+    url: "http://wactorz-python:8000/api/chat"
     method: POST
     content_type: "application/json"
     payload: '{"to":"main-actor","content":"{{ message }}"}'

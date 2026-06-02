@@ -63,10 +63,12 @@ class IOAgent(Actor):
             logger.error(f"[{self.name}] aiomqtt not installed — io/chat listener disabled")
             return
 
+        _last_chat_exc: str | None = None
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe(IO_CHAT_TOPIC, qos=1)
+                    _last_chat_exc = None
                     async for mqtt_msg in client.messages:
                         if self.state in (ActorState.STOPPED, ActorState.FAILED):
                             break
@@ -82,7 +84,12 @@ class IOAgent(Actor):
                 break
             except Exception as exc:
                 if self.state not in (ActorState.STOPPED, ActorState.FAILED):
-                    logger.warning(f"[{self.name}] io/chat disconnected: {exc}. Retry in 5s")
+                    exc_str = str(exc)
+                    if exc_str != _last_chat_exc:
+                        logger.warning(f"[{self.name}] io/chat disconnected: {exc}. Retry in 5s")
+                        _last_chat_exc = exc_str
+                    else:
+                        logger.debug(f"[{self.name}] io/chat still unavailable — retrying in 5s…")
                     await asyncio.sleep(5)
 
     # ── Routing ────────────────────────────────────────────────────────────

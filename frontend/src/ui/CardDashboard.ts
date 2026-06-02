@@ -18,13 +18,13 @@ import type { FeedItem } from "./ActivityFeed";
 import { HAClient, type HAEntity } from "../io/HAClient";
 import { ambient, AMBIENT_TRACKS } from "../io/AmbientManager";
 import { tts } from "../io/TTSManager";
+import { toast } from "./ToastManager";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const SYSTEM_AGENT_NAMES: Set<any> = new Set([
   "io-agent",
   "monitor-agent",
-  "manual-agent",
   "home-assistant-state-bridge",
   "home-assistant-map-agent",
 ]);
@@ -112,6 +112,9 @@ export class CardDashboard {
   private _historyLoaded: Set<string> = new Set();
   private _totalCostUsd: number | null = null;
   private _totalMessages: number | null = null;
+  private _hostCpu: number | null = null;
+  private _hostMemUsedMb: number | null = null;
+  private _hostMemTotalMb: number | null = null;
   private _costLimitInfo: Record<string, any> | null = null;
   private _costPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -122,6 +125,21 @@ export class CardDashboard {
   private _evEnd: ((e: Event) => void) | null = null;
   private _evConn: ((e: Event) => void) | null = null;
   private _evResetChat: ((e: Event) => void) | null = null;
+  private _evSendMessage: ((e: Event) => void) | null = null;
+  // True while _sendMessage() is dispatching — prevents the listener from
+  // double-adding a message that _sendMessage() already rendered locally.
+  private _selfDispatching = false;
+
+  // Input history (up/down arrow navigation, same pattern as IOBar)
+  private _inputHistory: string[] = [];
+  private _inputHistIdx = -1;
+  private _inputDraft = "";
+
+  // Autosuggestion state
+  private _inputSuggestion = "";
+  private _mentionOpen = false;
+  private _mentionIdx = -1;
+  private _mentionMatches: string[] = [];
 
   private get haUrl(): string | null {
     return localStorage.getItem("wactorz-ha-url") || null;
@@ -284,6 +302,30 @@ export class CardDashboard {
     if (this.view === "overview") this._renderStats();
   }
 
+  setHostStats(cpu: number, memUsedMb: number, memTotalMb?: number): void {
+    this._hostCpu = cpu;
+    this._hostMemUsedMb = memUsedMb;
+    if (memTotalMb !== undefined) this._hostMemTotalMb = memTotalMb;
+    const bar = this.root.querySelector<HTMLElement>("#af-host-bar");
+    if (!bar) return;
+    const cpuFill = bar.querySelector<HTMLElement>(".af-host-bar-fill-cpu");
+    const cpuVal = bar.querySelector<HTMLElement>(".af-host-cpu-val");
+    if (cpuFill) cpuFill.style.width = `${Math.max(0, Math.min(100, cpu)).toFixed(1)}%`;
+    if (cpuVal) cpuVal.textContent = `${cpu.toFixed(1)}%`;
+    const memFill = bar.querySelector<HTMLElement>(".af-host-bar-fill-mem");
+    const memVal = bar.querySelector<HTMLElement>(".af-host-mem-val");
+    const total = this._hostMemTotalMb;
+    const pct = total && total > 0 ? (memUsedMb / total) * 100 : 0;
+    if (memFill) memFill.style.width = `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
+    if (memVal) {
+      if (total && total > 0) {
+        memVal.textContent = `${(memUsedMb / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} GB`;
+      } else {
+        memVal.textContent = `${memUsedMb.toFixed(0)} MB`;
+      }
+    }
+  }
+
   // ── Agent events ──────────────────────────────────────────────────────────
 
   addAgent(agent: AgentInfo): void {
@@ -329,7 +371,7 @@ export class CardDashboard {
     if (this.view === "overview") this._renderNodes();
   }
 
-  onHeartbeat(agentId: string, timestampMs: number, cpu?: number, mem?: number): void {
+  onHeartbeat(agentId: string, timestampMs: number, _cpu?: number, _mem?: number): void {
     this.lastHb.set(agentId, timestampMs);
     if (!this.root.classList.contains("cd-visible")) return;
     if (this._removingIds.has(agentId)) return;
@@ -344,14 +386,6 @@ export class CardDashboard {
       dot.classList.remove("af-card-pulse", "af-card-stale");
       void dot.offsetWidth;
       dot.classList.add("af-card-pulse");
-    }
-    if (cpu !== undefined) {
-      const cpuEl = card.querySelector<HTMLElement>(".af-card-cpu");
-      if (cpuEl) { cpuEl.textContent = `CPU ${cpu.toFixed(1)}%`; cpuEl.style.display = ""; }
-    }
-    if (mem !== undefined) {
-      const memEl = card.querySelector<HTMLElement>(".af-card-mem");
-      if (memEl) { memEl.textContent = `${mem.toFixed(0)} MB`; memEl.style.display = ""; }
     }
   }
 
@@ -476,6 +510,37 @@ export class CardDashboard {
       if (this.view === "chat") this._renderChatThread();
     };
     document.addEventListener("af-reset-chat", this._evResetChat);
+
+    // Display the user's message in the chat UI for any send path (keyboard
+    // OR voice/wake-word). Keyboard sends go through _sendMessage() which
+    // already adds the message locally and sets _selfDispatching; those are
+    // skipped here to avoid double-add.  Voice sends dispatch af-send-message
+    // directly (from IOBar) without ever calling _sendMessage(), so they reach
+    // this listener with _selfDispatching === false and are rendered here.
+    this._evSendMessage = (e: Event) => {
+      if (this._selfDispatching) return;
+      const { content, target } = (
+        e as CustomEvent<{ content: string; target: string }>
+      ).detail;
+      this.chatTarget = target;
+      this._lastSentTarget = target;
+      const msg: ChatMessage = {
+        id: `user-${Date.now()}`,
+        from: "user",
+        to: target,
+        content,
+        timestampMs: Date.now(),
+      };
+      this.chatMessages.push(msg);
+      if (this.view !== "chat") {
+        this.view = "chat";
+        this._renderView();
+      } else {
+        this._appendChatMsgEl(msg);
+        this._scrollThread();
+      }
+    };
+    document.addEventListener("af-send-message", this._evSendMessage);
   }
 
   private _unwireEvents(): void {
@@ -502,6 +567,10 @@ export class CardDashboard {
     if (this._evResetChat) {
       document.removeEventListener("af-reset-chat", this._evResetChat);
       this._evResetChat = null;
+    }
+    if (this._evSendMessage) {
+      document.removeEventListener("af-send-message", this._evSendMessage);
+      this._evSendMessage = null;
     }
   }
 
@@ -611,7 +680,7 @@ export class CardDashboard {
         </div>
         <span class="af-node-pill online">online</span>
       </div>`);
-    const staleMs = 90_000;
+    const staleMs = 180_000;
     const now = Date.now();
     for (const [name, info] of this._remoteNodes) {
       const online = now - info.lastSeen < staleMs;
@@ -631,6 +700,8 @@ export class CardDashboard {
   private _buildOverview(): HTMLElement {
     const el = document.createElement("div");
     el.className = "af-overview";
+
+    el.appendChild(this._buildHostBar());
 
     const statsGrid = document.createElement("div");
     statsGrid.className = "af-stats-grid";
@@ -671,6 +742,48 @@ export class CardDashboard {
     panels.appendChild(np);
     el.appendChild(panels);
     return el;
+  }
+
+  private _buildHostBar(): HTMLElement {
+    const bar = document.createElement("div");
+    bar.id = "af-host-bar";
+    bar.className = "af-host-bar";
+
+    const cpu = this._hostCpu;
+    const memUsed = this._hostMemUsedMb;
+    const memTotal = this._hostMemTotalMb;
+
+    const cpuPct = cpu != null ? Math.max(0, Math.min(100, cpu)) : 0;
+    const cpuText = cpu != null ? `${cpu.toFixed(1)}%` : "—";
+    const memPct =
+      memUsed != null && memTotal != null && memTotal > 0
+        ? Math.max(0, Math.min(100, (memUsed / memTotal) * 100))
+        : 0;
+    const memText =
+      memUsed != null
+        ? memTotal != null && memTotal > 0
+          ? `${(memUsed / 1024).toFixed(1)} / ${(memTotal / 1024).toFixed(1)} GB`
+          : `${memUsed.toFixed(0)} MB`
+        : "—";
+
+    bar.innerHTML = `
+      <div class="af-host-label">APP</div>
+      <div class="af-host-metric">
+        <div class="af-host-metric-label">CPU</div>
+        <div class="af-host-bar-track">
+          <div class="af-host-bar-fill af-host-bar-fill-cpu" style="width:${cpuPct.toFixed(1)}%"></div>
+        </div>
+        <div class="af-host-metric-val af-host-cpu-val">${cpuText}</div>
+      </div>
+      <div class="af-host-metric">
+        <div class="af-host-metric-label">MEM</div>
+        <div class="af-host-bar-track">
+          <div class="af-host-bar-fill af-host-bar-fill-mem" style="width:${memPct.toFixed(1)}%"></div>
+        </div>
+        <div class="af-host-metric-val af-host-mem-val">${memText}</div>
+      </div>
+    `;
+    return bar;
   }
 
   private _buildStatCards(container: HTMLElement): void {
@@ -834,8 +947,6 @@ export class CardDashboard {
       <span>♥ <span class="af-card-hb-time">${hbMs ? relTime(hbMs) : "—"}</span></span>
       <span>${msgs} msgs</span>
       ${agent.costUsd != null ? `<span>$${agent.costUsd.toFixed(4)}</span>` : ""}
-      ${agent.cpu != null ? `<span class="af-card-cpu" title="CPU usage">${agent.cpu.toFixed(1)}%</span>` : `<span class="af-card-cpu" style="display:none"></span>`}
-      ${agent.mem != null ? `<span class="af-card-mem" title="Memory">${agent.mem.toFixed(0)} MB</span>` : `<span class="af-card-mem" style="display:none"></span>`}
     `;
 
     card.appendChild(dot);
@@ -1372,63 +1483,138 @@ export class CardDashboard {
     select.id = "af-target-select";
     this._populateSelect(select);
 
+    // ── Input wrapper (ghost text + mention panel + textarea + hint) ──────────
+    const inputWrap = document.createElement("div");
+    inputWrap.className = "af-input-wrap";
+
+    // @mention panel — floats above the wrap when @ is typed
+    const mentionPanel = document.createElement("div");
+    mentionPanel.className = "af-mention-panel";
+
+    // Ghost text layer — positioned behind the textarea
+    const ghost = document.createElement("div");
+    ghost.className = "af-input-ghost";
+    ghost.setAttribute("aria-hidden", "true");
+
     const input = document.createElement("textarea");
     input.className = "af-iobar-input";
     input.id = "af-iobar-input";
     input.rows = 1;
     input.placeholder = `Message @${this.chatTarget}…`;
+
+    // Hint row — keyboard shortcuts, visible on focus
+    const hint = document.createElement("div");
+    hint.className = "af-input-hint";
+    hint.textContent = "↑↓ history · Tab accept · @agent";
+
     const autoGrow = () => {
       input.style.height = "1px";
       const h = Math.min(input.scrollHeight, 140);
       input.style.height = h + "px";
       input.style.overflowY = h >= 140 ? "auto" : "hidden";
     };
-    input.addEventListener("input", autoGrow);
+
+    input.addEventListener("input", () => {
+      autoGrow();
+      this._onInputChange(input, select, ghost, mentionPanel);
+    });
+
     input.addEventListener("keydown", (e) => {
+      // @mention panel navigation
+      if (this._mentionOpen) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          this._closeMentionPanel(mentionPanel);
+          return;
+        }
+        if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+          e.preventDefault();
+          const dir = e.key === "ArrowRight" ? 1 : -1;
+          this._mentionIdx = Math.max(-1, Math.min(this._mentionMatches.length - 1, this._mentionIdx + dir));
+          this._renderMentionChips(mentionPanel, select, input);
+          return;
+        }
+        if (e.key === "Tab" || e.key === "Enter") {
+          e.preventDefault();
+          const idx = this._mentionIdx >= 0 ? this._mentionIdx : 0;
+          this._acceptMention(this._mentionMatches[idx] ?? "", input, select, mentionPanel, ghost);
+          return;
+        }
+      }
+
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
+        this._closeMentionPanel(mentionPanel);
         this._sendMessage(input, select);
         input.style.height = "auto";
+        this._clearGhost(input, ghost);
+        return;
       }
+      // Tab or → at end-of-line accepts suggestion
+      if ((e.key === "Tab" || (e.key === "ArrowRight" && input.selectionStart === input.value.length))
+          && this._inputSuggestion) {
+        e.preventDefault();
+        this._acceptSuggestion(input, ghost);
+        return;
+      }
+      if (e.key === "ArrowUp" && !e.shiftKey) {
+        e.preventDefault();
+        this._historyUp(input);
+        this._onInputChange(input, select, ghost, mentionPanel);
+        return;
+      }
+      if (e.key === "ArrowDown" && !e.shiftKey) {
+        e.preventDefault();
+        this._historyDown(input);
+        this._onInputChange(input, select, ghost, mentionPanel);
+        return;
+      }
+      if (e.key === "Escape") {
+        this._clearGhost(input, ghost);
+        return;
+      }
+      if (!["ArrowUp", "ArrowDown", "Tab"].includes(e.key)) this._inputHistIdx = -1;
     });
+
+    input.addEventListener("blur", () => {
+      setTimeout(() => this._closeMentionPanel(mentionPanel), 150);
+    });
+
     select.addEventListener("change", () => {
       this.chatTarget = select.value;
       input.placeholder = `Message @${select.value}…`;
     });
 
+    inputWrap.append(mentionPanel, ghost, input, hint);
+
     const sendBtn = document.createElement("button");
     sendBtn.className = "af-send-btn";
     sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`;
-    sendBtn.addEventListener("click", () => this._sendMessage(input, select));
+    sendBtn.addEventListener("click", () => {
+      this._closeMentionPanel(mentionPanel);
+      this._sendMessage(input, select);
+      this._clearGhost(input, ghost);
+    });
 
+    // Wake button hidden for 0.5 — create with hidden id so IOBar refs don't throw
     const wakeBtn = document.createElement("button");
-    wakeBtn.className = "af-voice-btn";
     wakeBtn.id = "af-wake-btn-cd";
-    wakeBtn.title = "Wake word — click to enable";
-    wakeBtn.innerHTML = `<svg width="15" height="15" viewBox="0 0 15 15" fill="currentColor" aria-hidden="true"><rect x="1" y="6" width="2" height="3" rx="1"/><rect x="4.5" y="4" width="2" height="7" rx="1"/><rect x="8" y="2" width="2" height="11" rx="1"/><rect x="11.5" y="4" width="2" height="7" rx="1"/></svg>`;
-    wakeBtn.addEventListener("click", () =>
-      document.dispatchEvent(new CustomEvent("af-wake-toggle")),
-    );
+    wakeBtn.style.display = "none";
 
     const micBtn = document.createElement("button");
     micBtn.className = "af-voice-btn";
     micBtn.id = "af-mic-btn-cd";
-    micBtn.title = "Hold to speak";
+    micBtn.title = "Tap to speak";
     micBtn.innerHTML = `<svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M7.5 1.5a2.5 2.5 0 0 0-2.5 2.5v4a2.5 2.5 0 0 0 5 0V4a2.5 2.5 0 0 0-2.5-2.5Z" fill="currentColor"/><path d="M3 7.5a4.5 4.5 0 0 0 9 0" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/><line x1="7.5" y1="12" x2="7.5" y2="13.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/><line x1="5" y1="13.5" x2="10" y2="13.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg>`;
-    micBtn.addEventListener("pointerdown", (e) => {
-      e.preventDefault();
-      micBtn.setPointerCapture(e.pointerId);
-      document.dispatchEvent(new CustomEvent("af-mic-start"));
-    });
-    micBtn.addEventListener("pointerup",     () => document.dispatchEvent(new CustomEvent("af-mic-stop")));
-    micBtn.addEventListener("pointercancel", () => document.dispatchEvent(new CustomEvent("af-mic-stop")));
+    micBtn.addEventListener("click", () =>
+      document.dispatchEvent(new CustomEvent("af-mic-toggle")),
+    );
 
     if ((document.body as any).__voiceUnavailable) {
-      wakeBtn.style.display = "none";
-      micBtn.style.display  = "none";
+      micBtn.style.display = "none";
     }
 
-    bar.append(wakeBtn, micBtn, select, input, sendBtn);
+    bar.append(wakeBtn, micBtn, select, inputWrap, sendBtn);
     return bar;
   }
 
@@ -1468,6 +1654,14 @@ export class CardDashboard {
   ): void {
     const content = input.value.trim();
     if (!content) return;
+    this._inputHistory.unshift(content);
+    if (this._inputHistory.length > 50) this._inputHistory.pop();
+    this._inputHistIdx = -1;
+    this._inputDraft = "";
+    this._inputSuggestion = "";
+    input.classList.remove("has-suggestion");
+    const ghost = input.previousElementSibling as HTMLElement | null;
+    if (ghost?.classList.contains("af-input-ghost")) ghost.textContent = "";
     const target = select.value || "main-actor";
     this.chatTarget = target;
     this._lastSentTarget = target;
@@ -1488,9 +1682,148 @@ export class CardDashboard {
     }
     input.value = "";
     input.style.height = "auto";
+    this._selfDispatching = true;
     document.dispatchEvent(
       new CustomEvent("af-send-message", { detail: { content, target } }),
     );
+    this._selfDispatching = false;
+  }
+
+  private _historyUp(input: HTMLTextAreaElement): void {
+    if (this._inputHistory.length === 0) return;
+    if (this._inputHistIdx === -1) this._inputDraft = input.value;
+    this._inputHistIdx = Math.min(this._inputHistIdx + 1, this._inputHistory.length - 1);
+    input.value = this._inputHistory[this._inputHistIdx] ?? "";
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+
+  private _historyDown(input: HTMLTextAreaElement): void {
+    if (this._inputHistIdx === -1) return;
+    this._inputHistIdx--;
+    input.value = this._inputHistIdx === -1
+      ? this._inputDraft
+      : (this._inputHistory[this._inputHistIdx] ?? "");
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+
+  // ── Private: autosuggestion + @mention ───────────────────────────────────
+
+  private _onInputChange(
+    input: HTMLTextAreaElement,
+    select: HTMLSelectElement,
+    ghost: HTMLElement,
+    mentionPanel: HTMLElement,
+  ): void {
+    const val = input.value;
+    // @mention detection: `@` anywhere at the end of the current word
+    const mentionMatch = /@(\w*)$/.exec(val);
+    if (mentionMatch) {
+      this._openMentionPanel(mentionMatch[1] ?? "", mentionPanel, select, input);
+      this._clearGhost(input, ghost);
+      return;
+    }
+    this._closeMentionPanel(mentionPanel);
+    this._updateGhost(input, ghost);
+  }
+
+  private _updateGhost(input: HTMLTextAreaElement, ghost: HTMLElement): void {
+    const val = input.value;
+    if (!val.trim()) { this._clearGhost(input, ghost); return; }
+    const lower = val.toLowerCase();
+    const match = this._inputHistory.find(
+      (h) => h.toLowerCase().startsWith(lower) && h !== val,
+    );
+    if (match) {
+      this._inputSuggestion = match;
+      const typed = document.createElement("span");
+      typed.style.color = "transparent";
+      typed.textContent = val;
+      const tail = document.createElement("span");
+      tail.textContent = match.slice(val.length);
+      ghost.textContent = "";
+      ghost.append(typed, tail);
+      input.classList.add("has-suggestion");
+    } else {
+      this._clearGhost(input, ghost);
+    }
+  }
+
+  private _clearGhost(input: HTMLTextAreaElement, ghost: HTMLElement): void {
+    this._inputSuggestion = "";
+    ghost.textContent = "";
+    input.classList.remove("has-suggestion");
+  }
+
+  private _acceptSuggestion(input: HTMLTextAreaElement, ghost: HTMLElement): void {
+    if (!this._inputSuggestion) return;
+    input.value = this._inputSuggestion;
+    input.setSelectionRange(input.value.length, input.value.length);
+    this._clearGhost(input, ghost);
+    // trigger autoGrow after filling
+    input.dispatchEvent(new Event("input"));
+  }
+
+  private _openMentionPanel(
+    query: string,
+    panel: HTMLElement,
+    select: HTMLSelectElement,
+    input: HTMLTextAreaElement,
+  ): void {
+    const all = [...this.agents.values()].map((a) => a.name).filter(Boolean);
+    this._mentionMatches = query
+      ? all.filter((n) => n.toLowerCase().startsWith(query.toLowerCase()))
+      : all;
+    if (this._mentionMatches.length === 0) { this._closeMentionPanel(panel); return; }
+    this._mentionIdx = 0;
+    this._mentionOpen = true;
+    this._renderMentionChips(panel, select, input);
+    panel.classList.add("open");
+  }
+
+  private _renderMentionChips(
+    panel: HTMLElement,
+    select: HTMLSelectElement,
+    input: HTMLTextAreaElement,
+  ): void {
+    panel.textContent = "";
+    this._mentionMatches.forEach((name, i) => {
+      const chip = document.createElement("button");
+      chip.className = "af-mention-chip" + (i === this._mentionIdx ? " active" : "");
+      chip.textContent = name;
+      chip.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        this._acceptMention(name, input, select, panel,
+          panel.previousElementSibling as HTMLElement);
+      });
+      panel.appendChild(chip);
+    });
+  }
+
+  private _acceptMention(
+    name: string,
+    input: HTMLTextAreaElement,
+    select: HTMLSelectElement,
+    panel: HTMLElement,
+    ghost: HTMLElement,
+  ): void {
+    if (!name) return;
+    // Replace the trailing @query with nothing (target is now set via select)
+    input.value = input.value.replace(/@\w*$/, "").trimEnd();
+    // Update the target select to point to this agent
+    const opt = [...select.options].find((o) => o.value === name || o.text === name);
+    if (opt) { select.value = opt.value; this.chatTarget = opt.value; }
+    input.placeholder = `Message @${name}…`;
+    this._closeMentionPanel(panel);
+    if (ghost) this._clearGhost(input, ghost);
+    input.focus();
+    input.dispatchEvent(new Event("input"));
+  }
+
+  private _closeMentionPanel(panel: HTMLElement): void {
+    this._mentionOpen = false;
+    this._mentionIdx = -1;
+    this._mentionMatches = [];
+    panel.classList.remove("open");
   }
 
   // ── Private: API calls ────────────────────────────────────────────────────
@@ -2093,7 +2426,7 @@ export class CardDashboard {
 
   private _refreshTimestamps(): void {
     const now = Date.now();
-    const STALE_MS = 90_000; // matches nodes panel threshold
+    const STALE_MS = 180_000; // matches nodes panel threshold
     this.lastHb.forEach((ms, id) => {
       const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
       if (!card) return;
@@ -3160,45 +3493,90 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
   private _buildResetPopover(): HTMLElement {
     const pop = document.createElement("div");
     pop.className = "af-audio-popover glass";
-    pop.style.cssText = "min-width:180px;padding:10px 12px;";
+    pop.style.cssText = "min-width:210px;padding:12px 14px;";
 
     const title = document.createElement("div");
     title.textContent = "Clear stored state";
-    title.style.cssText = "font-size:11px;opacity:.55;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;";
+    title.style.cssText = "font-size:10px;font-weight:600;opacity:.45;margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em;";
     pop.appendChild(title);
 
-    const scopes: { scope: string; label: string }[] = [
-      { scope: "chat",    label: "💬 Chat history" },
-      { scope: "metrics", label: "📊 Metrics & costs" },
-      { scope: "spawns",  label: "🚀 Spawn registry" },
-      { scope: "state",   label: "🗂 Agent state files" },
-      { scope: "all",     label: "🗑 Wipe everything" },
+    const ICON = {
+      chat:    `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9.5a5 5 0 0 1-5 5H3l-2 2V5a5 5 0 0 1 5-5h3"/><circle cx="12" cy="4" r="3"/></svg>`,
+      metrics: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="9" width="3" height="6" rx="1"/><rect x="6" y="5" width="3" height="10" rx="1"/><rect x="11" y="2" width="3" height="13" rx="1"/></svg>`,
+      spawns:  `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="2" r="1.5"/><circle cx="2" cy="13" r="1.5"/><circle cx="14" cy="13" r="1.5"/><path d="M8 3.5v4m0 4-5 3.5m5-3.5 5 3.5m-5-7.5-5 3.5m5-3.5 5 3.5"/></svg>`,
+      state:   `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="3" rx="1"/><rect x="2" y="8" width="12" height="3" rx="1"/><rect x="2" y="13" width="8" height="2" rx="1"/></svg>`,
+      logs:    `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z"/><path d="M5 6h6M5 9h4"/></svg>`,
+      all:     `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12M5 4V2h6v2M6 7v5M10 7v5M3 4l1 9a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-9"/></svg>`,
+    } as Record<string, string>;
+
+    const scopes: { scope: string; label: string; danger?: boolean }[] = [
+      { scope: "chat",    label: "Chat history" },
+      { scope: "metrics", label: "Metrics & costs" },
+      { scope: "spawns",  label: "Spawn registry" },
+      { scope: "state",   label: "Agent state files" },
+      { scope: "logs",    label: "Log files" },
+      { scope: "all",     label: "Wipe everything", danger: true },
     ];
 
-    for (const { scope, label } of scopes) {
+    scopes.forEach(({ scope, label, danger }, i) => {
+      if (danger) {
+        const hr = document.createElement("div");
+        hr.style.cssText = "height:1px;background:rgba(255,255,255,.08);margin:6px 0 8px;";
+        pop.appendChild(hr);
+      }
+
       const btn = document.createElement("button");
       btn.className = "af-mini-btn";
-      btn.style.cssText = "display:block;width:100%;margin-bottom:4px;text-align:left;";
-      btn.textContent = label;
+      btn.style.cssText = [
+        "display:flex;align-items:center;gap:8px;width:100%;",
+        "padding:6px 8px;margin-bottom:3px;border-radius:6px;",
+        "font-size:12px;text-align:left;transition:background .15s;",
+        danger ? "color:#f87171;" : "",
+      ].join("");
+      btn.innerHTML = `${ICON[scope] ?? ""}<span>${label}</span>`;
+
+      // Two-step confirm: first click arms, second fires
+      let armed = false;
+      let armTimer: ReturnType<typeof setTimeout> | null = null;
+
       btn.addEventListener("click", async () => {
+        if (!armed) {
+          armed = true;
+          const span = btn.querySelector("span")!;
+          const orig = span.textContent!;
+          span.textContent = `Confirm ${label.toLowerCase()}?`;
+          btn.style.background = danger ? "rgba(248,113,113,.15)" : "rgba(255,255,255,.1)";
+          armTimer = setTimeout(() => {
+            armed = false;
+            span.textContent = orig;
+            btn.style.background = "";
+          }, 3000);
+          return;
+        }
+
+        if (armTimer) clearTimeout(armTimer);
+        armed = false;
         pop.classList.remove("open");
-        if (!confirm(`Reset scope "${scope}"?`)) return;
+
         try {
           const res = await fetch("/api/reset", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ scope }),
           });
-          if (!res.ok) {
+          if (res.ok) {
+            toast.show({ type: "system", title: "Reset", message: `${label} cleared` });
+          } else {
             const err = await res.json().catch(() => ({}));
-            alert(`Reset failed: ${(err as any).error ?? res.status}`);
+            toast.show({ type: "alert-error", title: "Reset failed", message: (err as any).error ?? String(res.status) });
           }
         } catch (e) {
-          alert(`Reset failed: ${e}`);
+          toast.show({ type: "alert-error", title: "Reset failed", message: String(e) });
         }
       });
+
       pop.appendChild(btn);
-    }
+    });
 
     return pop;
   }

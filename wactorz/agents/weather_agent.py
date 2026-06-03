@@ -340,8 +340,17 @@ class WeatherAgent(Actor):
             return
         raw = msg.payload
         if isinstance(raw, dict):
-            text = raw.get("text") or raw.get("content") or ""
-            parsed = await self._parse_smart(text) if text else raw
+            # Already-structured intent passthrough
+            if "action" in raw:
+                parsed = raw
+            else:
+                # Accept every key that could carry a natural-language query or location.
+                # Main sends {"city": "Athens"} or {"text": "..."} or {"query": "..."};
+                # all map to a free-text parse so the NL pipeline handles them uniformly.
+                text = (raw.get("text") or raw.get("content") or
+                        raw.get("query") or raw.get("city") or
+                        raw.get("location") or "")
+                parsed = await self._parse_smart(text) if text else {"action": "current"}
         else:
             parsed = await self._parse_smart(str(raw))
         result = await self._handle_cmd(parsed)

@@ -70,6 +70,13 @@ EXAMPLES:
   → file path is present → delegate immediately
   → report the result
 
+  User: "what's the weather in Athens?" / "should I wear a jacket?" / "will it rain tomorrow?"
+  → agent.capabilities() finds weather-agent (spawnable=true)
+  → delegate with the user's full question as text: agent.send_to("weather-agent", {"text": "weather in Athens Greece"})
+  → the weather-agent understands natural language — no need to parse or extract a city yourself
+  → report the result back to the user
+  → DO NOT spawn a new weather agent — one already exists in the catalog
+
   User: "monitor my CPU temperature"
   → agent.capabilities() finds nothing suitable
   → write a new dynamic agent for it
@@ -3423,7 +3430,7 @@ class MainActor(LLMAgent):
 
         Matches lines like:
             @doc-to-pptx-agent {"file_path": "...", "output_path": "..."}
-            @weather-agent {"city": "Athens"}
+            @weather-agent {"text": "weather in Athens"}
         """
         import re
 

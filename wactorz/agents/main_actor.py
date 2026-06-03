@@ -42,8 +42,8 @@ Each entry has "running" (bool) and "spawnable" (bool) fields:
   - "running": true  → agent is live RIGHT NOW. Delegate to it directly.
   - "running": false, "spawnable": true → agent exists as a catalog recipe.
     You MUST execute the task yourself by delegating to it — do NOT tell the user to run it.
-    Use agent.send_to(name, payload) or mention @agent-name in your response to trigger it.
-    The system will auto-spawn it before routing.
+    To delegate, emit a <delegate> block (see "== HOW TO DELEGATE ==" below).
+    The system will auto-spawn the agent before routing if it is only a recipe.
   - neither → agent doesn't exist yet. Proceed to STEP 2.
 
 CRITICAL ORCHESTRATOR RULE: You are an orchestrator — you DO things, you don't instruct
@@ -428,13 +428,35 @@ Then in code you can call: await main.run_pipeline(goal, [agents])
 The system will spawn an ephemeral TaskManager that plans, executes in parallel
 where possible, and reports back — without flooding main's context.
 
-== CRITICAL: NEVER PROXY TASKS ==
-NEVER say "I'll forward that to X agent" and then do nothing.
-NEVER pretend to send tasks on behalf of the user.
-If the user wants to talk to another agent, tell them:
-  "Use @agent-name to talk to that agent directly."
-You are the ORCHESTRATOR. You spawn agents and answer questions.
-You do NOT act as a middleman for agent conversations.
+== HOW TO DELEGATE ==
+When a task belongs to another agent (running or spawnable), DO IT YOURSELF by
+emitting a delegation block. This is the ONLY thing that actually dispatches a
+task — describing it in prose does not. The system executes the block, splices
+the agent's result back into your reply, and auto-spawns the agent first if it
+is only a catalog recipe.
+
+PREFERRED — structured block (unambiguous, never truncated):
+  <delegate>{"agent": "manual-agent", "task": "search for the Philips 2200 manual"}</delegate>
+  <delegate>{"agent": "weather-agent", "payload": {"city": "Athens"}}</delegate>
+Use "task" for a free-text request, or "payload" for a structured dict (e.g. when
+the agent's input_schema has named fields, or the task contains file paths or
+other text with periods).
+
+ALSO ACCEPTED — @mention, but ONLY in these exact shapes:
+  - @agent-name {"key": "value"}        ← JSON payload, anywhere
+  - @agent-name <task text>             ← MUST start a line or sentence; the task
+                                          runs only up to the next . ! or ?
+A name buried mid-sentence ("you can use @agent-name to ...") does NOT dispatch.
+When in doubt, use the <delegate> block.
+
+== CRITICAL: NEVER PROXY, NEVER PRETEND ==
+NEVER say "I'll forward that to X" or "let me send that request" UNLESS the same
+reply contains a real <delegate> block (or a valid @mention form above). Saying
+you delegated without emitting one of those is the forbidden behavior — the task
+is never sent and the user is misled.
+You are the ORCHESTRATOR: you DO the task and report the result. Do NOT tell the
+user to "use @agent-name" themselves, and do NOT ask a follow-up question when you
+already have what you need to delegate — delegate in the same turn.
 
 == EXISTING AGENTS ==
 - main                    : you (orchestrator)
@@ -2775,7 +2797,11 @@ class MainActor(LLMAgent):
         # remove agents in response to user requests like "delete the math agent".
         clean, deleted, missing = await self._process_delete_commands(clean)
 
-        # Execute any @agent-name {payload} delegation patterns the LLM produced
+        # Execute structured <delegate>{...}</delegate> blocks — the preferred,
+        # unambiguous delegation form. Results are spliced in-place.
+        clean, _delegate_results = await self._process_delegate_commands(clean)
+
+        # Execute any looser @agent-name delegation patterns the LLM produced
         clean = await self._execute_llm_delegations(clean)
 
         await self._mqtt_publish(
@@ -2935,8 +2961,15 @@ class MainActor(LLMAgent):
         # Process any <delete> blocks — orchestrator-side counterpart of <spawn>
         _, deleted, missing = await self._process_delete_commands(full_response)
 
-        # Execute any @agent-name {payload} delegation patterns the LLM produced
-        # If delegations ran, yield the results as an additional chunk
+        # Execute structured <delegate>{...}</delegate> blocks first (preferred
+        # form). The raw block was already streamed to the user above, so append
+        # each result as an additional chunk — same approach as @mention results.
+        full_response, _delegate_results = await self._process_delegate_commands(full_response)
+        for _r in _delegate_results:
+            yield "\n" + _r
+
+        # Execute any looser @agent-name delegation patterns the LLM produced.
+        # If delegations ran, yield the results as an additional chunk.
         delegated = await self._execute_llm_delegations(full_response)
         if delegated != full_response:
             # Find what changed and yield just the new parts
@@ -3452,26 +3485,147 @@ class MainActor(LLMAgent):
 
         # ── Spawn ──────────────────────────────────────────────────────────────
 
+    async def _resolve_or_spawn(self, agent_name: str):
+        """
+        Resolve an agent by name, auto-spawning it from a catalog recipe if it
+        isn't running yet. Shared by @mention delegations and <delegate> blocks.
+
+        Returns (target_actor_or_None, spawnable_bool).
+        """
+        target = self._registry.find_by_name(agent_name) if self._registry else None
+        spawnable = False
+        if not target:
+            manifest = self._agent_manifests.get(agent_name, {})
+            spawnable = bool(manifest.get("spawnable") and manifest.get("catalog"))
+            if spawnable:
+                catalog_actor = self._registry.find_by_name(manifest["catalog"]) if self._registry else None
+                if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
+                    logger.info(f"[{self.name}] Auto-spawning '{agent_name}' via catalog...")
+                    try:
+                        spawn_result = await catalog_actor._action_spawn(agent_name, {})
+                        if spawn_result and spawn_result.get("ok"):
+                            await asyncio.sleep(0.5)
+                            target = self._registry.find_by_name(agent_name) if self._registry else None
+                            logger.info(f"[{self.name}] '{agent_name}' spawned successfully")
+                        else:
+                            err = spawn_result.get("message", "unknown") if spawn_result else "no response"
+                            logger.warning(f"[{self.name}] Spawn failed for '{agent_name}': {err}")
+                    except Exception as e:
+                        logger.error(f"[{self.name}] Spawn error for '{agent_name}': {e}")
+        return target, spawnable
+
+    async def _run_delegation(self, agent_name: str, payload) -> str:
+        """
+        Dispatch one already-resolved delegation and format the result string.
+        Shared by @mention delegations and <delegate> blocks.
+        """
+        json_str = json.dumps(payload)
+        logger.info(f"[{self.name}] Executing LLM delegation → @{agent_name} {json_str[:80]}")
+        try:
+            result = await self.delegate_task(agent_name, json_str, timeout=300.0)
+            if result:
+                if isinstance(result, dict):
+                    error = result.get("error")
+                    if error:
+                        return f"❌ {agent_name} failed: {error}"
+                    for key in ("pptx_path", "image_path", "result", "message", "output", "text"):
+                        if result.get(key):
+                            return f"✅ {agent_name} completed: {key}={result[key]}"
+                    return f"✅ {agent_name} completed: {result}"
+                return f"✅ {agent_name}: {result}"
+            return f"[{agent_name} did not respond]"
+        except Exception as e:
+            return f"[{agent_name} error: {e}]"
+
+    async def _process_delegate_commands(self, response: str):
+        """
+        Scan the LLM response for structured delegation blocks and execute them:
+
+            <delegate>{"agent": "manual-agent", "task": "search for the Philips 2200 manual"}</delegate>
+            <delegate>{"agent": "weather-agent", "payload": {"city": "Athens"}}</delegate>
+
+        This is the orchestrator-side counterpart of <spawn>/<delete> and the
+        PREFERRED way for the LLM to delegate: unlike a free-text @mention it is
+        unambiguous, never truncated, and carries a structured payload.
+
+        Accepted block fields:
+          - "agent"  (required) — target agent name
+          - "task"   — free-text task; wrapped as {"text": task}
+          - "payload"— explicit dict payload (takes precedence over "task")
+
+        Returns (cleaned_response, [result_strings]). The <delegate> block is
+        replaced in-place with its result so the user sees the outcome.
+        """
+        pattern = r'<delegate>(.*?)</delegate>'
+        results: list[str] = []
+
+        matches = list(re.finditer(pattern, response, re.DOTALL))
+        for m in matches:
+            block = m.group(1).strip()
+            try:
+                cfg = json.loads(block)
+            except json.JSONDecodeError as e:
+                logger.error(f"[{self.name}] Invalid <delegate> JSON: {e}\nRaw block: {block[:200]}")
+                response = response.replace(m.group(0), "[delegate: malformed block]")
+                continue
+
+            agent_name = (cfg.get("agent") or cfg.get("name") or "").strip()
+            if not agent_name:
+                logger.warning(f"[{self.name}] <delegate> block missing 'agent': {block[:200]}")
+                response = response.replace(m.group(0), "[delegate: no agent named]")
+                continue
+            if agent_name == self.name:
+                response = response.replace(m.group(0), "")
+                continue
+
+            if isinstance(cfg.get("payload"), dict):
+                payload = cfg["payload"]
+            else:
+                payload = {"text": str(cfg.get("task", "")).strip()}
+
+            target, spawnable = await self._resolve_or_spawn(agent_name)
+            if not target:
+                result_str = f"[Could not reach {agent_name}]"
+            else:
+                result_str = await self._run_delegation(agent_name, payload)
+
+            results.append(result_str)
+            response = response.replace(m.group(0), result_str)
+
+        return response, results
+
     async def _execute_llm_delegations(self, response: str) -> str:
         """
-        Scan the LLM response for @agent-name {json} delegation patterns and execute them.
-        Replaces the pattern in the response with the actual result.
+        Scan the LLM response for @agent-name delegation patterns and execute them.
+        Replaces the matched pattern in the response with the actual result.
 
-        Matches lines like:
-            @doc-to-pptx-agent {"file_path": "...", "output_path": "..."}
-            @weather-agent {"city": "Athens"}
+        Prefer <delegate>{...}</delegate> blocks (see _process_delegate_commands).
+        This handles the looser @mention forms the LLM still produces:
+
+          1. Explicit JSON payload, anywhere in the text (original behavior — the
+             form that already worked):
+                 @weather-agent {"city": "Athens"}
+
+          2. Bare conversational mention at the start of a line OR a sentence:
+                 ...sending that now.  @manual-agent search for the Philips 2200 manual.
+             The text from the mention up to the next sentence terminator / newline
+             is wrapped as {"text": "..."}.
+
+        Previously only form (1) was recognized, so a bare mention matched nothing,
+        was streamed to the user verbatim, and was never dispatched — which is why
+        nothing showed up in the logs.
         """
-        import re
+        # (full_match_str, agent_name, payload_dict, is_bare)
+        delegations = []
+        json_spans  = []   # char spans consumed by form (1), so form (2) skips them
 
-        # Find @agent-name then scan for the matching { } block manually
-        # (regex alone can't handle } inside string values reliably)
-        delegations = []   # list of (full_match_str, agent_name, payload_dict)
-
+        # ── Form 1: @agent-name {json} — ANYWHERE. Brace-scan the matching close
+        #    over the full response (payload may span lines / contain } in strings).
         for m in re.finditer(r'@([\w][\w\-]*)\s+(\{)', response):
             agent_name = m.group(1)
             if agent_name == self.name:
                 continue
-            start = m.start(2)   # position of opening {
+            start = m.start(2)
             depth = 0
             end   = start
             for i, ch in enumerate(response[start:], start):
@@ -3484,65 +3638,53 @@ class MainActor(LLMAgent):
                         break
             if depth != 0:
                 continue   # unmatched braces — skip
-            json_str = response[start:end]
             try:
-                payload = json.loads(json_str)
+                payload = json.loads(response[start:end])
             except json.JSONDecodeError:
                 continue
-            delegations.append((response[m.start():end], agent_name, payload))
+            delegations.append((response[m.start():end], agent_name, payload, False))
+            json_spans.append((m.start(), end))
+
+        # ── Form 2: bare mention at a line OR sentence boundary. The '@' must be
+        #    preceded by start-of-text, a newline, or sentence-ending punctuation,
+        #    so an @name buried mid-sentence ("you can use @x to ...") — which the
+        #    prompt treats as the WRONG, user-instructing pattern — is ignored.
+        trigger = re.compile(r'(?:^|\n|[.!?:]\s+)(@([\w][\w\-]*)[ \t]+)')
+        for m in trigger.finditer(response):
+            agent_name = m.group(2)
+            if agent_name == self.name:
+                continue
+            at_start      = m.start(1)   # index of the '@'
+            payload_start = m.end(1)     # first char after "@name "
+            if any(s <= at_start < e for s, e in json_spans):
+                continue   # already captured as the JSON form
+            if payload_start < len(response) and response[payload_start] == '{':
+                continue   # JSON form — owned by form (1)
+            tail = response[payload_start:]
+            stop = re.search(r'[.!?\n]', tail)
+            cut  = stop.start() if stop else len(tail)
+            task = tail[:cut].strip()
+            if not task:
+                continue
+            end = payload_start + cut
+            delegations.append((response[at_start:end], agent_name, {"text": task}, True))
 
         replacements = []
-        for full_match, agent_name, payload in delegations:
-            # Check if agent is running, if not auto-spawn via catalog
-            target = self._registry.find_by_name(agent_name) if self._registry else None
+        for full_match, agent_name, payload, is_bare in delegations:
+            target, spawnable = await self._resolve_or_spawn(agent_name)
             if not target:
-                manifest = self._agent_manifests.get(agent_name, {})
-                if manifest.get("spawnable") and manifest.get("catalog"):
-                    catalog_actor = self._registry.find_by_name(manifest["catalog"]) if self._registry else None
-                    if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
-                        logger.info(f"[{self.name}] Auto-spawning '{agent_name}' via catalog...")
-                        try:
-                            spawn_result = await catalog_actor._action_spawn(agent_name, {})
-                            if spawn_result and spawn_result.get("ok"):
-                                await asyncio.sleep(0.5)
-                                target = self._registry.find_by_name(agent_name) if self._registry else None
-                                logger.info(f"[{self.name}] '{agent_name}' spawned successfully")
-                            else:
-                                err = spawn_result.get("message", "unknown") if spawn_result else "no response"
-                                logger.warning(f"[{self.name}] Spawn failed for '{agent_name}': {err}")
-                        except Exception as e:
-                            logger.error(f"[{self.name}] Spawn error for '{agent_name}': {e}")
-
-            if not target:
+                # A bare prose mention of an unknown, non-spawnable name is almost
+                # certainly ordinary text (or an agent the LLM only imagined), so
+                # leave the line untouched rather than clobbering the reply. The
+                # explicit JSON form is unambiguous machine intent — surface it.
+                if is_bare and not spawnable:
+                    logger.debug(f"[{self.name}] Ignoring bare mention of unknown agent '{agent_name}'")
+                    continue
                 replacements.append((full_match, f"[Could not reach {agent_name}]"))
                 continue
-
-            json_str = json.dumps(payload)
-            logger.info(f"[{self.name}] Executing LLM delegation → @{agent_name} {json_str[:80]}")
-            try:
-                result = await self.delegate_task(agent_name, json_str, timeout=300.0)
-                if result:
-                    if isinstance(result, dict):
-                        error = result.get("error")
-                        if error:
-                            result_str = f"❌ {agent_name} failed: {error}"
-                        else:
-                            for key in ("pptx_path", "image_path", "result", "message", "output", "text"):
-                                if result.get(key):
-                                    result_str = f"✅ {agent_name} completed: {key}={result[key]}"
-                                    break
-                            else:
-                                result_str = f"✅ {agent_name} completed: {result}"
-                    else:
-                        result_str = f"✅ {agent_name}: {result}"
-                else:
-                    result_str = f"[{agent_name} did not respond]"
-            except Exception as e:
-                result_str = f"[{agent_name} error: {e}]"
-
+            result_str = await self._run_delegation(agent_name, payload)
             replacements.append((full_match, result_str))
 
-        # Apply replacements
         for original, replacement in replacements:
             response = response.replace(original, replacement)
 

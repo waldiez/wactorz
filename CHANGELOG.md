@@ -7,8 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Agent → UI notifications** — `Actor.notify_user(text)` pushes a message to the chat panel (via `agents/{id}/chat`); the monitor bridges it to a live chat frame. Previously agent messages only hit the dashboard.
+- **`agent.run_in_background(coro)`** — schedules a coroutine tracked on the actor, for long work that shouldn't block `handle_task`.
+- **`<delegate>` blocks** — `main` can delegate via `<delegate>{"agent": "...", "task": "..."}</delegate>`, alongside `@mentions`.
+
+### Changed
+
+- **ManualAgent** — user-facing loads now ack immediately and run search/download/extract in the background, notifying when ready (no longer blocked by the 60 s `handle_task` timeout). Programmatic `action: load_manual` stays synchronous.
+- **Orchestrator prompt** — added a "HOW TO DELEGATE" section and removed the contradictory "NEVER PROXY" guidance.
+
 ### Fixed
 
+- **Delegation never dispatched** — bare `@agent <task>` mentions in `main`'s output were streamed as prose, not dispatched. `_execute_llm_delegations` now matches them (line/sentence-anchored).
+- **Recipe-agent replies dropped** — `DynamicAgent` RESULT replies didn't echo `_task_id`, so `delegate_task` hung until timeout. They now echo it, matching `LLMAgent`.
 - **Monitor UI** — "Demo fallback" MQTT badge no longer appears when `MONITOR_PORT` differs from the default 8888. `config_handler` was advertising a hardcoded `:8888` WebSocket URL to the frontend; it now uses the actual bound port (`WS_PORT`).
 - **Monitor UI** — MQTT WebSocket URL is derived from `window.location` on every load and never cached in `localStorage`. Existing browsers with a stale cached URL (e.g. `ws://…:8888/mqtt`) self-heal automatically on next page load — no manual `localStorage` clearing required.
 - **Monitor UI** — Service worker now fetches `index.html` network-first so fresh content-hashed JS bundles always load after a redeploy (fixes stale-SW Demo fallback in normal vs incognito browsing).

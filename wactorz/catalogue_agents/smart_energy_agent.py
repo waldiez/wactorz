@@ -500,8 +500,23 @@ def _welcome(agent) -> str:
 def _is_import_intent(low: str) -> bool:
     triggers = ("import", "discover", "scan", "set up", "setup", "add plug",
                 "add my plug", "add a plug", "find plug", "onboard", "connect plug",
-                "monitor plug", "monitor my plug", "get started", "find my plug")
+                "monitor plug", "monitor my plug", "get started", "find my plug",
+                "check ha", "check home assistant", "look in ha", "search ha")
     return any(t in low for t in triggers)
+
+
+# Words that mean "this message is about energy/plugs" — used to decide whether
+# to proactively scan HA when nothing is set up yet. Kept broad on purpose:
+# when there are zero plugs, the only useful thing to do is go find some.
+_ENERGY_HINTS = (
+    "plug", "power", "watt", "energy", "consum", "electric", "kwh", "draw",
+    "usage", "cost", "tariff", "meter", "appliance", "device", "load", "solar",
+    "home assistant", "check ha", " ha ", "fridge", "heater", "printer", "rig",
+)
+
+
+def _looks_energy_related(low: str) -> bool:
+    return any(h in f" {low} " for h in _ENERGY_HINTS)
 
 
 def _is_cancel(low: str) -> bool:
@@ -511,6 +526,7 @@ def _is_cancel(low: str) -> bool:
 async def _converse(agent, text: str) -> dict:
     low = text.lower().strip()
     convo = agent.state.get("convo") or {}
+    has_plugs = bool(agent.state.get("plugs"))
 
     # An active selection flow takes priority over everything else.
     if convo.get("stage") == "selecting":
@@ -522,19 +538,26 @@ async def _converse(agent, text: str) -> dict:
     if _is_cancel(low):
         return {"result": "Nothing to cancel. Say \"import my plugs\" to begin."}
 
-    # Start onboarding
+    # Explicit import intent always scans.
     if _is_import_intent(low):
         return await _start_import(agent)
 
-    # Friendly natural-language status/list
-    if any(w in low for w in ("status", "list plug", "my plug", "what plug", "which plug",
-                              "show plug", "overview")):
+    # Friendly natural-language status/list (only meaningful once plugs exist).
+    if has_plugs and any(w in low for w in ("status", "list plug", "my plug", "what plug",
+                                            "which plug", "show plug", "overview")):
         return _status(agent)
 
-    if ("help" in low or low in ("hi", "hello", "hey", "?")) and not agent.state.get("plugs"):
+    # ── Proactive onboarding ─────────────────────────────────────────────────
+    # If nothing is set up yet, don't make the user guess the magic words. The
+    # moment they ask anything energy/plug/HA-related ("what's my power draw?",
+    # "check ha", "I have a plug called ac power"), just scan HA and show them.
+    if not has_plugs:
+        if _looks_energy_related(low):
+            return await _start_import(agent)
+        # Pure greeting / unrelated → friendly welcome that points the way.
         return {"result": _welcome(agent)}
 
-    # Otherwise treat as a question and let the LLM answer from live data
+    # Plugs exist → answer the question from live data.
     return await _ask_llm(agent, text)
 
 

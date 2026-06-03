@@ -28,6 +28,22 @@ PIPELINE_RULES_KEY   = "_pipeline_rules"
 PENDING_PLANS_KEY    = "_pending_plans"     # dry-run proposals awaiting user approval
 NODE_REGISTRY_KEY  = "_known_nodes"       # tracks online remote nodes
 
+
+def _normalize_agent_name(name: str) -> str:
+    """Canonicalise an agent name for fuzzy matching.
+
+    Lowercases, turns spaces/underscores into dashes, and strips a redundant
+    trailing '-agent' suffix so 'Smart Energy Agent', 'smart_energy_agent',
+    and 'smart-energy' all collapse to 'smart-energy'.
+    """
+    norm = (name or "").lower().strip().replace("_", "-").replace(" ", "-")
+    while "--" in norm:
+        norm = norm.replace("--", "-")
+    norm = norm.strip("-")
+    if norm.endswith("-agent") and norm != "-agent":
+        norm = norm[:-len("-agent")]
+    return norm
+
 ORCHESTRATOR_PROMPT = """You are the main orchestrator in a multi-agent system.
 
 You can spawn new agents on demand. BUT BEFORE writing any new agent code, you MUST
@@ -3485,6 +3501,28 @@ class MainActor(LLMAgent):
 
         # ── Spawn ──────────────────────────────────────────────────────────────
 
+    def _match_catalog_recipe(self, name: str, capabilities: Optional[list] = None) -> Optional[str]:
+        """Return the name of a catalog recipe that already covers this request.
+
+        Used to stop the LLM from reimplementing an agent that the catalog
+        already provides (e.g. it writes a fresh 'smart-energy-agent' when the
+        catalog has 'smart-energy'). Matching is by normalised name only —
+        the safest signal. Capability overlap is intentionally NOT used here
+        because it produces false positives that would block genuinely new
+        agents.
+
+        Only manifests that are spawnable catalog recipes are considered.
+        """
+        want = _normalize_agent_name(name)
+        if not want:
+            return None
+        for recipe_name, manifest in self._agent_manifests.items():
+            if not (manifest.get("spawnable") and manifest.get("catalog")):
+                continue
+            if _normalize_agent_name(recipe_name) == want:
+                return recipe_name
+        return None
+
     async def _resolve_or_spawn(self, agent_name: str):
         """
         Resolve an agent by name, auto-spawning it from a catalog recipe if it
@@ -3496,6 +3534,13 @@ class MainActor(LLMAgent):
         spawnable = False
         if not target:
             manifest = self._agent_manifests.get(agent_name, {})
+            # Fall back to a fuzzy catalog match so 'smart energy agent' or
+            # 'smart-energy-agent' still resolve to the 'smart-energy' recipe.
+            if not manifest:
+                matched = self._match_catalog_recipe(agent_name)
+                if matched:
+                    agent_name = matched
+                    manifest = self._agent_manifests.get(matched, {})
             spawnable = bool(manifest.get("spawnable") and manifest.get("catalog"))
             if spawnable:
                 catalog_actor = self._registry.find_by_name(manifest["catalog"]) if self._registry else None
@@ -3587,7 +3632,9 @@ class MainActor(LLMAgent):
             if not target:
                 result_str = f"[Could not reach {agent_name}]"
             else:
-                result_str = await self._run_delegation(agent_name, payload)
+                # Use the resolved actor's real name so delegation lands even
+                # when the LLM used a fuzzy alias ('smart energy agent').
+                result_str = await self._run_delegation(target.name, payload)
 
             results.append(result_str)
             response = response.replace(m.group(0), result_str)
@@ -3682,7 +3729,7 @@ class MainActor(LLMAgent):
                     continue
                 replacements.append((full_match, f"[Could not reach {agent_name}]"))
                 continue
-            result_str = await self._run_delegation(agent_name, payload)
+            result_str = await self._run_delegation(target.name, payload)
             replacements.append((full_match, result_str))
 
         for original, replacement in replacements:
@@ -3752,6 +3799,37 @@ class MainActor(LLMAgent):
         for match in re.findall(pattern, response, re.DOTALL):
             try:
                 config = self._parse_spawn_config(match.strip())
+
+                # ── Guard: don't let the LLM reimplement a catalog recipe ──────
+                # If the requested name maps to an existing catalog recipe, spawn
+                # THAT (the maintained, tested version) instead of the LLM's
+                # freshly-written duplicate. This is what stops "spawn the smart
+                # energy agent" from producing a brand-new 'smart-energy-agent'
+                # when the catalog already provides 'smart-energy'.
+                req_name = config.get("name", "")
+                if not config.get("replace"):
+                    recipe_name = self._match_catalog_recipe(req_name)
+                    if recipe_name:
+                        existing = self._registry.find_by_name(recipe_name) if self._registry else None
+                        if existing:
+                            logger.info(f"[{self.name}] '{req_name}' already covered by running "
+                                        f"catalog agent '{recipe_name}' — skipping LLM reimplementation")
+                            spawned.append(existing)
+                            continue
+                        catalog_actor = self._registry.find_by_name("catalog") if self._registry else None
+                        if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
+                            logger.info(f"[{self.name}] LLM tried to write '{req_name}'; spawning catalog "
+                                        f"recipe '{recipe_name}' instead")
+                            spawn_result = await catalog_actor._action_spawn(recipe_name, {})
+                            if spawn_result and spawn_result.get("ok"):
+                                await asyncio.sleep(0.5)
+                                actor = self._registry.find_by_name(recipe_name) if self._registry else None
+                                if actor:
+                                    spawned.append(actor)
+                                    continue
+                            logger.warning(f"[{self.name}] Catalog spawn of '{recipe_name}' failed "
+                                           f"({spawn_result}); falling back to LLM code")
+
                 # LLM agents have no "code" — only check for code if type is dynamic
                 agent_type = config.get("type", "dynamic")
                 has_code   = bool(config.get("code", "").strip())

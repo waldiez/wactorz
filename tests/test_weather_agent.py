@@ -35,6 +35,7 @@ class ParseIntentTest(unittest.TestCase):
 
     def test_current_default_and_named(self):
         self.assertIntent("what's the weather", "current", None)
+        self.assertIntent("whats the weather like rn", "current", None)
         self.assertIntent("whats the weather in athens gr", "current", "athens gr")
         self.assertIntent("temperature in paris", "current", "paris")
         self.assertIntent("athens", "current", "athens")
@@ -81,9 +82,27 @@ class ParseIntentTest(unittest.TestCase):
 
     def test_rain_and_snow_concerns(self):
         self.assertEqual(self._p("will it rain in london tomorrow?").get("concern"), "rain")
+        self.assertEqual(self._p("is it raining?").get("concern"), "rain")
+        self.assertEqual(self._p("is it raining?").get("action"), "current")
         self.assertEqual(self._p("do i need an umbrella tomorrow").get("concern"), "rain")
+        for text in (
+            "should i pack an umbrella tomorrow",
+            "should i bring an umbrella tomorrow",
+            "should i take an umbrella tomorrow",
+            "should i carry an umbrella tomorrow",
+        ):
+            p = self._p(text)
+            self.assertEqual(p.get("action"), "forecast", text)
+            self.assertEqual(p.get("concern"), "rain", text)
+            self.assertNotIn("location", p, text)
         self.assertEqual(self._p("is it going to snow in boston").get("concern"), "snow")
         self.assertIsNone(self._p("weather in paris").get("concern"))
+
+    def test_clothing_questions_are_weather_queries(self):
+        p = self._p("should i wear a jacket")
+        self.assertEqual(p["action"], "current")
+        self.assertEqual(p.get("concern"), "clothing")
+        self.assertNotEqual(p["action"], "not_weather")
 
     def test_fahrenheit(self):
         self.assertEqual(self._p("temperature in cairo in fahrenheit").get("units"), "fahrenheit")
@@ -99,6 +118,24 @@ class ParseIntentTest(unittest.TestCase):
         self.assertIntent("set default to Athens", "set-default", "Athens")
         self.assertIntent("set-default Tokyo", "set-default", "Tokyo")
         self.assertIntent("change my default location to Paris", "set-default", "Paris")
+        self.assertIntent("remember my location as Athens", "set-default", "Athens")
+        self.assertIntent("set my home to Thessaloniki", "set-default", "Thessaloniki")
+
+    def test_home_location_references_use_default_without_fake_location(self):
+        p = self._p("weather where I am")
+        self.assertEqual(p["action"], "current")
+        self.assertTrue(p.get("use_default_location"))
+        self.assertNotIn("location", p)
+        p = self._p("is it raining near me?")
+        self.assertEqual(p.get("concern"), "rain")
+        self.assertTrue(p.get("use_default_location"))
+        self.assertNotIn("location", p)
+
+    def test_self_location_statement_updates_default_location(self):
+        p = self.assertIntent("im in athens gr silly", "current", "athens gr")
+        self.assertTrue(p.get("update_default_location"))
+        p = self.assertIntent("I'm near Thessaloniki", "current", "Thessaloniki")
+        self.assertTrue(p.get("update_default_location"))
 
     def test_json_passthrough(self):
         p = parse_query('{"action": "forecast", "location": "Rome", "days": 4}', WED)
@@ -158,8 +195,154 @@ class FormatTest(unittest.TestCase):
         })
         self.assertIn("No", out)
 
+    def test_current_clothing_verdict(self):
+        out = self.agent._format({
+            "kind": "current", "location": "Athens", "temp": 29.0, "feels_like": 31.0,
+            "humidity": 39, "wind": 12.0, "precip": 0, "code": 0, "condition": "clear",
+            "units": "celsius", "concern": "clothing",
+        })
+        self.assertIn("No jacket needed", out)
+
     def test_error_passthrough(self):
         self.assertIn("couldn't find", self.agent._format({"error": "I couldn't find a place called 'x'."}))
+
+
+class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
+    async def test_followups_reuse_last_successful_location(self):
+        class FakeWeatherAgent(WeatherAgent):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.memory = {}
+
+            def persist(self, key, value):
+                self.memory[key] = value
+
+            def recall(self, key, default=None):
+                return self.memory.get(key, default)
+
+            async def _current(self, location: str, units: str = "celsius") -> dict:
+                label = "Athens, Attica, Greece" if "athens" in location.lower() else location
+                return {
+                    "kind": "current", "location": label, "temp": 29.5, "feels_like": 31.4,
+                    "humidity": 39, "wind": 12.2, "precip": 0, "code": 0, "condition": "clear",
+                }
+
+            async def _forecast(self, location: str, units: str = "celsius", **kwargs) -> dict:
+                label = "Athens, Attica, Greece" if "athens" in location.lower() else location
+                return {
+                    "kind": "forecast", "location": label,
+                    "forecast": [{"date": "2026-06-04", "temp_min": 22.0, "temp_max": 31.0,
+                                  "precip_mm": 0.0, "precip_prob": 5, "code": 0, "condition": "clear"}],
+                }
+
+        agent = FakeWeatherAgent(llm_provider=None, name="weather-agent")
+
+        first = await agent.chat("hey bro whats the weather in athens gr?")
+        self.assertIn("Athens", first)
+
+        jacket = await agent.chat("should i wear a jacket")
+        self.assertIn("Athens", jacket)
+        self.assertIn("from earlier", jacket)
+        self.assertIn("No jacket needed", jacket)
+        self.assertNotIn("London", jacket)
+
+        rain = await agent.chat("is it raining?")
+        self.assertIn("No", rain)
+        self.assertIn("dry right now", rain)
+        self.assertIn("Athens", rain)
+
+        tomorrow = await agent.chat("what about tomorrow?")
+        self.assertIn("Athens", tomorrow)
+        self.assertIn("clear", tomorrow)
+        self.assertNotIn("London", tomorrow)
+
+        umbrella = await agent.chat("should i pack an umbrella tomorrow")
+        self.assertIn("Athens", umbrella)
+        self.assertIn("dry tomorrow", umbrella)
+        self.assertNotIn("Pack", umbrella)
+        self.assertNotIn("Austria", umbrella)
+
+    async def test_home_location_is_separate_from_last_discussed_city(self):
+        class FakeWeatherAgent(WeatherAgent):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.memory = {}
+
+            def persist(self, key, value):
+                self.memory[key] = value
+
+            def recall(self, key, default=None):
+                return self.memory.get(key, default)
+
+            async def _current(self, location: str, units: str = "celsius") -> dict:
+                labels = {
+                    "athens": "Athens, Attica, Greece",
+                    "paris": "Paris, Ile-de-France, France",
+                }
+                key = location.split(",", 1)[0].lower()
+                return {
+                    "kind": "current", "location": labels.get(key, location),
+                    "temp": 20.0, "feels_like": 20.0, "humidity": 50,
+                    "wind": 7.0, "precip": 0, "code": 0, "condition": "clear",
+                }
+
+        agent = FakeWeatherAgent(llm_provider=None, name="weather-agent")
+
+        remembered = await agent.chat("remember my location as Athens")
+        self.assertIn("Athens", remembered)
+        self.assertEqual(agent.memory["default_location"], "Athens")
+
+        paris = await agent.chat("weather in Paris")
+        self.assertIn("Paris", paris)
+
+        followup = await agent.chat("is it raining?")
+        self.assertIn("Paris", followup)
+        self.assertIn("from earlier", followup)
+
+        home = await agent.chat("is it raining where I am?")
+        self.assertIn("Athens", home)
+        self.assertNotIn("Paris", home)
+
+    async def test_self_location_statement_changes_where_i_am(self):
+        class FakeWeatherAgent(WeatherAgent):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.memory = {}
+
+            def persist(self, key, value):
+                self.memory[key] = value
+
+            def recall(self, key, default=None):
+                return self.memory.get(key, default)
+
+            async def _current(self, location: str, units: str = "celsius") -> dict:
+                label = "Athens, Attica, Greece" if "athens" in location.lower() else location
+                return {
+                    "kind": "current", "location": label, "temp": 29.5, "feels_like": 31.6,
+                    "humidity": 40, "wind": 12.5, "precip": 0, "code": 0, "condition": "clear",
+                }
+
+        agent = FakeWeatherAgent(llm_provider=None, name="weather-agent")
+
+        current = await agent.chat("whats the weather like rn")
+        self.assertNotIn("rn", current)
+
+        moved = await agent.chat("im in athens gr silly")
+        self.assertIn("Athens", moved)
+        self.assertEqual(agent.memory["default_location"], "athens gr")
+
+        home = await agent.chat("weather where i am")
+        self.assertIn("Athens", home)
+        self.assertNotIn("London", home)
+
+        near_me = await agent.chat("is it raining near me?")
+        self.assertIn("Athens", near_me)
+        self.assertIn("dry right now", near_me)
+
+        at_home = await agent.chat("weather at home")
+        self.assertIn("Athens", at_home)
+        self.assertIn("saved location", at_home)
+        self.assertNotIn("say 'weather in <city>'", at_home)
 
 
 if __name__ == "__main__":

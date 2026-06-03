@@ -22,6 +22,7 @@ Structured commands are still accepted for programmatic callers:
   forecast [location] [days=3]
   history [location] [date]        e.g. "yesterday", "2026-05-31"
   set-default <location>
+  remember my location as <location>
 """
 
 from __future__ import annotations
@@ -84,7 +85,10 @@ _FILLER = {
     "history", "historical", "past", "jacket", "coat", "sweater", "boots",
     "shorts", "sunglasses", "sunscreen", "wear", "location", "default",
     "good", "morning", "afternoon", "evening", "night", "thanks", "thank",
-    "pls", "plz", "here", "local", "my",
+    "pls", "plz", "here", "local", "my", "where", "am", "home", "area", "place",
+    "rn", "silly",
+    # advice/travel verbs that otherwise look like tiny place names
+    "pack", "bring", "take", "carry", "grab", "use", "put", "wearing",
     # modal/auxiliary verbs — never place names
     "should", "shall", "must", "might", "may", "let", "lets", "let's",
     # corrections / chat filler that leak through
@@ -125,7 +129,7 @@ _STRIP_TIME = re.compile(
     r"next\s+\d+\s+days?|"
     r"the\s+next\s+\w+|this\s+(?:morning|afternoon|evening|month)|"
     r"days?\s+ago|last\s+night|last\s+week|last\s+weekend|"
-    r"tomorrow|tonight|tonite|today|yesterday|now|currently|"
+    r"tomorrow|tonight|tonite|today|yesterday|now|rn|currently|"
     r"on\s+\w+day|\w+day|mon|tue|tues|wed|thu|thurs|fri|sat|sun"
     r")\b",
     re.IGNORECASE,
@@ -133,11 +137,22 @@ _STRIP_TIME = re.compile(
 
 _PREP = re.compile(r"\b(?:in|at|for|near|around|over|across)\s+([a-zA-Z][\w\s,]*?)(?:\s*[?!.,;]|\s*$)", re.IGNORECASE)
 _ISO_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+_HOME_LOCATION_REF = re.compile(
+    r"\b(my location|my area|my place|where i am|where i'm at|where i live|"
+    r"home|here|near me|local(?:ly)?)\b",
+    re.IGNORECASE,
+)
+_SELF_LOCATION = re.compile(
+    r"\b(?:i\s*am|i'?m|we\s*are|we'?re)\s+(?:in|at|near)\s+"
+    r"([a-zA-Z][\w\s,]*?)(?:\s*[?!.,;]|\s*$)",
+    re.IGNORECASE,
+)
 
 # Keywords that mark a message as weather-related.  If NONE of these appear
 # and there is no temporal cue, the message is not a weather query.
 _WEATHER_VOCAB = re.compile(
-    r"\b(weather|wether|wheather|forecast|forcast|temperature|temp\b|rain|snow|"
+    r"\b(weather|wether|wheather|forecast|forcast|temperature|temp\b|"
+    r"rain(?:ing|y|s)?|drizzl\w*|shower\w*|snow(?:ing|y|s)?|"
     r"sun|sunny|cloud|wind|humid|storm|hot|cold|warm|cool|chilly|freez|"
     r"umbrella|jacket|coat|sunscreen|shorts|sunglasses|outside|degrees?|"
     r"feel.*like|feels?\s+like|uv|heatwave)\b",
@@ -145,7 +160,7 @@ _WEATHER_VOCAB = re.compile(
 )
 _TEMPORAL_VOCAB = re.compile(
     r"\b(today|tomorrow|yesterday|tonight|weekend|monday|tuesday|wednesday|"
-    r"thursday|friday|saturday|sunday|this\s+week|next\s+week|\d+\s+days?)\b",
+    r"thursday|friday|saturday|sunday|this\s+week|next\s+week|rn|\d+\s+days?)\b",
     re.IGNORECASE,
 )
 
@@ -187,8 +202,10 @@ def _resolve_when(low: str, today: date) -> dict:
     concern = None
     if re.search(r"\brain|umbrella|drizzl|shower|wet\b", low):
         concern = "rain"
-    elif re.search(r"\bsnow\b", low):
+    elif re.search(r"\bsnow(?:ing|y|s)?\b", low):
         concern = "snow"
+    elif re.search(r"\b(jacket|coat|sweater|hoodie|layers?|shorts|sunscreen|sunglasses|wear)\b", low):
+        concern = "clothing"
 
     units = "fahrenheit" if re.search(r"fahrenheit|°f|\bin f\b|deg f", low) else "celsius"
 
@@ -307,11 +324,23 @@ def parse_query(raw: str, today: Optional[date] = None) -> dict:
             pass
 
     low = text.lower()
+    self_location = None
+    self_match = _SELF_LOCATION.search(text)
+    if self_match:
+        self_location = _clean_location(self_match.group(1))
 
-    # set-default / "change my default location to X"
+    # set-default / "change my default location to X" / "remember my location as X"
     if re.match(r"(set[-\s]?default|change\s+(?:the\s+|my\s+)?default|my\s+default)\b", low) \
             or low.startswith("default "):
         tail = re.sub(r"^.*?default\b", "", text, flags=re.IGNORECASE)
+        return {"action": "set-default", "location": _clean_location(tail)}
+    if re.search(r"\b(remember|save|set|change|update)\b.*\b(my\s+)?(home|location|area|place)\b", low):
+        tail = re.sub(
+            r"^.*?\b(?:home|location|area|place)\b(?:\s+(?:as|to|is))?",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
         return {"action": "set-default", "location": _clean_location(tail)}
 
     # If the message has no weather vocabulary, no temporal cues, and no
@@ -327,11 +356,15 @@ def parse_query(raw: str, today: Optional[date] = None) -> dict:
             return {"action": "not_weather", "original": text}
 
     when = _resolve_when(low, today)
-    location = _extract_location(text)
+    location = self_location or _extract_location(text)
 
     payload: dict = {"action": when["action"]}
     if location:
         payload["location"] = location
+    if self_location:
+        payload["update_default_location"] = True
+    if _HOME_LOCATION_REF.search(text) and not location:
+        payload["use_default_location"] = True
     if when.get("concern"):
         payload["concern"] = when["concern"]
     if when.get("units") and when["units"] != "celsius":
@@ -356,12 +389,16 @@ class WeatherAgent(Actor):
         super().__init__(**kwargs)
         self._llm = llm_provider
         self._default_location = CONFIG.weather_default_location or "London"
+        self._last_location: Optional[str] = None
         self._geo_cache: dict[str, tuple[float, float, str]] = {}
 
     async def on_start(self):
         stored = self.recall("default_location") if hasattr(self, "recall") else None
         if stored:
             self._default_location = stored
+        last = self.recall("last_location") if hasattr(self, "recall") else None
+        if last:
+            self._last_location = last
         await self.publish_manifest(
             description="Natural-language weather: current, forecast, and historical data via Open-Meteo. No API key.",
             capabilities=["weather.current", "weather.forecast", "weather.history"],
@@ -458,10 +495,20 @@ class WeatherAgent(Actor):
 
     async def _handle_cmd(self, payload: dict) -> dict:
         action   = (payload.get("action") or "current").lower()
-        location = payload.get("location") or self._default_location
         concern  = payload.get("concern")
         units    = payload.get("units", "celsius")
-        used_default = not payload.get("location")
+        explicit_location = payload.get("location")
+        use_default_location = bool(payload.get("use_default_location"))
+        update_default_location = bool(payload.get("update_default_location"))
+        if explicit_location:
+            location = explicit_location
+        elif use_default_location:
+            location = self._default_location
+        else:
+            location = self._last_location or self._default_location
+        used_context = not explicit_location and not use_default_location and bool(self._last_location)
+        used_home_location = not explicit_location and use_default_location
+        used_default = not explicit_location and not used_context and not used_home_location
 
         if action == "not_weather":
             return {"error": (
@@ -473,10 +520,12 @@ class WeatherAgent(Actor):
         if action == "set-default":
             loc = payload.get("location")
             if not loc:
-                return {"error": "Tell me which location to set as default, e.g. 'set-default Athens'."}
+                return {"error": "Tell me which location to remember, e.g. 'remember my location as Athens'."}
             self._default_location = loc
+            self._last_location = loc
             try:
-                await self.persist("default_location", loc)
+                self.persist("default_location", loc)
+                self.persist("last_location", loc)
             except Exception:
                 pass
             return {"status": "ok", "default_location": loc}
@@ -498,9 +547,24 @@ class WeatherAgent(Actor):
             return {"error": f"I didn't understand that. Try 'weather in <city>' or 'forecast <city> tomorrow'."}
 
         if isinstance(res, dict) and "error" not in res:
+            if update_default_location and explicit_location:
+                self._default_location = explicit_location
+                try:
+                    self.persist("default_location", explicit_location)
+                except Exception:
+                    pass
             res["concern"] = concern
             res["units"] = units
             res["used_default"] = used_default
+            res["used_context"] = used_context
+            res["used_home_location"] = used_home_location
+            resolved_location = res.get("location")
+            if resolved_location:
+                self._last_location = resolved_location
+                try:
+                    self.persist("last_location", resolved_location)
+                except Exception:
+                    pass
         return res
 
     # ── Open-Meteo calls ──────────────────────────────────────────────────
@@ -701,6 +765,10 @@ class WeatherAgent(Actor):
             verdict = self._verdict_now(result, concern)
             suffix = (f" (using default location — say 'weather in <city>' to specify one)"
                       if result.get("used_default") else "")
+            if result.get("used_home_location"):
+                suffix = " (using your saved location)"
+            if result.get("used_context"):
+                suffix = f" (using {result['location']} from earlier)"
             return (f"{verdict} {base}".strip() + suffix)
 
         if kind == "history":
@@ -755,6 +823,19 @@ class WeatherAgent(Actor):
             return "No — it's dry right now."
         if concern == "snow":
             return "Yes — it's snowing." if result.get("code") in _SNOWY else "No — no snow right now."
+        if concern == "clothing":
+            temp = result.get("feels_like")
+            if temp is None:
+                temp = result.get("temp")
+            wind = result.get("wind") or 0
+            wet = result.get("code") in _RAINY or (result.get("precip") or 0) > 0
+            if temp is None:
+                return ""
+            if temp <= 12 or (temp <= 16 and wind >= 20):
+                return "Yes — wear a jacket."
+            if temp <= 19 or wet:
+                return "A light jacket is a good idea."
+            return "No jacket needed."
         return ""
 
     @staticmethod
@@ -771,6 +852,18 @@ class WeatherAgent(Actor):
         if concern == "snow":
             return (f"Yes — snow is expected {lbl}." if r.get("code") in _SNOWY
                     else f"No — no snow expected {lbl}.")
+        if concern == "clothing":
+            low, high = r.get("temp_min"), r.get("temp_max")
+            wet = r.get("code") in _RAINY or (r.get("precip_mm") or 0) > 0
+            if low is None and high is None:
+                return ""
+            cool = low is not None and low <= 16
+            mild = low is not None and low <= 20
+            if cool or wet:
+                return f"Bring a light jacket {lbl}."
+            if mild:
+                return f"You probably only need light layers {lbl}."
+            return f"No jacket needed {lbl}."
         return ""
 
     @staticmethod

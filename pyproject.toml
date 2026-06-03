@@ -138,6 +138,11 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
 # ── sdist (source distribution for PyPI) ──────────────────────────────────────
 [tool.hatch.build.targets.sdist]
 exclude = [

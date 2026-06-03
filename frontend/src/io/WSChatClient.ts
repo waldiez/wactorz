@@ -240,7 +240,8 @@ export class WSChatClient {
         // don't return — message may also carry chat/stream content
       }
 
-      const from = String(data["from"] ?? "io-gateway");
+      // "agent" carries the actual responder name; "from" is always "io-gateway"
+      const from = String(data["agent"] ?? data["from"] ?? "io-gateway");
       const rawTs = data["timestamp"] as number | undefined;
       const ts = rawTs ? (rawTs < 1e10 ? rawTs * 1000 : rawTs) : Date.now();
 

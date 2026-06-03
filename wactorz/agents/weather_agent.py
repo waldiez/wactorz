@@ -91,6 +91,15 @@ _FILLER = {
     "im", "told", "said", "think", "thought", "say", "know", "knew",
     "tf", "wtf", "lol", "lmao", "fr", "bro", "brother", "dude", "man",
     "stunned", "speak", "spoke", "speechless",
+    # informal pronouns / contractions — geocoded to obscure places without this
+    "youre", "you're", "theyre", "they're", "weve", "we've", "id", "i'd",
+    # conversational verbs and adjectives — not place names
+    "saying", "heavy", "light", "nice", "bad", "terrible", "awful", "great",
+    # sentence connectors / discourse markers
+    "then", "though", "still", "yet", "anyway", "actually", "basically",
+    "literally", "honestly", "exactly", "totally", "definitely", "clearly",
+    # internet slang
+    "uwu", "owo", "omg", "idk", "imo", "tbh", "ngl", "smh", "brb",
 }
 # Weather-topic words that aren't locations.
 _WEATHER_WORDS = {

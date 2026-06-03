@@ -436,12 +436,14 @@ async def handle_slash(text: str, reply_fn) -> bool:
     return False
 
 
-async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None):
+async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None,
+                       set_agent_name=None):
     """Core chat routing — slash commands, @mentions, or main-actor stream.
 
     reply_fn(text)        — send a complete message (slash commands, errors)
     stream_fn(chunk)      — send one streaming chunk (optional; falls back to reply_fn)
     stream_end_fn()       — signal that streaming is done (optional)
+    set_agent_name(name)  — called with the actual responder's name when known
     """
     _chunk_fn = stream_fn or reply_fn
     _end_fn   = stream_end_fn or (lambda: None)
@@ -489,6 +491,8 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                         break
 
             if remote_node:
+                if set_agent_name:
+                    set_agent_name(target_name)
                 import uuid as _uuid, json as _json
                 import aiomqtt
                 reply_topic = f"main/reply/io-gateway/{_uuid.uuid4().hex[:8]}"
@@ -552,6 +556,8 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
         return
 
     logger.info(f"[io-gateway] → {target.name}: {text[:60]!r}")
+    if set_agent_name:
+        set_agent_name(target.name)
 
     gen_fn = (
         getattr(target, "process_user_input_stream", None)
@@ -685,14 +691,18 @@ async def ws_handler(request):
     # with the full content, not a row per chunk.
     _stream_buffer: list[str] = []
 
-    def _persist_chat(role: str, content: str, agent_name: str = "main") -> None:
+    # Tracks which agent is currently responding so the bubble label and
+    # chat_log entry name the real agent, not the generic "io-gateway" proxy.
+    _current_agent: list[str] = [IO_GATEWAY_ID]
+
+    def _persist_chat(role: str, content: str, agent_name: str | None = None) -> None:
         """Best-effort write to chat_log. Never raises into the WS path."""
         if db is None or not content:
             return
         try:
             db.write_chat_log(
                 ts=time.time(),
-                agent_name=agent_name,
+                agent_name=agent_name or _current_agent[0],
                 role=role,
                 content=content,
             )
@@ -704,6 +714,7 @@ async def ws_handler(request):
             await ws.send_str(json.dumps({
                 "type":      "chat",
                 "from":      IO_GATEWAY_ID,
+                "agent":     _current_agent[0],
                 "content":   text,
                 "timestamp": time.time(),
             }))
@@ -718,6 +729,7 @@ async def ws_handler(request):
             await ws.send_str(json.dumps({
                 "type":      "stream_chunk",
                 "from":      IO_GATEWAY_ID,
+                "agent":     _current_agent[0],
                 "content":   chunk,
                 "timestamp": time.time(),
             }))
@@ -732,6 +744,7 @@ async def ws_handler(request):
             await ws.send_str(json.dumps({
                 "type":      "stream_end",
                 "from":      IO_GATEWAY_ID,
+                "agent":     _current_agent[0],
                 "timestamp": time.time(),
             }))
             # Now persist the full assembled assistant turn — once.
@@ -764,10 +777,14 @@ async def ws_handler(request):
                             # request even if the assistant reply errors out.
                             _persist_chat("user", content)
                             async def _safe_route(c=content):
+                                _current_agent[0] = IO_GATEWAY_ID  # reset before each turn
                                 try:
-                                    await _route_chat(c, ws_reply,
-                                                      stream_fn=ws_stream_chunk,
-                                                      stream_end_fn=ws_stream_end)
+                                    await _route_chat(
+                                        c, ws_reply,
+                                        stream_fn=ws_stream_chunk,
+                                        stream_end_fn=ws_stream_end,
+                                        set_agent_name=lambda n: _current_agent.__setitem__(0, n),
+                                    )
                                 except Exception as exc:
                                     logger.error(f"[ws] chat error: {exc}", exc_info=True)
                                     try:
@@ -775,6 +792,8 @@ async def ws_handler(request):
                                         await ws_stream_end()
                                     except Exception:
                                         pass
+                                finally:
+                                    _current_agent[0] = IO_GATEWAY_ID  # reset after turn
                             asyncio.create_task(_safe_route())
                         elif content:
                             # No registry — tell the browser to use MQTT

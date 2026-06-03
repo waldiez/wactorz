@@ -85,6 +85,12 @@ _FILLER = {
     "shorts", "sunglasses", "sunscreen", "wear", "location", "default",
     "good", "morning", "afternoon", "evening", "night", "thanks", "thank",
     "pls", "plz", "here", "local", "my",
+    # modal/auxiliary verbs — never place names
+    "should", "shall", "must", "might", "may", "let", "lets", "let's",
+    # corrections / chat filler that leak through
+    "im", "told", "said", "think", "thought", "say", "know", "knew",
+    "tf", "wtf", "lol", "lmao", "fr", "bro", "brother", "dude", "man",
+    "stunned", "speak", "spoke", "speechless",
 }
 # Weather-topic words that aren't locations.
 _WEATHER_WORDS = {
@@ -115,8 +121,23 @@ _STRIP_TIME = re.compile(
     re.IGNORECASE,
 )
 
-_PREP = re.compile(r"\b(?:in|at|for|near|around|over|across)\s+(.+)$", re.IGNORECASE)
+_PREP = re.compile(r"\b(?:in|at|for|near|around|over|across)\s+([a-zA-Z][\w\s,]*?)(?:\s*[?!.,;]|\s*$)", re.IGNORECASE)
 _ISO_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+
+# Keywords that mark a message as weather-related.  If NONE of these appear
+# and there is no temporal cue, the message is not a weather query.
+_WEATHER_VOCAB = re.compile(
+    r"\b(weather|wether|wheather|forecast|forcast|temperature|temp\b|rain|snow|"
+    r"sun|sunny|cloud|wind|humid|storm|hot|cold|warm|cool|chilly|freez|"
+    r"umbrella|jacket|coat|sunscreen|shorts|sunglasses|outside|degrees?|"
+    r"feel.*like|feels?\s+like|uv|heatwave)\b",
+    re.IGNORECASE,
+)
+_TEMPORAL_VOCAB = re.compile(
+    r"\b(today|tomorrow|yesterday|tonight|weekend|monday|tuesday|wednesday|"
+    r"thursday|friday|saturday|sunday|this\s+week|next\s+week|\d+\s+days?)\b",
+    re.IGNORECASE,
+)
 
 
 # ── Pure parsing helpers (network-free, unit-testable) ───────────────────────
@@ -244,12 +265,19 @@ def _clean_location(cand: str) -> Optional[str]:
 
 def _extract_location(raw: str) -> Optional[str]:
     """Pull a location out of free text. Returns None → use default."""
-    m = _PREP.search(raw)
-    if m:
-        loc = _clean_location(m.group(1))
-        if loc:
-            return loc
+    # Take the LAST prep phrase (e.g. "i was in uk? im in Athens" → "Athens")
+    matches = list(_PREP.finditer(raw))
+    if matches:
+        for m in reversed(matches):
+            loc = _clean_location(m.group(1))
+            if loc:
+                return loc
     return _clean_location(raw)
+
+
+def _is_weather_query(text: str) -> bool:
+    """True if the message is plausibly asking about weather."""
+    return bool(_WEATHER_VOCAB.search(text) or _TEMPORAL_VOCAB.search(text))
 
 
 def parse_query(raw: str, today: Optional[date] = None) -> dict:
@@ -275,6 +303,18 @@ def parse_query(raw: str, today: Optional[date] = None) -> dict:
             or low.startswith("default "):
         tail = re.sub(r"^.*?default\b", "", text, flags=re.IGNORECASE)
         return {"action": "set-default", "location": _clean_location(tail)}
+
+    # If the message has no weather vocabulary, no temporal cues, and no
+    # explicit "in/at/for X" prep phrase, it's probably not a weather query.
+    # BUT let through: ISO dates (history commands), bare city-name inputs
+    # (single non-noise token), and set-default already handled above.
+    if not _is_weather_query(text) and not _PREP.search(text):
+        has_iso = bool(_ISO_DATE.search(text))
+        # Is it just a city name (≥1 non-noise token, no sentence structure)?
+        leftover = _clean_location(text)
+        looks_like_place = bool(leftover) and len(text.split()) <= 4
+        if not has_iso and not looks_like_place:
+            return {"action": "not_weather", "original": text}
 
     when = _resolve_when(low, today)
     location = _extract_location(text)
@@ -412,6 +452,13 @@ class WeatherAgent(Actor):
         concern  = payload.get("concern")
         units    = payload.get("units", "celsius")
         used_default = not payload.get("location")
+
+        if action == "not_weather":
+            return {"error": (
+                "I'm a weather agent — I can only help with weather questions. "
+                "Try: 'weather in Athens', 'will it rain tomorrow?', "
+                "'should I bring a jacket in Oslo?'"
+            )}
 
         if action == "set-default":
             loc = payload.get("location")
@@ -642,7 +689,9 @@ class WeatherAgent(Actor):
                 base += f" (feels like {fl}{deg})"
             base += f", humidity {_r(result['humidity'])}%, wind {_r(result['wind'])} {ws}."
             verdict = self._verdict_now(result, concern)
-            return f"{verdict} {base}".strip()
+            suffix = (f" (using default location — say 'weather in <city>' to specify one)"
+                      if result.get("used_default") else "")
+            return (f"{verdict} {base}".strip() + suffix)
 
         if kind == "history":
             return (f"On {result['date']}, {result['location']} saw {result['condition']}, "

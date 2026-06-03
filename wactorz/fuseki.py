@@ -847,42 +847,68 @@ class HAFusekiBridge:
                 self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth
             )
             ws_url = self._ws_url()
-            log.info("Connecting to HA: %s", ws_url)
-            last_trim = time.time()
+            backoff = 5
 
-            async with HAWebSocketClient(ws_url, self._ha_token) as ha:
-                log.info("Authenticated. Loading initial states …")
-                await self._seed(ha, fuseki)
-
-                # Trim history on startup so stale data doesn't accumulate
-                # across restarts even when the process runs for short periods.
+            # ── Reconnect loop ──────────────────────────────────────────────
+            # The HA WebSocket dies periodically (keepalive ping timeout, HA
+            # restart, network blip). When it does, receive_event() raises a
+            # ConnectionClosedError. We must tear down the dead socket and open
+            # a fresh one — NOT keep calling receive_event() on the corpse,
+            # which just re-raises instantly and floods the log with identical
+            # tracebacks. Connection errors break out to here; we back off and
+            # reconnect. Per-event handler errors are caught separately so one
+            # bad state_changed payload can't kill the whole bridge.
+            while True:
                 try:
-                    await fuseki.trim_history_graph(
-                        GRAPH_HISTORY, self._HISTORY_RETAIN_DAYS
-                    )
-                except Exception as exc:
-                    log.warning("History trim on startup failed: %s", exc)
+                    log.info("Connecting to HA: %s", ws_url)
+                    async with HAWebSocketClient(ws_url, self._ha_token) as ha:
+                        log.info("Authenticated. Loading initial states …")
+                        await self._seed(ha, fuseki)
 
-                sub_id = await ha.subscribe_events("state_changed")
-                log.info("Subscribed (id=%d). Listening for state_changed …", sub_id)
-
-                while True:
-                    try:
-                        msg = await ha.receive_event(sub_id)
-                        await self._on_event(msg, fuseki)
-                    except Exception as exc:
-                        log.exception("Event handling error: %s", exc)
-
-                    # Daily retention trim
-                    now = time.time()
-                    if now - last_trim >= self._TRIM_INTERVAL:
-                        last_trim = now
+                        # Trim history on startup so stale data doesn't
+                        # accumulate across restarts.
                         try:
                             await fuseki.trim_history_graph(
                                 GRAPH_HISTORY, self._HISTORY_RETAIN_DAYS
                             )
                         except Exception as exc:
-                            log.warning("Periodic history trim failed: %s", exc)
+                            log.warning("History trim on startup failed: %s", exc)
+
+                        sub_id = await ha.subscribe_events("state_changed")
+                        log.info("Subscribed (id=%d). Listening for state_changed …", sub_id)
+                        backoff = 5            # healthy connection — reset backoff
+                        last_trim = time.time()
+
+                        while True:
+                            # Let connection errors propagate to the reconnect
+                            # handler below; only swallow per-event failures.
+                            msg = await ha.receive_event(sub_id)
+                            try:
+                                await self._on_event(msg, fuseki)
+                            except Exception as exc:
+                                log.warning("Skipping one event after handler error: %s", exc)
+
+                            # Daily retention trim
+                            now = time.time()
+                            if now - last_trim >= self._TRIM_INTERVAL:
+                                last_trim = now
+                                try:
+                                    await fuseki.trim_history_graph(
+                                        GRAPH_HISTORY, self._HISTORY_RETAIN_DAYS
+                                    )
+                                except Exception as exc:
+                                    log.warning("Periodic history trim failed: %s", exc)
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # Concise one-line log (no full traceback) — the socket is
+                    # gone, we know why, and we're reconnecting.
+                    log.warning("HA connection lost (%s) — reconnecting in %ss",
+                                type(exc).__name__, backoff)
+
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60)
 
     # ── Seed on startup ───────────────────────────────────────────────────────
 

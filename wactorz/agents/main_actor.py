@@ -3511,16 +3511,34 @@ class MainActor(LLMAgent):
         because it produces false positives that would block genuinely new
         agents.
 
-        Only manifests that are spawnable catalog recipes are considered.
+        Checks two sources so it doesn't depend on manifest-injection timing
+        (the catalog injects its recipe manifests into main on startup, but
+        that races with main coming up — if it lost the race, the manifests
+        wouldn't be here yet). The live catalog actor is the real source of
+        truth and is consulted as a fallback.
         """
         want = _normalize_agent_name(name)
         if not want:
             return None
+
+        # 1. Injected manifests (fast path)
         for recipe_name, manifest in self._agent_manifests.items():
             if not (manifest.get("spawnable") and manifest.get("catalog")):
                 continue
             if _normalize_agent_name(recipe_name) == want:
                 return recipe_name
+
+        # 2. Live catalog actor — authoritative, immune to injection races
+        if self._registry:
+            cat = self._registry.find_by_name("catalog")
+            if cat and hasattr(cat, "list_recipes"):
+                try:
+                    for recipe_name in cat.list_recipes():
+                        if _normalize_agent_name(recipe_name) == want:
+                            return recipe_name
+                except Exception:
+                    pass
+
         return None
 
     async def _resolve_or_spawn(self, agent_name: str):

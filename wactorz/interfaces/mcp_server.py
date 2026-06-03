@@ -33,6 +33,8 @@ from typing import Any
 import aiohttp
 
 try:
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
     from mcp.server.fastmcp import FastMCP
 except ImportError as exc:
     raise SystemExit(
@@ -45,6 +47,9 @@ WACTORZ_URL = os.getenv("WACTORZ_URL", "http://localhost:8000").rstrip("/")
 WACTORZ_API_KEY = os.getenv("WACTORZ_API_KEY", "")
 HA_URL = os.getenv("HA_URL", "").rstrip("/")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
+CALENDAR_MCP_URL = os.getenv("CALENDAR_MCP_URL", "").rstrip("/")
+CALENDAR_MCP_TOKEN = os.getenv("CALENDAR_MCP_TOKEN", "")
+CALENDAR_MCP_AUTHORIZATION = os.getenv("CALENDAR_MCP_AUTHORIZATION", "")
 
 mcp = FastMCP("wactorz")
 
@@ -132,6 +137,164 @@ async def ask_agent(agent_name: str, message: str) -> str:
     """
     data = await _wactorz_post("/chat", {"message": message, "agent_name": agent_name})
     return str(data.get("response", data))
+
+
+# ─── Remote Calendar MCP tools ──────────────────────────────────────────────
+
+
+def _calendar_mcp_headers() -> dict[str, str]:
+    auth = CALENDAR_MCP_AUTHORIZATION
+    if not auth and CALENDAR_MCP_TOKEN:
+        auth = f"Bearer {CALENDAR_MCP_TOKEN}"
+    return {"Authorization": auth} if auth else {}
+
+
+def _format_mcp_content(result: Any) -> str:
+    if getattr(result, "structuredContent", None) is not None:
+        return json.dumps(result.structuredContent, indent=2)
+    content = getattr(result, "content", None)
+    if not content:
+        return str(result)
+    parts = []
+    for item in content:
+        text = getattr(item, "text", None)
+        if text is not None:
+            parts.append(text)
+        else:
+            try:
+                parts.append(item.model_dump_json(indent=2))
+            except Exception:
+                parts.append(str(item))
+    return "\n".join(parts)
+
+
+async def _calendar_mcp_call(tool_name: str, arguments: dict | None = None) -> str:
+    """Call a tool on a configured remote Calendar MCP server."""
+    if not CALENDAR_MCP_URL:
+        return (
+            "Calendar MCP is not configured. Set CALENDAR_MCP_URL and, if needed, "
+            "CALENDAR_MCP_TOKEN or CALENDAR_MCP_AUTHORIZATION."
+        )
+    try:
+        async with streamablehttp_client(
+            CALENDAR_MCP_URL,
+            headers=_calendar_mcp_headers(),
+        ) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments or {})
+                return _format_mcp_content(result)
+    except Exception as exc:
+        return f"Calendar MCP error: {exc}"
+
+
+@mcp.tool()
+async def calendar_status() -> str:
+    """
+    Show remote Calendar MCP configuration status.
+
+    This does not expose tokens. Use calendar_mcp_list_tools to verify the
+    remote server is reachable.
+    """
+    return json.dumps(
+        {
+            "calendar_mcp_url": CALENDAR_MCP_URL or None,
+            "calendar_mcp_auth": bool(CALENDAR_MCP_TOKEN or CALENDAR_MCP_AUTHORIZATION),
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def calendar_mcp_list_tools() -> str:
+    """List tools exposed by the configured remote Calendar MCP server."""
+    if not CALENDAR_MCP_URL:
+        return (
+            "Calendar MCP is not configured. Set CALENDAR_MCP_URL and, if needed, "
+            "CALENDAR_MCP_TOKEN or CALENDAR_MCP_AUTHORIZATION."
+        )
+    try:
+        async with streamablehttp_client(
+            CALENDAR_MCP_URL,
+            headers=_calendar_mcp_headers(),
+        ) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = await session.list_tools()
+                return "\n".join(
+                    f"{tool.name}: {tool.description or ''}".rstrip()
+                    for tool in tools.tools
+                )
+    except Exception as exc:
+        return f"Calendar MCP error: {exc}"
+
+
+@mcp.tool()
+async def calendar_mcp_call_tool(tool_name: str, arguments_json: str = "{}") -> str:
+    """
+    Call any tool exposed by the configured remote Calendar MCP server.
+
+    arguments_json must be a JSON object string. Use calendar_mcp_list_tools()
+    to discover the exact tool names and schemas.
+    """
+    try:
+        arguments = json.loads(arguments_json or "{}")
+    except json.JSONDecodeError as exc:
+        return f"Invalid arguments_json: {exc}"
+    if not isinstance(arguments, dict):
+        return "arguments_json must encode a JSON object."
+    return await _calendar_mcp_call(tool_name, arguments)
+
+
+@mcp.tool()
+async def calendar_list(count: int = 10) -> str:
+    """
+    List upcoming events through the configured remote Calendar MCP server.
+
+    Assumes the remote server exposes a list_events tool.
+    """
+    return await _calendar_mcp_call("list_events", {"maxResults": count})
+
+
+@mcp.tool()
+async def calendar_today() -> str:
+    """List today's events through the configured remote Calendar MCP server."""
+    return await _calendar_mcp_call("list_events", {"range": "today"})
+
+
+@mcp.tool()
+async def calendar_week() -> str:
+    """List this week's events through the configured remote Calendar MCP server."""
+    return await _calendar_mcp_call("list_events", {"range": "week"})
+
+
+@mcp.tool()
+async def calendar_create_event(
+    summary: str,
+    start: str,
+    end: str = "",
+    location: str = "",
+    description: str = "",
+) -> str:
+    """
+    Create an event through the configured remote Calendar MCP server.
+
+    start/end should be ISO-8601 datetimes, e.g. 2026-06-03T15:00:00+03:00.
+    """
+    payload = {"summary": summary, "startDateTime": start}
+    if end:
+        payload["endDateTime"] = end
+    if location:
+        payload["location"] = location
+    if description:
+        payload["description"] = description
+    return await _calendar_mcp_call("create_event", payload)
+
+
+@mcp.tool()
+async def calendar_delete_event(event_id: str) -> str:
+    """Delete a calendar event through the configured remote Calendar MCP server."""
+    return await _calendar_mcp_call("delete_event", {"eventId": event_id})
 
 
 # ─── Agent management tools ─────────────────────────────────────────────────
@@ -333,6 +496,8 @@ async def config_resource() -> str:
             "wactorz_auth": bool(WACTORZ_API_KEY),
             "ha_url": HA_URL or None,
             "ha_auth": bool(HA_TOKEN),
+            "calendar_mcp_url": CALENDAR_MCP_URL or None,
+            "calendar_mcp_auth": bool(CALENDAR_MCP_TOKEN or CALENDAR_MCP_AUTHORIZATION),
         },
         indent=2,
     )

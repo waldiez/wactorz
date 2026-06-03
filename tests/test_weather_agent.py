@@ -64,6 +64,13 @@ class ParseIntentTest(unittest.TestCase):
         self.assertEqual(self._p("weather in cape town in 10 days")["days"], 10)
         self.assertEqual(self._p("weather in new york this week")["days"], 7)
 
+    def test_following_week_is_next_week(self):
+        p = self.assertIntent("whats the weather in athens for the following week", "forecast", "athens")
+        # "following week" = Mon–Sun of NEXT calendar week (same as "next week")
+        self.assertEqual((p["date_from"], p["date_to"]), ("2026-06-08", "2026-06-14"))
+        p2 = self._p("what will it be like the week after next in berlin")
+        self.assertEqual(p2["action"], "forecast")
+
     def test_history(self):
         p = self.assertIntent("what was the weather yesterday", "history", None)
         self.assertEqual(p["date"], "2026-06-02")

@@ -118,7 +118,8 @@ _STRIP_TIME = re.compile(
     r"\b("
     r"the\s+day\s+after\s+tomorrow|day\s+after\s+tomorrow|"
     r"over\s+the\s+weekend|this\s+coming\s+weekend|this\s+weekend|next\s+weekend|the\s+weekend|weekend|"
-    r"this\s+week|next\s+week|the\s+week|coming\s+week|rest\s+of\s+the\s+week|later\s+this\s+week|"
+    r"this\s+week|next\s+week|following\s+week|the\s+following\s+week|week\s+after\s+(?:next|this)|"
+    r"the\s+week|coming\s+week|rest\s+of\s+the\s+week|later\s+this\s+week|"
     r"next\s+few\s+days|coming\s+days|few\s+days|"
     r"in\s+\d+\s+days?|\d+\s+days?(?:\s+from\s+now|\s+ahead|\s+out)?|"
     r"next\s+\d+\s+days?|"
@@ -220,7 +221,7 @@ def _resolve_when(low: str, today: date) -> dict:
     if re.search(r"\bweekend\b", low):
         sat = _next_weekday(today, 5)
         return {**out, "action": "forecast", "date_from": sat, "date_to": sat + timedelta(days=1)}
-    if re.search(r"\bnext\s+week\b", low):
+    if re.search(r"\b(next\s+week|following\s+week|the\s+following\s+week|week\s+after\s+(?:next|this))\b", low):
         mon = _next_weekday(today, 0, force_next=True)
         return {**out, "action": "forecast", "date_from": mon, "date_to": mon + timedelta(days=6)}
     if re.search(r"\b(this\s+week|coming\s+days|next\s+few\s+days|few\s+days|rest\s+of\s+the\s+week|later\s+this\s+week)\b", low):

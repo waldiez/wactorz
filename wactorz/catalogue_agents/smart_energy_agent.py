@@ -240,25 +240,58 @@ def _period_keys(now: float) -> dict:
     }
 
 
-def _accumulate(acc: dict, plug_name: str, watts: float, dt_h: float, now: float) -> dict:
-    """Integrate watts over dt_h into per-period kWh accumulators, resetting
-    a bucket when its calendar period rolls over."""
-    rec = acc.setdefault(plug_name, {
+def _account(acc: dict, name: str, now: float, watts, dt_h,
+             energy_kwh, energy_kind) -> dict:
+    """Update a plug's per-period kWh buckets.
+
+    Two sources, in priority order:
+      • METER (energy_kwh present): the device's own kWh counter. We add the
+        per-poll delta to week/month/total; for a daily-reset 'today' sensor the
+        day bucket mirrors the sensor directly (a true full-day figure). This is
+        accurate and survives wactorz downtime — the meter kept counting.
+      • ESTIMATED (no meter): integrate live watts over the elapsed interval.
+        Less accurate, and 'today' only counts from when we started watching.
+
+    Buckets reset when their calendar period rolls over."""
+    rec = acc.setdefault(name, {
         "day_kwh": 0.0, "week_kwh": 0.0, "month_kwh": 0.0, "total_kwh": 0.0,
         "day": "", "week": "", "month": "",
+        "meter_last": None, "source": "estimated",
     })
     keys = _period_keys(now)
     for period in ("day", "week", "month"):
-        if rec[period] != keys[period]:
+        if rec.get(period) != keys[period]:
             rec[period] = keys[period]
             rec[f"{period}_kwh"] = 0.0
 
-    kwh = (watts / 1000.0) * dt_h
-    if kwh > 0:
-        rec["day_kwh"]   += kwh
-        rec["week_kwh"]  += kwh
-        rec["month_kwh"] += kwh
-        rec["total_kwh"] += kwh
+    if energy_kwh is not None:
+        rec["source"] = "meter"
+        last = rec.get("meter_last")
+        inc = 0.0
+        if last is not None:
+            inc = energy_kwh - last
+            if inc < 0:
+                # Sensor reset (daily rollover or device reboot). Don't count a
+                # negative; the small post-reset value is the new day's start.
+                inc = 0.0
+        rec["meter_last"] = energy_kwh
+
+        if energy_kind == "today":
+            rec["day_kwh"] = energy_kwh          # authoritative full-day value
+        else:
+            rec["day_kwh"] += inc                # 'since tracking' on day 1
+        rec["week_kwh"]  += inc
+        rec["month_kwh"] += inc
+        rec["total_kwh"] += inc
+    else:
+        rec["source"] = "estimated"
+        if dt_h and 0 < dt_h < 1.0 and watts is not None:
+            inc = (watts / 1000.0) * dt_h
+            if inc > 0:
+                rec["day_kwh"]   += inc
+                rec["week_kwh"]  += inc
+                rec["month_kwh"] += inc
+                rec["total_kwh"] += inc
     return rec
 
 
@@ -325,24 +358,34 @@ async def process(agent):
         if watts is None:
             # No reading this cycle — keep last known for rule continuity but skip accounting
             watts = agent.state["last_watts"].get(name)
-            if watts is None:
-                continue
+
+        # Read the device's own energy meter if it has one (kWh).
+        energy_entity = plug.get("ha_entity_energy")
+        energy_kwh = None
+        if energy_entity:
+            e_raw = _read_watts(states.get(energy_entity))   # generic float read
+            if e_raw is not None:
+                energy_kwh = e_raw * float(plug.get("energy_scale", 1.0))
+
+        # Nothing to work with this cycle.
+        if watts is None and energy_kwh is None:
+            continue
 
         # ── Energy + cost accounting ──────────────────────────────────────────
         last_ts = agent.state["last_poll"].get(name)
-        if last_ts:
-            dt_h = (now - last_ts) / 3600.0
-            if 0 < dt_h < 1.0:   # ignore absurd gaps (restart) > 1h
-                _accumulate(accum, name, watts, dt_h, now)
+        dt_h = ((now - last_ts) / 3600.0) if last_ts else None
+        _account(accum, name, now, watts, dt_h, energy_kwh, plug.get("energy_kind"))
         agent.state["last_poll"][name]  = now
-        agent.state["last_watts"][name] = watts
-        total_watts += watts
+        if watts is not None:
+            agent.state["last_watts"][name] = watts
+            total_watts += watts
 
         rec = accum.get(name, {})
         await agent.publish(f"custom/sensors/energy/{name}/power", {
             "entity_id": power_entity,
-            "watts":     round(watts, 2),
+            "watts":     round(watts, 2) if watts is not None else None,
             "kwh_today": round(rec.get("day_kwh", 0.0), 4),
+            "source":    rec.get("source", "estimated"),
             "ts":        now,
         })
         await agent.publish(f"custom/sensors/energy/{name}/cost", {
@@ -351,18 +394,21 @@ async def process(agent):
             "cost_today": _cost(rec.get("day_kwh", 0.0), rate),
             "cost_week":  _cost(rec.get("week_kwh", 0.0), rate),
             "cost_month": _cost(rec.get("month_kwh", 0.0), rate),
+            "source":     rec.get("source", "estimated"),
             "ts":         now,
         })
 
         summary.append({
             "plug":       name,
-            "watts":      round(watts, 2),
+            "watts":      round(watts, 2) if watts is not None else None,
             "protection": plug.get("protection", LOCKED),
             "cost_today": _cost(rec.get("day_kwh", 0.0), rate),
+            "source":     rec.get("source", "estimated"),
         })
 
         # ── Rule evaluation ───────────────────────────────────────────────────
-        await _evaluate_rules(agent, name, plug, watts, now)
+        if watts is not None:
+            await _evaluate_rules(agent, name, plug, watts, now)
 
     # ── Summary snapshot for dashboards ──────────────────────────────────────
     await agent.publish(SUMMARY_TOPIC, {
@@ -523,42 +569,97 @@ def _is_cancel(low: str) -> bool:
     return low.strip() in ("cancel", "never mind", "nevermind", "stop", "abort", "quit")
 
 
+def _parse_rate(low: str):
+    """Pull a kWh rate out of 'set rate to 0.20', 'electricity is 0.25 per kwh',
+    'my tariff is 0.30'. Requires an explicit rate keyword so phrases like
+    'I used 5 kwh' aren't mistaken for setting the tariff."""
+    import re as _re
+    if not any(k in low for k in ("rate", "tariff", "price", "per kwh", "per kw",
+                                  "cost per", "charge", "/kwh")):
+        return None
+    m = _re.search(r"(\d+[.,]?\d*)", low)
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _is_remove_intent(low: str) -> bool:
+    return any(k in low for k in ("stop monitoring", "remove ", "forget ", "delete ",
+                                  "unmonitor", "stop watching", "drop "))
+
+
 async def _converse(agent, text: str) -> dict:
     low = text.lower().strip()
     convo = agent.state.get("convo") or {}
     has_plugs = bool(agent.state.get("plugs"))
 
-    # An active selection flow takes priority over everything else.
+    # ── An active selection flow takes priority ──────────────────────────────
     if convo.get("stage") == "selecting":
         if _is_cancel(low):
             agent.state["convo"] = {}
             return {"result": "No problem — stopped. Say \"import my plugs\" whenever you're ready."}
+        # Let status/help mid-flow re-show the menu instead of being mistaken
+        # for a plug choice.
+        if low in ("status", "help", "?", "what", "huh", "list") or "what plug" in low:
+            cands = convo.get("candidates", [])
+            menu = "\n".join(f"  {i}. **{c['friendly']}**" for i, c in enumerate(cands, 1))
+            return {"result": (
+                "We're in the middle of importing. I found:\n" + menu +
+                "\n\nSay \"all\", a number/name, or \"cancel\"."
+            )}
         return await _handle_selection(agent, text)
 
     if _is_cancel(low):
         return {"result": "Nothing to cancel. Say \"import my plugs\" to begin."}
 
-    # Explicit import intent always scans.
+    # ── Set electricity rate (natural language) ──────────────────────────────
+    rate = _parse_rate(low)
+    if rate is not None:
+        return _set_rate(agent, rate, None)
+
+    # ── Stop monitoring a plug ───────────────────────────────────────────────
+    if has_plugs and _is_remove_intent(low):
+        return _remove_plug(agent, text)
+
+    # ── Explicit import intent always scans ──────────────────────────────────
     if _is_import_intent(low):
         return await _start_import(agent)
 
-    # Friendly natural-language status/list (only meaningful once plugs exist).
+    # ── Status / list (once plugs exist) ─────────────────────────────────────
     if has_plugs and any(w in low for w in ("status", "list plug", "my plug", "what plug",
-                                            "which plug", "show plug", "overview")):
+                                            "which plug", "show plug", "overview", "summary")):
         return _status(agent)
+
+    if "help" in low:
+        return {"result": _help_text(agent)}
 
     # ── Proactive onboarding ─────────────────────────────────────────────────
     # If nothing is set up yet, don't make the user guess the magic words. The
-    # moment they ask anything energy/plug/HA-related ("what's my power draw?",
-    # "check ha", "I have a plug called ac power"), just scan HA and show them.
+    # moment they ask anything energy/plug/HA-related, just scan HA and show them.
     if not has_plugs:
         if _looks_energy_related(low):
             return await _start_import(agent)
-        # Pure greeting / unrelated → friendly welcome that points the way.
         return {"result": _welcome(agent)}
 
     # Plugs exist → answer the question from live data.
     return await _ask_llm(agent, text)
+
+
+def _help_text(agent) -> str:
+    return (
+        "Here's what I can do (just talk to me normally):\n"
+        "  • **\"import my plugs\"** — scan Home Assistant and add plugs to watch\n"
+        "  • **\"what's my power draw?\"** / **\"status\"** — live wattage & today's cost\n"
+        "  • **\"how much has it cost today?\"** — cost breakdown (per day/week/month)\n"
+        "  • **\"set rate to 0.20\"** — change your €/kWh tariff\n"
+        "  • **\"stop monitoring the AC\"** — remove a plug\n"
+        "  • **\"turn off the printer when it's done\"** — auto-off (printer only; I "
+        "never switch off anything you didn't explicitly ask me to)\n"
+        f"\nCurrent rate: {agent.state['rate']} {agent.state['currency']}/kWh."
+    )
 
 
 async def _start_import(agent) -> dict:
@@ -615,28 +716,43 @@ async def _handle_selection(agent, text: str) -> dict:
         )}
 
     added = []
+    metered = 0
     for c in chosen:
         plug = {
             "name":             c["suggested_name"],
             "friendly":         c["friendly"],
             "ha_entity_power":  c["power_entity"],
             "ha_entity_switch": c.get("switch_entity"),
+            "ha_entity_energy": c.get("energy_entity"),
+            "energy_scale":     c.get("energy_scale", 1.0),
+            "energy_kind":      c.get("energy_kind"),
             "protection":       LOCKED,           # always safe by default
             "power_scale":      c.get("power_scale", 1.0),
             "cost_per_kwh":     agent.state["rate"],
         }
         agent.state["plugs"][plug["name"]] = plug
         added.append(c["friendly"])
+        if c.get("energy_entity"):
+            metered += 1
 
     agent.persist("plugs", agent.state["plugs"])
     agent.state["convo"] = {}   # flow complete
 
     names = ", ".join(added)
+    # Tell the user honestly where the cost figure comes from.
+    if metered == len(added):
+        accuracy = ("I'll read each plug's own energy meter for cost, so "
+                    "\"today\" reflects the whole day accurately.")
+    elif metered == 0:
+        accuracy = ("These plugs don't expose an energy meter, so I'll estimate "
+                    "cost from live wattage — \"today\" counts from now, not midnight.")
+    else:
+        accuracy = (f"{metered} of {len(added)} expose an energy meter (accurate "
+                    f"daily cost); the rest I'll estimate from live wattage.")
     return {"result": (
         f"Done! Now monitoring: **{names}**.\n\n"
-        f"All set to **never turn off** — I'll only track power and cost. "
-        f"You'll see live readings within a minute (rate: "
-        f"{agent.state['rate']} {agent.state['currency']}/kWh — tell me if that's wrong).\n\n"
+        f"All set to **never turn off** — I'll only track power and cost. {accuracy} "
+        f"(rate: {agent.state['rate']} {agent.state['currency']}/kWh — tell me if that's wrong).\n\n"
         f"Ask me \"how much has it cost today?\" anytime. And if you ever want one "
         f"to switch off automatically (like a 3D printer when a print finishes), "
         f"just tell me — I'll only ever do that for a plug you specifically ask about."
@@ -704,6 +820,15 @@ _POWER_SUFFIXES = (
     "_current_power", "_power", "_consumption", "_watts", "_wattage", "_load",
 )
 
+# Energy (kWh) sensor suffixes — the device's own cumulative meters. These are
+# the authoritative source for cost: the plug firmware integrates continuously
+# and the value survives wactorz being offline, unlike our watt-integration.
+_ENERGY_SUFFIXES = (
+    "_today_s_consumption", "_today_energy", "_energy_today", "_daily_energy",
+    "_this_month_s_consumption", "_monthly_energy", "_month_energy",
+    "_total_energy", "_energy_total", "_lifetime_energy", "_energy_kwh", "_energy",
+)
+
 
 def _slug(s: str) -> str:
     import re as _re
@@ -712,20 +837,37 @@ def _slug(s: str) -> str:
 
 
 def _base_entity(eid: str) -> str:
+    """Strip a power OR energy suffix so a device's power and energy sensors
+    collapse to the same base (e.g. sensor.ac_current_consumption and
+    sensor.ac_today_energy both → 'ac'), letting us pair them."""
     n = eid.split(".", 1)[1] if "." in eid else eid
-    for suf in _POWER_SUFFIXES:
+    for suf in (*_ENERGY_SUFFIXES, *_POWER_SUFFIXES):
         if n.endswith(suf):
             return n[: -len(suf)]
     return n
+
+
+def _energy_kind(eid: str, friendly: str) -> str:
+    """Classify an energy sensor: 'today' (daily-reset), 'month', or 'total'
+    (lifetime cumulative). 'today' is best for an accurate full-day figure."""
+    s = (eid + " " + (friendly or "")).lower()
+    if "today" in s or "daily" in s or "_day" in s or " day" in s:
+        return "today"
+    if "month" in s:
+        return "month"
+    return "total"
 
 
 def _discover_candidates(states: dict) -> list:
     """Find power-reporting plugs in HA and best-effort pair each with a switch.
 
     A candidate only needs a power sensor — the switch is optional (and unused
-    while everything is locked). Returns an ordered list of candidate dicts."""
-    power_sensors = []   # (entity_id, watts, scale, friendly)
-    switches = {}        # base_name -> entity_id
+    while everything is locked). Each candidate is also paired with the device's
+    own energy (kWh) sensor when one exists, so cost can come from the real
+    meter rather than from integrating watts. Returns ordered candidate dicts."""
+    power_sensors = []           # (entity_id, watts, scale, friendly)
+    switches = {}                # base_name -> entity_id
+    energy_by_base = {}          # base_name -> list of energy sensor dicts
 
     for eid, st in states.items():
         if not isinstance(st, dict):
@@ -738,19 +880,48 @@ def _discover_candidates(states: dict) -> list:
             switches[_base_entity(eid)] = eid
             continue
 
-        if eid.startswith("sensor."):
-            # Instantaneous power only (W/kW) — not energy (kWh), voltage, or current
-            is_power = dc == "power" or unit in ("w", "kw", "watt", "watts")
-            if not is_power:
-                continue
+        if not eid.startswith("sensor."):
+            continue
+
+        friendly = attrs.get("friendly_name") or eid
+
+        # Instantaneous power (W/kW)
+        if dc == "power" or unit in ("w", "kw", "watt", "watts"):
             try:
                 val = float(st.get("state"))
             except (TypeError, ValueError):
                 val = None
             scale = 1000.0 if unit == "kw" else 1.0
             watts = val * scale if val is not None else None
-            friendly = attrs.get("friendly_name") or eid
             power_sensors.append((eid, watts, scale, friendly))
+            continue
+
+        # Cumulative energy (kWh/Wh) — the device's own meter
+        if dc == "energy" or unit in ("kwh", "wh"):
+            energy_by_base.setdefault(_base_entity(eid), []).append({
+                "entity": eid,
+                "kind":   _energy_kind(eid, friendly),
+                "scale":  0.001 if unit == "wh" else 1.0,
+            })
+
+    def _pick_energy(base):
+        """Choose the best energy sensor for a base: prefer a daily-reset
+        'today' sensor (gives an accurate full-day figure directly), then a
+        lifetime 'total', then 'month'."""
+        cands = energy_by_base.get(base, [])
+        if not cands:
+            # looser prefix match
+            for b, lst in energy_by_base.items():
+                if b and (base.startswith(b) or b.startswith(base)):
+                    cands = lst
+                    break
+        if not cands:
+            return None
+        for want in ("today", "total", "month"):
+            for c in cands:
+                if c["kind"] == want:
+                    return c
+        return cands[0]
 
     candidates = []
     used_names = set()
@@ -758,14 +929,14 @@ def _discover_candidates(states: dict) -> list:
         base = _base_entity(eid)
         switch_eid = switches.get(base)
         if not switch_eid:
-            # Try a looser match: a switch whose base is a prefix of the sensor base
             for sb, sw in switches.items():
                 if base.startswith(sb) or sb.startswith(base):
                     switch_eid = sw
                     break
 
-        # Friendlier display: prefer the switch's name, and trim trailing
-        # "current consumption" / "power" noise from the sensor name.
+        energy = _pick_energy(base)
+
+        # Friendlier display: trim trailing "current consumption"/"power" noise.
         disp = friendly
         for noise in ("Current consumption", "Power consumption", "Power", "Consumption"):
             if disp.endswith(noise):
@@ -773,7 +944,6 @@ def _discover_candidates(states: dict) -> list:
                 break
 
         name = _slug(disp)
-        # Avoid collisions
         n, base_name = name, name
         idx = 2
         while n in used_names:
@@ -787,30 +957,46 @@ def _discover_candidates(states: dict) -> list:
             "switch_entity":  switch_eid,
             "watts":          watts,
             "power_scale":    scale,
+            "energy_entity":  energy["entity"] if energy else None,
+            "energy_scale":   energy["scale"]  if energy else 1.0,
+            "energy_kind":    energy["kind"]   if energy else None,
         })
 
     return candidates
 
 
+def _src_label(rec) -> str:
+    return "metered" if rec.get("source") == "meter" else "estimated"
+
+
 def _status(agent) -> dict:
     plugs = agent.state["plugs"]
     rate  = agent.state["rate"]
+    cur   = agent.state["currency"]
     rows  = []
     total_w = 0.0
+    any_estimated = False
     for name, plug in plugs.items():
         w   = agent.state["last_watts"].get(name)
         rec = agent.state["accum"].get(name, {})
         total_w += (w or 0.0)
+        src = _src_label(rec)
+        if src == "estimated":
+            any_estimated = True
+        fr = plug.get("friendly", name)
         rows.append(
-            f"  {name} [{plug.get('protection', LOCKED)}]: "
-            f"{w if w is not None else '—'}W  "
-            f"today {_cost(rec.get('day_kwh', 0.0), rate)} {agent.state['currency']}"
+            f"  • {fr} [{plug.get('protection', LOCKED)}]: "
+            f"{round(w, 1) if w is not None else '—'} W now, "
+            f"today {_cost(rec.get('day_kwh', 0.0), rate)} {cur} ({src})"
         )
     text = (
-        f"Smart energy — {len(plugs)} plug(s), {len(agent.state['rules'])} rule(s), "
-        f"rate {rate} {agent.state['currency']}/kWh\n" + ("\n".join(rows) if rows else "  (no plugs)")
-        + f"\n  total now: {round(total_w, 1)}W"
+        f"⚡ Smart energy — {len(plugs)} plug(s), {len(agent.state['rules'])} rule(s), "
+        f"rate {rate} {cur}/kWh\n" + ("\n".join(rows) if rows else "  (no plugs yet — say \"import my plugs\")")
+        + f"\n  total now: {round(total_w, 1)} W"
     )
+    if any_estimated:
+        text += ("\n  (estimated = no energy meter on that plug; cost is integrated "
+                 "from live wattage and counts from when I started watching)")
     return {
         "result":          text,
         "plugs_monitored": len(plugs),
@@ -822,19 +1008,28 @@ def _status(agent) -> dict:
 async def _report(agent, payload) -> dict:
     rate = agent.state["rate"]
     cur  = agent.state["currency"]
+    plugs = agent.state["plugs"]
     lines = [f"Cost report (rate {rate} {cur}/kWh):"]
     grand = {"day": 0.0, "week": 0.0, "month": 0.0}
+    any_estimated = False
     for name, rec in agent.state["accum"].items():
         d, w, m = rec.get("day_kwh", 0), rec.get("week_kwh", 0), rec.get("month_kwh", 0)
         grand["day"] += d; grand["week"] += w; grand["month"] += m
+        src = _src_label(rec)
+        if src == "estimated":
+            any_estimated = True
+        fr = plugs.get(name, {}).get("friendly", name)
         lines.append(
-            f"  {name}: today {_cost(d, rate)}{cur} ({d:.3f}kWh) | "
-            f"week {_cost(w, rate)}{cur} | month {_cost(m, rate)}{cur}"
+            f"  {fr}: today {_cost(d, rate)}{cur} ({d:.3f} kWh) | "
+            f"week {_cost(w, rate)}{cur} | month {_cost(m, rate)}{cur}  [{src}]"
         )
     lines.append(
         f"  TOTAL: today {_cost(grand['day'], rate)}{cur} | "
         f"week {_cost(grand['week'], rate)}{cur} | month {_cost(grand['month'], rate)}{cur}"
     )
+    if any_estimated:
+        lines.append("  Note: 'estimated' plugs have no energy meter — cost is integrated "
+                     "from live wattage and starts counting when monitoring began, not midnight.")
     return {
         "result":      "\n".join(lines),
         "cost_today":  _cost(grand["day"], rate),
@@ -865,12 +1060,53 @@ def _add_plug(agent, plug) -> dict:
             "plug": plug}
 
 
+_REMOVE_STOPWORDS = {
+    "stop", "monitoring", "monitor", "watching", "watch", "remove", "forget",
+    "delete", "drop", "unmonitor", "the", "a", "an", "my", "plug", "please",
+    "from", "list", "of", "for",
+}
+
+
+def _tokens(s: str) -> set:
+    import re as _re
+    return {t for t in _re.split(r"[^a-z0-9]+", (s or "").lower()) if len(t) >= 2}
+
+
+def _resolve_plug_name(agent, query) -> str:
+    """Find a plug key from free text by exact name/slug, else by best token
+    overlap between the (de-noised) query and each plug's name+friendly."""
+    if not query:
+        return None
+    plugs = agent.state["plugs"]
+    q = str(query).strip().lower()
+    if q in plugs:
+        return q
+    if _slug(q) in plugs:
+        return _slug(q)
+
+    q_tokens = _tokens(q) - _REMOVE_STOPWORDS
+    if not q_tokens:
+        return None
+
+    best, best_score = None, 0
+    for name, p in plugs.items():
+        plug_tokens = (_tokens(name) | _tokens(p.get("friendly", ""))) - _REMOVE_STOPWORDS
+        score = len(q_tokens & plug_tokens)
+        if score > best_score:
+            best, best_score = name, score
+    return best
+
+
 def _remove_plug(agent, name) -> dict:
-    if name in agent.state["plugs"]:
-        del agent.state["plugs"][name]
+    key = name if name in agent.state["plugs"] else _resolve_plug_name(agent, name)
+    if key and key in agent.state["plugs"]:
+        fr = agent.state["plugs"][key].get("friendly", key)
+        del agent.state["plugs"][key]
+        agent.state["accum"].pop(key, None)
         agent.persist("plugs", agent.state["plugs"])
-        return {"result": f"Removed plug '{name}'"}
-    return {"result": "error", "error": f"no plug named '{name}'"}
+        agent.persist("accum", agent.state["accum"])
+        return {"result": f"Stopped monitoring **{fr}**."}
+    return {"result": "error", "error": f"I'm not monitoring a plug called '{name}'."}
 
 
 def _add_rule(agent, rule) -> dict:
@@ -929,10 +1165,12 @@ async def _ask_llm(agent, question: str) -> dict:
         "currency":     agent.state["currency"],
         "plugs": {
             name: {
-                "watts_now":  agent.state["last_watts"].get(name),
-                "protection": p.get("protection", LOCKED),
-                "kwh_today":  round(agent.state["accum"].get(name, {}).get("day_kwh", 0.0), 4),
-                "kwh_month":  round(agent.state["accum"].get(name, {}).get("month_kwh", 0.0), 4),
+                "friendly":    p.get("friendly", name),
+                "watts_now":   agent.state["last_watts"].get(name),
+                "protection":  p.get("protection", LOCKED),
+                "kwh_today":   round(agent.state["accum"].get(name, {}).get("day_kwh", 0.0), 4),
+                "kwh_month":   round(agent.state["accum"].get(name, {}).get("month_kwh", 0.0), 4),
+                "cost_source": _src_label(agent.state["accum"].get(name, {})),
             }
             for name, p in agent.state["plugs"].items()
         },
@@ -941,8 +1179,11 @@ async def _ask_llm(agent, question: str) -> dict:
     system = (
         "You are the smart-energy agent for a Home Assistant setup. Answer the "
         "user's question using ONLY the JSON snapshot of live plug readings and "
-        "cost accumulators provided. Costs = kWh * rate_per_kwh. Be concise. "
-        "Never suggest turning off a plug whose protection is 'locked'."
+        "cost accumulators provided. Costs = kWh * rate_per_kwh. Be concise and "
+        "refer to plugs by their 'friendly' name. If a plug's cost_source is "
+        "'estimated', note that its cost is approximate (no hardware meter) and "
+        "counts only from when monitoring began, not midnight. Never suggest "
+        "turning off a plug whose protection is 'locked'."
     )
     prompt = f"SNAPSHOT:\n{json.dumps(snapshot, indent=2)}\n\nQUESTION: {question}"
     try:

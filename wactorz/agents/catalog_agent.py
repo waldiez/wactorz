@@ -235,6 +235,8 @@ def _build_catalog() -> dict:
             "name":         "smart-energy",
             "type":         "dynamic",
             "description":  "LLM-powered energy brain for smart plugs via Home Assistant (brand-agnostic). "
+                            "Talk to it in plain English: say 'import my plugs' and it scans HA, shows what "
+                            "it found with live wattage, and asks which to monitor — no JSON needed. "
                             "Monitors live wattage, tracks per-plug kWh and cost (today/week/month), and can "
                             "conditionally power down plugs via user-requested rules. Plugs marked 'locked' "
                             "(AC, servers, AI rigs) are NEVER turned off — hard-guarded in code.",
@@ -242,8 +244,11 @@ def _build_catalog() -> dict:
                              "power_monitoring", "tapo", "shelly"],
             "install":      [],
             "input_schema": {
-                "action": "str  — status|cost|report|add_plug|list_plugs|remove_plug|"
-                          "add_rule|list_rules|remove_rule|set_rate, or free-text question",
+                "text":   "str  — PRIMARY interface: plain-English request. 'import my plugs' "
+                          "starts conversational onboarding; 'how much did the AC cost today?' "
+                          "asks a question; 'status' shows an overview.",
+                "action": "str  — optional structured command for power users: status|cost|report|"
+                          "add_plug|list_plugs|remove_plug|add_rule|list_rules|remove_rule|set_rate",
                 "plug":   "dict — plug config: {name, ha_entity_switch, ha_entity_power, "
                           "protection: locked|auto_off_on_idle|manual} (for add_plug)",
                 "rule":   "dict — rule config, e.g. {type: auto_off_on_idle, plug, "

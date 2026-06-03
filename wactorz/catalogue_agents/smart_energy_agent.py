@@ -7,12 +7,30 @@ Brand-agnostic: works with any plug HA can see (Tapo, Shelly, Sonoff, Kasa…)
 
 WHAT IT DOES (always-on core)
 ─────────────────────────────
+  • Conversational onboarding for non-technical users: say "import my plugs"
+    and it scans Home Assistant, shows what it found with live wattage, and
+    asks in plain English which to monitor — no JSON, no entity IDs to type.
   • Polls each plug's HA power sensor → publishes live watts to MQTT and lets
     the timeseries-collector ingest it for history.
   • Tracks energy (kWh) and cost per plug for today / this week / this month,
     using a configurable per-kWh rate (default €0.138/kWh).
   • Publishes a live summary snapshot of every plug for dashboards.
   • Answers natural-language questions about usage and cost via its LLM.
+
+CONVERSATIONAL FLOW (the primary interface)
+───────────────────────────────────────────
+  User: "import my plugs"
+  Agent: scans HA → "I found these plugs that report power usage:
+           1. AC Power — 362 W right now
+         Which would you like me to monitor? (all / by number / by name)
+         I'll only watch usage and cost — I will never turn these off."
+  User: "all"  (or "1 and 3", or "the AC one")
+  Agent: adds them ALL as 'locked' (never-off) and confirms.
+
+  Every imported plug defaults to 'locked'. Auto-off is never part of import;
+  it's a separate, explicit request the user makes later for one named plug.
+  The raw JSON commands (add_plug, add_rule, …) still work for power users and
+  for main's routing, but a human never has to use them.
 
 WHAT IT DOES NOT DO BY DEFAULT
 ──────────────────────────────
@@ -263,6 +281,7 @@ async def setup(agent):
     agent.state["idle_since"] = {}      # name -> ts watts first dropped below threshold
     agent.state["auto_off_fired"] = {}  # name -> bool, so we don't re-fire while off
     agent.state["observed"]   = {}      # name -> {"min":..,"max":..} for calibration
+    agent.state["convo"]      = {}      # conversational onboarding state (stage, candidates)
 
     agent.declare_contract(
         publishes=[
@@ -300,6 +319,9 @@ async def process(agent):
     for name, plug in plugs.items():
         power_entity = plug.get("ha_entity_power")
         watts = _read_watts(states.get(power_entity)) if power_entity else None
+        if watts is not None:
+            # Normalise to watts (a sensor reporting kW has power_scale 1000)
+            watts *= float(plug.get("power_scale", 1.0))
         if watts is None:
             # No reading this cycle — keep last known for rule continuity but skip accounting
             watts = agent.state["last_watts"].get(name)
@@ -441,16 +463,310 @@ async def handle_task(agent, payload):
     if action == "set_rate":
         return _set_rate(agent, payload.get("rate"), payload.get("currency"))
 
-    # ── Free-text → LLM answers from live state + history ────────────────────
+    # ── Free-text → conversational router ────────────────────────────────────
     text = str(payload.get("action") or payload.get("text") or "").strip()
     if text:
-        return await _ask_llm(agent, text)
+        return await _converse(agent, text)
 
-    return {
-        "result": ("Commands: status, cost/report, add_plug, list_plugs, "
-                   "remove_plug, add_rule, list_rules, remove_rule, set_rate. "
-                   "Or ask a question in plain English."),
-    }
+    # No text at all → friendly first-contact welcome
+    return {"result": _welcome(agent)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONVERSATIONAL ONBOARDING — built for non-technical users
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# The whole point: a user should never have to type JSON. They say "import my
+# plugs", we scan Home Assistant, show what we found with live wattage, and ask
+# in plain English which to monitor. Everything is added as 'locked' — we NEVER
+# turn a plug off. Auto-off is a separate, explicit conversation the user starts
+# later (e.g. "turn my printer off when it's done").
+
+def _welcome(agent) -> str:
+    n = len(agent.state.get("plugs", {}))
+    if n == 0:
+        return (
+            "Hi! I keep an eye on your smart plugs — how much power they use and "
+            "what that costs. I never switch anything off on my own.\n\n"
+            "Say **\"import my plugs\"** and I'll scan Home Assistant and show you "
+            "what I find."
+        )
+    return _status(agent)["result"] + (
+        "\n\nSay \"import my plugs\" to add more, or just ask me things like "
+        "\"how much has the AC cost today?\""
+    )
+
+
+def _is_import_intent(low: str) -> bool:
+    triggers = ("import", "discover", "scan", "set up", "setup", "add plug",
+                "add my plug", "add a plug", "find plug", "onboard", "connect plug",
+                "monitor plug", "monitor my plug", "get started", "find my plug")
+    return any(t in low for t in triggers)
+
+
+def _is_cancel(low: str) -> bool:
+    return low.strip() in ("cancel", "never mind", "nevermind", "stop", "abort", "quit")
+
+
+async def _converse(agent, text: str) -> dict:
+    low = text.lower().strip()
+    convo = agent.state.get("convo") or {}
+
+    # An active selection flow takes priority over everything else.
+    if convo.get("stage") == "selecting":
+        if _is_cancel(low):
+            agent.state["convo"] = {}
+            return {"result": "No problem — stopped. Say \"import my plugs\" whenever you're ready."}
+        return await _handle_selection(agent, text)
+
+    if _is_cancel(low):
+        return {"result": "Nothing to cancel. Say \"import my plugs\" to begin."}
+
+    # Start onboarding
+    if _is_import_intent(low):
+        return await _start_import(agent)
+
+    # Friendly natural-language status/list
+    if any(w in low for w in ("status", "list plug", "my plug", "what plug", "which plug",
+                              "show plug", "overview")):
+        return _status(agent)
+
+    if ("help" in low or low in ("hi", "hello", "hey", "?")) and not agent.state.get("plugs"):
+        return {"result": _welcome(agent)}
+
+    # Otherwise treat as a question and let the LLM answer from live data
+    return await _ask_llm(agent, text)
+
+
+async def _start_import(agent) -> dict:
+    states = await _ha_get_states()
+    if not states:
+        return {"result": (
+            "I couldn't reach Home Assistant to scan for plugs. Once HA is "
+            "connected, say \"import my plugs\" again and I'll find them."
+        )}
+
+    candidates = _discover_candidates(states)
+    # Drop plugs we're already monitoring
+    existing_power = {p.get("ha_entity_power") for p in agent.state["plugs"].values()}
+    candidates = [c for c in candidates if c["power_entity"] not in existing_power]
+
+    if not candidates:
+        if agent.state["plugs"]:
+            return {"result": (
+                "I didn't find any *new* plugs with energy monitoring. "
+                + _status(agent)["result"]
+            )}
+        return {"result": (
+            "I scanned Home Assistant but didn't find any plugs that report power "
+            "usage (watts). Smart plugs like the Tapo P110 report energy; some "
+            "(like a plain on/off plug) don't. If you think one should show up, "
+            "check that its power sensor is enabled in Home Assistant."
+        )}
+
+    agent.state["convo"] = {"stage": "selecting", "candidates": candidates}
+
+    lines = ["I found these plugs that report power usage:\n"]
+    for i, c in enumerate(candidates, 1):
+        w = c["watts"]
+        wtxt = f"{w:.0f} W right now" if w is not None else "no reading yet"
+        lines.append(f"  {i}. **{c['friendly']}** — {wtxt}")
+    lines.append(
+        "\nWhich would you like me to monitor? You can say **\"all\"**, or pick by "
+        "number or name (e.g. \"1 and 3\" or \"the AC one\").\n\n"
+        "_I'll only watch usage and cost — I will never turn these off._"
+    )
+    return {"result": "\n".join(lines)}
+
+
+async def _handle_selection(agent, text: str) -> dict:
+    convo = agent.state["convo"]
+    candidates = convo.get("candidates", [])
+    chosen = await _interpret_selection(agent, text, candidates)
+
+    if not chosen:
+        return {"result": (
+            "Sorry, I didn't catch which ones. You can say \"all\", or give me "
+            "numbers or names — like \"1 and 2\" or \"just the AC\". "
+            "Or say \"cancel\" to stop."
+        )}
+
+    added = []
+    for c in chosen:
+        plug = {
+            "name":             c["suggested_name"],
+            "friendly":         c["friendly"],
+            "ha_entity_power":  c["power_entity"],
+            "ha_entity_switch": c.get("switch_entity"),
+            "protection":       LOCKED,           # always safe by default
+            "power_scale":      c.get("power_scale", 1.0),
+            "cost_per_kwh":     agent.state["rate"],
+        }
+        agent.state["plugs"][plug["name"]] = plug
+        added.append(c["friendly"])
+
+    agent.persist("plugs", agent.state["plugs"])
+    agent.state["convo"] = {}   # flow complete
+
+    names = ", ".join(added)
+    return {"result": (
+        f"Done! Now monitoring: **{names}**.\n\n"
+        f"All set to **never turn off** — I'll only track power and cost. "
+        f"You'll see live readings within a minute (rate: "
+        f"{agent.state['rate']} {agent.state['currency']}/kWh — tell me if that's wrong).\n\n"
+        f"Ask me \"how much has it cost today?\" anytime. And if you ever want one "
+        f"to switch off automatically (like a 3D printer when a print finishes), "
+        f"just tell me — I'll only ever do that for a plug you specifically ask about."
+    )}
+
+
+async def _interpret_selection(agent, text: str, candidates: list) -> list:
+    """Map a free-text reply to a subset of candidates. Robust without an LLM."""
+    low = text.lower().strip()
+    if not candidates:
+        return []
+
+    # Fast paths
+    if any(w in low for w in ("all", "every", "everything", "both", "yes please", "yeah all")):
+        return list(candidates)
+    if low in ("none", "no", "neither"):
+        return []
+
+    selected = []
+
+    # Numbers: "1", "1 and 3", "2,3"
+    import re as _re
+    nums = [int(n) for n in _re.findall(r"\d+", low)]
+    for n in nums:
+        if 1 <= n <= len(candidates) and candidates[n - 1] not in selected:
+            selected.append(candidates[n - 1])
+
+    # Name/keyword substring match on friendly name words
+    if not selected:
+        for c in candidates:
+            words = [w for w in c["friendly"].lower().replace("_", " ").split() if len(w) > 2]
+            if any(w in low for w in words):
+                if c not in selected:
+                    selected.append(c)
+
+    if selected:
+        return selected
+
+    # Last resort: ask the LLM to map the reply to candidate numbers
+    if agent.llm is not None:
+        menu = "\n".join(f"{i}. {c['friendly']}" for i, c in enumerate(candidates, 1))
+        try:
+            ans = await agent.llm.chat(
+                f"Plugs:\n{menu}\n\nUser reply: \"{text}\"\n\n"
+                f"Which plug numbers did the user choose? Reply with ONLY a JSON "
+                f"array of integers, e.g. [1,3]. Use [] if unclear, or all numbers "
+                f"if they meant everything.",
+                system="You map a user's plain-language choice to plug numbers. Output only a JSON array.",
+            )
+            picks = json.loads(ans[ans.find("["): ans.rfind("]") + 1])
+            for n in picks:
+                if isinstance(n, int) and 1 <= n <= len(candidates):
+                    if candidates[n - 1] not in selected:
+                        selected.append(candidates[n - 1])
+        except Exception:
+            pass
+
+    return selected
+
+
+# ── HA discovery ──────────────────────────────────────────────────────────────
+
+_POWER_SUFFIXES = (
+    "_current_consumption", "_power_consumption", "_active_power", "_apparent_power",
+    "_current_power", "_power", "_consumption", "_watts", "_wattage", "_load",
+)
+
+
+def _slug(s: str) -> str:
+    import re as _re
+    s = _re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_")
+    return s or "plug"
+
+
+def _base_entity(eid: str) -> str:
+    n = eid.split(".", 1)[1] if "." in eid else eid
+    for suf in _POWER_SUFFIXES:
+        if n.endswith(suf):
+            return n[: -len(suf)]
+    return n
+
+
+def _discover_candidates(states: dict) -> list:
+    """Find power-reporting plugs in HA and best-effort pair each with a switch.
+
+    A candidate only needs a power sensor — the switch is optional (and unused
+    while everything is locked). Returns an ordered list of candidate dicts."""
+    power_sensors = []   # (entity_id, watts, scale, friendly)
+    switches = {}        # base_name -> entity_id
+
+    for eid, st in states.items():
+        if not isinstance(st, dict):
+            continue
+        attrs = st.get("attributes", {}) or {}
+        unit  = str(attrs.get("unit_of_measurement") or "").lower()
+        dc    = str(attrs.get("device_class") or "").lower()
+
+        if eid.startswith("switch."):
+            switches[_base_entity(eid)] = eid
+            continue
+
+        if eid.startswith("sensor."):
+            # Instantaneous power only (W/kW) — not energy (kWh), voltage, or current
+            is_power = dc == "power" or unit in ("w", "kw", "watt", "watts")
+            if not is_power:
+                continue
+            try:
+                val = float(st.get("state"))
+            except (TypeError, ValueError):
+                val = None
+            scale = 1000.0 if unit == "kw" else 1.0
+            watts = val * scale if val is not None else None
+            friendly = attrs.get("friendly_name") or eid
+            power_sensors.append((eid, watts, scale, friendly))
+
+    candidates = []
+    used_names = set()
+    for eid, watts, scale, friendly in power_sensors:
+        base = _base_entity(eid)
+        switch_eid = switches.get(base)
+        if not switch_eid:
+            # Try a looser match: a switch whose base is a prefix of the sensor base
+            for sb, sw in switches.items():
+                if base.startswith(sb) or sb.startswith(base):
+                    switch_eid = sw
+                    break
+
+        # Friendlier display: prefer the switch's name, and trim trailing
+        # "current consumption" / "power" noise from the sensor name.
+        disp = friendly
+        for noise in ("Current consumption", "Power consumption", "Power", "Consumption"):
+            if disp.endswith(noise):
+                disp = disp[: -len(noise)].strip(" -_") or disp
+                break
+
+        name = _slug(disp)
+        # Avoid collisions
+        n, base_name = name, name
+        idx = 2
+        while n in used_names:
+            n = f"{base_name}_{idx}"; idx += 1
+        used_names.add(n)
+
+        candidates.append({
+            "friendly":       disp,
+            "suggested_name": n,
+            "power_entity":   eid,
+            "switch_entity":  switch_eid,
+            "watts":          watts,
+            "power_scale":    scale,
+        })
+
+    return candidates
 
 
 def _status(agent) -> dict:

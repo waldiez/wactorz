@@ -92,17 +92,25 @@ const _wsBase = `${_wsProto}//${_wsHost}${_isTauri ? "" : _ingressPath}`;
 
 // ── MQTT ──────────────────────────────────────────────────────────────────────
 
+// The MQTT WebSocket is always proxied at /mqtt on the *same* origin as this
+// page — the monitor server serves both the page and the proxy on one port.
+// So we derive the URL from window.location on every load and never persist it.
+// This makes it impossible for a stale cached value (e.g. an old port like the
+// hardcoded :8888) to break the connection and trip the "Demo fallback" badge.
+//
+// A build-time VITE_MQTT_WS_URL still wins for dev setups that talk to a broker
+// directly. There is deliberately no per-user/runtime override: a same-origin
+// proxy never needs one, and caching one in localStorage was the root cause of
+// the stale-port failures.
 const _mqttDefault = `${_wsBase}/mqtt`;
 
-// In Tauri, MQTT goes through the embedded backend proxy at /mqtt — always
-// override any stale localStorage value (e.g. ws://localhost:1883 saved by
-// a previous Python dev session).
-if (_isTauri) localStorage.setItem("wactorz-mqtt-url", _mqttDefault);
+// Self-heal browsers that cached a URL under older builds (incl. the bad :8888
+// value). Removing it on load means existing users recover automatically on the
+// next page load — no manual localStorage clearing required.
+localStorage.removeItem("wactorz-mqtt-url");
 
 const MQTT_BROKER =
-  localStorage.getItem("wactorz-mqtt-url") ||
-  (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) ||
-  _mqttDefault;
+  (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) || _mqttDefault;
 const mqtt = new MQTTClient(MQTT_BROKER);
 
 // ── UI ────────────────────────────────────────────────────────────────────────
@@ -335,20 +343,37 @@ fetch(`${_apiBase}/api/feed`)
   })
   .catch(() => {});
 
-// ── Seed localStorage from backend config (only for unset keys) ───────────────
-// Backend config (.env) provides defaults; a user-set localStorage value wins.
+// ── Seed localStorage from backend config ─────────────────────────────────────
+// Backend config (.env) is the source of truth. We track the last server value
+// we seeded (key + "__server") so we can tell "the user edited this locally"
+// from "the .env value changed". When the server value changes we update the
+// active key; otherwise a genuine user edit in Settings survives reloads.
+//
+// Note: the MQTT URL is intentionally NOT seeded here. The frontend always
+// connects to the same-origin /mqtt proxy (see _mqttDefault), so the broker's
+// address never belongs in the browser. Caching it here was the source of the
+// stale-port "Demo fallback" bug. A manual override is still available via the
+// Settings → MQTT field (wactorz-mqtt-url), which this never touches.
 fetch(`${_apiBase}/api/config`)
   .then((r) => (r.ok ? r.json() : null))
   .then((cfg) => {
     if (!cfg) return;
-    const setIfMissing = (key: string, value: string) => {
-      if (value && !localStorage.getItem(key)) localStorage.setItem(key, value);
+    // Seed `key` from the server value, letting .env changes propagate while
+    // preserving deliberate local edits.
+    const seedFromServer = (key: string, value: string) => {
+      if (!value) return;
+      const baselineKey = `${key}__server`;
+      const lastServer = localStorage.getItem(baselineKey);
+      // Server value changed (or never seeded) → adopt it as the active value.
+      if (value !== lastServer) {
+        localStorage.setItem(key, value);
+        localStorage.setItem(baselineKey, value);
+      }
     };
-    setIfMissing("wactorz-ha-url", cfg.ha?.url ?? "");
-    setIfMissing("wactorz-ha-token", cfg.ha?.token ?? "");
-    setIfMissing("wactorz-fuseki-url", cfg.fuseki?.url ?? "");
-    setIfMissing("wactorz-fuseki-dataset", cfg.fuseki?.dataset ?? "");
-    if (cfg.mqtt?.url) setIfMissing("wactorz-mqtt-url", cfg.mqtt.url);
+    seedFromServer("wactorz-ha-url", cfg.ha?.url ?? "");
+    seedFromServer("wactorz-ha-token", cfg.ha?.token ?? "");
+    seedFromServer("wactorz-fuseki-url", cfg.fuseki?.url ?? "");
+    seedFromServer("wactorz-fuseki-dataset", cfg.fuseki?.dataset ?? "");
   })
   .catch(() => {});
 

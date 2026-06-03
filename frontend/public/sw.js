@@ -2,12 +2,13 @@
  * Wactorz Service Worker
  *
  * Strategy:
- *   - App shell (JS/CSS/HTML/fonts) → cache-first, update in background
+ *   - index.html / entry points → network-first, cache fallback (ensures fresh JS hashes)
+ *   - Hashed assets (/assets/*, *.js, *.css) → cache-first (content-hash busts automatically)
  *   - API calls (/api/*, /ws/*, /mqtt/*) → network-only (never cache)
  *   - Everything else → network-first, fall back to cache
  */
 
-const CACHE = "wactorz-v2";
+const CACHE = "wactorz-v3";
 
 const NEVER_CACHE = ["/api/", "/ws", "/mqtt"];
 
@@ -16,8 +17,6 @@ self.addEventListener("install", (e) => {
   e.waitUntil(
     caches.open(CACHE).then((c) =>
       c.addAll([
-        "./",
-        "./index.html",
         "./site.webmanifest",
         "./favicon.svg",
       ]).catch(() => {}),
@@ -40,11 +39,25 @@ self.addEventListener("fetch", (e) => {
   if (NEVER_CACHE.some((p) => url.pathname.startsWith(p))) return;
   if (e.request.method !== "GET") return;
 
-  // App shell assets: cache-first
+  // HTML entry points: network-first so the browser always gets the latest
+  // index.html (which references the current content-hashed JS/CSS filenames).
+  if (url.pathname === "/" || url.pathname === "/index.html") {
+    e.respondWith(
+      fetch(e.request)
+        .then((res) => {
+          if (res.ok) {
+            caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
+          }
+          return res;
+        })
+        .catch(() => caches.match(e.request)),
+    );
+    return;
+  }
+
+  // Hashed assets: cache-first (Vite content-hash ensures stale files are never reused)
   if (
     url.pathname.startsWith("/assets/") ||
-    url.pathname === "/" ||
-    url.pathname === "/index.html" ||
     url.pathname.endsWith(".js") ||
     url.pathname.endsWith(".css") ||
     url.pathname.endsWith(".svg") ||

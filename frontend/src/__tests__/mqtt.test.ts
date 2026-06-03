@@ -274,11 +274,20 @@ describe("MQTTClient", () => {
     expect(spy).toHaveBeenCalled();
   });
 
-  it("emits 'disconnected' on TCP-level close event", () => {
-    const spy = vi.fn();
-    client.on("disconnected", spy);
-    mockHandlers["close"]?.();
-    expect(spy).toHaveBeenCalled();
+  it("emits 'disconnected' on TCP-level close event (after debounce)", () => {
+    vi.useFakeTimers();
+    try {
+      const spy = vi.fn();
+      client.on("disconnected", spy);
+      mockHandlers["close"]?.();
+      // The close handler debounces by 6 s so a quick reconnect doesn't flip
+      // the badge to "Demo fallback". Nothing should fire before then.
+      expect(spy).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(6000);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("emits 'error' on broker error", () => {

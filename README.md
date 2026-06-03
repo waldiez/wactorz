@@ -1,11 +1,11 @@
 <p align="center">
-  <img src=".github/assets/logo.svg" width="120" alt="Wactorz" />
+  <img src="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/logo.svg" width="120" alt="Wactorz" />
 </p>
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)"  srcset=".github/assets/title-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset=".github/assets/title-light.svg">
-    <img src=".github/assets/title-dark.svg" width="320" alt="Wactorz" />
+    <source media="(prefers-color-scheme: dark)"  srcset="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/title-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/title-light.svg">
+    <img src="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/title-dark.svg" width="320" alt="Wactorz" />
   </picture>
 </p>
 
@@ -14,16 +14,16 @@
 <p align="center">
 <a href="https://docs.waldiez.io/wactorz/">Docs</a> |
 <a href="https://docs.waldiez.io/wactorz/guide/development.html">Installation</a> |
-<a href="docs/architecture.md">Architecture</a> |
-<a href="ha-addon/DOCS.md">Home Assistant Addon</a> |
+<a href="https://docs.waldiez.io/wactorz/guide/architecture.html">Architecture</a> |
+<a href="https://github.com/waldiez/wactorz/blob/main/ha-addon/DOCS.md">Home Assistant Addon</a> |
 <a href="https://github.com/waldiez/wactorz/issues">Issues</a>
 </p>
 
 <p align="center">
-<a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"/></a>
+<a href="https://github.com/waldiez/wactorz/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"/></a>
 <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python"/></a>
 <a href="https://mosquitto.org"><img src="https://img.shields.io/badge/transport-MQTT-purple.svg" alt="MQTT"/></a>
-<a href="ha-addon/DOCS.md"><img src="https://img.shields.io/badge/Home%20Assistant-addon-41BDF5.svg" alt="Home Assistant"/></a>
+<a href="https://github.com/waldiez/wactorz/blob/main/ha-addon/DOCS.md"><img src="https://img.shields.io/badge/Home%20Assistant-addon-41BDF5.svg" alt="Home Assistant"/></a>
 </p>
 
 ---
@@ -54,14 +54,14 @@ python -m wactorz
 
 Dashboard: `http://localhost:8888`.
 
-If you'd rather skip the clone, [pull the image from Docker Hub](docs/dockerhub.md). To run without an API key, use Ollama:
+If you'd rather skip the clone, [pull the image from Docker Hub](https://docs.waldiez.io/wactorz/guide/dockerhub.html). To run without an API key, use Ollama:
 
 ```bash
 ollama pull llama3
 python -m wactorz --llm ollama --ollama-model llama3
 ```
 
-Windows setup is in [docs/windows.md](docs/windows.md); the full set of deployment options lives in [docs/deployment.md](docs/deployment.md).
+Windows setup is in [docs/windows.md](https://github.com/waldiez/wactorz/blob/main/docs/windows.md); the full set of deployment options lives in [docs/deployment.md](https://docs.waldiez.io/wactorz/guide/deployment.html).
 
 ---
 
@@ -155,17 +155,17 @@ LLM_API_KEY=your-key-here
 
 | Start here | For |
 |---|---|
-| [Quickstart](docs/quickstart.md) | First run and Windows setup |
-| [Docker Hub](docs/dockerhub.md) | Run from Docker without cloning the repo |
-| [Architecture](docs/architecture.md) | Actor system, supervision, MQTT flow |
-| [Agents](docs/agents.md) | Built-in agents, recipes, and dynamic agents |
-| [Pipelines](docs/pipelines.md) | Reactive automation patterns |
-| [Remote nodes](docs/remote-nodes.md) | Edge deployment over SSH |
-| [Interfaces](docs/interfaces.md) | CLI, REST, chat platforms, dashboard, MCP |
-| [API reference](docs/api.md) | REST endpoints and payloads |
-| [Deployment](docs/deployment.md) | Docker, native binary, systemd, staging, HA addon |
-| [Prometheus](docs/prometheus.md) | Metrics and monitoring |
-| [Technical reference](docs/reference.md) | Deeper internals |
+| [Quickstart](https://github.com/waldiez/wactorz/blob/main/docs/quickstart.md) | First run and Windows setup |
+| [Docker Hub](https://docs.waldiez.io/wactorz/guide/dockerhub.html) | Run from Docker without cloning the repo |
+| [Architecture](https://docs.waldiez.io/wactorz/guide/architecture.html) | Actor system, supervision, MQTT flow |
+| [Agents](https://docs.waldiez.io/wactorz/guide/agents.html) | Built-in agents, recipes, and dynamic agents |
+| [Pipelines](https://docs.waldiez.io/wactorz/guide/pipelines.html) | Reactive automation patterns |
+| [Remote nodes](https://docs.waldiez.io/wactorz/guide/remote-nodes.html) | Edge deployment over SSH |
+| [Interfaces](https://docs.waldiez.io/wactorz/guide/interfaces.html) | CLI, REST, chat platforms, dashboard, MCP |
+| [API reference](https://github.com/waldiez/wactorz/blob/main/docs/api.md) | REST endpoints and payloads |
+| [Deployment](https://docs.waldiez.io/wactorz/guide/deployment.html) | Docker, native binary, systemd, staging, HA addon |
+| [Prometheus](https://docs.waldiez.io/wactorz/guide/prometheus.html) | Metrics and monitoring |
+| [Technical reference](https://github.com/waldiez/wactorz/blob/main/docs/reference.md) | Deeper internals |
 
 ---
 
@@ -220,7 +220,7 @@ LLM_API_KEY=your-key-here
 <!-- prettier-ignore-end -->
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
-Contributions of any kind are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+Contributions of any kind are welcome. See [CONTRIBUTING.md](https://github.com/waldiez/wactorz/blob/main/CONTRIBUTING.md) to get started.
 
 ---
 
@@ -235,10 +235,10 @@ Contributions of any kind are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) to
 | New agent recipe | Add it in `wactorz/catalogue_agents/` and open a PR |
 | Home Assistant | HA integrations and addon config PRs are very welcome |
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code style, and the PR process.
+Read [CONTRIBUTING.md](https://github.com/waldiez/wactorz/blob/main/CONTRIBUTING.md) for setup instructions, code style, and the PR process.
 
 ---
 
 ## License
 
-[Apache 2.0](LICENSE). Free to use, modify, and distribute.
+[Apache 2.0](https://github.com/waldiez/wactorz/blob/main/LICENSE). Free to use, modify, and distribute.

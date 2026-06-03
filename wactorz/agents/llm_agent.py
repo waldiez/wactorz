@@ -23,7 +23,9 @@ def _period_key(period: str) -> str:
     if period == "daily":
         return now.strftime("%Y-%m-%d")
     if period == "weekly":
-        return now.strftime("%Y-W%W")
+        # ISO week (%G-W%V): weeks run Mon–Sun and never collapse into a
+        # partial "W00" at the start of January the way %Y-W%W does.
+        return now.strftime("%G-W%V")
     return now.strftime("%Y-%m")
 
 
@@ -91,16 +93,10 @@ def _accumulate_global_cost(delta: float) -> None:
     db = get_db()
     if db is None:
         return
-    from ..config import CONFIG
-    limit = CONFIG.llm_cost_limit_usd
-    try:
-        override = db.kv_get("_system", "_cost_limit_override")
-        if isinstance(override, dict):
-            limit = float(override.get("limit_usd", limit))
-    except Exception:
-        pass
-    if limit <= 0:
-        return
+    # Always accumulate, even when no limit is configured. Gating this on a
+    # limit meant period spend stayed at $0 until a cap existed, so enabling a
+    # cap mid-period gave false protection (spend already incurred was never
+    # recorded) and the "Current spend (no limit set)" readout was always $0.
     for period in ("daily", "weekly", "monthly"):
         key = _global_cost_kv_key(period)
         try:

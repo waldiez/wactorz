@@ -1188,10 +1188,12 @@ async def static_handler(request):
                     content = content.replace('"/api/', f'"{ingress_path}/api/')
                     content = content.replace('"/config"', f'"{ingress_path}/config"')
                     content = content.replace('"/actors"', f'"{ingress_path}/actors"')
-                    # FORCE the WebSocket to use port 8888 instead of HA's 8123
-                    content = content.replace('"ws://localhost:9001"', f'"ws://{request.host.split(":")[0]}:8888/mqtt"')
-                    content = content.replace('`ws://${location.host}/ws`', f'`ws://${{location.hostname}}:8888/ws`')
-                    content = content.replace('`ws://${location.host}/mqtt`', f'`ws://${{location.hostname}}:8888/mqtt`')
+                    # Point the WebSocket at the monitor's actual port (WS_PORT),
+                    # not HA's 8123. WS_PORT is where the /ws and /mqtt proxies live.
+                    host = request.host.split(":")[0]
+                    content = content.replace('"ws://localhost:9001"', f'"ws://{host}:{WS_PORT}/mqtt"')
+                    content = content.replace('`ws://${location.host}/ws`', f'`ws://${{location.hostname}}:{WS_PORT}/ws`')
+                    content = content.replace('`ws://${location.host}/mqtt`', f'`ws://${{location.hostname}}:{WS_PORT}/mqtt`')
                     
                     return _with_no_cache(web.Response(text=content, content_type="application/javascript"))
                 
@@ -1265,7 +1267,14 @@ async def mqtt_proxy_handler(request):
     raw_proto = request.headers.get("Sec-WebSocket-Protocol", "")
     protocols = [p.strip() for p in raw_proto.split(",") if p.strip()]
     client_ws = web.WebSocketResponse(protocols=protocols)
-    await client_ws.prepare(request)
+    try:
+        await client_ws.prepare(request)
+    except Exception as exc:
+        logger.error("[MQTT proxy] WebSocket handshake failed — %s | headers: %s",
+                     exc, dict(request.headers))
+        raise
+
+    logger.debug("[MQTT proxy] WS accepted from %s proto=%s", request.remote, protocols)
 
     upstream_url = f"ws://{MQTT_BROKER}:{MQTT_WS_PORT}/"
     try:
@@ -1276,6 +1285,7 @@ async def mqtt_proxy_handler(request):
                 headers={"Sec-WebSocket-Protocol": ",".join(protocols)} if protocols else {},
                 timeout=aiohttp.ClientTimeout(connect=2),
             ) as upstream_ws:
+                logger.debug("[MQTT proxy] upstream WS connected → %s", upstream_url)
                 async def forward(src, dst):
                     async for msg in src:
                         if msg.type == WSMsgType.BINARY:
@@ -1287,7 +1297,8 @@ async def mqtt_proxy_handler(request):
                 await asyncio.gather(forward(client_ws, upstream_ws), forward(upstream_ws, client_ws))
         return client_ws
     except Exception as exc:
-        logger.info("MQTT WS proxy unavailable (%s), falling back to TCP bridge", exc)
+        logger.info("[MQTT proxy] upstream WS unavailable (%s), falling back to TCP bridge %s:%s",
+                    exc, MQTT_BROKER, MQTT_PORT)
 
     await _bridge_mqtt_tcp(client_ws, MQTT_BROKER, MQTT_PORT)
     return client_ws
@@ -1767,13 +1778,13 @@ async def config_handler(request):
 
     # Ingress support: HA sets X-Ingress-Path
     ingress_path = request.headers.get("X-Ingress-Path", "")
-    
-    # Force the host to use port 8888 for WebSockets
+
+    # The /mqtt and /ws proxies are served by *this* server, so point the
+    # frontend at the monitor's actual port (WS_PORT), not a hardcoded one.
     raw_host = request.host.split(":")[0]
-    ws_host = f"{raw_host}:8888"
+    ws_host = f"{raw_host}:{WS_PORT}"
     protocol = "wss" if request.secure else "ws"
-    
-    # WebSocket URLs go direct to 8888
+
     mqtt_url = f"{protocol}://{ws_host}/mqtt"
     ws_url   = f"{protocol}://{ws_host}/ws"
 

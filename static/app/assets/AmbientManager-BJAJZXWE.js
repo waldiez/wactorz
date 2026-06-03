@@ -1,0 +1,1 @@
+import{r as e}from"./index-D43dDN7I.js";export{e as ambient};

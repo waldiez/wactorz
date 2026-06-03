@@ -313,5 +313,91 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.data, [])
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Global period-spend accumulation, rollover, and reset
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _KVStub:
+    """Minimal kv_get/kv_set store standing in for WactorzDB."""
+    def __init__(self):
+        self.store = {}
+
+    def kv_set(self, agent, key, value):
+        self.store[(agent, key)] = json.dumps(value, default=str)
+
+    def kv_get(self, agent, key, default=None):
+        raw = self.store.get((agent, key))
+        if raw is None:
+            return default
+        try:
+            return json.loads(raw)
+        except Exception:
+            return raw
+
+
+def _fixed_datetime(y, mo, d):
+    from datetime import datetime as _dt
+
+    class _DT(_dt):
+        @classmethod
+        def now(cls, tz=None):
+            return _dt(y, mo, d, 12, 0, 0)
+    return _DT
+
+
+class GlobalCostAccumulationTest(unittest.TestCase):
+    def setUp(self):
+        import wactorz.agents.llm_agent as L
+        self.L = L
+        self.db = _KVStub()
+        self._p_db = patch.object(L, "get_db", lambda: self.db)
+        self._p_db.start()
+
+    def tearDown(self):
+        self._p_db.stop()
+
+    def test_accumulates_without_a_limit(self):
+        """Regression: period spend must accrue even when no cap is configured."""
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
+            self.L._accumulate_global_cost(0.50)
+            info = self.L.get_global_cost_info()
+        self.assertAlmostEqual(info["spend_usd"], 0.50, places=6)
+
+    def test_cap_set_mid_period_sees_prior_spend(self):
+        """Spend before a cap exists is still counted, so the cap can't be silently overshot."""
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 7, 1)):
+            self.L._accumulate_global_cost(20.0)        # no cap yet
+            self.L.set_cost_limit(5.0, "monthly")        # now add a $5 cap
+            info = self.L.get_global_cost_info()
+        self.assertAlmostEqual(info["spend_usd"], 20.0, places=6)
+        self.assertTrue(info["limit_reached"])
+
+    def test_day_rollover_starts_fresh(self):
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
+            self.L.set_cost_limit(10.0, "daily")
+            self.L._accumulate_global_cost(3.0)
+            self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 3.0, places=6)
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 4)):
+            self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 0.0, places=6)
+        # going back preserves the old bucket
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
+            self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 3.0, places=6)
+
+    def test_reset_zeroes_current_period(self):
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
+            self.L.set_cost_limit(10.0, "daily")
+            self.L._accumulate_global_cost(3.0)
+            self.L.reset_global_cost()
+            self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 0.0, places=6)
+
+    def test_weekly_key_is_iso_week(self):
+        # 2026-01-01 is a Thursday → ISO week 2026-W01 (not the %W "W00" partial)
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 1, 1)):
+            self.assertEqual(self.L._period_key("weekly"), "2026-W01")
+        # late-December days that belong to next year's ISO week 1
+        with patch.object(self.L, "datetime", _fixed_datetime(2025, 12, 29)):
+            self.assertEqual(self.L._period_key("weekly"), "2026-W01")
+
+
 if __name__ == "__main__":
     unittest.main()

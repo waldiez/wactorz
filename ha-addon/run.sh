@@ -232,4 +232,7 @@ EOF
     done
 fi
 
+if [ -d /data ]; then
+    cd /data || exit 1
+fi
 exec wactorz

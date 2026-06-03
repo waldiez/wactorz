@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 1
 
+# Column DEFAULTs below use ((julianday('now') - 2440587.5) * 86400.0) for a
+# sub-second Unix timestamp. We deliberately avoid unixepoch('subsec'), which
+# requires SQLite >= 3.42 (2023): SQLite resolves a DEFAULT expression's
+# functions when it compiles ANY write to the table (even when the column value
+# is supplied), so an unavailable function breaks every INSERT — not just
+# default-relying ones. julianday() is core since SQLite 3.0 (2004), so this
+# works on every platform/version we could run on.
 _SCHEMA_SQL = """
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -39,7 +46,7 @@ CREATE TABLE IF NOT EXISTS kv_store (
     agent   TEXT NOT NULL,
     key     TEXT NOT NULL,
     value   TEXT NOT NULL,           -- JSON-encoded
-    updated REAL NOT NULL DEFAULT (unixepoch('subsec')),
+    updated REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0),
     PRIMARY KEY (agent, key)
 );
 
@@ -48,8 +55,8 @@ CREATE TABLE IF NOT EXISTS spawn_registry (
     name       TEXT PRIMARY KEY,
     config     TEXT NOT NULL,         -- JSON spawn config
     node       TEXT DEFAULT '',       -- remote node name (empty = local)
-    created_at REAL NOT NULL DEFAULT (unixepoch('subsec')),
-    updated_at REAL NOT NULL DEFAULT (unixepoch('subsec'))
+    created_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0),
+    updated_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
 );
 
 -- Pipeline rules — reactive rules with their agent lists
@@ -57,14 +64,14 @@ CREATE TABLE IF NOT EXISTS pipeline_rules (
     rule_id    TEXT PRIMARY KEY,
     task       TEXT NOT NULL,          -- original user request
     agents     TEXT NOT NULL,          -- JSON array of agent names
-    created_at REAL NOT NULL DEFAULT (unixepoch('subsec'))
+    created_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
 );
 
 -- User facts — durable facts extracted from conversations
 CREATE TABLE IF NOT EXISTS user_facts (
     key     TEXT PRIMARY KEY,
     value   TEXT NOT NULL,
-    updated REAL NOT NULL DEFAULT (unixepoch('subsec'))
+    updated REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
 );
 
 -- Topic contracts — TopicBus registry (survives restarts without retained MQTT)
@@ -78,14 +85,14 @@ CREATE TABLE IF NOT EXISTS topic_contracts (
     observed_samples TEXT DEFAULT '{}',   -- JSON dict
     node             TEXT DEFAULT '',
     actor_id         TEXT DEFAULT '',
-    updated          REAL NOT NULL DEFAULT (unixepoch('subsec'))
+    updated          REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
 );
 
 -- Notification webhook URLs
 CREATE TABLE IF NOT EXISTS webhook_urls (
     service TEXT PRIMARY KEY,          -- discord, slack, telegram
     url     TEXT NOT NULL,
-    updated REAL NOT NULL DEFAULT (unixepoch('subsec'))
+    updated REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
 );
 
 -- Plan cache — cached planner decompositions (with TTL)
@@ -93,7 +100,7 @@ CREATE TABLE IF NOT EXISTS plan_cache (
     cache_key  TEXT PRIMARY KEY,
     plan       TEXT NOT NULL,          -- JSON array of steps
     workers    TEXT DEFAULT '[]',      -- JSON array of worker names at cache time
-    created_at REAL NOT NULL DEFAULT (unixepoch('subsec'))
+    created_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
 );
 
 -- ══════════════════════════════════════════════════════════════════════════

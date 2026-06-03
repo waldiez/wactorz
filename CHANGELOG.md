@@ -16,10 +16,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Cost limit** — Period spend now accumulates even when no cap is configured. Previously `_accumulate_global_cost` skipped bookkeeping unless a limit was set, so enabling a cap mid-period gave false protection (spend already incurred this period was never recorded and the cap could be silently overshot), and the "Current spend (no limit set)" readout was permanently `$0`.
 - **Cost limit** — Weekly budget period now keys on the ISO week (`%G-W%V`) instead of `%Y-W%W`, which produced a partial `W00` bucket at the start of January and week boundaries that didn't align with Mon–Sun.
 - **Monitor UI** — "Reset spend" button now states explicitly that it clears only the current period's budget counter and leaves the lifetime "Cost" total unchanged (use `wactorz-reset --metrics` for that), removing confusion between the two separate accumulators.
+- **Persistence** — SQLite schema no longer uses `unixepoch('subsec')` (requires SQLite ≥ 3.42, 2023) for column DEFAULTs. SQLite resolves a DEFAULT's functions when compiling *any* write to the table, so on older bundled SQLite (e.g. python.org Windows builds) every write to `kv_store`, `spawn_registry`, and other config tables failed with `unknown function: unixepoch` — silently breaking cost tracking and agent persistence. Replaced with a portable `julianday()`-based expression (core since SQLite 3.0), keeping sub-second precision. Deploy images and CI were unaffected; this fixes local/dev pip installs on any platform.
 
 ### Tests
 
 - **Tests** — `mqtt.test.ts`: updated stale assertion for the 6 s disconnect-debounce introduced in a prior PR.
+- **Tests** — `test_persistence_writes.py`: new coverage for the real `WactorzDB` write path (the suite previously only used an in-memory fake), including a guard against reintroducing version-gated SQLite functions in the schema.
 
 ## [0.4.3] - 2026-06-01
 

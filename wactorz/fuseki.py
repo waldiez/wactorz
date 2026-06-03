@@ -1253,6 +1253,30 @@ def _parse_domains(raw: str | None) -> frozenset[str] | None:
     return frozenset(d.strip() for d in raw.split(",") if d.strip())
 
 
+async def fuseki_reachable(url: str, timeout: float = 2.0) -> bool:
+    """Quick TCP probe: is a Fuseki server actually listening at this URL?
+
+    Used to decide whether to start the HA→Fuseki bridge at all. If the user
+    isn't running Fuseki, there's no point connecting to HA and then failing to
+    write every single state change — that just floods the log. A pure TCP
+    connect is fast and doesn't depend on any Fuseki endpoint/auth."""
+    try:
+        parsed = urlparse(url if "://" in url else f"http://{url}")
+        host = parsed.hostname or "localhost"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=timeout
+        )
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
 async def _run_with_retry(coro_factory: Any, label: str) -> None:
     """Run a bridge coroutine, reconnecting on error with exponential backoff."""
     _last_exc_str: str | None = None
@@ -1301,8 +1325,8 @@ async def _main() -> None:
 
     tasks: list[Any] = []
 
-    # ── HA bridge (optional — skipped if no HA_TOKEN) ────────────────────────
-    if ha_token:
+    # ── HA bridge (optional — skipped if no HA_TOKEN or no Fuseki) ───────────
+    if ha_token and await fuseki_reachable(fuseki_url):
         log.info("HA→Fuseki bridge  ha=%s  domains=%s",
                  ha_url, ",".join(sorted(domains)) if domains else "default")
         ha_bridge = HAFusekiBridge(
@@ -1315,8 +1339,10 @@ async def _main() -> None:
             domains=domains,
         )
         tasks.append(_run_with_retry(ha_bridge.run, "HAFusekiBridge"))
-    else:
+    elif not ha_token:
         log.info("HA_TOKEN not set — HAFusekiBridge disabled.")
+    else:
+        log.info("Fuseki not reachable at %s — HAFusekiBridge disabled.", fuseki_url)
 
     # ── Agent manifest bridge (also writes channels) ──────────────────────────
     log.info("AgentManifestBridge  mqtt=%s:%d", mqtt_broker, mqtt_port)

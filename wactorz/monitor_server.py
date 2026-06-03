@@ -1708,9 +1708,18 @@ async def _start_ha_bridge(_app=None) -> None:
     if not CONFIG.ha_token or not CONFIG.fuseki_url:
         return
     try:
-        from .fuseki import HAFusekiBridge, _run_with_retry
+        from .fuseki import HAFusekiBridge, _run_with_retry, fuseki_reachable
     except Exception as exc:
         logger.warning("[ha-bridge] Could not import HAFusekiBridge: %s", exc)
+        return
+
+    # Don't start the bridge if Fuseki isn't actually running — otherwise it
+    # connects to HA and then fails to write every state change, flooding the
+    # log. If you're not using Fuseki, the bridge simply stays off.
+    if not await fuseki_reachable(CONFIG.fuseki_url):
+        logger.info("[ha-bridge] Fuseki not reachable at %s — HA→Fuseki bridge "
+                    "disabled. (Start Fuseki and POST /api/ha/sync to enable, "
+                    "or ignore if you don't use Fuseki.)", CONFIG.fuseki_url)
         return
 
     bridge = HAFusekiBridge(

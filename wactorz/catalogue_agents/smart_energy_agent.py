@@ -656,9 +656,10 @@ def _help_text(agent) -> str:
         "  • **\"how much has it cost today?\"** — cost breakdown (per day/week/month)\n"
         "  • **\"set rate to 0.20\"** — change your €/kWh tariff\n"
         "  • **\"stop monitoring the AC\"** — remove a plug\n"
-        "  • **\"turn off the printer when it's done\"** — auto-off (printer only; I "
-        "never switch off anything you didn't explicitly ask me to)\n"
-        f"\nCurrent rate: {agent.state['rate']} {agent.state['currency']}/kWh."
+        "\nI **only monitor** — I never switch a plug off. (Per-plug automations "
+        "like auto-off are off by default and only ever set up if you specifically "
+        "ask for one.)\n"
+        f"Current rate: {agent.state['rate']} {agent.state['currency']}/kWh."
     )
 
 
@@ -753,9 +754,7 @@ async def _handle_selection(agent, text: str) -> dict:
         f"Done! Now monitoring: **{names}**.\n\n"
         f"All set to **never turn off** — I'll only track power and cost. {accuracy} "
         f"(rate: {agent.state['rate']} {agent.state['currency']}/kWh — tell me if that's wrong).\n\n"
-        f"Ask me \"how much has it cost today?\" anytime. And if you ever want one "
-        f"to switch off automatically (like a 3D printer when a print finishes), "
-        f"just tell me — I'll only ever do that for a plug you specifically ask about."
+        f"Ask me \"how much has it cost today?\" or \"what's my power draw?\" anytime."
     )}
 
 

@@ -37,9 +37,10 @@ _CAL_ID = "primary"
 class CalendarAgent(Actor):
     """Google Calendar read/write."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, llm_provider=None, **kwargs):
         kwargs.setdefault("name", "calendar-agent")
         super().__init__(**kwargs)
+        self._llm = llm_provider
         self._service = None
         self._service_lock = asyncio.Lock()
 

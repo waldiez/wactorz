@@ -36,9 +36,10 @@ logger = logging.getLogger(__name__)
 class GmailAgent(Actor):
     """Gmail read + send."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, llm_provider=None, **kwargs):
         kwargs.setdefault("name", "gmail-agent")
         super().__init__(**kwargs)
+        self._llm = llm_provider
         self._service = None
         self._service_lock = asyncio.Lock()
 

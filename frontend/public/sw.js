@@ -8,9 +8,15 @@
  *   - Everything else → network-first, fall back to cache
  */
 
-const CACHE = "wactorz-v3";
+const CACHE = "wactorz-v4";
 
-const NEVER_CACHE = ["/api/", "/ws", "/mqtt"];
+const NEVER_CACHE = ["/api/", "/api", "/ws", "/mqtt"];
+
+function cacheResponse(request, response) {
+  if (!response || !response.ok) return;
+  const copy = response.clone();
+  caches.open(CACHE).then((c) => c.put(request, copy)).catch(() => {});
+}
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();
@@ -45,9 +51,7 @@ self.addEventListener("fetch", (e) => {
     e.respondWith(
       fetch(e.request)
         .then((res) => {
-          if (res.ok) {
-            caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
-          }
+          cacheResponse(e.request, res);
           return res;
         })
         .catch(() => caches.match(e.request)),
@@ -66,13 +70,11 @@ self.addEventListener("fetch", (e) => {
   ) {
     e.respondWith(
       caches.match(e.request).then((cached) => {
-        const fresh = fetch(e.request).then((res) => {
-          if (res.ok) {
-            caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
-          }
+        if (cached) return cached;
+        return fetch(e.request).then((res) => {
+          cacheResponse(e.request, res);
           return res;
         });
-        return cached ?? fresh;
       }),
     );
     return;
@@ -82,9 +84,7 @@ self.addEventListener("fetch", (e) => {
   e.respondWith(
     fetch(e.request)
       .then((res) => {
-        if (res.ok) {
-          caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
-        }
+        cacheResponse(e.request, res);
         return res;
       })
       .catch(() => caches.match(e.request)),

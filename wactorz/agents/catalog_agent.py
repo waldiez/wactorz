@@ -228,6 +228,38 @@ def _build_catalog() -> dict:
         }
         logger.info("[catalog] Loaded anomaly-detector recipe")
 
+    # ── smart-energy ───────────────────────────────────────────────────
+    code = _load_recipe("smart_energy_agent.py")
+    if code:
+        catalog["smart-energy"] = {
+            "name":         "smart-energy",
+            "type":         "dynamic",
+            "description":  "LLM-powered energy brain for smart plugs via Home Assistant (brand-agnostic). "
+                            "Monitors live wattage, tracks per-plug kWh and cost (today/week/month), and can "
+                            "conditionally power down plugs via user-requested rules. Plugs marked 'locked' "
+                            "(AC, servers, AI rigs) are NEVER turned off — hard-guarded in code.",
+            "capabilities": ["energy_monitoring", "smart_plug", "cost_tracking", "home_assistant",
+                             "power_monitoring", "tapo", "shelly"],
+            "install":      [],
+            "input_schema": {
+                "action": "str  — status|cost|report|add_plug|list_plugs|remove_plug|"
+                          "add_rule|list_rules|remove_rule|set_rate, or free-text question",
+                "plug":   "dict — plug config: {name, ha_entity_switch, ha_entity_power, "
+                          "protection: locked|auto_off_on_idle|manual} (for add_plug)",
+                "rule":   "dict — rule config, e.g. {type: auto_off_on_idle, plug, "
+                          "idle_threshold_watts, idle_delay_s} (for add_rule)",
+                "rate":   "float — €/kWh (for set_rate, default 0.138)",
+            },
+            "output_schema": {
+                "plugs_monitored": "int",
+                "active_rules":    "int",
+                "total_watts":     "float",
+            },
+            "poll_interval": 30,
+            "code":          code,
+        }
+        logger.info("[catalog] Loaded smart-energy recipe")
+
     # ── manual-agent ───────────────────────────────────────────────────
     code = _load_recipe("manual_agent.py")
     if code:

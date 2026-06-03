@@ -3010,6 +3010,16 @@ class MainActor(LLMAgent):
             system_msg_parts.append(f"Could not delete {', '.join(missing)} — not currently registered")
         system_msg = " | ".join(system_msg_parts)
 
+        # Surface the actual spawn/delete outcome as a VISIBLE chunk. The done
+        # dict below carries system_msg too, but io-gateway (and other dict-
+        # skipping consumers) drop dict chunks — so without this the user only
+        # ever sees the LLM's streamed chatter and never learns what truly got
+        # spawned. This is what made the catalog-dedup swap look like it "didn't
+        # work": the LLM described its own agent while the guard quietly spawned
+        # the real catalog recipe.
+        if system_msg:
+            yield f"\n\n_ℹ️ {system_msg}_"
+
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {"type": "user_interaction", "input": text[:100], "response": full_response[:200]},
@@ -3827,6 +3837,9 @@ class MainActor(LLMAgent):
                 req_name = config.get("name", "")
                 if not config.get("replace"):
                     recipe_name = self._match_catalog_recipe(req_name)
+                    # Always log the decision so it's clear from the logs whether
+                    # the guard engaged (and what it resolved the name to).
+                    logger.info(f"[{self.name}] spawn '{req_name}': catalog-dedup match = {recipe_name!r}")
                     if recipe_name:
                         existing = self._registry.find_by_name(recipe_name) if self._registry else None
                         if existing:

@@ -73,14 +73,24 @@ class CalendarAgent(Actor):
 
     async def chat(self, message: str) -> str:
         payload = self._parse(message)
-        result = await self._dispatch(payload)
+        result = await self._handle_cmd(payload)
         return self._format(result)
 
     async def handle_message(self, msg: Message):
         if msg.type != MessageType.TASK:
             return
-        payload = msg.payload if isinstance(msg.payload, dict) else self._parse(str(msg.payload))
-        result = await self._dispatch(payload)
+        raw = msg.payload
+        if isinstance(raw, dict):
+            text = raw.get("text") or raw.get("content") or ""
+            parsed = self._parse(text) if text else raw
+        else:
+            parsed = self._parse(str(raw))
+        result = await self._handle_cmd(parsed)
+        result["result"] = self._format(result)
+        if isinstance(raw, dict):
+            for key in ("_task_id", "task"):
+                if key in raw:
+                    result[key] = raw[key]
         target = msg.reply_to or msg.sender_id
         if target:
             await self.send(target, MessageType.RESULT, result)
@@ -117,7 +127,7 @@ class CalendarAgent(Actor):
             return {"action": "create", "summary": m.group(1), "start": m.group(2), "end": m.group(3)}
         return {"action": "list"}
 
-    async def _dispatch(self, payload: dict) -> dict:
+    async def _handle_cmd(self, payload: dict) -> dict:
         action = (payload.get("action") or "list").lower()
         try:
             if action == "status":

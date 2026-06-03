@@ -537,6 +537,17 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                     await _end_fn()
                     return
 
+        # Check if it's a spawnable catalog recipe — delegate to main which
+        # handles auto-spawn + routing in one shot.
+        main = main or (registry.find_by_name("main") if registry else None)
+        if main and hasattr(main, "_agent_manifests"):
+            manifest = main._agent_manifests.get(target_name, {})
+            if manifest.get("spawnable") and manifest.get("catalog"):
+                if hasattr(main, "process_user_input"):
+                    result = await main.process_user_input(content)
+                    await reply_fn(str(result))
+                    await _end_fn()
+                    return
         await reply_fn(f"Agent @{target_name} not found.")
         return
 

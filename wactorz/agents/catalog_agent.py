@@ -56,6 +56,80 @@ def _load_recipe(filename: str) -> Optional[str]:
 # CATALOG
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _build_native_catalog() -> dict:
+    """Native Actor subclasses — spawned directly, no code string needed."""
+    native = {}
+
+    try:
+        from .weather_agent import WeatherAgent
+        native["weather-agent"] = {
+            "name":         "weather-agent",
+            "type":         "native",
+            "factory":      WeatherAgent,
+            "description":  "Natural-language weather: current conditions, forecast (incl. tomorrow / weekday / weekend / 'will it rain'), and history via Open-Meteo. No API key required.",
+            "capabilities": ["weather.current", "weather.forecast", "weather.history"],
+            "input_schema": {
+                "action":   "current | forecast | history | set-default",
+                "location": "str — city name or lat,lon (optional, falls back to default)",
+                "days":     "int — forecast horizon 1-16 (forecast only, default 3)",
+            },
+            "output_schema": {
+                "location": "str", "temp_c": "float", "feels_like_c": "float",
+                "condition": "str", "humidity": "int", "wind_kph": "float",
+            },
+        }
+        logger.info("[catalog] Loaded weather-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] weather-agent unavailable: {e}")
+
+    try:
+        from .calendar_agent import CalendarAgent
+        native["calendar-agent"] = {
+            "name":         "calendar-agent",
+            "type":         "native",
+            "factory":      CalendarAgent,
+            "description":  "Google Calendar — list, create and delete events. Requires Google OAuth setup (~/.wactorz/google_client.json).",
+            "capabilities": ["calendar.list", "calendar.create", "calendar.delete"],
+            "input_schema": {
+                "action":   "list | today | week | create | delete | status",
+                "summary":  "str — event title (for 'create')",
+                "start":    "ISO-8601 datetime (for 'create')",
+                "end":      "ISO-8601 datetime (optional, default +1h)",
+                "event_id": "str (for 'delete')",
+                "count":    "int (for 'list', default 10)",
+            },
+            "output_schema": {"events": "list[{id,summary,start,end,location}]"},
+        }
+        logger.info("[catalog] Loaded calendar-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] calendar-agent unavailable: {e}")
+
+    try:
+        from .gmail_agent import GmailAgent
+        native["gmail-agent"] = {
+            "name":         "gmail-agent",
+            "type":         "native",
+            "factory":      GmailAgent,
+            "description":  "Gmail — search, read and send mail. Requires Google OAuth setup (~/.wactorz/google_client.json).",
+            "capabilities": ["gmail.search", "gmail.read", "gmail.send"],
+            "input_schema": {
+                "action":     "recent | search | read | send | unread | status",
+                "query":      "str — Gmail search expression",
+                "message_id": "str — for 'read'",
+                "to":         "str — recipient (for 'send')",
+                "subject":    "str (for 'send')",
+                "body":       "str (for 'send')",
+                "count":      "int (for 'recent', default 10)",
+            },
+            "output_schema": {"messages": "list[{id,from,subject,snippet,date}]"},
+        }
+        logger.info("[catalog] Loaded gmail-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] gmail-agent unavailable: {e}")
+
+    return native
+
+
 def _build_catalog() -> dict:
     catalog = {}
 
@@ -194,11 +268,14 @@ def _build_catalog() -> dict:
         }
         logger.info("[catalog] Loaded sinergym-optimizer recipe")
 
-    # ── ADD NEW RECIPES HERE ──────────────────────────────────────────────────
+    # ── ADD NEW DYNAMIC RECIPES HERE ─────────────────────────────────────────
     # code = _load_recipe("my_new_agent.py")
     # if code:
     #     catalog["my-new-agent"] = { ...spawn config..., "code": code }
-    # # ─────────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # ── Native Actor subclasses (weather, calendar, gmail, …) ─────────────────
+    catalog.update(_build_native_catalog())
 
     # ── anomaly-detector ───────────────────────────────────────────────────
     code = _load_recipe("anomaly_detector_agent.py")
@@ -328,6 +405,15 @@ class CatalogAgent(Actor):
             else:
                 logger.warning(f"[{self.name}] main not ready — could not inject manifest for '{name}'")
 
+        # Re-spawn native agents that were active before the last restart
+        active_native = self.recall("_active_native") or []
+        for name in active_native:
+            if self._registry and not self._registry.find_by_name(name):
+                recipe = self._catalog.get(name)
+                if recipe and recipe.get("type") == "native":
+                    logger.info(f"[{self.name}] Restoring native agent '{name}'")
+                    await self._action_spawn(name, {})
+
     def _current_task_description(self) -> str:
         return f"catalog ({len(self._catalog)} recipes)"
 
@@ -434,6 +520,26 @@ class CatalogAgent(Actor):
         )
 
         try:
+            main = self._registry.find_by_name("main") if self._registry else None
+            persistence_dir = str(getattr(main, "_persistence_dir", "./state/main").parent) if main else "./state"
+            llm_provider    = getattr(main, "llm", None) if main else None
+
+            # ── Native Actor path ─────────────────────────────────────────────
+            if recipe.get("type") == "native":
+                factory = recipe.get("factory")
+                if not factory:
+                    return {"ok": False, "message": f"Native recipe '{name}' has no factory"}
+                native_kwargs = {"name": name, "persistence_dir": persistence_dir}
+                if llm_provider:
+                    native_kwargs["llm_provider"] = llm_provider
+                actor = await self.spawn(factory, **native_kwargs)
+                if actor:
+                    await self._remember_native(name)
+                    msg = f"'{name}' spawned and running"
+                    logger.info(f"[{self.name}] {msg}")
+                    return {"ok": True, "message": msg, "agent": name}
+                return {"ok": False, "message": f"Spawn returned no actor for '{name}'"}
+
             from .dynamic_agent import DynamicAgent
 
             install = recipe.get("install", [])
@@ -497,10 +603,6 @@ class CatalogAgent(Actor):
                 else:
                     logger.info(f"[{self.name}] All deps for '{name}' already installed — skipping installer")
 
-            main = self._registry.find_by_name("main")
-            llm_provider    = getattr(main, "llm", None) if main else None
-            persistence_dir = str(getattr(main, "_persistence_dir", "./state/main").parent) if main else "./state"
-
             actor = await self.spawn(
                 DynamicAgent,
                 name            = name,
@@ -535,6 +637,25 @@ class CatalogAgent(Actor):
             msg = f"Failed to spawn '{name}': {e}"
             logger.error(f"[{self.name}] {msg}")
             return {"ok": False, "message": msg}
+
+    # ── Native persistence helpers ─────────────────────────────────────────────
+
+    async def _remember_native(self, name: str) -> None:
+        try:
+            active = self.recall("_active_native") or []
+            if name not in active:
+                active.append(name)
+                await self.persist("_active_native", active)
+        except Exception:
+            pass
+
+    async def _forget_native(self, name: str) -> None:
+        try:
+            active = self.recall("_active_native") or []
+            active = [n for n in active if n != name]
+            await self.persist("_active_native", active)
+        except Exception:
+            pass
 
     # ── Public API ─────────────────────────────────────────────────────────────
 

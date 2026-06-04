@@ -71,6 +71,8 @@ class AppConfig:
     fuseki_password: str
     llm_cost_limit_usd: float
     llm_cost_limit_period: str
+    energy_rate: float
+    energy_currency: str
 
 
 CONFIG = AppConfig(
@@ -106,4 +108,6 @@ CONFIG = AppConfig(
     fuseki_password=os.getenv("FUSEKI_PASSWORD", "admin"),
     llm_cost_limit_usd=_env_float("LLM_COST_LIMIT_USD", 0.0),
     llm_cost_limit_period=os.getenv("LLM_COST_LIMIT_PERIOD", "monthly"),
+    energy_rate=_env_float("ENERGY_RATE", 0.138),
+    energy_currency=os.getenv("ENERGY_CURRENCY", "EUR"),
 )

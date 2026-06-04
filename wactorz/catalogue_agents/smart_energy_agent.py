@@ -110,9 +110,23 @@ import json
 import time
 
 
-# ── Defaults ─────────────────────────────────────────────────────────────────
-DEFAULT_RATE          = 0.138      # €/kWh — adjustable per deployment
-DEFAULT_CURRENCY      = "EUR"
+# ── Defaults — read from env/config so deployers set ENERGY_RATE / ENERGY_CURRENCY
+def _default_rate():
+    try:
+        from wactorz.config import CONFIG
+        return float(CONFIG.energy_rate)
+    except Exception:
+        return 0.138
+
+def _default_currency():
+    try:
+        from wactorz.config import CONFIG
+        return str(CONFIG.energy_currency) or "EUR"
+    except Exception:
+        return "EUR"
+
+DEFAULT_RATE          = _default_rate()
+DEFAULT_CURRENCY      = _default_currency()
 DEFAULT_IDLE_DELAY_S  = 180        # 3 min cool-down before printer auto-off
 SUMMARY_TOPIC         = "custom/sensors/energy/summary"
 AUTO_OFF_TOPIC        = "wactorz/energy/auto_off"

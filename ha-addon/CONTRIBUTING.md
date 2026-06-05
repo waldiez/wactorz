@@ -59,6 +59,10 @@ The quickest loop without a real HA install:
    ```
 3. For a proper Supervisor integration test, follow the [HA addon dev docs](https://developers.home-assistant.io/docs/add-ons/testing).
 
+For testing on a **real HA OS box** — required to validate anything about
+**state persistence across updates** (a `docker restart` can't reveal those
+bugs) — follow the **[local add-on workflow](LOCAL_TESTING.md)**.
+
 ## Schema validation gotchas
 
 - `str?` means the field is optional; an absent key is valid. Use it for tokens/credentials that might be blank.

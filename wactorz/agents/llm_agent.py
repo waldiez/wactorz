@@ -462,9 +462,9 @@ class AnthropicProvider(LLMProvider):
 
 
 class OpenAIProvider(LLMProvider):
-    def __init__(self, model: str = "gpt-4o", api_key: Optional[str] = None):
+    def __init__(self, model: str = "gpt-4o", api_key: Optional[str] = None, base_url: Optional[str] = None):
         import openai
-        self.client = openai.AsyncOpenAI(api_key=api_key)
+        self.client = openai.AsyncOpenAI(api_key=api_key, **({"base_url": base_url} if base_url else {}))
         self.model = model
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:

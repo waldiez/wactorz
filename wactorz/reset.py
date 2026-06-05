@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -28,8 +29,10 @@ _CHAT_KV_KEYS  = ("conversation_history", "history_summary")
 _METRIC_KV_KEYS = ("_final_cost", "_messages_processed")
 
 
-_DEFAULT_DB    = "./state/wactorz.db"
-_DEFAULT_STATE = "./state"
+# Honour WACTORZ_STATE_DIR so a wipe targets the same durable location the app
+# writes to (the HA addon pins it to /data/state). Falls back to ./state.
+_DEFAULT_STATE = os.environ.get("WACTORZ_STATE_DIR", "./state")
+_DEFAULT_DB    = os.path.join(_DEFAULT_STATE, "wactorz.db")
 
 
 def _db(db_path: Optional[str] = None):

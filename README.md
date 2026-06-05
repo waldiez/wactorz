@@ -131,6 +131,7 @@ LLM_MODEL=claude-sonnet-4-6
 
 # Generic key — used for anthropic / openai / nim / gemini
 # For Ollama, set OLLAMA_URL instead (default: http://localhost:11434)
+# For OpenAI-compatible endpoints (Groq, Together, vLLM…), set OPENAI_URL to redirect
 LLM_API_KEY=your-key-here
 ```
 

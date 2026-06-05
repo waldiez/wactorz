@@ -380,10 +380,51 @@ class CatalogAgent(Actor):
                 return self._action_info(arg)
             if cmd == "spawn":
                 return await self._action_spawn(arg, {})
-            if cmd in self._catalog:
+            if self._resolve_name(cmd):
                 return await self._action_spawn(cmd, {})
 
         return self._action_list()
+
+    # ── Name resolution ───────────────────────────────────────────────────────
+
+    def _resolve_name(self, raw: str) -> str | None:
+        """Map a freeform name to a catalog key.
+
+        Tries in order:
+          1. Exact match
+          2. Normalised match (spaces/underscores → dashes, lowercase)
+          3. Strip a trailing ' agent' / '-agent' suffix and retry
+          4. Word-subset match: any catalog key whose slug-words are all present
+             in the input (ignoring the word 'agent')
+        """
+        if not raw:
+            return None
+
+        # 1. Exact
+        if raw in self._catalog:
+            return raw
+
+        # 2. Normalised
+        norm = raw.lower().strip().replace("_", "-").replace(" ", "-")
+        if norm in self._catalog:
+            return norm
+
+        # 3. Strip trailing '-agent' suffix
+        stripped = norm[:-6] if norm.endswith("-agent") else norm
+        if stripped and stripped in self._catalog:
+            return stripped
+
+        # 4. Word-subset: split input into meaningful words (drop 'agent'),
+        #    then find the first catalog key whose words are all present.
+        stop = {"agent", "the", "a", "an"}
+        input_words = {w for w in norm.replace("-", " ").split() if w not in stop}
+        if input_words:
+            for key in self._catalog:
+                key_words = set(key.replace("-", " ").split()) - stop
+                if key_words and key_words.issubset(input_words):
+                    return key
+
+        return None
 
     # ── Actions ────────────────────────────────────────────────────────────────
 
@@ -404,18 +445,20 @@ class CatalogAgent(Actor):
     def _action_info(self, name: str) -> dict:
         if not name:
             return {"ok": False, "message": "Provide 'agent' name for info action"}
-        recipe = self._catalog.get(name)
+        resolved = self._resolve_name(name)
+        recipe = self._catalog.get(resolved) if resolved else None
         if not recipe:
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
         safe = {k: v for k, v in recipe.items() if k != "code"}
-        return {"ok": True, "message": f"Recipe for '{name}'", "recipe": safe}
+        return {"ok": True, "message": f"Recipe for '{resolved}'", "recipe": safe}
 
     async def _action_spawn(self, name: str, payload: dict) -> dict:
         if not name:
             return {"ok": False, "message": "Provide 'agent' name to spawn"}
 
-        recipe = self._catalog.get(name)
+        resolved = self._resolve_name(name)
+        recipe = self._catalog.get(resolved) if resolved else None
         if not recipe:
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
@@ -423,14 +466,14 @@ class CatalogAgent(Actor):
         if not self._registry:
             return {"ok": False, "message": "No registry available — cannot spawn"}
 
-        existing = self._registry.find_by_name(name)
+        existing = self._registry.find_by_name(resolved)
         if existing:
-            return {"ok": True, "message": f"'{name}' is already running"}
+            return {"ok": True, "message": f"'{resolved}' is already running"}
 
-        logger.info(f"[{self.name}] Spawning '{name}'...")
+        logger.info(f"[{self.name}] Spawning '{resolved}'...")
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
-            {"type": "log", "message": f"Spawning '{name}'...", "timestamp": time.time()},
+            {"type": "log", "message": f"Spawning '{resolved}'...", "timestamp": time.time()},
         )
 
         try:
@@ -495,7 +538,7 @@ class CatalogAgent(Actor):
                     else:
                         logger.warning(f"[{self.name}] installer not found — skipping dep install for '{name}'")
                 else:
-                    logger.info(f"[{self.name}] All deps for '{name}' already installed — skipping installer")
+                    logger.info(f"[{self.name}] All deps for '{resolved}' already installed — skipping installer")
 
             main = self._registry.find_by_name("main")
             llm_provider    = getattr(main, "llm", None) if main else None
@@ -503,7 +546,7 @@ class CatalogAgent(Actor):
 
             actor = await self.spawn(
                 DynamicAgent,
-                name            = name,
+                name            = resolved,
                 code            = recipe["code"],
                 poll_interval   = float(recipe.get("poll_interval", 3600)),
                 description     = recipe.get("description", ""),
@@ -521,18 +564,18 @@ class CatalogAgent(Actor):
                     save_config["trusted"] = True
                     main._save_to_spawn_registry(save_config)
 
-                msg = f"'{name}' spawned and running"
+                msg = f"'{resolved}' spawned and running"
                 logger.info(f"[{self.name}] {msg}")
                 await self._mqtt_publish(
                     f"agents/{self.actor_id}/logs",
                     {"type": "log", "message": msg, "timestamp": time.time()},
                 )
-                return {"ok": True, "message": msg, "agent": name}
+                return {"ok": True, "message": msg, "agent": resolved}
             else:
-                return {"ok": False, "message": f"Spawn returned no actor for '{name}'"}
+                return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
         except Exception as e:
-            msg = f"Failed to spawn '{name}': {e}"
+            msg = f"Failed to spawn '{resolved}': {e}"
             logger.error(f"[{self.name}] {msg}")
             return {"ok": False, "message": msg}
 

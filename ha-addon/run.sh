@@ -106,6 +106,12 @@ FUSEKI_EMBEDDED=$(get_config_safe 'fuseki_embedded' 'false')
 export INTERFACE=rest
 export PORT=8000
 
+# Durable state directory. /data is addon-private and survives addon updates,
+# so chat history / pickle / SQLite state is not lost on rebuild. Pinned here
+# as an absolute path instead of relying on CWD.
+export WACTORZ_STATE_DIR=/data/state
+mkdir -p "$WACTORZ_STATE_DIR"
+
 # Logging
 if [ -n "$HA_TOKEN" ]; then ha_token_state="set"; else ha_token_state="empty"; fi
 bashio::log.info "Configured: mqtt_host='${MQTT_HOST}' mqtt_port='${MQTT_PORT}' ha_url='${HA_URL}' ha_token=${ha_token_state}"
@@ -119,7 +125,17 @@ fi
 if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
     bashio::log.info "Starting embedded Mosquitto MQTT broker..."
 
+    # Persist retained messages under /data so the live overview (agents grid,
+    # cost, state) survives addon restarts AND updates. /data is addon-private
+    # and preserved across image rebuilds.
+    mkdir -p /data/mosquitto
+
     cat > /tmp/mosquitto.conf << 'MQTTEOF'
+# Stay as root so the broker can write the persistence DB under /data
+# (started as root, mosquitto otherwise drops to the unprivileged
+# "mosquitto" user, which cannot write the root-owned /data/mosquitto).
+user root
+
 # TCP listener
 listener 1883
 allow_anonymous true
@@ -129,7 +145,9 @@ listener 8083
 protocol websockets
 allow_anonymous true
 
-persistence false
+persistence true
+persistence_location /data/mosquitto/
+autosave_interval 30
 MQTTEOF
 
     mosquitto -c /tmp/mosquitto.conf &

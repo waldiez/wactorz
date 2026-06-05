@@ -41,6 +41,19 @@ _PKG_DIR         = Path(__file__).resolve().parent   # wactorz/
 _RELOAD_CWD      = os.getcwd()
 
 
+def _state_dir() -> str:
+    """Resolve the persistent state directory.
+
+    Honours ``WACTORZ_STATE_DIR`` so deployments can pin an absolute,
+    durable location (the HA addon sets it to ``/data/state`` so chat /
+    pickle / SQLite state survives addon updates). Falls back to ``./state``
+    for local/dev runs. The directory is created if missing.
+    """
+    base = os.environ.get("WACTORZ_STATE_DIR", "./state")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
 def _start_reloader() -> None:
     """Watch wactorz/ for source changes and restart the process via os.execv."""
     try:
@@ -189,7 +202,7 @@ async def build_system(args: argparse.Namespace):
         provider = AnthropicProvider(model=CONFIG.llm_model, api_key=api_key)
     elif llm == "openai":
         api_key = os.getenv("OPENAI_API_KEY") or CONFIG.llm_api_key
-        provider = OpenAIProvider(model=CONFIG.llm_model, api_key=api_key)
+        provider = OpenAIProvider(model=CONFIG.llm_model, api_key=api_key, base_url=CONFIG.openai_url or None)
     elif llm == "ollama":
         ollama_model = args.ollama_model or CONFIG.llm_model
         provider = OllamaProvider(model=ollama_model, base_url=CONFIG.ollama_url)
@@ -207,11 +220,14 @@ async def build_system(args: argparse.Namespace):
         provider = None
         logger.warning("No LLM provider set. Agents will have limited capabilities.")
 
+    # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
+    _sd = _state_dir()
+
     # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
     system = ActorSystem(
         mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
         mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
-        state_dir="./state",
+        state_dir=_sd,
     )
     # MQTT client must exist before factories run so injected actors can publish
     system._mqtt_client = await __import__(
@@ -219,7 +235,7 @@ async def build_system(args: argparse.Namespace):
     )._MQTTPublisher.create(
         args.mqtt_broker or CONFIG.mqtt_host,
         args.mqtt_port or CONFIG.mqtt_port,
-        db_path="./state/mqtt_outbox.db",
+        db_path=os.path.join(_sd, "mqtt_outbox.db"),
     )
 
     # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────────────
@@ -239,9 +255,9 @@ async def build_system(args: argparse.Namespace):
     # .pkl data to the new stores.
     from wactorz.core.persistence import init_persistence, PersistenceAPI
     _db, _redis, _pickle_store = init_persistence(
-        db_path="./state/wactorz.db",
+        db_path=os.path.join(_sd, "wactorz.db"),
         redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379"),
-        state_dir="./state",
+        state_dir=_sd,
         run_migration=True,
     )
     logger.info("Persistence layer initialised (SQLite + %s + Pickle)",

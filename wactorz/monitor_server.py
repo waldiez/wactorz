@@ -1526,13 +1526,31 @@ async def reset_handler(request):
             _reset._reset_all_pickles()
     elif scope == "metrics":
         _reset.reset_metrics(agent)
+        # Also zero the LIVE in-memory counters on running actors. reset_metrics
+        # only clears the persisted kv snapshot, so without this the next
+        # heartbeat re-reports the old totals and the dashboard looks unchanged
+        # until a restart. Scoped to metrics/cost fields only (not history).
+        live_actors = list(registry.all_actors()) if registry is not None else []
+        for actor in live_actors:
+            if agent and actor.name != agent:
+                continue
+            actor.metrics.messages_processed = 0
+            if hasattr(actor, "total_cost_usd"):
+                actor.total_cost_usd      = 0.0
+                actor.total_input_tokens  = 0
+                actor.total_output_tokens = 0
     elif scope == "spawns":
         _reset.reset_spawns(agent)
     elif scope == "logs":
         _reset.reset_logs()
+        # The activity feed mirrors the log files we just truncated, so drop the
+        # in-memory entries too — otherwise the UI keeps showing stale lines.
+        state["log_feed"].clear()
 
-    # Clear in-memory dashboard state for the affected agents
-    if scope in ("chat", "metrics"):
+    # Clear in-memory dashboard cost/message state for the affected agents.
+    # Scoped to "metrics" only — clearing chat history must not zero cost/
+    # message counters or wipe the alerts/activity feed.
+    if scope == "metrics":
         if agent:
             aid = next(
                 (k for k, v in state["agents"].items() if v.get("name") == agent), None

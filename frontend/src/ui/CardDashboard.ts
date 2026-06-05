@@ -3574,7 +3574,8 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
         pop.classList.remove("open");
 
         try {
-          const res = await fetch("/api/reset", {
+          const ingress: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+          const res = await fetch(`${ingress}/api/reset`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ scope }),

@@ -1154,5 +1154,333 @@ class HomeAssistantAgentStaticHelperTest(unittest.TestCase):
         self.assertIn("Alt", HomeAssistantAgent._hardware_summary_lines(alternatives)[0])
 
 
+class HomeAssistantAgentCameraTest(unittest.IsolatedAsyncioTestCase):
+    def _agent(self, llm_provider=None) -> HomeAssistantAgent:
+        return _make_agent(self, llm_provider)
+
+    # ── heuristic ────────────────────────────────────────────────────────────
+
+    def test_camera_terms_route_to_other_heuristic(self):
+        for text in ("show me my camera", "list cameras", "get a snapshot", "camera stream url"):
+            with self.subTest(text=text):
+                self.assertEqual(HomeAssistantAgent._classify_action_heuristic(text), "other")
+
+    def test_meta_camera_question_does_not_route_to_unknown(self):
+        # "camera" in the message → heuristic returns "other", never "unknown"
+        self.assertNotEqual(
+            HomeAssistantAgent._classify_action_heuristic("can you show snapshots from cameras?"),
+            "unknown",
+        )
+
+    # ── _list_cameras ────────────────────────────────────────────────────────
+
+    async def test_list_cameras_no_config(self):
+        agent = self._agent()
+        agent.ha_url = ""
+        result = await agent._list_cameras()
+        self.assertIn("not configured", result["result"])
+        self.assertEqual(result["cameras"], [])
+
+    async def test_list_cameras_empty(self):
+        agent = self._agent()
+        with patch("wactorz.agents.home_assistant_agent.get_camera_entities", new=AsyncMock(return_value=[])):
+            result = await agent._list_cameras()
+        self.assertIn("No camera", result["result"])
+        self.assertEqual(result["cameras"], [])
+
+    async def test_list_cameras_populated(self):
+        cameras = [
+            {"entity_id": "camera.front_door", "state": "idle", "friendly_name": "Front Door"},
+            {"entity_id": "camera.backyard", "state": "streaming", "friendly_name": "Backyard"},
+        ]
+        agent = self._agent()
+        with patch("wactorz.agents.home_assistant_agent.get_camera_entities", new=AsyncMock(return_value=cameras)):
+            result = await agent._list_cameras()
+        self.assertIn("2 camera", result["result"])
+        self.assertIn("camera.front_door", result["result"])
+        self.assertEqual(result["cameras"], cameras)
+
+    async def test_list_cameras_exception(self):
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_entities",
+            new=AsyncMock(side_effect=RuntimeError("offline")),
+        ):
+            result = await agent._list_cameras()
+        self.assertIn("offline", result["result"])
+        self.assertIn("error", result)
+
+    # ── _camera_snapshot ─────────────────────────────────────────────────────
+
+    async def test_camera_snapshot_no_config(self):
+        agent = self._agent()
+        agent.ha_url = ""
+        result = await agent._camera_snapshot("camera.front_door")
+        self.assertIn("not configured", result["result"])
+
+    async def test_camera_snapshot_missing_entity_id(self):
+        agent = self._agent()
+        result = await agent._camera_snapshot("")
+        self.assertIn("required", result["result"])
+
+    async def test_camera_snapshot_success(self):
+        snap = {"image_base64": "abc123", "content_type": "image/jpeg", "entity_id": "camera.front_door"}
+        agent = self._agent()
+        with patch("wactorz.agents.home_assistant_agent.get_camera_snapshot", new=AsyncMock(return_value=snap)):
+            result = await agent._camera_snapshot("camera.front_door")
+        self.assertIn("Snapshot captured", result["result"])
+        self.assertEqual(result["data"], snap)
+
+    async def test_camera_snapshot_error_from_ha(self):
+        snap = {"error": "HTTP 502", "status": 502, "detail": "", "entity_id": "camera.front_door"}
+        agent = self._agent()
+        with patch("wactorz.agents.home_assistant_agent.get_camera_snapshot", new=AsyncMock(return_value=snap)):
+            result = await agent._camera_snapshot("camera.front_door")
+        self.assertIn("502", result["result"])
+        self.assertIn("error", result)
+
+    # ── _camera_stream_url ───────────────────────────────────────────────────
+
+    async def test_camera_stream_url_no_config(self):
+        agent = self._agent()
+        agent.ha_url = ""
+        result = await agent._camera_stream_url("camera.backyard")
+        self.assertIn("not configured", result["result"])
+
+    async def test_camera_stream_url_missing_entity_id(self):
+        agent = self._agent()
+        result = await agent._camera_stream_url("")
+        self.assertIn("required", result["result"])
+
+    async def test_camera_stream_url_returns_all_sources(self):
+        streams_data = {
+            "entity_id": "camera.backyard",
+            "streams": {
+                "mjpeg_proxy": "http://ha.local:8123/api/camera_proxy_stream/camera.backyard",
+                "camera_source": "rtsp://192.168.1.10/stream",
+                "hls": "http://ha.local:8123/api/hls/abc/master.m3u8",
+            },
+            "capabilities": ["hls"],
+        }
+        agent = self._agent()
+        with patch("wactorz.agents.home_assistant_agent.get_camera_stream_urls", new=AsyncMock(return_value=streams_data)):
+            result = await agent._camera_stream_url("camera.backyard")
+        self.assertIn("mjpeg_proxy", result["result"])
+        self.assertIn("rtsp://", result["result"])
+        self.assertIn("hls", result["result"])
+        self.assertEqual(result["data"], streams_data)
+
+    # ── M2M dispatch via handle_message ─────────────────────────────────────
+
+    async def test_handle_message_dispatches_list_cameras(self):
+        agent = self._agent()
+        agent.send = AsyncMock()
+        agent._list_cameras = AsyncMock(return_value={"result": "2 cameras", "cameras": []})
+        agent._process = AsyncMock()
+
+        await agent.handle_message(
+            Message(MessageType.TASK, "sender", {"operation": "list_cameras"})
+        )
+        agent._list_cameras.assert_awaited_once()
+        agent._process.assert_not_awaited()
+        sent = agent.send.await_args.args[2]
+        self.assertIn("2 cameras", sent["result"])
+
+    async def test_handle_message_dispatches_camera_snapshot(self):
+        agent = self._agent()
+        agent.send = AsyncMock()
+        snap = {"result": "Snapshot captured", "data": {"image_base64": "x"}}
+        agent._camera_snapshot = AsyncMock(return_value=snap)
+        agent._process = AsyncMock()
+
+        await agent.handle_message(
+            Message(MessageType.TASK, "sender", {"operation": "get_camera_snapshot", "camera_entity_id": "camera.front_door"})
+        )
+        agent._camera_snapshot.assert_awaited_once_with("camera.front_door")
+        agent._process.assert_not_awaited()
+
+    async def test_handle_message_dispatches_camera_stream_url(self):
+        agent = self._agent()
+        agent.send = AsyncMock()
+        agent._camera_stream_url = AsyncMock(return_value={"result": "Stream URLs", "data": {}})
+        agent._process = AsyncMock()
+
+        await agent.handle_message(
+            Message(MessageType.TASK, "sender", {"operation": "get_camera_stream_url", "camera_entity_id": "camera.backyard"})
+        )
+        agent._camera_stream_url.assert_awaited_once_with("camera.backyard")
+        agent._process.assert_not_awaited()
+
+    # ── tool loop: list_camera_entities ─────────────────────────────────────
+
+    async def test_tool_loop_list_camera_entities(self):
+        cameras = [{"entity_id": "camera.front_door", "state": "idle", "friendly_name": "Front Door"}]
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[ToolCall(id="c1", name="list_camera_entities")],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="You have one camera: Front Door.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_entities",
+            new=AsyncMock(return_value=cameras),
+        ) as mock_list:
+            result = await agent._handle_other_request("what cameras do I have?")
+        mock_list.assert_awaited_once_with(agent.ha_url, agent.ha_token)
+        self.assertEqual(result["result"], "You have one camera: Front Door.")
+
+    async def test_tool_loop_list_camera_entities_cached(self):
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(id="c1", name="list_camera_entities"),
+                        ToolCall(id="c2", name="list_camera_entities"),
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Checked once.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_entities",
+            new=AsyncMock(return_value=[]),
+        ) as mock_list:
+            await agent._handle_other_request("list cameras twice")
+        mock_list.assert_awaited_once()
+
+    # ── tool loop: get_camera_snapshot ───────────────────────────────────────
+
+    async def test_tool_loop_snapshot_appends_base64_to_result(self):
+        snap = {
+            "image_base64": "BASE64DATA",
+            "content_type": "image/jpeg",
+            "entity_id": "camera.front_door",
+        }
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(id="c1", name="get_camera_snapshot", arguments={"camera_entity_id": "camera.front_door"})
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Snapshot captured for Front Door.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_snapshot",
+            new=AsyncMock(return_value=snap),
+        ) as mock_snap:
+            result = await agent._handle_other_request("show me the front door camera")
+        mock_snap.assert_awaited_once()
+        self.assertIn("Snapshot captured", result["result"])
+        self.assertIn("data:image/jpeg;base64,BASE64DATA", result["result"])
+
+    async def test_tool_loop_snapshot_error_not_appended(self):
+        snap = {"error": "HTTP 502", "status": 502, "detail": "", "entity_id": "camera.front_door"}
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(id="c1", name="get_camera_snapshot", arguments={"camera_entity_id": "camera.front_door"})
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="The camera returned an error.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch("wactorz.agents.home_assistant_agent.get_camera_snapshot", new=AsyncMock(return_value=snap)):
+            result = await agent._handle_other_request("show me the front door camera")
+        self.assertNotIn("base64", result["result"])
+        self.assertNotIn("data:image", result["result"])
+
+    # ── tool loop: get_camera_stream_url ─────────────────────────────────────
+
+    async def test_tool_loop_stream_url_returns_all_sources(self):
+        streams_data = {
+            "entity_id": "camera.backyard",
+            "streams": {
+                "mjpeg_proxy": "http://ha.local:8123/api/camera_proxy_stream/camera.backyard",
+                "hls": "http://ha.local:8123/api/hls/xyz/master.m3u8",
+            },
+            "capabilities": ["hls"],
+        }
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(id="c1", name="get_camera_stream_url", arguments={"camera_entity_id": "camera.backyard"})
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Here are your stream URLs.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_stream_urls",
+            new=AsyncMock(return_value=streams_data),
+        ) as mock_stream:
+            result = await agent._handle_other_request("give me stream urls for my backyard camera")
+        mock_stream.assert_awaited_once_with(agent.ha_url, agent.ha_token, "camera.backyard")
+        self.assertEqual(result["result"], "Here are your stream URLs.")
+
+    async def test_tool_loop_stream_url_error(self):
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(id="c1", name="get_camera_stream_url", arguments={"camera_entity_id": "camera.backyard"})
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Failed to get stream.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_stream_urls",
+            new=AsyncMock(side_effect=RuntimeError("ws error")),
+        ):
+            result = await agent._handle_other_request("stream url for camera.backyard")
+        self.assertIsNotNone(result["result"])
+
+    async def test_tool_loop_unsupported_tool_is_error(self):
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[ToolCall(id="c1", name="fly_to_moon")],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Cannot do that.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        result = await agent._handle_other_request("do something unsupported")
+        self.assertEqual(result["result"], "Cannot do that.")
+
+
 if __name__ == "__main__":
     unittest.main()

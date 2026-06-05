@@ -14,6 +14,7 @@ class _FakeHAWebSocketClient:
         self.calls = []
         self.responses = dict(_FakeHAWebSocketClient.responses)
         self.exceptions = dict(_FakeHAWebSocketClient.exceptions)
+        self.response_queues = {k: list(v) for k, v in _FakeHAWebSocketClient.response_queues.items()}
         _FakeHAWebSocketClient.instances.append(self)
 
     async def __aenter__(self):
@@ -22,24 +23,29 @@ class _FakeHAWebSocketClient:
     async def __aexit__(self, exc_type, exc, tb):
         return None
 
-    async def call(self, command: str):
+    async def call(self, command: str, **kwargs):
         self.calls.append(command)
         if command in self.exceptions:
             raise self.exceptions[command]
+        if command in self.response_queues and self.response_queues[command]:
+            return self.response_queues[command].pop(0)
         return self.responses.get(command)
 
 
 _FakeHAWebSocketClient.responses = {}
 _FakeHAWebSocketClient.exceptions = {}
+_FakeHAWebSocketClient.response_queues = {}
 
 
 class _FakeResponse:
-    def __init__(self, status=200, json_data=None, text_data="", headers=None, json_exc=None):
+    def __init__(self, status=200, json_data=None, text_data="", headers=None, json_exc=None, read_data=b""):
         self.status = status
         self._json_data = json_data
         self._text_data = text_data
         self.headers = headers or {"Content-Type": "application/json"}
         self._json_exc = json_exc
+        self._read_data = read_data
+        self.content_type = self.headers.get("Content-Type", "application/json")
 
     async def __aenter__(self):
         return self
@@ -54,6 +60,9 @@ class _FakeResponse:
 
     async def text(self):
         return self._text_data
+
+    async def read(self):
+        return self._read_data
 
 
 class _FakeClientSession:
@@ -104,6 +113,7 @@ def _reset_fakes():
     _FakeHAWebSocketClient.instances = []
     _FakeHAWebSocketClient.responses = {}
     _FakeHAWebSocketClient.exceptions = {}
+    _FakeHAWebSocketClient.response_queues = {}
     _FakeClientSession.instances = []
     _FakeClientSession.get_results = []
     _FakeClientSession.post_results = []
@@ -808,6 +818,253 @@ class HomeAssistantHelperLiveContextTest(unittest.IsolatedAsyncioTestCase):
         self._set_live_context_responses(exposed={"switch.hidden": {"conversation": False}})
         no_entities = await ha_helper.get_live_context("http://ha.local:8123", "token")
         self.assertEqual(no_entities, {"success": False, "error": "No entities found"})
+
+
+class HomeAssistantHelperCameraTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        _reset_fakes()
+        self.ws_patch = patch(
+            "wactorz.core.integrations.home_assistant.ha_helper.HAWebSocketClient",
+            _FakeHAWebSocketClient,
+        )
+        self.session_patch = patch(
+            "wactorz.core.integrations.home_assistant.ha_helper.aiohttp.ClientSession",
+            _FakeClientSession,
+            create=True,
+        )
+        self.client_error_patch = patch(
+            "wactorz.core.integrations.home_assistant.ha_helper.aiohttp.ClientError",
+            _FakeClientError,
+            create=True,
+        )
+        self.ws_patch.start()
+        self.session_patch.start()
+        self.client_error_patch.start()
+        self.addCleanup(self.ws_patch.stop)
+        self.addCleanup(self.session_patch.stop)
+        self.addCleanup(self.client_error_patch.stop)
+
+    async def test_get_camera_entities_filters_camera_prefix(self):
+        _FakeHAWebSocketClient.responses = {
+            "get_states": [
+                {"entity_id": "camera.front_door", "state": "idle", "attributes": {"friendly_name": "Front Door"}},
+                {"entity_id": "camera.backyard", "state": "streaming", "attributes": {}},
+                {"entity_id": "light.kitchen", "state": "on", "attributes": {"friendly_name": "Kitchen"}},
+                {"entity_id": "sensor.temp", "state": "21.5", "attributes": {}},
+            ]
+        }
+
+        result = await ha_helper.get_camera_entities("http://ha.local:8123", "token")
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], {"entity_id": "camera.front_door", "state": "idle", "friendly_name": "Front Door"})
+        self.assertEqual(result[1], {"entity_id": "camera.backyard", "state": "streaming", "friendly_name": None})
+        client = _FakeHAWebSocketClient.instances[0]
+        self.assertEqual(client.calls, ["get_states"])
+
+    async def test_get_camera_entities_empty_when_no_cameras(self):
+        _FakeHAWebSocketClient.responses = {
+            "get_states": [
+                {"entity_id": "light.kitchen", "state": "on", "attributes": {}},
+            ]
+        }
+        result = await ha_helper.get_camera_entities("ws://ha.local", "token")
+        self.assertEqual(result, [])
+
+    def test_get_camera_stream_url_pure_function(self):
+        url = ha_helper.get_camera_stream_url("http://ha.local:8123", "camera.front_door")
+        self.assertEqual(url, "http://ha.local:8123/api/camera_proxy_stream/camera.front_door")
+
+        url_https = ha_helper.get_camera_stream_url("https://ha.example.com", "camera.backyard")
+        self.assertEqual(url_https, "https://ha.example.com/api/camera_proxy_stream/camera.backyard")
+
+    async def test_get_camera_snapshot_success(self):
+        import base64
+        image_bytes = b"\xff\xd8\xff" + b"\x00" * 10  # minimal fake JPEG
+        _FakeClientSession.get_results = [
+            _FakeResponse(
+                status=200,
+                headers={"Content-Type": "image/jpeg"},
+                read_data=image_bytes,
+            )
+        ]
+
+        result = await ha_helper.get_camera_snapshot("http://ha.local:8123", "token", "camera.front_door")
+
+        self.assertEqual(result["entity_id"], "camera.front_door")
+        self.assertEqual(result["content_type"], "image/jpeg")
+        self.assertEqual(result["image_base64"], base64.b64encode(image_bytes).decode("ascii"))
+        self.assertNotIn("error", result)
+        session = _FakeClientSession.instances[0]
+        self.assertEqual(session.get_calls[0][0], "http://ha.local:8123/api/camera_proxy/camera.front_door")
+        self.assertEqual(session.get_calls[0][1]["headers"]["Authorization"], "Bearer token")
+
+    async def test_get_camera_snapshot_http_error_returns_error_dict(self):
+        _FakeClientSession.get_results = [
+            _FakeResponse(status=404, text_data="404: Not Found")
+        ]
+
+        result = await ha_helper.get_camera_snapshot("http://ha.local:8123", "token", "camera.missing")
+
+        self.assertEqual(result["entity_id"], "camera.missing")
+        self.assertEqual(result["error"], "HTTP 404")
+        self.assertEqual(result["status"], 404)
+        self.assertIn("Not Found", result["detail"])
+        self.assertNotIn("image_base64", result)
+
+    async def test_get_camera_snapshot_http_error_no_body(self):
+        _FakeClientSession.get_results = [
+            _FakeResponse(status=503, text_data="")
+        ]
+
+        result = await ha_helper.get_camera_snapshot("http://ha.local:8123", "token", "camera.offline")
+
+        self.assertEqual(result["error"], "HTTP 503")
+        self.assertEqual(result["status"], 503)
+        self.assertEqual(result["detail"], "")
+
+    async def test_get_camera_snapshot_exception_returns_error_dict(self):
+        _FakeClientSession.get_results = [_FakeClientError("network timeout")]
+
+        result = await ha_helper.get_camera_snapshot("http://ha.local:8123", "token", "camera.front_door")
+
+        self.assertEqual(result["entity_id"], "camera.front_door")
+        self.assertIn("error", result)
+        self.assertNotIn("image_base64", result)
+
+    async def test_get_camera_stream_urls_mjpeg_always_present(self):
+        # No REST session, no WS capabilities
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("unsupported")}
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.front_door")
+
+        self.assertEqual(result["entity_id"], "camera.front_door")
+        self.assertIn("mjpeg_proxy", result["streams"])
+        self.assertEqual(
+            result["streams"]["mjpeg_proxy"],
+            "http://ha.local:8123/api/camera_proxy_stream/camera.front_door",
+        )
+
+    async def test_get_camera_stream_urls_404_camera_source_silently_skipped(self):
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("no ws")}
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.x")
+
+        self.assertNotIn("camera_source", result["streams"])
+        self.assertEqual(list(result["streams"].keys()), ["mjpeg_proxy"])
+
+    async def test_get_camera_stream_urls_camera_source_plain_text(self):
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("no ws")}
+        _FakeClientSession.get_results = [
+            _FakeResponse(status=200, text_data="rtsp://cam.local/stream\n")
+        ]
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.x")
+
+        self.assertEqual(result["streams"]["camera_source"], "rtsp://cam.local/stream")
+        session = _FakeClientSession.instances[0]
+        self.assertEqual(
+            session.get_calls[0][0],
+            "http://ha.local:8123/api/camera_stream_source/camera.x",
+        )
+
+    async def test_get_camera_stream_urls_ws_hls_absolute_url(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.response_queues = {
+            "camera/capabilities": [{"frontend_stream_types": ["hls"]}],
+            "camera/stream": [{"url": "http://ha.local:8123/api/hls/abc123/index.m3u8"}],
+        }
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.front_door")
+
+        self.assertIn("hls", result["streams"])
+        self.assertEqual(result["streams"]["hls"], "http://ha.local:8123/api/hls/abc123/index.m3u8")
+        self.assertEqual(result["capabilities"], ["hls"])
+
+    async def test_get_camera_stream_urls_ws_relative_url_resolved(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.response_queues = {
+            "camera/capabilities": [{"frontend_stream_types": ["hls"]}],
+            "camera/stream": [{"url": "/api/hls/relative/index.m3u8"}],
+        }
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.back")
+
+        self.assertEqual(result["streams"]["hls"], "http://ha.local:8123/api/hls/relative/index.m3u8")
+
+    async def test_get_camera_stream_urls_web_rtc_skipped_for_stream_call(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.response_queues = {
+            "camera/capabilities": [{"frontend_stream_types": ["hls", "web_rtc"]}],
+            "camera/stream": [{"url": "http://ha.local/hls.m3u8"}],
+        }
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.x")
+
+        client = _FakeHAWebSocketClient.instances[0]
+        stream_calls = [c for c in client.calls if c == "camera/stream"]
+        self.assertEqual(len(stream_calls), 1, "web_rtc must not trigger a camera/stream call")
+        self.assertIn("hls", result["streams"])
+        self.assertNotIn("web_rtc", result["streams"])
+        self.assertIn("web_rtc", result["capabilities"])
+
+    async def test_get_camera_stream_urls_all_sources_combined(self):
+        _FakeClientSession.get_results = [
+            _FakeResponse(status=200, text_data="rtsp://cam.local/stream")
+        ]
+        _FakeHAWebSocketClient.response_queues = {
+            "camera/capabilities": [{"frontend_stream_types": ["hls"]}],
+            "camera/stream": [{"url": "/api/hls/abc.m3u8"}],
+        }
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.combo")
+
+        self.assertEqual(set(result["streams"].keys()), {"mjpeg_proxy", "camera_source", "hls"})
+        self.assertEqual(result["streams"]["camera_source"], "rtsp://cam.local/stream")
+        self.assertEqual(result["streams"]["hls"], "http://ha.local:8123/api/hls/abc.m3u8")
+
+    async def test_get_camera_stream_urls_ws_capabilities_exception_skipped(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("WS error")}
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.x")
+
+        self.assertEqual(result["capabilities"], [])
+        self.assertEqual(list(result["streams"].keys()), ["mjpeg_proxy"])
+
+    async def test_get_camera_stream_urls_ws_stream_format_exception_skipped(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.response_queues = {
+            "camera/capabilities": [{"frontend_stream_types": ["hls"]}],
+        }
+        _FakeHAWebSocketClient.exceptions = {"camera/stream": RuntimeError("format error")}
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.x")
+
+        self.assertNotIn("hls", result["streams"])
+        self.assertEqual(list(result["streams"].keys()), ["mjpeg_proxy"])
+
+    async def test_get_camera_stream_urls_ws_url_normalised(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("skip")}
+
+        await ha_helper.get_camera_stream_urls("https://ha.example.com", "token", "camera.x")
+
+        ws_client = _FakeHAWebSocketClient.instances[0]
+        self.assertEqual(ws_client.ws_url, "wss://ha.example.com/api/websocket")
+
+    async def test_get_camera_stream_urls_rest_url_normalised(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("skip")}
+
+        result = await ha_helper.get_camera_stream_urls("wss://ha.example.com/api/websocket", "token", "camera.x")
+
+        self.assertEqual(
+            result["streams"]["mjpeg_proxy"],
+            "https://ha.example.com/api/camera_proxy_stream/camera.x",
+        )
 
 
 if __name__ == "__main__":

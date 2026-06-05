@@ -369,7 +369,7 @@ class HomeAssistantAgent(LLMAgent):
         }
 
 
-    # ── Camera direct handlers (M2M) ─────────────────────────────────────────
+    # ── Camera direct handlers (A2A) ─────────────────────────────────────────
 
     async def _list_cameras(self) -> dict[str, Any]:
         if not self.ha_url or not self.ha_token:

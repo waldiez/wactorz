@@ -1270,7 +1270,7 @@ class HomeAssistantAgentCameraTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("hls", result["result"])
         self.assertEqual(result["data"], streams_data)
 
-    # ── M2M dispatch via handle_message ─────────────────────────────────────
+    # ── A2A dispatch via handle_message ─────────────────────────────────────
 
     async def test_handle_message_dispatches_list_cameras(self):
         agent = self._agent()

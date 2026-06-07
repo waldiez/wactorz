@@ -256,6 +256,116 @@ def _build_catalog() -> dict:
         }
         logger.info("[catalog] Loaded manual-agent recipe")
 
+    # ── maddpg-fleet ───────────────────────────────────────────────────
+    code = _load_recipe("maddpg_fleet_agent.py")
+    if code:
+        catalog["maddpg-fleet"] = {
+            "name":         "maddpg-fleet",
+            "type":         "dynamic",
+            "description":  "Deploys the trained MADDPG OfficeMedium policy as a fleet of per-zone inference agents (one per zone). Inference only — loads model.pt + normalizer.npz, no retraining.",
+            "capabilities": ["sinergym", "maddpg", "rl_inference", "multi_agent",
+                             "building_control", "energy_optimization"],
+            "install":      ["torch", "numpy", "aiomqtt"],
+            "input_schema": {
+                "action":          "str  — launch | stop | status",
+                "env_id":          "str  — Sinergym env ID (must match the bridge)",
+                "model_path":      "str  — absolute path to trained model.pt",
+                "normalizer_path": "str  — absolute path to normalizer.npz",
+                "zones":           "list — optional explicit zone names in bridge order",
+                "info_timeout":    "float — seconds to wait for env_info, default 30",
+                "infer_dir":       "str  — dir holding maddpg_infer.py; default = model.pt dir",
+            },
+            "output_schema": {
+                "ok":       "bool",
+                "children": "list — spawned zone agent names",
+                "zones":    "list",
+                "message":  "str",
+            },
+            "poll_interval": 3600,
+            "code":          code,
+        }
+        logger.info("[catalog] Loaded maddpg-fleet recipe")
+        
+    code = _load_recipe("sinergym_hsml_agent.py")
+    if code:
+        catalog["sinergym-hsml"] = {
+            "name":         "sinergym-hsml",
+            "type":         "dynamic",
+            "description":  "Answers natural-language questions about the Sinergym "
+                            "simulation (agent decisions, setpoints, zone temperatures, "
+                            "occupancy, outdoor conditions) by generating SPARQL over the "
+                            "Fuseki/HSML store and replying in plain language.",
+            "capabilities": ["sinergym", "fuseki", "sparql", "question_answering",
+                            "hsml", "provenance", "building_analytics"],
+            "install":      [],   # uses stdlib urllib + main's LLM provider
+            "input_schema": {
+                "question":        "str — a plain-English question about the building",
+                "action":          "str — optional: refresh | config",
+                "fuseki_url":      "str — optional override (default host.docker.internal:3030)",
+                "fuseki_dataset":  "str — optional (default 'sinergym')",
+                "fuseki_user":     "str — optional",
+                "fuseki_password": "str — optional",
+            },
+            "output_schema": {
+                "ok":     "bool",
+                "answer": "str — natural-language answer",
+                "sparql": "str — the query that was run (for transparency)",
+                "rows":   "int — number of result rows",
+            },
+            "poll_interval": 3600,
+            "code":          code,
+        }
+        logger.info("[catalog] Loaded sinergym-hsml recipe")
+        
+    code = _load_recipe("sinergym_schema_agent.py")
+    if code:
+      catalog["sinergym-schema"] = {
+          "name":         "sinergym-schema",
+          "type":         "dynamic",
+          "description":  "Authoritative map of the Sinergym I/O layout: which "
+                          "observation index is which variable, per-zone observation "
+                          "indices, action variables and their bounds, reward "
+                          "components, and info-dict keys. Consult this agent before "
+                          "interpreting raw obs/action arrays from MQTT or Fuseki.",
+          "capabilities": ["sinergym", "schema", "observation_layout",
+                           "observation_indices", "action_space", "reward_components",
+                           "introspection", "metadata"],
+          "install":      [],   # stdlib only; learns the schema from env_info
+          "input_schema": {
+              "action": "str — optional: obs | zone | actions | reward | info",
+              "zone":   "str — zone name (with action 'zone')",
+              "text":   "str — or a plain question, e.g. 'what is obs index 12?'",
+              "env_id": "str — optional, which env to listen to",
+          },
+          "output_schema": {"answer": "str — the requested schema info"},
+          "poll_interval": 3600,
+          "code":          code,
+      }
+      logger.info("[catalog] Loaded sinergym-schema recipe")
+
+
+    code = _load_recipe("sinergym_labeler_agent.py")
+    if code:
+        catalog["sinergym-labeler"] = {
+            "name":         "sinergym-labeler",
+            "type":         "dynamic",
+            "description":  "Republishes Sinergym observations as name-keyed dicts on "
+                            "MQTT (sinergym/env/officeMedium-multiagent/observation/labeled) so other agents can read obs "
+                            "by variable name instead of array index. Pure data-plane; "
+                            "no task delegation needed.",
+            "capabilities": ["sinergym", "observation", "labeled_observation",
+                            "mqtt", "schema", "data_plane"],
+            "install":      [],
+            "input_schema": {
+                "env_id": "str — optional, which env to label",
+                "action": "str — optional: status",
+            },
+            "output_schema": {"status": "str"},
+            "poll_interval": 3600,
+            "code":          code,
+        }
+        logger.info("[catalog] Loaded sinergym-labeler recipe")
+
     return catalog
 
 

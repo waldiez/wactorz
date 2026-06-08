@@ -111,14 +111,12 @@ pip show sinergym        # expect: Version: 3.11.0
 ## 4. File placement map
 
 ### 4a. Inside the Sinergym container (workspace, next to `register_env.py`)
-| File | Purpose |
-|---|---|
-| `ASHRAE901_OfficeMedium_STD2019_Denver_MultiAgent.epJSON` | the 15-zone building model |
-| `officeMedium_multiagent.yaml` | Sinergym env definition |
-| `register_env.py` | builds the training-parity env (`make_custom_env`) |
-| `sinergym_bridge_anomalies.py` | **the bridge** (patched `sinergym_bridge_mas.py`) |
-| `anomaly_injector.py` | imported by the bridge when `--inject-anomalies` |
-| `maddpg_v3.py`, `maddpg_v2.py`, `ensemble_controller.py` | imported by the bridge for the **Custom Reward** + eval metrics |
+| File | Purpose | Location |
+|---|---|---|
+| `ASHRAE901_OfficeMedium_STD2019_Denver_MultiAgent.epJSON` | the 15-zone building model | sinergym docker - /sinergym/data/buildings/ |
+| `officeMedium_multiagent.yaml` | Sinergym env definition | sinergym docker - /sinergym/data/default_configuration/ |
+| `register_env.py` | builds the training-parity env (`make_custom_env`) | outside the folders |
+| `sinergym_bridge_anomalies.py` | **the bridge** (patched `sinergym_bridge_mas.py`) | outside the folders next to  `sinergym_bridge_anomalies.py`|
 
 > The bridge run command below uses the name `sinergym_bridge_anomalies.py`. That is the
 > patched bridge — rename `sinergym_bridge_mas.py` to that, or adjust the command.
@@ -403,7 +401,7 @@ don't exist for 24.1.0. Apply the §3b edits (drop suffix, use `Ubuntu22.04`).
 Optionally pass `"infer_dir":"…/state/maddpg_office"` in the launch payload.
 
 **`[CUSTOM-REWARD] Disabled (could not import training code)`**
-The bridge couldn't import `maddpg_v3` / `maddpg_v2` / `ensemble_controller`. Place them in
+The bridge couldn't import `maddpg_v3`. Place them in
 the container next to `register_env.py`. Without them the run still works — it just omits the
 Custom Reward and per-month lines.
 

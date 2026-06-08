@@ -835,10 +835,10 @@ async def _fetch_ha_entities(agent):
     Used to inject the right entity IDs into the LLM system prompt — without this
     the planner uses a hardcoded entity that may not exist on this network."""
     import os, aiohttp
-    ha_url   = os.environ.get("HA_URL")   or "http://192.168.0.105:8123"
+    ha_url   = (os.environ.get("HA_URL") or "").strip()
     ha_token = os.environ.get("HA_TOKEN")
-    if not ha_token:
-        await agent.log("HA_TOKEN not set — skipping entity discovery", level="warning")
+    if not ha_url or not ha_token:
+        await agent.log("HA_URL or HA_TOKEN not set — skipping entity discovery", level="warning")
         return {"lights": [], "switches": []}
     headers = {"Authorization": f"Bearer {ha_token}"}
     try:
@@ -875,10 +875,10 @@ async def _ha_call(agent, payload):
     if not service or "." not in service:
         raise ValueError("ha requires 'service' like 'light.turn_on'")
     domain, action = service.split(".", 1)
-    ha_url   = os.environ.get("HA_URL")   or "http://192.168.0.105:8123"
+    ha_url   = (os.environ.get("HA_URL") or "").strip()
     ha_token = os.environ.get("HA_TOKEN")
-    if not ha_token:
-        raise RuntimeError("HA_TOKEN not set in environment")
+    if not ha_url or not ha_token:
+        raise RuntimeError("HA_URL or HA_TOKEN not set in environment")
     url = f"{ha_url.rstrip('/')}/api/services/{domain}/{action}"
     body = {}
     if entity_id:

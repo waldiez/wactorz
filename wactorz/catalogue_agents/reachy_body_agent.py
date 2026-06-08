@@ -128,12 +128,11 @@ async def setup(agent):
     # Lite:     daemon runs on localhost (you started it manually).
     # NO HF App may be active on the robot — Apps own it exclusively.
     # ---- Build connection attempt ladder ----
-    # media_backend defaults to "no_media": we drive motion only, so opening the
-    # WebRTC/GStreamer media manager just burns CPU and causes audio-device
-    # contention on Windows (see GStreamer "send failed because receiver is gone"
-    # errors). Override by publishing {"media_backend": "auto"} to
-    # custom/reachy/config + restart if you ever need camera/mic from this agent.
-    media_backend = agent.recall("media_backend") or "no_media"
+    # media_backend defaults to "" (SDK default) so the audio system is
+    # initialized and the say command can play through Reachy's speaker.
+    # Set to "no_media" via custom/reachy/config + restart if you hit
+    # GStreamer audio-device contention on Windows and don't need the speaker.
+    media_backend = agent.recall("media_backend") or ""
     agent.state["media_backend"] = media_backend
 
     mini = None
@@ -877,37 +876,47 @@ async def _say(agent, payload):
             pass
 
     # -- Play through the robot's speaker --
-    # Try raw-bytes methods first (most reliable across SDK versions).
-    for method_name in ("play_audio", "play_sound", "play_mp3"):
-        fn = getattr(mini, method_name, None)
-        if fn is None:
-            # Some SDK versions nest audio under mini.audio.*
-            audio_obj = getattr(mini, "audio", None)
-            if audio_obj is not None:
-                fn = getattr(audio_obj, "play", None) or getattr(audio_obj, method_name, None)
-        if fn is None:
-            continue
-        try:
-            await _do(fn, audio_bytes)
-            return {"said": text, "voice": voice}
-        except Exception:
-            continue
+    # Search on mini directly, then on known sub-objects where the SDK nests audio.
+    # media_manager / media / audio are the common containers across SDK versions.
+    sub_objects = [mini]
+    for attr in ("media_manager", "_media_manager", "media", "_media", "audio", "_audio"):
+        obj = getattr(mini, attr, None)
+        if obj is not None:
+            sub_objects.append(obj)
+
+    for obj in sub_objects:
+        for method_name in ("play_audio", "play_sound", "play_mp3", "play"):
+            fn = getattr(obj, method_name, None)
+            if fn is None:
+                continue
+            try:
+                await _do(fn, audio_bytes)
+                return {"said": text, "voice": voice}
+            except Exception:
+                continue
 
     # Fallback: built-in TTS (some SDK versions handle synthesis on-robot).
-    for method_name in ("say", "speak"):
-        fn = getattr(mini, method_name, None)
-        if fn is None:
-            continue
-        try:
-            await _do(fn, text)
-            return {"said": text, "voice": "sdk-builtin"}
-        except Exception:
-            continue
+    for obj in sub_objects:
+        for method_name in ("say", "speak"):
+            fn = getattr(obj, method_name, None)
+            if fn is None:
+                continue
+            try:
+                await _do(fn, text)
+                return {"said": text, "voice": "sdk-builtin"}
+            except Exception:
+                continue
 
+    hint = (
+        " media_backend is 'no_media' — publish {\"media_backend\": \"\"} to "
+        "custom/reachy/config and restart to enable audio."
+        if agent.state.get("media_backend") == "no_media" else
+        " Check your reachy-mini SDK version."
+    )
     raise RuntimeError(
         "Reachy SDK exposes no audio playback method "
-        "(tried play_audio, play_sound, play_mp3, mini.audio.play, say, speak). "
-        "Check your reachy-mini SDK version."
+        "(tried play_audio, play_sound, play_mp3, play, say, speak on mini and media sub-objects)."
+        + hint
     )
 
 

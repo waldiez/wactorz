@@ -183,6 +183,21 @@ async def setup(agent):
         )
     else:
         agent.state["mini"] = mini
+        # Report where speech will come out: only the WebRTC backend reaches the
+        # robot speaker (play_sound -> daemon). LOCAL/gstreamer plays on this host.
+        try:
+            _audio = getattr(getattr(mini, "media", None), "audio", None)
+            _on_robot = bool(getattr(_audio, "daemon_url", None))
+            agent.state["audio_on_robot"] = _on_robot
+            if _on_robot:
+                await agent.log("Audio routes to the ROBOT speaker (WebRTC backend).")
+            else:
+                await agent.log(
+                    "Audio will play on THIS HOST, not the robot. For robot "
+                    'speech publish {"media_backend": "webrtc"} to '
+                    "custom/reachy/config and restart.", level="warning")
+        except Exception:
+            pass
 
     # ---- Discover HA entities so the LLM uses the right IDs ----
     # Without this the planner falls back to a hardcoded entity_id that may not
@@ -910,11 +925,27 @@ async def _say(agent, payload):
     media = getattr(mini, "media", None) or getattr(mini, "media_manager", None)
     if media is None:
         raise RuntimeError("reachy SDK exposes no media manager (mini.media)")
-    if getattr(media, "audio", None) is None:
+    audio = getattr(media, "audio", None)
+    if audio is None:
         raise RuntimeError(
             "reachy audio backend is not initialized — media_backend is "
             f"'{agent.state.get('media_backend') or 'default'}'. Publish "
             '{"media_backend": ""} to custom/reachy/config and restart the agent.'
+        )
+
+    # Where will the sound come out? Only the WebRTC backend routes to the ROBOT
+    # speaker (play_sound uploads the file and calls the daemon's
+    # /api/media/play_sound). The LOCAL/gstreamer backend plays on THIS host's
+    # speakers. Detect via the daemon_url the WebRTC client carries.
+    daemon_url = getattr(audio, "daemon_url", None) or getattr(media, "_daemon_url", None)
+    plays_on_robot = bool(daemon_url)
+    if not plays_on_robot:
+        await agent.log(
+            "say will play on the HOST machine, not the robot — this backend "
+            f"('{agent.state.get('media_backend') or 'default'}') uses local "
+            'audio. Publish {"media_backend": "webrtc"} to custom/reachy/config '
+            "and restart so play_sound routes to the robot's speaker.",
+            level="warning",
         )
 
     # Voice precedence: explicit payload voice > script auto-detect > configured default.
@@ -966,7 +997,9 @@ async def _say(agent, payload):
     agent.state["_say_tmp"] = play_path
 
     return {"said": text, "voice": voice, "attenuation_db": attenuation_db,
-            "boosted": play_path != raw_path}
+            "boosted": play_path != raw_path,
+            "on_robot": plays_on_robot,
+            "output": "robot" if plays_on_robot else "host (set media_backend=webrtc)"}
 
 
 async def _boost_audio(agent, src_path, attenuation_db=0.0):

@@ -139,9 +139,18 @@ async def setup(agent):
     last_err = None
     attempts = []
     base = {"media_backend": media_backend} if media_backend else {}
+    # For a Wireless robot the speaker lives on the robot's board, reachable only
+    # via the WebRTC backend over the network (a stray localhost daemon would give
+    # the LOCAL backend -> host speakers). So when webrtc is requested, try the
+    # network connection FIRST so play_sound routes to the robot.
+    prefer_network = str(media_backend).lower() == "webrtc"
     if robot_host:
+        if prefer_network:
+            attempts.append({**base, "host": robot_host, "connection_mode": "network"})
         attempts.append({**base, "host": robot_host})                                 # explicit host pin
         attempts.append({**base, "host": robot_host, "connection_mode": "network"})
+    if prefer_network:
+        attempts.append({**base, "connection_mode": "network"})                        # network first for webrtc
     attempts.append({**base})                                                          # autodetect (default)
     attempts.append({**base, "connection_mode": "network"})                            # force network mode
 

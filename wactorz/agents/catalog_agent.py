@@ -365,6 +365,32 @@ def _build_catalog() -> dict:
             "code":          code,
         }
         logger.info("[catalog] Loaded sinergym-labeler recipe")
+    
+    code = _load_recipe("sinergym_anomaly_agent.py")
+    if code:
+        catalog["sinergym-anomaly"] = {
+            "name":         "sinergym-anomaly",
+            "type":         "dynamic",
+            "description":  "Live anomaly detection on the Sinergym observation stream "
+                            "using a pre-trained forecast detector. Subscribes to the "
+                            "global obs topic, flags hvac_fault / sensor_drift (and occ / "
+                            "weather) events, publishes alerts on .../anomaly, and records "
+                            "them in Fuseki with provenance for precision/recall analysis.",
+            "capabilities": ["sinergym", "anomaly_detection", "fault_detection",
+                            "monitoring", "forecast", "hvac_fault", "sensor_drift"],
+            "install":      ["torch", "numpy"],   # detector requires PyTorch
+            "input_schema": {
+                "action":        "str — optional: status | reset | config",
+                "detector_path": "str — path to the trained .pkl",
+                "infer_dir":     "str — dir containing forecast_anomaly_detector.py + .pkl",
+                "env_id":        "str — optional",
+                "fuseki_url":    "str — optional",
+            },
+            "output_schema": {"status": "str"},
+            "poll_interval": 3600,
+            "code":          code,
+        }
+        logger.info("[catalog] Loaded sinergym-anomaly recipe")
 
     return catalog
 

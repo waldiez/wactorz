@@ -44,6 +44,7 @@ G_ZONES = "urn:sinergym:zones"
 G_OBS   = "urn:sinergym:observations"
 G_EPS   = "urn:sinergym:episodes"
 G_HOURLY= "urn:sinergym:hourly"
+G_ANOM  = "urn:sinergym:anomalies"
 
 PREFIXES = (
     "PREFIX sgy: <" + SGY_NS + ">\n"
@@ -146,6 +147,19 @@ async def _discover(agent, cfg):
         eps = await _query(cfg, PREFIXES +
             f"SELECT DISTINCT ?e WHERE {{ GRAPH <{G_ZONES}> {{ ?s sgy:episode ?e }} }} ORDER BY ?e")
         ctx["episodes"] = [r["e"] for r in eps if r.get("e")]
+
+        # Anomaly alerts graph (written by sinergym-anomaly). Discover its
+        # predicates + count so the LLM can answer "what anomalies fired".
+        try:
+            ap = await _query(cfg, PREFIXES +
+                f"SELECT DISTINCT ?p WHERE {{ GRAPH <{G_ANOM}> {{ ?s a sgy:Alert ; ?p ?o }} }}")
+            ctx["anomaly_predicates"] = sorted({_pfx(r["p"]) for r in ap if r.get("p")})
+            ac = await _query(cfg, PREFIXES +
+                f"SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{G_ANOM}> {{ ?s a sgy:Alert }} }}")
+            ctx["anomaly_count"] = ac[0].get("n") if ac else "0"
+        except Exception:
+            ctx["anomaly_predicates"] = []
+            ctx["anomaly_count"] = "0"
     except Exception as e:
         agent.log(f"schema discovery failed: {e}", level="warning")
     return ctx
@@ -163,6 +177,7 @@ DATASET / NAMED GRAPHS (always wrap patterns in the right GRAPH block):
   <{G_OBS}>          global per-step observation (whole-building / outdoor)
   <{G_EPS}>          episode metadata
   <{G_HOURLY}>       downsampled hourly averages of old episodes
+  <{G_ANOM}>         detected anomaly alerts, type sgy:Alert ({ctx.get('anomaly_count', '0')} so far)
 
 ZONE-STEP predicates actually present in <{G_ZONES}> (use these EXACTLY, with their
 namespace prefix — note prov:/rdfs: are NOT sgy:):
@@ -177,6 +192,13 @@ namespace prefix — note prov:/rdfs: are NOT sgy:):
 GLOBAL-OBS predicates present in <{G_OBS}> (use these EXACTLY):
   {', '.join(ctx.get('obs_predicates', [])) or '(unknown)'}
   (e.g. sgy:outdoorTemperature, sgy:outdoorHumidity, sgy:windSpeed, sgy:step, sgy:episode)
+
+ANOMALY-ALERT predicates present in <{G_ANOM}> (type sgy:Alert):
+  {', '.join(ctx.get('anomaly_predicates', [])) or '(none yet)'}
+  Meaning: sgy:step / sgy:episode (xsd:integer), sgy:kindGuess (e.g. "hvac_fault",
+  "sensor_drift"), sgy:severity (decimal), sgy:zoneIndex (int, optional),
+  sgy:sources / sgy:message (strings), sgy:detector (string),
+  prov:wasAttributedTo -> the detector agent IRI.
 
 AGENTS — each declared in <{G_ZONES}> as:
   ?agent rdf:type prov:SoftwareAgent ; rdfs:label "<name>" ;
@@ -219,6 +241,20 @@ SELECT DISTINCT ?agent ?name WHERE {{
   }}
 }}
 
+# What anomalies were detected (optionally filter by kind or episode):
+SELECT ?step ?episode ?kind ?severity ?zone WHERE {{
+  GRAPH <{G_ANOM}> {{
+    ?a a sgy:Alert ; sgy:step ?step ; sgy:episode ?episode ;
+       sgy:kindGuess ?kind ; sgy:severity ?severity .
+    OPTIONAL {{ ?a sgy:zoneIndex ?zone }}
+  }}
+}} ORDER BY ?episode ?step LIMIT 200
+
+# Count detected anomalies by kind:
+SELECT ?kind (COUNT(*) AS ?n) WHERE {{
+  GRAPH <{G_ANOM}> {{ ?a a sgy:Alert ; sgy:kindGuess ?kind }}
+}} GROUP BY ?kind
+
 RULES:
   - Data is SAMPLED every 3rd step, so exact step numbers may not exist; prefer a
     range filter (FILTER(?step >= A && ?step <= B)) or ORDER BY + LIMIT over exact match.
@@ -227,6 +263,7 @@ RULES:
     This ALWAYS works. The 'a prov:SoftwareAgent ; sgy:controlsZone' declaration may be ABSENT,
     so do NOT rely on it; treat rdfs:label as OPTIONAL.
   - Outdoor / whole-building values are in <{G_OBS}>, NOT in the per-zone graph.
+  - Detected anomalies / alerts / faults are in <{G_ANOM}> (type sgy:Alert), NOT the zones graph.
   - Use prov: and rdfs: prefixes for those predicates — never sgy:wasAttributedTo / sgy:label.
 """
 

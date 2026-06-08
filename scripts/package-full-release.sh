@@ -82,7 +82,7 @@ cp scripts/package-release.sh       "${WORK_DIR}/scripts/package-release.sh"
 cp scripts/package-full-release.sh  "${WORK_DIR}/scripts/package-full-release.sh"
 cp scripts/package-native.sh        "${WORK_DIR}/scripts/package-native.sh"
 cp scripts/build-native.sh          "${WORK_DIR}/scripts/build-native.sh"
-cp .env.example                     "${WORK_DIR}/.env.example"
+cp .env.template                     "${WORK_DIR}/.env.template"
 
 # Native-mode infrastructure
 cp compose.native.yaml                    "${WORK_DIR}/compose.native.yaml"
@@ -101,7 +101,7 @@ cat > "${WORK_DIR}/compose.release.yaml" << 'COMPOSEYAML'
 # Wactorz — quick deploy (pre-built linux/amd64 image, no Rust compile)
 #
 # 1. docker load < wactorz-server.tar.gz
-# 2. cp .env.example .env  &&  edit .env
+# 2. cp .env.template .env  &&  edit .env
 # 3. docker compose -f compose.release.yaml up -d
 #
 name: wactorz
@@ -248,7 +248,7 @@ fi
 
 # ── Environment ───────────────────────────────────────────────────────────────
 banner "Configuring environment…"
-[ -f .env ] || { cp .env.example .env; echo "  Created .env from template."; }
+[ -f .env ] || { cp .env.template .env; echo "  Created .env from template."; }
 
 get_env() { grep -E "^${1}=" .env 2>/dev/null | cut -d= -f2- || true; }
 set_env() {
@@ -332,14 +332,14 @@ The wizard will ask:
 
 ```bash
 docker load < wactorz-server.tar.gz
-cp .env.example .env && nano .env     # set LLM_API_KEY
+cp .env.template .env && nano .env     # set LLM_API_KEY
 docker compose -f compose.release.yaml up -d
 ```
 
 ### B) Build from source
 
 ```bash
-cp .env.example .env && nano .env
+cp .env.template .env && nano .env
 docker compose up -d --build          # uses compose.yaml with build: directives
 ```
 
@@ -369,7 +369,7 @@ docker exec wactorz-dashboard nginx -s reload
 ├── compose.yaml           # build-from-source (default dev/prod)
 ├── compose.release.yaml   # pre-built image (fastest deploy)
 ├── compose.dev.yaml       # mock-only, no LLM
-├── .env.example           # copy to .env and fill secrets
+├── .env.template           # copy to .env and fill secrets
 ├── wactorz-server.tar.gz   # linux/amd64 Docker image
 ├── deploy.sh              # interactive wizard
 ├── rust/                  # Rust source (wactorz-server)

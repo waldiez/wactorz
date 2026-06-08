@@ -133,3 +133,99 @@ impl Message {
         Self::new(None, Some(to), MessageType::Command { command: cmd })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_text_shorthand() {
+        let m = Message::text(Some("a".into()), Some("b".into()), "hello");
+        assert_eq!(m.from.as_deref(), Some("a"));
+        assert_eq!(m.to.as_deref(), Some("b"));
+        assert!(matches!(m.payload, MessageType::Text { ref content } if content == "hello"));
+        assert!(!m.id.is_empty());
+        assert!(m.timestamp_ms > 0);
+    }
+
+    #[test]
+    fn message_command_shorthand() {
+        let m = Message::command("actor-1".into(), ActorCommand::Stop);
+        assert!(m.from.is_none());
+        assert_eq!(m.to.as_deref(), Some("actor-1"));
+        assert!(matches!(
+            m.payload,
+            MessageType::Command { command: ActorCommand::Stop }
+        ));
+    }
+
+    #[test]
+    fn message_new_broadcast() {
+        let m = Message::new(None, None, MessageType::Heartbeat { sequence: 7 });
+        assert!(m.from.is_none());
+        assert!(m.to.is_none());
+        assert!(matches!(m.payload, MessageType::Heartbeat { sequence: 7 }));
+    }
+
+    #[test]
+    fn actor_command_eq() {
+        assert_eq!(ActorCommand::Stop, ActorCommand::Stop);
+        assert_ne!(ActorCommand::Stop, ActorCommand::Pause);
+        assert_eq!(ActorCommand::Resume, ActorCommand::Resume);
+        assert_eq!(ActorCommand::Status, ActorCommand::Status);
+    }
+
+    #[test]
+    fn alert_severity_eq() {
+        assert_eq!(AlertSeverity::Info, AlertSeverity::Info);
+        assert_ne!(AlertSeverity::Warning, AlertSeverity::Error);
+        assert_eq!(AlertSeverity::Critical, AlertSeverity::Critical);
+    }
+
+    #[test]
+    fn message_type_variants_are_clone_debug() {
+        let variants = vec![
+            MessageType::Text { content: "hi".into() },
+            MessageType::Heartbeat { sequence: 1 },
+            MessageType::Command { command: ActorCommand::Stop },
+            MessageType::Alert {
+                severity: AlertSeverity::Warning,
+                message: "warn".into(),
+                context: serde_json::json!({}),
+            },
+            MessageType::Task {
+                task_id: "t1".into(),
+                description: "do it".into(),
+                payload: serde_json::json!(null),
+            },
+            MessageType::TaskResult {
+                task_id: "t1".into(),
+                success: true,
+                result: serde_json::json!(42),
+            },
+            MessageType::SpawnRequest {
+                agent_type: "llm".into(),
+                agent_name: "bot".into(),
+                config: serde_json::json!({}),
+            },
+            MessageType::SpawnResult {
+                agent_name: "bot".into(),
+                agent_id: "id-1".into(),
+                success: false,
+                error: Some("oops".into()),
+            },
+        ];
+        for v in variants {
+            let _c = v.clone();
+            let _d = format!("{v:?}");
+        }
+    }
+
+    #[test]
+    fn message_type_serde_roundtrip() {
+        let original = MessageType::Text { content: "roundtrip".into() };
+        let json = serde_json::to_string(&original).unwrap();
+        let decoded: MessageType = serde_json::from_str(&json).unwrap();
+        assert!(matches!(decoded, MessageType::Text { ref content } if content == "roundtrip"));
+    }
+}

@@ -701,6 +701,27 @@ class Actor(ABC):
     async def _publish_status(self):
         await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
 
+    async def notify_user(self, text: str, **extra):
+        """
+        Push a user-facing chat message to the UI from this actor, OUTSIDE the
+        synchronous request/reply turn.
+
+        The monitor forwards agents/{id}/chat messages to the chat panel as live
+        chat frames, so use this for autonomous notifications the user should see
+        in chat without having just asked for them: a long delegated task
+        finishing after the reply already returned, sensor alerts, scheduled
+        output, reactive automations, etc.
+        """
+        payload = {
+            "from":      self.name,
+            "to":        "user",
+            "content":   str(text),
+            "timestamp": time.time(),
+        }
+        if extra:
+            payload.update(extra)
+        await self._mqtt_publish(f"agents/{self.actor_id}/chat", payload)
+
     # ─── Status ───────────────────────────────────────────────────────────────
 
     def get_status(self) -> dict:

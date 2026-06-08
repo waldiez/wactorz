@@ -345,6 +345,8 @@
       .af-chat-msg-bubble ul,
       .af-chat-msg-bubble ol { margin: 4px 0; padding-left: 18px; white-space: normal; }
       .af-chat-msg-bubble li { margin: 1px 0; }
+      .af-chat-msg-bubble li > ul,
+      .af-chat-msg-bubble li > ol { margin: 1px 0; }
       .af-chat-msg-bubble code {
         background: rgba(0,0,0,0.3); padding: 1px 4px;
         border-radius: 3px; font-size: 11px; font-family: monospace;
@@ -354,6 +356,37 @@
         border-radius: 6px; overflow-x: auto; margin-top: 4px;
       }
       .af-chat-msg-bubble pre code { background: none; padding: 0; }
+      /* Paragraph spacing: tight, and no stray margin on the bubble edges so a
+         single-line reply is the same height as plain text was. */
+      .af-chat-msg-bubble p { margin: 0 0 6px; }
+      .af-chat-msg-bubble > :first-child { margin-top: 0; }
+      .af-chat-msg-bubble > :last-child  { margin-bottom: 0; }
+      .af-chat-msg-bubble a {
+        color: #8ab4ff; text-decoration: underline;
+        text-underline-offset: 2px; word-break: break-all;
+      }
+      .af-chat-msg-bubble blockquote {
+        margin: 4px 0; padding: 2px 0 2px 10px; white-space: normal;
+        border-left: 3px solid rgba(255,255,255,0.18);
+        color: rgba(255,255,255,0.65);
+      }
+      .af-chat-msg-bubble hr {
+        border: 0; height: 1px; margin: 8px 0;
+        background: rgba(255,255,255,0.12);
+      }
+      .af-chat-msg-bubble strong { font-weight: 600; }
+      .af-chat-msg-bubble del { text-decoration: line-through; opacity: 0.7; }
+      /* Tables scroll horizontally inside the bubble rather than overflowing. */
+      .af-chat-msg-bubble table {
+        border-collapse: collapse; margin: 6px 0; font-size: 12px;
+        display: block; max-width: 100%; overflow-x: auto; white-space: normal;
+      }
+      .af-chat-msg-bubble th,
+      .af-chat-msg-bubble td {
+        border: 1px solid rgba(255,255,255,0.14);
+        padding: 4px 8px; text-align: left;
+      }
+      .af-chat-msg-bubble th { background: rgba(255,255,255,0.06); font-weight: 600; }
       @keyframes msg-appear {
         from { opacity: 0; transform: translateY(5px); }
         to   { opacity: 1; transform: translateY(0); }
@@ -747,6 +780,43 @@
       .af-stat-value { margin-top: 8px; font-size: 26px; font-weight: 700; }
       .af-stat-detail { margin-top: 6px; color: rgba(255,255,255,0.55); font-size: 12px; }
 
+      /* ── Host stats bar ── */
+      .af-host-bar {
+        display: flex; align-items: center; gap: 20px;
+        padding: 10px 16px; border-radius: 12px;
+        background: linear-gradient(90deg, rgba(7,12,28,0.9), rgba(10,16,32,0.7));
+        border: 1px solid rgba(255,255,255,0.07);
+        font-size: 12px; color: rgba(255,255,255,0.55);
+        flex-shrink: 0;
+      }
+      .af-host-label {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+        color: rgba(255,255,255,0.3); flex-shrink: 0;
+      }
+      .af-host-metric {
+        display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
+      }
+      .af-host-metric-label {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+        color: rgba(255,255,255,0.28); flex-shrink: 0; width: 30px;
+      }
+      .af-host-bar-track {
+        flex: 1; height: 4px; border-radius: 2px;
+        background: rgba(255,255,255,0.07); overflow: hidden; min-width: 60px; max-width: 120px;
+      }
+      .af-host-bar-fill {
+        height: 100%; border-radius: 2px; width: 0%;
+        transition: width 0.6s ease;
+      }
+      .af-host-bar-fill-cpu { background: linear-gradient(90deg, #f59e0b, #fcd34d); }
+      .af-host-bar-fill-mem { background: linear-gradient(90deg, #6366f1, #818cf8); }
+      .af-host-metric-val {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px; color: rgba(255,255,255,0.6); flex-shrink: 0; min-width: 70px;
+      }
+
       .af-overview-panels {
         display: grid; grid-template-columns: minmax(0,1.5fr) minmax(280px,0.9fr); gap: 16px; align-items: start;
       }
@@ -834,6 +904,41 @@
         scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.15) transparent;
       }
       .af-iobar-input:focus { border-color: rgba(37,99,235,0.55); background: rgba(255,255,255,0.07); }
+      .af-iobar-input.has-suggestion { background: transparent !important; position: relative; z-index: 1; }
+
+      /* ── Autosuggestion ghost text ── */
+      .af-input-wrap { position: relative; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+      .af-input-ghost {
+        position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+        padding: 7px 12px; font-size: 13px; font-family: inherit; line-height: 1.4;
+        border: 1px solid transparent; border-radius: 8px;
+        pointer-events: none; z-index: 0; overflow: hidden;
+        white-space: pre-wrap; word-break: break-word;
+        color: rgba(147,197,253,0.32);
+      }
+      .af-input-hint {
+        font-size: 10px; color: rgba(255,255,255,0.18); padding: 0 2px;
+        display: none; user-select: none; line-height: 1;
+      }
+      .af-input-wrap:focus-within .af-input-hint { display: block; }
+
+      /* ── @mention panel ── */
+      .af-mention-panel {
+        display: none; position: absolute; bottom: calc(100% + 6px); left: 0;
+        background: rgba(9,18,40,0.97); border: 1px solid rgba(37,99,235,0.35);
+        border-radius: 10px; padding: 6px 8px; gap: 6px;
+        flex-wrap: wrap; z-index: 200; max-width: 100%;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+      }
+      .af-mention-panel.open { display: flex; }
+      .af-mention-chip {
+        padding: 4px 11px; border-radius: 20px; font-size: 11px; cursor: pointer;
+        border: 1px solid rgba(37,99,235,0.3); background: rgba(37,99,235,0.1);
+        color: #93c5fd; transition: background 0.1s, border-color 0.1s; white-space: nowrap;
+      }
+      .af-mention-chip:hover, .af-mention-chip.active {
+        background: rgba(37,99,235,0.28); border-color: #3b82f6; color: #fff;
+      }
       .af-send-btn {
         width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
         display: flex; align-items: center; justify-content: center;
@@ -994,9 +1099,10 @@
       .af-state-error        { color: #f87171; }
 
       /* Heartbeat pulse on dot */
+      .af-card-state-dot { transition: opacity 1.2s ease, filter 1.2s ease; }
       .af-card-pulse { animation: af-card-hb-once 0.5s ease !important; }
       @keyframes af-card-hb-once { 0%,100%{transform:scale(1)} 40%{transform:scale(1.9);opacity:1} }
-      /* Stale agent — no heartbeat for 90 s */
+      /* Stale agent — no heartbeat for 180 s */
       .af-card-stale { animation: none !important; opacity: 0.35; filter: grayscale(1); }
 
       /* ── Classic (cd-card) layout ────────────────────────────────────────── */
@@ -1916,10 +2022,10 @@
         .fin-metric-val { font-size: 15px; }
       }
     </style>
-    <script type="module" crossorigin src="./assets/index-Du91Y7aj.js"></script>
+    <script type="module" crossorigin src="./assets/index-CBl6r0nt.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-lhHHWwHU.js">
     <link rel="modulepreload" crossorigin href="./assets/babylon-core-wJ5bR-LE.js">
-    <link rel="modulepreload" crossorigin href="./assets/vendor-DuCOOrkg.js">
+    <link rel="modulepreload" crossorigin href="./assets/vendor-CcRsjWCO.js">
   </head>
   <body>
     <!-- 3D canvas -->

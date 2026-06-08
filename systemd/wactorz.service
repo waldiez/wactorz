@@ -8,7 +8,7 @@
 # Logs:
 #   journalctl -u wactorz -f
 #
-# The binary reads all config from environment variables (see .env.example).
+# The binary reads all config from environment variables (see .env.template).
 # EnvironmentFile below loads them automatically on service start.
 #
 # NautilusAgent SSH note:

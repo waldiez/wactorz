@@ -160,7 +160,7 @@
 <h3 id="steps">Steps</h3>
 <div class="highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/waldiez/wactorz
 <span class="nb">cd</span><span class="w"> </span>wactorz
-cp<span class="w"> </span>.env.example<span class="w"> </span>.env
+cp<span class="w"> </span>.env.template<span class="w"> </span>.env
 nano<span class="w"> </span>.env<span class="w">           </span><span class="c1"># set LLM_API_KEY at minimum</span>
 docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
@@ -259,7 +259,7 @@ bash<span class="w"> </span>deploy-native.sh<span class="w">        </span><span
 
 <h4 id="option-b-use-scriptsdeploysh">Option B — use <code>scripts/deploy.sh</code></h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># 1. Configure .env</span>
-cp<span class="w"> </span>.env.example<span class="w"> </span>.env
+cp<span class="w"> </span>.env.template<span class="w"> </span>.env
 nano<span class="w"> </span>.env
 <span class="c1"># Set: LLM_API_KEY, DEPLOY_HOST, DEPLOY_PATH, NAUTILUS_SSH_KEY</span>
 <span class="c1"># If the remote already has nginx running (certbot/SSL), also set:</span>
@@ -274,7 +274,7 @@ bash<span class="w"> </span>scripts/deploy.sh
 2. Build the frontend (<code>npm run build</code>)
 3. Build the binary via <code>cargo build --release</code> or Docker buildx
 4. rsync <code>frontend/dist/</code> and the binary to the remote host
-5. Create <code>.env</code> from <code>.env.example</code> on the remote (preserves existing)
+5. Create <code>.env</code> from <code>.env.template</code> on the remote (preserves existing)
 6. Start Mosquitto via Docker + configure nginx (see modes below)
 7. Install + start the <code>wactorz</code> systemd service</p>
 <h4 id="nginx-modes">nginx modes</h4>
@@ -346,7 +346,7 @@ journalctl<span class="w"> </span>-u<span class="w"> </span>wactorz<span class="
 <p>The unit template at <code>systemd/wactorz.service</code> has comments for every field.</p>
 <hr />
 <h2 id="environment-variables">Environment variables</h2>
-<p>See <code>.env.example</code> for the full annotated list.  The most important ones:</p>
+<p>See <code>.env.template</code> for the full annotated list.  The most important ones:</p>
 <table>
 <thead>
 <tr>

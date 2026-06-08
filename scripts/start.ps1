@@ -68,7 +68,7 @@ if (Is-AgentflowRepo $cwd) {
 # ── 2. Check .env ─────────────────────────────────────────────────────────────
 
 $envFile    = Join-Path $repoDir ".env"
-$envExample = Join-Path $repoDir ".env.example"
+$envTemplate = Join-Path $repoDir ".env.template"
 
 if (Test-Path $envFile) {
     $content = Get-Content $envFile -Raw
@@ -83,8 +83,8 @@ if (Test-Path $envFile) {
     } else {
         Write-Host ".env is set up correctly."
     }
-} elseif (Test-Path $envExample) {
-    Copy-Item $envExample $envFile
+} elseif (Test-Path $envTemplate) {
+    Copy-Item $envTemplate $envFile
     Write-Banner ".env created from template — please fill in your API key"
     Write-Host "  The file is opening in Notepad now."
     Write-Host "  Find the line:  LLM_API_KEY="
@@ -93,7 +93,7 @@ if (Test-Path $envFile) {
     Write-Host ""
     Start-Process notepad $envFile -Wait
 } else {
-    Write-Host "WARNING: no .env or .env.example found. You may need to create the .env file manually."
+    Write-Host "WARNING: no .env or .env.template found. You may need to create the .env file manually."
 }
 
 # ── 3. Mosquitto (MQTT broker) ────────────────────────────────────────────────

@@ -1033,6 +1033,25 @@ class DynamicAgent(Actor):
     async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:
             self.metrics.messages_processed += 1
+
+            # Correlation id for request/reply. main.delegate_task() and
+            # AgentAPI.send_to() tag the TASK with "_task_id" and then block on a
+            # future keyed by it; the reply MUST echo that id or the caller's
+            # future never resolves. Without this, recipe/dynamic agents (e.g.
+            # manual-agent) run handle_task and log everything but their RESULT
+            # is un-correlatable, so the user sees no response. LLMAgent already
+            # echoes it — this brings DynamicAgent to parity.
+            _incoming = msg.payload if isinstance(msg.payload, dict) else {}
+            _corr     = _incoming.get("_task_id")
+
+            def _with_corr(r):
+                if _corr is None:
+                    return r
+                if isinstance(r, dict):
+                    return r if "_task_id" in r else {**r, "_task_id": _corr}
+                # non-dict result (str/number) — wrap so the id can ride along
+                return {"result": r, "_task_id": _corr}
+
             if self._fn_handle_task:
                 try:
                     result = await asyncio.wait_for(
@@ -1040,7 +1059,7 @@ class DynamicAgent(Actor):
                         timeout=self._HANDLE_TASK_TIMEOUT,
                     )
                     if msg.sender_id and result is not None:
-                        await self.send(msg.sender_id, MessageType.RESULT, result)
+                        await self.send(msg.sender_id, MessageType.RESULT, _with_corr(result))
                 except asyncio.TimeoutError:
                     logger.error(
                         f"[{self.name}] handle_task() timed out after "
@@ -1052,25 +1071,25 @@ class DynamicAgent(Actor):
                         traceback_str="",
                     )
                     if msg.sender_id:
-                        await self.send(msg.sender_id, MessageType.RESULT, {
+                        await self.send(msg.sender_id, MessageType.RESULT, _with_corr({
                             "error": f"handle_task() timed out after {self._HANDLE_TASK_TIMEOUT}s",
                             "error_phase": "handle_task",
                             "agent": self.name,
-                        })
+                        }))
                 except Exception as e:
                     tb = traceback.format_exc()
                     logger.error(f"[{self.name}] handle_task() error: {e}\n{tb}")
                     await self._publish_error(phase="handle_task", error=e, traceback_str=tb)
                     if msg.sender_id:
-                        await self.send(msg.sender_id, MessageType.RESULT, {
+                        await self.send(msg.sender_id, MessageType.RESULT, _with_corr({
                             "error":       str(e),
                             "error_phase": "handle_task",
                             "agent":       self.name,
-                        })
+                        }))
             else:
                 if msg.sender_id:
                     await self.send(msg.sender_id, MessageType.RESULT,
-                                    {"info": f"{self.name} has no handle_task defined"})
+                                    _with_corr({"info": f"{self.name} has no handle_task defined"}))
 
     async def _publish_error(
         self,
@@ -1695,6 +1714,31 @@ class _AgentAPI:
                 "timestamp": time.time(),
             }
         )
+
+    async def notify_user(self, text: str):
+        """
+        Push a user-facing chat message to the chat panel (see Actor.notify_user).
+        Use this — not log() or alert() — when the user should see the message in
+        chat, e.g. when a long task finishes or an autonomous agent has news.
+        """
+        await self._actor.notify_user(text)
+
+    def run_in_background(self, coro):
+        """
+        Schedule a coroutine on the actor's event loop and track it on the actor
+        so it is cancelled cleanly on stop (same lifecycle as subscribe()).
+        Returns the asyncio.Task.
+
+        Use for slow work you don't want to block handle_task on: return a quick
+        ack from handle_task, do the work in here, then call notify_user() with
+        the result when it's ready.
+        """
+        task = asyncio.create_task(coro)
+        try:
+            self._actor._tasks.append(task)
+        except Exception:
+            pass
+        return task
 
     # ── Persistence ────────────────────────────────────────────────────────
 

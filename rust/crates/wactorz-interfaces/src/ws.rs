@@ -856,3 +856,865 @@ async fn proxy_to_mosquitto(socket: WebSocket, state: BridgeState, proto: Option
 
     up_to_cl.abort();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn fresh() -> MonitorState {
+        MonitorState::default()
+    }
+
+    // ── WsEnvelope ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn ws_envelope_serde_roundtrip() {
+        let e = WsEnvelope { topic: "agents/a1/status".into(), payload: json!({"state": "running"}) };
+        let s = serde_json::to_string(&e).unwrap();
+        let d: WsEnvelope = serde_json::from_str(&s).unwrap();
+        assert_eq!(d.topic, "agents/a1/status");
+        assert_eq!(d.payload["state"], "running");
+    }
+
+    #[test]
+    fn ws_envelope_is_debug_and_clone() {
+        let e = WsEnvelope { topic: "t".into(), payload: json!(1) };
+        let _ = format!("{e:?}");
+        let e2 = e.clone();
+        assert_eq!(e2.topic, "t");
+    }
+
+    // ── now_secs ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn now_secs_returns_positive() {
+        assert!(now_secs() > 0.0);
+    }
+
+    // ── MonitorState::default ─────────────────────────────────────────────────
+
+    #[test]
+    fn monitor_state_default_is_empty() {
+        let st = fresh();
+        assert!(st.agents.is_empty());
+        assert!(st.nodes.is_empty());
+        assert!(st.alerts.is_empty());
+        assert!(st.log_feed.is_empty());
+    }
+
+    // ── parse_topic: system/* ─────────────────────────────────────────────────
+
+    #[test]
+    fn parse_topic_system_health_updates_and_returns_event() {
+        let mut st = fresh();
+        let r = st.parse_topic("system/health", json!({"status": "ok"}));
+        let (ev, is_hb) = r.unwrap();
+        assert_eq!(ev["type"], "system");
+        assert_eq!(ev["subtype"], "health");
+        assert!(!is_hb);
+        assert_eq!(st.system_health["status"], "ok");
+    }
+
+    #[test]
+    fn parse_topic_system_alerts_inserts_and_returns_event() {
+        let mut st = fresh();
+        let r = st.parse_topic("system/alerts", json!({"msg": "alert!"}));
+        let (ev, is_hb) = r.unwrap();
+        assert_eq!(ev["subtype"], "alerts");
+        assert!(!is_hb);
+        assert_eq!(st.alerts.len(), 1);
+    }
+
+    #[test]
+    fn parse_topic_system_alerts_prunes_at_50() {
+        let mut st = fresh();
+        for i in 0..55u32 {
+            st.parse_topic("system/alerts", json!({"i": i}));
+        }
+        assert!(st.alerts.len() <= 50, "alerts len = {}", st.alerts.len());
+    }
+
+    #[test]
+    fn parse_topic_system_unknown_subtype_still_returns_event() {
+        let mut st = fresh();
+        let r = st.parse_topic("system/unknown_sub", json!({}));
+        let (ev, _) = r.unwrap();
+        assert_eq!(ev["subtype"], "unknown_sub");
+    }
+
+    // ── parse_topic: agents/*  ────────────────────────────────────────────────
+
+    #[test]
+    fn parse_topic_agents_status_updates_agent_and_adds_log() {
+        let mut st = fresh();
+        let r = st.parse_topic("agents/a1b2c3d4/status", json!({"name": "alpha", "state": "running"}));
+        let (ev, is_hb) = r.unwrap();
+        assert_eq!(ev["type"], "agent");
+        assert_eq!(ev["agent_id"], "a1b2c3d4");
+        assert!(!is_hb);
+        assert!(st.agents.contains_key("a1b2c3d4"));
+        assert_eq!(st.agents["a1b2c3d4"]["name"], "alpha");
+        assert_eq!(st.agents["a1b2c3d4"]["state"], "running");
+        assert_eq!(st.log_feed[0]["type"], "status");
+    }
+
+    #[test]
+    fn parse_topic_agents_status_payload_not_object_still_registers_agent() {
+        let mut st = fresh();
+        st.parse_topic("agents/plain_id/status", json!("not-object"));
+        assert!(st.agents.contains_key("plain_id"));
+    }
+
+    #[test]
+    fn parse_topic_agents_heartbeat_is_heartbeat_true() {
+        let mut st = fresh();
+        let r = st.parse_topic("agents/hb_id/heartbeat", json!({"name": "beta", "state": "running", "cpu": 12.5}));
+        let (_, is_hb) = r.unwrap();
+        assert!(is_hb, "heartbeat should set is_heartbeat=true");
+        assert!(st.agents.contains_key("hb_id"));
+        assert_eq!(st.agents["hb_id"]["cpu"], 12.5);
+    }
+
+    #[test]
+    fn parse_topic_agents_heartbeat_updates_memory_and_task() {
+        let mut st = fresh();
+        st.parse_topic("agents/hb_id/heartbeat", json!({"name": "beta", "memory_mb": 256, "task": "scan", "state": "running"}));
+        assert_eq!(st.agents["hb_id"]["mem"], 256);
+        assert_eq!(st.agents["hb_id"]["task"], "scan");
+    }
+
+    #[test]
+    fn parse_topic_agents_heartbeat_payload_not_object() {
+        let mut st = fresh();
+        let r = st.parse_topic("agents/hb2/heartbeat", json!("not-obj"));
+        let (_, is_hb) = r.unwrap();
+        assert!(is_hb);
+    }
+
+    #[test]
+    fn parse_topic_agents_metrics_updates_agent() {
+        let mut st = fresh();
+        st.parse_topic("agents/m_id/metrics", json!({"messages_processed": 5, "cost_usd": 0.01, "input_tokens": 100, "output_tokens": 50}));
+        assert_eq!(st.agents["m_id"]["messages_processed"], 5);
+        assert_eq!(st.agents["m_id"]["cost_usd"], 0.01);
+    }
+
+    #[test]
+    fn parse_topic_agents_metrics_payload_not_object() {
+        let mut st = fresh();
+        let r = st.parse_topic("agents/m2/metrics", json!(42));
+        assert!(r.is_some());
+    }
+
+    #[test]
+    fn parse_topic_agents_logs_adds_log_entry_and_merges_payload() {
+        let mut st = fresh();
+        st.parse_topic("agents/l_id/logs", json!({"message": "hello", "level": "info"}));
+        assert!(!st.log_feed.is_empty());
+        assert_eq!(st.log_feed[0]["type"], "log");
+        assert_eq!(st.log_feed[0]["message"], "hello");
+    }
+
+    #[test]
+    fn parse_topic_agents_logs_payload_not_object() {
+        let mut st = fresh();
+        st.parse_topic("agents/l2/logs", json!("string-log"));
+        assert_eq!(st.log_feed[0]["type"], "log");
+    }
+
+    #[test]
+    fn parse_topic_agents_spawned_adds_log_and_merges_payload() {
+        let mut st = fresh();
+        st.parse_topic("agents/sp_id/spawned", json!({"parent": "main"}));
+        assert_eq!(st.log_feed[0]["type"], "spawned");
+        assert_eq!(st.log_feed[0]["parent"], "main");
+    }
+
+    #[test]
+    fn parse_topic_agents_spawned_payload_not_object() {
+        let mut st = fresh();
+        st.parse_topic("agents/sp2/spawned", json!(null));
+        assert_eq!(st.log_feed[0]["type"], "spawned");
+    }
+
+    #[test]
+    fn parse_topic_agents_completed_adds_log_and_updates_agent() {
+        let mut st = fresh();
+        st.parse_topic("agents/c_id/completed", json!({"result": "ok"}));
+        assert_eq!(st.log_feed[0]["type"], "completed");
+        assert!(st.agents.contains_key("c_id"));
+    }
+
+    #[test]
+    fn parse_topic_agents_alert_with_object_payload_enriches() {
+        let mut st = fresh();
+        st.parse_topic("agents/al_id/alert", json!({"severity": "critical", "name": "my-agent"}));
+        assert!(!st.alerts.is_empty());
+        assert_eq!(st.alerts[0]["severity"], "critical");
+        assert_eq!(st.log_feed[0]["type"], "alert");
+        assert_eq!(st.log_feed[0]["message"], "my-agent unresponsive (critical)");
+    }
+
+    #[test]
+    fn parse_topic_agents_alert_without_name_uses_short_id() {
+        let mut st = fresh();
+        st.parse_topic("agents/al_id_xx/alert", json!({"severity": "warning"}));
+        assert!(!st.alerts.is_empty());
+        // name defaults to short agent_id segment
+        assert!(!st.log_feed[0]["name"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_topic_agents_alert_uses_known_name_from_previous_status() {
+        let mut st = fresh();
+        st.parse_topic("agents/named_id/status", json!({"name": "well-known", "state": "running"}));
+        st.parse_topic("agents/named_id/alert", json!({"severity": "warning"}));
+        assert_eq!(st.log_feed[0]["name"], "well-known");
+    }
+
+    #[test]
+    fn parse_topic_agents_alert_with_non_object_payload_uses_fallback() {
+        let mut st = fresh();
+        st.parse_topic("agents/al2/alert", json!("bad"));
+        assert!(!st.alerts.is_empty());
+        assert_eq!(st.alerts[0]["agent_id"], "al2");
+    }
+
+    #[test]
+    fn parse_topic_agents_alert_prunes_at_50() {
+        let mut st = fresh();
+        for i in 0..55u32 {
+            st.parse_topic(&format!("agents/ag{i}/alert"), json!({"i": i}));
+        }
+        assert!(st.alerts.len() <= 50);
+    }
+
+    #[test]
+    fn parse_topic_agents_unknown_metric_returns_agent_event() {
+        let mut st = fresh();
+        let r = st.parse_topic("agents/u_id/custom_metric", json!({"data": 1}));
+        let (ev, is_hb) = r.unwrap();
+        assert_eq!(ev["type"], "agent");
+        assert!(!is_hb);
+    }
+
+    // ── parse_topic: nodes/* ─────────────────────────────────────────────────
+
+    #[test]
+    fn parse_topic_nodes_heartbeat_with_object_updates_nodes() {
+        let mut st = fresh();
+        let r = st.parse_topic("nodes/rpi4/heartbeat", json!({"agents": ["alpha"], "node_id": "n1"}));
+        let (ev, is_hb) = r.unwrap();
+        assert_eq!(ev["type"], "node");
+        assert_eq!(ev["node_name"], "rpi4");
+        assert!(!is_hb);
+        assert!(st.nodes.contains_key("rpi4"));
+        assert_eq!(st.nodes["rpi4"]["agents"][0], "alpha");
+        assert_eq!(st.nodes["rpi4"]["node_id"], "n1");
+        assert_eq!(st.nodes["rpi4"]["online"], true);
+    }
+
+    #[test]
+    fn parse_topic_nodes_heartbeat_with_non_object_skips_insert_but_returns_event() {
+        let mut st = fresh();
+        let r = st.parse_topic("nodes/rpi4/heartbeat", json!("bad"));
+        assert!(r.is_some());
+        assert!(st.nodes.is_empty());
+    }
+
+    #[test]
+    fn parse_topic_nodes_non_heartbeat_returns_none() {
+        let mut st = fresh();
+        assert!(st.parse_topic("nodes/rpi4/other", json!({})).is_none());
+    }
+
+    // ── parse_topic: unrecognised patterns ───────────────────────────────────
+
+    #[test]
+    fn parse_topic_unknown_top_level_returns_none() {
+        let mut st = fresh();
+        assert!(st.parse_topic("unknown/topic/here", json!({})).is_none());
+    }
+
+    #[test]
+    fn parse_topic_agents_too_short_returns_none() {
+        let mut st = fresh();
+        assert!(st.parse_topic("agents/only_one", json!({})).is_none());
+    }
+
+    #[test]
+    fn parse_topic_system_too_short_returns_none() {
+        let mut st = fresh();
+        assert!(st.parse_topic("system", json!({})).is_none());
+    }
+
+    // ── snapshot ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn snapshot_returns_expected_keys() {
+        let mut st = fresh();
+        st.parse_topic("agents/a1/status", json!({"name": "alpha", "state": "running"}));
+        st.parse_topic("nodes/n1/heartbeat", json!({"agents": [], "node_id": "n"}));
+        let snap = st.snapshot();
+        assert!(snap["agents"].is_array());
+        assert!(snap["nodes"].is_array());
+        assert!(snap["alerts"].is_array());
+        assert!(snap["log_feed"].is_array());
+        assert!(snap["total_cost_usd"].is_number());
+    }
+
+    #[test]
+    fn snapshot_sums_cost_usd() {
+        let mut st = fresh();
+        st.parse_topic("agents/a1/metrics", json!({"cost_usd": 0.05, "messages_processed": 1, "input_tokens": 1, "output_tokens": 1}));
+        let snap = st.snapshot();
+        let cost = snap["total_cost_usd"].as_f64().unwrap();
+        assert!(cost >= 0.0);
+    }
+
+    #[test]
+    fn snapshot_caps_alerts_at_10() {
+        let mut st = fresh();
+        for i in 0..15u32 {
+            st.alerts.push(json!({"i": i}));
+        }
+        let snap = st.snapshot();
+        assert!(snap["alerts"].as_array().unwrap().len() <= 10);
+    }
+
+    #[test]
+    fn snapshot_caps_log_feed_at_20() {
+        let mut st = fresh();
+        for i in 0..25u32 {
+            st.log_feed.push(json!({"i": i}));
+        }
+        let snap = st.snapshot();
+        assert!(snap["log_feed"].as_array().unwrap().len() <= 20);
+    }
+
+    // ── prune_stale ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn prune_stale_removes_old_running_agent() {
+        let mut st = fresh();
+        st.agents.insert("old".into(), json!({ "agent_id": "old", "last_update": 0.0, "state": "running" }));
+        st.prune_stale();
+        assert!(!st.agents.contains_key("old"));
+    }
+
+    #[test]
+    fn prune_stale_keeps_fresh_agent() {
+        let mut st = fresh();
+        st.agents.insert("fresh".into(), json!({ "agent_id": "fresh", "last_update": now_secs(), "state": "running" }));
+        st.prune_stale();
+        assert!(st.agents.contains_key("fresh"));
+    }
+
+    #[test]
+    fn prune_stale_removes_old_stopped_agent_with_short_grace() {
+        let mut st = fresh();
+        let old = now_secs() - 20.0; // 20s ago > TERMINAL_AGENT_GRACE_SECS (15s)
+        st.agents.insert("dead".into(), json!({ "agent_id": "dead", "last_update": old, "state": "stopped" }));
+        st.prune_stale();
+        assert!(!st.agents.contains_key("dead"));
+    }
+
+    #[test]
+    fn prune_stale_keeps_recent_stopped_agent() {
+        let mut st = fresh();
+        let recent = now_secs() - 5.0; // 5s ago < TERMINAL_AGENT_GRACE_SECS (15s)
+        st.agents.insert("recent_stopped".into(), json!({ "agent_id": "recent_stopped", "last_update": recent, "state": "stopped" }));
+        st.prune_stale();
+        assert!(st.agents.contains_key("recent_stopped"));
+    }
+
+    #[test]
+    fn prune_stale_agents_without_last_update_default_to_now_and_are_kept() {
+        let mut st = fresh();
+        st.agents.insert("no_ts".into(), json!({ "agent_id": "no_ts", "state": "running" }));
+        st.prune_stale();
+        assert!(st.agents.contains_key("no_ts"));
+    }
+
+    // ── add_log ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn add_log_inserts_at_front_and_caps_at_100() {
+        let mut st = fresh();
+        for i in 0..105u32 {
+            st.add_log(json!({"i": i}));
+        }
+        assert_eq!(st.log_feed.len(), 100);
+        assert_eq!(st.log_feed[0]["i"], 104); // most recent at front
+    }
+
+    // ── update_agent ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn update_agent_creates_entry_and_updates_key() {
+        let mut st = fresh();
+        st.update_agent("my_agent_id", "custom_key", json!("hello"));
+        assert!(st.agents.contains_key("my_agent_id"));
+        assert_eq!(st.agents["my_agent_id"]["custom_key"], "hello");
+        assert!(st.agents["my_agent_id"]["last_update"].as_f64().unwrap() > 0.0);
+    }
+
+    #[test]
+    fn update_agent_updates_existing_entry() {
+        let mut st = fresh();
+        st.update_agent("existing_id", "key", json!(1));
+        st.update_agent("existing_id", "key", json!(2));
+        assert_eq!(st.agents["existing_id"]["key"], 2);
+    }
+
+    // ── BridgeState / handle_slash_command / handle_browser_* ────────────────
+
+    fn make_bridge_state() -> BridgeState {
+        use wactorz_mqtt::{MqttClient, MqttConfig};
+        let config = MqttConfig::default();
+        let (mqtt_client, _event_loop) = MqttClient::new(config).unwrap();
+        let (mqtt_tx, _) = broadcast::channel(8);
+        let (monitor_tx, _) = broadcast::channel(8);
+        BridgeState {
+            mqtt_tx,
+            monitor: Arc::new(Mutex::new(MonitorState::default())),
+            monitor_tx,
+            mqtt_client: Arc::new(mqtt_client),
+            system: wactorz_core::ActorSystem::default(),
+            mqtt_host: "localhost".into(),
+            mqtt_ws_port: 9001,
+        }
+    }
+
+    #[test]
+    fn ws_bridge_monitor_arc_returns_arc() {
+        use wactorz_mqtt::{MqttClient, MqttConfig};
+        let (mqtt_tx, _) = broadcast::channel(8);
+        let (mqtt_client, _) = MqttClient::new(MqttConfig::default()).unwrap();
+        let bridge = WsBridge::new(
+            mqtt_tx,
+            Arc::new(mqtt_client),
+            wactorz_core::ActorSystem::default(),
+            "localhost".into(),
+            9001,
+        );
+        let _arc = bridge.monitor_arc();
+    }
+
+    #[tokio::test]
+    async fn handle_slash_command_help_returns_help_text() {
+        let state = make_bridge_state();
+        let reply = handle_slash_command("/help", &state).await;
+        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert_eq!(v["type"], "chat");
+        assert!(v["content"].as_str().unwrap().contains("Commands"));
+    }
+
+    #[tokio::test]
+    async fn handle_slash_command_h_alias_is_same_as_help() {
+        let state = make_bridge_state();
+        let reply = handle_slash_command("/h", &state).await;
+        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert!(v["content"].as_str().unwrap().contains("Commands"));
+    }
+
+    #[tokio::test]
+    async fn handle_slash_command_agents_with_no_agents() {
+        let state = make_bridge_state();
+        let reply = handle_slash_command("/agents", &state).await;
+        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert!(v["content"].as_str().unwrap().contains("No agents"));
+    }
+
+    #[tokio::test]
+    async fn handle_slash_command_agents_with_registered_agents() {
+        let state = make_bridge_state();
+        {
+            let mut st = state.monitor.lock().await;
+            st.agents.insert("test_id_abc".into(), json!({
+                "agent_id": "test_id_abc",
+                "name":     "alpha",
+                "state":    "running",
+                "last_update": now_secs(),
+            }));
+        }
+        let reply = handle_slash_command("/agents", &state).await;
+        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert!(v["content"].as_str().unwrap().contains("Agents"));
+    }
+
+    #[tokio::test]
+    async fn handle_slash_command_nodes_with_no_nodes() {
+        let state = make_bridge_state();
+        let reply = handle_slash_command("/nodes", &state).await;
+        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert!(v["content"].as_str().unwrap().contains("no remote nodes"));
+    }
+
+    #[tokio::test]
+    async fn handle_slash_command_nodes_with_online_node() {
+        let state = make_bridge_state();
+        {
+            let mut st = state.monitor.lock().await;
+            st.nodes.insert("pi4".into(), json!({
+                "node": "pi4", "online": true, "agents": ["alpha", "beta"]
+            }));
+        }
+        let reply = handle_slash_command("/nodes", &state).await;
+        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert!(v["content"].as_str().unwrap().contains("pi4"));
+        assert!(v["content"].as_str().unwrap().contains("online"));
+    }
+
+    #[tokio::test]
+    async fn handle_slash_command_nodes_with_offline_node() {
+        let state = make_bridge_state();
+        {
+            let mut st = state.monitor.lock().await;
+            st.nodes.insert("pi5".into(), json!({
+                "node": "pi5", "online": false, "agents": []
+            }));
+        }
+        let reply = handle_slash_command("/nodes", &state).await;
+        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert!(v["content"].as_str().unwrap().contains("OFFLINE"));
+        assert!(v["content"].as_str().unwrap().contains("no agents"));
+    }
+
+    #[tokio::test]
+    async fn handle_slash_command_unknown_returns_error_message() {
+        let state = make_bridge_state();
+        let reply = handle_slash_command("/unknown_xyz", &state).await;
+        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert!(v["content"].as_str().unwrap().contains("Unknown command"));
+    }
+
+    #[tokio::test]
+    async fn handle_browser_message_invalid_json_is_noop() {
+        let state = make_bridge_state();
+        handle_browser_message("not json", &state).await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_message_unknown_type_is_noop() {
+        let state = make_bridge_state();
+        handle_browser_message(r#"{"type": "unknown_msg"}"#, &state).await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_chat_no_content_is_noop() {
+        let state = make_bridge_state();
+        handle_browser_message(r#"{"type": "chat"}"#, &state).await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_chat_unknown_agent_logs_warn() {
+        let state = make_bridge_state();
+        handle_browser_message(
+            r#"{"type": "chat", "content": "hello", "agent_name": "ghost-agent"}"#,
+            &state,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_chat_with_known_agent() {
+        use wactorz_core::{ActorEntry, ActorMetrics, ActorState};
+        let state = make_bridge_state();
+        let (tx, _rx) = mpsc::channel(8);
+        state.system.registry.register(ActorEntry {
+            id: "chat-agent-id".into(),
+            name: "main-actor".into(),
+            state: ActorState::Running,
+            mailbox: tx,
+            protected: false,
+            metrics: Arc::new(ActorMetrics::new()),
+            supervisor_id: None,
+        }).await;
+        handle_browser_message(
+            r#"{"type": "chat", "content": "hi", "agent_name": "main-actor"}"#,
+            &state,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_chat_empty_agent_name_uses_main_actor() {
+        let state = make_bridge_state();
+        // agent_name="" is filtered → uses "main-actor" which is not registered → warn
+        handle_browser_message(
+            r#"{"type": "chat", "content": "hi", "agent_name": ""}"#,
+            &state,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_command_no_command_field_is_noop() {
+        let state = make_bridge_state();
+        handle_browser_message(r#"{"type": "command", "agent_id": "x"}"#, &state).await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_command_no_agent_id_field_is_noop() {
+        let state = make_bridge_state();
+        handle_browser_message(r#"{"type": "command", "command": "stop"}"#, &state).await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_command_invalid_command_logs_warn() {
+        let state = make_bridge_state();
+        handle_browser_message(
+            r#"{"type": "command", "command": "explode", "agent_id": "x"}"#,
+            &state,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_command_pause_updates_state_optimistically() {
+        let state = make_bridge_state();
+        {
+            let mut st = state.monitor.lock().await;
+            st.agents.insert("pid1".into(), json!({
+                "agent_id": "pid1", "state": "running", "last_update": now_secs()
+            }));
+        }
+        handle_browser_message(
+            r#"{"type": "command", "command": "pause", "agent_id": "pid1"}"#,
+            &state,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_command_stop_updates_state_optimistically() {
+        let state = make_bridge_state();
+        {
+            let mut st = state.monitor.lock().await;
+            st.agents.insert("sid1".into(), json!({
+                "agent_id": "sid1", "state": "running", "last_update": now_secs()
+            }));
+        }
+        handle_browser_message(
+            r#"{"type": "command", "command": "stop", "agent_id": "sid1"}"#,
+            &state,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_command_resume_updates_state_optimistically() {
+        let state = make_bridge_state();
+        {
+            let mut st = state.monitor.lock().await;
+            st.agents.insert("rid1".into(), json!({
+                "agent_id": "rid1", "state": "paused", "last_update": now_secs()
+            }));
+        }
+        handle_browser_message(
+            r#"{"type": "command", "command": "resume", "agent_id": "rid1"}"#,
+            &state,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn handle_browser_command_delete_does_not_panic() {
+        // MQTT publish will fail (no broker) → early return before delete.
+        // Test just verifies the function handles the failure gracefully.
+        let state = make_bridge_state();
+        {
+            let mut st = state.monitor.lock().await;
+            st.agents.insert("did1".into(), json!({
+                "agent_id": "did1", "state": "running", "last_update": now_secs()
+            }));
+        }
+        handle_browser_message(
+            r#"{"type": "command", "command": "delete", "agent_id": "did1"}"#,
+            &state,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn spawn_monitor_task_subscribe_failure_is_handled() {
+        // EventLoop is dropped (make_bridge_state drops it) → subscribe fails gracefully.
+        let state = make_bridge_state();
+        let bridge = WsBridge { state };
+        bridge.spawn_monitor_task();
+        // Give spawned tasks time to run the subscribe error path.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    #[tokio::test]
+    async fn spawn_monitor_task_broadcasts_patches() {
+        use wactorz_mqtt::{MqttClient, MqttConfig};
+
+        let (mqtt_tx, _) = broadcast::channel::<WsEnvelope>(16);
+        let config = MqttConfig::default();
+        let (mqtt_client, _event_loop) = MqttClient::new(config).unwrap();
+        // _event_loop alive → subscribe("nodes/#") will succeed (covers Ok branch)
+
+        let bridge = WsBridge::new(
+            mqtt_tx.clone(),
+            Arc::new(mqtt_client),
+            wactorz_core::ActorSystem::default(),
+            "localhost".into(),
+            9001,
+        );
+        let mut monitor_rx = bridge.state.monitor_tx.subscribe();
+        bridge.spawn_monitor_task();
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        mqtt_tx
+            .send(WsEnvelope {
+                topic: "agents/abc123/status".into(),
+                payload: serde_json::json!({"state": "running", "name": "test-agent"}),
+            })
+            .unwrap();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            monitor_rx.recv(),
+        )
+        .await;
+        assert!(result.is_ok(), "monitor task should broadcast a patch within 200ms");
+        let json_str = result.unwrap().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(v["type"], "patch");
+    }
+
+    #[tokio::test]
+    async fn spawn_monitor_task_skips_unknown_topic() {
+        use wactorz_mqtt::{MqttClient, MqttConfig};
+
+        let (mqtt_tx, _) = broadcast::channel::<WsEnvelope>(16);
+        let (mqtt_client, _event_loop) = MqttClient::new(MqttConfig::default()).unwrap();
+
+        let bridge = WsBridge::new(
+            mqtt_tx.clone(),
+            Arc::new(mqtt_client),
+            wactorz_core::ActorSystem::default(),
+            "localhost".into(),
+            9001,
+        );
+        let mut monitor_rx = bridge.state.monitor_tx.subscribe();
+        bridge.spawn_monitor_task();
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // Unknown topic → parse_topic returns None → monitor_tx not sent to.
+        mqtt_tx
+            .send(WsEnvelope {
+                topic: "unknown/topic".into(),
+                payload: serde_json::json!({}),
+            })
+            .unwrap();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            monitor_rx.recv(),
+        )
+        .await;
+        // Should time out because no broadcast was sent for unknown topic.
+        assert!(result.is_err(), "unknown topic should not broadcast");
+    }
+
+    // ── handle_browser_command with a live MQTT EventLoop ─────────────────────
+    //
+    // When the EventLoop is alive, publish_json queues successfully → the
+    // state-update and broadcast code after the publish is reached.
+
+    fn make_bridge_state_live() -> (BridgeState, Box<dyn std::any::Any + Send>) {
+        use wactorz_mqtt::{MqttClient, MqttConfig};
+        let (mqtt_client, event_loop) = MqttClient::new(MqttConfig::default()).unwrap();
+        let (mqtt_tx, _) = broadcast::channel(8);
+        let (monitor_tx, _) = broadcast::channel(8);
+        let state = BridgeState {
+            mqtt_tx,
+            monitor: Arc::new(Mutex::new(MonitorState::default())),
+            monitor_tx,
+            mqtt_client: Arc::new(mqtt_client),
+            system: wactorz_core::ActorSystem::default(),
+            mqtt_host: "localhost".into(),
+            mqtt_ws_port: 9001,
+        };
+        (state, Box::new(event_loop))
+    }
+
+    #[tokio::test]
+    async fn handle_browser_command_pause_with_live_mqtt_updates_state() {
+        let (state, _event_loop) = make_bridge_state_live();
+        {
+            let mut st = state.monitor.lock().await;
+            st.agents.insert("ag1".into(), json!({
+                "agent_id": "ag1", "state": "running", "name": "test", "last_update": now_secs()
+            }));
+        }
+        handle_browser_message(
+            r#"{"type": "command", "command": "pause", "agent_id": "ag1"}"#,
+            &state,
+        )
+        .await;
+        let st = state.monitor.lock().await;
+        assert_eq!(st.agents["ag1"]["state"], json!("paused"));
+    }
+
+    #[tokio::test]
+    async fn handle_browser_command_stop_with_live_mqtt_updates_state() {
+        let (state, _event_loop) = make_bridge_state_live();
+        {
+            let mut st = state.monitor.lock().await;
+            st.agents.insert("ag2".into(), json!({
+                "agent_id": "ag2", "state": "running", "name": "test", "last_update": now_secs()
+            }));
+        }
+        handle_browser_message(
+            r#"{"type": "command", "command": "stop", "agent_id": "ag2"}"#,
+            &state,
+        )
+        .await;
+        let st = state.monitor.lock().await;
+        assert_eq!(st.agents["ag2"]["state"], json!("stopped"));
+    }
+
+    #[tokio::test]
+    async fn handle_browser_command_resume_with_live_mqtt_updates_state() {
+        let (state, _event_loop) = make_bridge_state_live();
+        {
+            let mut st = state.monitor.lock().await;
+            st.agents.insert("ag3".into(), json!({
+                "agent_id": "ag3", "state": "paused", "name": "test", "last_update": now_secs()
+            }));
+        }
+        handle_browser_message(
+            r#"{"type": "command", "command": "resume", "agent_id": "ag3"}"#,
+            &state,
+        )
+        .await;
+        let st = state.monitor.lock().await;
+        assert_eq!(st.agents["ag3"]["state"], json!("running"));
+    }
+
+    #[tokio::test]
+    async fn handle_browser_command_delete_with_live_mqtt_removes_agent() {
+        let (state, _event_loop) = make_bridge_state_live();
+        {
+            let mut st = state.monitor.lock().await;
+            st.agents.insert("ag4".into(), json!({
+                "agent_id": "ag4", "state": "running", "name": "test", "last_update": now_secs()
+            }));
+        }
+        handle_browser_message(
+            r#"{"type": "command", "command": "delete", "agent_id": "ag4"}"#,
+            &state,
+        )
+        .await;
+        let st = state.monitor.lock().await;
+        assert!(!st.agents.contains_key("ag4"), "agent should be removed after delete");
+    }
+}

@@ -89,6 +89,90 @@ impl ActorMetrics {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_is_all_zeros() {
+        let m = ActorMetrics::new();
+        let s = m.snapshot();
+        assert_eq!(s.messages_received, 0);
+        assert_eq!(s.messages_processed, 0);
+        assert_eq!(s.messages_failed, 0);
+        assert_eq!(s.heartbeats, 0);
+        assert_eq!(s.restart_count, 0);
+        assert_eq!(s.llm_input_tokens, 0);
+        assert_eq!(s.llm_output_tokens, 0);
+        assert_eq!(s.llm_cost_usd, 0.0);
+    }
+
+    #[test]
+    fn record_received_increments_and_sets_timestamp() {
+        let m = ActorMetrics::new();
+        m.record_received();
+        m.record_received();
+        let s = m.snapshot();
+        assert_eq!(s.messages_received, 2);
+        assert!(s.last_message_at > 0);
+    }
+
+    #[test]
+    fn record_processed_increments() {
+        let m = ActorMetrics::new();
+        m.record_processed();
+        assert_eq!(m.snapshot().messages_processed, 1);
+    }
+
+    #[test]
+    fn record_failed_increments() {
+        let m = ActorMetrics::new();
+        m.record_failed();
+        assert_eq!(m.snapshot().messages_failed, 1);
+    }
+
+    #[test]
+    fn record_heartbeat_increments() {
+        let m = ActorMetrics::new();
+        m.record_heartbeat();
+        m.record_heartbeat();
+        assert_eq!(m.snapshot().heartbeats, 2);
+    }
+
+    #[test]
+    fn record_restart_increments() {
+        let m = ActorMetrics::new();
+        m.record_restart();
+        assert_eq!(m.snapshot().restart_count, 1);
+    }
+
+    #[test]
+    fn record_llm_usage_accumulates() {
+        let m = ActorMetrics::new();
+        m.record_llm_usage(100, 50, 1_000_000);
+        m.record_llm_usage(200, 100, 2_000_000);
+        let s = m.snapshot();
+        assert_eq!(s.llm_input_tokens, 300);
+        assert_eq!(s.llm_output_tokens, 150);
+        assert!((s.llm_cost_usd - 0.003).abs() < 1e-9);
+    }
+
+    #[test]
+    fn snapshot_is_clone_and_debug() {
+        let m = ActorMetrics::new();
+        let s = m.snapshot();
+        let _s2 = s.clone();
+        let repr = format!("{s:?}");
+        assert!(repr.contains("MetricsSnapshot"));
+    }
+
+    #[test]
+    fn metrics_is_default() {
+        let m = ActorMetrics::default();
+        assert_eq!(m.snapshot().messages_received, 0);
+    }
+}
+
 /// A point-in-time snapshot of [`ActorMetrics`] that is `Serialize`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsSnapshot {

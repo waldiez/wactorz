@@ -168,12 +168,14 @@ class TimeSeriesCollector(Actor):
             logger.error(f"[{self.name}] aiomqtt not available — collector disabled")
             return
 
+        _last_mqtt_exc: str | None = None
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
                     for pattern in self._topics:
                         await client.subscribe(pattern)
                     logger.info(f"[{self.name}] Subscribed to: {self._topics}")
+                    _last_mqtt_exc = None
 
                     async for msg in client.messages:
                         try:
@@ -190,7 +192,12 @@ class TimeSeriesCollector(Actor):
                 break
             except Exception as e:
                 if self.state not in (ActorState.STOPPED, ActorState.FAILED):
-                    logger.warning(f"[{self.name}] MQTT error: {e}. Reconnecting in 5s...")
+                    exc_str = str(e)
+                    if exc_str != _last_mqtt_exc:
+                        logger.warning(f"[{self.name}] MQTT error: {e}. Reconnecting in 5s...")
+                        _last_mqtt_exc = exc_str
+                    else:
+                        logger.debug(f"[{self.name}] MQTT still unavailable — retrying in 5s…")
                     await asyncio.sleep(5)
 
     def _route_message(self, topic: str, payload: dict):

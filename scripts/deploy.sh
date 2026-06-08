@@ -67,9 +67,9 @@ echo "╚═══════════════════════�
 if [ -f .env ]; then
     set -a; source .env; set +a
     info "Loaded .env"
-elif [ -f .env.example ]; then
-    warn ".env not found — loading .env.example (no secrets will be set)"
-    set -a; source .env.example; set +a
+elif [ -f .env.template ]; then
+    warn ".env not found — loading .env.template (no secrets will be set)"
+    set -a; source .env.template; set +a
 else
     warn "No .env file found — all values must be set in the environment."
 fi
@@ -262,13 +262,13 @@ rsync -az \
     "${DEPLOY_HOST}:${DEPLOY_PATH}/infra/mosquitto/mosquitto.conf"
 ok "infra/mosquitto/mosquitto.conf"
 
-# ── Sync .env.example (preserve existing .env) ───────────────────────────────
+# ── Sync .env.template (preserve existing .env) ───────────────────────────────
 rsync -az \
     -e "${RSYNC_SSH_E}" \
-    .env.example \
-    "${DEPLOY_HOST}:${DEPLOY_PATH}/.env.example"
-ssh_run "[ -f ${DEPLOY_PATH}/.env ] || cp ${DEPLOY_PATH}/.env.example ${DEPLOY_PATH}/.env"
-ok ".env.example synced (existing .env preserved)"
+    .env.template \
+    "${DEPLOY_HOST}:${DEPLOY_PATH}/.env.template"
+ssh_run "[ -f ${DEPLOY_PATH}/.env ] || cp ${DEPLOY_PATH}/.env.template ${DEPLOY_PATH}/.env"
+ok ".env.template synced (existing .env preserved)"
 
 # ── Start Mosquitto (always via Docker) ───────────────────────────────────────
 banner "Starting Mosquitto…"

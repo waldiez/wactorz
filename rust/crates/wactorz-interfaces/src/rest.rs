@@ -36,6 +36,25 @@ use crate::ws::MonitorState;
 use wactorz_core::ActorSystem;
 use wactorz_core::message::{ActorCommand, Message};
 
+/// JSON body for POST /api/reset
+#[derive(Debug, Deserialize)]
+struct ResetRequest {
+    scope: String,
+    agent: Option<String>,
+}
+
+/// JSON body for POST /api/cost/limit
+#[derive(Debug, Deserialize)]
+struct CostLimitRequest {
+    limit_usd: f64,
+    #[serde(default = "default_period")]
+    period: String,
+}
+
+fn default_period() -> String {
+    "monthly".to_string()
+}
+
 /// Runtime config exposed via /api/config (mirrors Python's config_handler).
 #[derive(Clone, Debug, Default)]
 pub struct RuntimeConfig {
@@ -160,6 +179,20 @@ impl RestServer {
             // Global chat log
             .route("/api/chats", get(chat_log_handler))
             .route("/chats", get(chat_log_handler))
+            // Reset
+            .route("/api/reset", post(reset_handler))
+            // Cost tracking
+            .route("/api/cost", get(cost_handler))
+            .route("/cost", get(cost_handler))
+            .route("/api/cost/limit", post(cost_limit_handler))
+            .route("/cost/limit", post(cost_limit_handler))
+            .route("/api/cost/reset", post(cost_reset_handler))
+            .route("/cost/reset", post(cost_reset_handler))
+            // TTS
+            .route("/api/tts/voices", get(tts_voices_handler))
+            .route("/api/tts", get(tts_handler))
+            // HA bridge sync
+            .route("/api/ha/sync", post(ha_sync_handler))
             .with_state(self.state.clone());
 
         // Merge /ws and /mqtt onto the same port so the frontend can reach
@@ -606,5 +639,2145 @@ async fn chat_handler(
                 Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
             }
         }
+    }
+}
+
+// ── Reset ────────────────────────────────────────────────────────────────────
+
+async fn reset_handler(
+    State(state): State<AppState>,
+    Json(body): Json<ResetRequest>,
+) -> axum::response::Response {
+    const VALID: &[&str] = &["chat", "state", "metrics", "spawns", "logs", "all"];
+    if !VALID.contains(&body.scope.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("scope must be one of {VALID:?}") })),
+        )
+            .into_response();
+    }
+    let data_dir = std::path::PathBuf::from(&state.config.data_dir);
+    let scope = body.scope.clone();
+    let agent = body.agent.clone();
+    let result =
+        tokio::task::spawn_blocking(move || do_reset(&data_dir, &scope, agent.as_deref())).await;
+    match result {
+        Ok(Ok(())) => Json(
+            serde_json::json!({ "status": "ok", "scope": body.scope, "agent": body.agent }),
+        )
+        .into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+fn do_reset(data_dir: &std::path::Path, scope: &str, agent: Option<&str>) -> anyhow::Result<()> {
+    match scope {
+        "chat" => do_reset_chat(data_dir, agent),
+        "state" => do_reset_state(data_dir, agent),
+        "metrics" => do_reset_metrics(data_dir, agent),
+        "spawns" => do_reset_spawns(data_dir, agent),
+        "logs" => do_reset_logs(data_dir),
+        "all" => {
+            do_reset_chat(data_dir, agent)?;
+            do_reset_state(data_dir, agent)?;
+            do_reset_metrics(data_dir, agent)?;
+            do_reset_spawns(data_dir, agent)?;
+            do_reset_logs(data_dir)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn do_reset_chat(data_dir: &std::path::Path, agent: Option<&str>) -> anyhow::Result<()> {
+    let db_path = data_dir.join("wactorz.db");
+    if db_path.exists() {
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let _ = conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS chat_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL, agent_name TEXT, role TEXT, content TEXT, session_id TEXT
+            );",
+        );
+        if let Some(name) = agent {
+            let _ = conn.execute(
+                "DELETE FROM chat_log WHERE agent_name = ?",
+                rusqlite::params![name],
+            );
+        } else {
+            let _ = conn.execute("DELETE FROM chat_log", []);
+        }
+    }
+    for_actor_dbs(data_dir, agent, |conn| {
+        let _ = conn.execute(
+            "DELETE FROM kv_store WHERE key IN ('conversation_history', 'history_summary')",
+            [],
+        );
+    });
+    Ok(())
+}
+
+fn do_reset_state(data_dir: &std::path::Path, agent: Option<&str>) -> anyhow::Result<()> {
+    for_actor_dbs(data_dir, agent, |conn| {
+        let _ = conn.execute("DELETE FROM kv_store", []);
+    });
+    Ok(())
+}
+
+fn do_reset_metrics(data_dir: &std::path::Path, agent: Option<&str>) -> anyhow::Result<()> {
+    for_actor_dbs(data_dir, agent, |conn| {
+        let _ = conn.execute(
+            "DELETE FROM kv_store WHERE key IN ('_final_cost', '_messages_processed')",
+            [],
+        );
+    });
+    Ok(())
+}
+
+fn do_reset_spawns(data_dir: &std::path::Path, agent: Option<&str>) -> anyhow::Result<()> {
+    let db_path = data_dir.join("wactorz.db");
+    if db_path.exists() && let Ok(conn) = rusqlite::Connection::open(&db_path) {
+        if let Some(name) = agent {
+            let _ = conn.execute(
+                "DELETE FROM spawn_registry WHERE name = ? OR spawned_by = ?",
+                rusqlite::params![name, name],
+            );
+        } else {
+            let _ = conn.execute("DELETE FROM spawn_registry", []);
+        }
+    }
+    Ok(())
+}
+
+fn do_reset_logs(data_dir: &std::path::Path) -> anyhow::Result<()> {
+    for name in &["wactorz.log", "monitor.log"] {
+        let p = data_dir.join(name);
+        if p.exists() {
+            std::fs::write(&p, b"")?;
+        }
+    }
+    Ok(())
+}
+
+/// Run `f` against the SQLite kv_store of every matching actor DB under `<data_dir>/actors/`.
+fn for_actor_dbs<F: FnMut(&rusqlite::Connection)>(
+    data_dir: &std::path::Path,
+    agent: Option<&str>,
+    mut f: F,
+) {
+    let actors_dir = data_dir.join("actors");
+    if !actors_dir.exists() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(&actors_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("db") {
+            continue;
+        }
+        if let Some(name) = agent {
+            let safe: String = name
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                .collect();
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if stem != safe {
+                continue;
+            }
+        }
+        if let Ok(conn) = rusqlite::Connection::open(&path) {
+            f(&conn);
+        }
+    }
+}
+
+// ── Cost ─────────────────────────────────────────────────────────────────────
+
+async fn cost_handler(State(state): State<AppState>) -> axum::response::Response {
+    let data_dir = std::path::PathBuf::from(&state.config.data_dir);
+    let result =
+        tokio::task::spawn_blocking(move || aggregate_cost(&data_dir)).await;
+    match result {
+        Ok(info) => Json(info).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+fn aggregate_cost(data_dir: &std::path::Path) -> serde_json::Value {
+    let actors_dir = data_dir.join("actors");
+    let mut total_cost = 0.0f64;
+    let mut total_input = 0u64;
+    let mut total_output = 0u64;
+    let mut agents: Vec<serde_json::Value> = Vec::new();
+
+    if actors_dir.exists() && let Ok(entries) = std::fs::read_dir(&actors_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("db") {
+                continue;
+            }
+            let Ok(conn) = rusqlite::Connection::open(&path) else {
+                continue;
+            };
+            let Ok(raw) = conn.query_row(
+                "SELECT value FROM kv_store WHERE key = '_final_cost'",
+                [],
+                |row| row.get::<_, String>(0),
+            ) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            let cost = v.get("cost_usd").and_then(|x| x.as_f64()).unwrap_or(0.0);
+            let input = v.get("input_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+            let output = v.get("output_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+            let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            total_cost += cost;
+            total_input += input;
+            total_output += output;
+            agents.push(serde_json::json!({
+                "name": name,
+                "cost_usd": cost,
+                "input_tokens": input,
+                "output_tokens": output,
+            }));
+        }
+    }
+
+    let (limit_usd, period) = read_cost_limit(data_dir);
+    serde_json::json!({
+        "total_cost_usd": (total_cost * 1_000_000.0).round() / 1_000_000.0,
+        "total_input_tokens": total_input,
+        "total_output_tokens": total_output,
+        "limit_usd": limit_usd,
+        "period": period,
+        "agents": agents,
+    })
+}
+
+fn read_cost_limit(data_dir: &std::path::Path) -> (f64, String) {
+    let db_path = data_dir.join("wactorz.db");
+    if !db_path.exists() {
+        return (0.0, "monthly".to_string());
+    }
+    let Ok(conn) = rusqlite::Connection::open(&db_path) else {
+        return (0.0, "monthly".to_string());
+    };
+    let _ = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    );
+    let Ok(raw) = conn.query_row(
+        "SELECT value FROM kv_store WHERE key = 'cost_limit'",
+        [],
+        |row| row.get::<_, String>(0),
+    ) else {
+        return (0.0, "monthly".to_string());
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return (0.0, "monthly".to_string());
+    };
+    let limit = v.get("limit_usd").and_then(|x| x.as_f64()).unwrap_or(0.0);
+    let period = v
+        .get("period")
+        .and_then(|x| x.as_str())
+        .unwrap_or("monthly")
+        .to_string();
+    (limit, period)
+}
+
+async fn cost_limit_handler(
+    State(state): State<AppState>,
+    Json(body): Json<CostLimitRequest>,
+) -> axum::response::Response {
+    if !["daily", "weekly", "monthly"].contains(&body.period.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "period must be daily, weekly, or monthly" })),
+        )
+            .into_response();
+    }
+    let data_dir = std::path::PathBuf::from(&state.config.data_dir);
+    let limit_usd = body.limit_usd;
+    let period = body.period.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let db_path = data_dir.join("wactorz.db");
+        let conn = rusqlite::Connection::open(&db_path)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )?;
+        let val = serde_json::to_string(&serde_json::json!({ "limit_usd": limit_usd, "period": period }))?;
+        conn.execute(
+            "INSERT INTO kv_store (key, value) VALUES ('cost_limit', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![val],
+        )?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => Json(
+            serde_json::json!({ "ok": true, "limit_usd": body.limit_usd, "period": body.period }),
+        )
+        .into_response(),
+        Ok(Err(e)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn cost_reset_handler(State(state): State<AppState>) -> axum::response::Response {
+    let data_dir = std::path::PathBuf::from(&state.config.data_dir);
+    let result = tokio::task::spawn_blocking(move || {
+        for_actor_dbs(&data_dir, None, |conn| {
+            let _ = conn.execute("DELETE FROM kv_store WHERE key = '_final_cost'", []);
+        });
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => {
+            Json(serde_json::json!({ "ok": true, "total_cost_usd": 0.0 })).into_response()
+        }
+        Ok(Err(e)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── TTS ──────────────────────────────────────────────────────────────────────
+
+async fn tts_voices_handler() -> axum::response::Response {
+    let output = tokio::process::Command::new("edge-tts")
+        .args(["--list-voices"])
+        .output()
+        .await;
+    match output {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            // Parse "Name: ...\nGender: ...\n\n" blocks
+            let mut voices: Vec<serde_json::Value> = Vec::new();
+            let mut name = String::new();
+            let mut gender = String::new();
+            for line in text.lines() {
+                if let Some(v) = line.strip_prefix("Name: ") {
+                    name = v.trim().to_string();
+                } else if let Some(v) = line.strip_prefix("Gender: ") {
+                    gender = v.trim().to_string();
+                } else if line.trim().is_empty() && !name.is_empty() {
+                    let locale: String = name.splitn(3, '-').take(2).collect::<Vec<_>>().join("-");
+                    voices.push(serde_json::json!({ "name": name, "locale": locale, "gender": gender }));
+                    name.clear();
+                    gender.clear();
+                }
+            }
+            if !name.is_empty() {
+                let locale: String = name.splitn(3, '-').take(2).collect::<Vec<_>>().join("-");
+                voices.push(serde_json::json!({ "name": name, "locale": locale, "gender": gender }));
+            }
+            Json(voices).into_response()
+        }
+        _ => Json(serde_json::json!([])).into_response(),
+    }
+}
+
+async fn tts_handler(Query(params): Query<HashMap<String, String>>) -> axum::response::Response {
+    let text = params.get("text").map(|s| s.trim().to_string()).unwrap_or_default();
+    if text.is_empty() {
+        return (StatusCode::BAD_REQUEST, "text param required").into_response();
+    }
+
+    // Strip code blocks and cap at 300 chars — same as Python
+    let clean: String = {
+        let mut s = text.clone();
+        while let (Some(start), Some(end)) = (s.find("```"), s.find("```").and_then(|i| s[i+3..].find("```").map(|j| i + 3 + j + 3))) {
+            s = format!("{}code block{}", &s[..start], &s[end..]);
+        }
+        s.chars().take(300).collect()
+    };
+
+    let default_voice = std::env::var("TTS_VOICE").unwrap_or_else(|_| "en-US-JennyNeural".to_string());
+    let voice = params.get("voice").cloned().unwrap_or(default_voice);
+
+    let tmp = std::env::temp_dir().join(format!("wactorz_tts_{}.mp3", std::process::id()));
+    let result = tokio::process::Command::new("edge-tts")
+        .args(["--text", &clean, "--voice", &voice, "--write-media", tmp.to_str().unwrap_or("/tmp/tts.mp3")])
+        .output()
+        .await;
+
+    match result {
+        Ok(out) if out.status.success() => {
+            match tokio::fs::read(&tmp).await {
+                Ok(audio) => {
+                    let _ = tokio::fs::remove_file(&tmp).await;
+                    (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "audio/mpeg"),
+                         (header::CACHE_CONTROL, "no-store")],
+                        audio,
+                    )
+                        .into_response()
+                }
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            }
+        }
+        _ => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "edge-tts not installed — pip install 'wactorz[tts]' or brew install edge-tts",
+        )
+            .into_response(),
+    }
+}
+
+// ── HA bridge sync ────────────────────────────────────────────────────────────
+
+async fn ha_sync_handler(State(state): State<AppState>) -> axum::response::Response {
+    if state.config.ha_token.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "HA_TOKEN not configured" })),
+        )
+            .into_response();
+    }
+    match state.system.registry.get_by_name("ha-state-bridge").await {
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "ha-state-bridge not running" })),
+        )
+            .into_response(),
+        Some(entry) => {
+            // Send Stop — the supervisor will restart the agent automatically
+            let msg = Message::command(entry.id.clone(), ActorCommand::Stop);
+            match state.system.registry.send(&entry.id, msg).await {
+                Ok(_) => Json(serde_json::json!({ "status": "restarted" })).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            }
+        }
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn setup_global_db(dir: &TempDir) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open(dir.path().join("wactorz.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE chat_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL, agent_name TEXT, role TEXT, content TEXT, session_id TEXT
+             );
+             CREATE TABLE spawn_registry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT, spawned_by TEXT
+             );
+             CREATE TABLE kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn setup_actor_db(dir: &TempDir, name: &str) -> rusqlite::Connection {
+        let actors = dir.path().join("actors");
+        std::fs::create_dir_all(&actors).unwrap();
+        let conn = rusqlite::Connection::open(actors.join(format!("{name}.db"))).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
+        conn
+    }
+
+    // ── reset_chat ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn reset_chat_clears_all_chat_log_rows() {
+        let dir = TempDir::new().unwrap();
+        let conn = setup_global_db(&dir);
+        conn.execute(
+            "INSERT INTO chat_log (ts, agent_name, role, content, session_id) VALUES (1.0, 'a', 'user', 'hi', 's1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chat_log (ts, agent_name, role, content, session_id) VALUES (2.0, 'b', 'assistant', 'hello', 's1')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        do_reset_chat(dir.path(), None).unwrap();
+
+        let conn = rusqlite::Connection::open(dir.path().join("wactorz.db")).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chat_log", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn reset_chat_with_agent_filter_only_removes_that_agent() {
+        let dir = TempDir::new().unwrap();
+        let conn = setup_global_db(&dir);
+        conn.execute("INSERT INTO chat_log (ts, agent_name, role, content, session_id) VALUES (1.0, 'keep', 'user', 'x', 's')", []).unwrap();
+        conn.execute("INSERT INTO chat_log (ts, agent_name, role, content, session_id) VALUES (2.0, 'remove', 'user', 'y', 's')", []).unwrap();
+        drop(conn);
+
+        do_reset_chat(dir.path(), Some("remove")).unwrap();
+
+        let conn = rusqlite::Connection::open(dir.path().join("wactorz.db")).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chat_log", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "only 'remove' rows should be deleted");
+    }
+
+    #[test]
+    fn reset_chat_clears_history_kv_in_actor_db() {
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let actor = setup_actor_db(&dir, "my-agent");
+        actor.execute("INSERT INTO kv_store VALUES ('conversation_history', '[]')", []).unwrap();
+        actor.execute("INSERT INTO kv_store VALUES ('history_summary', '\"\"')", []).unwrap();
+        actor.execute("INSERT INTO kv_store VALUES ('other_key', '\"keep\"')", []).unwrap();
+        drop(actor);
+
+        do_reset_chat(dir.path(), None).unwrap();
+
+        let actor = rusqlite::Connection::open(dir.path().join("actors/my-agent.db")).unwrap();
+        let remaining: Vec<String> = {
+            let mut stmt = actor.prepare("SELECT key FROM kv_store").unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .flatten()
+                .collect()
+        };
+        assert!(!remaining.contains(&"conversation_history".to_string()));
+        assert!(!remaining.contains(&"history_summary".to_string()));
+        assert!(remaining.contains(&"other_key".to_string()));
+    }
+
+    // ── reset_metrics ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn reset_metrics_removes_cost_and_message_count_keys() {
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let actor = setup_actor_db(&dir, "llm");
+        actor.execute("INSERT INTO kv_store VALUES ('_final_cost', '{\"cost_usd\":0.5}')", []).unwrap();
+        actor.execute("INSERT INTO kv_store VALUES ('_messages_processed', '100')", []).unwrap();
+        actor.execute("INSERT INTO kv_store VALUES ('other', '\"keep\"')", []).unwrap();
+        drop(actor);
+
+        do_reset_metrics(dir.path(), None).unwrap();
+
+        let actor = rusqlite::Connection::open(dir.path().join("actors/llm.db")).unwrap();
+        let remaining: Vec<String> = {
+            let mut stmt = actor.prepare("SELECT key FROM kv_store").unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .flatten()
+                .collect()
+        };
+        assert!(!remaining.contains(&"_final_cost".to_string()));
+        assert!(!remaining.contains(&"_messages_processed".to_string()));
+        assert!(remaining.contains(&"other".to_string()));
+    }
+
+    // ── reset_logs ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn reset_logs_truncates_existing_log_files() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("wactorz.log"), b"old log content").unwrap();
+        std::fs::write(dir.path().join("monitor.log"), b"monitor output").unwrap();
+
+        do_reset_logs(dir.path()).unwrap();
+
+        assert_eq!(std::fs::read(dir.path().join("wactorz.log")).unwrap(), b"");
+        assert_eq!(std::fs::read(dir.path().join("monitor.log")).unwrap(), b"");
+    }
+
+    #[test]
+    fn reset_logs_does_not_error_when_log_files_absent() {
+        let dir = TempDir::new().unwrap();
+        assert!(do_reset_logs(dir.path()).is_ok());
+    }
+
+    // ── aggregate_cost ────────────────────────────────────────────────────────
+
+    #[test]
+    fn aggregate_cost_sums_across_all_actor_dbs() {
+        let dir = TempDir::new().unwrap();
+        for (name, cost, inp, out) in [("a", 0.01, 100u64, 50u64), ("b", 0.02, 200, 100)] {
+            let actor = setup_actor_db(&dir, name);
+            let val = serde_json::to_string(&serde_json::json!({
+                "name": name, "cost_usd": cost,
+                "input_tokens": inp, "output_tokens": out,
+            }))
+            .unwrap();
+            actor.execute("INSERT INTO kv_store VALUES ('_final_cost', ?)", rusqlite::params![val]).unwrap();
+        }
+
+        let info = aggregate_cost(dir.path());
+        let total = info["total_cost_usd"].as_f64().unwrap();
+        assert!((total - 0.03).abs() < 1e-6, "total={total}");
+        assert_eq!(info["total_input_tokens"].as_u64().unwrap(), 300);
+        assert_eq!(info["total_output_tokens"].as_u64().unwrap(), 150);
+        assert_eq!(info["agents"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn aggregate_cost_returns_zero_when_no_actor_dbs() {
+        let dir = TempDir::new().unwrap();
+        let info = aggregate_cost(dir.path());
+        assert_eq!(info["total_cost_usd"].as_f64().unwrap(), 0.0);
+        assert_eq!(info["agents"].as_array().unwrap().len(), 0);
+    }
+
+    // ── read_cost_limit ───────────────────────────────────────────────────────
+
+    #[test]
+    fn read_cost_limit_returns_defaults_when_no_db() {
+        let dir = TempDir::new().unwrap();
+        let (limit, period) = read_cost_limit(dir.path());
+        assert_eq!(limit, 0.0);
+        assert_eq!(period, "monthly");
+    }
+
+    #[test]
+    fn read_cost_limit_reads_stored_limit() {
+        let dir = TempDir::new().unwrap();
+        let conn = setup_global_db(&dir);
+        let val = serde_json::to_string(&serde_json::json!({"limit_usd": 5.0, "period": "weekly"})).unwrap();
+        conn.execute("INSERT INTO kv_store VALUES ('cost_limit', ?)", rusqlite::params![val]).unwrap();
+        drop(conn);
+
+        let (limit, period) = read_cost_limit(dir.path());
+        assert!((limit - 5.0).abs() < 1e-9);
+        assert_eq!(period, "weekly");
+    }
+
+    // ── do_reset (integration) ────────────────────────────────────────────────
+
+    #[test]
+    fn do_reset_all_scope_clears_everything() {
+        let dir = TempDir::new().unwrap();
+        let conn = setup_global_db(&dir);
+        conn.execute("INSERT INTO chat_log (ts, agent_name, role, content, session_id) VALUES (1.0, 'x', 'user', 'hi', 's')", []).unwrap();
+        drop(conn);
+        let actor = setup_actor_db(&dir, "agent");
+        actor.execute("INSERT INTO kv_store VALUES ('_final_cost', '{\"cost_usd\":1.0}')", []).unwrap();
+        actor.execute("INSERT INTO kv_store VALUES ('conversation_history', '[]')", []).unwrap();
+        drop(actor);
+        std::fs::write(dir.path().join("wactorz.log"), b"stuff").unwrap();
+
+        do_reset(dir.path(), "all", None).unwrap();
+
+        let conn = rusqlite::Connection::open(dir.path().join("wactorz.db")).unwrap();
+        let chat_count: i64 = conn.query_row("SELECT COUNT(*) FROM chat_log", [], |r| r.get(0)).unwrap();
+        assert_eq!(chat_count, 0);
+        assert_eq!(std::fs::read(dir.path().join("wactorz.log")).unwrap(), b"");
+    }
+
+    #[test]
+    fn do_reset_rejects_unknown_scope_silently() {
+        let dir = TempDir::new().unwrap();
+        // Unknown scope is already rejected by the handler before calling do_reset,
+        // but do_reset itself should not error — it's a no-op.
+        assert!(do_reset(dir.path(), "nonexistent", None).is_ok());
+    }
+
+    // ── do_reset_state ────────────────────────────────────────────────────────
+
+    #[test]
+    fn do_reset_state_clears_kv_store() {
+        let dir = TempDir::new().unwrap();
+        let actor = setup_actor_db(&dir, "state-agent");
+        actor.execute("INSERT INTO kv_store VALUES ('some_key', '\"val\"')", []).unwrap();
+        drop(actor);
+
+        do_reset_state(dir.path(), None).unwrap();
+
+        let actor = rusqlite::Connection::open(dir.path().join("actors/state-agent.db")).unwrap();
+        let count: i64 = actor.query_row("SELECT COUNT(*) FROM kv_store", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    // ── do_reset_spawns ───────────────────────────────────────────────────────
+
+    #[test]
+    fn do_reset_spawns_clears_spawn_registry() {
+        let dir = TempDir::new().unwrap();
+        let conn = setup_global_db(&dir);
+        conn.execute("INSERT INTO spawn_registry (name, spawned_by) VALUES ('child', 'main')", []).unwrap();
+        drop(conn);
+
+        do_reset_spawns(dir.path(), None).unwrap();
+
+        let conn = rusqlite::Connection::open(dir.path().join("wactorz.db")).unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM spawn_registry", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn do_reset_spawns_with_agent_filter() {
+        let dir = TempDir::new().unwrap();
+        let conn = setup_global_db(&dir);
+        conn.execute("INSERT INTO spawn_registry (name, spawned_by) VALUES ('keep', 'main')", []).unwrap();
+        conn.execute("INSERT INTO spawn_registry (name, spawned_by) VALUES ('remove', 'main')", []).unwrap();
+        drop(conn);
+
+        do_reset_spawns(dir.path(), Some("remove")).unwrap();
+
+        let conn = rusqlite::Connection::open(dir.path().join("wactorz.db")).unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM spawn_registry", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn do_reset_spawns_no_db_is_ok() {
+        let dir = TempDir::new().unwrap();
+        assert!(do_reset_spawns(dir.path(), None).is_ok());
+    }
+
+    // ── for_actor_dbs with agent filter ──────────────────────────────────────
+
+    #[test]
+    fn for_actor_dbs_agent_filter_targets_only_named_db() {
+        let dir = TempDir::new().unwrap();
+        setup_actor_db(&dir, "target");
+        setup_actor_db(&dir, "other");
+        let mut visited = Vec::new();
+        for_actor_dbs(dir.path(), Some("target"), |_conn| {
+            visited.push("visited");
+        });
+        assert_eq!(visited.len(), 1);
+    }
+
+    // ── default_period ────────────────────────────────────────────────────────
+
+    #[test]
+    fn default_period_is_monthly() {
+        assert_eq!(default_period(), "monthly");
+    }
+
+    // ── RuntimeConfig ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn runtime_config_default_is_valid() {
+        let c = RuntimeConfig::default();
+        assert!(c.ha_url.is_empty());
+        assert_eq!(c.mqtt_port, 0);
+    }
+
+    // ── RestServer construction ────────────────────────────────────────────────
+
+    #[test]
+    fn rest_server_new_and_router_build() {
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let config = RuntimeConfig {
+            data_dir: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let _router = server.router();
+    }
+
+    #[test]
+    fn rest_server_with_monitor() {
+        use crate::ws::MonitorState;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let config = RuntimeConfig {
+            data_dir: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let monitor = Arc::new(Mutex::new(MonitorState::default()));
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string())
+            .with_monitor(monitor);
+        let _router = server.router();
+    }
+
+    // ── Axum handler tests via tower::ServiceExt ──────────────────────────────
+
+    fn make_state(dir: &TempDir) -> AppState {
+        AppState {
+            system: wactorz_core::ActorSystem::default(),
+            config: RuntimeConfig {
+                data_dir: dir.path().to_str().unwrap().to_string(),
+                ..Default::default()
+            },
+            http: reqwest::Client::new(),
+            monitor: None,
+        }
+    }
+
+    fn build_router(dir: &TempDir) -> axum::Router {
+        let sys = wactorz_core::ActorSystem::default();
+        let config = RuntimeConfig {
+            data_dir: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let server = RestServer::new(
+            sys,
+            "127.0.0.1:0".parse().unwrap(),
+            config,
+            dir.path().to_str().unwrap().to_string(),
+        );
+        server.router()
+    }
+
+    async fn body_bytes(resp: axum::response::Response) -> Vec<u8> {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        bytes.to_vec()
+    }
+
+    #[tokio::test]
+    async fn handler_health_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_list_actors_empty_system() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/actors").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(v.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn handler_get_actor_not_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/actors/no-such-id").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handler_send_message_actor_not_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/actors/no-such/message")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"content":"hello"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handler_stop_actor_not_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/actors/no-such")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handler_pause_actor_not_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/actors/no-such/pause")
+                    .header("Content-Type", "application/json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handler_resume_actor_not_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/actors/no-such/resume")
+                    .header("Content-Type", "application/json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handler_get_metrics_not_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/actors/no-such/metrics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handler_config_returns_json() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/api/config").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(v.get("ha").is_some());
+        assert!(v.get("mqtt").is_some());
+    }
+
+    #[tokio::test]
+    async fn handler_feed_without_monitor_returns_empty_array() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/api/feed").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(v.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn handler_feed_with_monitor_returns_log_feed() {
+        use tower::ServiceExt;
+        use axum::http::{Request, StatusCode};
+        use axum::body::Body;
+        use crate::ws::MonitorState;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let dir = TempDir::new().unwrap();
+        let monitor = Arc::new(Mutex::new(MonitorState::default()));
+        {
+            let mut st = monitor.lock().await;
+            st.log_feed.push(serde_json::json!({"type": "test", "msg": "hello"}));
+        }
+
+        let sys = wactorz_core::ActorSystem::default();
+        let config = RuntimeConfig {
+            data_dir: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let server = RestServer::new(
+            sys,
+            "127.0.0.1:0".parse().unwrap(),
+            config,
+            dir.path().to_str().unwrap().to_string(),
+        )
+        .with_monitor(monitor);
+
+        let resp = server
+            .router()
+            .oneshot(Request::builder().uri("/api/feed").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(!v.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn handler_cost_with_no_actors_returns_zero() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/api/cost").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["total_cost_usd"].as_f64().unwrap(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn handler_cost_limit_invalid_period_returns_bad_request() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/cost/limit")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"limit_usd": 5.0, "period": "yearly"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handler_cost_limit_valid_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/cost/limit")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"limit_usd": 10.0, "period": "monthly"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_cost_limit_no_period_uses_default_monthly() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/cost/limit")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"limit_usd": 5.0}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["period"], "monthly");
+    }
+
+    #[tokio::test]
+    async fn handler_cost_reset_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/cost/reset")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_reset_invalid_scope_returns_bad_request() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reset")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"scope": "invalid"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handler_reset_valid_scope_chat_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reset")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"scope": "chat"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_reset_valid_scope_all_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reset")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"scope": "all"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_chat_agent_not_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"message": "hello", "agent_name": "nonexistent"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handler_chat_default_main_actor_not_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"message": "hello"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handler_actor_history_not_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/actors/no-such/history").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handler_chat_log_empty_db_returns_empty() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/api/chats").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(v.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn handler_chat_log_with_filters_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let conn = setup_global_db(&dir);
+        conn.execute(
+            "INSERT INTO chat_log (ts, agent_name, role, content, session_id) VALUES (1.0, 'alpha', 'user', 'hi', 's1')",
+            [],
+        ).unwrap();
+        drop(conn);
+
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chats?agent=alpha&role=user&since=0&limit=10")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handler_fuseki_sparql_empty_url_returns_503() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/fuseki/mydb/sparql")
+                    .header("Content-Type", "application/sparql-query")
+                    .body(Body::from("SELECT * WHERE { ?s ?p ?o }"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn handler_tts_empty_text_returns_bad_request() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/api/tts?text=").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handler_tts_no_text_param_returns_bad_request() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/api/tts").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handler_tts_with_text_and_no_edge_tts_returns_503() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/api/tts?text=hello+world").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        // edge-tts is not installed in test env → 503
+        assert!(resp.status() == StatusCode::SERVICE_UNAVAILABLE || resp.status() == StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_tts_voices_returns_array() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/api/tts/voices").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(v.is_array()); // empty [] when edge-tts not installed
+    }
+
+    #[tokio::test]
+    async fn handler_ha_sync_empty_token_returns_bad_request() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ha/sync")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handler_ha_sync_no_ha_bridge_returns_not_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        // Provide a non-empty token so we get past the empty-token guard
+        let sys = wactorz_core::ActorSystem::default();
+        let config = RuntimeConfig {
+            ha_token: "test-token".to_string(),
+            data_dir: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ha/sync")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── Actor interaction tests (with registered actors) ──────────────────────
+
+    fn make_test_actor_entry(name: &str, protected: bool) -> (wactorz_core::ActorEntry, tokio::sync::mpsc::Receiver<wactorz_core::message::Message>) {
+        use wactorz_core::ActorMetrics;
+        use wactorz_core::ActorState;
+        use std::sync::Arc;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(10);
+        let entry = wactorz_core::ActorEntry {
+            id: format!("{name}-test-id"),
+            name: name.to_string(),
+            state: ActorState::Running,
+            mailbox: tx,
+            protected,
+            metrics: Arc::new(ActorMetrics::new()),
+            supervisor_id: None,
+        };
+        (entry, rx)
+    }
+
+    #[tokio::test]
+    async fn handler_get_actor_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("test-actor", false);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server.router()
+            .oneshot(Request::builder().uri(format!("/actors/{id}")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_get_metrics_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("metrics-actor", false);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server.router()
+            .oneshot(Request::builder().uri(format!("/actors/{id}/metrics")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_stop_actor_found_and_not_protected() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("stop-actor", false);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server.router()
+            .oneshot(Request::builder().method("DELETE").uri(format!("/actors/{id}")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_stop_actor_protected_returns_forbidden() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("prot-actor", true);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server.router()
+            .oneshot(Request::builder().method("DELETE").uri(format!("/actors/{id}")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn handler_pause_actor_found_and_not_protected() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("pause-actor", false);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server.router()
+            .oneshot(Request::builder().method("POST").uri(format!("/actors/{id}/pause")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_pause_actor_protected_returns_forbidden() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("prot-pause", true);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server.router()
+            .oneshot(Request::builder().method("POST").uri(format!("/actors/{id}/pause")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn handler_resume_actor_found_and_not_protected() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("resume-actor", false);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server.router()
+            .oneshot(Request::builder().method("POST").uri(format!("/actors/{id}/resume")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_resume_actor_protected_returns_forbidden() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("prot-resume", true);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server.router()
+            .oneshot(Request::builder().method("POST").uri(format!("/actors/{id}/resume")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn handler_send_message_found_actor() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("msg-actor", false);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server.router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/actors/{id}/message"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"content":"test message"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_chat_found_actor() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("main-actor", false);
+        sys.registry.register(entry).await;
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server.router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"message": "hello"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_actor_history_found_with_db() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("history-actor", false);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+
+        // Create actor DB with conversation_history
+        let actor_db = setup_actor_db(&dir, "history-actor");
+        let history = serde_json::json!([{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]);
+        actor_db.execute(
+            "INSERT INTO kv_store VALUES ('conversation_history', ?)",
+            rusqlite::params![serde_json::to_string(&history).unwrap()],
+        ).unwrap();
+        drop(actor_db);
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server.router()
+            .oneshot(Request::builder().uri(format!("/actors/{id}/history")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v.as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn rest_server_with_ws_merges_router() {
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let config = RuntimeConfig {
+            data_dir: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let ws_router = axum::Router::new();
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string())
+            .with_ws(ws_router);
+        let _router = server.router();
+    }
+
+    #[tokio::test]
+    async fn handler_ha_sync_with_token_and_ha_bridge_found() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("ha-state-bridge", false);
+        sys.registry.register(entry).await;
+
+        let config = RuntimeConfig {
+            ha_token: "test-token".to_string(),
+            data_dir: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let server = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string());
+        let resp = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ha/sync")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_reset_state_scope_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reset")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"scope": "state"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_reset_metrics_scope_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reset")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"scope": "metrics"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_reset_spawns_scope_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reset")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"scope": "spawns"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_reset_logs_scope_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reset")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"scope": "logs"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_reset_with_agent_filter_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        setup_actor_db(&dir, "my-agent");
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reset")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"scope": "chat", "agent": "my-agent"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_list_actors_api_alias_works() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(Request::builder().uri("/api/actors").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_cost_limit_daily_period_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/cost/limit")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"limit_usd": 1.0, "period": "daily"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_cost_limit_weekly_period_returns_ok() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        setup_global_db(&dir);
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/cost/limit")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"limit_usd": 2.0, "period": "weekly"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn handler_fuseki_update_empty_url_returns_503() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/fuseki/mydb/update")
+                    .header("Content-Type", "application/sparql-update")
+                    .body(Body::from("DELETE WHERE { ?s ?p ?o }"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn aggregate_cost_skips_non_db_and_entries_without_cost() {
+        let dir = TempDir::new().unwrap();
+        let actors_dir = dir.path().join("actors");
+        std::fs::create_dir_all(&actors_dir).unwrap();
+
+        // Non-db file → skipped (covers continue at non-db extension)
+        std::fs::write(actors_dir.join("readme.txt"), b"ignore me").unwrap();
+
+        // DB with no kv_store table → query_row fails → skipped (covers missing key continue)
+        let empty_path = actors_dir.join("empty.db");
+        let _ = rusqlite::Connection::open(&empty_path).unwrap();
+
+        // DB with non-JSON value → serde_json parse fails → skipped (covers bad-json continue)
+        let bad_conn = setup_actor_db(&dir, "badjson");
+        bad_conn
+            .execute("INSERT INTO kv_store VALUES ('_final_cost', 'INVALID')", [])
+            .unwrap();
+        drop(bad_conn);
+
+        let info = aggregate_cost(dir.path());
+        assert_eq!(info["total_cost_usd"].as_f64().unwrap(), 0.0);
+        assert_eq!(info["agents"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn handler_cost_with_actor_db_returns_nonzero_total() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let conn = setup_actor_db(&dir, "cost-agent");
+        let val = serde_json::to_string(&serde_json::json!({
+            "name": "cost-agent",
+            "cost_usd": 0.5,
+            "input_tokens": 1000,
+            "output_tokens": 500,
+        }))
+        .unwrap();
+        conn.execute(
+            "INSERT INTO kv_store VALUES ('_final_cost', ?)",
+            rusqlite::params![val],
+        )
+        .unwrap();
+        drop(conn);
+        // Non-db file to exercise the extension-mismatch continue
+        std::fs::write(dir.path().join("actors").join("notes.txt"), b"").unwrap();
+
+        let resp = build_router(&dir)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/cost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(v["total_cost_usd"].as_f64().unwrap() > 0.0);
+        assert_eq!(v["agents"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn make_state_builds_valid_app_state() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let state = make_state(&dir);
+        // Verify the state has the expected defaults
+        assert!(state.monitor.is_none());
+        assert!(state.config.ha_token.is_empty());
+        // Smoke-test: build a router using AppState directly via oneshot
+        let router = build_router(&dir);
+        let resp = router
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        drop(state);
+    }
+
+    #[tokio::test]
+    async fn handler_list_actors_with_registered_actor_returns_entry() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, _rx) = make_test_actor_entry("list-test", false);
+        sys.registry.register(entry).await;
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let resp = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string())
+            .router()
+            .oneshot(Request::builder().uri("/actors").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = body_bytes(resp).await;
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v.as_array().unwrap().len(), 1);
+        assert_eq!(v[0]["name"], "list-test");
+    }
+
+    #[tokio::test]
+    async fn handler_stop_actor_mailbox_closed_returns_500() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, rx) = make_test_actor_entry("stop-closed", false);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+        drop(rx); // channel receiver dropped → next send() will fail
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let resp = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string())
+            .router()
+            .oneshot(Request::builder().method("DELETE").uri(format!("/actors/{id}")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn handler_pause_actor_mailbox_closed_returns_500() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, rx) = make_test_actor_entry("pause-closed", false);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+        drop(rx);
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let resp = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string())
+            .router()
+            .oneshot(Request::builder().method("POST").uri(format!("/actors/{id}/pause")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn handler_resume_actor_mailbox_closed_returns_500() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, rx) = make_test_actor_entry("resume-closed", false);
+        let id = entry.id.clone();
+        sys.registry.register(entry).await;
+        drop(rx);
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let resp = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string())
+            .router()
+            .oneshot(Request::builder().method("POST").uri(format!("/actors/{id}/resume")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn handler_chat_mailbox_closed_returns_500() {
+        use tower::ServiceExt;
+        use axum::http::Request;
+        use axum::body::Body;
+
+        let dir = TempDir::new().unwrap();
+        let sys = wactorz_core::ActorSystem::default();
+        let (entry, rx) = make_test_actor_entry("main-actor", false);
+        sys.registry.register(entry).await;
+        drop(rx); // mailbox closed
+
+        let config = RuntimeConfig { data_dir: dir.path().to_str().unwrap().to_string(), ..Default::default() };
+        let resp = RestServer::new(sys, "127.0.0.1:0".parse().unwrap(), config, dir.path().to_str().unwrap().to_string())
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"message": "hello"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

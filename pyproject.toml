@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 authors = [{ name = "Wactorz Contributors" }]
 keywords = ["agents", "llm", "actor-model", "mqtt", "multi-agent", "orchestration"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Education",
@@ -94,9 +94,9 @@ wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
 
 [project.urls]
-Homepage      = "https://waldiez.github.io/wactorz/"
+Homepage      = "https://docs.waldiez.io/wactorz/"
 Repository    = "https://github.com/waldiez/wactorz"
-Documentation = "https://waldiez.github.io/wactorz/guide/"
+Documentation = "https://docs.waldiez.io/wactorz/"
 "Bug Tracker" = "https://github.com/waldiez/wactorz/issues"
 
 # ── Version ────────────────────────────────────────────────────────────────────

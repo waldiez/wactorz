@@ -35,12 +35,19 @@ DOCS   = ROOT / "docs"
 SITE   = ROOT / "static" / "docs"
 STATIC = ROOT / "static"
 
+
+def _get_version() -> str:
+    version_file = ROOT / "wactorz" / "_version.py"
+    m = re.search(r'__version__\s*=\s*"([^"]+)"', version_file.read_text(encoding="utf-8"))
+    return m.group(1) if m else "0.0.0"
+
 # ── Navigation definition ──────────────────────────────────────────────────────
 # Each section maps to a subdirectory under site/
 # Format: (label, subdir, [(page_label, md_filename), ...]) or (label, url)
 NAV = [
     ("Guide", "guide", [
         ("Installation", "development.md"),
+        ("Docker Hub",   "dockerhub.md"),
         ("Architecture", "architecture.md"),
         ("Agents",       "agents.md"),
         ("Auto-Wiring",       "mqtt_auto_wiring.md"),
@@ -295,11 +302,23 @@ def build(site_dir: Path = SITE) -> None:
         else:
             shutil.copy(front_icon, favicon)
 
-    # Copy landing page
+    # Copy landing page, stamping the current version into the badge
+    version = _get_version()
     landing = DOCS / "_landing.html"
     if landing.exists():
-        shutil.copy(landing, site_dir / "index.html")
-        print(f"  landing  → static/docs/index.html")
+        text = landing.read_text(encoding="utf-8")
+        text = re.sub(r"v\d+\.\d+\.\d+ · Alpha", f"v{version} · Alpha", text)
+        (site_dir / "index.html").write_text(text, encoding="utf-8")
+        print(f"  landing  → static/docs/index.html  (v{version})")
+
+    # Write versions.json with the current release
+    import json
+    versions = [
+        {"version": "latest", "title": "latest", "aliases": ["stable"]},
+        {"version": version, "title": version},
+    ]
+    (site_dir / "versions.json").write_text(json.dumps(versions, indent=2) + "\n", encoding="utf-8")
+    print(f"  versions → static/docs/versions.json  (v{version})")
 
     # Render each markdown page into its subdir
     first_per_subdir: dict[str, str] = {}

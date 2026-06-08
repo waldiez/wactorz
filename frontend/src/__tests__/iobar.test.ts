@@ -23,11 +23,16 @@ function makeMocks() {
   const voiceInput = {
     isAvailable: true,
     isRecording: false,
+    isAmbient: false,
     start: vi.fn().mockResolvedValue(true),
     stop: vi.fn(),
+    startAmbient: vi.fn().mockReturnValue(true),
+    stopAmbient: vi.fn(),
     onTranscript: null as ((text: string, final: boolean) => void) | null,
     onStop: null as (() => void) | null,
     onError: null as ((msg: string) => void) | null,
+    onWakeWord: null as ((textAfter: string) => void) | null,
+    onAmbientStop: null as (() => void) | null,
   } as any;
 
   return { ioManager, voiceInput };
@@ -244,31 +249,30 @@ describe("IOBar", () => {
 
   // ── voice ─────────────────────────────────────────────────────────────────
 
-  it("pointerdown on mic starts recording when not already recording", async () => {
+  it("click on mic starts recording when not already recording", async () => {
     new IOBar(voiceInput, ioManager);
-    getMic().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1 }));
+    getMic().click();
     await vi.waitFor(() => expect(voiceInput.start).toHaveBeenCalled());
   });
 
-  it("pointerup on mic stops recording", () => {
+  it("click on mic stops recording when already recording", () => {
     voiceInput.isRecording = true;
     new IOBar(voiceInput, ioManager);
-    getMic().dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    getMic().click();
     expect(voiceInput.stop).toHaveBeenCalled();
   });
 
-  it("pointerup is no-op when not recording", () => {
+  it("click on mic does not call stop when not recording", () => {
     voiceInput.isRecording = false;
     new IOBar(voiceInput, ioManager);
-    getMic().dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    getMic().click();
     expect(voiceInput.stop).not.toHaveBeenCalled();
   });
 
-  it("pointercancel on mic stops recording", () => {
-    voiceInput.isRecording = true;
+  it("click on mic adds recording class when start returns true", async () => {
     new IOBar(voiceInput, ioManager);
-    getMic().dispatchEvent(new PointerEvent("pointercancel", { bubbles: true }));
-    expect(voiceInput.stop).toHaveBeenCalled();
+    getMic().click();
+    await vi.waitFor(() => expect(getMic().classList.contains("recording")).toBe(true));
   });
 
   it("Shift+ArrowUp reaches last if-check without resetting histIdx", async () => {
@@ -284,18 +288,32 @@ describe("IOBar", () => {
     expect(input.value).toBe(valueBefore);
   });
 
-  it("pointerdown is no-op when already recording", async () => {
+  it("click on mic does not call start when already recording", async () => {
     voiceInput.isRecording = true;
     new IOBar(voiceInput, ioManager);
-    getMic().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1 }));
+    getMic().click();
     await new Promise((r) => setTimeout(r, 10));
     expect(voiceInput.start).not.toHaveBeenCalled();
+  });
+
+  it("startMic() is no-op when voiceInput is already recording", async () => {
+    voiceInput.isRecording = true;
+    const iobar = new IOBar(voiceInput, ioManager);
+    await iobar.startMic();
+    expect(voiceInput.start).not.toHaveBeenCalled();
+  });
+
+  it("stopMic() is no-op when voiceInput is not recording", () => {
+    voiceInput.isRecording = false;
+    const iobar = new IOBar(voiceInput, ioManager);
+    iobar.stopMic();
+    expect(voiceInput.stop).not.toHaveBeenCalled();
   });
 
   it("start returning false does not add recording class", async () => {
     voiceInput.start.mockResolvedValue(false);
     new IOBar(voiceInput, ioManager);
-    getMic().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1 }));
+    getMic().click();
     await vi.waitFor(() => expect(voiceInput.start).toHaveBeenCalled());
     expect(getMic().classList.contains("recording")).toBe(false);
   });
@@ -353,5 +371,129 @@ describe("IOBar", () => {
     input.dispatchEvent(new Event("input"));
     // Just verify no throw — jsdom doesn't render scrollHeight meaningfully
     expect(true).toBe(true);
+  });
+
+  // ── wake word handler ──────────────────────────────────────────────────────
+
+  it("onWakeWord with empty textAfter calls startMic", async () => {
+    new IOBar(voiceInput, ioManager);
+    voiceInput.onWakeWord!("");
+    await vi.waitFor(() => expect(voiceInput.start).toHaveBeenCalled());
+  });
+
+  it("onWakeWord with textAfter fills input and sends", async () => {
+    new IOBar(voiceInput, ioManager);
+    voiceInput.onWakeWord!("say hello");
+    await vi.waitFor(() => expect(ioManager.send).toHaveBeenCalledWith("say hello", null));
+  });
+
+  it("onAmbientStop hides wake button and sets localStorage", () => {
+    new IOBar(voiceInput, ioManager);
+    voiceInput.onAmbientStop!();
+    const wakeBtn = document.getElementById("wake-btn") as HTMLButtonElement;
+    expect(wakeBtn.style.display).toBe("none");
+    expect(localStorage.getItem("wactorz.wakeActive")).toBe("0");
+  });
+
+  // ── toggleWake ─────────────────────────────────────────────────────────────
+
+  it("toggleWake() when isAmbient=true stops ambient and removes 'ambient' class", () => {
+    voiceInput.isAmbient = true;
+    const iobar = new IOBar(voiceInput, ioManager);
+    iobar.toggleWake();
+    expect(voiceInput.stopAmbient).toHaveBeenCalled();
+    expect(document.getElementById("wake-btn")!.classList.contains("ambient")).toBe(false);
+  });
+
+  it("toggleWake() when isAmbient=false and startAmbient succeeds adds 'ambient' class", () => {
+    voiceInput.isAmbient = false;
+    voiceInput.startAmbient.mockReturnValue(true);
+    const iobar = new IOBar(voiceInput, ioManager);
+    iobar.toggleWake();
+    expect(voiceInput.startAmbient).toHaveBeenCalled();
+    expect(document.getElementById("wake-btn")!.classList.contains("ambient")).toBe(true);
+  });
+
+  it("toggleWake() when isAmbient=false and startAmbient fails shows unavailable title", () => {
+    vi.useFakeTimers();
+    voiceInput.isAmbient = false;
+    voiceInput.startAmbient.mockReturnValue(false);
+    const iobar = new IOBar(voiceInput, ioManager);
+    iobar.toggleWake();
+    expect(document.getElementById("wake-btn")!.title).toContain("unavailable");
+    vi.useRealTimers();
+  });
+
+  it("toggleWake() when not ambient restores title after 4 seconds", () => {
+    vi.useFakeTimers();
+    voiceInput.isAmbient = false;
+    voiceInput.startAmbient.mockReturnValue(false);
+    const iobar = new IOBar(voiceInput, ioManager);
+    iobar.toggleWake();
+    vi.advanceTimersByTime(4001);
+    expect(document.getElementById("wake-btn")!.title).toContain("click to enable");
+    vi.useRealTimers();
+  });
+
+  // ── onTranscript with af-iobar-input in DOM (CardDashboard path) ─────────
+
+  it("onTranscript final=false fills af-iobar-input when present", () => {
+    document.body.innerHTML += `<input id="af-iobar-input">`;
+    new IOBar(voiceInput, ioManager);
+    voiceInput.onTranscript!("hello interim", false);
+    const cdInput = document.getElementById("af-iobar-input") as HTMLInputElement;
+    expect(cdInput.value).toBe("hello interim");
+    expect(ioManager.send).not.toHaveBeenCalled();
+  });
+
+  it("onTranscript final=true dispatches af-send-message and clears af-iobar-input", () => {
+    document.body.innerHTML += `<input id="af-iobar-input">`;
+    new IOBar(voiceInput, ioManager);
+    const eventSpy = vi.fn();
+    document.addEventListener("af-send-message", eventSpy, { once: true });
+    voiceInput.onTranscript!("final text", true);
+    expect(eventSpy).toHaveBeenCalled();
+    const detail = (eventSpy.mock.calls[0]![0] as CustomEvent).detail;
+    expect(detail.content).toBe("final text");
+    const cdInput = document.getElementById("af-iobar-input") as HTMLInputElement;
+    expect(cdInput.value).toBe("");
+  });
+
+  // ── af-iobar-input branch (CardDashboard path) ────────────────────────────
+
+  it("onWakeWord with textAfter dispatches af-send-message when af-iobar-input exists", () => {
+    document.body.innerHTML += `<input id="af-iobar-input">`;
+    new IOBar(voiceInput, ioManager);
+    const eventSpy = vi.fn();
+    document.addEventListener("af-send-message", eventSpy, { once: true });
+    voiceInput.onWakeWord!("open settings");
+    expect(eventSpy).toHaveBeenCalled();
+    const detail = (eventSpy.mock.calls[0]![0] as CustomEvent).detail;
+    expect(detail.content).toBe("open settings");
+  });
+
+  // ── af-wake-btn-cd branch (CardDashboard wake button) ────────────────────
+
+  it("onWakeWord triggers class on af-wake-btn-cd when it exists", () => {
+    document.body.innerHTML += `<button id="af-wake-btn-cd"></button>`;
+    new IOBar(voiceInput, ioManager);
+    voiceInput.onWakeWord!(""); // empty → startMic path, also triggers _syncWakeTriggered
+    const cdWake = document.getElementById("af-wake-btn-cd")!;
+    expect(cdWake.classList.contains("triggered")).toBe(true);
+  });
+
+  it("_syncWakeTriggered removes triggered class from both buttons after 700ms", () => {
+    vi.useFakeTimers();
+    document.body.innerHTML += `<button id="af-wake-btn-cd"></button>`;
+    new IOBar(voiceInput, ioManager);
+    voiceInput.onWakeWord!(""); // triggers _syncWakeTriggered → adds "triggered" + schedules removal
+    const wakeBtn = document.getElementById("wake-btn")!;
+    const cdWake = document.getElementById("af-wake-btn-cd")!;
+    expect(wakeBtn.classList.contains("triggered")).toBe(true);
+    expect(cdWake.classList.contains("triggered")).toBe(true);
+    vi.advanceTimersByTime(750); // fire both 700ms timers
+    expect(wakeBtn.classList.contains("triggered")).toBe(false);
+    expect(cdWake.classList.contains("triggered")).toBe(false);
+    vi.useRealTimers();
   });
 });

@@ -27,6 +27,8 @@ import logging
 import time
 from typing import Optional
 
+import psutil
+
 from ..core.actor import Actor, Message, MessageType, ActorState
 
 logger = logging.getLogger(__name__)
@@ -58,12 +60,24 @@ class MonitorActor(Actor):
         # Cooldown: actor_id -> last time we notified main
         self._last_notified:  dict[str, float] = {}
 
+        # Cached Process object — cpu_percent(interval=None) tracks a delta
+        # between consecutive calls on the SAME instance; creating a new one
+        # each time always returns 0.0.
+        self._proc = psutil.Process()
+
     async def on_start(self):
         if self._registry:
             now = time.time()
             for actor in self._registry.all_actors():
                 if actor.actor_id != self.actor_id:
                     self._last_seen[actor.actor_id] = now
+
+        # Prime the baseline on the cached instance so the first real reading
+        # is meaningful (cpu_percent needs two samples on the same object).
+        try:
+            self._proc.cpu_percent(interval=None)
+        except Exception:
+            pass
 
         self._tasks.append(asyncio.create_task(self._monitor_loop()))
         logger.info(f"[{self.name}] Monitor started. check_interval={self.check_interval}s")
@@ -93,6 +107,7 @@ class MonitorActor(Actor):
                 await self._check_all_actors()
                 await self._check_error_registry()
                 await self._publish_system_health()
+                await self._publish_host_stats()
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -305,3 +320,19 @@ class MonitorActor(Actor):
             ],
         }
         await self._mqtt_publish("system/health", health)
+
+    async def _publish_host_stats(self):
+        try:
+            cpu_pct = self._proc.cpu_percent(interval=None)
+            mem_info = self._proc.memory_info()
+            mem_used_mb = mem_info.rss / 1024 / 1024
+            mem_total_mb = psutil.virtual_memory().total / 1024 / 1024
+            stats = {
+                "cpu":          cpu_pct,
+                "mem_used_mb":  mem_used_mb,
+                "mem_total_mb": mem_total_mb,
+                "timestamp":    time.time(),
+            }
+            await self._mqtt_publish("system/host", stats)
+        except Exception as e:
+            logger.debug(f"[{self.name}] host stats error: {e}")

@@ -7,7 +7,7 @@ First off — thank you. Wactorz is built in the open and every contribution mat
 - **Bug reports** — open a [GitHub issue](https://github.com/waldiez/wactorz/issues/new?template=bug_report.yml)
 - **Feature requests** — open a [feature issue](https://github.com/waldiez/wactorz/issues/new?template=feature_request.yml)
 - **Code** — fork → branch → PR
-- **Docs** — the `docs/` directory is MkDocs Markdown; PRs welcome
+- **Docs** — the `docs/` directory is Markdown built by `scripts/build_docs.py`; PRs welcome
 - **Testing** — add test cases in `tests/`
 
 ## Development Setup
@@ -16,8 +16,8 @@ First off — thank you. Wactorz is built in the open and every contribution mat
 git clone https://github.com/waldiez/wactorz
 cd wactorz
 
-# Python (editable install with all extras)
-pip install -e ".[all,docs]"
+# Python (editable install with all extras and dev tooling)
+pip install -e ".[all,docs,dev]"
 
 # Frontend
 cd frontend && bun install && bun run build && cd ..
@@ -28,7 +28,7 @@ cd frontend && bun install && bun run build && cd ..
 # by CI and published to https://waldiez.github.io/wactorz/api/
 
 # Rust (optional)
-cd rust && cargo build && cd ..
+cargo build
 ```
 
 Run the tests:
@@ -51,9 +51,9 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 
 ## Code Style
 
-- **Python**: `ruff` for linting, `black` for formatting (via pre-commit hooks)
+- **Python**: unit tests and backend parity checks via pre-commit hooks
 - **Rust**: `cargo fmt` + `cargo clippy`
-- **TypeScript**: `biome` (via `bun run lint`)
+- **TypeScript**: Prettier formatting and `bun run typecheck`
 
 Install pre-commit hooks: `pre-commit install`
 
@@ -73,7 +73,7 @@ docs: update MQTT topics reference for 0.2.0
 wactorz/          Python package source
 ├── agents/         Built-in agent implementations
 ├── core/           Actor base, registry, supervisor
-└── interfaces/     CLI, REST, Discord, WhatsApp interfaces
+└── interfaces/     CLI, REST, Discord, WhatsApp, Telegram interfaces
 
 frontend/           Babylon.js web dashboard (TypeScript + Vite)
 rust/               Rust WS bridge and server crates

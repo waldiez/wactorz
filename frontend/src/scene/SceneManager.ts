@@ -74,6 +74,7 @@ export class SceneManager {
   private activeTheme: ThemeBase;
   private cardDashboard: CardDashboard | null = null;
   private socialDashboard: SocialDashboard | null = null;
+  private _remoteNodeLastSeen: Map<string, number> = new Map();
 
   constructor(canvas: HTMLCanvasElement) {
     // ── Engine + Scene ────────────────────────────────────────────────────────
@@ -186,6 +187,9 @@ export class SceneManager {
     // protected:true is sticky — MQTT partial updates (spawn/heartbeat/status)
     // may carry false as a placeholder; never let them overwrite a confirmed true.
     if (existing?.protected) merged.protected = true;
+    // node is sticky — partial updates (status, metrics) never include it, but
+    // we must not lose the remote-node tag or reconcileAgents() will evict it.
+    if (existing?.node) merged.node = existing.node;
     this.agents.set(agent.id, merged);
     if (this.cardDashboard) {
       existing
@@ -219,14 +223,49 @@ export class SceneManager {
 
   updateRemoteNode(name: string, agents: string[]): void {
     this.cardDashboard?.updateRemoteNode(name, agents);
+    if (agents.length > 0) {
+      this._remoteNodeLastSeen.set(name, Date.now());
+    } else {
+      this._remoteNodeLastSeen.delete(name);
+    }
+    // Evict remote agents for this node whose names are no longer in the live list.
+    const liveNames = new Set(agents);
+    const toEvict: string[] = [];
+    for (const [id, agent] of this.agents) {
+      if (agent.node === name && !liveNames.has(agent.name)) toEvict.push(id);
+    }
+    toEvict.forEach((id) => this.removeAgent(id));
+  }
+
+  setHostStats(cpu: number, memUsedMb: number, memTotalMb?: number): void {
+    this.cardDashboard?.setHostStats(cpu, memUsedMb, memTotalMb);
   }
 
   reconcileAgents(liveAgents: AgentInfo[]): void {
     const liveIds = new Set(liveAgents.map((agent) => agent.id));
-    for (const id of this.agents.keys()) {
-      if (!liveIds.has(id)) this.removeAgent(id);
+    for (const [id, agent] of this.agents) {
+      // Remote agents are not in the local REST response — skip them here.
+      // They are evicted by updateRemoteNode() when their node heartbeat
+      // updates the live agent list, or by pruneStaleRemoteAgents() when
+      // the node stops heartbeating.
+      if (!liveIds.has(id) && !agent.node) this.removeAgent(id);
     }
     liveAgents.forEach((agent) => this.addOrUpdateAgent(agent));
+  }
+
+  /** Remove agents belonging to nodes whose heartbeat has gone stale (>3 min). */
+  pruneStaleRemoteAgents(staleMs = 180_000): void {
+    const now = Date.now();
+    const toEvict: string[] = [];
+    for (const [id, agent] of this.agents) {
+      if (!agent.node) continue;
+      const lastSeen = this._remoteNodeLastSeen.get(agent.node);
+      // Only prune if the node has been seen at least once AND has since gone
+      // stale.  If we have never received a node-heartbeat for this node yet,
+      // leave the agent alone — we simply don't have timing data yet.
+      if (lastSeen !== undefined && now - lastSeen > staleMs) toEvict.push(id);
+    }
+    toEvict.forEach((id) => this.removeAgent(id));
   }
 
   onHeartbeat(payload: HeartbeatPayload): void {
@@ -253,6 +292,7 @@ export class SceneManager {
             ? payload.timestampMs
             : Date.now(),
         ).toISOString(),
+        ...(payload.node !== undefined && { node: payload.node }),
       });
       // Immediately pulse the newly created card — without this, the dot
       // blinks infinitely for ~10s until the next scheduled heartbeat.

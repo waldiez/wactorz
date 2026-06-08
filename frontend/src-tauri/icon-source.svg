@@ -20,8 +20,12 @@
       <feGaussianBlur stdDeviation="0.6" result="blur"/>
       <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
+    <clipPath id="wz-clip">
+      <rect width="32" height="32" rx="7"/>
+    </clipPath>
   </defs>
 
+  <g clip-path="url(#wz-clip)">
   <!-- Background -->
   <rect width="32" height="32" rx="7" fill="url(#wz-bg)"/>
 
@@ -50,6 +54,8 @@
   <!-- Dot 5 — top-right — cyan -->
   <circle cx="28.5" cy="6" r="2.6" fill="#22d3ee" filter="url(#wz-dot-glow)"/>
   <circle cx="28.5" cy="6" r="1.1" fill="white" opacity="0.8"/>
+
+  </g>
 
   <!-- Rim -->
   <rect width="32" height="32" rx="7" stroke="#818cf8" stroke-width="0.4" fill="none" opacity="0.22"/>

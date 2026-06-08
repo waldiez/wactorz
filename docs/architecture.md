@@ -20,18 +20,23 @@ The framework is built on three ideas: every agent is an independent **actor** w
 │  Supervisor  ──  ONE_FOR_ONE restart strategy per actor                │
 │  ActorRegistry  ──  name → actor lookup, MQTT publisher                │
 │                                                                        │
-│  MainActor           LLM orchestrator, intent routing, spawn registry  │
-│  MonitorAgent        heartbeat watchdog, alerts main on failure        │
-│  IOAgent             MQTT↔UI gateway, routes chat to main             │
-│  CatalogAgent        pre-built recipe library, spawns on request       │
-│  InstallerAgent      pip installs deps for dynamic agents              │
-│  HomeAssistantAgent  HA REST API — entities, services, automations     │
-│  PlannerAgent        spawned per-request, builds multi-agent pipelines │
-│  DynamicAgent*       LLM-generated Python, spawned at runtime         │
+│  MainActor                  LLM orchestrator, intent routing, spawn reg│
+│  MonitorAgent               heartbeat watchdog, alerts main on failure │
+│  IOAgent                    MQTT↔UI gateway, routes chat to main      │
+│  CatalogAgent               pre-built recipe library, spawns on demand │
+│  InstallerAgent             pip installs deps for dynamic agents       │
+│  HomeAssistantAgent         HA REST API — entities, services, automa…  │
+│  HomeAssistantStateBridge   streams HA state changes → MQTT            │
+│  HomeAssistantMapAgent      entity → friendly name / domain resolver   │
+│  TimeSeriesCollector        writes MQTT streams to SQLite time-series  │
+│  PlannerAgent*              per-request planner, exits after planning  │
+│  DynamicAgent*              LLM-generated Python, spawned at runtime   │
+│  ScheduledAgent*            first-class time triggers                  │
 └────────────────────────────┬───────────────────────────────────────────┘
+   * not in the supervised set — spawned and managed by the spawn registry
                              │  pub / sub
                              ▼
-                    MQTT broker  (embedded, starts with wactorz)
+                    MQTT broker  (separate process — Mosquitto)
                     :1883 TCP  (default)
                              │
               ┌──────────────┴──────────────┐
@@ -40,7 +45,7 @@ The framework is built on three ideas: every agent is an independent **actor** w
    WebSocket API               custom topics, any device or service
 ```
 
-> **💡 One command to start** — Running `wactorz` starts everything — the actor system, and the web dashboard. Note a separate MQTT broker process needed.
+> **💡 One command to start** — Running `wactorz` starts the actor system and the web dashboard. A separate MQTT broker (Mosquitto) must be running first — start it with `docker compose up -d` from the repo root.
 
 ---
 
@@ -85,7 +90,8 @@ class MyAgent(Actor):
 
     async def handle_message(self, msg: Message):
         # Called for every message in the inbox.
-        # msg.type is TASK, RESULT, HEARTBEAT, ERROR, or COMMAND.
+        # msg.type is one of: START, STOP, PAUSE, RESUME, DELETE,
+        # TASK, RESULT, HEARTBEAT, SPAWN, TICK, STATUS_REQUEST, STATUS_RESPONSE.
         if msg.type == MessageType.TASK:
             result = await self._do_work(msg.payload)
             await self.send(msg.reply_to, MessageType.RESULT, result)
@@ -143,10 +149,12 @@ User types:  "@my-agent {"action": "status"}"
 Interface (CLIInterface / DiscordInterface / RESTInterface / WhatsAppInterface / TelegramInterface)
   │  calls main_actor.process_user_input(text)
   ▼
-MainActor._classify_intent()     ← one LLM call: HA | PIPELINE | OTHER
+MainActor._classify_intent()     ← one LLM call: ACTUATE | HA | PIPELINE | OTHER
   │
-  ├── OTHER  →  main.chat()       ← conversational reply
-  ├── HA     →  send to home-assistant-agent
+  ├── ACTUATE  → OneOffActuatorAgent (ephemeral) ← immediate HA device control
+  ├── HA       → send to home-assistant-agent
+  ├── PIPELINE → spawn PlannerAgent → multi-agent pipeline + persisted rule
+  ├── OTHER    → main.chat()       ← conversational reply
   └── @mention detected  →  send directly to named actor
           │
           ▼
@@ -183,13 +191,13 @@ Discord channel
 
 ## LLM Providers
 
-| Provider | Flag | Env var | Default model |
+| Provider | Flag | Env var | Example model |
 |----------|------|---------|---------------|
-| `AnthropicProvider` | `--llm anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
+| `AnthropicProvider` | `--llm anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` (also the global `LLM_MODEL` default) |
 | `OpenAIProvider` | `--llm openai` | `OPENAI_API_KEY` | `gpt-4o` |
-| `OllamaProvider` | `--llm ollama --ollama-model llama3` | — | local |
-| `NIMProvider` | `--llm nim --nim-model meta/llama-3.3-70b-instruct` | `NIM_API_KEY` | free tier |
-| `GeminiProvider` | `--llm gemini --gemini-model gemini-2.5-flash` | `GEMINI_API_KEY` | `gemini-2.5-flash` |
+| `OllamaProvider` | `--llm ollama --ollama-model llama3` | — (local; uses `OLLAMA_URL`) | `llama3`, `mistral`, etc. |
+| `NIMProvider` | `--llm nim --nim-model meta/llama-3.3-70b-instruct` | `NIM_API_KEY` | `meta/llama-3.3-70b-instruct` |
+| `GeminiProvider` | `--llm gemini --gemini-model gemini-2.5-flash` | `GEMINI_API_KEY` | `gemini-2.5-flash` (gemini-only fallback when `LLM_MODEL` is unset) |
 
 All providers implement `complete(messages, system) → (text, usage)` and `stream(messages, system) → AsyncGenerator`. Cost tracking (USD per 1M tokens) is built into every provider and accumulated in `LLMAgent.metrics`.
 
@@ -210,13 +218,13 @@ system.supervisor
   # ... etc
 ```
 
-Dynamic agents (spawned by main or planner) are **not** in the supervision tree — they are managed by the spawn registry. On restart, main re-spawns them from the saved code in `state/main/state.pkl`.
+Dynamic agents (spawned by main or planner) are **not** in the supervision tree — they are managed by the spawn registry. On restart, main re-spawns them from the persisted `_spawned_agents` key in `state/wactorz.db` (SQLite).
 
 ---
 
 ## Running Wactorz
 
-The `wactorz` command starts everything — the actor system, an embedded MQTT broker, and the web dashboard. No separate broker process is needed.
+The `wactorz` command starts the actor system and the web dashboard. It connects to an **external MQTT broker** (Mosquitto) that must already be running. The simplest way is `docker compose up -d` from the repo, which starts Mosquitto on `:1883`.
 
 ```bash
 # Start with Anthropic Claude (default interface: CLI)

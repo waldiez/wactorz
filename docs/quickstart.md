@@ -50,7 +50,7 @@ The script will automatically:
 - Install the Python package
 - Launch Wactorz
 
-When it's running, open your browser at **http://localhost:8080**
+When it's running, open your browser at **http://localhost:8888**
 
 ---
 

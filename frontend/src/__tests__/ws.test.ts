@@ -349,4 +349,216 @@ describe("WSChatClient", () => {
     (globalThis as any).WebSocket = original;
     c.disconnect();
   });
+
+  // ── onLogFeed setter ───────────────────────────────────────────────────────
+
+  it("onLogFeed() registers callback", () => {
+    const c = new WSChatClient();
+    const spy = vi.fn();
+    expect(() => c.onLogFeed(spy)).not.toThrow();
+  });
+
+  // ── reset message ──────────────────────────────────────────────────────────
+
+  it("reset message calls onStatePatch and clears log_feed via onLogFeed", () => {
+    const c = new WSChatClient();
+    const patchSpy = vi.fn();
+    const feedSpy = vi.fn();
+    c.onStatePatch(patchSpy);
+    c.onLogFeed(feedSpy);
+    c.connect("ws://localhost/ws");
+    ws().emit("message", {
+      data: JSON.stringify({
+        type: "reset",
+        scope: "all",
+        state: {
+          agents: [{ agent_id: "a1", name: "alpha" }],
+          log_feed: [{ ts: 1, msg: "hi" }],
+        },
+      }),
+    });
+    expect(patchSpy).toHaveBeenCalledWith(
+      [{ agent_id: "a1", name: "alpha" }], undefined, {},
+    );
+    expect(feedSpy).toHaveBeenCalledWith([{ ts: 1, msg: "hi" }]);
+  });
+
+  it("reset message with scope='chat' dispatches af-reset-chat event", () => {
+    const c = new WSChatClient();
+    c.connect("ws://localhost/ws");
+    const eventSpy = vi.fn();
+    document.addEventListener("af-reset-chat", eventSpy, { once: true });
+    ws().emit("message", {
+      data: JSON.stringify({ type: "reset", scope: "chat", state: { agents: [] } }),
+    });
+    expect(eventSpy).toHaveBeenCalled();
+  });
+
+  it("reset message with scope='all' dispatches af-reset-chat event", () => {
+    const c = new WSChatClient();
+    c.connect("ws://localhost/ws");
+    const eventSpy = vi.fn();
+    document.addEventListener("af-reset-chat", eventSpy, { once: true });
+    ws().emit("message", {
+      data: JSON.stringify({ type: "reset", scope: "all", state: { agents: [] } }),
+    });
+    expect(eventSpy).toHaveBeenCalled();
+  });
+
+  it("reset message with scope='logs' does not dispatch af-reset-chat event", () => {
+    const c = new WSChatClient();
+    c.connect("ws://localhost/ws");
+    const eventSpy = vi.fn();
+    document.addEventListener("af-reset-chat", eventSpy, { once: true });
+    ws().emit("message", {
+      data: JSON.stringify({ type: "reset", scope: "logs", state: { agents: [] } }),
+    });
+    expect(eventSpy).not.toHaveBeenCalled();
+    document.removeEventListener("af-reset-chat", eventSpy);
+  });
+
+  it("reset message with total_cost_usd and total_messages passes stats", () => {
+    const c = new WSChatClient();
+    const patchSpy = vi.fn();
+    c.onStatePatch(patchSpy);
+    c.connect("ws://localhost/ws");
+    ws().emit("message", {
+      data: JSON.stringify({
+        type: "reset", scope: "state",
+        state: { agents: [], total_cost_usd: 2.5, total_messages: 10 },
+      }),
+    });
+    expect(patchSpy).toHaveBeenCalledWith([], undefined, { totalCostUsd: 2.5, totalMessages: 10 });
+  });
+
+  it("reset message with no log_feed does not call onLogFeed", () => {
+    const c = new WSChatClient();
+    const feedSpy = vi.fn();
+    c.onLogFeed(feedSpy);
+    c.connect("ws://localhost/ws");
+    ws().emit("message", {
+      data: JSON.stringify({ type: "reset", scope: "state", state: { agents: [] } }),
+    });
+    expect(feedSpy).not.toHaveBeenCalled();
+  });
+
+  // ── optional-call null paths (_onChat?, _onLogFeed?, _onStreamChunk?) ────
+
+  it("chat message without onChat registered does not throw", () => {
+    const c = new WSChatClient();
+    c.connect("ws://localhost/ws");
+    // _onChat is null → _onChat?.() skips gracefully
+    expect(() => ws().emit("message", { data: JSON.stringify({ type: "chat", content: "hi" }) }))
+      .not.toThrow();
+  });
+
+  it("stream_chunk without onStreamChunk registered does not throw", () => {
+    const c = new WSChatClient();
+    c.connect("ws://localhost/ws");
+    expect(() => ws().emit("message", { data: JSON.stringify({ type: "stream_chunk", content: "part" }) }))
+      .not.toThrow();
+  });
+
+  it("state patch with log_feed but no onLogFeed registered does not throw", () => {
+    const c = new WSChatClient();
+    c.connect("ws://localhost/ws");
+    expect(() => ws().emit("message", {
+      data: JSON.stringify({ state: { log_feed: [{ ts: 1, msg: "hi" }] } }),
+    })).not.toThrow();
+  });
+
+  // ── reset/delete_agent branch coverage ──────────────────────────────────
+
+  it("reset message without scope field uses empty string for scope (covers ?? '')", () => {
+    const c = new WSChatClient();
+    c.connect("ws://localhost/ws");
+    const eventSpy = vi.fn();
+    document.addEventListener("af-reset-chat", eventSpy, { once: true });
+    ws().emit("message", {
+      data: JSON.stringify({ type: "reset", state: { agents: [] } }), // no scope field
+    });
+    expect(eventSpy).not.toHaveBeenCalled(); // scope="" doesn't match "chat" or "all"
+    document.removeEventListener("af-reset-chat", eventSpy);
+  });
+
+  it("reset message without agents in state uses empty array (covers ?? [])", () => {
+    const c = new WSChatClient();
+    const spy = vi.fn();
+    c.onStatePatch(spy);
+    c.connect("ws://localhost/ws");
+    ws().emit("message", {
+      data: JSON.stringify({ type: "reset", scope: "state", state: {} }), // no agents field
+    });
+    expect(spy).toHaveBeenCalledWith([], undefined, {});
+  });
+
+  it("delete_agent with log_feed in state calls onLogFeed (covers line 228 truthy branch)", () => {
+    const c = new WSChatClient();
+    const feedSpy = vi.fn();
+    c.onLogFeed(feedSpy);
+    c.connect("ws://localhost/ws");
+    ws().emit("message", {
+      data: JSON.stringify({
+        type: "delete_agent",
+        agent_id: "gone",
+        state: { agents: [], log_feed: [{ ts: 1, msg: "bye" }] },
+      }),
+    });
+    expect(feedSpy).toHaveBeenCalledWith([{ ts: 1, msg: "bye" }]);
+  });
+
+  it("delete_agent without agent_id uses empty string (covers ?? '')", () => {
+    const c = new WSChatClient();
+    const spy = vi.fn();
+    c.onStatePatch(spy);
+    c.connect("ws://localhost/ws");
+    ws().emit("message", {
+      data: JSON.stringify({ type: "delete_agent", state: { agents: [] } }), // no agent_id
+    });
+    expect(spy).toHaveBeenCalledWith([], "", {});
+  });
+
+  // ── close after intentional disconnect ────────────────────────────────────
+
+  it("close event after intentional disconnect does not schedule reconnect", () => {
+    const c = new WSChatClient();
+    c.connect("ws://localhost/ws");
+    c.disconnect(); // _closed = true
+    ws().emit("close", {}); // !_closed is false → no reconnect
+    vi.runAllTimers();
+    expect(instances.length).toBe(1); // no new connection
+  });
+
+  // ── null content in chat / stream_chunk ───────────────────────────────────
+
+  it("chat message with no content uses empty string", () => {
+    const c = new WSChatClient();
+    const spy = vi.fn();
+    c.onChat(spy);
+    c.connect("ws://localhost/ws");
+    ws().emit("message", { data: JSON.stringify({ type: "chat", from: "agent" }) });
+    expect(spy.mock.calls[0]![0]).toBe("");
+  });
+
+  it("stream_chunk with no content uses empty string", () => {
+    const c = new WSChatClient();
+    const spy = vi.fn();
+    c.onStreamChunk(spy);
+    c.connect("ws://localhost/ws");
+    ws().emit("message", { data: JSON.stringify({ type: "stream_chunk", from: "agent" }) });
+    expect(spy.mock.calls[0]![0]).toBe("");
+  });
+
+  // ── state patch with empty log_feed ──────────────────────────────────────
+
+  it("state patch with empty log_feed array does not call onLogFeed", () => {
+    const c = new WSChatClient();
+    const spy = vi.fn();
+    c.onLogFeed(spy);
+    c.connect("ws://localhost/ws");
+    ws().emit("message", {
+      data: JSON.stringify({ state: { agents: [], log_feed: [] } }),
+    });
+    expect(spy).not.toHaveBeenCalled();
+  });
 });

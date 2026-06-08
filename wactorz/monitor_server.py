@@ -850,11 +850,12 @@ def parse_topic(topic: str, payload_str: str):
                 uptime = float(uptime)
             except (TypeError, ValueError):
                 uptime = 0.0
-            if uptime < 10.0:
+            agent_state = data.get("state", "")
+            if uptime < 10.0 and agent_state not in ("stopped", "failed"):
                 _undelete(agent_id)
                 logger.info(
                     f"[MQTT] Re-admitting respawned agent {agent_id[:8]} "
-                    f"(uptime={uptime:.1f}s, previously deleted)"
+                    f"(uptime={uptime:.1f}s, state={agent_state}, previously deleted)"
                 )
 
         # If the agent was just deleted, update_agent() refuses to recreate
@@ -903,6 +904,31 @@ def parse_topic(topic: str, payload_str: str):
         elif metric == "spawned":
             add_log({"type": "spawned", "agent_id": agent_id, "timestamp": time.time(),
                      **(data if isinstance(data, dict) else {})})
+        elif metric == "chat":
+            # User-facing message pushed by an agent via Actor.notify_user().
+            # Forward it to the chat panel as a live chat frame (in addition to
+            # the dashboard feed). The frame is carried under "_push_chat";
+            # mqtt_listener does the broadcast since parse_topic is synchronous.
+            sender  = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            content = ""
+            if isinstance(data, dict):
+                content = (data.get("content") or data.get("text") or "").strip()
+                sender  = data.get("from") or sender
+            elif isinstance(data, str):
+                content = data.strip()
+            if content:
+                add_log({"type": "chat", "agent_id": agent_id, "from": sender,
+                         "content": content, "timestamp": time.time()})
+                return {
+                    "type": "agent", "agent_id": agent_id, "metric": "chat", "data": data,
+                    "_push_chat": {
+                        "type":      "chat",
+                        "from":      sender,
+                        "content":   content,
+                        "timestamp": time.time(),
+                    },
+                }
+            return {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
         elif metric == "completed":
             update_agent(agent_id, "last_completed", data)
             add_log({"type": "completed", "agent_id": agent_id, "timestamp": time.time()})
@@ -1067,6 +1093,22 @@ async def mqtt_listener():
                             metric    = event.get("metric", "")
                             log_event = None if metric == "heartbeat" else event
                             await broadcast({"type": "patch", "event": log_event, "state": _snapshot()})
+                            # Agent-originated user-facing message → push to the
+                            # chat panel as a live chat frame, and persist it so
+                            # it survives a browser reload like any other turn.
+                            push = event.get("_push_chat")
+                            if push:
+                                await broadcast(push)
+                                try:
+                                    if db is not None and push.get("content"):
+                                        db.write_chat_log(
+                                            ts=push.get("timestamp", time.time()),
+                                            agent_name=push.get("from", "agent"),
+                                            role="assistant",
+                                            content=push["content"],
+                                        )
+                                except Exception as _exc:
+                                    logger.debug(f"[chat-bridge] persist failed: {_exc}")
 
             except Exception as e:
                 mqtt_client_ref = None
@@ -1187,10 +1229,12 @@ async def static_handler(request):
                     content = content.replace('"/api/', f'"{ingress_path}/api/')
                     content = content.replace('"/config"', f'"{ingress_path}/config"')
                     content = content.replace('"/actors"', f'"{ingress_path}/actors"')
-                    # FORCE the WebSocket to use port 8888 instead of HA's 8123
-                    content = content.replace('"ws://localhost:9001"', f'"ws://{request.host.split(":")[0]}:8888/mqtt"')
-                    content = content.replace('`ws://${location.host}/ws`', f'`ws://${{location.hostname}}:8888/ws`')
-                    content = content.replace('`ws://${location.host}/mqtt`', f'`ws://${{location.hostname}}:8888/mqtt`')
+                    # Point the WebSocket at the monitor's actual port (WS_PORT),
+                    # not HA's 8123. WS_PORT is where the /ws and /mqtt proxies live.
+                    host = request.host.split(":")[0]
+                    content = content.replace('"ws://localhost:9001"', f'"ws://{host}:{WS_PORT}/mqtt"')
+                    content = content.replace('`ws://${location.host}/ws`', f'`ws://${{location.hostname}}:{WS_PORT}/ws`')
+                    content = content.replace('`ws://${location.host}/mqtt`', f'`ws://${{location.hostname}}:{WS_PORT}/mqtt`')
                     
                     return _with_no_cache(web.Response(text=content, content_type="application/javascript"))
                 
@@ -1264,7 +1308,14 @@ async def mqtt_proxy_handler(request):
     raw_proto = request.headers.get("Sec-WebSocket-Protocol", "")
     protocols = [p.strip() for p in raw_proto.split(",") if p.strip()]
     client_ws = web.WebSocketResponse(protocols=protocols)
-    await client_ws.prepare(request)
+    try:
+        await client_ws.prepare(request)
+    except Exception as exc:
+        logger.error("[MQTT proxy] WebSocket handshake failed — %s | headers: %s",
+                     exc, dict(request.headers))
+        raise
+
+    logger.debug("[MQTT proxy] WS accepted from %s proto=%s", request.remote, protocols)
 
     upstream_url = f"ws://{MQTT_BROKER}:{MQTT_WS_PORT}/"
     try:
@@ -1275,6 +1326,7 @@ async def mqtt_proxy_handler(request):
                 headers={"Sec-WebSocket-Protocol": ",".join(protocols)} if protocols else {},
                 timeout=aiohttp.ClientTimeout(connect=2),
             ) as upstream_ws:
+                logger.debug("[MQTT proxy] upstream WS connected → %s", upstream_url)
                 async def forward(src, dst):
                     async for msg in src:
                         if msg.type == WSMsgType.BINARY:
@@ -1286,7 +1338,8 @@ async def mqtt_proxy_handler(request):
                 await asyncio.gather(forward(client_ws, upstream_ws), forward(upstream_ws, client_ws))
         return client_ws
     except Exception as exc:
-        logger.info("MQTT WS proxy unavailable (%s), falling back to TCP bridge", exc)
+        logger.info("[MQTT proxy] upstream WS unavailable (%s), falling back to TCP bridge %s:%s",
+                    exc, MQTT_BROKER, MQTT_PORT)
 
     await _bridge_mqtt_tcp(client_ws, MQTT_BROKER, MQTT_PORT)
     return client_ws
@@ -1425,30 +1478,29 @@ async def reset_handler(request):
     scope = body.get("scope", "")
     agent = body.get("agent") or None
 
-    valid = {"chat", "state", "metrics", "spawns", "all"}
+    valid = {"chat", "state", "metrics", "spawns", "logs", "all"}
     if scope not in valid:
         return web.json_response(
             {"error": f"scope must be one of {sorted(valid)}"}, status=400
         )
 
-    from wactorz.reset import (
-        reset_chat, reset_agent_state, reset_metrics, reset_spawns,
-        reset_all, _reset_all_pickles,
-    )
+    import wactorz.reset as _reset
 
     if scope == "all":
-        reset_all(agent)
+        _reset.reset_all(agent)
     elif scope == "chat":
-        reset_chat(agent)
+        _reset.reset_chat(agent)
     elif scope == "state":
         if agent:
-            reset_agent_state(agent)
+            _reset.reset_agent_state(agent)
         else:
-            _reset_all_pickles()
+            _reset._reset_all_pickles()
     elif scope == "metrics":
-        reset_metrics(agent)
+        _reset.reset_metrics(agent)
     elif scope == "spawns":
-        reset_spawns(agent)
+        _reset.reset_spawns(agent)
+    elif scope == "logs":
+        _reset.reset_logs()
 
     # Clear in-memory dashboard state for the affected agents
     if scope in ("all", "chat", "metrics"):
@@ -1554,6 +1606,12 @@ async def actors_handler(request):
     # Prefer the live registry (injected by cli.py) — actor objects carry the
     # authoritative protected flag.  Fall back to MQTT-derived state dict when
     # the registry is unavailable (standalone monitor_server mode).
+    #
+    # CONTRACT: the registry path intentionally excludes remote-runner agents
+    # (they are not in the local Python registry).  The frontend relies on this
+    # to distinguish local vs remote agents: any agent absent from this response
+    # but present via MQTT heartbeat with a "node" field is a remote agent and
+    # must NOT be evicted by the 15-second REST reconcile cycle.
     if registry is not None:
         result = []
         for actor in registry.all_actors():
@@ -1650,9 +1708,18 @@ async def _start_ha_bridge(_app=None) -> None:
     if not CONFIG.ha_token or not CONFIG.fuseki_url:
         return
     try:
-        from .fuseki import HAFusekiBridge, _run_with_retry
+        from .fuseki import HAFusekiBridge, _run_with_retry, fuseki_reachable
     except Exception as exc:
         logger.warning("[ha-bridge] Could not import HAFusekiBridge: %s", exc)
+        return
+
+    # Don't start the bridge if Fuseki isn't actually running — otherwise it
+    # connects to HA and then fails to write every state change, flooding the
+    # log. If you're not using Fuseki, the bridge simply stays off.
+    if not await fuseki_reachable(CONFIG.fuseki_url):
+        logger.info("[ha-bridge] Fuseki not reachable at %s — HA→Fuseki bridge "
+                    "disabled. (Start Fuseki and POST /api/ha/sync to enable, "
+                    "or ignore if you don't use Fuseki.)", CONFIG.fuseki_url)
         return
 
     bridge = HAFusekiBridge(
@@ -1761,13 +1828,13 @@ async def config_handler(request):
 
     # Ingress support: HA sets X-Ingress-Path
     ingress_path = request.headers.get("X-Ingress-Path", "")
-    
-    # Force the host to use port 8888 for WebSockets
+
+    # The /mqtt and /ws proxies are served by *this* server, so point the
+    # frontend at the monitor's actual port (WS_PORT), not a hardcoded one.
     raw_host = request.host.split(":")[0]
-    ws_host = f"{raw_host}:8888"
+    ws_host = f"{raw_host}:{WS_PORT}"
     protocol = "wss" if request.secure else "ws"
-    
-    # WebSocket URLs go direct to 8888
+
     mqtt_url = f"{protocol}://{ws_host}/mqtt"
     ws_url   = f"{protocol}://{ws_host}/ws"
 
@@ -1895,7 +1962,24 @@ async def main(exit_on_failure: bool = False):
             raise SystemExit(1)
         return
 
-    app = web.Application()
+    @web.middleware
+    async def _cors_middleware(request, handler):
+        if request.method == "OPTIONS":
+            return web.Response(headers={
+                "Access-Control-Allow-Origin":  "*",
+                "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            })
+        response = await handler(request)
+        try:
+            response.headers["Access-Control-Allow-Origin"]  = "*"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        except Exception:
+            pass
+        return response
+
+    app = web.Application(middlewares=[_cors_middleware])
     app.router.add_get("/",                      index_handler)
     app.router.add_get("/health",                health_handler)
     app.router.add_get("/api/cost",              cost_handler)

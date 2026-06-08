@@ -1,6 +1,6 @@
 # Installation
 
-Wactorz requires Python 3.10+ and a running MQTT broker. The `wactorz` command starts everything — the actor system, the embedded broker, and the web dashboard.
+Wactorz requires Python 3.10+ and a running MQTT broker (Mosquitto). The `wactorz` command starts the actor system and the web dashboard — start Mosquitto first with `docker compose up -d`.
 
 ---
 
@@ -37,10 +37,13 @@ The `[all]` extra installs everything except the ML stack (heavy torch dependenc
 |---|---|---|
 | `wactorz[anthropic]` | `anthropic` | `--llm anthropic` (default) |
 | `wactorz[openai]` | `openai` | `--llm openai` |
-| `wactorz[google]` | `google-generativeai` | `--llm gemini` |
+| `wactorz[google]` | `google-genai` | `--llm gemini` |
 | `wactorz[discord]` | `discord.py` | `--interface discord` |
 | `wactorz[whatsapp]` | `twilio` | `--interface whatsapp` |
 | `wactorz[mcp]` | `mcp` | MCP-compatible clients |
+| `wactorz[otel]` | OpenTelemetry SDK/exporter | OTLP tracing |
+| `wactorz[influx]` | `influxdb-client` | InfluxDB time-series export |
+| `wactorz[tts]` | `edge-tts` | text-to-speech support |
 | `wactorz[ml]` | `ultralytics`, `torch`, `numpy` | webcam detection pipelines |
 | `wactorz[all]` | all of the above except `ml` | recommended starting point |
 
@@ -133,13 +136,12 @@ WACTORZ_API_KEY=              # optional; mirrors API_KEY for REST auth
 # Only needed if using an external broker instead of the embedded one
 MQTT_HOST=localhost
 MQTT_PORT=1883
-MQTT_WS_PORT=9001
 ```
 
 #### Web dashboard
 
 ```env
-MONITOR_PORT=8888   # dashboard port, default 8888
+WS_PORT=8888   # dashboard port, default 8888
 ```
 
 ---
@@ -290,7 +292,7 @@ docker compose --profile python-full down -v
 
 ```bash
 # Rebuild and restart just the Python app
-docker compose --profile python-full up -d --build wactorz
+docker compose --profile python-full up -d --build wactorz-python
 
 # Full teardown and clean rebuild
 docker compose --profile python-full down -v
@@ -358,6 +360,8 @@ wactorz/                         ← repo root
 │   │   ├── main_actor.py        ← LLM orchestrator
 │   │   ├── llm_agent.py         ← LLM base + all providers
 │   │   ├── home_assistant_agent.py
+│   │   ├── prompts/
+│   │   │   └── home_assistant_prompts.py  ← HA LLM system prompts
 │   │   ├── home_assistant_state_bridge_agent.py
 │   │   ├── home_assistant_map_agent.py
 │   │   ├── monitor_agent.py
@@ -367,8 +371,6 @@ wactorz/                         ← repo root
 │   ├── interfaces/
 │   │   ├── chat_interfaces.py   ← CLI, REST, Discord, WhatsApp, Telegram
 │   │   └── mcp_server.py        ← MCP tools/resources for compatible clients
-│   └── static/
-│       └── docs/                ← documentation (served at /docs/)
 ├── static/                      ← source docs + frontend SPA
 ├── state/                       ← agent persistence (created at runtime)
 ├── Dockerfile                   ← Python app container
@@ -416,7 +418,7 @@ touch wactorz/catalogue_agents/my_agent.py
 
 ```bash
 pip install -e ".[dev]"
-pytest
+python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 ---
@@ -444,23 +446,48 @@ mosquitto_sub -h localhost -t 'agents/+/logs' -v
 
 #### Read persistence state
 
+The spawn registry, user facts, and pipeline rules now live in SQLite (`state/wactorz.db`), routed automatically by `PersistenceAPI`. Read them with:
+
 ```python
 python3 -c "
-import pickle
-data = pickle.load(open('state/main/state.pkl', 'rb'))
-print('Spawn registry:', list(data.get('_spawned_agents', {}).keys()))
-print('User facts:', data.get('_user_facts', {}))
+import sqlite3, json
+conn = sqlite3.connect('state/wactorz.db')
+row = conn.execute(
+    \"SELECT value FROM kv_store WHERE agent='main' AND key='_spawned_agents'\"
+).fetchone()
+spawned = json.loads(row[0]) if row else {}
+print('Spawn registry:', list(spawned.keys()))
+
+row = conn.execute(
+    \"SELECT value FROM kv_store WHERE agent='main' AND key='_user_facts'\"
+).fetchone()
+print('User facts:', json.loads(row[0]) if row else {})
 "
+```
+
+The `spawn_registry` table also holds spawn configs in a structured form:
+
+```bash
+sqlite3 state/wactorz.db "SELECT name, node FROM spawn_registry;"
 ```
 
 #### Remove a stuck agent from the spawn registry
 
 ```python
 python3 -c "
-import pickle
-data = pickle.load(open('state/main/state.pkl', 'rb'))
-data['_spawned_agents'].pop('my-stuck-agent', None)
-pickle.dump(data, open('state/main/state.pkl', 'wb'))
-print('Done. Remaining:', list(data['_spawned_agents'].keys()))
+import sqlite3, json
+conn = sqlite3.connect('state/wactorz.db')
+row = conn.execute(
+    \"SELECT value FROM kv_store WHERE agent='main' AND key='_spawned_agents'\"
+).fetchone()
+spawned = json.loads(row[0]) if row else {}
+spawned.pop('my-stuck-agent', None)
+conn.execute(
+    \"UPDATE kv_store SET value=? WHERE agent='main' AND key='_spawned_agents'\",
+    (json.dumps(spawned),),
+)
+conn.execute(\"DELETE FROM spawn_registry WHERE name='my-stuck-agent'\")
+conn.commit()
+print('Done. Remaining:', list(spawned.keys()))
 "
 ```

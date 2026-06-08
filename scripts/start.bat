@@ -16,7 +16,7 @@ powershell -ExecutionPolicy Bypass -Command ^
   "if(Is-Repo $cwd){ $r=$cwd; Set-Location $r; git fetch; git pull }" ^
   "elseif(Is-Repo $default){ $r=$default; Set-Location $r; git fetch; git pull }" ^
   "else{ if(-not(Test-Path 'C:\waldiez')){ New-Item -ItemType Directory 'C:\waldiez'|Out-Null }; Set-Location 'C:\waldiez'; git clone https://github.com/waldiez/wactorz; $r=$default; Set-Location $r };" ^
-  "$env=$r+'\.env'; $ex=$r+'\.env.example';" ^
+  "$env=$r+'\.env'; $ex=$r+'\.env.template';" ^
   "if(Test-Path $env){ $c=Get-Content $env -Raw; if($c -notmatch 'LLM_API_KEY\s*=\s*\S+'){ Write-Host 'WARNING: LLM_API_KEY missing in .env — opening file...'; Start-Process notepad $env -Wait } }" ^
   "elseif(Test-Path $ex){ Copy-Item $ex $env; Write-Host '.env created — opening for you to fill in your API key...'; Start-Process notepad $env -Wait };" ^
   "try{ $s=docker inspect --format '{{.State.Status}}' mosquitto 2>$null } catch { $s='missing' };" ^

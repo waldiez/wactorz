@@ -274,11 +274,20 @@ describe("MQTTClient", () => {
     expect(spy).toHaveBeenCalled();
   });
 
-  it("emits 'disconnected' on TCP-level close event", () => {
-    const spy = vi.fn();
-    client.on("disconnected", spy);
-    mockHandlers["close"]?.();
-    expect(spy).toHaveBeenCalled();
+  it("emits 'disconnected' on TCP-level close event (after debounce)", () => {
+    vi.useFakeTimers();
+    try {
+      const spy = vi.fn();
+      client.on("disconnected", spy);
+      mockHandlers["close"]?.();
+      // The close handler debounces by 6 s so a quick reconnect doesn't flip
+      // the badge to "Demo fallback". Nothing should fire before then.
+      expect(spy).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(6000);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("emits 'error' on broker error", () => {
@@ -413,6 +422,39 @@ describe("MQTTClient", () => {
     client.on("system-health", spy);
     triggerMessage("system/health", { status: "ok" });
     expect(spy).toHaveBeenCalledOnce();
+  });
+
+  // ── system/host ───────────────────────────────────────────────────────────────
+
+  it("routes system/host → 'host-stats' with camelCase fields", () => {
+    const spy = vi.fn();
+    client.on("host-stats", spy);
+    triggerMessage("system/host", { cpu: 45.2, memUsedMb: 1024, memTotalMb: 8192 });
+    expect(spy).toHaveBeenCalledOnce();
+    const s = spy.mock.calls[0]![0];
+    expect(s.cpu).toBe(45.2);
+    expect(s.memUsedMb).toBe(1024);
+    expect(s.memTotalMb).toBe(8192);
+  });
+
+  it("routes system/host → 'host-stats' with snake_case alt fields", () => {
+    const spy = vi.fn();
+    client.on("host-stats", spy);
+    triggerMessage("system/host", { cpu_pct: 60.0, mem_used_mb: 2048, mem_total_mb: 16384 });
+    const s = spy.mock.calls[0]![0];
+    expect(s.cpu).toBe(60.0);
+    expect(s.memUsedMb).toBe(2048);
+    expect(s.memTotalMb).toBe(16384);
+  });
+
+  it("routes system/host → 'host-stats' omitting non-numeric fields", () => {
+    const spy = vi.fn();
+    client.on("host-stats", spy);
+    triggerMessage("system/host", { cpu: "high", memUsedMb: null, memTotalMb: undefined });
+    const s = spy.mock.calls[0]![0];
+    expect(s.cpu).toBeUndefined();
+    expect(s.memUsedMb).toBeUndefined();
+    expect(s.memTotalMb).toBeUndefined();
   });
 
   it("routes system/coin → 'coin'", () => {

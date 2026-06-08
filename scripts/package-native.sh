@@ -13,7 +13,7 @@
 #   systemd/wactorz.service  systemd unit template
 #   scripts/build-native.sh    rebuild from source if Rust is on host
 #   deploy-native.sh        deployment wizard
-#   .env.example
+#   .env.template
 #
 # Prerequisites (build machine):
 #   • Docker + buildx (to cross-compile the binary for linux/amd64)
@@ -93,7 +93,7 @@ cp systemd/wactorz.service          "${WORK_DIR}/systemd/wactorz.service"
 # Scripts
 cp scripts/build-native.sh            "${WORK_DIR}/scripts/build-native.sh"
 cp scripts/mock-agents.mjs            "${WORK_DIR}/scripts/mock-agents.mjs"
-cp .env.example                       "${WORK_DIR}/.env.example"
+cp .env.template                       "${WORK_DIR}/.env.template"
 chmod +x "${WORK_DIR}/scripts/build-native.sh"
 
 # ── 4. deploy-native.sh ───────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ info "Binary: ./wactorz  (arch: ${ARCH})"
 
 # ── Environment ───────────────────────────────────────────────────────────────
 banner "Configuring environment…"
-[ -f .env ] || { cp .env.example .env; echo "  Created .env from template."; }
+[ -f .env ] || { cp .env.template .env; echo "  Created .env from template."; }
 
 get_env() { grep -E "^${1}=" .env 2>/dev/null | cut -d= -f2- || true; }
 set_env() {
@@ -259,7 +259,7 @@ The wizard:
 docker compose -f compose.native.yaml up -d
 
 # 2. Configure environment
-cp .env.example .env
+cp .env.template .env
 nano .env   # set LLM_API_KEY at minimum
 
 # 3. Run wactorz

@@ -25,7 +25,7 @@
 #   :8080  → Rust API                  API_EXTERNAL_PORT        (rust/full)
 #   :8123  → Home Assistant                                      (full)
 #
-# Copy .env.example → .env and fill in secrets before running.
+# Copy .env.template → .env and fill in secrets before running.
 
 name: wactorz
 

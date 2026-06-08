@@ -57,7 +57,7 @@ Wactorz solves this with **topic-based auto-wiring**: agents declare what data t
 
 ## Step 1: TopicContract — What an Agent Declares
 
-Every agent that publishes or subscribes to MQTT topics has a `TopicContract` — a dataclass that declares its data interface:
+Agents that publish or subscribe through the DynamicAgent API, declare a contract, or are spawned with topic fields get a `TopicContract` — a dataclass that declares their data interface:
 
 ```python
 @dataclass
@@ -68,9 +68,10 @@ class TopicContract:
     triggers_when:    dict                   # conditions that trigger action
     produces_schema:  dict                   # declared field names + types
     consumes_schema:  dict                   # expected input field names
-    observed_samples: dict                   # AUTO-CAPTURED real payloads
     node:             Optional[str]          # remote node name (if edge)
     actor_id:         Optional[str]          # unique actor ID
+    timestamp:        float                  # registration/update time
+    observed_samples: dict                   # AUTO-CAPTURED real payloads
 ```
 
 Contracts are registered in the `TopicRegistry` — a global in-memory index accessible from anywhere via `get_topic_bus().registry`.
@@ -103,6 +104,9 @@ existing = bus.registry.get(self.name)
 if existing:
     if topic not in existing.subscribes:
         existing.subscribes.append(topic)
+else:
+    contract = TopicContract(name=self.name, subscribes=[topic], actor_id=self.actor_id)
+    bus.register_contract(contract)
 ```
 
 **Path 3 — Explicit via `agent.declare_contract()`:**
@@ -118,7 +122,7 @@ async def setup(agent):
     )
 ```
 
-`declare_contract()` accepts common LLM kwarg variants (`schema` → `produces_schema`, `topics` → `publishes`, etc.) and coerces bare strings to lists.
+`declare_contract()` accepts common LLM kwarg variants (`schema`, `output_schema`, `produce_schema` → `produces_schema`; `input_schema`, `consume_schema` → `consumes_schema`; `topics`, `publish` → `publishes`; `subscribe` → `subscribes`) and coerces bare strings to lists.
 
 ---
 
@@ -201,13 +205,13 @@ If `observed_samples` is empty (the producer started before the schema-capture c
 
 ```python
 async def _sample_live_topics(self, bus) -> list[str]:
-    # Single MQTT connection subscribes to ALL known publish topics
+    # Single MQTT connection subscribes to up to 10 known publish topics
     # Collects one real message per topic with a global timeout
     # Stores results back into contracts for future calls
 ```
 
 This method:
-1. Gathers all publish topics from all registered contracts
+1. Gathers up to 10 publish topics from registered contracts (up to 5 per contract)
 2. Opens one MQTT connection and subscribes to all of them
 3. Waits up to 15 seconds total (not per-topic) for messages to arrive
 4. Parses each payload, extracts field names and types
@@ -272,7 +276,7 @@ If multiple topics match, all candidates are provided to the LLM to pick the mos
 
 ### 4.2 Schema Context Injection
 
-Before generating code, the planner builds schema context from two sources:
+Before generating code, the planner builds schema context from three sources:
 
 **Source A — `observed_samples` on contracts:**
 
@@ -356,7 +360,7 @@ Every `publish()` call updates the contract's `observed_samples` and re-register
 
 ### Manifest Propagation
 
-Each agent publishes a retained MQTT manifest at `agents/{id}/manifest` that includes `observed_samples`. This means:
+Dynamic agents and actors that call `publish_manifest()` publish a retained MQTT manifest at `agents/{id}/manifest` that includes `observed_samples` when available. This means:
 - MainActor's manifest listener picks it up and stores it in `_agent_manifests`
 - The planner can query manifests even for agents it didn't spawn
 - Schema data survives agent restarts (retained MQTT messages persist in the broker)
@@ -380,9 +384,6 @@ TopicBus — Reactive Pub/Sub Registry
 
   [temp-simulator]
     publishes : sensors/data
-    OBSERVED on 'sensors/data': fields={'temp': 'float', 'humidity': 'float'}
-                                example={'temp': 30.5, 'humidity': 47.7}
-
   [mean-logger]
     subscribes: sensors/data
 
@@ -445,7 +446,7 @@ User says: *"spawn an agent to log the mean of the last 5 temperature values"*
 
 ```
 1. MainActor classifies intent → PIPELINE
-2. PlannerAgent spawned
+2. PlannerAgent spawned in plan-only mode and returns a pending proposal
 
 3. Topic resolution:
    _resolve_data_references() finds "temperature" keywords
@@ -463,22 +464,25 @@ User says: *"spawn an agent to log the mean of the last 5 temperature values"*
    "OBSERVED on 'sensors/data': fields={'temp': 'float', 'humidity': 'float'}"
    "CRITICAL: Use payload['temp'] — NOT payload['temperature']"
 
-6. LLM generates spawn config:
+6. LLM generates a plan item with `spawn_config`:
    {
      "name": "temp-mean-logger",
-     "type": "dynamic",
-     "code": "
-       async def setup(agent):
-           agent.state['buffer'] = []
-           async def on_temp(payload):
-               agent.state['buffer'].append(payload.get('temp', 0))  # ← correct field name
-               if len(agent.state['buffer']) > 5:
-                   agent.state['buffer'] = agent.state['buffer'][-5:]
-               if len(agent.state['buffer']) == 5:
-                   mean = sum(agent.state['buffer']) / 5
-                   await agent.log(f'Mean of last 5: {mean:.2f}°C')
-           agent.subscribe('sensors/data', on_temp)
-     "
+     "description": "Logs the rolling mean of temperature readings",
+     "spawn_config": {
+       "type": "dynamic",
+       "code": "
+         async def setup(agent):
+             agent.state['buffer'] = []
+             async def on_temp(payload):
+                 agent.state['buffer'].append(payload.get('temp', 0))  # ← correct field name
+                 if len(agent.state['buffer']) > 5:
+                     agent.state['buffer'] = agent.state['buffer'][-5:]
+                 if len(agent.state['buffer']) == 5:
+                     mean = sum(agent.state['buffer']) / 5
+                     await agent.log(f'Mean of last 5: {mean:.2f}°C')
+             agent.subscribe('sensors/data', on_temp)
+       "
+     }
    }
 
 7. _validate_pipeline_code():
@@ -486,7 +490,7 @@ User says: *"spawn an agent to log the mean of the last 5 temperature values"*
    - No raw aiomqtt ✓
    - No direct HA API calls ✓
 
-8. Agent spawned, TopicBus logs:
+8. User approves the proposal, the agent is spawned, and TopicBus logs:
    [TopicBus] Auto-wiring opportunity: temp-simulator → temp-mean-logger via sensors/data
 
 9. Agent receives messages, computes means:
@@ -505,7 +509,7 @@ User says: *"spawn an agent to log the mean of the last 5 temperature values"*
 | **Agent discovery** | Planner must know agent names | Planner queries TopicRegistry by data type |
 | **Field name matching** | LLM guesses → frequent KeyError | Real field names captured from live payloads |
 | **Adding a new producer** | Must update all consumers | New producer auto-appears in registry |
-| **Removing a producer** | Consumers silently break | TopicBus shows which consumers are orphaned |
+| **Removing a producer** | Consumers silently break | Stale contracts are pruned before planning |
 | **Schema documentation** | Manual, always outdated | Auto-captured from real messages |
 | **Multi-node** | Requires name→node mapping | Topics are node-agnostic (MQTT handles routing) |
 

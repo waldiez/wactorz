@@ -34,6 +34,16 @@ describe("initials", () => {
     const result = initials("main io agent");
     expect(result).toBe("MI");
   });
+
+  it("parts[0] empty when name starts with separator (covers falsy-parts[0] branch)", () => {
+    // "-agent".split(/[\s\-_]+/) = ["", "agent"] → parts[0]="" → falsy → a=""
+    expect(initials("-agent")).toBe("A");
+  });
+
+  it("parts[1] empty when name ends with separator (covers falsy-parts[1] branch)", () => {
+    // "a-".split(/[\s\-_]+/) = ["a", ""] → parts[1]="" → falsy → b=""
+    expect(initials("a-")).toBe("A");
+  });
 });
 
 // ── escHtml ───────────────────────────────────────────────────────────────────
@@ -207,5 +217,17 @@ describe("ToastManager (DOM)", () => {
     el.dispatchEvent(new Event("transitionend"));
     expect(el.isConnected).toBe(false);
     void t;
+  });
+
+  it("dismiss is no-op when element removed before auto-dismiss timer fires", async () => {
+    vi.useFakeTimers();
+    const t = await freshToast();
+    t.show({ title: "A", message: "a", durationMs: 1000 });
+    const el = document.querySelector<HTMLElement>(".wz-toast")!;
+    el.remove(); // disconnect element before timer fires
+    vi.advanceTimersByTime(1100); // auto-dismiss fires → dismiss() → !isConnected → return early
+    // No throw = success (early return guard on line 372 worked)
+    expect(el.isConnected).toBe(false);
+    vi.useRealTimers();
   });
 });

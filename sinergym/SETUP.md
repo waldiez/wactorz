@@ -7,6 +7,9 @@ natural-language Q&A agent over the data.
 
 This document is a complete, from-scratch setup guide. Follow the parts in order.
 
+> **On Linux?** This runbook builds a Windows VS Code devcontainer. For a Linux
+> container-only path (no devcontainer), see [`docker/LOCAL_SETUP.md`](docker/LOCAL_SETUP.md).
+
 ---
 
 ## 1. Architecture at a glance

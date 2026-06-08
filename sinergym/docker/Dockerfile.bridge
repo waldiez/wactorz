@@ -1,0 +1,33 @@
+# Sinergym bridge image — reproduces the SETUP.md target locally on Linux.
+#
+# SETUP.md requires Sinergym 3.11.0 *code* running on EnergyPlus *24.1.0*.
+# There is no published image for that exact combo:
+#   - sailugr/sinergym:v3.10.0  → EnergyPlus 24.1.0 (SHA 9d7789a3ac)   ← right engine
+#   - sailugr/sinergym:v3.11.0  → EnergyPlus 25.1.0                     ← wrong engine
+# So we take the v3.10.0 base (correct EnergyPlus) and pip-upgrade the Python
+# package to 3.11.0 on top — exactly what SETUP §3b achieves (3.11.0 source +
+# EnergyPlus 24.1.0), but without a slow from-source EnergyPlus build.
+#
+# The *-lite* variant (0.7 GB vs 13 GB) is used deliberately: it bundles Sinergym +
+# EnergyPlus but omits the DRL stack (stable-baselines3 / torch). The bridge only
+# drives the simulation and talks MQTT/Fuseki — all policy inference runs host-side
+# in wactorz — so none of that weight is needed here.
+FROM sailugr/sinergym:v3.10.0-lite
+
+# 3.11.0 Python code; EnergyPlus stays 24.1.0 from the base layer.
+# paho-mqtt is needed by the bridge (the only non-stdlib dep it adds; Fuseki
+# writes use stdlib urllib).
+RUN pip install --no-cache-dir --force-reinstall --no-deps "sinergym==3.11.0" \
+ && pip install --no-cache-dir "paho-mqtt>=2.0"
+
+# Drop the 15-zone OfficeMedium building + its env config into the dirs Sinergym
+# resolves building/config files from (path discovered at build time, not hardcoded).
+COPY ASHRAE901_OfficeMedium_STD2019_Denver_MultiAgent.epJSON /tmp/bld.epJSON
+COPY officeMedium_multiagent.yaml /tmp/cfg.yaml
+RUN SGY="$(python -c 'import sinergym,os;print(os.path.dirname(sinergym.__file__))')" \
+ && echo "sinergym data dir: $SGY/data" \
+ && cp /tmp/bld.epJSON "$SGY/data/buildings/ASHRAE901_OfficeMedium_STD2019_Denver_MultiAgent.epJSON" \
+ && cp /tmp/cfg.yaml   "$SGY/data/default_configuration/officeMedium_multiagent.yaml" \
+ && rm -f /tmp/bld.epJSON /tmp/cfg.yaml \
+ && python -c "import sinergym; print('sinergym', sinergym.__version__)" \
+ && energyplus --version

@@ -219,3 +219,10 @@ yolov8n.pt
 # Tauri
 frontend/src-tauri/target/
 frontend/src-tauri/gen/
+
+# Sinergym bridge runtime artifacts (EnergyPlus episode output, written by the container)
+sinergym/.lock
+sinergym/*-res*/
+sinergym/eplus-env-*/
+sinergym/Eplus-*/
+sinergym/output*/

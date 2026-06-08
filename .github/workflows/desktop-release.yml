@@ -28,33 +28,32 @@ jobs:
         include:
           - platform: ubuntu-24.04
             args: ''
-            arch: x86_64
             rust_targets: ''
 
-          - platform: ubuntu-24.04
-            args: '--target aarch64-unknown-linux-gnu'
-            arch: aarch64
-            rust_targets: 'aarch64-unknown-linux-gnu'
+          # Native Arm64 runner — avoids cross-compiling glib/webkit2gtk
+          # (pkg-config refuses to link host-arch GTK libs into an aarch64
+          # binary; setting up a proper aarch64 sysroot is fragile, this
+          # mirrors the windows-11-arm native-build approach instead).
+          - platform: ubuntu-24.04-arm
+            args: ''
+            rust_targets: ''
 
           - platform: windows-latest
             args: ''
-            arch: x86_64
             rust_targets: ''
 
           - platform: windows-11-arm
             args: ''
-            arch: aarch64
             rust_targets: ''
 
           - platform: macos-latest
             args: '--target universal-apple-darwin'
-            arch: universal
             rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
 
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -68,7 +67,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-24.04'
+        if: startsWith(matrix.platform, 'ubuntu-24.04')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -76,9 +75,6 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-          fi
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -121,7 +117,7 @@ jobs:
       # The artifactPaths output is a JSON array; parse and upload each path.
       - name: Upload artifacts (manual dispatch)
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wactorz-desktop-${{ matrix.platform }}
           # Cover both workspace-root target/ and frontend/src-tauri/target/

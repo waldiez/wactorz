@@ -832,17 +832,48 @@ async def _stop(agent):
     return {"stopped": True, "fallback": True}
 
 
+def _voice_for_text(text, default_voice):
+    """Pick a TTS voice whose language matches the script of `text`.
+
+    An English neural voice given text in a non-Latin script (e.g. Greek)
+    reads out the Unicode letter NAMES instead of pronouncing the word. We
+    only auto-switch for scripts with an unambiguous language mapping, and we
+    never override a default that's already in the target language.
+
+    Returns default_voice when the script is Latin/ambiguous or already matches.
+    """
+    # Count alphabetic chars per detectable script.
+    el = latin = 0
+    for ch in text:
+        if not ch.isalpha():
+            continue
+        cp = ord(ch)
+        if 0x0370 <= cp <= 0x03FF or 0x1F00 <= cp <= 0x1FFF:   # Greek + Greek Extended
+            el += 1
+        elif 0x0041 <= cp <= 0x024F:                            # Latin + Latin Extended-A/B
+            latin += 1
+    # Greek dominates and the default isn't already a Greek voice -> use one.
+    if el > 0 and el >= latin and not default_voice.lower().startswith("el-"):
+        return "el-GR-AthinaNeural"
+    return default_voice
+
+
 async def _say(agent, payload):
-    """Speak text through Reachy's onboard speaker using edge-tts for synthesis.
+    """Speak text through Reachy's speaker using edge-tts for synthesis.
 
-    Tries SDK audio methods in order: play_audio → play_sound → play_mp3 (raw
-    bytes), then say/speak (built-in TTS if the SDK has it). Raises clearly if
-    none are found so the caller knows what to fix.
+    Pipeline: edge-tts synthesizes the text to an MP3 file, then the Reachy
+    SDK's media manager plays it via GStreamer (mini.media.play_sound, which
+    decodes MP3 through playbin and routes to the robot/host audio sink).
 
-    Voice can be any edge-tts voice name; defaults to TTS_VOICE env var or
+    play_sound is fire-and-forget (GStreamer set_state(PLAYING) returns
+    immediately), so we keep the temp file on disk and only delete the
+    PREVIOUS utterance's file on the next call — deleting too early would
+    cut playback off mid-sentence.
+
+    Voice is any edge-tts voice name; defaults to TTS_VOICE env var or
     en-US-JennyNeural. Override per-call: {"cmd":"say","text":"hi","voice":"en-GB-RyanNeural"}
     """
-    import os, tempfile
+    import os, tempfile, uuid
     text = (payload.get("text") or payload.get("message") or payload.get("say") or "").strip()
     if not text:
         raise ValueError("say requires {'text': '...'}")
@@ -852,72 +883,48 @@ async def _say(agent, payload):
     if mini is None:
         raise RuntimeError("reachy not connected")
 
-    voice = (payload.get("voice") or agent.state.get("tts_voice")
-             or os.environ.get("TTS_VOICE", "en-US-JennyNeural"))
+    # The media manager only has a live audio backend when media_backend != "no_media".
+    media = getattr(mini, "media", None) or getattr(mini, "media_manager", None)
+    if media is None:
+        raise RuntimeError("reachy SDK exposes no media manager (mini.media)")
+    if getattr(media, "audio", None) is None:
+        raise RuntimeError(
+            "reachy audio backend is not initialized — media_backend is "
+            f"'{agent.state.get('media_backend') or 'default'}'. Publish "
+            '{"media_backend": ""} to custom/reachy/config and restart the agent.'
+        )
 
-    # -- Generate TTS audio bytes via edge-tts --
+    # Voice precedence: explicit payload voice > script auto-detect > configured default.
+    # Auto-detect matters because an English voice fed literal Greek text spells out
+    # the Unicode letter names ("kappa alpha lambda...") instead of pronouncing the
+    # word. Picking a voice that matches the text's script fixes that.
+    default_voice = (agent.state.get("tts_voice")
+                     or os.environ.get("TTS_VOICE", "en-US-JennyNeural"))
+    voice = payload.get("voice") or _voice_for_text(text, default_voice)
+
+    # -- Synthesize to a temp MP3 file (path-based, GStreamer playbin decodes it) --
     try:
         import edge_tts
     except ImportError:
         raise RuntimeError("edge-tts not installed — pip install edge-tts")
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-    tmp_path = tmp.name
-    tmp.close()
-    try:
-        communicate = edge_tts.Communicate(text, voice)
-        await communicate.save(tmp_path)
-        with open(tmp_path, "rb") as f:
-            audio_bytes = f.read()
-    finally:
+    tmp_path = os.path.join(tempfile.gettempdir(), f"reachy_say_{uuid.uuid4().hex}.mp3")
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(tmp_path)
+
+    # -- Play through the robot's speaker (non-blocking GStreamer playbin) --
+    await _do(media.play_sound, tmp_path)
+
+    # Clean up the previous utterance now that a new one is playing.
+    prev = agent.state.get("_say_tmp")
+    if prev and prev != tmp_path:
         try:
-            os.unlink(tmp_path)
+            os.unlink(prev)
         except Exception:
             pass
+    agent.state["_say_tmp"] = tmp_path
 
-    # -- Play through the robot's speaker --
-    # Search on mini directly, then on known sub-objects where the SDK nests audio.
-    # media_manager / media / audio are the common containers across SDK versions.
-    sub_objects = [mini]
-    for attr in ("media_manager", "_media_manager", "media", "_media", "audio", "_audio"):
-        obj = getattr(mini, attr, None)
-        if obj is not None:
-            sub_objects.append(obj)
-
-    for obj in sub_objects:
-        for method_name in ("play_audio", "play_sound", "play_mp3", "play"):
-            fn = getattr(obj, method_name, None)
-            if fn is None:
-                continue
-            try:
-                await _do(fn, audio_bytes)
-                return {"said": text, "voice": voice}
-            except Exception:
-                continue
-
-    # Fallback: built-in TTS (some SDK versions handle synthesis on-robot).
-    for obj in sub_objects:
-        for method_name in ("say", "speak"):
-            fn = getattr(obj, method_name, None)
-            if fn is None:
-                continue
-            try:
-                await _do(fn, text)
-                return {"said": text, "voice": "sdk-builtin"}
-            except Exception:
-                continue
-
-    hint = (
-        " media_backend is 'no_media' — publish {\"media_backend\": \"\"} to "
-        "custom/reachy/config and restart to enable audio."
-        if agent.state.get("media_backend") == "no_media" else
-        " Check your reachy-mini SDK version."
-    )
-    raise RuntimeError(
-        "Reachy SDK exposes no audio playback method "
-        "(tried play_audio, play_sound, play_mp3, play, say, speak on mini and media sub-objects)."
-        + hint
-    )
+    return {"said": text, "voice": voice}
 
 
 async def _fetch_ha_entities(agent):

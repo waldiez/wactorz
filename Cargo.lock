@@ -5840,7 +5840,7 @@ dependencies = [
 
 [[package]]
 name = "wactorz-agents"
-version = "0.4.2"
+version = "0.4.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5859,7 +5859,7 @@ dependencies = [
 
 [[package]]
 name = "wactorz-core"
-version = "0.4.2"
+version = "0.4.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5876,7 +5876,7 @@ dependencies = [
 
 [[package]]
 name = "wactorz-desktop"
-version = "0.4.2"
+version = "0.4.4"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -5900,7 +5900,7 @@ dependencies = [
 
 [[package]]
 name = "wactorz-interfaces"
-version = "0.4.2"
+version = "0.4.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5925,7 +5925,7 @@ dependencies = [
 
 [[package]]
 name = "wactorz-mqtt"
-version = "0.4.2"
+version = "0.4.4"
 dependencies = [
  "anyhow",
  "rumqttc",
@@ -5939,7 +5939,7 @@ dependencies = [
 
 [[package]]
 name = "wactorz-server"
-version = "0.4.2"
+version = "0.4.4"
 dependencies = [
  "anyhow",
  "axum",

@@ -15,27 +15,41 @@ on:
       - 'v*.*.*'
   workflow_dispatch:
 
+# tauri-action needs to create/update the (draft) GitHub Release and upload
+# bundle assets to it — the default GITHUB_TOKEN is read-only without this.
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: ubuntu-22.04
+          - platform: ubuntu-24.04
             args: ''
             arch: x86_64
+            rust_targets: ''
 
-          - platform: ubuntu-22.04
+          - platform: ubuntu-24.04
             args: '--target aarch64-unknown-linux-gnu'
             arch: aarch64
+            rust_targets: 'aarch64-unknown-linux-gnu'
 
           - platform: windows-latest
             args: ''
             arch: x86_64
+            rust_targets: ''
+
+          - platform: windows-11-arm
+            args: ''
+            arch: aarch64
+            rust_targets: ''
 
           - platform: macos-latest
             args: '--target universal-apple-darwin'
             arch: universal
+            rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
 
     runs-on: ${{ matrix.platform }}
 
@@ -49,12 +63,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || (matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || '') }}
+          targets: ${{ matrix.rust_targets }}
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -92,6 +106,7 @@ jobs:
             |---|---|
             | **macOS** (Apple Silicon + Intel) | `.dmg` |
             | **Windows** (x64) | `.msi` |
+            | **Windows** (ARM64) | `.msi` |
             | **Linux** (x64) | `.AppImage`, `.deb` |
             | **Linux** (ARM64) | `.AppImage`, `.deb` |
 

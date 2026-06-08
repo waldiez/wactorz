@@ -166,14 +166,14 @@ Agents registered: `maddpg-fleet`, `sinergym-labeler`, `sinergym-anomaly`,
    @catalog spawn sinergym-anomaly
    @catalog spawn sinergym-hsml
    ```
-4. Point the **host-side** agents at Fuseki on `localhost` (see §10):
+4. Point the **host-side** agents at Fuseki on `localhost` (see §10), not sure if this works properly!:
    ```
    @sinergym-hsml    {"action":"config","fuseki_url":"http://localhost:3030"}
    @sinergym-anomaly {"action":"config","fuseki_url":"http://localhost:3030"}
    ```
 5. Launch the MADDPG fleet (15 children):
    ```
-   @maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"C:/Users/pkasn/Documents/wactorz_dev/wactorz/state/maddpg_office/model.pt","normalizer_path":"C:/Users/pkasn/Documents/wactorz_dev/wactorz/state/maddpg_office/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+   @maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"path_to_wactorz/wactorz/state/maddpg_office/model.pt","normalizer_path":"C:/Users/pkasn/Documents/wactorz_dev/wactorz/state/maddpg_office/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
    ```
    The 15 zones must be in **this order** (it is the actor index order the policy expects).
 6. Run the bridge inside the Sinergym container (Part 7).

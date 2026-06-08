@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sinergym · Digital Twin</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23070b14'/%3E%3Cg transform='translate(6 6)' fill='none' stroke='%2336e2c2' stroke-width='1.6'%3E%3Cpath d='M2 13 L10 9 L18 13 L10 17 Z'/%3E%3Cpath d='M2 9 L10 5 L18 9 L10 13 Z' stroke='%235b8cff'/%3E%3Cpath d='M2 5 L10 1 L18 5 L10 9 Z' stroke='%23e7eefc'/%3E%3C/g%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- top bar -->
+      <header id="topbar">
+        <div class="brand"><span class="dot"></span> SINERGYM <span class="muted">· digital twin</span></div>
+        <div id="clock" class="clock">— · day —/365 · ep —</div>
+        <div id="conn" class="conn"><span class="led off"></span><span id="conn-text">connecting…</span></div>
+      </header>
+
+      <!-- left: weather rail -->
+      <aside id="weather" class="glass">
+        <div class="rail-title">OUTDOOR</div>
+        <div class="wx-temp"><span id="wx-temp">—</span><span class="unit">°C</span></div>
+        <div class="wx-row"><span>humidity</span><b id="wx-hum">—</b></div>
+        <div class="wx-row"><span>wind</span><b id="wx-wind">—</b></div>
+        <div class="wx-row"><span>direction</span><b id="wx-dir">—</b></div>
+        <div class="wx-solar">
+          <div class="wx-row"><span>diffuse sun</span><b id="wx-dif">—</b></div>
+          <div class="wx-bar"><i id="wx-dif-bar"></i></div>
+          <div class="wx-row"><span>direct sun</span><b id="wx-dir-sun">—</b></div>
+          <div class="wx-bar"><i id="wx-dir-bar"></i></div>
+        </div>
+        <div class="rail-title" style="margin-top:18px">BUILDING</div>
+        <div class="wx-row"><span>HVAC demand</span><b id="hvac">—</b></div>
+        <div class="wx-row"><span>mean zone</span><b id="meanzone">—</b></div>
+        <div class="wx-row"><span>comfort</span><b id="comfort">—</b></div>
+      </aside>
+
+      <!-- center: 3D twin -->
+      <main id="stage">
+        <canvas id="twin"></canvas>
+        <div id="legend" class="legend">
+          <span>cold</span><i class="grad"></i><span>hot</span>
+        </div>
+        <div id="floors" class="floor-toggle"></div>
+
+        <!-- history transport -->
+        <div id="transport" class="transport">
+          <button id="tp-load" class="tp-btn">⟲ replay run</button>
+          <button id="tp-play" class="tp-btn hidden">▶</button>
+          <input id="tp-slider" type="range" min="0" max="0" value="0" class="hidden" />
+          <span id="tp-frame" class="tp-frame hidden">—</span>
+          <select id="tp-metric" class="tp-sel hidden" title="zone colour metric">
+            <option value="clg">cooling setpoint</option>
+            <option value="htg">heating setpoint</option>
+            <option value="temp">core temp</option>
+          </select>
+          <button id="tp-live" class="tp-btn hidden">● live</button>
+        </div>
+      </main>
+
+      <!-- right: zones -->
+      <aside id="zones" class="glass">
+        <div class="rail-title">ZONES <span id="zcount" class="muted"></span></div>
+        <div id="zonelist" class="zonelist"></div>
+      </aside>
+
+      <!-- bottom: anomaly feed -->
+      <footer id="alerts" class="glass">
+        <div class="rail-title">ANOMALIES <span id="acount" class="muted">0</span></div>
+        <div id="alertfeed" class="alertfeed"><div class="empty">no anomalies yet</div></div>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

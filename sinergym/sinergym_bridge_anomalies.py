@@ -164,6 +164,28 @@ def _build_zone_obs_indices(zone_idx: int, obs_dim: int, n_zones: int) -> list[i
     return list(range(obs_dim))
 
 
+def _zone_local_obs_by_name(obs_names, zone: str):
+    """Resolve a zone's local obs variables BY NAME → [(global_idx, kind_name)].
+
+    Matches obs variables whose name ends with ``_<zone>`` (e.g.
+    ``air_temperature_Core_mid`` → idx, kind ``air_temperature``). Robust to '-'/'_'
+    differences in zone names (the 5-zone env uses ``SPACE1-1`` in the zone list but
+    ``..._SPACE1_1`` in variable names). This replaces the positional/strided slice,
+    which silently mis-maps grouped obs layouts like OfficeMedium (all temps, then all
+    humidities, …) and corrupted the per-zone RDF predicates in Fuseki.
+    """
+    if not obs_names:
+        return []
+    suffixes = {"_" + zone, "_" + zone.replace("-", "_")}
+    out = []
+    for idx, name in enumerate(obs_names):
+        for suf in suffixes:
+            if name.endswith(suf):
+                out.append((idx, name[: -len(suf)]))
+                break
+    return out
+
+
 def _build_zone_action_indices(zone_idx: int, n_zones: int) -> tuple[int, int]:
     return zone_idx, n_zones + zone_idx
 
@@ -1115,6 +1137,7 @@ class SinergymBridgeMAS:
         self.n_zones: int              = 0
         self.zone_obs_indices: dict    = {}
         self.zone_action_indices: dict = {}
+        self._zone_local_kind: dict    = {}   # zone → {global_obs_idx: kind_name}
         self.zone_obs_local_override   = zone_obs_local
 
         self._act_low:  np.ndarray | None = None
@@ -1195,7 +1218,14 @@ class SinergymBridgeMAS:
                   f"Using strided split.")
 
         for i, zone in enumerate(self.zones):
-            if has_5zone_layout:
+            # Prefer name-based slicing — correct for any obs layout. Fall back to the
+            # positional/strided heuristics only when variable names are unavailable.
+            named = _zone_local_obs_by_name(self._obs_variable_names, zone)
+            if named:
+                local_idx = [idx for idx, _ in named]
+                self.zone_obs_indices[zone] = _SHARED_OBS_INDICES + local_idx
+                self._zone_local_kind[zone] = {idx: kind for idx, kind in named}
+            elif has_5zone_layout:
                 self.zone_obs_indices[zone] = _build_zone_obs_indices(i, obs_dim, self.n_zones)
             else:
                 total_local    = obs_dim - len(_SHARED_OBS_INDICES)
@@ -1441,8 +1471,13 @@ class SinergymBridgeMAS:
             oi = self.zone_obs_indices.get(zone, [])
             zone_obs_names = None
             if self._obs_variable_names:
+                # Use the normalized per-zone kind names (air_temperature, htg_setpoint, …)
+                # for local dims so RDF predicates are clean (sgy:airTemperature) and not
+                # zone-baked/mis-mapped; shared/outdoor dims keep their raw names (the RDF
+                # writer skips them anyway).
+                kindmap = self._zone_local_kind.get(zone, {})
                 zone_obs_names = [
-                    self._obs_variable_names[i]
+                    kindmap.get(i, self._obs_variable_names[i])
                     for i in oi if i < len(self._obs_variable_names)
                 ]
             zone_act_names = None

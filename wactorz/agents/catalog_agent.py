@@ -298,9 +298,9 @@ def _build_catalog() -> dict:
             "capabilities": ["robot", "reachy", "reachy_mini", "embodied", "motion",
                              "head", "antennas", "gaze", "emotion", "actuator",
                              "expressive", "human_robot_interaction"],
-            "install":      ["reachy-mini", "numpy"],
+            "install":      ["reachy-mini", "numpy", "edge-tts"],
             "input_schema": {
-                "cmd":         "str  — wake|sleep|pose|antennas|look_at|look_pixel|emotion|set_pose|bind|unbind|list_emotions|stop",
+                "cmd":         "str  — wake|sleep|pose|antennas|look_at|look_pixel|emotion|set_pose|bind|unbind|list_emotions|stop|say",
                 "duration":    "float — motion duration in seconds (pose/antennas/look_at)",
                 "method":      "str  — interpolation: linear|minjerk|ease_in_out|cartoon (default minjerk)",
                 "yaw":         "float — head yaw, degrees by default",

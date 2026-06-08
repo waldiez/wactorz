@@ -251,7 +251,7 @@ async def setup(agent):
     # Convenience: per-verb topics rewrite payload through the same dispatcher.
     for verb in ("wake", "sleep", "pose", "antennas", "look_at",
                  "look_pixel", "emotion", "set_pose", "bind",
-                 "unbind", "list_emotions", "stop"):
+                 "unbind", "list_emotions", "stop", "say"):
         def _make_cb(v):
             async def cb(payload):
                 p = dict(payload or {})
@@ -308,6 +308,8 @@ Robot commands:
   {"cmd":"pose","yaw":<deg>,"pitch":<deg>,"roll":<deg>,"duration":<sec>}
   {"cmd":"antennas","left":<deg>,"right":<deg>,"duration":<sec>}
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
+  {"cmd":"say","text":"<what to say>"}
+  {"cmd":"say","text":"<what to say>","voice":"<edge-tts voice name>"}
 
 Home Assistant commands (use the actual entity_id from the inventory below):
   {"cmd":"ha","service":"light.turn_on","entity_id":"<light entity>"}
@@ -323,7 +325,7 @@ Reactive bindings — for "WHEN X happens, do Y" requests:
   {"cmd":"unbind","topic":"homeassistant/state_changes"}    ← removes ALL rules on a topic
 A bind is a STANDING rule — it survives restarts and fires every time the HA event matches.
 
-Expressive gestures (the robot has no speaker, express emotion through motion):
+Expressive gestures (combine with say for rich expression — use say for speech, motion for feeling):
 - "happy noise" / "happy" -> antennas wiggle up (left:60,right:60 then left:30,right:30 then left:60,right:60), head tilt up (pitch:-10)
 - "sleepy noise" / "tired" -> head droop down slowly (pitch:25 duration:1.5), antennas droop (left:-30,right:-30 duration:1.2)
 - "curious" -> head tilt (roll:15), antennas up
@@ -607,6 +609,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "unbind":        result = await _unbind(agent, payload)
         elif cmd == "list_emotions": result = {"emotions": agent.state.get("emotion_names", [])}
         elif cmd == "stop":          result = await _stop(agent)
+        elif cmd == "say":           result = await _say(agent, payload)
         elif cmd == "ha":            result = await _ha_call(agent, payload)
         else:
             raise ValueError(f"unknown cmd: {cmd}")
@@ -828,6 +831,84 @@ async def _stop(agent):
     create_head_pose = agent.state["create_head_pose"]
     await _do(mini.goto_target, head=create_head_pose(), duration=0.1)
     return {"stopped": True, "fallback": True}
+
+
+async def _say(agent, payload):
+    """Speak text through Reachy's onboard speaker using edge-tts for synthesis.
+
+    Tries SDK audio methods in order: play_audio → play_sound → play_mp3 (raw
+    bytes), then say/speak (built-in TTS if the SDK has it). Raises clearly if
+    none are found so the caller knows what to fix.
+
+    Voice can be any edge-tts voice name; defaults to TTS_VOICE env var or
+    en-US-JennyNeural. Override per-call: {"cmd":"say","text":"hi","voice":"en-GB-RyanNeural"}
+    """
+    import os, tempfile
+    text = (payload.get("text") or payload.get("message") or payload.get("say") or "").strip()
+    if not text:
+        raise ValueError("say requires {'text': '...'}")
+    text = text[:500]
+
+    mini = agent.state.get("mini")
+    if mini is None:
+        raise RuntimeError("reachy not connected")
+
+    voice = (payload.get("voice") or agent.state.get("tts_voice")
+             or os.environ.get("TTS_VOICE", "en-US-JennyNeural"))
+
+    # -- Generate TTS audio bytes via edge-tts --
+    try:
+        import edge_tts
+    except ImportError:
+        raise RuntimeError("edge-tts not installed — pip install edge-tts")
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(tmp_path)
+        with open(tmp_path, "rb") as f:
+            audio_bytes = f.read()
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+    # -- Play through the robot's speaker --
+    # Try raw-bytes methods first (most reliable across SDK versions).
+    for method_name in ("play_audio", "play_sound", "play_mp3"):
+        fn = getattr(mini, method_name, None)
+        if fn is None:
+            # Some SDK versions nest audio under mini.audio.*
+            audio_obj = getattr(mini, "audio", None)
+            if audio_obj is not None:
+                fn = getattr(audio_obj, "play", None) or getattr(audio_obj, method_name, None)
+        if fn is None:
+            continue
+        try:
+            await _do(fn, audio_bytes)
+            return {"said": text, "voice": voice}
+        except Exception:
+            continue
+
+    # Fallback: built-in TTS (some SDK versions handle synthesis on-robot).
+    for method_name in ("say", "speak"):
+        fn = getattr(mini, method_name, None)
+        if fn is None:
+            continue
+        try:
+            await _do(fn, text)
+            return {"said": text, "voice": "sdk-builtin"}
+        except Exception:
+            continue
+
+    raise RuntimeError(
+        "Reachy SDK exposes no audio playback method "
+        "(tried play_audio, play_sound, play_mp3, mini.audio.play, say, speak). "
+        "Check your reachy-mini SDK version."
+    )
 
 
 async def _fetch_ha_entities(agent):

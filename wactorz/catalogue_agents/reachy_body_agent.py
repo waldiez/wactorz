@@ -224,6 +224,9 @@ async def setup(agent):
     # Loaded from persistent state so they survive restarts.
     agent.state["bindings"] = agent.recall("bindings") or {}
 
+    # ---- Persistent say loudness (extra makeup gain in dB, set via cmd=volume) ----
+    agent.state["say_gain_db"] = float(agent.recall("say_gain_db") or 0)
+
     # ---- Wake up so the robot is ready for commands (skip if disconnected) ----
     if mini is not None:
         try:
@@ -250,7 +253,7 @@ async def setup(agent):
     # Convenience: per-verb topics rewrite payload through the same dispatcher.
     for verb in ("wake", "sleep", "pose", "antennas", "look_at",
                  "look_pixel", "emotion", "set_pose", "bind",
-                 "unbind", "list_emotions", "stop", "say"):
+                 "unbind", "list_emotions", "stop", "say", "volume"):
         def _make_cb(v):
             async def cb(payload):
                 p = dict(payload or {})
@@ -273,6 +276,7 @@ async def setup(agent):
         "bindings": list(agent.state["bindings"].keys()),
         "robot_host":    agent.state.get("robot_host") or "(autodetect)",
         "media_backend": agent.state.get("media_backend") or "default",
+        "say_gain_db":   agent.state.get("say_gain_db", 0),
         "ts":            _time.time(),
     })
 
@@ -293,6 +297,7 @@ async def process(agent):
         "bindings": list(agent.state.get("bindings", {}).keys()),
         "robot_host":    agent.state.get("robot_host") or "(autodetect)",
         "media_backend": agent.state.get("media_backend") or "default",
+        "say_gain_db":   agent.state.get("say_gain_db", 0),
         "ts":            _time.time(),
     })
 
@@ -309,6 +314,15 @@ Robot commands:
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
   {"cmd":"say","text":"<what to say>"}
   {"cmd":"say","text":"<what to say>","voice":"<edge-tts voice name>"}
+  {"cmd":"volume","level":<0-100>}    ← persistent speech volume; 100=loudest (default), lower=quieter
+  {"cmd":"volume","db":<float<=0>}    ← or set it as dB below max (0=loudest, negative=quieter)
+
+Speech & volume rules:
+- "say X", "tell them X", "speak X", "announce X" -> {"cmd":"say","text":"X"}.
+- Speech already plays at max volume by default — no action needed to be loud.
+- "louder" / "turn it up" / "I can't hear" -> {"cmd":"volume","level":100} (restore max).
+- "quieter" / "too loud" / "turn it down" -> {"cmd":"volume","level":40}.
+- "set volume to N" / "volume N percent" -> {"cmd":"volume","level":N}.
 
 Home Assistant commands (use the actual entity_id from the inventory below):
   {"cmd":"ha","service":"light.turn_on","entity_id":"<light entity>"}
@@ -609,6 +623,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "list_emotions": result = {"emotions": agent.state.get("emotion_names", [])}
         elif cmd == "stop":          result = await _stop(agent)
         elif cmd == "say":           result = await _say(agent, payload)
+        elif cmd == "volume":        result = await _volume(agent, payload)
         elif cmd == "ha":            result = await _ha_call(agent, payload)
         else:
             raise ValueError(f"unknown cmd: {cmd}")
@@ -872,6 +887,14 @@ async def _say(agent, payload):
 
     Voice is any edge-tts voice name; defaults to TTS_VOICE env var or
     en-US-JennyNeural. Override per-call: {"cmd":"say","text":"hi","voice":"en-GB-RyanNeural"}
+
+    Loudness: edge-tts output is quiet (~-22 dB mean) — too soft for a room/
+    audience. When ffmpeg is available we compress + limit the speech to the
+    digital ceiling (~-11 dB mean, roughly 3-4x perceived loudness) before
+    playback. That is the loudest software can make it; the persistent volume
+    setting and gain_db only attenuate DOWN from there. Controls:
+      {"loud": false}      → skip the boost, play the raw (quiet) TTS
+      {"gain_db": -8}      → this utterance only, 8 dB below max (quieter)
     """
     import os, tempfile, uuid
     text = (payload.get("text") or payload.get("message") or payload.get("say") or "").strip()
@@ -908,23 +931,109 @@ async def _say(agent, payload):
     except ImportError:
         raise RuntimeError("edge-tts not installed — pip install edge-tts")
 
-    tmp_path = os.path.join(tempfile.gettempdir(), f"reachy_say_{uuid.uuid4().hex}.mp3")
+    raw_path = os.path.join(tempfile.gettempdir(), f"reachy_say_{uuid.uuid4().hex}.mp3")
     communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(tmp_path)
+    await communicate.save(raw_path)
+
+    # -- Loudness boost (default on) --------------------------------------------
+    # The boost compresses + limits speech to the digital ceiling — that's the
+    # LOUDEST software can make it. attenuation_db (<=0) dials DOWN from there:
+    # persistent volume setting + per-call gain_db, clamped so positive values
+    # (which would only clip against the ceiling) can't push past max.
+    loud = payload.get("loud", True)
+    attenuation_db = min(0.0, float(payload.get("gain_db", 0))
+                              + float(agent.state.get("say_gain_db", 0) or 0))
+    play_path = raw_path
+    if loud:
+        boosted = await _boost_audio(agent, raw_path, attenuation_db)
+        if boosted:
+            try:
+                os.unlink(raw_path)   # raw is consumed by the boost step
+            except Exception:
+                pass
+            play_path = boosted
 
     # -- Play through the robot's speaker (non-blocking GStreamer playbin) --
-    await _do(media.play_sound, tmp_path)
+    await _do(media.play_sound, play_path)
 
     # Clean up the previous utterance now that a new one is playing.
     prev = agent.state.get("_say_tmp")
-    if prev and prev != tmp_path:
+    if prev and prev != play_path:
         try:
             os.unlink(prev)
         except Exception:
             pass
-    agent.state["_say_tmp"] = tmp_path
+    agent.state["_say_tmp"] = play_path
 
-    return {"said": text, "voice": voice}
+    return {"said": text, "voice": voice, "attenuation_db": attenuation_db,
+            "boosted": play_path != raw_path}
+
+
+async def _boost_audio(agent, src_path, attenuation_db=0.0):
+    """Compress + limit speech to the loudest clean level via ffmpeg.
+
+    Returns the path to a new boosted MP3, or None if ffmpeg is unavailable or
+    fails (caller falls back to the raw file). Raw edge-tts is ~-22 dB mean;
+    the chain brings it to ~-11 dB at the digital ceiling (roughly 3-4x
+    perceived loudness) — that's the maximum. attenuation_db (<=0) dials the
+    final level DOWN from there for quieter playback.
+    """
+    import os, shutil, subprocess, tempfile, uuid
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        await agent.log("ffmpeg not found — playing raw (quieter) TTS", level="warning")
+        return None
+    af = "acompressor=threshold=-20dB:ratio=9:attack=5:release=50:makeup=10,alimiter=limit=0.97"
+    attenuation_db = min(0.0, float(attenuation_db))
+    if attenuation_db < 0:
+        af += f",volume={attenuation_db:.1f}dB"
+    out_path = os.path.join(tempfile.gettempdir(), f"reachy_say_{uuid.uuid4().hex}.mp3")
+
+    def _run():
+        return subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", src_path,
+             "-af", af, out_path],
+            capture_output=True, text=True,
+        )
+    try:
+        proc = await _do(_run)
+    except Exception as e:
+        await agent.log(f"ffmpeg boost failed ({e}) — playing raw TTS", level="warning")
+        return None
+    if proc.returncode != 0 or not os.path.exists(out_path):
+        await agent.log(f"ffmpeg boost error — playing raw TTS: {proc.stderr[:200]}", level="warning")
+        try:
+            os.unlink(out_path)
+        except Exception:
+            pass
+        return None
+    return out_path
+
+
+async def _volume(agent, payload):
+    """Set the persistent speech volume applied to every `say`. Survives restarts.
+
+    The default boost already plays at the loudest clean level the software can
+    produce, so volume only attenuates DOWN from that ceiling.
+
+    Accepts either:
+      {"cmd":"volume","level": <0-100>}  100=loudest (default), lower=quieter
+      {"cmd":"volume","db": <float>}     dB below max; 0=loudest, negative=quieter
+    """
+    if "level" in payload:
+        # 100 -> 0 dB (max), 50 -> -20 dB, 0 -> -40 dB (near silent).
+        level = max(0.0, min(100.0, float(payload["level"])))
+        gain_db = (level - 100.0) * 0.4
+    elif "db" in payload:
+        gain_db = float(payload["db"])
+    else:
+        raise ValueError("volume requires 'level' (0-100) or 'db' (float)")
+    gain_db = max(-40.0, min(0.0, gain_db))   # clamp: 0 is max, can't exceed the ceiling
+    agent.state["say_gain_db"] = gain_db
+    agent.persist("say_gain_db", gain_db)
+    # Friendly level readout (inverse of the level->db map).
+    level_out = round(gain_db / 0.4 + 100.0)
+    return {"say_gain_db": gain_db, "level": level_out}
 
 
 async def _fetch_ha_entities(agent):

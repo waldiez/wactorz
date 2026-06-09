@@ -157,3 +157,11 @@ curl -s -u admin:admin -H 'Content-Type: application/sparql-query' \
 - **`localhost` vs `host.docker.internal` (SETUP §10).** Host-side agents (`sinergym-hsml`,
   `sinergym-anomaly`) use `localhost:3030`; the in-container bridge uses
   `host.docker.internal:3030`. `run-bridge.sh` maps the latter for Linux.
+- **Multiple runs accumulate in Fuseki — wipe between runs.** The dataset is persistent
+  (TDB2) and every run numbers episodes from 1, so back-to-back runs pile up and collide
+  on `(step, zone)`; the replay/SPARQL then averages a *mix* of runs. Use
+  `./run-bridge.sh --clean` to wipe the dataset before a run (or
+  `curl -u admin:admin -X POST http://localhost:3030/sinergym/update --data-urlencode 'update=CLEAR ALL'`).
+  The **proper** long-term fix (for the delivered addon) is to stamp every record with a
+  unique **run id** (e.g. `sgy:run "<ts-uuid>"`) and have the viz/queries default to the
+  latest run — then multiple runs coexist cleanly instead of needing a wipe.

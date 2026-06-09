@@ -87,7 +87,7 @@ async def setup(agent):
         agent.state["acted"] = agent.state.get("acted", 0) + 1
 
     agent.subscribe(OBS_TOPIC, on_obs)
-    agent.log(f"zone agent ready: idx={ZONE_INDEX} zone={ZONE_NAME} -> {ACTION_TOPIC}")
+    await agent.log(f"zone agent ready: idx={ZONE_INDEX} zone={ZONE_NAME} -> {ACTION_TOPIC}")
 
 
 async def process(agent):
@@ -158,12 +158,12 @@ async def _launch(agent, cfg):
     if not zones:
         msg = ("no zone list available (env_info not seen and no 'zones' param) "
                "— refusing to launch so agents never publish to wrong topics")
-        agent.log(msg, level="error")
+        await agent.log(msg, level="error")
         return {"ok": False, "message": msg}
 
     if not os.path.exists(cfg["model_path"]):
         msg = f"model not found at {cfg['model_path']}"
-        agent.log(msg, level="error")
+        await agent.log(msg, level="error")
         return {"ok": False, "message": msg}
 
     DynamicAgent = type(agent._actor)   # avoid hard-coding the package path
@@ -197,11 +197,11 @@ async def _launch(agent, cfg):
             )
             names.append(cname)
         except Exception as e:
-            agent.log(f"spawn failed for {cname}: {e}", level="error")
+            await agent.log(f"spawn failed for {cname}: {e}", level="error")
 
     agent.state["children"] = names
     agent.persist("config", cfg)
-    agent.log(f"launched {len(names)}/{len(zones)} zone agents for env {env_id}")
+    await agent.log(f"launched {len(names)}/{len(zones)} zone agents for env {env_id}")
     return {"ok": True, "message": f"launched {len(names)} zone agents",
             "children": names, "zones": zones}
 
@@ -219,7 +219,7 @@ async def _stop_children(agent):
                 await child.stop()
                 stopped.append(cname)
         except Exception as e:
-            agent.log(f"stop failed for {cname}: {e}", level="warning")
+            await agent.log(f"stop failed for {cname}: {e}", level="warning")
     agent.state["children"] = []
     return stopped
 
@@ -236,13 +236,13 @@ async def setup(agent):
             agent.state["info"] = payload
 
     agent.subscribe(info_topic, on_info)
-    agent.log(f"maddpg-fleet ready; listening for env_info on {info_topic}")
+    await agent.log(f"maddpg-fleet ready; listening for env_info on {info_topic}")
 
     # Auto-launch only if the checkpoint is already present.
     if os.path.exists(cfg["model_path"]):
         await _launch(agent, cfg)
     else:
-        agent.log(
+        await agent.log(
             f"model not found at {cfg['model_path']} — send a 'launch' task "
             f"with model_path/env_id to start", level="warning")
 
@@ -285,9 +285,10 @@ async def handle_task(agent, payload):
 
     if not action:
         return {"ok": False,
-                "message": "no action parsed. Use forward slashes in paths, e.g. "
+                "message": "no action parsed, e.g. "
                            "@maddpg-fleet {\"action\":\"launch\",\"env_id\":\"...\","
-                           "\"model_path\":\"C:/.../model.pt\",\"normalizer_path\":\"C:/.../normalizer.npz\"} "
+                           "\"model_path\":\"state/maddpg_office/model.pt\","
+                           "\"normalizer_path\":\"state/maddpg_office/normalizer.npz\"} "
                            "— or @maddpg-fleet status"}
 
     if action == "launch":

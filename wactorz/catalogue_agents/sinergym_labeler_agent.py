@@ -77,7 +77,7 @@ async def setup(agent):
         if isinstance(payload, dict) and payload.get("obs_variable_names"):
             agent.state["names"] = payload["obs_variable_names"]
             agent.persist("obs_names", agent.state["names"])
-            agent.log(f"[labeler] learned {len(agent.state['names'])} global obs names")
+            await agent.log(f"[labeler] learned {len(agent.state['names'])} global obs names")
 
     async def on_zone_env_info(payload):
         if isinstance(payload, dict) and payload.get("zone") and payload.get("obs_variable_names"):
@@ -91,7 +91,7 @@ async def setup(agent):
         vals = payload.get("obs")
         if not names or not isinstance(vals, list):
             if not agent.state["warned"]:
-                agent.log("[labeler] obs arrived before schema; waiting for env_info "
+                await agent.log("[labeler] obs arrived before schema; waiting for env_info "
                           "(emitted at episode start)", level="warning")
                 agent.state["warned"] = True
             return
@@ -137,7 +137,7 @@ async def setup(agent):
     agent.subscribe(t["zone_env_info"], on_zone_env_info)
     agent.subscribe(t["obs"], on_obs)
     agent.subscribe(t["zone_obs"], on_zone_obs)
-    agent.log(f"sinergym-labeler ready; republishing keyed obs to {t['obs_out']} "
+    await agent.log(f"sinergym-labeler ready; republishing keyed obs to {t['obs_out']} "
               f"(and per-zone .../zone/<zone>/observation{SUFFIX}).")
 
 

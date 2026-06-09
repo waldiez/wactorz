@@ -161,7 +161,7 @@ async def _discover(agent, cfg):
             ctx["anomaly_predicates"] = []
             ctx["anomaly_count"] = "0"
     except Exception as e:
-        agent.log(f"schema discovery failed: {e}", level="warning")
+        await agent.log(f"schema discovery failed: {e}", level="warning")
     return ctx
 
 
@@ -305,13 +305,13 @@ async def _answer_question(agent, cfg, question):
         return {"ok": False, "answer": "No LLM provider is configured, so I can't translate "
                                        "questions to queries. Configure one on main and respawn."}
 
-    agent.log(f"[hsml] Q: {question!r}")
+    await agent.log(f"[hsml] Q: {question!r}")
     ctx = agent.state.get("schema")
     if not ctx:
         _t0 = _t.time()
         ctx = await _discover(agent, cfg)
         agent.state["schema"] = ctx
-        agent.log(f"[hsml] schema discovered in {_t.time()-_t0:.1f}s "
+        await agent.log(f"[hsml] schema discovered in {_t.time()-_t0:.1f}s "
                   f"(zones={len(ctx.get('zones', []))}, "
                   f"zone_preds={len(ctx.get('zone_predicates', []))}, "
                   f"agents={len(ctx.get('agents', []))})")
@@ -324,9 +324,9 @@ async def _answer_question(agent, cfg, question):
         system=SPARQL_SYS,
     )
     query_body = _strip_query(gen)
-    agent.log(f"[hsml] SPARQL generated in {_t.time()-_t0:.1f}s:\n{query_body}")
+    await agent.log(f"[hsml] SPARQL generated in {_t.time()-_t0:.1f}s:\n{query_body}")
     if not _is_safe(query_body):
-        agent.log("[hsml] generated query rejected as unsafe/invalid", level="warning")
+        await agent.log("[hsml] generated query rejected as unsafe/invalid", level="warning")
         return {"ok": False, "answer": "I could only form an unsafe or invalid query for that. "
                                        "Try rephrasing — e.g. ask about a specific zone, agent, "
                                        "step range, or episode.",
@@ -337,9 +337,9 @@ async def _answer_question(agent, cfg, question):
     _t0 = _t.time()
     try:
         rows = await _query(cfg, full_query)
-        agent.log(f"[hsml] Fuseki returned {len(rows)} row(s) in {_t.time()-_t0:.1f}s")
+        await agent.log(f"[hsml] Fuseki returned {len(rows)} row(s) in {_t.time()-_t0:.1f}s")
     except Exception as e:
-        agent.log(f"[hsml] Fuseki query failed in {_t.time()-_t0:.1f}s: {e}; retrying once",
+        await agent.log(f"[hsml] Fuseki query failed in {_t.time()-_t0:.1f}s: {e}; retrying once",
                   level="warning")
         try:
             fix = await agent.llm.chat(
@@ -348,14 +348,14 @@ async def _answer_question(agent, cfg, question):
                 system=SPARQL_SYS,
             )
             query_body = _strip_query(fix)
-            agent.log(f"[hsml] corrected SPARQL:\n{query_body}")
+            await agent.log(f"[hsml] corrected SPARQL:\n{query_body}")
             if not _is_safe(query_body):
                 raise ValueError("unsafe corrected query")
             full_query = PREFIXES + query_body
             rows = await _query(cfg, full_query)
-            agent.log(f"[hsml] Fuseki (retry) returned {len(rows)} row(s)")
+            await agent.log(f"[hsml] Fuseki (retry) returned {len(rows)} row(s)")
         except Exception as e2:
-            agent.log(f"[hsml] Fuseki query failed again: {e2}", level="error")
+            await agent.log(f"[hsml] Fuseki query failed again: {e2}", level="error")
             return {"ok": False, "answer": f"The query against Fuseki failed: {e2}",
                     "sparql": full_query}
 
@@ -370,7 +370,7 @@ async def _answer_question(agent, cfg, question):
         f"{json.dumps(shown, ensure_ascii=False)}{note}\n\nAnswer:",
         system=ANSWER_SYS,
     )
-    agent.log(f"[hsml] answer composed in {_t.time()-_t0:.1f}s")
+    await agent.log(f"[hsml] answer composed in {_t.time()-_t0:.1f}s")
     return {"ok": True, "answer": answer.strip(), "sparql": full_query, "rows": len(rows)}
 
 
@@ -385,13 +385,13 @@ async def setup(agent):
         ctx = await _discover(agent, cfg)
         if ctx.get("zone_predicates"):
             agent.state["schema"] = ctx
-            agent.log(f"sinergym-hsml ready; schema pre-warmed in {_t.time()-_t0:.1f}s "
+            await agent.log(f"sinergym-hsml ready; schema pre-warmed in {_t.time()-_t0:.1f}s "
                       f"(zones={len(ctx.get('zones', []))}, agents={len(ctx.get('agents', []))})")
         else:
-            agent.log("sinergym-hsml ready; schema empty/unreachable now, will retry on first question",
+            await agent.log("sinergym-hsml ready; schema empty/unreachable now, will retry on first question",
                       level="warning")
     except Exception as e:
-        agent.log(f"sinergym-hsml ready; schema pre-warm failed ({e}), will retry lazily",
+        await agent.log(f"sinergym-hsml ready; schema pre-warm failed ({e}), will retry lazily",
                   level="warning")
 
 
@@ -423,7 +423,7 @@ async def handle_task(agent, payload):
     if action == "refresh":
         agent.state["schema"] = await _discover(agent, cfg)
         sc = agent.state["schema"]
-        agent.log(f"[hsml] schema refreshed: zones={sc.get('zones')} "
+        await agent.log(f"[hsml] schema refreshed: zones={sc.get('zones')} "
                   f"zone_predicates={sc.get('zone_predicates')}")
         return (f"Schema refreshed: {len(sc.get('zones', []))} zones, "
                 f"{len(sc.get('agents', []))} agents, "
@@ -442,9 +442,9 @@ async def handle_task(agent, payload):
                 "\"what setpoints did maddpg-zone-11 pick near step 20000?\" "
                 "or \"what was the outdoor temperature in episode 1?\"")
 
-    agent.log(f"[hsml] received question, dispatching to LLM+Fuseki pipeline")
+    await agent.log(f"[hsml] received question, dispatching to LLM+Fuseki pipeline")
     result = await _answer_question(agent, cfg, q)
-    agent.log(f"[hsml] ok={result.get('ok')} rows={result.get('rows')}\n"
+    await agent.log(f"[hsml] ok={result.get('ok')} rows={result.get('rows')}\n"
               f"[hsml] sparql:\n{result.get('sparql', '(none)')}")
     answer = result.get("answer", "(no answer)")
     sparql = result.get("sparql")

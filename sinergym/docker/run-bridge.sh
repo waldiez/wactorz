@@ -11,12 +11,30 @@
 #
 # Usage:
 #   ./run-bridge.sh                       # clean deploy run (reproduces eval metrics)
+#   ./run-bridge.sh --clean               # wipe the Fuseki dataset first, then run
 #   ./run-bridge.sh --inject-anomalies --anomaly-seed 5   # with anomaly injection
 # Any extra args are appended to the bridge command.
+#
+# Why --clean: the Fuseki dataset is persistent (TDB2) and every run is "episode 1",
+# so without clearing, successive runs ACCUMULATE and collide on (step, zone) — the
+# replay/queries then have to AVG-dedupe a mix of runs. Use --clean for a pristine
+# dataset per run. (A future fix is to stamp each run with a unique id; see LOCAL_SETUP.)
 set -euo pipefail
 
 SGY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # wactorz/sinergym
 IMAGE="wactorz-sinergym-bridge:3.11.0-ep24.1.0"
+FUSEKI_HOST_URL="${FUSEKI_HOST_URL:-http://localhost:3030}"
+
+# Strip --clean (the bridge doesn't understand it); wipe the dataset host-side first.
+CLEAN=0; ARGS=()
+for a in "$@"; do
+  if [ "$a" = "--clean" ]; then CLEAN=1; else ARGS+=("$a"); fi
+done
+if [ "$CLEAN" = 1 ]; then
+  echo "[clean] clearing Fuseki dataset 'sinergym' ($FUSEKI_HOST_URL)…"
+  curl -fsS -u admin:admin -X POST "$FUSEKI_HOST_URL/sinergym/update" \
+    --data-urlencode 'update=CLEAR ALL' >/dev/null && echo "[clean] dataset wiped."
+fi
 
 ZONES="Core_bottom,Core_mid,Core_top,\
 Perimeter_bot_ZN_1,Perimeter_bot_ZN_2,Perimeter_bot_ZN_3,Perimeter_bot_ZN_4,\
@@ -35,9 +53,11 @@ CMD=(python sinergym_bridge_anomalies.py
      --fuseki-url http://host.docker.internal:3030 --fuseki-dataset sinergym
      --fuseki-user admin --fuseki-password admin
      --broker host.docker.internal --port 1883
-     "$@")
+     "${ARGS[@]}")
 
-exec docker run --rm -it \
+# Use an interactive TTY only when we actually have one (so this also works backgrounded).
+TTY=""; [ -t 0 ] && [ -t 1 ] && TTY="-it"
+exec docker run --rm $TTY \
   --add-host=host.docker.internal:host-gateway \
   -v "$SGY_DIR":/work \
   -v "$INJECTOR_DIR":/injector:ro \

@@ -79,7 +79,7 @@ async def setup(agent):
         }
         agent.state["global"] = g
         agent.persist("schema_global", g)
-        agent.log(f"[schema] captured global env_info: obs_dim={g.get('obs_dim')} "
+        await agent.log(f"[schema] captured global env_info: obs_dim={g.get('obs_dim')} "
                   f"action_dim={g.get('action_dim')} zones={g.get('n_zones')}")
 
     async def on_zone_env_info(payload):
@@ -106,12 +106,12 @@ async def setup(agent):
                 keys = sorted(info.keys())
                 agent.state["info_keys"] = keys
                 agent.persist("schema_info_keys", keys)
-                agent.log(f"[schema] captured info keys: {keys}")
+                await agent.log(f"[schema] captured info keys: {keys}")
 
     agent.subscribe(t["env_info"], on_env_info)
     agent.subscribe(t["zone_env_info"], on_zone_env_info)
     agent.subscribe(t["obs"], on_obs)
-    agent.log(f"sinergym-schema ready; listening on {t['env_info']} "
+    await agent.log(f"sinergym-schema ready; listening on {t['env_info']} "
               f"(env_info is emitted at each episode start).")
 
 

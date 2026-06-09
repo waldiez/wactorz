@@ -21,14 +21,14 @@ GRU sequence never bridges across episodes.
 
 Files (place beside the MADDPG model)
 -------------------------------------
-  C:/Users/pkasn/Documents/wactorz_dev/wactorz/state/maddpg_office/
+  <infer_dir>/   (default: state/maddpg_office, override via SINERGYM_MODEL_DIR)
       forecast_anomaly_detector.py     (the detector module — imported)
       detector_forecast_v9_mixed.pkl   (the trained pickle — loaded; version forecast_v8)
 
 Launch params (defaults shown)
 ------------------------------
   env_id        "officeMedium-multiagent"
-  infer_dir     "C:/Users/pkasn/Documents/wactorz_dev/wactorz/state/maddpg_office"
+  infer_dir     "state/maddpg_office"  (or $SINERGYM_MODEL_DIR)
   detector_path "<infer_dir>/detector_forecast_v9_mixed.pkl"
   fuseki_url/dataset/user/password   (same store the bridge writes to)
 
@@ -42,10 +42,13 @@ Control (via @sinergym-anomaly)
 AGENT_CODE = r'''
 import asyncio
 import json
+import os
 import sys
 
 ENV_ID_DEFAULT = "officeMedium-multiagent"
-INFER_DIR_DEFAULT = "C:/Users/pkasn/Documents/wactorz_dev/wactorz/state/maddpg_office"
+# Portable default: relative to the wactorz working dir (repo root), overridable via env.
+# (Was a hardcoded Windows path, which never resolved on other hosts → detector never loaded.)
+INFER_DIR_DEFAULT = os.environ.get("SINERGYM_MODEL_DIR", "state/maddpg_office")
 DETECTOR_FILE_DEFAULT = "detector_forecast_v9_mixed.pkl"
 
 SGY_NS  = "https://waldiez.github.io/wactorz/sinergym#"
@@ -147,13 +150,13 @@ async def setup(agent):
     try:
         agent.state["det"] = await asyncio.to_thread(_load_detector, agent, cfg)
         fitted = getattr(agent.state["det"], "is_fitted", False)
-        agent.log(f"[anomaly] detector loaded from {cfg['detector_path']} "
+        await agent.log(f"[anomaly] detector loaded from {cfg['detector_path']} "
                   f"(is_fitted={fitted})")
         if not fitted:
-            agent.log("[anomaly] WARNING: detector reports is_fitted=False; "
+            await agent.log("[anomaly] WARNING: detector reports is_fitted=False; "
                       "update() will no-op until a fitted model is loaded", level="warning")
     except Exception as e:
-        agent.log(f"[anomaly] FAILED to load detector: {e}", level="error")
+        await agent.log(f"[anomaly] FAILED to load detector: {e}", level="error")
 
     obs_topic   = f"sinergym/env/{cfg['env_id']}/observation"
     agent.state["alert_topic"] = f"sinergym/env/{cfg['env_id']}/anomaly"
@@ -183,7 +186,7 @@ async def setup(agent):
             alert = det.update(_np.asarray(obs, dtype=_np.float64), info, None)
         except Exception as e:
             if agent.state["n_steps"] % 500 == 0:
-                agent.log(f"[anomaly] update() error: {e}", level="warning")
+                await agent.log(f"[anomaly] update() error: {e}", level="warning")
             alert = None
         agent.state["n_steps"] = agent.state.get("n_steps", 0) + 1
 
@@ -207,19 +210,19 @@ async def setup(agent):
         try:
             await agent.publish(agent.state["alert_topic"], rec)
         except Exception as e:
-            agent.log(f"[anomaly] publish failed: {e}", level="warning")
+            await agent.log(f"[anomaly] publish failed: {e}", level="warning")
         # 2) persist to Fuseki with provenance (off the event loop)
         try:
             await asyncio.to_thread(_fuseki_update, cfg, _alert_ttl(cfg, alert, step, ep))
         except Exception as e:
             agent.state["fuseki_fail"] += 1
             if agent.state["fuseki_fail"] <= 3:
-                agent.log(f"[anomaly] Fuseki write failed: {e}", level="warning")
-        agent.log(f"[anomaly] ALERT step={step} kind={alert.kind_guess} "
+                await agent.log(f"[anomaly] Fuseki write failed: {e}", level="warning")
+        await agent.log(f"[anomaly] ALERT step={step} kind={alert.kind_guess} "
                   f"sev={alert.severity:.2f} zone={getattr(alert,'zone_idx',None)}")
 
     agent.subscribe(obs_topic, on_obs)
-    agent.log(f"sinergym-anomaly ready; watching {obs_topic}, alerts -> "
+    await agent.log(f"sinergym-anomaly ready; watching {obs_topic}, alerts -> "
               f"{agent.state['alert_topic']} and Fuseki <{G_ANOM}>.")
 
 
@@ -228,6 +231,18 @@ async def process(agent):
 
 
 async def handle_task(agent, payload):
+    # The "@agent {json}" path delivers {"text": "<raw json>"} WITHOUT parsing it, so
+    # normalize here — otherwise config/reset silently fall through to status.
+    if isinstance(payload, dict) and "action" not in payload and "text" in payload:
+        raw = (payload.get("text") or "").strip()
+        if raw.startswith("{"):
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                payload = {"action": raw.split()[0] if raw else ""}
+        elif raw:
+            payload = {"action": raw.split()[0]}
+
     action = ""
     if isinstance(payload, dict):
         action = (payload.get("action") or "").lower().strip()

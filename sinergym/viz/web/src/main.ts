@@ -1,5 +1,6 @@
 // Bootstrap: load geometry → build twin → connect live feed → wire dashboard,
 // with a history-replay transport that scrubs a finished run from Fuseki.
+import { AskPanel } from "./ask";
 import { Feed, type Geometry } from "./data";
 import { HistoryPlayer, type Metric } from "./history";
 import { Twin } from "./twin";
@@ -7,8 +8,13 @@ import { UI } from "./ui";
 
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
 
+interface VizConfig { mqttWsPort: number; wsChatPort: number; building: string }
+
 async function boot() {
-  const geo: Geometry = await fetch("/api/geometry").then((r) => r.json());
+  const [geo, cfg] = await Promise.all([
+    fetch("/api/geometry").then((r) => r.json()) as Promise<Geometry>,
+    fetch("/api/config").then((r) => r.json()).catch(() => ({ mqttWsPort: 9001, wsChatPort: 8888 })) as Promise<VizConfig>,
+  ]);
   const canvas = document.getElementById("twin") as HTMLCanvasElement;
   const twin = new Twin(canvas, geo);
   const ui = new UI(geo, twin);
@@ -20,7 +26,10 @@ async function boot() {
   feed.onStatus((ok) => ui.setConn(ok));
   feed.onFrame((f) => { if (mode === "live") ui.frame(f); });
   feed.onAlert((a) => { if (mode === "live") ui.alert(a, feed.zoneByIdx); });
-  feed.connect();
+  feed.connect(cfg.mqttWsPort);
+
+  // ── ask-the-run (hsml Q&A over wactorz monitor WS) ──────────────────────────
+  new AskPanel(cfg.wsChatPort);
 
   // ── history replay ───────────────────────────────────────────────────────────
   const player = new HistoryPlayer();

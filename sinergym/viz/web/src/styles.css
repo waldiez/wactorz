@@ -132,5 +132,55 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
   letter-spacing: 0.12em; padding: 4px 10px; border-radius: 14px; background: rgba(91,140,255,0.16);
   border: 1px solid var(--panel-brd); color: var(--accent); }
 
+/* ask-the-run panel */
+.ask-launch { font: inherit; font-size: 12px; font-weight: 600; color: var(--accent2); cursor: pointer;
+  background: rgba(54,226,194,0.12); border: 1px solid rgba(54,226,194,0.4); border-radius: 18px;
+  padding: 6px 14px; margin-left: auto; margin-right: 14px; transition: all 0.15s; }
+.ask-launch:hover { background: rgba(54,226,194,0.22); box-shadow: 0 0 16px rgba(54,226,194,0.25); }
+.ask-panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: 380px; max-width: 92vw;
+  display: flex; flex-direction: column; z-index: 50; transform: translateX(calc(100% + 24px));
+  transition: transform 0.32s cubic-bezier(0.22,1,0.36,1); padding: 0; overflow: hidden; }
+.ask-panel.open { transform: none; }
+.ask-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 18px;
+  font-weight: 700; letter-spacing: 0.04em; color: #d7e6ff;
+  background: linear-gradient(180deg, rgba(54,226,194,0.10), transparent);
+  border-bottom: 1px solid var(--panel-brd); }
+.ask-close { background: none; border: none; color: var(--muted); font-size: 15px; cursor: pointer; }
+.ask-close:hover { color: #fff; }
+.ask-hint { margin: 12px 16px; padding: 12px 14px; border-radius: 10px; font-size: 12px; line-height: 1.5;
+  color: #cdd9f6; background: rgba(255,177,59,0.08); border: 1px solid rgba(255,177,59,0.3); }
+.ask-hint code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+.ask-thread { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.ask-msg { max-width: 88%; padding: 9px 12px; border-radius: 12px; font-size: 12.5px; line-height: 1.5;
+  animation: pop 0.2s ease; word-wrap: break-word; }
+.ask-user { align-self: flex-end; background: linear-gradient(180deg, #4c6ef5, #4259d8); color: #fff;
+  border-bottom-right-radius: 4px; }
+.ask-agent { align-self: flex-start; background: rgba(255,255,255,0.05); border: 1px solid var(--panel-brd);
+  color: #e2eafc; border-bottom-left-radius: 4px; }
+.ask-sys { align-self: center; background: rgba(255,84,112,0.10); border: 1px solid rgba(255,84,112,0.3);
+  color: #ffc2cd; font-size: 11.5px; }
+.ask-sparql { margin-top: 8px; }
+.ask-sparql summary { cursor: pointer; color: var(--accent2); font-size: 11px; }
+.ask-sparql pre { margin: 7px 0 0; padding: 9px 11px; background: rgba(8,12,22,0.7); border-radius: 8px;
+  font: 11px/1.45 ui-monospace, "SF Mono", Menlo, monospace; color: #bcd; overflow-x: auto;
+  border: 1px solid var(--panel-brd); white-space: pre-wrap; }
+.ask-typing { display: flex; gap: 4px; align-items: center; }
+.ask-typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--muted);
+  animation: blink 1.2s infinite both; }
+.ask-typing span:nth-child(2) { animation-delay: 0.2s; } .ask-typing span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 0%,80%,100% { opacity: 0.25; } 40% { opacity: 1; } }
+.ask-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; }
+.ask-chip { font: inherit; font-size: 11px; color: #aebfe6; cursor: pointer; text-align: left;
+  background: rgba(91,140,255,0.10); border: 1px solid var(--panel-brd); border-radius: 14px; padding: 5px 10px; }
+.ask-chip:hover { border-color: var(--accent); background: rgba(91,140,255,0.2); }
+.ask-form { display: flex; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--panel-brd); }
+.ask-input { flex: 1; background: rgba(255,255,255,0.05); border: 1px solid var(--panel-brd); border-radius: 10px;
+  color: var(--ink); padding: 9px 12px; font: inherit; font-size: 12.5px; outline: none; }
+.ask-input:focus { border-color: var(--accent2); }
+.ask-input:disabled { opacity: 0.5; }
+.ask-send { background: var(--accent2); color: #042; border: none; border-radius: 10px; width: 40px;
+  font-size: 15px; cursor: pointer; font-weight: 700; }
+.ask-send:hover { background: #5cf0d6; }
+
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(99,130,220,0.25); border-radius: 8px; }

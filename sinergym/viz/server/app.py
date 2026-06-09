@@ -42,6 +42,10 @@ FUSEKI_URL = os.environ.get("FUSEKI_URL", "http://localhost:3030").rstrip("/")
 FUSEKI_DATASET = os.environ.get("FUSEKI_DATASET", "sinergym")
 FUSEKI_USER = os.environ.get("FUSEKI_USER", "admin")
 FUSEKI_PASSWORD = os.environ.get("FUSEKI_PASSWORD", "admin")
+# Ports the browser connects to directly (not proxied) — served to the frontend so
+# nothing is hardcoded in the bundle. Override via env to match your deployment.
+MQTT_WS_PORT = int(os.environ.get("MQTT_WS_PORT", "9001"))    # mosquitto websockets listener
+WS_CHAT_PORT = int(os.environ.get("WS_CHAT_PORT", "8888"))    # wactorz monitor /ws (hsml Q&A)
 
 _dist = os.path.join(HERE, "..", "web", "dist")
 WEB_ROOT = os.path.abspath(
@@ -180,6 +184,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._send(200, json.dumps({"ok": True, "building": os.path.basename(EPJSON),
                                         "fuseki": FUSEKI_URL}).encode())
+            return
+        if path == "/api/config":
+            self._send(200, json.dumps({
+                "mqttWsPort": MQTT_WS_PORT,
+                "wsChatPort": WS_CHAT_PORT,
+                "building": os.path.splitext(os.path.basename(EPJSON))[0],
+            }).encode())
             return
         if path == "/api/history":
             self._history()

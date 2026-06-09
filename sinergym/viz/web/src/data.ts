@@ -75,7 +75,8 @@ export class Feed {
   onAlert(cb: AlertCb) { this.alertCbs.push(cb); }
   onStatus(cb: StatusCb) { this.statusCbs.push(cb); }
 
-  connect(url = `ws://${location.hostname}:9001`) {
+  connect(port = 9001) {
+    const url = `ws://${location.hostname}:${port}`;
     const c = mqtt.connect(url, { reconnectPeriod: 2000, connectTimeout: 8000 });
     c.on("connect", () => {
       this.statusCbs.forEach((cb) => cb(true));

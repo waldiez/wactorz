@@ -39,12 +39,30 @@ _OCCUPIED_MARKERS = ("People", "ZoneControl:Thermostat")
 
 
 def _verts(surface: dict[str, Any]) -> list[list[float]]:
+    """BuildingSurface:Detailed — vertices as a list of {vertex_x/y/z_coordinate}."""
     out = []
     for v in surface.get("vertices", []):
         out.append([
             float(v["vertex_x_coordinate"]),
             float(v["vertex_y_coordinate"]),
             float(v["vertex_z_coordinate"]),
+        ])
+    return out
+
+
+def _fen_verts(obj: dict[str, Any]) -> list[list[float]]:
+    """FenestrationSurface:Detailed — vertices as flat numbered fields
+    (vertex_1_x_coordinate, vertex_1_y_coordinate, …), NOT a list."""
+    out = []
+    n = int(obj.get("number_of_vertices", 4))
+    for i in range(1, n + 1):
+        x = obj.get(f"vertex_{i}_x_coordinate")
+        if x is None:
+            break
+        out.append([
+            float(x),
+            float(obj.get(f"vertex_{i}_y_coordinate", 0.0)),
+            float(obj.get(f"vertex_{i}_z_coordinate", 0.0)),
         ])
     return out
 
@@ -131,7 +149,7 @@ def extract(epjson_path: str) -> dict[str, Any]:
             "zone": surf_zone.get(host),
             "surface": host,
             "kind": fen.get("surface_type", "Window"),
-            "vertices": _verts(fen),
+            "vertices": _fen_verts(fen),
         })
 
     return {

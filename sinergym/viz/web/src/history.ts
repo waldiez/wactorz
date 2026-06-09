@@ -23,8 +23,13 @@ export class HistoryPlayer {
   private i = 0;
   private timer?: number;
   metric: Metric = "clg";
-  fps = 24;
+  fps = 12;
   onFrame?: (f: HFrame) => void;
+
+  setFps(n: number) {
+    this.fps = n;
+    if (this.timer) { this.pause(); this.play(); }   // restart at new cadence
+  }
 
   get loaded() { return !!this.h; }
   get length() { return this.h?.steps.length ?? 0; }

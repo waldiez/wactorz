@@ -2,7 +2,7 @@
 // EnergyPlus is Z-up; Babylon is Y-up → map (x,y,z)_EP → (x, z, y)_Babylon,
 // recentred on the building footprint.
 import {
-  ArcRotateCamera, Color3, Color4, Engine, GlowLayer, HemisphericLight,
+  ArcRotateCamera, Color3, Color4, Constants, Engine, GlowLayer, HemisphericLight,
   Mesh, MeshBuilder, Scene, StandardMaterial, Vector3, VertexData,
 } from "@babylonjs/core";
 import type { Geometry } from "./data";
@@ -15,6 +15,7 @@ export class Twin {
   private zoneMesh = new Map<string, Mesh>();
   private zoneMat = new Map<string, StandardMaterial>();
   private floorMeshes = new Map<string, Mesh[]>();
+  private windowMeshes: Mesh[] = [];
   private target = new Map<string, [number, number, number]>(); // smoothed colour target
 
   constructor(canvas: HTMLCanvasElement, geo: Geometry) {
@@ -44,7 +45,7 @@ export class Twin {
     hemi.groundColor = new Color3(0.05, 0.08, 0.15);
 
     const glow = new GlowLayer("glow", this.scene);
-    glow.intensity = 0.55;
+    glow.intensity = 0.6;
 
     // ground grid
     const ground = MeshBuilder.CreateGround("g", { width: span * 2.4, height: span * 2.4 }, this.scene);
@@ -100,6 +101,47 @@ export class Twin {
       if (z.occupied) this.target.set(name, [0.13, 0.18, 0.3]);
     }
 
+    // ── glazing: windows (glass) + doors, from the fenestration geometry ────────
+    // Glass uses ADDITIVE blending so it only adds a cyan glow to the façade and
+    // never darkens the zones behind it (combine-mode transparent panes stacked over
+    // the building were muting the tints). This also makes the toggle obvious.
+    // Warm "lit window" glazing: additive amber (never darkens the building) that pops
+    // against the cool temp-tinted floors, with crisp warm frames per pane.
+    const glass = new StandardMaterial("glass", this.scene);
+    glass.diffuseColor = new Color3(0, 0, 0);
+    glass.emissiveColor = new Color3(0.85, 0.55, 0.20);
+    glass.alpha = 0.62; glass.alphaMode = Constants.ALPHA_ADD;
+    glass.backFaceCulling = false; glass.disableLighting = true;
+    const doorMat = new StandardMaterial("door", this.scene);
+    doorMat.diffuseColor = new Color3(0.16, 0.20, 0.28);
+    doorMat.emissiveColor = new Color3(0.05, 0.07, 0.11);
+    doorMat.alpha = 0.55; doorMat.backFaceCulling = false;
+
+    for (const w of geo.windows ?? []) {
+      if (!w.vertices || w.vertices.length < 3) continue;
+      const positions: number[] = [];
+      const indices: number[] = [];
+      for (const v of w.vertices) {
+        const p = ep(v);
+        // sit just proud of the wall so panes read clearly without z-fighting
+        const len = Math.hypot(p.x, p.z) || 1;
+        positions.push(p.x + (p.x / len) * 0.25, p.y, p.z + (p.z / len) * 0.25);
+      }
+      for (let i = 1; i < w.vertices.length - 1; i++) indices.push(0, i, i + 1);
+      const mesh = new Mesh("fen_" + w.surface, this.scene);
+      const vd = new VertexData();
+      vd.positions = positions; vd.indices = indices;
+      const normals: number[] = [];
+      VertexData.ComputeNormals(positions, indices, normals);
+      vd.normals = normals; vd.applyToMesh(mesh);
+      const isDoor = w.kind === "Door";
+      mesh.material = isDoor ? doorMat : glass;
+      mesh.enableEdgesRendering();
+      mesh.edgesWidth = isDoor ? 1.4 : 2.0;
+      mesh.edgesColor = isDoor ? new Color4(0.5, 0.6, 0.8, 0.3) : new Color4(1.0, 0.82, 0.48, 0.9);
+      this.windowMeshes.push(mesh);   // toggled together via setWindowsVisible
+    }
+
     // smooth colour lerp each frame
     this.scene.onBeforeRenderObservable.add(() => {
       for (const [name, mat] of this.zoneMat) {
@@ -108,7 +150,7 @@ export class Twin {
         c.r += (t[0] - c.r) * 0.08;
         c.g += (t[1] - c.g) * 0.08;
         c.b += (t[2] - c.b) * 0.08;
-        mat.emissiveColor.set(c.r * 0.45, c.g * 0.45, c.b * 0.45);
+        mat.emissiveColor.set(c.r * 0.6, c.g * 0.6, c.b * 0.6);
       }
     });
 
@@ -134,5 +176,9 @@ export class Twin {
 
   setFloorVisible(floor: string, visible: boolean) {
     for (const m of this.floorMeshes.get(floor) ?? []) m.setEnabled(visible);
+  }
+
+  setWindowsVisible(visible: boolean) {
+    for (const m of this.windowMeshes) m.setEnabled(visible);
   }
 }

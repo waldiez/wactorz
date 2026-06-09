@@ -6,11 +6,18 @@
 // SPARQL it generated, which we render in a code block. When the WS isn't reachable
 // (pure-viz deployment, no wactorz/LLM) the panel shows a clear "needs wactorz" hint.
 const GATEWAY = "io-gateway";
-const SUGGESTIONS = [
-  "which agent controls Perimeter_top_ZN_1?",
-  "what setpoints did maddpg-zone-11 choose near step 20000?",
-  "what anomalies were detected, and of what kind?",
-];
+
+// Suggested questions are templated from the actual building's zone names (passed in
+// from the loaded geometry) so they stay relevant for ANY building, not just this one.
+function buildSuggestions(zones: string[]): string[] {
+  const a = zones[0] ?? "a zone";
+  const b = zones[Math.floor(zones.length / 2)] ?? a;
+  return [
+    `which agent controls ${a}?`,
+    `what cooling setpoints were chosen for ${b}?`,
+    `what anomalies were detected, and of what kind?`,
+  ];
+}
 
 const el = (tag: string, cls?: string, html?: string) => {
   const e = document.createElement(tag);
@@ -29,9 +36,11 @@ export class AskPanel {
   private hint: HTMLElement;
   private streamBubble?: HTMLElement;
   private port: number;
+  private suggestions: string[];
 
-  constructor(port = 8888) {
+  constructor(port = 8888, zones: string[] = []) {
     this.port = port;
+    this.suggestions = buildSuggestions(zones);
     const { panel, thread, input, hint } = this.build();
     this.panel = panel; this.thread = thread; this.input = input; this.hint = hint;
     this.connect();
@@ -158,7 +167,7 @@ export class AskPanel {
     form.addEventListener("submit", (e) => { e.preventDefault(); this.send(input.value); input.value = ""; });
 
     const chips = panel.querySelector(".ask-chips")!;
-    for (const s of SUGGESTIONS) {
+    for (const s of this.suggestions) {
       const c = el("button", "ask-chip", this.escape(s));
       c.addEventListener("click", () => { input.value = s; this.send(s); input.value = ""; });
       chips.appendChild(c);

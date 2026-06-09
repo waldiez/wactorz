@@ -29,7 +29,10 @@ async function boot() {
   feed.connect(cfg.mqttWsPort);
 
   // ── ask-the-run (hsml Q&A over wactorz monitor WS) ──────────────────────────
-  new AskPanel(cfg.wsChatPort);
+  // Seed the suggested questions from the actual building's occupied zones so they
+  // stay relevant for any building, not just this one.
+  const occZones = Object.entries(geo.zones).filter(([, z]) => z.occupied).map(([n]) => n);
+  new AskPanel(cfg.wsChatPort, occZones);
 
   // ── history replay ───────────────────────────────────────────────────────────
   const player = new HistoryPlayer();
@@ -48,7 +51,7 @@ async function boot() {
       mode = "history"; ui.setMode("history");
       slider.max = String(h.steps.length - 1); slider.value = "0";
       show($("tp-load"), false);
-      [playBtn, slider, $("tp-frame"), $("tp-metric"), $("tp-live")].forEach((e) => show(e));
+      [playBtn, slider, $("tp-frame"), $("tp-metric"), $("tp-speed"), $("tp-live")].forEach((e) => show(e));
       playBtn.textContent = "▶";
     } catch (e) {
       $("tp-load").textContent = "⟲ replay run";
@@ -63,12 +66,14 @@ async function boot() {
   slider.addEventListener("input", () => { player.pause(); playBtn.textContent = "▶"; player.seek(+slider.value); });
   $("tp-metric").addEventListener("change", (e) =>
     player.setMetric((e.target as HTMLSelectElement).value as Metric));
+  $("tp-speed").addEventListener("change", (e) =>
+    player.setFps(+(e.target as HTMLSelectElement).value));
 
   $("tp-live").addEventListener("click", () => {
     player.pause();
     mode = "live"; ui.setMode("live");
     show($("tp-load")); $("tp-load").textContent = "⟲ replay run";
-    [playBtn, slider, $("tp-frame"), $("tp-metric"), $("tp-live")].forEach((e) => show(e, false));
+    [playBtn, slider, $("tp-frame"), $("tp-metric"), $("tp-speed"), $("tp-live")].forEach((e) => show(e, false));
   });
 }
 

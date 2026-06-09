@@ -156,5 +156,17 @@ export class UI {
       };
       box.appendChild(b);
     }
+    // glazing toggle (only if the building has windows)
+    if (this.geo.windows?.length) {
+      const g = document.createElement("button");
+      g.textContent = "✦ glass";
+      g.className = "glass-toggle";
+      let on = true;
+      g.onclick = () => {
+        on = !on; g.classList.toggle("off", !on);
+        this.twin.setWindowsVisible(on);
+      };
+      box.appendChild(g);
+    }
   }
 }

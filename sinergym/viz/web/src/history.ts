@@ -22,7 +22,7 @@ export class HistoryPlayer {
   private h?: History;
   private i = 0;
   private timer?: number;
-  metric: Metric = "clg";
+  metric: Metric = "temp";
   fps = 12;
   onFrame?: (f: HFrame) => void;
 

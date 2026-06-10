@@ -400,6 +400,17 @@ async def process(agent):
 
 
 async def handle_task(agent, payload):
+    # The "@agent {json}" path delivers {"text": "<raw json>"} WITHOUT parsing it,
+    # so an {"action":"config"|"refresh"} command arrives as a text-only wrapper and
+    # would otherwise fall through to the question path. Normalize it here first.
+    if isinstance(payload, dict) and "action" not in payload and "text" in payload:
+        raw = (payload.get("text") or "").strip()
+        if raw.startswith("{") and raw.endswith("}"):
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                pass
+
     # Accept a structured dict, a raw string, or the {"text": "..."} wrapper that
     # the direct @agent input path delivers.
     question = None

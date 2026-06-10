@@ -128,29 +128,30 @@ async def setup(agent):
     # Lite:     daemon runs on localhost (you started it manually).
     # NO HF App may be active on the robot — Apps own it exclusively.
     # ---- Build connection attempt ladder ----
-    # media_backend defaults to "" (SDK default) so the audio system is
-    # initialized and the say command can play through Reachy's speaker.
-    # Set to "no_media" via custom/reachy/config + restart if you hit
-    # GStreamer audio-device contention on Windows and don't need the speaker.
-    media_backend = agent.recall("media_backend") or ""
+    # media_backend resolution (first non-empty wins):
+    #   1. runtime config via custom/reachy/config (agent.recall)
+    #   2. REACHY_MEDIA_BACKEND in the environment/.env  (deterministic, no MQTT race)
+    #   3. "" → SDK auto-detect.
+    # Set "webrtc" to route speech to the ROBOT speaker: with the desktop app's
+    # local daemon bridging to a Wireless robot, the WebRTC backend plays via the
+    # daemon (play_sound -> /api/media/play_sound) instead of the host speakers.
+    # The LOCAL/gstreamer backend always plays on this host.
+    import os as _os
+    media_backend = (agent.recall("media_backend")
+                     or _os.environ.get("REACHY_MEDIA_BACKEND") or "").strip()
     agent.state["media_backend"] = media_backend
 
     mini = None
     last_err = None
     attempts = []
     base = {"media_backend": media_backend} if media_backend else {}
-    # For a Wireless robot the speaker lives on the robot's board, reachable only
-    # via the WebRTC backend over the network (a stray localhost daemon would give
-    # the LOCAL backend -> host speakers). So when webrtc is requested, try the
-    # network connection FIRST so play_sound routes to the robot.
-    prefer_network = str(media_backend).lower() == "webrtc"
+    # Connection: keep auto-detect first (the desktop app's local daemon is the
+    # bridge that actually reaches the robot, same path the dashboard uses), with
+    # a forced-network fallback. The backend choice above — not the connection
+    # mode — is what routes audio to the robot.
     if robot_host:
-        if prefer_network:
-            attempts.append({**base, "host": robot_host, "connection_mode": "network"})
         attempts.append({**base, "host": robot_host})                                 # explicit host pin
         attempts.append({**base, "host": robot_host, "connection_mode": "network"})
-    if prefer_network:
-        attempts.append({**base, "connection_mode": "network"})                        # network first for webrtc
     attempts.append({**base})                                                          # autodetect (default)
     attempts.append({**base, "connection_mode": "network"})                            # force network mode
 

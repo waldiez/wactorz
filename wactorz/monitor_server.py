@@ -1081,24 +1081,40 @@ def _snapshot() -> dict:
     for nd in state["nodes"].values():
         nd["online"] = _node_online(nd.get("last_seen", 0))
 
-    # Prefer MQTT-derived data from state["agents"]; fall back to live actor
-    # objects for the window between restart and first MQTT heartbeat (0.5s).
+    # The headline totals must match what the dashboard actually shows on the
+    # cards. Each card resolves its cost via _actor_cost() — MQTT state, then the
+    # live actor object, then the persisted _final_cost row — so the header has to
+    # coalesce the same three sources per agent. Summing only state["cost_usd"]
+    # (or only iterating the local registry) dropped any on-screen agent whose
+    # cost lives on the actor object / SQLite rather than in an MQTT metrics frame
+    # (the reachy-body case: header read main-only while two cards were visible).
+    actors_by_id: dict = {}
+    actors_by_name: dict = {}
     if registry is not None:
-        live_names = {a.name for a in registry.all_actors()}
-        live_cost = sum(
-            state["agents"].get(a.actor_id, {}).get("cost_usd")
-            or getattr(a, "total_cost_usd", 0.0)
-            for a in registry.all_actors()
-        )
-        live_msgs = sum(
-            state["agents"].get(a.actor_id, {}).get("messages_processed")
-            or getattr(getattr(a, "metrics", None), "messages_processed", 0)
-            for a in registry.all_actors()
-        )
-    else:
-        live_names = {a.get("name", "") for a in state["agents"].values()}
-        live_cost = sum(a.get("cost_usd", 0.0) for a in state["agents"].values())
-        live_msgs = sum(a.get("messages_processed", 0) for a in state["agents"].values())
+        for a in registry.all_actors():
+            actors_by_id[a.actor_id] = a
+            actors_by_name[a.name] = a
+
+    live_names: set = set()
+    live_cost = 0.0
+    live_msgs = 0
+    seen_ids: set = set()
+    for aid, ag in state["agents"].items():
+        seen_ids.add(aid)
+        name = ag.get("name", "")
+        live_names.add(name)
+        actor = actors_by_id.get(aid) or actors_by_name.get(name)
+        live_cost += _best_cost(ag, actor, name)
+        live_msgs += _best_msgs(ag, actor)
+    # Fold in live actors not yet in state (the post-restart window before the
+    # first heartbeat). Keyed by actor_id so agents already counted above are
+    # skipped — no double-count.
+    for a in actors_by_id.values():
+        if a.actor_id in seen_ids:
+            continue
+        live_names.add(a.name)
+        live_cost += _best_cost(None, a, a.name)
+        live_msgs += _best_msgs(None, a)
 
     # The live + _final_cost sum can dip when an agent is deleted (its _final_cost
     # row is purged) or hard-killed (its on_stop never ran). The durable ledger is
@@ -1431,6 +1447,23 @@ def _actor_payload(ag: dict) -> dict:
     }
 
 
+def _final_cost_from_db(name: str):
+    """Read the persisted _final_cost cost_usd for an agent name, or None."""
+    if db is None or not name:
+        return None
+    try:
+        import json as _json
+        row = db.conn.execute(
+            "SELECT value FROM kv_store WHERE agent=? AND key='_final_cost'",
+            (name,),
+        ).fetchone()
+        if row:
+            return _json.loads(row[0]).get("cost_usd")
+    except Exception:
+        pass
+    return None
+
+
 def _actor_cost(actor, ag: dict):
     """Return the most accurate cost available: MQTT-derived first, then live object, then SQLite."""
     mqtt_cost = ag.get("cost_usd")
@@ -1439,19 +1472,50 @@ def _actor_cost(actor, ag: dict):
     live_cost = getattr(actor, "total_cost_usd", None)
     if live_cost:
         return round(live_cost, 6)
-    if db is not None:
-        try:
-            import json as _json
-            row = db.conn.execute(
-                "SELECT value FROM kv_store WHERE agent=? AND key='_final_cost'",
-                (actor.name,),
-            ).fetchone()
-            if row:
-                entry = _json.loads(row[0])
-                return entry.get("cost_usd")
-        except Exception:
-            pass
-    return None
+    return _final_cost_from_db(getattr(actor, "name", None))
+
+
+def _best_cost(ag, actor, name: str) -> float:
+    """Resolve an agent's cost the SAME way the cards do (_actor_cost): MQTT
+    state first, then the live actor object, then the persisted _final_cost row.
+    Returns 0.0 when nothing is known so it can be summed safely. The headline
+    total must use this — summing only state["cost_usd"] dropped agents whose
+    cost lives on the actor object / SQLite (the reachy-body case)."""
+    if ag is not None:
+        c = ag.get("cost_usd")
+        if c is not None:
+            try:
+                return float(c)
+            except (TypeError, ValueError):
+                pass
+    if actor is not None:
+        c = getattr(actor, "total_cost_usd", None)
+        if c:
+            try:
+                return float(c)
+            except (TypeError, ValueError):
+                pass
+    c = _final_cost_from_db(name)
+    try:
+        return float(c) if c is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _best_msgs(ag, actor) -> int:
+    """Resolve message count: MQTT state first, then the live actor's metrics."""
+    if ag is not None:
+        m = ag.get("messages_processed")
+        if m:
+            try:
+                return int(m)
+            except (TypeError, ValueError):
+                pass
+    m = getattr(getattr(actor, "metrics", None), "messages_processed", 0)
+    try:
+        return int(m) if m else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 async def health_handler(request):

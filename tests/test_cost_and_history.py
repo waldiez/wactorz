@@ -292,6 +292,120 @@ class LifetimeCostLedgerTest(unittest.TestCase):
         self.assertEqual(self._ms._lifetime_cost_total(), 0.05)
 
 
+class SnapshotTotalsTest(unittest.TestCase):
+    """_snapshot() headline totals must match the cards the dashboard renders,
+    including remote / spawned agents that live in state but not in this
+    process's registry (the reachy-body bug: headline < visible sum)."""
+
+    def setUp(self):
+        import wactorz.monitor_server as ms
+        self._ms = ms
+        self._orig_db       = ms.db
+        self._orig_reg      = ms.registry
+        self._orig_agents   = dict(ms.state["agents"])
+        self._orig_ledger   = dict(ms._lifetime_cost)
+        self._orig_loaded   = ms._lifetime_loaded
+        ms.db = None                       # no historical / no ledger persistence
+        ms._lifetime_cost.clear()
+        ms._lifetime_loaded = True         # skip db hydrate
+        ms.state["agents"] = {}
+
+    def tearDown(self):
+        self._ms.db = self._orig_db
+        self._ms.registry = self._orig_reg
+        self._ms.state["agents"] = self._orig_agents
+        self._ms._lifetime_cost.clear()
+        self._ms._lifetime_cost.update(self._orig_ledger)
+        self._ms._lifetime_loaded = self._orig_loaded
+
+    def test_sums_all_visible_agents_when_no_registry(self):
+        self._ms.registry = None
+        self._ms.state["agents"] = {
+            "main": {"name": "main", "cost_usd": 0.0381},
+            "reachy-body": {"name": "reachy-body", "cost_usd": 0.0213},
+        }
+        snap = self._ms._snapshot()
+        self.assertAlmostEqual(snap["total_cost_usd"], 0.0594, places=6)
+
+    def test_includes_state_only_agent_missing_from_registry(self):
+        """A spawned/remote agent shows on a card (state) but isn't in the local
+        registry — it must still count toward the headline total."""
+        local_main = types.SimpleNamespace(
+            actor_id="main", name="main", total_cost_usd=0.0381,
+            metrics=types.SimpleNamespace(messages_processed=1),
+        )
+        self._ms.registry = types.SimpleNamespace(all_actors=lambda: [local_main])
+        self._ms.state["agents"] = {
+            "main":        {"name": "main",        "cost_usd": 0.0381, "messages_processed": 1},
+            "reachy-body": {"name": "reachy-body", "cost_usd": 0.0213, "messages_processed": 3},
+        }
+        snap = self._ms._snapshot()
+        # Old behaviour summed only registry actors -> 0.0381. Must be the full sum.
+        self.assertAlmostEqual(snap["total_cost_usd"], 0.0594, places=6)
+        self.assertEqual(snap["total_messages"], 4)
+
+    def test_includes_cost_living_on_actor_object_only(self):
+        """The reachy-body bug: an agent's card shows cost from its live actor
+        object (total_cost_usd) but state["cost_usd"] was never set by an MQTT
+        metrics frame. The header must still count it."""
+        main_actor = types.SimpleNamespace(
+            actor_id="main-id", name="main", total_cost_usd=0.038124,
+            metrics=types.SimpleNamespace(messages_processed=1),
+        )
+        reachy_actor = types.SimpleNamespace(
+            actor_id="reachy-id", name="reachy-body", total_cost_usd=0.021285,
+            metrics=types.SimpleNamespace(messages_processed=3),
+        )
+        self._ms.registry = types.SimpleNamespace(
+            all_actors=lambda: [main_actor, reachy_actor])
+        self._ms.state["agents"] = {
+            "main-id":   {"name": "main", "cost_usd": 0.038124, "messages_processed": 1},
+            "reachy-id": {"name": "reachy-body", "messages_processed": 3},  # no cost_usd
+        }
+        snap = self._ms._snapshot()
+        self.assertAlmostEqual(snap["total_cost_usd"], 0.059409, places=6)
+        self.assertEqual(snap["total_messages"], 4)
+
+    def test_includes_cost_from_sqlite_final_cost(self):
+        """Cost lives only in the persisted _final_cost row (no MQTT state, zero on
+        the object) — still counts, matching the card's _actor_cost fallback."""
+        self._ms.db = _make_kv_db([
+            {"agent": "main", "key": "_final_cost",
+             "value": {"name": "main", "cost_usd": 0.038124}},
+            {"agent": "reachy-body", "key": "_final_cost",
+             "value": {"name": "reachy-body", "cost_usd": 0.021285}},
+        ])
+        main_a = types.SimpleNamespace(
+            actor_id="m", name="main", total_cost_usd=0.0,
+            metrics=types.SimpleNamespace(messages_processed=0))
+        reachy_a = types.SimpleNamespace(
+            actor_id="r", name="reachy-body", total_cost_usd=0.0,
+            metrics=types.SimpleNamespace(messages_processed=0))
+        self._ms.registry = types.SimpleNamespace(all_actors=lambda: [main_a, reachy_a])
+        self._ms.state["agents"] = {"m": {"name": "main"}, "r": {"name": "reachy-body"}}
+        snap = self._ms._snapshot()
+        # Must NOT double-count: _final_cost is used for the live sum, and
+        # historical (also _final_cost) must skip names already counted.
+        self.assertAlmostEqual(snap["total_cost_usd"], 0.059409, places=6)
+
+    def test_folds_in_live_actor_not_yet_in_state(self):
+        """Fresh-boot window: an actor exists but hasn't published a heartbeat
+        into state yet — its cost still counts, with no double-count for those
+        already in state."""
+        in_state = types.SimpleNamespace(
+            actor_id="main", name="main", total_cost_usd=0.05,
+            metrics=types.SimpleNamespace(messages_processed=0),
+        )
+        not_yet = types.SimpleNamespace(
+            actor_id="fresh", name="fresh", total_cost_usd=0.02,
+            metrics=types.SimpleNamespace(messages_processed=0),
+        )
+        self._ms.registry = types.SimpleNamespace(all_actors=lambda: [in_state, not_yet])
+        self._ms.state["agents"] = {"main": {"name": "main", "cost_usd": 0.05}}
+        snap = self._ms._snapshot()
+        self.assertAlmostEqual(snap["total_cost_usd"], 0.07, places=6)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. actor_history_handler
 # ─────────────────────────────────────────────────────────────────────────────

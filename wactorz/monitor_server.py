@@ -1485,6 +1485,14 @@ async def cost_reset_handler(request):
     from .agents.llm_agent import reset_global_cost
     try:
         info = reset_global_cost()
+        # Clear the in-memory lifetime ledger so max() doesn't pin the display
+        # to pre-reset values for the rest of this process lifetime.
+        _lifetime_cost.clear()
+        if db is not None:
+            try:
+                db.kv_delete("_system", _LIFETIME_LEDGER_KEY)
+            except Exception:
+                pass
         return web.json_response({"ok": True, **info})
     except Exception as e:
         return web.json_response({"error": str(e)}, status=400)

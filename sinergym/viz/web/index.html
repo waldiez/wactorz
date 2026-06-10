@@ -5,41 +5,70 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Sinergym · Digital Twin</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23070b14'/%3E%3Cg transform='translate(6 6)' fill='none' stroke='%2336e2c2' stroke-width='1.6'%3E%3Cpath d='M2 13 L10 9 L18 13 L10 17 Z'/%3E%3Cpath d='M2 9 L10 5 L18 9 L10 13 Z' stroke='%235b8cff'/%3E%3Cpath d='M2 5 L10 1 L18 5 L10 9 Z' stroke='%23e7eefc'/%3E%3C/g%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
     <div id="app">
-      <!-- top bar -->
+      <!-- masthead -->
       <header id="topbar">
-        <div class="brand"><span class="dot"></span> SINERGYM <span class="muted">· digital twin</span></div>
-        <div id="clock" class="clock">— · day —/365 · ep —</div>
-        <div id="conn" class="conn"><span class="led off"></span><span id="conn-text">connecting…</span></div>
+        <div class="brand"><span class="dot"></span> SINERGYM <span class="muted">/ digital twin</span></div>
+        <div id="clock" class="clock">—— · day —/365 · ep —</div>
+        <div class="masthead-right">
+          <div class="occ-pill" title="people in the building right now">
+            <svg viewBox="0 0 16 16" class="occ-ico"><circle cx="8" cy="4.2" r="2.6"/><path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/></svg>
+            <b id="occ-total">—</b><span class="occ-unit">present</span>
+          </div>
+          <div id="conn" class="conn"><span class="led off"></span><span id="conn-text">connecting…</span></div>
+        </div>
       </header>
 
-      <!-- left: weather rail -->
+      <!-- left: instrument rail -->
       <aside id="weather" class="glass">
-        <div class="rail-title">OUTDOOR</div>
+        <div class="rail-title">Outdoor</div>
         <div class="wx-temp"><span id="wx-temp">—</span><span class="unit">°C</span></div>
+        <div class="wx-sky" id="wx-sky"><span class="wx-sky-ico">·</span> —</div>
         <div class="wx-row"><span>humidity</span><b id="wx-hum">—</b></div>
         <div class="wx-row"><span>wind</span><b id="wx-wind">—</b></div>
         <div class="wx-row"><span>direction</span><b id="wx-dir">—</b></div>
         <div class="wx-solar">
-          <div class="wx-row"><span>diffuse sun</span><b id="wx-dif">—</b></div>
+          <div class="wx-row borderless"><span>diffuse sun</span><b id="wx-dif">—</b></div>
           <div class="wx-bar"><i id="wx-dif-bar"></i></div>
-          <div class="wx-row"><span>direct sun</span><b id="wx-dir-sun">—</b></div>
+          <div class="wx-row borderless"><span>direct sun</span><b id="wx-dir-sun">—</b></div>
           <div class="wx-bar"><i id="wx-dir-bar"></i></div>
         </div>
-        <div class="rail-title" style="margin-top:18px">BUILDING</div>
+
+        <div class="rail-title spaced">Simulation</div>
+        <div class="wx-row"><span>episode</span><b id="sim-ep">—</b></div>
+        <div class="wx-row"><span>sim date</span><b id="sim-date">—</b></div>
+        <div class="wx-row"><span>step</span><b id="sim-step">—</b></div>
+
+        <div class="rail-title spaced">Building</div>
         <div class="wx-row"><span>HVAC demand</span><b id="hvac">—</b></div>
+        <div class="wx-row"><span>total electric</span><b id="elec-total">—</b></div>
         <div class="wx-row"><span>mean zone</span><b id="meanzone">—</b></div>
-        <div class="wx-row"><span>comfort</span><b id="comfort">—</b></div>
+        <div class="comfort-wrap">
+          <div class="wx-row borderless"><span>in comfort</span><b id="comfort">—</b></div>
+          <div class="comfort-bar"><i id="comfort-bar"></i></div>
+        </div>
       </aside>
 
       <!-- center: 3D twin -->
       <main id="stage">
         <canvas id="twin"></canvas>
+        <div class="rainfx"></div>
+        <div id="viewmode">
+          <select id="view-metric" class="tp-sel" title="colour the zones by">
+            <option value="temp">◧ colour · temperature</option>
+            <option value="occ">◧ colour · occupancy</option>
+          </select>
+        </div>
         <div id="legend" class="legend">
-          <span>cold</span><i class="grad"></i><span>hot</span>
+          <span>15°</span><i class="grad"></i><span>30°</span>
+          <span class="legend-sep"></span>
+          <i class="occ-dot"></i><span>occupied</span>
         </div>
         <div id="floors" class="floor-toggle"></div>
 
@@ -65,15 +94,15 @@
         </div>
       </main>
 
-      <!-- right: zones -->
+      <!-- right: per-floor zone matrix -->
       <aside id="zones" class="glass">
-        <div class="rail-title">ZONES <span id="zcount" class="muted"></span></div>
-        <div id="zonelist" class="zonelist"></div>
+        <div class="rail-title">Zones <span id="zcount" class="muted"></span></div>
+        <div id="zonematrix" class="zonematrix"></div>
       </aside>
 
       <!-- bottom: anomaly feed -->
       <footer id="alerts" class="glass">
-        <div class="rail-title">ANOMALIES <span id="acount" class="muted">0</span></div>
+        <div class="rail-title">Anomalies <span id="acount" class="muted">0</span></div>
         <div id="alertfeed" class="alertfeed"><div class="empty">no anomalies yet</div></div>
       </footer>
     </div>

@@ -26,7 +26,14 @@ export interface Frame {
   month: number; day: number; hour: number;
   outdoor: { temp: number; hum: number; wind: number; dir: number; dif: number; dir_sun: number };
   hvacW: number;
+  elecTotalW: number;                 // facility total HVAC electricity
   zoneTemp: Record<string, number>;   // by zone name
+  zoneHum: Record<string, number>;    // relative humidity %
+  zoneOcc: Record<string, number>;    // people occupant count
+  zoneHtg: Record<string, number>;    // heating setpoint °C
+  zoneClg: Record<string, number>;    // cooling setpoint °C
+  occTotal: number;                   // people across the building
+  raining: boolean;                   // Sinergym info.is_raining
   faultActive: boolean;
   hvacEff: number | null;
 }
@@ -36,27 +43,40 @@ export interface Alert {
   zoneIdx: number | null; message: string; detector: string; groundTruth?: boolean;
 }
 
-// ── temperature → colour ─────────────────────────────────────────────────────
-// blue (cold) → teal → green (comfort) → amber → red (hot). Comfort ≈ 20–26 °C.
-const STOPS: [number, [number, number, number]][] = [
-  [15, [0.23, 0.48, 1.0]],
-  [20, [0.21, 0.83, 0.74]],
-  [23, [0.22, 0.83, 0.62]],
-  [26, [0.95, 0.82, 0.23]],
-  [30, [1.0, 0.33, 0.44]],
-];
-export function tempColor(t: number): [number, number, number] {
-  if (t <= STOPS[0][0]) return STOPS[0][1];
-  if (t >= STOPS[STOPS.length - 1][0]) return STOPS[STOPS.length - 1][1];
-  for (let i = 0; i < STOPS.length - 1; i++) {
-    const [a, ca] = STOPS[i], [b, cb] = STOPS[i + 1];
-    if (t >= a && t <= b) {
-      const f = (t - a) / (b - a);
+// ── colour ramps ─────────────────────────────────────────────────────────────
+function ramp(stops: [number, [number, number, number]][], v: number): [number, number, number] {
+  if (!Number.isFinite(v) || v <= stops[0][0]) return stops[0][1];
+  if (v >= stops[stops.length - 1][0]) return stops[stops.length - 1][1];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [a, ca] = stops[i], [b, cb] = stops[i + 1];
+    if (v >= a && v <= b) {
+      const f = (v - a) / (b - a);
       return [ca[0] + (cb[0] - ca[0]) * f, ca[1] + (cb[1] - ca[1]) * f, ca[2] + (cb[2] - ca[2]) * f];
     }
   }
-  return STOPS[STOPS.length - 1][1];
+  return stops[stops.length - 1][1];
 }
+
+// Temperature: steep, saturated stops through the occupied band (20–26 °C) so small
+// differences between zones read as clearly distinct colours (blue→cyan→green→amber→red).
+const TEMP_STOPS: [number, [number, number, number]][] = [
+  [16, [0.18, 0.42, 1.0]],
+  [20, [0.14, 0.80, 0.95]],
+  [22, [0.16, 0.86, 0.52]],
+  [24, [0.88, 0.86, 0.20]],
+  [26, [1.0, 0.55, 0.16]],
+  [29, [1.0, 0.26, 0.40]],
+];
+export const tempColor = (t: number) => ramp(TEMP_STOPS, t);
+
+// Occupancy: dim slate when empty → warm amber → near-white as a zone fills (≈8 people).
+const OCC_STOPS: [number, [number, number, number]][] = [
+  [0, [0.15, 0.19, 0.31]],
+  [1, [0.85, 0.52, 0.18]],
+  [4, [1.0, 0.72, 0.28]],
+  [8, [1.0, 0.93, 0.72]],
+];
+export const occColor = (people: number) => ramp(OCC_STOPS, people);
 export const cssColor = (c: [number, number, number]) =>
   `rgb(${(c[0] * 255) | 0},${(c[1] * 255) | 0},${(c[2] * 255) | 0})`;
 
@@ -106,10 +126,25 @@ export class Feed {
   }
 
   private emitFrame(envId: string, m: Record<string, any>) {
+    // The labeler republishes every obs as <variable>_<zone>; bucket the per-zone
+    // families we care about by prefix so nothing here is building-specific.
     const zoneTemp: Record<string, number> = {};
+    const zoneHum: Record<string, number> = {};
+    const zoneOcc: Record<string, number> = {};
+    const zoneHtg: Record<string, number> = {};
+    const zoneClg: Record<string, number> = {};
+    const bucket = (k: string, p: string, dst: Record<string, number>) => {
+      if (k.startsWith(p)) { dst[k.slice(p.length)] = m[k]; return true; }
+      return false;
+    };
     for (const k of Object.keys(m)) {
-      if (k.startsWith("air_temperature_")) zoneTemp[k.slice("air_temperature_".length)] = m[k];
+      bucket(k, "air_temperature_", zoneTemp) ||
+        bucket(k, "air_humidity_", zoneHum) ||
+        bucket(k, "people_occupant_", zoneOcc) ||
+        bucket(k, "htg_setpoint_", zoneHtg) ||
+        bucket(k, "clg_setpoint_", zoneClg);
     }
+    const occTotal = Object.values(zoneOcc).reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
     const info = m.info ?? {};
     const f: Frame = {
       envId,
@@ -122,7 +157,9 @@ export class Feed {
         dif: m.diffuse_solar_radiation ?? 0, dir_sun: m.direct_solar_radiation ?? 0,
       },
       hvacW: m.HVAC_electricity_demand_rate ?? NaN,
-      zoneTemp,
+      elecTotalW: m.total_electricity_HVAC ?? NaN,
+      zoneTemp, zoneHum, zoneOcc, zoneHtg, zoneClg, occTotal,
+      raining: !!(info.is_raining ?? m.is_raining),
       faultActive: !!info.hvac_fault_active,
       hvacEff: typeof info.hvac_efficiency === "number" ? info.hvac_efficiency : null,
     };

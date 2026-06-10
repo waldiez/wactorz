@@ -144,7 +144,9 @@ export class AskPanel {
   private build() {
     const btn = el("button", "ask-launch", "✦ Ask the run");
     btn.addEventListener("click", () => this.toggle());
-    document.getElementById("topbar")!.insertBefore(btn, document.getElementById("conn"));
+    // sits in the masthead's right cluster, ahead of the occupancy pill + conn LED
+    const mr = document.querySelector(".masthead-right") ?? document.getElementById("topbar")!;
+    mr.insertBefore(btn, mr.firstChild);
 
     const panel = el("aside", "ask-panel glass");
     panel.innerHTML = `

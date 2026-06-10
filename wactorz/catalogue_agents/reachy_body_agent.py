@@ -1215,10 +1215,18 @@ async def _volume(agent, payload):
     agent.persist("volume_level", level)
 
     ok, detail = await _apply_volume(agent, level)
-    result = {"level": level, "muted": bool(agent.state.get("muted")), "applied": ok}
+    muted = bool(agent.state.get("muted"))
+    # Always print volume changes to the CLI for debug/visibility.
+    src = ("mute" if mute is True else "unmute" if mute is False
+           else "delta" if "delta" in payload else "level" if "level" in payload else "db")
+    if ok:
+        await agent.log(f"🔊 volume -> {level}/100 (muted={muted}) via {src} [{detail}]")
+    else:
+        await agent.log(f"🔊 volume -> {level}/100 (muted={muted}) via {src} NOT applied: {detail}",
+                        level="warning")
+    result = {"level": level, "muted": muted, "applied": ok}
     if not ok:
         result["reason"] = detail
-        await agent.log(f"volume set to {level} but not applied to robot: {detail}", level="warning")
     return result
 
 

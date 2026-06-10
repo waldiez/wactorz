@@ -897,6 +897,9 @@ def parse_topic(topic: str, payload_str: str):
                     state["agents"][agent_id]["cost_usd"]      = data.get("cost_usd", 0.0)
                     state["agents"][agent_id]["input_tokens"]  = data.get("input_tokens", 0)
                     state["agents"][agent_id]["output_tokens"] = data.get("output_tokens", 0)
+                    # Bank the spend durably so it survives the agent being
+                    # deleted or hard-killed before its on_stop() can persist.
+                    _record_lifetime_cost(agent_id, data.get("cost_usd"))
 
         elif metric == "logs":
             add_log({"type": "log", "agent_id": agent_id, "timestamp": time.time(),
@@ -966,6 +969,70 @@ def _node_online(last_seen: float) -> bool:
     return (time.time() - last_seen) < 45
 
 
+# ── Durable lifetime cost ledger ────────────────────────────────────────────
+# The headline total cost must never drop when an agent goes away. The per-agent
+# _final_cost rows that feed _historical_cost_usd() are purged on permanent
+# delete (kv_purge_agent) and are never written on a hard kill — an addon update
+# restarts the container, so an in-flight agent's on_stop() never runs. A total
+# computed purely from live actors + surviving _final_cost rows therefore leaks
+# spend whenever an agent is deleted or killed mid-life.
+#
+# Every actor publishes its cumulative cost_usd over MQTT on each heartbeat
+# (~10s), so the monitor sees the spend long before the agent disappears. We bank
+# each actor's highest-reported cost into a monotonic ledger keyed by the stable
+# actor_id and persist it under the _system agent in SQLite. Deletion and hard
+# kills cannot erase what was already banked; keying by actor_id stops a
+# respawned agent from double-counting.
+_LIFETIME_LEDGER_KEY = "_lifetime_cost_ledger"
+_lifetime_cost: dict = {}
+_lifetime_loaded = False
+
+
+def _ensure_lifetime_loaded() -> None:
+    """Lazily hydrate the in-memory ledger from SQLite once db is injected."""
+    global _lifetime_loaded
+    if _lifetime_loaded or db is None:
+        return
+    try:
+        stored = db.kv_get("_system", _LIFETIME_LEDGER_KEY)
+        if isinstance(stored, dict):
+            for k, v in stored.items():
+                try:
+                    _lifetime_cost[k] = float(v)
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        pass
+    _lifetime_loaded = True
+
+
+def _record_lifetime_cost(agent_id: str, cost_usd) -> None:
+    """Bank an agent's reported lifetime cost as a monotonic high-water mark.
+    Persisted durably so deletion / hard kills never drop it from the total."""
+    if not agent_id or cost_usd is None:
+        return
+    try:
+        cost = float(cost_usd)
+    except (TypeError, ValueError):
+        return
+    if cost <= 0:
+        return
+    _ensure_lifetime_loaded()
+    if cost <= _lifetime_cost.get(agent_id, 0.0):
+        return
+    _lifetime_cost[agent_id] = cost
+    if db is not None:
+        try:
+            db.kv_set("_system", _LIFETIME_LEDGER_KEY, _lifetime_cost)
+        except Exception:
+            pass
+
+
+def _lifetime_cost_total() -> float:
+    _ensure_lifetime_loaded()
+    return sum(_lifetime_cost.values())
+
+
 def _historical_cost_usd(live_names: set) -> float:
     """Sum _final_cost for agents not in live_names."""
     if db is None:
@@ -1033,7 +1100,12 @@ def _snapshot() -> dict:
         live_cost = sum(a.get("cost_usd", 0.0) for a in state["agents"].values())
         live_msgs = sum(a.get("messages_processed", 0) for a in state["agents"].values())
 
-    total_cost = live_cost + _historical_cost_usd(live_names)
+    # The live + _final_cost sum can dip when an agent is deleted (its _final_cost
+    # row is purged) or hard-killed (its on_stop never ran). The durable ledger is
+    # monotonic, so clamp the headline total up to whichever is larger — spend is
+    # never lost, and the live path still covers the fresh-boot window before the
+    # first heartbeat repopulates the ledger.
+    total_cost = max(live_cost + _historical_cost_usd(live_names), _lifetime_cost_total())
     total_msgs = live_msgs + _historical_messages(live_names)
     return {
         "agents":           list(state["agents"].values()),

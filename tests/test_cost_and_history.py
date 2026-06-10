@@ -221,6 +221,78 @@ class HistoricalCostTest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 4b. Durable lifetime cost ledger in monitor_server
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _KVStub:
+    """Minimal kv_get/kv_set db stub with JSON round-trip, like WactorzDB."""
+    def __init__(self, store=None):
+        self._kv = dict(store or {})
+
+    def kv_get(self, agent, key, default=None):
+        return self._kv.get((agent, key), default)
+
+    def kv_set(self, agent, key, value):
+        # Mimic the real store's JSON serialization so callers can't mutate
+        # what's "persisted" by holding a reference.
+        self._kv[(agent, key)] = json.loads(json.dumps(value))
+
+
+class LifetimeCostLedgerTest(unittest.TestCase):
+    def setUp(self):
+        import wactorz.monitor_server as ms
+        self._ms = ms
+        self._orig_db       = ms.db
+        self._orig_ledger   = dict(ms._lifetime_cost)
+        self._orig_loaded   = ms._lifetime_loaded
+        ms._lifetime_cost.clear()
+        ms._lifetime_loaded = False
+        ms.db = _KVStub()
+
+    def tearDown(self):
+        self._ms.db = self._orig_db
+        self._ms._lifetime_cost.clear()
+        self._ms._lifetime_cost.update(self._orig_ledger)
+        self._ms._lifetime_loaded = self._orig_loaded
+
+    def test_records_and_totals_cost(self):
+        self._ms._record_lifetime_cost("a1", 0.05)
+        self._ms._record_lifetime_cost("a2", 0.03)
+        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.08, places=6)
+
+    def test_is_monotonic_high_water(self):
+        self._ms._record_lifetime_cost("a1", 0.05)
+        self._ms._record_lifetime_cost("a1", 0.02)  # lower report — ignored
+        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.05, places=6)
+        self._ms._record_lifetime_cost("a1", 0.09)  # higher — raises
+        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.09, places=6)
+
+    def test_survives_agent_disappearing(self):
+        """The core bug: a deleted / hard-killed agent must not drop the total."""
+        self._ms._record_lifetime_cost("planner-1123da", 0.0365)
+        # Agent vanishes (no more reports, never written to _final_cost).
+        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.0365, places=6)
+
+    def test_ignores_non_positive_and_invalid(self):
+        for bad in (0, -1.0, None, "x"):
+            self._ms._record_lifetime_cost("a1", bad)
+        self.assertEqual(self._ms._lifetime_cost_total(), 0.0)
+
+    def test_persists_to_db_and_reloads(self):
+        self._ms._record_lifetime_cost("a1", 0.07)
+        # Simulate a monitor restart: drop in-memory state, keep the db.
+        self._ms._lifetime_cost.clear()
+        self._ms._lifetime_loaded = False
+        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.07, places=6)
+
+    def test_no_db_is_safe(self):
+        self._ms.db = None
+        self._ms._lifetime_loaded = False
+        self._ms._record_lifetime_cost("a1", 0.05)  # must not raise
+        self.assertEqual(self._ms._lifetime_cost_total(), 0.05)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 5. actor_history_handler
 # ─────────────────────────────────────────────────────────────────────────────
 

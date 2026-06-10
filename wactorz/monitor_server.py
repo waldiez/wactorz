@@ -904,6 +904,31 @@ def parse_topic(topic: str, payload_str: str):
         elif metric == "spawned":
             add_log({"type": "spawned", "agent_id": agent_id, "timestamp": time.time(),
                      **(data if isinstance(data, dict) else {})})
+        elif metric == "chat":
+            # User-facing message pushed by an agent via Actor.notify_user().
+            # Forward it to the chat panel as a live chat frame (in addition to
+            # the dashboard feed). The frame is carried under "_push_chat";
+            # mqtt_listener does the broadcast since parse_topic is synchronous.
+            sender  = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            content = ""
+            if isinstance(data, dict):
+                content = (data.get("content") or data.get("text") or "").strip()
+                sender  = data.get("from") or sender
+            elif isinstance(data, str):
+                content = data.strip()
+            if content:
+                add_log({"type": "chat", "agent_id": agent_id, "from": sender,
+                         "content": content, "timestamp": time.time()})
+                return {
+                    "type": "agent", "agent_id": agent_id, "metric": "chat", "data": data,
+                    "_push_chat": {
+                        "type":      "chat",
+                        "from":      sender,
+                        "content":   content,
+                        "timestamp": time.time(),
+                    },
+                }
+            return {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
         elif metric == "completed":
             update_agent(agent_id, "last_completed", data)
             add_log({"type": "completed", "agent_id": agent_id, "timestamp": time.time()})
@@ -1068,6 +1093,22 @@ async def mqtt_listener():
                             metric    = event.get("metric", "")
                             log_event = None if metric == "heartbeat" else event
                             await broadcast({"type": "patch", "event": log_event, "state": _snapshot()})
+                            # Agent-originated user-facing message → push to the
+                            # chat panel as a live chat frame, and persist it so
+                            # it survives a browser reload like any other turn.
+                            push = event.get("_push_chat")
+                            if push:
+                                await broadcast(push)
+                                try:
+                                    if db is not None and push.get("content"):
+                                        db.write_chat_log(
+                                            ts=push.get("timestamp", time.time()),
+                                            agent_name=push.get("from", "agent"),
+                                            role="assistant",
+                                            content=push["content"],
+                                        )
+                                except Exception as _exc:
+                                    logger.debug(f"[chat-bridge] persist failed: {_exc}")
 
             except Exception as e:
                 mqtt_client_ref = None
@@ -1667,9 +1708,18 @@ async def _start_ha_bridge(_app=None) -> None:
     if not CONFIG.ha_token or not CONFIG.fuseki_url:
         return
     try:
-        from .fuseki import HAFusekiBridge, _run_with_retry
+        from .fuseki import HAFusekiBridge, _run_with_retry, fuseki_reachable
     except Exception as exc:
         logger.warning("[ha-bridge] Could not import HAFusekiBridge: %s", exc)
+        return
+
+    # Don't start the bridge if Fuseki isn't actually running — otherwise it
+    # connects to HA and then fails to write every state change, flooding the
+    # log. If you're not using Fuseki, the bridge simply stays off.
+    if not await fuseki_reachable(CONFIG.fuseki_url):
+        logger.info("[ha-bridge] Fuseki not reachable at %s — HA→Fuseki bridge "
+                    "disabled. (Start Fuseki and POST /api/ha/sync to enable, "
+                    "or ignore if you don't use Fuseki.)", CONFIG.fuseki_url)
         return
 
     bridge = HAFusekiBridge(

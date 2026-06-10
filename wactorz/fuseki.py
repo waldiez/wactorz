@@ -847,42 +847,68 @@ class HAFusekiBridge:
                 self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth
             )
             ws_url = self._ws_url()
-            log.info("Connecting to HA: %s", ws_url)
-            last_trim = time.time()
+            backoff = 5
 
-            async with HAWebSocketClient(ws_url, self._ha_token) as ha:
-                log.info("Authenticated. Loading initial states …")
-                await self._seed(ha, fuseki)
-
-                # Trim history on startup so stale data doesn't accumulate
-                # across restarts even when the process runs for short periods.
+            # ── Reconnect loop ──────────────────────────────────────────────
+            # The HA WebSocket dies periodically (keepalive ping timeout, HA
+            # restart, network blip). When it does, receive_event() raises a
+            # ConnectionClosedError. We must tear down the dead socket and open
+            # a fresh one — NOT keep calling receive_event() on the corpse,
+            # which just re-raises instantly and floods the log with identical
+            # tracebacks. Connection errors break out to here; we back off and
+            # reconnect. Per-event handler errors are caught separately so one
+            # bad state_changed payload can't kill the whole bridge.
+            while True:
                 try:
-                    await fuseki.trim_history_graph(
-                        GRAPH_HISTORY, self._HISTORY_RETAIN_DAYS
-                    )
-                except Exception as exc:
-                    log.warning("History trim on startup failed: %s", exc)
+                    log.info("Connecting to HA: %s", ws_url)
+                    async with HAWebSocketClient(ws_url, self._ha_token) as ha:
+                        log.info("Authenticated. Loading initial states …")
+                        await self._seed(ha, fuseki)
 
-                sub_id = await ha.subscribe_events("state_changed")
-                log.info("Subscribed (id=%d). Listening for state_changed …", sub_id)
-
-                while True:
-                    try:
-                        msg = await ha.receive_event(sub_id)
-                        await self._on_event(msg, fuseki)
-                    except Exception as exc:
-                        log.exception("Event handling error: %s", exc)
-
-                    # Daily retention trim
-                    now = time.time()
-                    if now - last_trim >= self._TRIM_INTERVAL:
-                        last_trim = now
+                        # Trim history on startup so stale data doesn't
+                        # accumulate across restarts.
                         try:
                             await fuseki.trim_history_graph(
                                 GRAPH_HISTORY, self._HISTORY_RETAIN_DAYS
                             )
                         except Exception as exc:
-                            log.warning("Periodic history trim failed: %s", exc)
+                            log.warning("History trim on startup failed: %s", exc)
+
+                        sub_id = await ha.subscribe_events("state_changed")
+                        log.info("Subscribed (id=%d). Listening for state_changed …", sub_id)
+                        backoff = 5            # healthy connection — reset backoff
+                        last_trim = time.time()
+
+                        while True:
+                            # Let connection errors propagate to the reconnect
+                            # handler below; only swallow per-event failures.
+                            msg = await ha.receive_event(sub_id)
+                            try:
+                                await self._on_event(msg, fuseki)
+                            except Exception as exc:
+                                log.warning("Skipping one event after handler error: %s", exc)
+
+                            # Daily retention trim
+                            now = time.time()
+                            if now - last_trim >= self._TRIM_INTERVAL:
+                                last_trim = now
+                                try:
+                                    await fuseki.trim_history_graph(
+                                        GRAPH_HISTORY, self._HISTORY_RETAIN_DAYS
+                                    )
+                                except Exception as exc:
+                                    log.warning("Periodic history trim failed: %s", exc)
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # Concise one-line log (no full traceback) — the socket is
+                    # gone, we know why, and we're reconnecting.
+                    log.warning("HA connection lost (%s) — reconnecting in %ss",
+                                type(exc).__name__, backoff)
+
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60)
 
     # ── Seed on startup ───────────────────────────────────────────────────────
 
@@ -1227,6 +1253,30 @@ def _parse_domains(raw: str | None) -> frozenset[str] | None:
     return frozenset(d.strip() for d in raw.split(",") if d.strip())
 
 
+async def fuseki_reachable(url: str, timeout: float = 2.0) -> bool:
+    """Quick TCP probe: is a Fuseki server actually listening at this URL?
+
+    Used to decide whether to start the HA→Fuseki bridge at all. If the user
+    isn't running Fuseki, there's no point connecting to HA and then failing to
+    write every single state change — that just floods the log. A pure TCP
+    connect is fast and doesn't depend on any Fuseki endpoint/auth."""
+    try:
+        parsed = urlparse(url if "://" in url else f"http://{url}")
+        host = parsed.hostname or "localhost"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=timeout
+        )
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
 async def _run_with_retry(coro_factory: Any, label: str) -> None:
     """Run a bridge coroutine, reconnecting on error with exponential backoff."""
     _last_exc_str: str | None = None
@@ -1275,8 +1325,8 @@ async def _main() -> None:
 
     tasks: list[Any] = []
 
-    # ── HA bridge (optional — skipped if no HA_TOKEN) ────────────────────────
-    if ha_token:
+    # ── HA bridge (optional — skipped if no HA_TOKEN or no Fuseki) ───────────
+    if ha_token and await fuseki_reachable(fuseki_url):
         log.info("HA→Fuseki bridge  ha=%s  domains=%s",
                  ha_url, ",".join(sorted(domains)) if domains else "default")
         ha_bridge = HAFusekiBridge(
@@ -1289,8 +1339,10 @@ async def _main() -> None:
             domains=domains,
         )
         tasks.append(_run_with_retry(ha_bridge.run, "HAFusekiBridge"))
-    else:
+    elif not ha_token:
         log.info("HA_TOKEN not set — HAFusekiBridge disabled.")
+    else:
+        log.info("Fuseki not reachable at %s — HAFusekiBridge disabled.", fuseki_url)
 
     # ── Agent manifest bridge (also writes channels) ──────────────────────────
     log.info("AgentManifestBridge  mqtt=%s:%d", mqtt_broker, mqtt_port)

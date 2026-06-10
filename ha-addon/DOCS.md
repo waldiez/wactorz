@@ -4,7 +4,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 
 > **Requires Home Assistant OS or Supervised.**
 > The Supervisor (which runs addons) is not available on Home Assistant Container or Core installs.
-> If you are running Home Assistant in Docker, use the [Docker deployment](https://waldiez.github.io/wactorz/deployment/) instead.
+> If you are running Home Assistant in Docker, use the [Docker deployment](https://hub.docker.com/r/waldiez/wactorz) instead.
 
 ## Installation
 
@@ -71,5 +71,5 @@ Set `ha_url` to `http://homeassistant.local:8123` (the default) and generate a l
 
 ## Support
 
-- Documentation: https://waldiez.github.io/wactorz/
+- Documentation: https://docs.waldiez.io/wactorz/
 - Issues: https://github.com/waldiez/wactorz/issues

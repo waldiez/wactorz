@@ -71,6 +71,7 @@ class AppConfig:
     fuseki_password: str
     llm_cost_limit_usd: float
     llm_cost_limit_period: str
+    openai_url: str
 
 
 CONFIG = AppConfig(
@@ -100,10 +101,11 @@ CONFIG = AppConfig(
     nautilus_ssh_key=os.getenv("NAUTILUS_SSH_KEY", ""),
     nautilus_strict_host_keys=os.getenv("NAUTILUS_STRICT_HOST_KEYS", "0"),
     weather_default_location=os.getenv("WEATHER_DEFAULT_LOCATION", "London"),
-    fuseki_url=os.getenv("FUSEKI_URL", "http://localhost:3030"),
+    fuseki_url=os.getenv("FUSEKI_URL", ""),
     fuseki_dataset=os.getenv("FUSEKI_DATASET", "wactorz"),
     fuseki_user=os.getenv("FUSEKI_USER", "admin"),
     fuseki_password=os.getenv("FUSEKI_PASSWORD", "admin"),
     llm_cost_limit_usd=_env_float("LLM_COST_LIMIT_USD", 0.0),
     llm_cost_limit_period=os.getenv("LLM_COST_LIMIT_PERIOD", "monthly"),
+    openai_url=os.getenv("OPENAI_URL", ""),
 )

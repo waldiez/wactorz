@@ -5,7 +5,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)"  srcset="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/title-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/title-light.svg">
-    <img src="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/title-dark.svg" width="320" alt="Wactorz" />
+    <img src="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/title-light.svg" width="320" alt="Wactorz" />
   </picture>
 </p>
 
@@ -131,6 +131,7 @@ LLM_MODEL=claude-sonnet-4-6
 
 # Generic key — used for anthropic / openai / nim / gemini
 # For Ollama, set OLLAMA_URL instead (default: http://localhost:11434)
+# For OpenAI-compatible endpoints (Groq, Together, vLLM…), set OPENAI_URL to redirect
 LLM_API_KEY=your-key-here
 ```
 

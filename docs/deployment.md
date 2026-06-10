@@ -208,6 +208,7 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `LLM_PROVIDER` | `anthropic` | `anthropic` / `openai` / `ollama` / `gemini` / `nim` |
 | `LLM_MODEL` | `claude-sonnet-4-6` | Any model ID |
 | `LLM_API_KEY` | _(required for cloud providers)_ | API key — not needed for Ollama only |
+| `OPENAI_URL` | _(unset)_ | Redirect `openai` provider to a compatible endpoint (Groq, Together, vLLM, etc.) |
 | `LLM_COST_LIMIT_USD` | `0` (disabled) | Hard spend cap per period — set `0` to disable |
 | `LLM_COST_LIMIT_PERIOD` | `monthly` | Reset period: `daily`, `weekly`, or `monthly` |
 | `MQTT_HOST` | `localhost` | Use `mosquitto` inside Docker |

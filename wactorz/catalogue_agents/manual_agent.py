@@ -305,7 +305,7 @@ async def _llm_route(agent, text: str) -> dict:
                 "error": "I couldn't figure out which device manual to load.",
                 "hint":  "Try: 'load the manual for <device model>'.",
             }
-        return await _load_manual(agent, device)
+        return await _load_manual_async(agent, device)
 
     if tool == "ask":
         question = (decision.get("question") or text).strip()
@@ -391,7 +391,7 @@ async def _heuristic_route(agent, text: str) -> dict:
             flags=re.IGNORECASE,
         ).strip(" ,.?!\"'")
         if device:
-            return await _load_manual(agent, device)
+            return await _load_manual_async(agent, device)
 
     # Default: if a manual is loaded, treat as a question; else ask to load
     if agent.state.get("manual_text"):
@@ -406,6 +406,52 @@ async def _heuristic_route(agent, text: str) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 # Load manual
 # ══════════════════════════════════════════════════════════════════════════════
+
+async def _load_manual_async(agent, device: str, explicit_url: Optional[str] = None) -> dict:
+    """
+    User-facing load. The full search + download + extract can run well past the
+    handle_task timeout, so kick it off in the background and return an immediate
+    acknowledgement; the final outcome is pushed to the chat panel via
+    notify_user() when it's ready.
+
+    Falls back to a synchronous load when the runtime has no background-task
+    support (e.g. a remote-runner API without run_in_background), so behaviour is
+    safe everywhere.
+    """
+    if hasattr(agent, "run_in_background"):
+        agent.run_in_background(_load_manual_bg(agent, device, explicit_url))
+        return _ack_load(device)
+    return await _load_manual(agent, device, explicit_url=explicit_url)
+
+
+async def _load_manual_bg(agent, device: str, explicit_url: Optional[str] = None) -> None:
+    """Run the slow load, then notify the user with the outcome."""
+    try:
+        result = await _load_manual(agent, device, explicit_url=explicit_url)
+    except Exception as e:
+        await agent.log(f"Background manual load crashed: {e}")
+        result = {"error": str(e)}
+    # Both success and failure returns carry a human-readable "result" string.
+    message = result.get("result") or result.get("error") or "Manual load finished."
+    if hasattr(agent, "notify_user"):
+        try:
+            await agent.notify_user(message)
+            return
+        except Exception as e:
+            await agent.log(f"notify_user failed: {e}")
+    # No push channel available — at least leave it in the event log.
+    await agent.log(message)
+
+
+def _ack_load(device: str) -> dict:
+    return {
+        "status": "loading",
+        "result": (
+            f"Searching for the {device} manual now — I'll download it, read it, "
+            f"and message you here when it's ready. Feel free to keep chatting."
+        ),
+    }
+
 
 async def _load_manual(agent, device: str, explicit_url: Optional[str] = None) -> dict:
     """

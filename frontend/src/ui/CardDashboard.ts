@@ -126,6 +126,7 @@ export class CardDashboard {
   private _evEnd: ((e: Event) => void) | null = null;
   private _evConn: ((e: Event) => void) | null = null;
   private _evResetChat: ((e: Event) => void) | null = null;
+  private _wipeAll: ((e: Event) => void) | null = null;
   private _evSendMessage: ((e: Event) => void) | null = null;
   // True while _sendMessage() is dispatching — prevents the listener from
   // double-adding a message that _sendMessage() already rendered locally.
@@ -528,6 +529,14 @@ export class CardDashboard {
     };
     document.addEventListener("af-reset-chat", this._evResetChat);
 
+    this._wipeAll = (e: Event) => {
+      this.feedItems = [];
+      this.chatMessages = [];
+      this._historyLoaded.clear();
+      this._renderView();
+    };
+    document.addEventListener("af-wipe-all", this._wipeAll);
+
     // Display the user's message in the chat UI for any send path (keyboard
     // OR voice/wake-word). Keyboard sends go through _sendMessage() which
     // already adds the message locally and sets _selfDispatching; those are
@@ -584,6 +593,10 @@ export class CardDashboard {
     if (this._evResetChat) {
       document.removeEventListener("af-reset-chat", this._evResetChat);
       this._evResetChat = null;
+    }
+    if (this._wipeAll) {
+      document.removeEventListener("af-wipe-all", this._wipeAll);
+      this._wipeAll = null;
     }
     if (this._evSendMessage) {
       document.removeEventListener("af-send-message", this._evSendMessage);
@@ -2592,10 +2605,15 @@ export class CardDashboard {
         const r = resetBtn.getBoundingClientRect();
         resetPop.style.top   = `${r.bottom + 6}px`;
         resetPop.style.right = `${window.innerWidth - r.right}px`;
+      } else {
+        (resetPop as any)._resetArmed?.();
       }
     });
     document.addEventListener("click", (e) => {
-      if (!resetPop.contains(e.target as Node)) resetPop.classList.remove("open");
+      if (!resetPop.contains(e.target as Node)) {
+        (resetPop as any)._resetArmed?.();
+        resetPop.classList.remove("open");
+      }
     });
 
     header.append(left, center, right);
@@ -3566,6 +3584,7 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
       { scope: "all",     label: "Wipe everything", danger: true },
     ];
 
+    const armResets: Array<() => void> = [];
     scopes.forEach(({ scope, label, danger }, i) => {
       if (danger) {
         const hr = document.createElement("div");
@@ -3594,11 +3613,14 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
           const orig = span.textContent!;
           span.textContent = `Confirm ${label.toLowerCase()}?`;
           btn.style.background = danger ? "rgba(248,113,113,.15)" : "rgba(255,255,255,.1)";
-          armTimer = setTimeout(() => {
+          const cancelArm = () => {
+            if (armTimer) { clearTimeout(armTimer); armTimer = null; }
             armed = false;
             span.textContent = orig;
             btn.style.background = "";
-          }, 3000);
+          };
+          armTimer = setTimeout(cancelArm, 3000);
+          armResets.push(cancelArm);
           return;
         }
 
@@ -3607,7 +3629,8 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
         pop.classList.remove("open");
 
         try {
-          const res = await fetch("/api/reset", {
+          const ingress: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+          const res = await fetch(`${ingress}/api/reset`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ scope }),
@@ -3625,7 +3648,7 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
 
       pop.appendChild(btn);
     });
-
+    (pop as any)._resetArmed = () => armResets.forEach(fn => fn());
     return pop;
   }
 }

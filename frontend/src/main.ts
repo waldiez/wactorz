@@ -822,3 +822,6 @@ window.addEventListener("beforeunload", () => {
   wsChat.disconnect();
   scene.dispose();
 });
+
+// wipe all
+document.addEventListener("af-wipe-all", () => scene.clearAll());

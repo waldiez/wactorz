@@ -76,6 +76,7 @@ mqtt_client_ref = None
 # still ignoring stale retained messages from the deleted instance.
 _deleted_agent_ids: list = []
 _DELETED_IDS_MAX   = 1024
+_hard_resetting    = False
 
 
 def _mark_deleted(agent_id: str) -> None:
@@ -231,7 +232,7 @@ def _parse_mention(content: str) -> tuple[str, str]:
 
 
 def update_agent(agent_id: str, key: str, data):
-    if _is_deleted(agent_id):
+    if _hard_resetting or _is_deleted(agent_id):
         return
     if agent_id not in state["agents"]:
         state["agents"][agent_id] = {
@@ -1011,6 +1012,9 @@ def _historical_messages(live_names: set) -> int:
 
 
 def _snapshot() -> dict:
+    if _hard_resetting:
+        return {"agents": [], "nodes": [], "alerts": [], "log_feed": [],
+                "total_cost_usd": 0, "total_messages": 0}
     for nd in state["nodes"].values():
         nd["online"] = _node_online(nd.get("last_seen", 0))
 
@@ -1089,7 +1093,7 @@ async def mqtt_listener():
                             continue
 
                         event = parse_topic(topic, payload)
-                        if event:
+                        if event and not _hard_resetting:
                             metric    = event.get("metric", "")
                             log_event = None if metric == "heartbeat" else event
                             await broadcast({"type": "patch", "event": log_event, "state": _snapshot()})
@@ -1487,7 +1491,73 @@ async def reset_handler(request):
     import wactorz.reset as _reset
 
     if scope == "all":
+        # Block incoming heartbeats, stop all actors, wipe disk, clear memory
+        global _hard_resetting
+        _hard_resetting = True
+        supervisor = getattr(registry, "_supervisor_ref", None) if registry is not None else None
+        all_actors  = list(registry.all_actors()) if registry is not None else []
+        # Only stop user-spawned (non-protected) actors — system actors keep running
+        stoppable   = [a for a in all_actors if not getattr(a, "protected", False)]
+        agent_ids   = [a.actor_id for a in stoppable]
+        if supervisor is not None:
+            for actor in stoppable:
+                supervisor.release(actor.name)
+        await asyncio.gather(*[actor.stop() for actor in stoppable], return_exceptions=True)
+        # Unregister stopped actors so _snapshot() no longer finds them
+        await asyncio.gather(
+            *[registry.unregister(a.actor_id) for a in stoppable],
+            return_exceptions=True,
+        )
+        # Clear MQTT retained messages for stopped agents
+        await asyncio.gather(
+            *[_purge_agent_retained(aid) for aid in agent_ids],
+            return_exceptions=True,
+        )
+        # Reset in-memory metrics + history on protected (system) actors
+        protected_actors = [a for a in all_actors if getattr(a, "protected", False)]
+        for actor in protected_actors:
+            actor.metrics.messages_processed = 0
+            actor.metrics.errors = 0
+            actor.metrics.tasks_completed = 0
+            actor.metrics.tasks_failed = 0
+            if hasattr(actor, "total_cost_usd"):
+                actor.total_cost_usd      = 0.0
+                actor.total_input_tokens  = 0
+                actor.total_output_tokens = 0
+            if hasattr(actor, "_conversation_history"):
+                actor._conversation_history = []
+            if hasattr(actor, "_history_summary"):
+                actor._history_summary = ""
+            if hasattr(actor, "_user_facts"):
+                actor._user_facts = {}
+            if hasattr(actor, "_pipeline_rules"):
+                actor._pipeline_rules = []
+            if hasattr(actor, "_spawned_agents"):
+                actor._spawned_agents = {}
+        # Clear Fuseki dataset if configured
+        try:
+            import aiohttp as _aiohttp
+            fuseki_update = f"{CONFIG.fuseki_url}/{CONFIG.fuseki_dataset}/update"
+            async with _aiohttp.ClientSession() as _sess:
+                await _sess.post(
+                    fuseki_update,
+                    data={"update": "DELETE WHERE { ?s ?p ?o }"},
+                    auth=_aiohttp.BasicAuth(CONFIG.fuseki_user, CONFIG.fuseki_password),
+                    timeout=_aiohttp.ClientTimeout(total=5),
+                )
+        except Exception as exc:
+            logger.debug("[reset] Fuseki clear skipped: %s", exc)
         _reset.reset_all(agent)
+        state["agents"].clear()
+        state["nodes"].clear()
+        state["alerts"].clear()
+        state["log_feed"].clear()
+        await broadcast({"type": "reset", "scope": "all", "agent": None, "state": {
+            "agents": [], "nodes": [], "alerts": [], "log_feed": [],
+            "total_cost_usd": 0, "total_messages": 0,
+        }})
+        _hard_resetting = False
+        return web.json_response({"status": "ok", "scope": "all", "agent": None})
     elif scope == "chat":
         _reset.reset_chat(agent)
     elif scope == "state":
@@ -1497,13 +1567,31 @@ async def reset_handler(request):
             _reset._reset_all_pickles()
     elif scope == "metrics":
         _reset.reset_metrics(agent)
+        # Also zero the LIVE in-memory counters on running actors. reset_metrics
+        # only clears the persisted kv snapshot, so without this the next
+        # heartbeat re-reports the old totals and the dashboard looks unchanged
+        # until a restart. Scoped to metrics/cost fields only (not history).
+        live_actors = list(registry.all_actors()) if registry is not None else []
+        for actor in live_actors:
+            if agent and actor.name != agent:
+                continue
+            actor.metrics.messages_processed = 0
+            if hasattr(actor, "total_cost_usd"):
+                actor.total_cost_usd      = 0.0
+                actor.total_input_tokens  = 0
+                actor.total_output_tokens = 0
     elif scope == "spawns":
         _reset.reset_spawns(agent)
     elif scope == "logs":
         _reset.reset_logs()
+        # The activity feed mirrors the log files we just truncated, so drop the
+        # in-memory entries too — otherwise the UI keeps showing stale lines.
+        state["log_feed"].clear()
 
-    # Clear in-memory dashboard state for the affected agents
-    if scope in ("all", "chat", "metrics"):
+    # Clear in-memory dashboard cost/message state for the affected agents.
+    # Scoped to "metrics" only — clearing chat history must not zero cost/
+    # message counters or wipe the alerts/activity feed.
+    if scope == "metrics":
         if agent:
             aid = next(
                 (k for k, v in state["agents"].items() if v.get("name") == agent), None
@@ -1512,6 +1600,9 @@ async def reset_handler(request):
                 state["agents"][aid].pop("cost_usd", None)
                 state["agents"][aid].pop("messages_processed", None)
         else:
+            for aid in state["agents"]:
+                state["agents"][aid].pop("cost_usd", None)
+                state["agents"][aid].pop("messages_processed", None)
             state["alerts"].clear()
             state["log_feed"].clear()
 

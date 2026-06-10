@@ -220,6 +220,84 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status, 200)
         self.assertEqual(resp.data["scope"], "logs")
 
+    async def test_chat_scope_preserves_alerts_and_feed(self):
+        # Narrowed: clearing chat history must not wipe alerts or the feed.
+        self._ms.state["alerts"] = [{"id": "a1"}]
+        self._ms.state["log_feed"] = [{"type": "log", "message": "keep"}]
+        resp = await self._call("chat")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self._ms.state["alerts"], [{"id": "a1"}])
+        self.assertEqual(self._ms.state["log_feed"], [{"type": "log", "message": "keep"}])
+
+    async def test_metrics_scope_clears_alerts_and_feed(self):
+        self._ms.state["alerts"] = [{"id": "a1"}]
+        self._ms.state["log_feed"] = [{"type": "log", "message": "old"}]
+        resp = await self._call("metrics")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self._ms.state["alerts"], [])
+        self.assertEqual(self._ms.state["log_feed"], [])
+
+    async def test_logs_scope_clears_log_feed(self):
+        # Truncating the log files should also drop the in-memory activity-feed
+        # buffer so a refreshed client doesn't replay stale lines.
+        self._ms.state["log_feed"] = [{"type": "log", "message": "old"}]
+        resp = await self._call("logs")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self._ms.state["log_feed"], [])
+
+    async def test_metrics_scope_zeroes_live_actor_counters(self):
+        # reset_metrics only clears the persisted kv; the handler must also zero
+        # the running actors' in-memory counters so the dashboard updates live
+        # instead of waiting for a restart.
+        import types
+        import wactorz.monitor_server as ms
+        actor = types.SimpleNamespace(
+            name="alpha",
+            metrics=types.SimpleNamespace(messages_processed=42),
+            total_cost_usd=1.23,
+            total_input_tokens=100,
+            total_output_tokens=200,
+        )
+        fake_registry = MagicMock()
+        fake_registry.all_actors.return_value = [actor]
+        req = _make_request({"scope": "metrics"})
+        orig_registry = ms.registry
+        ms.registry = fake_registry
+        try:
+            with patch("wactorz.reset.reset_metrics"), \
+                 patch.object(ms, "broadcast", new=AsyncMock()), \
+                 patch.object(ms, "_snapshot", return_value={}):
+                resp = await ms.reset_handler(req)
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(actor.metrics.messages_processed, 0)
+            self.assertEqual(actor.total_cost_usd, 0.0)
+            self.assertEqual(actor.total_input_tokens, 0)
+            self.assertEqual(actor.total_output_tokens, 0)
+        finally:
+            ms.registry = orig_registry
+
+    async def test_metrics_scope_respects_agent_filter(self):
+        # With an agent filter, only the matching actor's counters reset.
+        import types
+        import wactorz.monitor_server as ms
+        alpha = types.SimpleNamespace(name="alpha", metrics=types.SimpleNamespace(messages_processed=10))
+        beta  = types.SimpleNamespace(name="beta",  metrics=types.SimpleNamespace(messages_processed=20))
+        fake_registry = MagicMock()
+        fake_registry.all_actors.return_value = [alpha, beta]
+        req = _make_request({"scope": "metrics", "agent": "alpha"})
+        orig_registry = ms.registry
+        ms.registry = fake_registry
+        try:
+            with patch("wactorz.reset.reset_metrics"), \
+                 patch.object(ms, "broadcast", new=AsyncMock()), \
+                 patch.object(ms, "_snapshot", return_value={}):
+                resp = await ms.reset_handler(req)
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(alpha.metrics.messages_processed, 0)
+            self.assertEqual(beta.metrics.messages_processed, 20)
+        finally:
+            ms.registry = orig_registry
+
     async def test_all_scope_returns_200(self):
         resp = await self._call("all")
         self.assertEqual(resp.status, 200)

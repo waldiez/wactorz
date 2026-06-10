@@ -249,17 +249,17 @@ async def setup(agent):
     # Loaded from persistent state so they survive restarts.
     agent.state["bindings"] = agent.recall("bindings") or {}
 
-    # ---- Persistent robot speaker volume (daemon gain dB, set via cmd=volume) ----
-    agent.state["robot_gain_db"] = float(agent.recall("robot_gain_db") or 0)
+    # ---- Robot speaker volume (0-100, daemon-native; set via cmd=volume) ----
+    # The daemon persists its own volume, so sync FROM it at startup (a GET, no
+    # test sound) rather than re-applying our value. Fall back to persisted.
     agent.state["muted"] = bool(agent.recall("muted"))
-    agent.state["premute_db"] = float(agent.recall("premute_db") or 0)
-    # Re-apply it to the daemon so the speaker level survives restarts.
-    if mini is not None and agent.state["robot_gain_db"]:
-        ok, detail = await _set_robot_gain(agent, agent.state["robot_gain_db"])
-        if ok:
-            await agent.log(f"Restored robot speaker gain: {agent.state['robot_gain_db']} dB")
-        else:
-            await agent.log(f"Could not restore robot gain: {detail}", level="warning")
+    agent.state["premute_level"] = int(agent.recall("premute_level") or 100)
+    live = await _get_daemon_volume(agent) if mini is not None else None
+    if live is not None:
+        agent.state["volume_level"] = live
+        await agent.log(f"Robot speaker volume is {live}/100 (from daemon).")
+    else:
+        agent.state["volume_level"] = int(agent.recall("volume_level") or 100)
 
     # ---- Wake up so the robot is ready for commands (skip if disconnected) ----
     if mini is not None:
@@ -310,8 +310,7 @@ async def setup(agent):
         "bindings": list(agent.state["bindings"].keys()),
         "robot_host":    agent.state.get("robot_host") or "(autodetect)",
         "media_backend": agent.state.get("media_backend") or "default",
-        "robot_gain_db": agent.state.get("robot_gain_db", 0),
-        "volume_level":  _db_to_level(agent.state.get("robot_gain_db", 0) or 0),
+        "volume_level":  agent.state.get("volume_level", 100),
         "muted":         bool(agent.state.get("muted")),
         "ts":            _time.time(),
     })
@@ -333,8 +332,7 @@ async def process(agent):
         "bindings": list(agent.state.get("bindings", {}).keys()),
         "robot_host":    agent.state.get("robot_host") or "(autodetect)",
         "media_backend": agent.state.get("media_backend") or "default",
-        "robot_gain_db": agent.state.get("robot_gain_db", 0),
-        "volume_level":  _db_to_level(agent.state.get("robot_gain_db", 0) or 0),
+        "volume_level":  agent.state.get("volume_level", 100),
         "muted":         bool(agent.state.get("muted")),
         "ts":            _time.time(),
     })
@@ -352,7 +350,7 @@ Robot commands:
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
   {"cmd":"say","text":"<what to say>"}
   {"cmd":"say","text":"<what to say>","voice":"<edge-tts voice name>"}
-  {"cmd":"volume","level":<0-100>}    ← absolute robot speaker volume; 100=loudest, ~45=normal, 0=quietest
+  {"cmd":"volume","level":<0-100>}    ← absolute robot speaker volume; 100=loudest, 50=mid, 0=quietest
   {"cmd":"volume","delta":<+/-pts>}   ← relative change in level points (add to the CURRENT level shown below)
   {"cmd":"volume","mute":true|false}  ← mute (true) or restore the pre-mute volume (false)
 
@@ -465,7 +463,7 @@ async def _nl_to_commands(agent, text):
     ha_section = "\n".join(lines) if lines else "\n(no HA entities discovered — ha commands will fail)"
     # Inject the current speaker volume so the LLM can do relative ("a bit louder")
     # and mute/unmute requests correctly.
-    cur_level = _db_to_level(agent.state.get("robot_gain_db", 0) or 0)
+    cur_level = agent.state.get("volume_level", 100)
     muted = bool(agent.state.get("muted"))
     vol_section = (f"\n\nCurrent speaker volume: level {cur_level} (0-100), "
                    f"muted={'yes' if muted else 'no'}.")
@@ -1040,9 +1038,7 @@ async def _say(agent, payload):
     agent.state["_say_tmp"] = play_path
 
     return {"said": text, "voice": voice, "trim_db": trim_db,
-            "robot_gain_db": agent.state.get("robot_gain_db", 0),
-        "volume_level":  _db_to_level(agent.state.get("robot_gain_db", 0) or 0),
-        "muted":         bool(agent.state.get("muted")),
+            "volume_level": agent.state.get("volume_level", 100),
             "boosted": play_path != raw_path,
             "on_robot": plays_on_robot,
             "output": "robot" if plays_on_robot else "host (set media_backend=webrtc)"}
@@ -1117,82 +1113,112 @@ def _daemon_url(agent):
             or getattr(mini, "_daemon_http_url", None))
 
 
-async def _set_robot_gain(agent, gain_db):
-    """POST the speaker gain to the daemon (robot-side). Returns (ok, detail)."""
+async def _get_daemon_volume(agent):
+    """GET the robot speaker volume (0-100) from the daemon, or None if unavailable."""
     import aiohttp
     url = _daemon_url(agent)
     if not url:
-        return False, ("no daemon URL — robot gain needs the WebRTC backend. "
-                       'Publish {"media_backend": "webrtc"} to custom/reachy/config and restart.')
-    endpoint = f"{url.rstrip('/')}/api/audio/gain"
+        return None
     try:
         async with aiohttp.ClientSession() as s:
-            async with s.post(endpoint, json={"gain_db": gain_db},
-                              timeout=aiohttp.ClientTimeout(total=5)) as r:
-                body = await r.text()
+            async with s.get(f"{url.rstrip('/')}/api/volume/current",
+                             timeout=aiohttp.ClientTimeout(total=5)) as r:
+                if r.status != 200:
+                    return None
+                data = await r.json()
+        v = data.get("volume")
+        return int(v) if v is not None else None
+    except Exception:
+        return None
+
+
+async def _apply_volume(agent, level):
+    """Set the robot speaker volume (0-100) on the daemon. Returns (ok, detail).
+
+    Primary: v1.7.x native POST /api/volume/set {"volume": 0-100} (what the
+    dashboard slider uses; controls the "Reachy Mini Audio" device). Falls back
+    to POST /api/audio/gain {"gain_db": ...} for daemons that ship PR #1187.
+    """
+    import aiohttp
+    url = _daemon_url(agent)
+    if not url:
+        return False, ('no daemon URL — robot volume needs the WebRTC backend. '
+                       'Set REACHY_MEDIA_BACKEND=webrtc (or publish media_backend) and restart.')
+    base = url.rstrip("/")
+    level = int(max(0, min(100, round(level))))
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"{base}/api/volume/set", json={"volume": level},
+                              timeout=aiohttp.ClientTimeout(total=8)) as r:
+                if r.status < 400:
+                    return True, f"volume/set={level}"
+                if r.status != 404:
+                    body = await r.text()
+                    return False, f"volume/set {r.status}: {body[:160]}"
+            # Older/newer daemon without /api/volume — try the PR #1187 gain endpoint.
+            async with s.post(f"{base}/api/audio/gain", json={"gain_db": _level_to_db(level)},
+                              timeout=aiohttp.ClientTimeout(total=8)) as r:
+                if r.status < 400:
+                    return True, f"audio/gain={_level_to_db(level):.1f}dB"
                 if r.status == 404:
-                    return False, ("daemon has no /api/audio/gain (PR #1187 not in this "
-                                   "daemon version) — use the dashboard SPEAKER slider or set "
-                                   "REACHY_AUDIO_GAIN_DB on the robot.")
-                if r.status >= 400:
-                    return False, f"daemon returned {r.status}: {body[:160]}"
-        return True, endpoint
+                    return False, ("daemon exposes neither /api/volume/set nor /api/audio/gain — "
+                                   "use the dashboard SPEAKER slider.")
+                body = await r.text()
+                return False, f"audio/gain {r.status}: {body[:160]}"
     except Exception as e:
-        return False, f"could not reach daemon at {endpoint}: {e}"
+        return False, f"could not reach daemon at {base}: {e}"
 
 
 async def _volume(agent, payload):
-    """Set / adjust / mute the robot speaker volume (persists; re-applied on restart).
+    """Set / adjust / mute the robot speaker volume (persists; survives restart).
 
-    Drives the daemon's audio gain (PR #1187) — the actual robot speaker level,
-    range -20..+24 dB. The ffmpeg boost on each `say` is separate (it maximizes
-    the file's digital level); this is the hardware/output amplification on top.
+    Drives the daemon's native speaker volume (0-100) — the actual "Reachy Mini
+    Audio" output, same lever as the dashboard SPEAKER slider. The ffmpeg boost
+    on each `say` is separate (it maximizes the file's digital level); this is the
+    hardware output level on top. NOTE: the daemon plays a short test sound on set.
 
     One of (checked in this order):
       {"cmd":"volume","mute": true}       silence (remembers current level)
       {"cmd":"volume","mute": false}      restore the level from before muting
-      {"cmd":"volume","level": <0-100>}   absolute: 0=quietest, ~45=unity(0dB), 100=loudest
-      {"cmd":"volume","db": <-20..24>}    absolute gain in dB
-      {"cmd":"volume","delta": <+/-pts>}  relative change in level points (e.g. +15)
+      {"cmd":"volume","level": <0-100>}   absolute: 0=quietest, 100=loudest
+      {"cmd":"volume","delta": <+/-pts>}  relative change (e.g. +15, -25)
+      {"cmd":"volume","db": <-20..24>}    legacy: dB mapped onto 0-100
     """
-    cur_db = float(agent.state.get("robot_gain_db", 0) or 0)
+    cur = int(agent.state.get("volume_level", 100) or 0)
     mute = payload.get("mute")
 
     if mute is True:
         if not agent.state.get("muted"):
-            agent.state["premute_db"] = cur_db          # remember to restore later
-            agent.persist("premute_db", cur_db)
-        gain_db = _ROBOT_GAIN_MIN_DB
+            agent.state["premute_level"] = cur          # remember to restore later
+            agent.persist("premute_level", cur)
+        level = 0
         agent.state["muted"] = True
         agent.persist("muted", True)
     elif mute is False:
-        gain_db = float(agent.state.get("premute_db", 0) or 0)
+        level = int(agent.state.get("premute_level", 100) or 0)
         agent.state["muted"] = False
         agent.persist("muted", False)
     elif "level" in payload:
-        gain_db = _level_to_db(payload["level"])
+        level = float(payload["level"])
+    elif "delta" in payload:
+        level = cur + float(payload["delta"])
     elif "db" in payload:
-        gain_db = float(payload["db"])
-    elif "delta" in payload:                            # relative, in level points
-        gain_db = _level_to_db(_db_to_level(cur_db) + float(payload["delta"]))
-    elif "delta_db" in payload:
-        gain_db = cur_db + float(payload["delta_db"])
+        level = _db_to_level(float(payload["db"]))
     else:
-        raise ValueError("volume requires mute, level (0-100), db (-20..24), or delta")
+        raise ValueError("volume requires mute, level (0-100), delta, or db")
 
-    gain_db = round(max(_ROBOT_GAIN_MIN_DB, min(_ROBOT_GAIN_MAX_DB, gain_db)), 1)
+    level = int(max(0, min(100, round(level))))
     if mute is None:                                    # any explicit set clears mute
         agent.state["muted"] = False
         agent.persist("muted", False)
-    agent.state["robot_gain_db"] = gain_db
-    agent.persist("robot_gain_db", gain_db)
+    agent.state["volume_level"] = level
+    agent.persist("volume_level", level)
 
-    ok, detail = await _set_robot_gain(agent, gain_db)
-    result = {"robot_gain_db": gain_db, "level": _db_to_level(gain_db),
-              "muted": bool(agent.state.get("muted")), "applied": ok}
+    ok, detail = await _apply_volume(agent, level)
+    result = {"level": level, "muted": bool(agent.state.get("muted")), "applied": ok}
     if not ok:
         result["reason"] = detail
-        await agent.log(f"volume set to {gain_db} dB but not applied to robot: {detail}", level="warning")
+        await agent.log(f"volume set to {level} but not applied to robot: {detail}", level="warning")
     return result
 
 

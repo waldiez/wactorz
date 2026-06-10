@@ -248,8 +248,15 @@ async def setup(agent):
     # Loaded from persistent state so they survive restarts.
     agent.state["bindings"] = agent.recall("bindings") or {}
 
-    # ---- Persistent say loudness (extra makeup gain in dB, set via cmd=volume) ----
-    agent.state["say_gain_db"] = float(agent.recall("say_gain_db") or 0)
+    # ---- Persistent robot speaker volume (daemon gain dB, set via cmd=volume) ----
+    agent.state["robot_gain_db"] = float(agent.recall("robot_gain_db") or 0)
+    # Re-apply it to the daemon so the speaker level survives restarts.
+    if mini is not None and agent.state["robot_gain_db"]:
+        ok, detail = await _set_robot_gain(agent, agent.state["robot_gain_db"])
+        if ok:
+            await agent.log(f"Restored robot speaker gain: {agent.state['robot_gain_db']} dB")
+        else:
+            await agent.log(f"Could not restore robot gain: {detail}", level="warning")
 
     # ---- Wake up so the robot is ready for commands (skip if disconnected) ----
     if mini is not None:
@@ -300,7 +307,7 @@ async def setup(agent):
         "bindings": list(agent.state["bindings"].keys()),
         "robot_host":    agent.state.get("robot_host") or "(autodetect)",
         "media_backend": agent.state.get("media_backend") or "default",
-        "say_gain_db":   agent.state.get("say_gain_db", 0),
+        "robot_gain_db": agent.state.get("robot_gain_db", 0),
         "ts":            _time.time(),
     })
 
@@ -321,7 +328,7 @@ async def process(agent):
         "bindings": list(agent.state.get("bindings", {}).keys()),
         "robot_host":    agent.state.get("robot_host") or "(autodetect)",
         "media_backend": agent.state.get("media_backend") or "default",
-        "say_gain_db":   agent.state.get("say_gain_db", 0),
+        "robot_gain_db": agent.state.get("robot_gain_db", 0),
         "ts":            _time.time(),
     })
 
@@ -338,13 +345,12 @@ Robot commands:
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
   {"cmd":"say","text":"<what to say>"}
   {"cmd":"say","text":"<what to say>","voice":"<edge-tts voice name>"}
-  {"cmd":"volume","level":<0-100>}    ← persistent speech volume; 100=loudest (default), lower=quieter
-  {"cmd":"volume","db":<float<=0>}    ← or set it as dB below max (0=loudest, negative=quieter)
+  {"cmd":"volume","level":<0-100>}    ← robot speaker volume; 100=loudest, ~45=normal, 0=quietest
+  {"cmd":"volume","db":<-20..24>}     ← or set the speaker gain directly in dB
 
 Speech & volume rules:
 - "say X", "tell them X", "speak X", "announce X" -> {"cmd":"say","text":"X"}.
-- Speech already plays at max volume by default — no action needed to be loud.
-- "louder" / "turn it up" / "I can't hear" -> {"cmd":"volume","level":100} (restore max).
+- "louder" / "turn it up" / "I can't hear" -> {"cmd":"volume","level":100}.
 - "quieter" / "too loud" / "turn it down" -> {"cmd":"volume","level":40}.
 - "set volume to N" / "volume N percent" -> {"cmd":"volume","level":N}.
 
@@ -976,16 +982,15 @@ async def _say(agent, payload):
     await communicate.save(raw_path)
 
     # -- Loudness boost (default on) --------------------------------------------
-    # The boost compresses + limits speech to the digital ceiling — that's the
-    # LOUDEST software can make it. attenuation_db (<=0) dials DOWN from there:
-    # persistent volume setting + per-call gain_db, clamped so positive values
-    # (which would only clip against the ceiling) can't push past max.
+    # The boost compresses + limits the TTS file to the digital ceiling (loudest
+    # the file can be). Robot speaker loudness on top of that is the persistent
+    # volume (daemon gain, set via cmd=volume). per-call gain_db (<=0) trims this
+    # one utterance quieter at the file level without touching the volume setting.
     loud = payload.get("loud", True)
-    attenuation_db = min(0.0, float(payload.get("gain_db", 0))
-                              + float(agent.state.get("say_gain_db", 0) or 0))
+    trim_db = min(0.0, float(payload.get("gain_db", 0)))
     play_path = raw_path
     if loud:
-        boosted = await _boost_audio(agent, raw_path, attenuation_db)
+        boosted = await _boost_audio(agent, raw_path, trim_db)
         if boosted:
             try:
                 os.unlink(raw_path)   # raw is consumed by the boost step
@@ -1005,7 +1010,8 @@ async def _say(agent, payload):
             pass
     agent.state["_say_tmp"] = play_path
 
-    return {"said": text, "voice": voice, "attenuation_db": attenuation_db,
+    return {"said": text, "voice": voice, "trim_db": trim_db,
+            "robot_gain_db": agent.state.get("robot_gain_db", 0),
             "boosted": play_path != raw_path,
             "on_robot": plays_on_robot,
             "output": "robot" if plays_on_robot else "host (set media_backend=webrtc)"}
@@ -1052,30 +1058,73 @@ async def _boost_audio(agent, src_path, attenuation_db=0.0):
     return out_path
 
 
-async def _volume(agent, payload):
-    """Set the persistent speech volume applied to every `say`. Survives restarts.
+# Daemon audio-gain API (reachy_mini PR #1187): POST /api/audio/gain {"gain_db": x}
+# applies a GStreamer volume+rglimiter on the robot's playback pipeline, so this
+# is the REAL robot speaker loudness (same lever as the dashboard SPEAKER slider).
+_ROBOT_GAIN_MIN_DB = -20.0
+_ROBOT_GAIN_MAX_DB = 24.0
 
-    The default boost already plays at the loudest clean level the software can
-    produce, so volume only attenuates DOWN from that ceiling.
+
+def _daemon_url(agent):
+    """Base URL of the robot daemon's HTTP API, if reachable (WebRTC backend only)."""
+    mini = agent.state.get("mini")
+    media = getattr(mini, "media", None) or getattr(mini, "media_manager", None)
+    audio = getattr(media, "audio", None)
+    return (getattr(audio, "daemon_url", None) or getattr(media, "_daemon_url", None)
+            or getattr(mini, "_daemon_http_url", None))
+
+
+async def _set_robot_gain(agent, gain_db):
+    """POST the speaker gain to the daemon (robot-side). Returns (ok, detail)."""
+    import aiohttp
+    url = _daemon_url(agent)
+    if not url:
+        return False, ("no daemon URL — robot gain needs the WebRTC backend. "
+                       'Publish {"media_backend": "webrtc"} to custom/reachy/config and restart.')
+    endpoint = f"{url.rstrip('/')}/api/audio/gain"
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(endpoint, json={"gain_db": gain_db},
+                              timeout=aiohttp.ClientTimeout(total=5)) as r:
+                body = await r.text()
+                if r.status == 404:
+                    return False, ("daemon has no /api/audio/gain (PR #1187 not in this "
+                                   "daemon version) — use the dashboard SPEAKER slider or set "
+                                   "REACHY_AUDIO_GAIN_DB on the robot.")
+                if r.status >= 400:
+                    return False, f"daemon returned {r.status}: {body[:160]}"
+        return True, endpoint
+    except Exception as e:
+        return False, f"could not reach daemon at {endpoint}: {e}"
+
+
+async def _volume(agent, payload):
+    """Set the robot speaker volume (persists; re-applied on restart).
+
+    Drives the daemon's audio gain (PR #1187) — the actual robot speaker level,
+    range -20..+24 dB. The ffmpeg boost on each `say` is separate (it maximizes
+    the file's digital level); this is the hardware/output amplification on top.
 
     Accepts either:
-      {"cmd":"volume","level": <0-100>}  100=loudest (default), lower=quieter
-      {"cmd":"volume","db": <float>}     dB below max; 0=loudest, negative=quieter
+      {"cmd":"volume","level": <0-100>}  0=quietest(-20dB), ~45=unity(0dB), 100=loudest(+24dB)
+      {"cmd":"volume","db": <float>}     direct gain in dB (-20..+24)
     """
     if "level" in payload:
-        # 100 -> 0 dB (max), 50 -> -20 dB, 0 -> -40 dB (near silent).
         level = max(0.0, min(100.0, float(payload["level"])))
-        gain_db = (level - 100.0) * 0.4
+        gain_db = _ROBOT_GAIN_MIN_DB + level / 100.0 * (_ROBOT_GAIN_MAX_DB - _ROBOT_GAIN_MIN_DB)
     elif "db" in payload:
         gain_db = float(payload["db"])
     else:
-        raise ValueError("volume requires 'level' (0-100) or 'db' (float)")
-    gain_db = max(-40.0, min(0.0, gain_db))   # clamp: 0 is max, can't exceed the ceiling
-    agent.state["say_gain_db"] = gain_db
-    agent.persist("say_gain_db", gain_db)
-    # Friendly level readout (inverse of the level->db map).
-    level_out = round(gain_db / 0.4 + 100.0)
-    return {"say_gain_db": gain_db, "level": level_out}
+        raise ValueError("volume requires 'level' (0-100) or 'db' (-20..24)")
+    gain_db = round(max(_ROBOT_GAIN_MIN_DB, min(_ROBOT_GAIN_MAX_DB, gain_db)), 1)
+    agent.state["robot_gain_db"] = gain_db
+    agent.persist("robot_gain_db", gain_db)
+    ok, detail = await _set_robot_gain(agent, gain_db)
+    level_out = round((gain_db - _ROBOT_GAIN_MIN_DB) / (_ROBOT_GAIN_MAX_DB - _ROBOT_GAIN_MIN_DB) * 100)
+    if not ok:
+        await agent.log(f"volume set to {gain_db} dB but not applied to robot: {detail}", level="warning")
+        return {"robot_gain_db": gain_db, "level": level_out, "applied": False, "reason": detail}
+    return {"robot_gain_db": gain_db, "level": level_out, "applied": True}
 
 
 async def _fetch_ha_entities(agent):

@@ -307,6 +307,8 @@ def _build_catalog() -> dict:
                 "loud":        "bool  — cmd=say; default true (compress+limit file to max); false plays raw quiet TTS",
                 "level":       "float — 0-100 robot speaker volume (cmd=volume); 100=loudest, ~45=normal, 0=quietest",
                 "db":          "float — robot speaker gain in dB (cmd=volume), -20..+24 (daemon /api/audio/gain)",
+                "delta":       "float — relative volume change in level points (cmd=volume), e.g. +15 / -25",
+                "mute":        "bool  — cmd=volume; true silences (remembers level), false restores it",
                 "duration":    "float — motion duration in seconds (pose/antennas/look_at)",
                 "method":      "str  — interpolation: linear|minjerk|ease_in_out|cartoon (default minjerk)",
                 "yaw":         "float — head yaw, degrees by default",

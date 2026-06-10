@@ -251,6 +251,8 @@ async def setup(agent):
 
     # ---- Persistent robot speaker volume (daemon gain dB, set via cmd=volume) ----
     agent.state["robot_gain_db"] = float(agent.recall("robot_gain_db") or 0)
+    agent.state["muted"] = bool(agent.recall("muted"))
+    agent.state["premute_db"] = float(agent.recall("premute_db") or 0)
     # Re-apply it to the daemon so the speaker level survives restarts.
     if mini is not None and agent.state["robot_gain_db"]:
         ok, detail = await _set_robot_gain(agent, agent.state["robot_gain_db"])
@@ -309,6 +311,8 @@ async def setup(agent):
         "robot_host":    agent.state.get("robot_host") or "(autodetect)",
         "media_backend": agent.state.get("media_backend") or "default",
         "robot_gain_db": agent.state.get("robot_gain_db", 0),
+        "volume_level":  _db_to_level(agent.state.get("robot_gain_db", 0) or 0),
+        "muted":         bool(agent.state.get("muted")),
         "ts":            _time.time(),
     })
 
@@ -330,6 +334,8 @@ async def process(agent):
         "robot_host":    agent.state.get("robot_host") or "(autodetect)",
         "media_backend": agent.state.get("media_backend") or "default",
         "robot_gain_db": agent.state.get("robot_gain_db", 0),
+        "volume_level":  _db_to_level(agent.state.get("robot_gain_db", 0) or 0),
+        "muted":         bool(agent.state.get("muted")),
         "ts":            _time.time(),
     })
 
@@ -346,14 +352,19 @@ Robot commands:
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
   {"cmd":"say","text":"<what to say>"}
   {"cmd":"say","text":"<what to say>","voice":"<edge-tts voice name>"}
-  {"cmd":"volume","level":<0-100>}    ← robot speaker volume; 100=loudest, ~45=normal, 0=quietest
-  {"cmd":"volume","db":<-20..24>}     ← or set the speaker gain directly in dB
+  {"cmd":"volume","level":<0-100>}    ← absolute robot speaker volume; 100=loudest, ~45=normal, 0=quietest
+  {"cmd":"volume","delta":<+/-pts>}   ← relative change in level points (add to the CURRENT level shown below)
+  {"cmd":"volume","mute":true|false}  ← mute (true) or restore the pre-mute volume (false)
 
 Speech & volume rules:
 - "say X", "tell them X", "speak X", "announce X" -> {"cmd":"say","text":"X"}.
-- "louder" / "turn it up" / "I can't hear" -> {"cmd":"volume","level":100}.
-- "quieter" / "too loud" / "turn it down" -> {"cmd":"volume","level":40}.
-- "set volume to N" / "volume N percent" -> {"cmd":"volume","level":N}.
+- ABSOLUTE: "max/full/loudest volume" -> level 100; "normal/default volume" -> level 50;
+  "minimum/quietest" -> level 0; "half volume" -> level 50; "set volume to N" / "N percent" -> level N.
+- RELATIVE (use delta, NOT level — the current level is given below):
+  "a bit/slightly/a little louder" -> delta +15; "louder" / "turn it up" -> delta +25; "much louder" -> level 100;
+  "a bit quieter" -> delta -15; "quieter" / "turn it down" / "too loud" -> delta -25.
+- MUTE: "mute" / "silence" / "be quiet" / "stop talking" -> mute true;
+  "unmute" / "speak up again" / "sound back on" -> mute false.
 
 Home Assistant commands (use the actual entity_id from the inventory below):
   {"cmd":"ha","service":"light.turn_on","entity_id":"<light entity>"}
@@ -452,7 +463,13 @@ async def _nl_to_commands(agent, text):
         for it in items:
             lines.append(f"  {it['entity_id']:50s}  ({it['name']})")
     ha_section = "\n".join(lines) if lines else "\n(no HA entities discovered — ha commands will fail)"
-    system_with_ents = _NL_SYSTEM + "\n\nLive HA inventory:" + ha_section
+    # Inject the current speaker volume so the LLM can do relative ("a bit louder")
+    # and mute/unmute requests correctly.
+    cur_level = _db_to_level(agent.state.get("robot_gain_db", 0) or 0)
+    muted = bool(agent.state.get("muted"))
+    vol_section = (f"\n\nCurrent speaker volume: level {cur_level} (0-100), "
+                   f"muted={'yes' if muted else 'no'}.")
+    system_with_ents = _NL_SYSTEM + "\n\nLive HA inventory:" + ha_section + vol_section
     raw = await agent.llm.chat(text, system=system_with_ents)
     raw = (raw or "").strip()
     if raw.startswith("```"):
@@ -531,12 +548,23 @@ async def handle_task(agent, payload):
                 except Exception:
                     pass
             if "cmd" not in payload and "action" not in payload and stripped:
-                low = stripped.lower()
+                low = stripped.lower().rstrip("!.")
                 # Single-verb shortcuts (no LLM call needed)
                 if   low in ("wake", "wake up"):           payload = {"cmd": "wake"}
                 elif low in ("sleep", "go to sleep"):      payload = {"cmd": "sleep"}
                 elif low in ("stop",):                     payload = {"cmd": "stop"}
                 elif low in ("list emotions", "emotions"): payload = {"cmd": "list_emotions"}
+                # Common volume phrases — handled without an LLM round-trip.
+                elif low in ("mute", "silence", "be quiet", "quiet", "shut up", "stop talking"):
+                    payload = {"cmd": "volume", "mute": True}
+                elif low in ("unmute", "sound on", "speak up", "speak up again"):
+                    payload = {"cmd": "volume", "mute": False}
+                elif low in ("louder", "turn it up", "volume up", "speak louder"):
+                    payload = {"cmd": "volume", "delta": 25}
+                elif low in ("quieter", "turn it down", "volume down", "too loud"):
+                    payload = {"cmd": "volume", "delta": -25}
+                elif low in ("max volume", "full volume", "loudest", "maximum volume"):
+                    payload = {"cmd": "volume", "level": 100}
                 else:
                     # Natural language — ask the LLM to plan a command sequence,
                     # then execute it synchronously. handle_task has 60s budget;
@@ -1013,6 +1041,8 @@ async def _say(agent, payload):
 
     return {"said": text, "voice": voice, "trim_db": trim_db,
             "robot_gain_db": agent.state.get("robot_gain_db", 0),
+        "volume_level":  _db_to_level(agent.state.get("robot_gain_db", 0) or 0),
+        "muted":         bool(agent.state.get("muted")),
             "boosted": play_path != raw_path,
             "on_robot": plays_on_robot,
             "output": "robot" if plays_on_robot else "host (set media_backend=webrtc)"}
@@ -1066,6 +1096,18 @@ _ROBOT_GAIN_MIN_DB = -20.0
 _ROBOT_GAIN_MAX_DB = 24.0
 
 
+def _level_to_db(level):
+    """Map a 0-100 volume level to the daemon gain range (-20..+24 dB)."""
+    level = max(0.0, min(100.0, float(level)))
+    return _ROBOT_GAIN_MIN_DB + level / 100.0 * (_ROBOT_GAIN_MAX_DB - _ROBOT_GAIN_MIN_DB)
+
+
+def _db_to_level(db):
+    """Inverse of _level_to_db: dB -> 0-100 level."""
+    return round((float(db) - _ROBOT_GAIN_MIN_DB)
+                 / (_ROBOT_GAIN_MAX_DB - _ROBOT_GAIN_MIN_DB) * 100)
+
+
 def _daemon_url(agent):
     """Base URL of the robot daemon's HTTP API, if reachable (WebRTC backend only)."""
     mini = agent.state.get("mini")
@@ -1100,32 +1142,58 @@ async def _set_robot_gain(agent, gain_db):
 
 
 async def _volume(agent, payload):
-    """Set the robot speaker volume (persists; re-applied on restart).
+    """Set / adjust / mute the robot speaker volume (persists; re-applied on restart).
 
     Drives the daemon's audio gain (PR #1187) — the actual robot speaker level,
     range -20..+24 dB. The ffmpeg boost on each `say` is separate (it maximizes
     the file's digital level); this is the hardware/output amplification on top.
 
-    Accepts either:
-      {"cmd":"volume","level": <0-100>}  0=quietest(-20dB), ~45=unity(0dB), 100=loudest(+24dB)
-      {"cmd":"volume","db": <float>}     direct gain in dB (-20..+24)
+    One of (checked in this order):
+      {"cmd":"volume","mute": true}       silence (remembers current level)
+      {"cmd":"volume","mute": false}      restore the level from before muting
+      {"cmd":"volume","level": <0-100>}   absolute: 0=quietest, ~45=unity(0dB), 100=loudest
+      {"cmd":"volume","db": <-20..24>}    absolute gain in dB
+      {"cmd":"volume","delta": <+/-pts>}  relative change in level points (e.g. +15)
     """
-    if "level" in payload:
-        level = max(0.0, min(100.0, float(payload["level"])))
-        gain_db = _ROBOT_GAIN_MIN_DB + level / 100.0 * (_ROBOT_GAIN_MAX_DB - _ROBOT_GAIN_MIN_DB)
+    cur_db = float(agent.state.get("robot_gain_db", 0) or 0)
+    mute = payload.get("mute")
+
+    if mute is True:
+        if not agent.state.get("muted"):
+            agent.state["premute_db"] = cur_db          # remember to restore later
+            agent.persist("premute_db", cur_db)
+        gain_db = _ROBOT_GAIN_MIN_DB
+        agent.state["muted"] = True
+        agent.persist("muted", True)
+    elif mute is False:
+        gain_db = float(agent.state.get("premute_db", 0) or 0)
+        agent.state["muted"] = False
+        agent.persist("muted", False)
+    elif "level" in payload:
+        gain_db = _level_to_db(payload["level"])
     elif "db" in payload:
         gain_db = float(payload["db"])
+    elif "delta" in payload:                            # relative, in level points
+        gain_db = _level_to_db(_db_to_level(cur_db) + float(payload["delta"]))
+    elif "delta_db" in payload:
+        gain_db = cur_db + float(payload["delta_db"])
     else:
-        raise ValueError("volume requires 'level' (0-100) or 'db' (-20..24)")
+        raise ValueError("volume requires mute, level (0-100), db (-20..24), or delta")
+
     gain_db = round(max(_ROBOT_GAIN_MIN_DB, min(_ROBOT_GAIN_MAX_DB, gain_db)), 1)
+    if mute is None:                                    # any explicit set clears mute
+        agent.state["muted"] = False
+        agent.persist("muted", False)
     agent.state["robot_gain_db"] = gain_db
     agent.persist("robot_gain_db", gain_db)
+
     ok, detail = await _set_robot_gain(agent, gain_db)
-    level_out = round((gain_db - _ROBOT_GAIN_MIN_DB) / (_ROBOT_GAIN_MAX_DB - _ROBOT_GAIN_MIN_DB) * 100)
+    result = {"robot_gain_db": gain_db, "level": _db_to_level(gain_db),
+              "muted": bool(agent.state.get("muted")), "applied": ok}
     if not ok:
+        result["reason"] = detail
         await agent.log(f"volume set to {gain_db} dB but not applied to robot: {detail}", level="warning")
-        return {"robot_gain_db": gain_db, "level": level_out, "applied": False, "reason": detail}
-    return {"robot_gain_db": gain_db, "level": level_out, "applied": True}
+    return result
 
 
 async def _fetch_ha_entities(agent):

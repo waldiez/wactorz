@@ -136,6 +136,9 @@ WACTORZ_API_KEY=              # optional; mirrors API_KEY for REST auth
 # Only needed if using an external broker instead of the embedded one
 MQTT_HOST=localhost
 MQTT_PORT=1883
+# Optional — set for a broker with allow_anonymous false; blank = anonymous
+MQTT_USERNAME=
+MQTT_PASSWORD=
 ```
 
 #### Web dashboard

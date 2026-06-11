@@ -20,7 +20,6 @@ Commands (prefix @wiz-agent stripped):
 """
 
 from __future__ import annotations
-from ..core.mqtt import mqtt_client
 
 import asyncio
 import json
@@ -29,6 +28,7 @@ import time
 from typing import Any
 
 from ..core.actor import Actor, ActorState, Message, MessageType
+from ..core.mqtt import mqtt_client
 
 logger = logging.getLogger(__name__)
 

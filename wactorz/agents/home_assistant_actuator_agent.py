@@ -11,7 +11,6 @@ Designed to be the actuator end of the pipeline:
 """
 
 from __future__ import annotations
-from ..core.mqtt import mqtt_client
 
 import asyncio
 import logging
@@ -25,6 +24,7 @@ from wactorz.config import CONFIG
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import normalize_ha_ws_url
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
+from ..core.mqtt import mqtt_client
 
 logger = logging.getLogger(__name__)
 

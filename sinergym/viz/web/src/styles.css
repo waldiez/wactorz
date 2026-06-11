@@ -89,6 +89,17 @@ body::after {
 .led { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .led.on { background: var(--good); box-shadow: 0 0 10px var(--good); }
 .led.off { background: var(--bad); }
+/* day/night cue — explicit sun/moon chip so the time of day is never ambiguous */
+.daycue { display: flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 20px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  border: 1px solid var(--panel-brd); background: rgba(124,141,181,0.10); color: var(--muted);
+  transition: all 0.6s ease; }
+.daycue .daycue-ico { font-size: 13px; }
+.daycue.day { color: #ffe7a6; background: rgba(255,206,112,0.16); border-color: rgba(255,206,112,0.5);
+  box-shadow: 0 0 16px rgba(255,206,112,0.3); }
+.daycue.dawn, .daycue.dusk { color: #ffc89a; background: rgba(255,160,100,0.14);
+  border-color: rgba(255,160,100,0.42); }
+.daycue.night { color: #aab9e6; background: rgba(120,150,230,0.12); border-color: rgba(120,150,230,0.34); }
 
 /* instrument rail */
 #weather { grid-area: wx; padding: 16px 16px 14px; display: flex; flex-direction: column;
@@ -130,6 +141,13 @@ body::after {
   border: 1px solid var(--panel-brd); box-shadow: var(--shadow);
   background: radial-gradient(120% 100% at 50% 0%, #0c1426, #05080f 75%); }
 #twin { width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
+/* daylight wash: a soft sky-glow over the canvas that brightens at midday and fades at
+   night. Layered above the WebGL canvas (not the scene light) so zone temp tints stay crisp. */
+.daylight { position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  opacity: var(--daylight, 0); transition: opacity 1.4s ease;
+  background:
+    linear-gradient(180deg, rgba(150,190,255,0.18), rgba(150,190,255,0.05) 38%, transparent 66%),
+    radial-gradient(120% 70% at 50% -8%, rgba(255,236,190,0.16), transparent 60%); }
 /* rain overlay: two layers of slanted streaks falling at different speeds */
 .rainfx { position: absolute; inset: 0; pointer-events: none; opacity: 0; z-index: 2;
   transition: opacity 0.8s ease; mix-blend-mode: screen;
@@ -155,8 +173,33 @@ body::after {
 .floor-toggle .glass-toggle { color: var(--warm); border-color: rgba(255,176,74,0.4); margin-top: 4px; }
 .floor-toggle .glass-toggle:hover { border-color: var(--warm); background: rgba(255,176,74,0.14); }
 
+.floor-toggle .plan-toggle { color: var(--accent); border-color: rgba(91,140,255,0.45); margin-top: 4px; }
+.floor-toggle .plan-toggle:hover { border-color: var(--accent); background: rgba(91,140,255,0.2); }
+.floor-toggle .plan-toggle.on { color: #fff; background: rgba(91,140,255,0.32); border-color: var(--accent); }
+
+/* plan-view zone labels: HTML chips reprojected over each zone centroid (shown only in plan) */
+.zone-labels { position: absolute; inset: 0; pointer-events: none; display: none; z-index: 5; }
+.zone-labels.on { display: block; }
+.zone-label { position: absolute; transform: translate(-50%, -50%); white-space: nowrap;
+  text-align: center; line-height: 1.25; color: #eaf1ff;
+  padding: 3px 9px; border-radius: 7px; background: rgba(7,11,20,0.7);
+  border: 1px solid rgba(120,150,210,0.4); text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+.zone-label b { display: block; font: 600 11px var(--mono); letter-spacing: 0.04em; }
+.zone-label span { display: block; font: 500 10px var(--mono); opacity: 0.66; }
+
+.zoomctl { position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
+.zoom-btn { width: 32px; height: 32px; display: grid; place-items: center; font: 18px var(--mono);
+  font-weight: 600; line-height: 1; color: var(--ink); background: rgba(12,18,33,0.62);
+  border: 1px solid var(--panel-brd); border-radius: 8px; cursor: pointer;
+  backdrop-filter: blur(6px); transition: all 0.15s; }
+.zoom-btn:hover { border-color: var(--accent); background: rgba(91,140,255,0.16); color: #fff; }
+.zoom-btn:active { transform: scale(0.92); }
+
 /* per-floor zone matrix */
 #zones { grid-area: zones; padding: 16px 14px 12px; display: flex; flex-direction: column; min-height: 0; }
+.zones-hint { font-family: var(--mono); font-size: 10px; line-height: 1.4; color: var(--muted);
+  margin: -3px 0 11px; display: flex; align-items: center; gap: 6px; }
+.zones-hint .zh-ico { color: var(--accent); font-size: 12px; }
 .zonematrix { overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
 .zfloor { display: flex; flex-direction: column; gap: 7px; }
 .zfloor-h { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px;
@@ -176,6 +219,11 @@ body::after {
 .zcell.sel { border-color: #fff;
   box-shadow: inset 0 -10px 18px -12px var(--tc), 0 0 0 1.5px rgba(255,255,255,0.85), 0 0 18px -4px var(--tc); }
 .zcell.sel .zc-name { color: #eaf1ff; }
+/* affordance: a focus glyph that surfaces on hover and stays lit while a zone is focused */
+.zcell::after { content: "⊕"; position: absolute; top: 3px; right: 4px; font-size: 10px;
+  color: var(--accent); opacity: 0; transition: opacity 0.15s; pointer-events: none; }
+.zcell:hover::after { opacity: 0.85; }
+.zcell.sel::after { content: "●"; opacity: 1; color: #fff; }
 .zc-name { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em; color: var(--muted);
   font-weight: 600; }
 .zc-temp { font-family: var(--mono); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums;

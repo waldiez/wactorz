@@ -69,6 +69,25 @@ export class UI {
     $("conn").querySelector(".led")!.className = "led " + (ok ? "on" : "off");
   }
 
+  // Make day/night unmistakable without touching the temperature tints: a masthead
+  // sun/moon chip + a soft sky wash layered *over* the canvas (so zone colours are untouched).
+  private setPhase(hour: number) {
+    const h = (((hour % 24) + 24) % 24);
+    let day = 0;                                   // 0 night … 1 midday, smooth at the edges
+    if (h >= 8 && h <= 16) day = 1;
+    else if (h > 4 && h < 8) day = (h - 4) / 4;
+    else if (h > 16 && h < 20) day = (20 - h) / 4;
+    let label = "night", ico = "☾", cls = "night";
+    if (h >= 7 && h < 9) { label = "dawn"; ico = "🌅"; cls = "dawn"; }
+    else if (h >= 9 && h < 17) { label = "day"; ico = "☀"; cls = "day"; }
+    else if (h >= 17 && h < 19) { label = "dusk"; ico = "🌆"; cls = "dusk"; }
+    const cue = $("daycue");
+    cue.className = "daycue " + cls;
+    cue.querySelector(".daycue-ico")!.textContent = ico;
+    $("daycue-label").textContent = label;
+    $("stage").style.setProperty("--daylight", day.toFixed(2));
+  }
+
   private setSky(raining: boolean) {
     const el = $("wx-sky");
     el.className = "wx-sky" + (raining ? " rain" : "");
@@ -83,6 +102,7 @@ export class UI {
     this.twin.setTimeOfDay(f.hour);
     this.twin.setRaining(f.raining);
     this.setSky(f.raining);
+    this.setPhase(f.hour);
     const d = `${MONTHS[f.month] ?? "—"} ${f.day || ""} · ${String(f.hour).padStart(2, "0")}:00`;
     $("clock").textContent = `${d} · ep ${f.episode}`;
     // outdoor
@@ -184,6 +204,7 @@ export class UI {
   historyFrame(f: HFrame, total: number) {
     const d = stepDate(f.step);
     this.twin.setTimeOfDay(d.hour);
+    this.setPhase(d.hour);
     this.twin.setRaining(false);   // rain isn't stored in history
     document.getElementById("stage")!.classList.remove("raining");
     $("wx-sky").innerHTML = `<span class="wx-sky-ico">·</span> —`;
@@ -244,18 +265,44 @@ export class UI {
     }
   }
 
+  private floorBtns = new Map<string, HTMLButtonElement>();
+
+  /** Set a floor's visibility + keep its toggle button in sync (used by the plan lens too). */
+  private setFloorOn(floor: string, on: boolean) {
+    const b = this.floorBtns.get(floor); if (!b) return;
+    b.dataset.on = on ? "1" : "";
+    b.classList.toggle("off", !on);
+    this.twin.setFloorVisible(floor, on);
+  }
+
   private buildFloorToggles() {
     const box = $("floors");
     for (const floor of this.geo.floors) {
       const b = document.createElement("button");
       b.textContent = FLOOR_LABEL[floor] ?? floor;
-      let on = true;
-      b.onclick = () => {
-        on = !on; b.classList.toggle("off", !on);
-        this.twin.setFloorVisible(floor, on);
-      };
+      b.dataset.on = "1";
+      b.onclick = () => this.setFloorOn(floor, b.dataset.on !== "1");
+      this.floorBtns.set(floor, b);
       box.appendChild(b);
     }
+
+    // top-down floor-plan lens. Floors stack directly above each other, so from straight
+    // overhead they overlap — entering plan view isolates the top floor; the floor toggles
+    // still page through the others. Leaving it restores the full 3D model.
+    const plan = document.createElement("button");
+    plan.className = "plan-toggle";
+    plan.textContent = "⊞ plan";
+    let on = false;
+    plan.onclick = () => {
+      on = !on;
+      plan.classList.toggle("on", on);
+      plan.textContent = on ? "◇ 3D" : "⊞ plan";
+      this.twin.setPlanView(on);
+      const top = this.geo.floors[this.geo.floors.length - 1];
+      for (const f of this.geo.floors) this.setFloorOn(f, on ? f === top : true);
+    };
+    box.appendChild(plan);
+
     if (this.geo.windows?.length) {
       const g = document.createElement("button");
       g.textContent = "✦ glass";

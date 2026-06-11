@@ -17,6 +17,9 @@
         <div class="brand"><span class="dot"></span> SINERGYM <span class="muted">/ digital twin</span></div>
         <div id="clock" class="clock">—— · day —/365 · ep —</div>
         <div class="masthead-right">
+          <div id="daycue" class="daycue night" title="time of day in the simulation">
+            <span class="daycue-ico">☾</span><span id="daycue-label">night</span>
+          </div>
           <div class="occ-pill" title="people in the building right now">
             <svg viewBox="0 0 16 16" class="occ-ico"><circle cx="8" cy="4.2" r="2.6"/><path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/></svg>
             <b id="occ-total">—</b><span class="occ-unit">present</span>
@@ -58,6 +61,7 @@
       <!-- center: 3D twin -->
       <main id="stage">
         <canvas id="twin"></canvas>
+        <div class="daylight"></div>
         <div class="rainfx"></div>
         <div id="viewmode">
           <select id="view-metric" class="tp-sel" title="colour the zones by">
@@ -71,6 +75,11 @@
           <i class="occ-dot"></i><span>occupied</span>
         </div>
         <div id="floors" class="floor-toggle"></div>
+
+        <div id="zoomctl" class="zoomctl">
+          <button id="zoom-in" class="zoom-btn" title="zoom in" aria-label="zoom in">+</button>
+          <button id="zoom-out" class="zoom-btn" title="zoom out" aria-label="zoom out">−</button>
+        </div>
 
         <!-- history transport -->
         <div id="transport" class="transport">
@@ -97,6 +106,7 @@
       <!-- right: per-floor zone matrix -->
       <aside id="zones" class="glass">
         <div class="rail-title">Zones <span id="zcount" class="muted"></span></div>
+        <div class="zones-hint"><span class="zh-ico">⊕</span> click a zone to focus it in 3D · again to reset</div>
         <div id="zonematrix" class="zonematrix"></div>
       </aside>
 

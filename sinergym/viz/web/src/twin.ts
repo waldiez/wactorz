@@ -2,10 +2,10 @@
 // EnergyPlus is Z-up; Babylon is Y-up → map (x,y,z)_EP → (x, z, y)_Babylon,
 // recentred on the building footprint.
 import {
-  ArcRotateCamera, Color3, Color4, Constants, Engine, GlowLayer, HemisphericLight,
-  Mesh, MeshBuilder, Scene, StandardMaterial, Vector3, VertexData,
+  ArcRotateCamera, Camera, Color3, Color4, Constants, Engine, GlowLayer, HemisphericLight,
+  Matrix, Mesh, MeshBuilder, Scene, StandardMaterial, Vector3, VertexData,
 } from "@babylonjs/core";
-import type { Geometry } from "./data";
+import type { Geometry, ZoneGeo } from "./data";
 import { tempColor } from "./data";
 
 export class Twin {
@@ -27,6 +27,11 @@ export class Twin {
   private focused: string | null = null;             // zone the camera is locked onto
   private camTarget!: Vector3;                        // eased camera target
   private homeTarget!: Vector3;                       // default (whole-building) target
+  private span = 1;                                   // footprint span, for ortho bounds
+  private planMode = false;                           // top-down floor-plan lens
+  private orbit = { alpha: 0, beta: 0, radius: 0 };   // saved 3D pose, restored on exit
+  private labelBox?: HTMLDivElement;                  // overlay holding the per-zone labels
+  private labels = new Map<string, HTMLDivElement>(); // zone → its plan-view label
 
   constructor(canvas: HTMLCanvasElement, geo: Geometry) {
     this.engine = new Engine(canvas, true, { antialias: true, adaptToDeviceRatio: true });
@@ -39,7 +44,16 @@ export class Twin {
     const { min, max } = geo.bbox;
     const cx = (min[0] + max[0]) / 2, cy = (min[1] + max[1]) / 2;
     const span = Math.max(max[0] - min[0], max[1] - min[1]);
+    this.span = span;
     const ep = (v: number[]) => new Vector3(v[0] - cx, v[2] * VSCALE, v[1] - cy);
+
+    // Zones tile the footprint edge-to-edge, so the thin perimeter strips blur into
+    // the huge core and read as one mass. Shrink each zone horizontally toward its own
+    // footprint centroid so a clear gap opens between neighbours — true proportions kept,
+    // just pulled apart enough to tell the 5 zones/floor apart (the "better representation").
+    const INSET = 0.8;
+    const insetXY = (v: number[], c: [number, number, number]): number[] =>
+      [c[0] + (v[0] - c[0]) * INSET, c[1] + (v[1] - c[1]) * INSET, v[2]];
 
     // Floor explode: pull each storey apart vertically so the floors read as distinct,
     // stacked slabs. floorIdx maps a z-height to its storey; the gap scales with floor height.
@@ -53,7 +67,7 @@ export class Twin {
     const topY = max[2] * VSCALE + (nFloors - 1) * GAP;
 
     this.camera = new ArcRotateCamera("cam", Math.PI * 0.86, Math.PI * 0.37,
-      span * 1.42, new Vector3(0, topY * 0.42, 0), this.scene);
+      span * 1.95, new Vector3(0, topY * 0.42, 0), this.scene);
     this.camTarget = this.camera.target.clone();
     this.homeTarget = this.camera.target.clone();
     // gentle idle orbit (read-only showcase); auto-pauses on interaction, resumes when idle
@@ -94,7 +108,7 @@ export class Twin {
       for (const surf of z.surfaces) {
         const base = positions.length / 3;
         for (const v of surf.vertices) {
-          const p = ep(v); positions.push(p.x, p.y, p.z);
+          const p = ep(insetXY(v, z.centroid)); positions.push(p.x, p.y, p.z);
         }
         for (let i = 1; i < surf.vertices.length - 1; i++) {
           indices.push(base, base + i, base + i + 1);
@@ -133,14 +147,18 @@ export class Twin {
       if (z.occupied) {
         this.target.set(name, [0.13, 0.18, 0.3]);
         // a warm presence light at the zone centroid — dark until people arrive
-        const orb = MeshBuilder.CreateSphere(name + "_occ", { diameter: 1.0, segments: 10 }, this.scene);
+        const orb = MeshBuilder.CreateSphere(name + "_occ", { diameter: 1.4, segments: 12 }, this.scene);
         const c = ep(z.centroid); c.y += explode(z.z_range[0]);
         orb.position.set(c.x, c.y, c.z);
         this.zoneCenter.set(name, c.clone());
+        // Render the presence orb in a later group so it's never occluded by the zone
+        // shell it sits inside — occupancy stays readable on every floor, not just the top.
+        orb.renderingGroupId = 1;
         const om = new StandardMaterial(name + "_occm", this.scene);
         om.diffuseColor = new Color3(0, 0, 0);
         om.emissiveColor = new Color3(0.0, 0.0, 0.0);
         om.disableLighting = true;
+        om.disableDepthWrite = true;
         om.alpha = 0.9; om.alphaMode = Constants.ALPHA_ADD;
         orb.material = om;
         orb.scaling.setAll(0.01);
@@ -189,8 +207,9 @@ export class Twin {
       const positions: number[] = [];
       const indices: number[] = [];
       const wy = explode(Math.min(...w.vertices.map((v) => v[2])));   // window's storey lift
+      const wc = w.zone ? geo.zones[w.zone]?.centroid : null;          // track the inset wall
       for (const v of w.vertices) {
-        const p = ep(v);
+        const p = ep(wc ? insetXY(v, wc) : v);
         // sit just proud of the wall so panes read clearly without z-fighting
         const len = Math.hypot(p.x, p.z) || 1;
         positions.push(p.x + (p.x / len) * 0.25, p.y + wy, p.z + (p.z / len) * 0.25);
@@ -208,6 +227,44 @@ export class Twin {
       mesh.edgesWidth = isDoor ? 1.4 : 2.0;
       mesh.edgesColor = isDoor ? new Color4(0.5, 0.6, 0.8, 0.3) : new Color4(0.9, 0.68, 0.36, 0.55);
       this.windowMeshes.push(mesh);   // toggled together via setWindowsVisible
+    }
+
+    // ── plan-view labels: one HTML chip per occupied zone, parked over its centroid.
+    // Hidden in 3D; shown (and reprojected each frame) only in the top-down plan lens.
+    const host = canvas.parentElement;
+    if (host) {
+      const box = document.createElement("div");
+      box.className = "zone-labels";
+      host.appendChild(box);
+      this.labelBox = box;
+      // Compass from the DOE OfficeMedium perimeter naming (ZN_1=N, _2=E, _3=S, _4=W) —
+      // authoritative for this model; geometry position alone can't recover true facing
+      // without the building's north axis. Falls back to no compass for other naming.
+      const COMPASS: Record<string, string> = { "1": "north", "2": "east", "3": "south", "4": "west" };
+      // Floor-polygon area (shoelace on x,y) → conditioned m² for the zone.
+      const area = (z: ZoneGeo): number => {
+        const f = z.surfaces.find((s) => /floor/i.test(s.type)) ??
+          z.surfaces.find((s) => /ceil|roof/i.test(s.type));
+        if (!f) return 0;
+        let a = 0;
+        for (let i = 0; i < f.vertices.length; i++) {
+          const [x1, y1] = f.vertices[i], [x2, y2] = f.vertices[(i + 1) % f.vertices.length];
+          a += x1 * y2 - x2 * y1;
+        }
+        return Math.abs(a) / 2;
+      };
+      for (const name of this.zoneCenter.keys()) {
+        const z = geo.zones[name];
+        const znum = name.match(/ZN_?(\d+)/i)?.[1];
+        const title = /core/i.test(name) ? "Core"
+          : znum ? `ZN ${znum}${COMPASS[znum] ? " " + COMPASS[znum] : ""}` : name;
+        const m2 = z ? Math.round(area(z)) : 0;
+        const el = document.createElement("div");
+        el.className = "zone-label";
+        el.innerHTML = `<b>${title}</b>${m2 ? `<span>${m2} m²</span>` : ""}`;
+        box.appendChild(el);
+        this.labels.set(name, el);
+      }
     }
 
     // smooth colour lerp + occupancy presence pulse each frame
@@ -240,10 +297,14 @@ export class Twin {
         p.mesh.scaling.setAll(Math.max(0.01, s));
         p.mesh.setEnabled(p.cur > 0.02);
       }
+      if (this.planMode) this.updateLabels();
     });
 
     this.engine.runRenderLoop(() => this.scene.render());
-    addEventListener("resize", () => this.engine.resize());
+    addEventListener("resize", () => {
+      this.engine.resize();
+      if (this.planMode) this.applyOrtho();
+    });
   }
 
   setZoneTemp(zone: string, temp: number) {
@@ -336,6 +397,64 @@ export class Twin {
       mat.emissiveColor.set(0.9 * p + 0.1, 0.18, 0.28);
       if (t >= 2) { clearInterval(id); }
     }, 40);
+  }
+
+  /** On-screen zoom: scale the camera radius, clamped to its limits (mult<1 = zoom in). */
+  zoom(mult: number) {
+    const lo = this.camera.lowerRadiusLimit ?? 0;
+    const hi = this.camera.upperRadiusLimit ?? Infinity;
+    this.camera.radius = Math.min(hi, Math.max(lo, this.camera.radius * mult));
+  }
+
+  /** Toggle the top-down floor-plan lens: same meshes + live colours, orthographic from
+   *  straight above, with zone labels. The 3D orbit pose is saved and restored on exit. */
+  setPlanView(on: boolean) {
+    if (on === this.planMode) return;
+    this.planMode = on;
+    const cam = this.camera;
+    if (on) {
+      this.orbit = { alpha: cam.alpha, beta: cam.beta, radius: cam.radius };
+      cam.useAutoRotationBehavior = false;
+      cam.mode = Camera.ORTHOGRAPHIC_CAMERA;
+      cam.alpha = -Math.PI / 2;   // north (─y_EP) points up
+      cam.beta = 0.001;           // look straight down
+      cam.target = this.homeTarget.clone();
+      this.applyOrtho();
+      this.labelBox?.classList.add("on");
+    } else {
+      cam.mode = Camera.PERSPECTIVE_CAMERA;
+      cam.alpha = this.orbit.alpha; cam.beta = this.orbit.beta; cam.radius = this.orbit.radius;
+      cam.useAutoRotationBehavior = true;
+      this.labelBox?.classList.remove("on");
+    }
+  }
+
+  /** Size the orthographic frustum to the footprint and viewport aspect. */
+  private applyOrtho() {
+    const h = this.span * 0.62;
+    const aspect = this.engine.getRenderWidth() / Math.max(1, this.engine.getRenderHeight());
+    this.camera.orthoTop = h; this.camera.orthoBottom = -h;
+    this.camera.orthoLeft = -h * aspect; this.camera.orthoRight = h * aspect;
+  }
+
+  /** Project each zone centroid to screen and park its label there (plan view only). */
+  private updateLabels() {
+    const canvas = this.engine.getRenderingCanvas();
+    if (!canvas) return;
+    const rw = this.engine.getRenderWidth(), rh = this.engine.getRenderHeight();
+    const vp = this.camera.viewport.toGlobal(rw, rh);
+    // Project returns render-buffer pixels; the CSS overlay is in CSS pixels. Convert with
+    // the real canvas client size (robust to any devicePixelRatio / display scaling).
+    const sx = canvas.clientWidth / rw, sy = canvas.clientHeight / rh;
+    for (const [name, el] of this.labels) {
+      const center = this.zoneCenter.get(name);
+      const mesh = this.zoneMesh.get(name);
+      if (!center || !mesh?.isEnabled()) { el.style.display = "none"; continue; }
+      const p = Vector3.Project(center, Matrix.Identity(), this.scene.getTransformMatrix(), vp);
+      el.style.display = "block";
+      el.style.left = `${p.x * sx}px`;
+      el.style.top = `${p.y * sy}px`;
+    }
   }
 
   setFloorVisible(floor: string, visible: boolean) {

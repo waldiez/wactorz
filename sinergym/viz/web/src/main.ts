@@ -19,6 +19,10 @@ async function boot() {
   const twin = new Twin(canvas, geo);
   const ui = new UI(geo, twin);
 
+  // on-screen zoom controls (the camera also responds to the mouse wheel)
+  $("zoom-in").addEventListener("click", () => twin.zoom(0.82));
+  $("zoom-out").addEventListener("click", () => twin.zoom(1.22));
+
   let mode: "live" | "history" = "live";
 
   // ── live feed ──────────────────────────────────────────────────────────────

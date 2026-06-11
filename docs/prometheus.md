@@ -10,7 +10,7 @@ Included:
 - actor health and runtime metrics from the Python registry
 - process/runtime metrics from the Python process
 - Prometheus in Docker Compose
-- optional Mosquitto and Fuseki availability probes controlled by `.env`
+- optional Mosquitto availability probe controlled by `.env`
 - optional OpenTelemetry Collector scrape target controlled by `.env`
 
 ## What Is Monitored
@@ -40,14 +40,13 @@ The app exposes these at:
 GET /metrics
 ```
 
-### Mosquitto, Fuseki, and OpenTelemetry Collector
+### Mosquitto and OpenTelemetry Collector
 
-Mosquitto and Fuseki are **optional** Prometheus targets.
+Mosquitto is an **optional** Prometheus target.
 
-They are monitored with the Blackbox Exporter:
+It is monitored with the Blackbox Exporter:
 
 - Mosquitto: TCP connect probe to `mosquitto:1883`
-- Fuseki: HTTP probe to `http://fuseki:3030/$/ping`
 
 This is availability monitoring, not deep service-specific exporter telemetry.
 
@@ -62,7 +61,6 @@ PROMETHEUS_EXTERNAL_PORT=9090
 PROMETHEUS_SCRAPE_INTERVAL=15s
 PROMETHEUS_PYTHON_TARGET=wactorz-python
 PROMETHEUS_MONITOR_MOSQUITTO=0
-PROMETHEUS_MONITOR_FUSEKI=0
 PROMETHEUS_MONITOR_OTELCOL=0
 REST_EXTERNAL_PORT=8000
 ```
@@ -73,7 +71,6 @@ Notes:
 - If Wactorz runs in Compose, use the service name such as `wactorz-python` or `wactorz`.
 - If Wactorz runs from the terminal on the host, use `host.docker.internal`.
 - `PROMETHEUS_MONITOR_MOSQUITTO=1` enables the Mosquitto TCP probe.
-- `PROMETHEUS_MONITOR_FUSEKI=1` enables the Fuseki health probe.
 - `PROMETHEUS_MONITOR_OTELCOL=1` enables the OpenTelemetry Collector scrape target.
 
 ## Docker Compose
@@ -158,8 +155,6 @@ Expected:
 ### 3. Check optional probes
 
 When `PROMETHEUS_MONITOR_MOSQUITTO=1`, Prometheus should show a `mosquitto-blackbox` target.
-
-When `PROMETHEUS_MONITOR_FUSEKI=1`, Prometheus should show a `fuseki-blackbox` target.
 
 If a flagged dependency is not running, that target will correctly show as failing.
 

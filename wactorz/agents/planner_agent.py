@@ -26,12 +26,6 @@ from typing import Optional
 from ..core.actor import Actor, Message, MessageType
 from .llm_agent import LLMProvider
 
-try:
-    from .sparql_context import build_sparql_context as _build_sparql_context
-    _SPARQL_AVAILABLE = True
-except ImportError:
-    _SPARQL_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
 
 _SKIP_AGENTS    = {"main", "monitor", "installer", "home-assistant-agent", "home-assistant-hardware", "home-assistant-automation", "anomaly-detector", "code-agent"}
@@ -79,21 +73,6 @@ class PlannerAgent(Actor):
         self.total_input_tokens:  int   = 0
         self.total_output_tokens: int   = 0
         self.total_cost_usd:      float = 0.0
-
-        # Fuseki endpoint for SPARQL world-model enrichment (optional).
-        # SPARQL queries enrich the planner's prompt with durable channel schemas
-        # and relevant Home Assistant state from the knowledge graph. If the
-        # config import or the endpoint is unreachable, planning continues
-        # without it — _build_sparql_context handles failures gracefully.
-        try:
-            from ..config import CONFIG
-            self._fuseki_url: str = (
-                getattr(CONFIG, "fuseki_url", None)
-                or getattr(CONFIG, "fuseki_endpoint", None)
-                or "http://localhost:3030/wactorz/sparql"
-            )
-        except Exception:
-            self._fuseki_url = "http://localhost:3030/wactorz/sparql"
 
     def _current_task_description(self) -> str:
         return self._task[:60] if self._task else "waiting for task"
@@ -1105,20 +1084,6 @@ class PlannerAgent(Actor):
                 logger.warning(f"[{self.name}] Feasibility check error (continuing): {e}")
 
         # ── 3. Decompose into spawn configs ────────────────────────────────
-        # SPARQL enrichment: fetch durable channel schemas + relevant HA state
-        # from the Fuseki knowledge graph. Optional — degrades gracefully if
-        # the endpoint is unreachable, the import isn't available, or the
-        # query times out (3s ceiling).
-        _sparql_pipeline_ctx = ""
-        if _SPARQL_AVAILABLE:
-            try:
-                _sparql_pipeline_ctx = await _build_sparql_context(
-                    task=task,
-                    fuseki_url=self._fuseki_url,
-                    timeout=3.0,
-                )
-            except Exception as _e:
-                logger.debug(f"[{self.name}] SPARQL pipeline context skipped: {_e}")
 
         # Build the prompt as a list of parts to avoid f-string escape issues
         prompt_parts = [
@@ -1382,13 +1347,6 @@ class PlannerAgent(Actor):
                     "",
                 ]
                 if topic_samples_section else []
-            ),
-            *(  # SPARQL: durable channel schemas + relevant HA states from Fuseki
-                (lambda ctx: [
-                    "═══ FUSEKI KNOWLEDGE GRAPH (durable schemas + HA state) ═══",
-                    ctx,
-                    "",
-                ] if ctx else [])(_sparql_pipeline_ctx)
             ),
             "═══ HOME ASSISTANT ENTITIES ═══",
             ha_section,
@@ -1739,24 +1697,12 @@ class PlannerAgent(Actor):
         except Exception:
             pass
 
-        # ── SPARQL world-model enrichment (durable channel schemas + HA state) ──
-        sparql_ctx = ""
-        if _SPARQL_AVAILABLE:
-            try:
-                sparql_ctx = await _build_sparql_context(
-                    task=task,
-                    fuseki_url=self._fuseki_url,
-                    timeout=3.0,
-                )
-            except Exception as _e:
-                logger.debug(f"[{self.name}] SPARQL context skipped: {_e}")
-
         prompt = f"""You are a task planner for a multi-agent system.
 Break the task into steps. Each step is handled by one agent.
 
 AVAILABLE AGENTS (with input/output contracts):
 {workers_desc}
-{topic_schema_ctx}{sparql_ctx}
+{topic_schema_ctx}
 TASK: {task}
 
 OUTPUT RULES:

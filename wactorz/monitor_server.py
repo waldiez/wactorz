@@ -1698,61 +1698,6 @@ async def chat_log_handler(request):
 
 
 _tts_voices_cache: list | None = None
-_ha_bridge_task: asyncio.Task | None = None
-
-
-async def _start_ha_bridge(_app=None) -> None:
-    """Launch HAFusekiBridge as a background task if HA_TOKEN is configured."""
-    global _ha_bridge_task
-    from .config import CONFIG
-    if not CONFIG.ha_token or not CONFIG.fuseki_url:
-        return
-    try:
-        from .fuseki import HAFusekiBridge, _run_with_retry, fuseki_reachable
-    except Exception as exc:
-        logger.warning("[ha-bridge] Could not import HAFusekiBridge: %s", exc)
-        return
-
-    # Don't start the bridge if Fuseki isn't actually running — otherwise it
-    # connects to HA and then fails to write every state change, flooding the
-    # log. If you're not using Fuseki, the bridge simply stays off.
-    if not await fuseki_reachable(CONFIG.fuseki_url):
-        logger.info("[ha-bridge] Fuseki not reachable at %s — HA→Fuseki bridge "
-                    "disabled. (Start Fuseki and POST /api/ha/sync to enable, "
-                    "or ignore if you don't use Fuseki.)", CONFIG.fuseki_url)
-        return
-
-    bridge = HAFusekiBridge(
-        ha_url=CONFIG.ha_url,
-        ha_token=CONFIG.ha_token,
-        fuseki_url=CONFIG.fuseki_url,
-        fuseki_dataset=CONFIG.fuseki_dataset,
-        fuseki_user=CONFIG.fuseki_user,
-        fuseki_password=CONFIG.fuseki_password,
-    )
-    _ha_bridge_task = asyncio.create_task(
-        _run_with_retry(bridge.run, "HAFusekiBridge"),
-        name="ha-fuseki-bridge",
-    )
-    logger.info("[ha-bridge] HAFusekiBridge started (ha=%s → fuseki=%s/%s)",
-                CONFIG.ha_url, CONFIG.fuseki_url, CONFIG.fuseki_dataset)
-
-
-async def ha_sync_handler(request):
-    """POST /api/ha/sync — cancel and restart the HA→Fuseki bridge immediately."""
-    from aiohttp import web
-    from .config import CONFIG
-    global _ha_bridge_task
-    if not CONFIG.ha_token:
-        return web.json_response({"error": "HA_TOKEN not configured"}, status=400)
-    if _ha_bridge_task and not _ha_bridge_task.done():
-        _ha_bridge_task.cancel()
-        try:
-            await _ha_bridge_task
-        except (asyncio.CancelledError, Exception):
-            pass
-    await _start_ha_bridge()
-    return web.json_response({"status": "restarted"})
 
 
 async def _warm_tts_voices(_app=None) -> None:
@@ -1842,12 +1787,6 @@ async def config_handler(request):
         "ha": {
             "url":   CONFIG.ha_url,
             "token": CONFIG.ha_token,
-        },
-        "fuseki": {
-            "url":      CONFIG.fuseki_url,
-            "dataset":  CONFIG.fuseki_dataset,
-            "user":     CONFIG.fuseki_user,
-            "password": CONFIG.fuseki_password,
         },
         "mqtt": {
             "host": MQTT_BROKER,
@@ -2022,18 +1961,13 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/api/tts/voices",        tts_voices_handler)
     app.router.add_get("/api/tts",               tts_handler)
     app.on_startup.append(_warm_tts_voices)
-    app.on_startup.append(_start_ha_bridge)
 
     app.router.add_get("/api/config",            config_handler)
     app.router.add_get("/config",                config_handler)
     app.router.add_get("/api/feed",              feed_handler)
     app.router.add_get("/feed",                  feed_handler)
     app.router.add_post("/api/reset",             reset_handler)
-    app.router.add_post("/api/ha/sync",          ha_sync_handler)
     app.router.add_get("/favicon.svg",           index_handler)
-    from .fuseki_proxy import fuseki_proxy_handler
-    app.router.add_post("/api/fuseki/{dataset}/sparql",  fuseki_proxy_handler)
-    app.router.add_post("/api/fuseki/{dataset}/update",  fuseki_proxy_handler)
     app.router.add_get("/docs",  lambda r: web.HTTPFound("/docs/"))
     app.router.add_get("/docs/",             docs_handler)
     app.router.add_get("/docs/{path:.+}",    docs_handler)

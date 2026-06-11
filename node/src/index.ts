@@ -18,7 +18,6 @@ import { WifAgent }       from "./agents/wif_agent";
 import { WizAgent }       from "./agents/wiz_agent";
 import { QAAgent }        from "./agents/qa_agent";
 import { NautilusAgent }  from "./agents/nautilus_agent";
-import { FusekiAgent }    from "./agents/fuseki_agent";
 import { TickAgent }      from "./agents/tick_agent";
 import { HomeAssistantAgent } from "./agents/ha_agent";
 
@@ -44,7 +43,6 @@ async function main() {
   const wiz      = new WizAgent(pub);
   const qa       = new QAAgent(pub);
   const nautilus = new NautilusAgent(pub);
-  const fuseki   = new FusekiAgent(pub);
   const tick     = new TickAgent(pub);
   const ha       = new HomeAssistantAgent(pub);
 
@@ -53,7 +51,7 @@ async function main() {
   console.log(`[wactorz-node] Connected to MQTT at ${MQTT_URL}`);
 
   // Spawn all agents
-  for (const agent of [io, monitor, udx, weather, news, wif, wiz, qa, nautilus, fuseki, tick, ha]) {
+  for (const agent of [io, monitor, udx, weather, news, wif, wiz, qa, nautilus, tick, ha]) {
     system.spawnActor(agent);
     console.log(`[wactorz-node] Spawned ${agent.name}`);
   }

@@ -3,7 +3,7 @@ MCP Server - Exposes wactorz capabilities as Model Context Protocol tools.
 
 Any MCP-compatible client (Claude Desktop, Cursor, Zed, etc.) can connect
 and drive a running wactorz instance: chat with the orchestrator, manage
-live agents, query Fuseki, and control Home Assistant entities directly.
+live agents, and control Home Assistant entities directly.
 
 Run:      wactorz-mcp                           (stdio transport, for Claude Desktop)
 Env:      WACTORZ_URL       (default http://localhost:8000)

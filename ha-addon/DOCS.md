@@ -28,6 +28,8 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `mqtt_host` | `core-mosquitto` | MQTT broker hostname — use `core-mosquitto` for the official Mosquitto addon |
 | `mqtt_port` | `1883` | MQTT broker port |
 | `mqtt_ws_port` | `8083` | MQTT WebSocket broker port |
+| `mqtt_username` | *(blank)* | Broker username (optional). Leave blank for an anonymous broker; **required for the official Mosquitto addon** (it disables anonymous access). |
+| `mqtt_password` | *(blank)* | Broker password (optional). |
 | `mosquitto_embedded` | `false` | Start a bundled Mosquitto broker inside the addon (no external addon needed) |
 | `ha_url` | `http://homeassistant.local:8123` | Home Assistant base URL seen from inside the addon container |
 | `ha_token` | *(blank)* | Long-lived access token (HA → Profile → Security → Long-Lived Access Tokens) |

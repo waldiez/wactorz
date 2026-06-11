@@ -10,6 +10,7 @@ interface get the same behaviour as the CLI.
 """
 
 import asyncio
+from ..core.mqtt import mqtt_client
 import json
 import logging
 import time
@@ -66,7 +67,7 @@ class IOAgent(Actor):
         _last_chat_exc: str | None = None
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe(IO_CHAT_TOPIC, qos=1)
                     _last_chat_exc = None
                     async for mqtt_msg in client.messages:

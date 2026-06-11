@@ -4,6 +4,7 @@ Supported: CLI (terminal), Discord, WhatsApp (via Twilio), REST.
 """
 
 import asyncio
+from ..core.mqtt import mqtt_client
 import logging
 import os
 from typing import Any
@@ -136,7 +137,7 @@ class CLIInterface:
 
         async def _listen_for_reply():
             try:
-                async with aiomqtt.Client(main._mqtt_broker, main._mqtt_port) as client:
+                async with mqtt_client(main._mqtt_broker, main._mqtt_port) as client:
                     await client.subscribe(reply_topic)
                     async for msg in client.messages:
                         try:

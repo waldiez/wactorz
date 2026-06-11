@@ -19,6 +19,7 @@ The `agent` parameter gives access to:
 """
 
 import asyncio
+from ..core.mqtt import mqtt_client
 import logging
 import time
 import traceback
@@ -1547,7 +1548,7 @@ class _AgentAPI:
                 return
             while True:
                 try:
-                    async with aiomqtt.Client(actor._mqtt_broker, actor._mqtt_port) as client:
+                    async with mqtt_client(actor._mqtt_broker, actor._mqtt_port) as client:
                         await client.subscribe(topic)
                         logger.info(f"[{actor.name}] Subscribed to {topic}")
                         async for msg in client.messages:
@@ -1842,7 +1843,7 @@ class _AgentAPI:
                 import aiomqtt
                 broker = getattr(self._actor, "_mqtt_broker", "localhost")
                 port   = getattr(self._actor, "_mqtt_port", 1883)
-                async with aiomqtt.Client(broker, port) as client:
+                async with mqtt_client(broker, port) as client:
                     await client.subscribe(reply_topic)
                     async for msg in client.messages:
                         try:
@@ -2013,7 +2014,7 @@ class _AgentAPI:
         result = []
         async def _fetch():
             try:
-                async with aiomqtt.Client(actor._mqtt_broker, actor._mqtt_port) as client:
+                async with mqtt_client(actor._mqtt_broker, actor._mqtt_port) as client:
                     await client.subscribe(topic)
                     async for msg in client.messages:
                         try:

@@ -20,6 +20,7 @@ Commands (prefix @wiz-agent stripped):
 """
 
 from __future__ import annotations
+from ..core.mqtt import mqtt_client
 
 import asyncio
 import json
@@ -93,7 +94,7 @@ class WizAgent(Actor):
 
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     for t in topics:
                         await client.subscribe(t)
                     async for message in client.messages:

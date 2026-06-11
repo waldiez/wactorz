@@ -47,6 +47,8 @@ class AppConfig:
     ollama_url: str
     mqtt_host: str
     mqtt_port: int
+    mqtt_username: str
+    mqtt_password: str
     ha_url: str
     ha_token: str
     ha_state_bridge_output_topic: str
@@ -83,6 +85,8 @@ CONFIG = AppConfig(
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),
     mqtt_port=_env_int("MQTT_PORT", 1883),
+    mqtt_username=os.getenv("MQTT_USERNAME", ""),
+    mqtt_password=os.getenv("MQTT_PASSWORD", ""),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
     ha_state_bridge_output_topic=os.getenv("HA_STATE_BRIDGE_OUTPUT_TOPIC", "homeassistant/state_changes"),

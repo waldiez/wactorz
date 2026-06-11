@@ -4,6 +4,7 @@ Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """
 
 import asyncio
+from .core.mqtt import mqtt_client
 import logging
 import json
 import re
@@ -2629,7 +2630,7 @@ class MainActor(LLMAgent):
                 async def _wait_reply():
                     try:
                         import aiomqtt
-                        async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                        async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                             await client.subscribe(reply_topic)
                             async for msg in client.messages:
                                 try:
@@ -4441,7 +4442,7 @@ async def handle_task(agent, payload):
 
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("agents/+/manifest")
                     logger.info("[main] Subscribed to agent manifests.")
                     async for msg in client.messages:
@@ -4587,7 +4588,7 @@ async def handle_task(agent, payload):
         TOKEN_TTL_S = 300
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("nodes/+/state_return")
                     logger.info("[main] Subscribed to state_return topics.")
                     async for msg in client.messages:
@@ -5086,7 +5087,7 @@ async def handle_task(agent, payload):
 
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("nodes/+/heartbeat")
                     await client.subscribe("nodes/+/migrate_result")
                     logger.info("[main] Subscribed to node heartbeats.")
@@ -5323,7 +5324,7 @@ async def handle_task(agent, payload):
 
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("main/llm_request")
                     logger.info("[main] LLM bridge listening on main/llm_request")
                     async for msg in client.messages:
@@ -5438,7 +5439,7 @@ async def handle_task(agent, payload):
 
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     for pattern in ("agents/+/data/#", "custom/#", "sensors/#"):
                         await client.subscribe(pattern)
                     async for msg in client.messages:
@@ -5558,7 +5559,7 @@ async def handle_task(agent, payload):
         async def _wait_reply():
             try:
                 import aiomqtt
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe(reply_topic)
                     async for msg in client.messages:
                         try:

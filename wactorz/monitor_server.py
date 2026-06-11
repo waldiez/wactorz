@@ -10,6 +10,7 @@ The mode is advertised to the browser on connect via a {"type":"config"} frame
 so the frontend knows whether to send chat over /ws or publish to io/chat.
 """
 import sys
+from .core.mqtt import mqtt_client
 import asyncio
 
 if sys.platform == "win32":
@@ -499,7 +500,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                     "_remote_task":  True,
                 }
                 try:
-                    async with aiomqtt.Client(
+                    async with mqtt_client(
                         getattr(main, "_mqtt_broker", "localhost"),
                         getattr(main, "_mqtt_port",   1883),
                     ) as client:
@@ -1058,7 +1059,7 @@ async def mqtt_listener():
     try:
         while True:
             try:
-                async with aiomqtt.Client(MQTT_BROKER, MQTT_PORT) as client:
+                async with mqtt_client(MQTT_BROKER, MQTT_PORT) as client:
                     mqtt_client_ref = client
                     logger.info("MQTT connected.")
 

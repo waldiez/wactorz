@@ -586,9 +586,10 @@ class StreamWindow:
         except ImportError:
             logger.error("[StreamWindow] aiomqtt not installed")
             return
+        from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
         while True:
             try:
-                async with aiomqtt.Client(broker, port) as client:
+                async with mqtt_client(broker, port) as client:
                     await client.subscribe(self.topic)
                     async for msg in client.messages:
                         try:

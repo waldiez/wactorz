@@ -11,6 +11,7 @@ Designed to be the actuator end of the pipeline:
 """
 
 from __future__ import annotations
+from ..core.mqtt import mqtt_client
 
 import asyncio
 import logging
@@ -240,7 +241,7 @@ class HomeAssistantActuatorAgent(Actor):
 
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     for topic in self.config.mqtt_topics:
                         await client.subscribe(topic)
                     logger.info("[%s] subscribed to %r", self.name, self.config.mqtt_topics)

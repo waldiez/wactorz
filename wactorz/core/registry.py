@@ -751,12 +751,13 @@ class _MQTTPublisher:
         - Messages are NOT dequeued until successfully published (no loss on disconnect)
         """
         import aiomqtt
+        from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
         backoff = 1.0
         _last_exc_str: str | None = None
 
         while True:
             try:
-                async with aiomqtt.Client(
+                async with mqtt_client(
                     broker, port,
                     identifier   = self._client_id,
                     clean_session = False,

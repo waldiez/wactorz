@@ -55,8 +55,8 @@ function staticAvatar(name: string, type?: string): string | null {
   if (n.includes("io") || t.includes("gateway") || t.includes("io"))
     return "/avatars/user.webp";
 
-  // Docs / knowledge / fuseki
-  if (n.includes("fuseki") || n.includes("docs") || n.includes("rag"))
+  // Docs / knowledge
+  if (n.includes("docs") || n.includes("rag"))
     return "/avatars/rag.webp";
 
   return null; // fall through to DiceBear

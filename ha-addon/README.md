@@ -9,7 +9,7 @@ Home Assistant addon that packages Wactorz as a supervised addon for Home Assist
 ```
 ha-addon/
 ├── config.yaml   # Addon manifest: name, version, ports, options schema
-├── Dockerfile    # Alpine + Java 17 + Mosquitto + Fuseki + wactorz[all]
+├── Dockerfile    # Alpine + Mosquitto + wactorz[all]
 ├── run.sh        # Entrypoint: reads options.json, exports env vars, starts services
 ├── DOCS.md       # User-facing install/options reference (rendered in HA UI)
 ├── icon.png      # 144×144 addon icon
@@ -22,7 +22,6 @@ ha-addon/
 2. **`/data/options.json`** — Supervisor writes user-configured values (from config.yaml `options:`) here at boot time.
 3. **`run.sh`** reads `options.json` via `jq`, exports env vars (`WACTORZ_*`, `MQTT_*`, etc.), and then:
    - Optionally starts embedded Mosquitto (if `mosquitto_embedded: true`).
-   - Optionally starts embedded Fuseki (if `fuseki_embedded: true`).
    - Launches `wactorz` (the main Wactorz server).
 4. **Ingress** — HA proxies the addon UI through the Supervisor ingress tunnel on port 8888, so the UI is accessible directly from the HA sidebar without exposing a port.
 
@@ -35,8 +34,7 @@ ha-addon/
 | Layer | What it installs |
 |---|---|
 | Base image | `ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.20` (or amd64 variant) |
-| `apk add` | curl, git, jq, gcc, musl-dev, linux-headers, libffi-dev, openssl-dev, OpenJDK 17 JRE, Mosquitto |
-| Fuseki | Downloaded from Apache archives at build time; unpacked to `/opt/fuseki` |
+| `apk add` | curl, git, jq, gcc, musl-dev, linux-headers, libffi-dev, openssl-dev, Mosquitto |
 | Wactorz | `pip3 install 'wactorz[all] @ git+…@main'` |
 | Entrypoint | `run.sh` copied to `/run.sh` |
 
@@ -48,15 +46,13 @@ ha-addon/
 |---|---|---|
 | 8000/tcp | Wactorz REST + WebSocket API | Yes |
 | 8888/tcp | Wactorz Monitor UI (ingress) | Yes |
-| 3030/tcp | Fuseki SPARQL (embedded only) | Yes (inactive unless enabled) |
 | 1883/tcp | MQTT TCP (embedded only) | No (mapped to `null`) |
 
 ## Embedded services
 
-Both optional services are bundled in the addon image and started on demand:
+- **Mosquitto** (`/etc/mosquitto/`) — optionally started before Wactorz (`mosquitto_embedded: true`); data persisted to `/share/mosquitto`.
 
-- **Mosquitto** (`/etc/mosquitto/`) — started before Wactorz; data persisted to `/share/mosquitto`.
-- **Fuseki** (`/opt/fuseki/`) — started before Wactorz; data persisted to `/share/fuseki`. Auth credentials regenerated from `fuseki_user`/`fuseki_password` on every boot.
+> Fuseki / SPARQL has been **removed** — no embedded server, no connection options, and the UI "Graph" tab is gone. Wactorz runs without a triplestore.
 
 ## Local development / testing
 
@@ -76,11 +72,6 @@ cat > /tmp/options.json <<'EOF'
   "ha_url": "http://homeassistant.local:8123",
   "ha_token": "",
   "mosquitto_embedded": true,
-  "fuseki_embedded": false,
-  "fuseki_url": "http://localhost:3030",
-  "fuseki_dataset": "wactorz",
-  "fuseki_user": "admin",
-  "fuseki_password": "admin",
   "discord_bot_token": "",
   "telegram_bot_token": "",
   "telegram_allowed_user_id": 0,

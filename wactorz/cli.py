@@ -303,17 +303,6 @@ async def build_system(args: argparse.Namespace):
         return _wire_persistence(
             CatalogAgent(name="catalog", persistence_dir="./state"))
 
-    # ── Register critical actors under the Supervisor ─────────────────────────
-    from wactorz.agents.timeseries_collector import TimeSeriesCollector
-
-    def make_ts_collector():
-        return _wire_persistence(
-            TimeSeriesCollector(
-                name="timeseries-collector",
-                retention_days=int(os.environ.get("TS_RETENTION_DAYS", "90")),
-                batch_interval=float(os.environ.get("TS_BATCH_INTERVAL", "5.0")),
-                persistence_dir="./state",
-            ))
 
     (
         system.supervisor
@@ -325,7 +314,6 @@ async def build_system(args: argparse.Namespace):
         .supervise("home-assistant-map-agent",   make_ha_map_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-state-bridge",make_ha_state_bridge, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
         .supervise("catalog",                    make_catalog,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
-        .supervise("timeseries-collector",       make_ts_collector,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=2.0)
     )
 
     await system.supervisor.start()

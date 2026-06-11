@@ -328,6 +328,22 @@ async def build_system(args: argparse.Namespace):
         .supervise("catalog",                    make_catalog,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
     )
 
+    # Bind the monitor web UI BEFORE starting the supervisor. Agent startup
+    # touches the MQTT broker, and on a slow/unreachable/auth-rejected broker
+    # that can stall — previously the UI started *after* supervisor.start(), so a
+    # stalled broker left the addon serving a blank page on boot. Starting the UI
+    # first means it is always reachable (showing "connecting…" rather than
+    # nothing) regardless of broker state. The registry is populated live as
+    # agents register, so the overview fills in as they come up.
+    if not getattr(args, "no_monitor", False):
+        await _start_web_ui(
+            port=args.monitor_port,
+            mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
+            mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
+            actor_registry=system.registry,
+            persistence_db=_db,
+        )
+
     await system.supervisor.start()
 
     asyncio.create_task(_seed_fuseki_registry(system.registry))
@@ -350,14 +366,8 @@ async def app():
     setup_otel(lambda: system.registry)
     setup_influx()
 
-    if not args.no_monitor:
-        await _start_web_ui(
-            port=args.monitor_port,
-            mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
-            mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
-            actor_registry=system.registry,
-            persistence_db=_db,
-        )
+    # NOTE: the monitor web UI is now started inside build_system(), before the
+    # supervisor, so it binds even if the broker stalls agent startup.
 
     from wactorz.interfaces.chat_interfaces import (
         CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface, TelegramInterface

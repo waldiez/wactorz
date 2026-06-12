@@ -11,6 +11,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **TimeSeriesCollector** — moved from an auto-started supervised actor to an on-demand catalog agent (`@catalog spawn timeseries-collector`); no longer started at boot.
 
+### Fixed
+
+- **HA add-on blank page on boot** — the monitor web UI now binds *before* the supervisor starts, so a slow, unreachable, or auth-rejecting MQTT broker no longer leaves the add-on serving a blank page; the dashboard is reachable immediately and the overview fills in as agents register. `run.sh` also probes an external (non-embedded) broker for up to 15s before launch so wactorz doesn't churn against an unreachable broker at boot.
+
 
 ## [0.4.4] - 2026-06-08
 

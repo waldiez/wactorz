@@ -86,12 +86,42 @@ def reset_metrics(agent_name: Optional[str] = None, db_path: Optional[str] = Non
                 f" for {agent_name!r}" if agent_name else " (all agents)")
 
 
+_SPAWN_REGISTRY_KV_KEY = "_spawned_agents"
+
+
 def reset_spawns(agent_name: Optional[str] = None, db_path: Optional[str] = None) -> None:
-    """Clear the spawn_registry (optionally for one agent)."""
+    """Clear the spawn registry (optionally for one agent).
+
+    There are TWO stores to clear:
+      1. the ``spawn_registry`` SQL table (legacy / vestigial), and
+      2. the AUTHORITATIVE registry the main actor actually reads, which lives
+         in ``kv_store`` under (owner, "_spawned_agents") because
+         "_spawned_agents" is routed to SQLite-kv by PersistenceAPI.
+
+    Without clearing (2), ``main._restore_spawned_agents()`` re-spawns every
+    "deleted" agent on the next restart. ``agent_name`` here is the *spawned*
+    agent's name; the registry is keyed by that name inside the owner's entry.
+    """
     db = _db(db_path)
     rows = db.clear_spawn_registry(agent_name)
-    logger.info("[reset] spawn_registry: deleted %d rows%s", rows,
+    logger.info("[reset] spawn_registry table: deleted %d rows%s", rows,
                 f" for {agent_name!r}" if agent_name else "")
+
+    cleared = 0
+    for owner in _all_kv_agents(db):
+        reg = db.kv_get(owner, _SPAWN_REGISTRY_KV_KEY, None)
+        if not isinstance(reg, dict):
+            continue
+        if agent_name:
+            if agent_name in reg:
+                reg.pop(agent_name, None)
+                db.kv_set(owner, _SPAWN_REGISTRY_KV_KEY, reg)
+                cleared += 1
+        else:
+            db.kv_delete(owner, _SPAWN_REGISTRY_KV_KEY)
+            cleared += 1
+    logger.info("[reset] kv spawn registry cleared for %d owner(s)%s",
+                cleared, f" (agent {agent_name!r})" if agent_name else "")
 
 
 def reset_logs(log_dir: Optional[str] = None) -> None:

@@ -127,6 +127,7 @@ export class CardDashboard {
   private _evConn: ((e: Event) => void) | null = null;
   private _evResetChat: ((e: Event) => void) | null = null;
   private _wipeAll: ((e: Event) => void) | null = null;
+  private _clearFeed: ((e: Event) => void) | null = null;
   private _evSendMessage: ((e: Event) => void) | null = null;
   // True while _sendMessage() is dispatching — prevents the listener from
   // double-adding a message that _sendMessage() already rendered locally.
@@ -514,6 +515,15 @@ export class CardDashboard {
     };
     document.addEventListener("af-wipe-all", this._wipeAll);
 
+    // A metrics/logs reset cleared the server-side activity log — drop this
+    // dashboard's own feed too. (The slide-out ActivityFeed in main.ts is a
+    // SEPARATE component with its own handler; this clears the in-card feed.)
+    this._clearFeed = (_e: Event) => {
+      this.feedItems = [];
+      this._renderView();
+    };
+    document.addEventListener("af-clear-feed", this._clearFeed);
+
     // Display the user's message in the chat UI for any send path (keyboard
     // OR voice/wake-word). Keyboard sends go through _sendMessage() which
     // already adds the message locally and sets _selfDispatching; those are
@@ -574,6 +584,10 @@ export class CardDashboard {
     if (this._wipeAll) {
       document.removeEventListener("af-wipe-all", this._wipeAll);
       this._wipeAll = null;
+    }
+    if (this._clearFeed) {
+      document.removeEventListener("af-clear-feed", this._clearFeed);
+      this._clearFeed = null;
     }
     if (this._evSendMessage) {
       document.removeEventListener("af-send-message", this._evSendMessage);
@@ -3077,30 +3091,34 @@ export class CardDashboard {
       ].join("");
       btn.innerHTML = `${ICON[scope] ?? ""}<span>${label}</span>`;
 
-      // Two-step confirm: first click arms, second fires
+      // Two-step confirm: first click arms, second fires.
+      const span = btn.querySelector("span")!;
       let armed = false;
       let armTimer: ReturnType<typeof setTimeout> | null = null;
 
+      // Reset this button back to its resting label/style. Registered ONCE so
+      // _resetArmed() can disarm every button, and called on the fire path too
+      // (otherwise the label stays stuck on "Confirm …?" after a reset fires).
+      const disarm = () => {
+        if (armTimer) { clearTimeout(armTimer); armTimer = null; }
+        armed = false;
+        span.textContent = label;
+        btn.style.background = "";
+      };
+      armResets.push(disarm);
+
       btn.addEventListener("click", async () => {
         if (!armed) {
+          // Only one button armed at a time — disarm any others first.
+          armResets.forEach((fn) => fn !== disarm && fn());
           armed = true;
-          const span = btn.querySelector("span")!;
-          const orig = span.textContent!;
           span.textContent = `Confirm ${label.toLowerCase()}?`;
           btn.style.background = danger ? "rgba(248,113,113,.15)" : "rgba(255,255,255,.1)";
-          const cancelArm = () => {
-            if (armTimer) { clearTimeout(armTimer); armTimer = null; }
-            armed = false;
-            span.textContent = orig;
-            btn.style.background = "";
-          };
-          armTimer = setTimeout(cancelArm, 3000);
-          armResets.push(cancelArm);
+          armTimer = setTimeout(disarm, 3000);
           return;
         }
 
-        if (armTimer) clearTimeout(armTimer);
-        armed = false;
+        disarm();
         pop.classList.remove("open");
 
         try {

@@ -217,6 +217,11 @@ export class WSChatClient {
             detail: { agent: data["agent"] ?? null },
           }));
         }
+        // metrics and logs both clear the server-side activity feed; the
+        // on-screen feed is append-only, so tell it to drop its entries.
+        if (scope === "metrics" || scope === "logs") {
+          document.dispatchEvent(new CustomEvent("af-clear-feed"));
+        }
         return;
       }
 

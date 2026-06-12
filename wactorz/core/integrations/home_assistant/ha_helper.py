@@ -606,6 +606,14 @@ def get_camera_stream_url(rest_base: str, camera_entity_id: str) -> str:
     return f"{rest_base}/api/camera_proxy_stream/{camera_entity_id}"
 
 
+def get_camera_snapshot_url(rest_base: str, camera_entity_id: str) -> str:
+    """Return the single-image snapshot URL for a camera entity (no HTTP call).
+
+    Requires an Authorization: Bearer <HA_TOKEN> header to fetch.
+    """
+    return f"{rest_base}/api/camera_proxy/{camera_entity_id}"
+
+
 async def get_camera_stream_urls(
     ws_url: str, token: str, camera_entity_id: str
 ) -> dict[str, Any]:

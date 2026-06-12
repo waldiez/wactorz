@@ -37,6 +37,7 @@ from ..core.integrations.home_assistant.ha_helper import (
     get_automations,
     get_camera_entities,
     get_camera_snapshot,
+    get_camera_snapshot_url,
     get_camera_stream_url,
     get_camera_stream_urls,
     get_devices,
@@ -152,6 +153,8 @@ class HomeAssistantAgent(LLMAgent):
             result = await self._camera_snapshot(camera_entity_id)
         elif operation == "get_camera_stream_url":
             result = await self._camera_stream_url(camera_entity_id)
+        elif operation == "get_camera_snapshot_url":
+            result = await self._camera_snapshot_url(camera_entity_id)
         elif entities or hardware:
             # Pre-selected entities/hardware provided (e.g. direct API call) — skip
             # classification and go straight to automation creation.
@@ -411,6 +414,21 @@ class HomeAssistantAgent(LLMAgent):
         for kind, url in streams.items():
             lines.append(f"  {kind}: {url}")
         return {"result": "\n".join(lines), "data": data}
+
+    async def _camera_snapshot_url(self, camera_entity_id: str) -> dict[str, Any]:
+        if not self.ha_url or not self.ha_token:
+            return {"result": "HA_URL or HA_TOKEN not configured.", "error": "not_configured"}
+        if not camera_entity_id:
+            return {"result": "camera_entity_id is required.", "error": "missing_entity_id"}
+        rest_base = normalize_ha_base_url(self.ha_url)
+        url = get_camera_snapshot_url(rest_base, camera_entity_id)
+        return {
+            "result": (
+                f"Snapshot URL for {camera_entity_id}: {url}\n"
+                "Requires header Authorization: Bearer <HA_TOKEN> to fetch."
+            ),
+            "data": {"entity_id": camera_entity_id, "snapshot_url": url},
+        }
 
 
     async def _handle_other_request(self, text: str) -> dict[str, Any]:

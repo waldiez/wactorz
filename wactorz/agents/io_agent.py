@@ -35,7 +35,9 @@ class IOAgent(Actor):
     def __init__(self, **kwargs):
         kwargs.setdefault("name", "io-agent")
         super().__init__(**kwargs)
-        self.protected = False
+        # The io-agent is core infrastructure (the chat/IO gateway) — it must
+        # survive a "Wipe everything" reset like the other system actors.
+        self.protected = True
         self._pending_replies: dict[str, tuple[str, float]] = {}
 
     # ── Lifecycle ──────────────────────────────────────────────────────────

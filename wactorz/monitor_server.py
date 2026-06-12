@@ -1010,7 +1010,16 @@ def _ensure_lifetime_loaded() -> None:
 
 def _record_lifetime_cost(agent_id: str, cost_usd) -> None:
     """Bank an agent's reported lifetime cost as a monotonic high-water mark.
-    Persisted durably so deletion / hard kills never drop it from the total."""
+    Persisted durably so deletion / hard kills never drop it from the total.
+
+    The high-water mark is deliberately robust to out-of-order / transient-low
+    heartbeats (a momentary lower reading never lowers the banked value). The
+    trade-off: if a same-named agent is *deleted* (purging its _final_cost) and
+    then respawned with the same actor_id, the new life's spend is absorbed into
+    the existing high-water rather than added on top — i.e. it can undercount in
+    that narrow case. That is preferred over inferring "a new life started" from
+    a cost regression, which a stale frame would misread and double-count.
+    """
     if not agent_id or cost_usd is None:
         return
     try:

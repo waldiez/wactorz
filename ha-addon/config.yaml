@@ -57,6 +57,11 @@ options:
   mqtt_host: core-mosquitto
   mqtt_port: 1883
   mqtt_ws_port: 8083
+  # Broker credentials (optional) — leave blank for an anonymous broker.
+  # The official Mosquitto addon disables anonymous access, so set these to a
+  # Home Assistant user/password (or a broker-specific login) when not embedded.
+  mqtt_username: ""
+  mqtt_password: ""
 
   # Home Assistant connection (used by HA agents inside Wactorz)
   ha_url: "http://homeassistant.local:8123"
@@ -102,6 +107,8 @@ schema:
   mqtt_host: str
   mqtt_port: port
   mqtt_ws_port: port
+  mqtt_username: str?
+  mqtt_password: str?
   ha_url: url
   ha_token: str?
   fuseki_url: url

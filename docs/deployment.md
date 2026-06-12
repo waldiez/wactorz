@@ -213,6 +213,8 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `LLM_COST_LIMIT_PERIOD` | `monthly` | Reset period: `daily`, `weekly`, or `monthly` |
 | `MQTT_HOST` | `localhost` | Use `mosquitto` inside Docker |
 | `MQTT_PORT` | `1883` | |
+| `MQTT_USERNAME` | _(blank)_ | Broker username — blank = anonymous; required for brokers with `allow_anonymous false` (e.g. the official Mosquitto add-on) |
+| `MQTT_PASSWORD` | _(blank)_ | Broker password |
 | `PORT` | `8000` | Python REST API listen port |
 | `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
 | `API_ADDR` | `0.0.0.0:8080` | Rust server REST listen address _(Rust only)_ |

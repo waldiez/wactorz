@@ -53,6 +53,10 @@ esac
 export MQTT_HOST=$(get_config_safe 'mqtt_host' 'core-mosquitto')
 export MQTT_PORT=$(get_config_safe 'mqtt_port' '1883')
 export MQTT_WS_PORT=$(get_config_safe 'mqtt_ws_port' '8083')
+# Optional broker credentials (blank = anonymous). Needed for the official
+# Mosquitto addon and any broker with allow_anonymous false.
+export MQTT_USERNAME=$(get_config_safe 'mqtt_username' '')
+export MQTT_PASSWORD=$(get_config_safe 'mqtt_password' '')
 
 # Home Assistant Config
 HA_URL=$(get_config_safe 'ha_url' '')
@@ -152,10 +156,12 @@ MQTTEOF
 
     mosquitto -c /tmp/mosquitto.conf &
 
-    # Override wactorz MQTT config to use the local broker
+    # Override wactorz MQTT config to use the local broker (anonymous)
     export MQTT_HOST="localhost"
     export MQTT_PORT="1883"
     export MQTT_WS_PORT="8083"
+    export MQTT_USERNAME=""
+    export MQTT_PASSWORD=""
 
     # Wait until Mosquitto is accepting connections (up to 15 s)
     i=0

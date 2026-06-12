@@ -24,6 +24,7 @@ import time
 from typing import Optional
 
 from ..core.actor import Actor, Message, MessageType
+from ..core.mqtt import mqtt_client
 from .llm_agent import LLMProvider
 
 try:
@@ -811,7 +812,7 @@ class PlannerAgent(Actor):
 
         async def _collect():
             try:
-                async with aiomqtt.Client(broker, port) as client:
+                async with mqtt_client(broker, port) as client:
                     for topic, _ in topics_to_sample:
                         await client.subscribe(topic)
                     async for msg in client.messages:

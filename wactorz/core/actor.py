@@ -407,11 +407,12 @@ class Actor(ABC):
             import aiomqtt
         except ImportError:
             return
+        from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
 
         topic = f"agents/{self.actor_id}/commands"
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe(topic)
                     logger.debug(f"[{self.name}] Subscribed to {topic}")
                     async for message in client.messages:

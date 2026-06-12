@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] - 2026-06-10
+
+### Added
+
+- **MQTT broker authentication** — optional `MQTT_USERNAME` / `MQTT_PASSWORD` (add-on options `mqtt_username` / `mqtt_password`) inject broker credentials into every in-process MQTT connection via a central `mqtt_client()` factory. Blank = anonymous, so the embedded/anonymous broker is unchanged; auth only engages when set. Fixes external brokers with `allow_anonymous false` — e.g. the official Home Assistant Mosquitto add-on — which previously rejected every connection. The dashboard's MQTT WebSocket proxy injects the same credentials into the browser's CONNECT server-side, so the live monitor keeps working under an authenticated broker without exposing credentials to the browser.
+
+### Changed
+
+- **TimeSeriesCollector** — moved from an auto-started supervised actor to an on-demand catalog agent (`@catalog spawn timeseries-collector`); no longer started at boot.
+
+### Removed
+
+- **Apache Jena Fuseki / SPARQL — removed entirely** across the whole product. Gone are: the Python `fuseki.py` / `fuseki_proxy.py` / `fuseki_agent.py` / `sparql_context.py` / `smart_cities_agent.py` and their wiring (HA→Fuseki bridge, `/api/fuseki` proxy, `/api/ha/sync`, planner SPARQL enrichment, `config.py` fuseki fields, `wactorz-fuseki` entry point); the Rust `FusekiAgent`, the `/api/fuseki` proxy + its tests, the `--fuseki-*` CLI args, and the Fuseki RDF writes in the HA→state bridge (now HA→MQTT only); the Node `FusekiAgent`; the UI **Graph** tab + its HUD link/CSS; the embedded Fuseki in the HA add-on; the `fuseki` Docker services (`compose.yaml` / `compose.dev.yaml`) + image (`config/fuseki-container/`), the ontology (`infra/fuseki/`), the nginx `/fuseki/` proxy, the Prometheus Fuseki probe, and all `FUSEKI_*` env/docs. Wactorz no longer ships or depends on a triplestore.
+
+### Fixed
+
+- **HA add-on blank page on boot** — the monitor web UI now binds *before* the supervisor starts, so a slow, unreachable, or auth-rejecting MQTT broker no longer leaves the add-on serving a blank page; the dashboard is reachable immediately and the overview fills in as agents register. `run.sh` also probes an external (non-embedded) broker for up to 15s before launch so wactorz doesn't churn against an unreachable broker at boot.
+
+---
+
 ## [0.4.4] - 2026-06-08
 
 ### Added

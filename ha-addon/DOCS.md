@@ -28,14 +28,11 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `mqtt_host` | `core-mosquitto` | MQTT broker hostname — use `core-mosquitto` for the official Mosquitto addon |
 | `mqtt_port` | `1883` | MQTT broker port |
 | `mqtt_ws_port` | `8083` | MQTT WebSocket broker port |
+| `mqtt_username` | *(blank)* | Broker username (optional). Leave blank for an anonymous broker; **required for the official Mosquitto addon** (it disables anonymous access). |
+| `mqtt_password` | *(blank)* | Broker password (optional). |
 | `mosquitto_embedded` | `false` | Start a bundled Mosquitto broker inside the addon (no external addon needed) |
 | `ha_url` | `http://homeassistant.local:8123` | Home Assistant base URL seen from inside the addon container |
 | `ha_token` | *(blank)* | Long-lived access token (HA → Profile → Security → Long-Lived Access Tokens) |
-| `fuseki_url` | `http://localhost:3030` | Apache Jena Fuseki SPARQL endpoint (leave at default when `fuseki_embedded: true`) |
-| `fuseki_dataset` | `wactorz` | Fuseki dataset name |
-| `fuseki_user` | `admin` | Fuseki username |
-| `fuseki_password` | `admin` | Fuseki password |
-| `fuseki_embedded` | `false` | Start a bundled Apache Jena Fuseki inside the addon (no external service needed) |
 | `discord_bot_token` | *(blank)* | Discord bot token (optional) |
 | `telegram_bot_token` | *(blank)* | Telegram bot token (optional) |
 | `telegram_allowed_user_id` | `0` | Telegram user ID allowed to send commands (0 = disabled) |
@@ -56,14 +53,11 @@ Set `mosquitto_embedded: true`. Wactorz starts its own Mosquitto instance inside
 
 ## Embedded services
 
-Setting `mosquitto_embedded` or `fuseki_embedded` to `true` bundles those services inside the Wactorz container — no separate addons required.
+Setting `mosquitto_embedded` to `true` bundles a Mosquitto broker inside the Wactorz container — no separate addon required.
 
 | Option | Port | Data path |
 |---|---|---|
 | `mosquitto_embedded: true` | `1883` TCP (exposed as addon port) | `/share/mosquitto` |
-| `fuseki_embedded: true` | `3030` (exposed as addon port) | `/share/fuseki` |
-
-> Fuseki auth credentials are regenerated from `fuseki_user` / `fuseki_password` on every boot, so credential changes take effect automatically.
 
 ## Home Assistant integration
 

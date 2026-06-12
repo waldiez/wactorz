@@ -147,7 +147,7 @@ LLM_API_KEY=your-key-here
 | `mobile/` | Flutter companion app |
 | `ha-addon/` | Home Assistant Supervisor addon |
 | `docs/` | Markdown docs source |
-| `infra/` | Mosquitto, Prometheus, OpenTelemetry, Fuseki, nginx, and HA configs |
+| `infra/` | Mosquitto, Prometheus, OpenTelemetry, nginx, and HA configs |
 | `tests/` | Python test suite and backend parity harness |
 
 ---

@@ -115,6 +115,7 @@
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
       <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
@@ -145,7 +146,7 @@
 </code></pre></div>
 
 <h4 id="2-copy-remote_runnerpy-to-the-device">2. Copy <code>remote_runner.py</code> to the device</h4>
-<div class="highlight"><pre><span></span><code>scp<span class="w"> </span>remote_runner.py<span class="w"> </span>pi@raspberrypi.local:~/
+<div class="highlight"><pre><span></span><code>scp<span class="w"> </span>wactorz/remote_runner.py<span class="w"> </span>pi@raspberrypi.local:~/
 </code></pre></div>
 
 <h4 id="3-start-the-runner">3. Start the runner</h4>
@@ -166,7 +167,7 @@
 <tr>
 <td><code>--broker</code></td>
 <td><code>localhost</code></td>
-<td>MQTT broker hostname or IP. Also reads <code>$AGENTFLOW_BROKER</code>.</td>
+<td>MQTT broker hostname or IP. Also reads <code>$WACTORZ_BROKER</code>.</td>
 </tr>
 <tr>
 <td><code>--port</code></td>
@@ -176,7 +177,7 @@
 <tr>
 <td><code>--name</code> / <code>--node</code></td>
 <td>random</td>
-<td>Unique node name. Also reads <code>$AGENTFLOW_NODE</code>.</td>
+<td>Unique node name. Also reads <code>$WACTORZ_NODE</code>.</td>
 </tr>
 <tr>
 <td><code>--loglevel</code></td>
@@ -194,7 +195,7 @@
 <span class="na">ExecStart</span><span class="o">=</span><span class="s">/usr/bin/python3 /home/pi/remote_runner.py --broker 192.168.1.10 --name rpi-livingroom</span>
 <span class="na">Restart</span><span class="o">=</span><span class="s">always</span>
 <span class="na">RestartSec</span><span class="o">=</span><span class="s">5</span>
-<span class="na">Environment</span><span class="o">=</span><span class="s">AGENTFLOW_BROKER=192.168.1.10</span>
+<span class="na">Environment</span><span class="o">=</span><span class="s">WACTORZ_BROKER=192.168.1.10</span>
 
 <span class="k">[Install]</span>
 <span class="na">WantedBy</span><span class="o">=</span><span class="s">multi-user.target</span>

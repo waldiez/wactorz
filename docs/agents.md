@@ -382,37 +382,6 @@ TS_BATCH_INTERVAL=5.0      # flush to SQLite every N seconds (default: 5)
 
 ---
 
-### FusekiAgent `[optional]`
-
-**File:** `wactorz/agents/fuseki_agent.py`
-
-| | |
-|---|---|
-| **name** | `fern-agent` |
-| **protected** | `false` — can be stopped/deleted from the dashboard |
-
-SPARQL interface to Apache Jena Fuseki. Executes `SELECT`, `CONSTRUCT`, `DESCRIBE`, and `ASK` queries against the configured triplestore. No LLM involved — pure graph query agent.
-
-#### Configuration
-
-```bash
-FUSEKI_URL=http://localhost:3030   # default
-FUSEKI_DATASET=wactorz             # default
-```
-
-#### Commands
-
-```
-@fern-agent query SELECT * WHERE { ?s ?p ?o } LIMIT 5
-@fern-agent ask ASK { <http://example.org/foo> a owl:Class }
-@fern-agent prefixes           — list common RDF prefix bindings
-@fern-agent datasets           — list available Fuseki datasets
-```
-
-The Wactorz ontology (`infra/fuseki/ontology/wactorz.ttl`) models the running agent topology as RDF: each agent is an `af:Agent` with `af:publishesTo` / `af:subscribesTo` links to `af:Channel` nodes. Live agent metrics (`messagesProcessed`, `errorsCount`, `costUsd`, etc.) are updated continuously by `MetricsBridge`, which subscribes to `agents/+/metrics` MQTT and writes each heartbeat payload to Fuseki via `FusekiClient.upsert_agent_metrics()`.
-
----
-
 ## DynamicAgent
 
 **File:** `wactorz/agents/dynamic_agent.py`

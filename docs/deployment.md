@@ -53,10 +53,9 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 | Profile | Service | Internal address | External port |
 |---|---|---|---|
 | _(all)_ | mosquitto | `mosquitto:1883` / `:9001` | `:1883`, `:9001` |
-| `python` / `python-full` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
-| `python` / `python-full` | monitor UI | `wactorz-python:8888` | `:8888` |
-| `python` / `python-full` | prometheus | `wactorz-prometheus:9090` | `:9090` |
-| `python-full` / `full` | fuseki | `fuseki:3030` | `:3030` |
+| `python` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
+| `python` | monitor UI | `wactorz-python:8888` | `:8888` |
+| `python` | prometheus | `wactorz-prometheus:9090` | `:9090` |
 | `rust` / `full` | wactorz-server (Rust) | `wactorz-server:8080` | `:8080` (API), `:8081` (WS) |
 | `rust` / `full` | nginx (dashboard) | — | `:80` |
 | `full` | home-assistant | `homeassistant:8123` | `:8123` |
@@ -213,6 +212,8 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `LLM_COST_LIMIT_PERIOD` | `monthly` | Reset period: `daily`, `weekly`, or `monthly` |
 | `MQTT_HOST` | `localhost` | Use `mosquitto` inside Docker |
 | `MQTT_PORT` | `1883` | |
+| `MQTT_USERNAME` | _(blank)_ | Broker username — blank = anonymous; required for brokers with `allow_anonymous false` (e.g. the official Mosquitto add-on) |
+| `MQTT_PASSWORD` | _(blank)_ | Broker password |
 | `PORT` | `8000` | Python REST API listen port |
 | `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
 | `API_ADDR` | `0.0.0.0:8080` | Rust server REST listen address _(Rust only)_ |
@@ -220,7 +221,6 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
 | `PROMETHEUS_SCRAPE_INTERVAL` | `15s` | Global Prometheus scrape interval |
 | `PROMETHEUS_MONITOR_MOSQUITTO` | `1` | Enable Mosquitto TCP availability probe |
-| `PROMETHEUS_MONITOR_FUSEKI` | `0` | Enable Fuseki HTTP availability probe |
 | `DASHBOARD_EXTERNAL_PORT` | `80` | nginx host port |
 | `NAUTILUS_SSH_KEY` | _(default key)_ | Path to SSH private key |
 | `NAUTILUS_STRICT_HOST_KEYS` | `0` | `1` = enforce strict host-key checking |

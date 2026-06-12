@@ -134,9 +134,8 @@ docker exec "$CID" ls -l /data/state /data/mosquitto
 - **Test with an *update*, not a restart** — a restart can't reveal a persistence bug.
 - Expected, harmless: `Warning: Mosquitto should not be run as root` — that's the
   `user root` setting that lets the broker persist retained messages to `/data`.
-- Storage map: `/opt/fuseki` = the Fuseki **program** (in the image, ephemeral);
-  `/share/fuseki` = Fuseki **data** (persistent); `/data` = add-on-private
-  persistent store (chat/SQLite/pickle, embedded Mosquitto).
+- Storage map: `/data` = add-on-private persistent store
+  (chat/SQLite/pickle, embedded Mosquitto retained messages under `/data/mosquitto`).
 
 ## Cleanup / shipping
 

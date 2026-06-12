@@ -3,6 +3,11 @@ version: "0.4.5"
 slug: wactorz
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
 url: https://github.com/waldiez/wactorz
+# Pre-built multi-arch image — Supervisor PULLS this (with progress) instead of
+# building on-device. Published per-arch by .github/workflows/addon-image.yml.
+# For local source testing, remove this line in the test copy so Supervisor
+# builds from the Dockerfile (see LOCAL_TESTING.md).
+image: "ghcr.io/waldiez/wactorz-addon-{arch}"
 arch:
   - aarch64
   - amd64

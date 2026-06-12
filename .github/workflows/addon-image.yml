@@ -1,0 +1,74 @@
+name: Add-on Image 🏠🐳
+# yamllint disable rule:truthy
+# Builds and pushes the Home Assistant ADD-ON image (ha-addon/) per-arch so the
+# Supervisor PULLS it (with progress) instead of building on-device. This is
+# distinct from image.yml, which builds the standalone app image from the repo
+# root Dockerfile.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: "The image tag to build and push (e.g. v1.2.3 or latest)"
+        required: true
+        default: "latest"
+      ref:
+        description: "wactorz git ref to pip-install into the image (branch/tag/sha)"
+        required: true
+        default: "main"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  addon:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64, amd64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve tag + wactorz ref
+        id: meta
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            # Tag push (e.g. v1.2.3): build that release from main. Strip the
+            # leading 'v' so the image tag matches config.yaml `version`, which
+            # is what Supervisor pulls ({image}:{version}).
+            tag="${GITHUB_REF_NAME#v}"
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.inputs.version_tag }}" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ github.event.inputs.ref }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Point the build at the requested wactorz ref
+        run: |
+          sed -i "s|^  WACTORZ_REF: .*|  WACTORZ_REF: ${{ steps.meta.outputs.ref }}|" \
+            ha-addon/build.yaml
+          echo "build.yaml args:" && grep WACTORZ_REF ha-addon/build.yaml
+
+      - name: Build & push ${{ matrix.arch }}
+        uses: home-assistant/builder@master
+        with:
+          args: |
+            --${{ matrix.arch }} \
+            --target /data/ha-addon \
+            --image "wactorz-addon-{arch}" \
+            --docker-hub "ghcr.io/waldiez" \
+            --version "${{ steps.meta.outputs.tag }}" \
+            --addon

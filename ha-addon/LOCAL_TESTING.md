@@ -18,13 +18,13 @@ When Supervisor builds the add-on, the pieces come from **two different places**
 
 | Piece | Comes from | How you change it for a test |
 |---|---|---|
-| `config.yaml`, `Dockerfile`, `run.sh` | the add-on **files** Supervisor reads from disk | edit the local copy on the host |
-| the `wactorz` Python package | pulled **inside the Dockerfile** via `pip install … git+…@main` | repoint that `@main` at your branch |
+| `config.yaml`, `build.yaml`, `run.sh` | the add-on **files** Supervisor reads from disk | edit the local copy on the host |
+| the `wactorz` Python package | pip-installed inside the Dockerfile from `git+…@${WACTORZ_REF}` | set `WACTORZ_REF` in `build.yaml` to your branch (and drop `image:` to force a build) |
 
 **Takeaway:** `run.sh` changes are picked up from your local copy with no git at
 all. **Python** changes (`wactorz/…`) are only picked up if your branch is
-**pushed** *and* the Dockerfile's `pip` ref points at it. Merging to `dev` does
-**not** make the real add-on use new Python — the ref is `@main`.
+**pushed** *and* `build.yaml`'s `WACTORZ_REF` points at it. Merging to `dev` does
+**not** make the real add-on use new Python — production builds from `main`.
 
 ---
 
@@ -52,18 +52,28 @@ name: Wactorz (test)
 slug: wactorz_test
 ```
 
-## 2. Point the Python install at your branch (local-only)
+## 2. Force a local build + point it at your branch (local-only)
 
-Edit `/addons/wactorz-test/Dockerfile` — change the `pip install` ref:
+The production add-on has an `image:` key, so Supervisor would **pull** the
+pre-built image instead of building your local copy. For source testing, make two
+host-only edits (**never commit them**):
 
-```diff
-- "wactorz[all] @ git+https://github.com/waldiez/wactorz.git@main"
-+ "wactorz[all] @ git+https://github.com/waldiez/wactorz.git@your-branch"
-```
+1. **Remove the `image:` line** from `/addons/wactorz-test/config.yaml` so
+   Supervisor builds from the local `Dockerfile` instead of pulling.
+2. **Set the wactorz ref** in `/addons/wactorz-test/build.yaml`:
 
-> Your branch must be **pushed** to GitHub for this to resolve. This edit lives
-> only on the host — **never commit it.** (`run.sh` is already the version you
-> copied, so it needs no ref.)
+   ```diff
+   -  WACTORZ_REF: main
+   +  WACTORZ_REF: your-branch
+   ```
+
+> Your branch must be **pushed** to GitHub for the ref to resolve. No Dockerfile
+> edit needed — the ref flows in as a build arg. (`run.sh` is already the copy
+> you made.)
+>
+> Alternatively, skip the local build entirely: run the **Add-on Image** workflow
+> (`workflow_dispatch`) with `ref = your-branch` and `version_tag = test`, then
+> point the test copy's `image:` at `ghcr.io/waldiez/wactorz-addon-{arch}:test`.
 
 ## 3. Make Supervisor see it, then install
 
@@ -129,7 +139,7 @@ docker exec "$CID" ls -l /data/state /data/mosquitto
 
 - **Files at the top level** of the add-on folder — no nested `ha-addon/`.
 - **Distinct `slug`** (`wactorz_test`) so it doesn't collide with the store add-on.
-- **`Dockerfile` `@branch` is local-only** — never commit it; revert to `@main`.
+- **The `image:` removal + `build.yaml` `WACTORZ_REF` are local-only** — never commit them.
 - **`run.sh` is picked up locally** (no git). **Python needs the branch pushed.**
 - **Test with an *update*, not a restart** — a restart can't reveal a persistence bug.
 - Expected, harmless: `Warning: Mosquitto should not be run as root` — that's the
@@ -140,6 +150,8 @@ docker exec "$CID" ls -l /data/state /data/mosquitto
 ## Cleanup / shipping
 
 - Remove the test add-on: uninstall it, then `rm -rf /addons/wactorz-test`.
-- To ship the fix: merge your branch to `dev`, then `dev → main` (manual). Production
-  add-ons build from `@main`, so they pick it up once it lands there — no Dockerfile
-  ref change needed in production.
+- To ship the fix: merge your branch to `dev`, then `dev → main` (manual). On the
+  release tag (`vX.Y.Z`), the **Add-on Image** workflow builds the prebuilt image
+  from `main` and pushes `ghcr.io/waldiez/wactorz-addon-{arch}:X.Y.Z`. Bump
+  `version` in `config.yaml` to match — Supervisor then **pulls** `{image}:{version}`
+  (with progress), no on-device build.

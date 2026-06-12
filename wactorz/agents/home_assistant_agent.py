@@ -147,6 +147,9 @@ class HomeAssistantAgent(LLMAgent):
         operation = msg.payload.get("operation") if isinstance(msg.payload, dict) else None
         camera_entity_id = str(msg.payload.get("camera_entity_id", "")).strip() if isinstance(msg.payload, dict) else ""
 
+        if operation:
+            logger.debug(f"[{self.name}] operation={operation} camera_entity_id={camera_entity_id!r} from={msg.sender_id}")
+
         if operation == "list_cameras":
             result = await self._list_cameras()
         elif operation == "get_camera_snapshot":
@@ -397,7 +400,9 @@ class HomeAssistantAgent(LLMAgent):
         rest_base = normalize_ha_base_url(self.ha_url)
         snapshot = await get_camera_snapshot(rest_base, self.ha_token, camera_entity_id)
         if "error" in snapshot:
+            logger.warning(f"[{self.name}] get_camera_snapshot({camera_entity_id}) failed: {snapshot['error']}")
             return {"result": f"Snapshot failed: {snapshot['error']}", "error": snapshot["error"]}
+        logger.debug(f"[{self.name}] get_camera_snapshot({camera_entity_id}) -> {len(snapshot.get('image_base64', ''))} b64 chars")
         return {
             "result": f"Snapshot captured for {camera_entity_id}.",
             "data": snapshot,
@@ -410,6 +415,7 @@ class HomeAssistantAgent(LLMAgent):
             return {"result": "camera_entity_id is required.", "error": "missing_entity_id"}
         data = await get_camera_stream_urls(self.ha_url, self.ha_token, camera_entity_id)
         streams = data.get("streams", {})
+        logger.debug(f"[{self.name}] get_camera_stream_url({camera_entity_id}) -> {streams}")
         lines = [f"Stream URLs for {camera_entity_id}:"]
         for kind, url in streams.items():
             lines.append(f"  {kind}: {url}")
@@ -422,6 +428,7 @@ class HomeAssistantAgent(LLMAgent):
             return {"result": "camera_entity_id is required.", "error": "missing_entity_id"}
         rest_base = normalize_ha_base_url(self.ha_url)
         url = get_camera_snapshot_url(rest_base, camera_entity_id)
+        logger.debug(f"[{self.name}] get_camera_snapshot_url({camera_entity_id}) -> {url}")
         return {
             "result": (
                 f"Snapshot URL for {camera_entity_id}: {url}\n"
@@ -663,7 +670,7 @@ class HomeAssistantAgent(LLMAgent):
                 "platform": str(e.get("platform") or ""),
             }
             for e in entities
-            if isinstance(e, dict)
+            if isinstance(e, dict) and e.get("disabled_by") == None
         ]
         lines = [f"Found {len(entity_rows)} entities in Home Assistant:"]
         for idx, row in enumerate(entity_rows, 1):

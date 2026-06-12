@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.5
+
+- Removed: Apache Jena Fuseki / SPARQL entirely. Gone are the bundled JRE 17 + Fuseki tarball (~170 MB), the `fuseki_embedded` option, all `fuseki_url` / `fuseki_dataset` / `fuseki_user` / `fuseki_password` options, and addon port `3030`. The UI "Graph" tab has also been removed. Wactorz runs without a triplestore.
+
+## 0.4.4
+
+- Added: OpenAI-compatible endpoint support — set `OPENAI_URL` to redirect the `openai` provider to any compatible API (Groq, Together, vLLM, LM Studio, etc.).
+- Added: `Actor.notify_user(text)` pushes messages directly to the chat panel.
+- Added: `agent.run_in_background(coro)` for long work that shouldn't block `handle_task`.
+- Added: `<delegate>` blocks — main agent can delegate tasks via structured blocks alongside `@mentions`.
+- Changed: ManualAgent loads now run in the background and notify when ready (no longer blocked by the 60 s timeout).
+- Fixed: Chat panel renders agent replies as a Markdown subset (bold, italic, inline code, links, lists).
+- Fixed: Delegation via bare `@agent <task>` mentions now correctly dispatches instead of being streamed as prose.
+- Fixed: DynamicAgent RESULT replies now echo `_task_id` so `delegate_task` no longer hangs until timeout.
+- Fixed: Monitor UI — "Demo fallback" MQTT badge no longer appears when `MONITOR_PORT` differs from the default.
+- Fixed: Monitor UI — MQTT WebSocket URL derived from `window.location` on every load, never stale-cached in `localStorage`.
+- Fixed: Monitor UI — Service worker fetches `index.html` network-first so fresh JS bundles always load after a redeploy.
+- Fixed: Monitor UI — HA / Fuseki config seeding tracks a baseline so `.env` changes (e.g. `HA_URL`) propagate on next load.
+- Fixed: Cost tracking — period spend now accumulates even when no cap is configured; weekly period uses ISO week boundaries.
+- Fixed: SQLite schema no longer uses `unixepoch('subsec')`, fixing write failures on older SQLite builds (e.g. python.org Windows).
+
 ## 0.4.3.2
 
 - Fixed: add-on state now genuinely persists across updates — state directory pinned to an absolute `/data/state` (`WACTORZ_STATE_DIR`) instead of relying on the working directory, which let state fall into the container's ephemeral layer.

@@ -75,9 +75,9 @@ def update_cargo_toml(new_version):
 def update_docs_landing(new_version):
     landing_file = Path("docs/_landing.html")
     if landing_file.exists():
-        content = landing_file.read_text()
+        content = landing_file.read_text(encoding="utf-8")
         new_content = re.sub(r'<div class="hero-badge">v.* · Alpha</div>', f'<div class="hero-badge">v{new_version} · Alpha</div>', content)
-        landing_file.write_text(new_content)
+        landing_file.write_text(new_content, encoding="utf-8")
         print(f"Updated {landing_file}")
 
 def update_docs_versions_json(new_version):

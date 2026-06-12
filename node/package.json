@@ -1,6 +1,6 @@
 {
   "name": "@waldiez/wactorz-node",
-  "version": "0.4.0",
+  "version": "0.4.4",
   "description": "Wactorz Node.js/TypeScript runtime \u2014 actor-model multi-agent system",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

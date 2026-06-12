@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tracing::info;
 
 use wactorz_agents::{
-    CatalogAgent, DynamicAgent, FusekiAgent, HomeAssistantActuatorAgent, HomeAssistantAgent,
+    CatalogAgent, DynamicAgent, HomeAssistantActuatorAgent, HomeAssistantAgent,
     HomeAssistantStateBridgeAgent, IOAgent, InstallerAgent, LlmConfig, LlmProvider, MainActor,
     ManualAgent, MonitorAgent, WeatherAgent,
 };
@@ -76,22 +76,6 @@ pub struct Args {
     #[arg(long, default_value = "", env = "HA_TOKEN")]
     pub ha_token: String,
 
-    /// Apache Jena Fuseki URL
-    #[arg(long, default_value = "", env = "FUSEKI_URL")]
-    pub fuseki_url: String,
-
-    /// Fuseki dataset name
-    #[arg(long, default_value = "", env = "FUSEKI_DATASET")]
-    pub fuseki_dataset: String,
-
-    /// Fuseki username
-    #[arg(long, default_value = "", env = "FUSEKI_USER")]
-    pub fuseki_user: String,
-
-    /// Fuseki password
-    #[arg(long, default_value = "", env = "FUSEKI_PASSWORD")]
-    pub fuseki_password: String,
-
     /// Default weather location
     #[arg(long, default_value = "", env = "WEATHER_DEFAULT_LOCATION")]
     pub weather_default_location: String,
@@ -145,44 +129,6 @@ pub struct Args {
     pub ha_state_bridge_domains: String,
 }
 
-fn normalize_fuseki_endpoint(url: &str, dataset: &str) -> (String, String) {
-    let mut base = url.trim().trim_end_matches('/').to_string();
-    let mut ds = dataset.trim().trim_matches('/').to_string();
-
-    if base.is_empty() {
-        return (base, ds);
-    }
-
-    let split_idx = base.find("://").map(|idx| idx + 3).unwrap_or(0);
-    let path_start = base[split_idx..].find('/').map(|idx| split_idx + idx);
-
-    if let Some(path_start) = path_start {
-        let host = &base[..path_start];
-        let path = &base[path_start..];
-        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        if let Some(last) = segments.last() {
-            if ds.is_empty() {
-                ds = (*last).to_string();
-                let parent = &segments[..segments.len().saturating_sub(1)];
-                base = if parent.is_empty() {
-                    host.to_string()
-                } else {
-                    format!("{}/{}", host, parent.join("/"))
-                };
-            } else if *last == ds {
-                let parent = &segments[..segments.len().saturating_sub(1)];
-                base = if parent.is_empty() {
-                    host.to_string()
-                } else {
-                    format!("{}/{}", host, parent.join("/"))
-                };
-            }
-        }
-    }
-
-    (base, ds)
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     match dotenv() {
@@ -199,14 +145,6 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     info!("Starting AgentFlow server");
-    let (fuseki_url, fuseki_dataset) =
-        normalize_fuseki_endpoint(&args.fuseki_url, &args.fuseki_dataset);
-    if !fuseki_url.is_empty() || !fuseki_dataset.is_empty() {
-        info!(
-            "Fuseki config normalized to base='{}' dataset='{}'",
-            fuseki_url, fuseki_dataset
-        );
-    }
 
     // ── Publisher channel ─────────────────────────────────────────────────────
     let (publisher, mut pub_rx) = EventPublisher::channel();
@@ -399,7 +337,7 @@ async fn main() -> Result<()> {
     // NATO node names:
     //   alpha=main-actor  bravo=monitor    charlie=io
     //   delta=installer   echo=code-agent  foxtrot=manual
-    //   golf=home-assistant  hotel=weather  india=fuseki  juliet=catalog
+    //   golf=home-assistant  hotel=weather  juliet=catalog
     //   kilo=ha-actuator  lima=ha-state-bridge
 
     let mut sup = Supervisor::new(system.clone());
@@ -534,30 +472,6 @@ async fn main() -> Result<()> {
     }
     {
         let pub_ = publisher.clone();
-        let fuseki_url = fuseki_url.clone();
-        let fuseki_dataset = fuseki_dataset.clone();
-        let fuseki_user = args.fuseki_user.clone();
-        let fuseki_password = args.fuseki_password.clone();
-        sup.supervise(
-            "fuseki-agent",
-            Arc::new(move || {
-                let c = ActorConfig::new_with_node("fuseki-agent", "india");
-                Box::new(
-                    FusekiAgent::new(c)
-                        .with_fuseki_config(fuseki_url.clone(), fuseki_dataset.clone())
-                        .with_fuseki_auth(fuseki_user.clone(), fuseki_password.clone())
-                        .with_publisher(pub_.clone()),
-                )
-            }),
-            SupervisorStrategy::OneForOne,
-            5,
-            60.0,
-            2.0,
-        );
-    }
-
-    {
-        let pub_ = publisher.clone();
         sup.supervise(
             "catalog",
             Arc::new(move || {
@@ -597,10 +511,6 @@ async fn main() -> Result<()> {
         let sys = system.clone();
         let ha_url = args.ha_url.clone();
         let ha_token = args.ha_token.clone();
-        let fuseki_url = fuseki_url.clone();
-        let fuseki_dataset = fuseki_dataset.clone();
-        let fuseki_user = args.fuseki_user.clone();
-        let fuseki_password = args.fuseki_password.clone();
         let output_topic = args.ha_state_bridge_topic.clone();
         let domains: Vec<String> = args
             .ha_state_bridge_domains
@@ -621,8 +531,6 @@ async fn main() -> Result<()> {
                             output_topic.clone(),
                             domains.clone(),
                         )
-                        .with_fuseki_config(fuseki_url.clone(), fuseki_dataset.clone())
-                        .with_fuseki_auth(fuseki_user.clone(), fuseki_password.clone())
                         .with_publisher(pub_.clone()),
                 )
             }),
@@ -635,7 +543,7 @@ async fn main() -> Result<()> {
 
     sup.start().await?;
     info!(
-        "Supervisor started — 12 agents (main, monitor, io, installer, code, manual, home-assistant, weather, fuseki, catalog, ha-actuator, ha-state-bridge)"
+        "Supervisor started — 11 agents (main, monitor, io, installer, code, manual, home-assistant, weather, catalog, ha-actuator, ha-state-bridge)"
     );
 
     // ── REST server ───────────────────────────────────────────────────────────
@@ -645,10 +553,6 @@ async fn main() -> Result<()> {
     let runtime_cfg = RuntimeConfig {
         ha_url: args.ha_url.clone(),
         ha_token: args.ha_token.clone(),
-        fuseki_url: fuseki_url.clone(),
-        fuseki_dataset: fuseki_dataset.clone(),
-        fuseki_user: args.fuseki_user.clone(),
-        fuseki_password: args.fuseki_password.clone(),
         weather_default_location: args.weather_default_location.clone(),
         mqtt_host: args.mqtt_host.clone(),
         mqtt_port: args.mqtt_port,

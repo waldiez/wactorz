@@ -180,9 +180,6 @@ infra/homeassistant/secrets.yaml
 # But do commit the example
 !infra/homeassistant/secrets.yaml.example
 
-# Fuseki database files
-infra/fuseki/databases/
-
 # Mosquitto runtime files
 infra/mosquitto/*.log
 infra/mosquitto/*.db

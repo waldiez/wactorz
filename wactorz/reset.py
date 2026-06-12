@@ -76,6 +76,12 @@ def reset_metrics(agent_name: Optional[str] = None, db_path: Optional[str] = Non
     for agent in agents:
         for key in _METRIC_KV_KEYS:
             db.kv_delete(agent, key)
+    # The monitor's durable lifetime cost ledger (keyed by actor_id under the
+    # _system agent) is monotonic and outlives individual agents, so a full
+    # metrics reset must clear it too or the headline total never zeroes. A
+    # single-agent reset can't map name->actor_id here, so it's left intact.
+    if not agent_name:
+        db.kv_delete("_system", "_lifetime_cost_ledger")
     logger.info("[reset] metrics kv cleared%s",
                 f" for {agent_name!r}" if agent_name else " (all agents)")
 

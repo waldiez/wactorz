@@ -33,6 +33,8 @@ import socket
 import time
 from pathlib import Path
 
+from .core.mqtt import mqtt_client
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -499,7 +501,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                     "_remote_task":  True,
                 }
                 try:
-                    async with aiomqtt.Client(
+                    async with mqtt_client(
                         getattr(main, "_mqtt_broker", "localhost"),
                         getattr(main, "_mqtt_port",   1883),
                     ) as client:
@@ -1058,7 +1060,7 @@ async def mqtt_listener():
     try:
         while True:
             try:
-                async with aiomqtt.Client(MQTT_BROKER, MQTT_PORT) as client:
+                async with mqtt_client(MQTT_BROKER, MQTT_PORT) as client:
                     mqtt_client_ref = client
                     logger.info("MQTT connected.")
 
@@ -1269,6 +1271,73 @@ async def docs_handler(request):
     raise web.HTTPNotFound()
 
 
+def _encode_mqtt_str(s: str) -> bytes:
+    b = s.encode("utf-8")
+    return bytes((len(b) >> 8, len(b) & 0xFF)) + b
+
+
+def _inject_connect_credentials(pkt: bytes, username: str, password: str) -> bytes:
+    """Add username/password to an anonymous MQTT CONNECT packet, in-flight.
+
+    The browser's mqtt.js client connects with no credentials, so an
+    authenticated broker rejects it ("Not authorized") and the dashboard falls
+    back to demo data. This rewrites the CONNECT as it passes through the proxy
+    so the broker accepts it — without ever sending the credentials to the
+    browser. Works for MQTT 3.1.1 and 5.0; username/password are the last two
+    payload fields in both, so they're appended at the end.
+
+    Any non-CONNECT packet, an already-credentialed CONNECT, or a malformed /
+    partial buffer is returned unchanged.
+    """
+    if len(pkt) < 2 or pkt[0] != 0x10:  # not a CONNECT (packet type 1, flags 0)
+        return pkt
+    rem_len = 0
+    mult = 1
+    idx = 1
+    while True:  # decode Remaining Length (variable byte integer)
+        if idx >= len(pkt):
+            return pkt
+        b = pkt[idx]
+        rem_len += (b & 0x7F) * mult
+        idx += 1
+        if not (b & 0x80):
+            break
+        mult *= 128
+        if mult > 128 ** 3:
+            return pkt
+    body = pkt[idx:idx + rem_len]
+    if len(body) < rem_len or len(body) < 4:
+        return pkt  # split across frames — don't risk corrupting it
+    pn_len = (body[0] << 8) | body[1]
+    flags_pos = 2 + pn_len + 1  # protocol name + 1-byte protocol level
+    if flags_pos >= len(body):
+        return pkt
+    if body[flags_pos] & 0x80:  # username flag already set — leave it alone
+        return pkt
+    new_body = bytearray(body)
+    new_body[flags_pos] |= 0xC0  # set username + password flags
+    new_body += _encode_mqtt_str(username) + _encode_mqtt_str(password)
+    rl = bytearray()  # re-encode Remaining Length
+    x = len(new_body)
+    while True:
+        d = x % 128
+        x //= 128
+        if x:
+            d |= 0x80
+        rl.append(d)
+        if not x:
+            break
+    return bytes((0x10,)) + bytes(rl) + bytes(new_body)
+
+
+def _proxy_mqtt_creds():
+    """Broker creds for the dashboard's MQTT proxy, or None when anonymous."""
+    from .config import CONFIG
+    if CONFIG.mqtt_username:
+        return (CONFIG.mqtt_username, CONFIG.mqtt_password)
+    return None
+
+
 async def _bridge_mqtt_tcp(client_ws, broker: str, port: int) -> None:
     from aiohttp import WSMsgType
     try:
@@ -1277,11 +1346,18 @@ async def _bridge_mqtt_tcp(client_ws, broker: str, port: int) -> None:
         logger.warning("MQTT TCP bridge: cannot connect to %s:%s — %s", broker, port, exc)
         return
 
+    creds = _proxy_mqtt_creds()
+
     async def ws_to_tcp():
+        first = creds is not None  # inject creds into the browser's CONNECT
         try:
             async for msg in client_ws:
                 if msg.type == WSMsgType.BINARY:
-                    writer.write(msg.data)
+                    data = msg.data
+                    if first:
+                        first = False
+                        data = _inject_connect_credentials(data, creds[0], creds[1])
+                    writer.write(data)
                     await writer.drain()
                 elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
                     break
@@ -1327,15 +1403,24 @@ async def mqtt_proxy_handler(request):
                 timeout=aiohttp.ClientTimeout(connect=2),
             ) as upstream_ws:
                 logger.debug("[MQTT proxy] upstream WS connected → %s", upstream_url)
-                async def forward(src, dst):
+                creds = _proxy_mqtt_creds()
+                async def forward(src, dst, inject=False):
+                    first = inject  # inject creds into the browser's CONNECT
                     async for msg in src:
                         if msg.type == WSMsgType.BINARY:
-                            await dst.send_bytes(msg.data)
+                            data = msg.data
+                            if first:
+                                first = False
+                                data = _inject_connect_credentials(data, creds[0], creds[1])
+                            await dst.send_bytes(data)
                         elif msg.type == WSMsgType.TEXT:
                             await dst.send_str(msg.data)
                         elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
                             break
-                await asyncio.gather(forward(client_ws, upstream_ws), forward(upstream_ws, client_ws))
+                await asyncio.gather(
+                    forward(client_ws, upstream_ws, inject=creds is not None),
+                    forward(upstream_ws, client_ws),
+                )
         return client_ws
     except Exception as exc:
         logger.info("[MQTT proxy] upstream WS unavailable (%s), falling back to TCP bridge %s:%s",

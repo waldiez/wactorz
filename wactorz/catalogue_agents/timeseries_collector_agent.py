@@ -252,6 +252,7 @@ async def _mqtt_subscriber(agent):
     except ImportError:
         await agent.log("aiomqtt not available — collector disabled")
         return
+    import os
 
     topics = agent.state["topics"]
     _last_exc = None
@@ -260,6 +261,8 @@ async def _mqtt_subscriber(agent):
             async with aiomqtt.Client(
                 agent._actor._mqtt_broker,
                 agent._actor._mqtt_port,
+                username=os.environ.get("MQTT_USERNAME") or None,
+                password=os.environ.get("MQTT_PASSWORD") or None,
             ) as client:
                 for pattern in topics:
                     await client.subscribe(pattern)

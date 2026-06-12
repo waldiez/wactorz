@@ -10,7 +10,6 @@ else
     python_target="wactorz:8000"
 fi
 monitor_mosquitto="${PROMETHEUS_MONITOR_MOSQUITTO:-1}"
-monitor_fuseki="${PROMETHEUS_MONITOR_FUSEKI:-0}"
 monitor_otelcol="${PROMETHEUS_MONITOR_OTELCOL:-0}"
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 template_file="${PROMETHEUS_TEMPLATE_FILE:-${script_dir}/prometheus.yml}"
@@ -37,25 +36,6 @@ cat >>"$out_file" <<'EOF'
       module: [tcp_connect]
     static_configs:
       - targets: ["mosquitto:1883"]
-    relabel_configs:
-      - source_labels: [__address__]
-        target_label: __param_target
-      - source_labels: [__param_target]
-        target_label: instance
-      - target_label: __address__
-        replacement: blackbox-exporter:9115
-EOF
-fi
-
-if is_enabled "$monitor_fuseki"; then
-cat >>"$out_file" <<'EOF'
-
-  - job_name: fuseki-blackbox
-    metrics_path: /probe
-    params:
-      module: [http_2xx]
-    static_configs:
-      - targets: ["http://fuseki:3030/$/ping"]
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

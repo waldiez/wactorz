@@ -395,7 +395,7 @@ docker compose -f compose.dev.yaml up -d
 
 - **Google AI key** (for agent portrait photos): baked into the frontend bundle
   at build time. To change it, rebuild the frontend and re-package.
-- **Home Assistant** and **Fuseki** are optional; start with `--profile full`.
+- **Home Assistant** is optional; start with `--profile full`.
 - **Logs**: `docker compose logs -f wactorz`
 - **Upgrade**: run `bash deploy.sh` again with a new archive — existing volumes
   (MQTT data) are preserved.

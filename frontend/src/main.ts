@@ -372,8 +372,6 @@ fetch(`${_apiBase}/api/config`)
     };
     seedFromServer("wactorz-ha-url", cfg.ha?.url ?? "");
     seedFromServer("wactorz-ha-token", cfg.ha?.token ?? "");
-    seedFromServer("wactorz-fuseki-url", cfg.fuseki?.url ?? "");
-    seedFromServer("wactorz-fuseki-dataset", cfg.fuseki?.dataset ?? "");
   })
   .catch(() => {});
 

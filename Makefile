@@ -2,7 +2,7 @@
         up down logs shell release release-full release-native release-source \
         run run-py test test-py test-rust parity coverage coverage-py coverage-rust ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish \
-        dev-rust dev-rust-full dev-rust-down dev-rust-check \
+        dev-rust dev-rust-down dev-rust-check \
         dev-desktop build-desktop
 
 COMPOSE      := docker compose
@@ -38,14 +38,8 @@ dev-rust: ## Start mosquitto + run Rust server natively (REST :8080, WS :8081)
 	$(COMPOSE_DEV) up -d --wait mosquitto
 	cargo run -p wactorz-server -- --no-cli
 
-dev-rust-full: ## Start mosquitto + fuseki + run Rust server natively
-	$(COMPOSE_DEV) up -d --wait mosquitto fuseki
-	cargo run -p wactorz-server -- --no-cli \
-	  --fuseki-url http://localhost:3030 \
-	  --fuseki-dataset wactorz
-
-dev-rust-down: ## Stop the Rust dev infrastructure (mosquitto + fuseki)
-	$(COMPOSE_DEV) stop mosquitto fuseki
+dev-rust-down: ## Stop the Rust dev infrastructure (mosquitto)
+	$(COMPOSE_DEV) stop mosquitto
 
 dev-rust-check: ## Smoke-test a running Rust server (health, actors, config)
 	@echo "── /health ──────────────────────────────"

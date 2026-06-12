@@ -39,8 +39,6 @@ const KB: Record<string, string> = {
   news: "**news-agent — HackerNews headlines**\n\nFetches HN headlines on demand. Commands: `top [n]`, `new`, `best`, `ask`, `show`, `jobs`, `help`. No API key needed. agentType: `data`.",
   wif: "**wif-agent — finance expert**\n\nIn-memory finance tracker: expenses, budgets, compound interest, loan, ROI, tax, tip. Commands: `add`, `budget`, `report`, `balance`, `compound`, `loan`, `roi`, `tax`, `tip`, `help`. agentType: `financier`.",
   wiz: "**wiz-agent — WaldiezCoin economist**\n\nIn-game token economy (+10 spawn, +2 heartbeat, +5 healthy, −5 QA flag, −3 alert). Commands: `balance`, `history [n]`, `earn`, `debit`, `help`. agentType: `coin`.",
-  fuseki:
-    "**fern-agent — SPARQL knowledge graph**\n\nConnects to Apache Jena Fuseki. Commands: `query <sparql>`, `ask <sparql>`, `prefixes`, `datasets`, `help`. No API key. agentType: `librarian`.",
   tick: "**chron-agent — scheduler/timer**\n\nIn-process cron. Commands: `at <HH:MM>`, `in <n> <unit>`, `every <n> <unit>`, `list`, `cancel <id>`, `clear`, `help`. agentType: `scheduler`.",
   ha: "**ha-agent — Home Assistant discovery**\n\nQueries HA REST API for devices and entities. Commands: `status`, `devices`, `entities`, `domains`, `search <kw>`, `state <entity_id>`, `help`. agentType: `home-assistant`.",
 };
@@ -57,7 +55,6 @@ const ALIASES: Record<string, string> = {
   orchestrator: "main", llm: "main",
   coin: "wiz", economy: "wiz",
   finance: "wif", financier: "wif",
-  fern: "fuseki", "fuseki-agent": "fuseki",
   chron: "tick", "tick-agent": "tick", scheduler: "tick",
   "home-assistant": "ha", homeassistant: "ha",
 };

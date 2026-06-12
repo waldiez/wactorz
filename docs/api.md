@@ -15,7 +15,7 @@ Both publish to the same MQTT broker, so external clients can mix and match.
 
 ## Monitor REST API (`:8888`)
 
-Base URL: `http://localhost:8888/`. Most endpoints accept both `/api/<path>` and `/<path>`; `/api/tts`, `/api/reset`, `/api/ha/sync`, and `/api/fuseki/*` are `/api/`-only.
+Base URL: `http://localhost:8888/`. Most endpoints accept both `/api/<path>` and `/<path>`; `/api/tts` and `/api/reset` are `/api/`-only.
 
 ### `GET /health`
 
@@ -207,15 +207,6 @@ Recent activity feed events.
 ### `POST /api/ha/sync`
 
 Trigger a Home Assistant snapshot/sync.
-
----
-
-### Fuseki proxy
-
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/fuseki/{dataset}/sparql` | SPARQL query proxy |
-| `POST` | `/api/fuseki/{dataset}/update` | SPARQL update proxy |
 
 ---
 

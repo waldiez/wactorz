@@ -1,5 +1,5 @@
 name: Wactorz
-version: "0.4.4"
+version: "0.4.5"
 slug: wactorz
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
 url: https://github.com/waldiez/wactorz
@@ -23,12 +23,10 @@ webui: http://[HOST]:[PORT:8888]
 ports:
   8000/tcp: 8000
   8888/tcp: 8888
-  3030/tcp: 3030
   1883/tcp: null
 ports_description:
   8000/tcp: Wactorz REST + WebSocket API
   8888/tcp: Wactorz Monitor UI
-  3030/tcp: Fuseki SPARQL endpoint (only active when fuseki_embedded is true)
   1883/tcp: MQTT TCP broker (only active when mosquitto_embedded is true)
 
 # ── Persistent state ───────────────────────────────────────────────────────────
@@ -67,16 +65,9 @@ options:
   ha_url: "http://homeassistant.local:8123"
   ha_token: ""
 
-  # Fuseki / SPARQL triplestore (optional)
-  fuseki_url: "http://localhost:3030"
-  fuseki_dataset: wactorz
-  fuseki_user: admin
-  fuseki_password: admin
-
-  # Embedded services — bundle Mosquitto and/or Fuseki inside this addon container
-  # (no external addons needed; data persisted to /share/mosquitto and /share/fuseki)
+  # Embedded services — bundle Mosquitto inside this addon container
+  # (no external addon needed; data persisted to /share/mosquitto)
   mosquitto_embedded: false
-  fuseki_embedded: false
 
   # Optional extra integrations
   discord_bot_token: ""
@@ -111,12 +102,7 @@ schema:
   mqtt_password: str?
   ha_url: url
   ha_token: str?
-  fuseki_url: url
-  fuseki_dataset: str
-  fuseki_user: str
-  fuseki_password: str
   mosquitto_embedded: bool
-  fuseki_embedded: bool
   discord_bot_token: str?
   telegram_bot_token: str?
   telegram_allowed_user_id: int

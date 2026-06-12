@@ -23,7 +23,6 @@
 
 pub mod catalog;
 pub mod dynamic_agent;
-pub mod fuseki_agent;
 pub mod ha_actuator;
 pub mod ha_state_bridge;
 pub mod home_assistant_agent;
@@ -50,7 +49,6 @@ pub mod wme_agent;
 
 pub use catalog::CatalogAgent;
 pub use dynamic_agent::DynamicAgent;
-pub use fuseki_agent::FusekiAgent;
 pub use ha_actuator::HomeAssistantActuatorAgent;
 pub use ha_state_bridge::HomeAssistantStateBridgeAgent;
 pub use home_assistant_agent::HomeAssistantAgent;

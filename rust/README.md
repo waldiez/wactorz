@@ -30,7 +30,6 @@ wactorz-server
 ```bash
 # From repo root
 make dev-rust          # mosquitto in Docker + Rust server natively (port 8080)
-make dev-rust-full     # + Fuseki triplestore
 make dev-rust-check    # smoke-test a running server
 make dev-rust-down     # stop Docker services
 ```
@@ -58,8 +57,6 @@ cargo run -p wactorz-server -- \
 | `--llm-api-key` | env `LLM_API_KEY` | API key |
 | `--ha-url` | — | Home Assistant base URL |
 | `--ha-token` | env `HA_TOKEN` | Long-lived HA access token |
-| `--fuseki-url` | `http://localhost:3030` | Apache Jena Fuseki URL |
-| `--fuseki-dataset` | `wactorz` | Fuseki dataset name |
 | `--static-dir` | `static/app` | Serve SPA from this directory |
 | `--no-cli` | off | Disable interactive REPL (use in containers) |
 
@@ -74,8 +71,6 @@ cargo run -p wactorz-server -- \
 | `POST` | `/api/actors/{id}/resume` | Resume an actor |
 | `POST` | `/api/actors/{id}/stop` | Stop an actor |
 | `GET` | `/api/config` | Non-secret runtime config (seeds frontend localStorage) |
-| `POST` | `/api/fuseki/{dataset}/sparql` | SPARQL SELECT/ASK proxy |
-| `POST` | `/api/fuseki/{dataset}/update` | SPARQL INSERT/DELETE proxy |
 | `GET` | `/ws` | WebSocket bridge (MQTT ↔ browser) |
 | `GET` | `/*` | SPA fallback (ServeDir) |
 
@@ -126,7 +121,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-new-agent).
 | foxtrot | manual | no |
 | golf | home-assistant | no |
 | hotel | weather | no |
-| india | fuseki | no |
 | juliet | catalog | yes |
 | kilo | ha-actuator | no |
 | lima | ha-state-bridge | no |

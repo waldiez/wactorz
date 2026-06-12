@@ -10,7 +10,6 @@ The mode is advertised to the browser on connect via a {"type":"config"} frame
 so the frontend knows whether to send chat over /ws or publish to io/chat.
 """
 import sys
-from .core.mqtt import mqtt_client
 import asyncio
 
 if sys.platform == "win32":
@@ -33,6 +32,8 @@ import logging
 import socket
 import time
 from pathlib import Path
+
+from .core.mqtt import mqtt_client
 
 logging.basicConfig(
     level=logging.INFO,

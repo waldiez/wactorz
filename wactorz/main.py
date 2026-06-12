@@ -4,7 +4,6 @@ Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """
 
 import asyncio
-from .core.mqtt import mqtt_client
 import logging
 import json
 import re
@@ -13,6 +12,7 @@ from typing import Optional
 from wactorz.config import CONFIG
 
 from ..core.actor import Actor, Message, MessageType, ActorState
+from .core.mqtt import mqtt_client
 from .llm_agent import LLMAgent, LLMProvider
 
 logger = logging.getLogger(__name__)

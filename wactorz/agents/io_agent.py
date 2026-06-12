@@ -10,12 +10,12 @@ interface get the same behaviour as the CLI.
 """
 
 import asyncio
-from ..core.mqtt import mqtt_client
 import json
 import logging
 import time
 
 from ..core.actor import Actor, ActorState, Message, MessageType
+from ..core.mqtt import mqtt_client
 
 logger = logging.getLogger(__name__)
 

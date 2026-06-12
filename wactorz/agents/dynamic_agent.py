@@ -19,7 +19,6 @@ The `agent` parameter gives access to:
 """
 
 import asyncio
-from ..core.mqtt import mqtt_client
 import logging
 import time
 import traceback
@@ -27,6 +26,7 @@ import types
 from typing import Any, Optional
 
 from ..core.actor import Actor, Message, MessageType, ActorState
+from ..core.mqtt import mqtt_client
 
 logger = logging.getLogger(__name__)
 

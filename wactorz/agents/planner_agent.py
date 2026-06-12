@@ -17,7 +17,6 @@ Auto-triggered by MainActor when complexity heuristic fires.
 """
 
 import asyncio
-from ..core.mqtt import mqtt_client
 import hashlib
 import json
 import logging
@@ -25,6 +24,7 @@ import time
 from typing import Optional
 
 from ..core.actor import Actor, Message, MessageType
+from ..core.mqtt import mqtt_client
 from .llm_agent import LLMProvider
 
 try:

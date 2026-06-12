@@ -4,12 +4,12 @@ Supported: CLI (terminal), Discord, WhatsApp (via Twilio), REST.
 """
 
 import asyncio
-from ..core.mqtt import mqtt_client
 import logging
 import os
 from typing import Any
 from typing import TYPE_CHECKING
 
+from ..core.mqtt import mqtt_client
 from ..monitoring import PrometheusMonitor
 
 if TYPE_CHECKING:

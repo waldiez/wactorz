@@ -1,0 +1,1 @@
+import{r as e}from"./index-BJB2W3_K.js";export{e as ambient};

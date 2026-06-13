@@ -11,6 +11,7 @@
 
 import type { AgentInfo, AgentState } from "../types/agent";
 import { agentImageGen } from "../io/AgentImageGen";
+import { escapeHtml } from "./escapeHtml";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -334,16 +335,16 @@ export class SocialDashboard {
       <div class="sd-body">
         <div class="sd-avatar-wrap">
           <div class="sd-avatar">
-            <img src="${imgUrl}" alt="${agent.name}" loading="lazy"
+            <img src="${imgUrl}" alt="${escapeHtml(agent.name)}" loading="lazy"
                  onerror="this.style.display='none'">
           </div>
           <span class="sd-state-dot sd-dot-${st}"></span>
         </div>
 
         <div class="sd-info">
-          <span class="sd-name">${agent.name}</span>
+          <span class="sd-name">${escapeHtml(agent.name)}</span>
           <span class="sd-handle">${handle}</span>
-          <p class="sd-bio">${bioline(agent)}</p>
+          <p class="sd-bio">${escapeHtml(bioline(agent))}</p>
           <span class="sd-type-badge sd-badge-${st}">${st.toUpperCase()}</span>
         </div>
 
@@ -361,7 +362,7 @@ export class SocialDashboard {
         ${this.buildMetricsRow(agent)}
 
         <div class="sd-footer">
-          <button class="sd-chat-btn" data-name="${agent.name}">💬 Chat</button>
+          <button class="sd-chat-btn" data-name="${escapeHtml(agent.name)}">💬 Chat</button>
           <div class="cd-controls">
             <button class="cd-ctrl" data-action="pause"  title="Pause">⏸</button>
             <button class="cd-ctrl" data-action="resume" title="Resume">▶</button>
@@ -428,7 +429,7 @@ export class SocialDashboard {
   private buildMetricsRow(agent: AgentInfo): string {
     const parts: string[] = [];
     if (agent.task)
-      parts.push(`<span class="sd-metric-task">${agent.task}</span>`);
+      parts.push(`<span class="sd-metric-task">${escapeHtml(agent.task)}</span>`);
     if (agent.messagesProcessed != null)
       parts.push(
         `<span class="sd-metric-chip">${agent.messagesProcessed} proc</span>`,

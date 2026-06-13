@@ -74,32 +74,23 @@ describe("TTSManager", () => {
     expect((globalThis as any).speechSynthesis.cancel).toHaveBeenCalled();
   });
 
-  // ── checkUserIntent ────────────────────────────────────────────────────────
+  // ── TTS off means no speech, regardless of message content ──────────────────
 
-  it("checkUserIntent('please speak') sets forceNext flag", async () => {
+  it("notify() never speaks while TTS is off, even for speech-like content", async () => {
     const { TTSManager } = await freshTTS();
     const m = new TTSManager();
-    m.checkUserIntent("please speak the reply");
-    // After forcing, the next notify should call speak
-    m.notify("hello");
-    await vi.waitFor(() => expect((globalThis as any).speechSynthesis.speak).toHaveBeenCalledOnce());
-  });
-
-  it("checkUserIntent with no keyword does not set forceNext", async () => {
-    const { TTSManager } = await freshTTS();
-    const m = new TTSManager();
-    m.checkUserIntent("what is the weather?");
-    m.notify("sunny");
+    expect(m.ttsEnabled).toBe(false);
+    // Replies that mention speak/narrate/recite/"read it out loud" etc. must NOT
+    // trigger speech while the toggle is off — TTS off means no TTS, full stop.
+    for (const text of [
+      "speak narrate recite voice aloud",
+      "please read it out loud for me",
+      "say that aloud",
+      "tell me the answer out loud",
+    ]) {
+      m.notify(text);
+    }
     expect((globalThis as any).speechSynthesis.speak).not.toHaveBeenCalled();
-  });
-
-  it("forceNext flag is consumed after one notify", async () => {
-    const { TTSManager } = await freshTTS();
-    const m = new TTSManager();
-    m.checkUserIntent("read it out");
-    m.notify("first");
-    m.notify("second");
-    await vi.waitFor(() => expect((globalThis as any).speechSynthesis.speak).toHaveBeenCalledOnce());
   });
 
   // ── notify paths ───────────────────────────────────────────────────────────
@@ -134,28 +125,12 @@ describe("TTSManager", () => {
     await vi.waitFor(() => expect((globalThis as any).speechSynthesis.speak).toHaveBeenCalledOnce());
   });
 
-  it("notify() does not call speak when both ttsEnabled=false and no forceNext", async () => {
+  it("notify() does not call speak when ttsEnabled=false", async () => {
     const { TTSManager } = await freshTTS();
     const m = new TTSManager();
     m.notify("hello agent");
     expect((globalThis as any).speechSynthesis.speak).not.toHaveBeenCalled();
   });
-
-  // ── speak keyword variants ────────────────────────────────────────────────
-
-  it.each([
-    "speak", "read it out", "say it", "tell me", "voice", "aloud", "out loud", "read this out",
-    "narrate", "recite", "read that back", "read it back", "say that aloud", "say it out loud",
-  ])(
-    "checkUserIntent recognises keyword '%s'",
-    async (phrase) => {
-      const { TTSManager } = await freshTTS();
-      const m = new TTSManager();
-      m.checkUserIntent(phrase);
-      m.notify("response");
-      await vi.waitFor(() => expect((globalThis as any).speechSynthesis.speak).toHaveBeenCalledOnce());
-    },
-  );
 
   // ── AudioContext failure / suspend paths ──────────────────────────────────
 

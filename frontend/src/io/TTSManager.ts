@@ -16,10 +16,6 @@ const LS_BEEP  = "wactorz.beep";
 const LS_TTS   = "wactorz.tts";
 const LS_VOICE = "wactorz.ttsVoice";
 
-/** Patterns that indicate the user wants the reply spoken aloud. */
-const SPEAK_REQUEST =
-  /\b(speak|narrate|recite|read|say|tell me|voice|out ?loud|aloud|read ?(it|that|this) ?(?:out|back)|say ?(it|that|this)? ?(?:out ?loud|aloud))\b/i;
-
 export interface TTSVoice {
   name: string;
   locale: string;
@@ -29,7 +25,6 @@ export interface TTSVoice {
 export class TTSManager {
   private _beepEnabled: boolean;
   private _ttsEnabled: boolean;
-  private _forceNext = false;
   private _audioCtx: AudioContext | null = null;
   /** null = unknown, true = server responded ok, false = unavailable (503/network) */
   private _serverAvailable: boolean | null = null;
@@ -107,15 +102,6 @@ export class TTSManager {
     localStorage.setItem(LS_VOICE, name);
   }
 
-  /**
-   * Call with the user's outgoing message text.
-   * If it contains a speech request, the next reply will be spoken once
-   * even if the TTS toggle is off.
-   */
-  checkUserIntent(text: string): void {
-    if (SPEAK_REQUEST.test(text)) this._forceNext = true;
-  }
-
   toggleBeep(): boolean {
     this._beepEnabled = !this._beepEnabled;
     localStorage.setItem(LS_BEEP, this._beepEnabled ? "1" : "0");
@@ -132,8 +118,9 @@ export class TTSManager {
   /** Call on incoming agent message. Beeps and/or speaks depending on settings. */
   notify(text: string, _from?: string): void {
     if (this._beepEnabled) this._beep();
-    if (this._ttsEnabled || this._forceNext) {
-      this._forceNext = false;
+    // TTS off means no speech — full stop. There is deliberately no keyword
+    // "intent" override; speaking only ever happens when the toggle is on.
+    if (this._ttsEnabled) {
       this._speak(text);
     }
   }

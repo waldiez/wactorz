@@ -23,6 +23,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **HA add-on blank page on boot** — the monitor web UI now binds *before* the supervisor starts, so a slow, unreachable, or auth-rejecting MQTT broker no longer leaves the add-on serving a blank page; the dashboard is reachable immediately and the overview fills in as agents register. `run.sh` also probes an external (non-embedded) broker for up to 15s before launch so wactorz doesn't churn against an unreachable broker at boot.
 - **Headline cost total** — the dashboard's total no longer drops below the visible cards. It now resolves each agent's cost from the same three sources the cards use (MQTT state → live actor → persisted `_final_cost`), and a durable, monotonic per-`actor_id` ledger (fed by each agent's heartbeat `cost_usd`, persisted under `_system`) keeps deletions and hard kills from ever lowering the total. A full metrics reset clears the ledger so the total can still be zeroed deliberately.
+- **HA add-on ingress URL escaping** — TTS and PWA-manifest requests now stay inside HA's `/api/hassio_ingress/<token>/` prefix. `TTSManager` fetched bare `/api/tts/voices` and `/api/tts`, which resolve against HA core and 404'd (server edge-tts silently fell back to browser voices); both now use the same ingress-aware `_apiBase` as the rest of the UI. The `<link rel="manifest">` gained `crossorigin="use-credentials"` so the browser sends the ingress auth cookie (was a 401 on `site.webmanifest`).
 
 ---
 

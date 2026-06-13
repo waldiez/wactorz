@@ -78,6 +78,7 @@ mqtt_client_ref = None
 # still ignoring stale retained messages from the deleted instance.
 _deleted_agent_ids: list = []
 _DELETED_IDS_MAX   = 1024
+_hard_resetting    = False
 
 
 def _mark_deleted(agent_id: str) -> None:
@@ -129,6 +130,72 @@ async def _purge_agent_retained(agent_id: str) -> None:
             await mqtt_client_ref.publish(topic, b"", retain=True)
         except Exception as e:
             logger.debug(f"[purge] Failed to clear retained {topic}: {e}")
+
+
+async def _purge_node_desired_state(node: str) -> None:
+    """Clear the retained nodes/{node}/desired_state message.
+
+    The remote runner subscribes to this topic and, on reconnect/reboot,
+    reconciles it by spawning any listed agent that isn't already running.
+    If a reset doesn't clear it, the runner re-spawns the just-deleted agents.
+    """
+    if not mqtt_client_ref or not node:
+        return
+    topic = f"nodes/{node}/desired_state"
+    try:
+        await mqtt_client_ref.publish(topic, b"", retain=True)
+    except Exception as e:
+        logger.debug(f"[purge] Failed to clear retained {topic}: {e}")
+
+
+async def _purge_spawn_reconcile(agent: str | None = None) -> None:
+    """Tear down the agent-respawn state behind a spawn-registry clear.
+
+    Shared by the "spawns" and "all" reset scopes so both behave identically:
+      1. clear the kv-backed registry through the live main actor — an uncached
+         recall("_spawned_agents") then returns empty and a later checkpoint
+         can't rewrite the cleared set back to disk; and
+      2. fix the retained nodes/{node}/desired_state so a reconnecting runner
+         can't reconcile cleared agents back.
+
+    For a global clear (agent is None) every affected node's desired_state is
+    blanked. For a single-agent clear it is REPUBLISHED from the reduced registry
+    so sibling agents still on that node survive.
+
+    Must run BEFORE reset_spawns()/reset_all() wipe the kv on disk — it reads the
+    registry to learn which nodes are affected.
+    """
+    main_ref = registry.find_by_name("main") if registry is not None else None
+    reg = {}
+    if main_ref is not None and hasattr(main_ref, "_get_spawn_registry"):
+        reg = main_ref._get_spawn_registry() or {}
+
+    # Affected nodes: live heartbeats ∪ registry (covers offline nodes).
+    node_names: set[str] = set(state["nodes"].keys())
+    for name, cfg in reg.items():
+        if agent and name != agent:
+            continue
+        n = (cfg.get("node") or "").strip()
+        if n:
+            node_names.add(n)
+
+    # Clear the live registry through the actor's own persistence.
+    if (main_ref is not None and hasattr(main_ref, "recall")
+            and main_ref.recall("_spawned_agents", None) is not None):
+        kept = {k: v for k, v in reg.items() if k != agent} if agent else {}
+        main_ref.persist("_spawned_agents", kept)
+
+    if agent and main_ref is not None and hasattr(main_ref, "_update_node_desired_state"):
+        # Republish from the reduced registry so siblings on the node survive.
+        await asyncio.gather(
+            *[main_ref._update_node_desired_state(n) for n in node_names],
+            return_exceptions=True,
+        )
+    else:
+        await asyncio.gather(
+            *[_purge_node_desired_state(n) for n in node_names],
+            return_exceptions=True,
+        )
 
 
 async def _delete_agent(agent_id: str) -> str:
@@ -233,7 +300,7 @@ def _parse_mention(content: str) -> tuple[str, str]:
 
 
 def update_agent(agent_id: str, key: str, data):
-    if _is_deleted(agent_id):
+    if _hard_resetting or _is_deleted(agent_id):
         return
     if agent_id not in state["agents"]:
         state["agents"][agent_id] = {
@@ -1089,6 +1156,9 @@ def _historical_messages(live_names: set) -> int:
 
 
 def _snapshot() -> dict:
+    if _hard_resetting:
+        return {"agents": [], "nodes": [], "alerts": [], "log_feed": [],
+                "total_cost_usd": 0, "total_messages": 0}
     for nd in state["nodes"].values():
         nd["online"] = _node_online(nd.get("last_seen", 0))
 
@@ -1188,7 +1258,7 @@ async def mqtt_listener():
                             continue
 
                         event = parse_topic(topic, payload)
-                        if event:
+                        if event and not _hard_resetting:
                             metric    = event.get("metric", "")
                             log_event = None if metric == "heartbeat" else event
                             await broadcast({"type": "patch", "event": log_event, "state": _snapshot()})
@@ -1725,9 +1795,138 @@ async def reset_handler(request):
     import wactorz.reset as _reset
 
     if scope == "all":
-        _reset.reset_all(agent)
+        # Block incoming heartbeats, stop all actors, wipe disk, clear memory
+        global _hard_resetting
+        _hard_resetting = True
+        # Wrap the whole teardown so _hard_resetting ALWAYS resets — otherwise a
+        # mid-wipe exception leaves it True forever and every incoming heartbeat
+        # stays blocked, freezing the dashboard until the process restarts.
+        try:
+            supervisor = getattr(registry, "_supervisor_ref", None) if registry is not None else None
+            all_actors  = list(registry.all_actors()) if registry is not None else []
+            # Only stop user-spawned (non-protected) actors — system actors keep running
+            stoppable   = [a for a in all_actors if not getattr(a, "protected", False)]
+            # The registry is the AUTHORITATIVE source of the protected flag — the
+            # dashboard entry's "protected" is only set when a heartbeat happened to
+            # carry it, so trusting it alone wrongly tears down system agents (main /
+            # monitor / installer / catalog) and they flicker back on the next beat.
+            protected_ids   = {a.actor_id for a in all_actors if getattr(a, "protected", False)}
+            protected_names = {a.name      for a in all_actors if getattr(a, "protected", False)}
+            # Tear down every NON-protected agent the dashboard knows about (covers an
+            # agent present only via MQTT, or a remote agent absent from this registry),
+            # but never one that maps to a protected registry actor.
+            dash_ids  = [
+                aid for aid, ag in state["agents"].items()
+                if not ag.get("protected", False)
+                and aid not in protected_ids
+                and ag.get("name") not in protected_names
+            ]
+            agent_ids = list({a.actor_id for a in stoppable} | set(dash_ids))
+
+            # Release supervised actors first so the Supervisor doesn't race to
+            # restart them, then stop + unregister the live local ones.
+            if supervisor is not None:
+                for actor in stoppable:
+                    supervisor.release(actor.name)
+            await asyncio.gather(*[actor.stop() for actor in stoppable], return_exceptions=True)
+            await asyncio.gather(
+                *[registry.unregister(a.actor_id) for a in stoppable],
+                return_exceptions=True,
+            )
+
+            # Stop agents living on runner nodes (not in this registry) and clear the
+            # retained spawn directives that would otherwise replay on reconnect.
+            # Harmless when there are no nodes.
+            node_names = set(state["nodes"].keys())
+            _main = registry.find_by_name("main") if registry is not None else None
+            if _main is not None and hasattr(_main, "_get_spawn_registry"):
+                for cfg in (_main._get_spawn_registry() or {}).values():
+                    n = (cfg.get("node") or "").strip()
+                    if n:
+                        node_names.add(n)
+            if mqtt_client_ref and node_names:
+                await asyncio.gather(*[
+                    mqtt_client_ref.publish(f"nodes/{n}/stop_all",
+                                            json.dumps({"reason": "wipe everything"}), qos=1)
+                    for n in node_names
+                ], return_exceptions=True)
+                await asyncio.gather(*[
+                    mqtt_client_ref.publish(f"nodes/{n}/spawn", b"", retain=True)
+                    for n in node_names
+                ], return_exceptions=True)
+
+            # Purge retained MQTT for EVERY non-protected agent, tombstone each so a
+            # late/in-flight frame can't re-admit it once _hard_resetting clears, and
+            # drop it from the dashboard now.
+            await asyncio.gather(
+                *[_purge_agent_retained(aid) for aid in agent_ids],
+                return_exceptions=True,
+            )
+            for aid in agent_ids:
+                _mark_deleted(aid)
+                state["agents"].pop(aid, None)
+
+            # Clear the live spawn registry + retained desired_state so neither a
+            # restart nor a runner reconnect can resurrect the wiped agents. Runs
+            # before reset_all() wipes the kv on disk (it reads the registry first).
+            await _purge_spawn_reconcile(None)
+            # Reset in-memory metrics + history on protected (system) actors
+            protected_actors = [a for a in all_actors if getattr(a, "protected", False)]
+            for actor in protected_actors:
+                actor.metrics.messages_processed = 0
+                actor.metrics.errors = 0
+                actor.metrics.tasks_completed = 0
+                actor.metrics.tasks_failed = 0
+                if hasattr(actor, "total_cost_usd"):
+                    actor.total_cost_usd      = 0.0
+                    actor.total_input_tokens  = 0
+                    actor.total_output_tokens = 0
+                if hasattr(actor, "_conversation_history"):
+                    actor._conversation_history = []
+                if hasattr(actor, "_history_summary"):
+                    actor._history_summary = ""
+                if hasattr(actor, "_user_facts"):
+                    actor._user_facts = {}
+                if hasattr(actor, "_pipeline_rules"):
+                    actor._pipeline_rules = []
+                # NOTE: the kv-backed spawn registry is cleared by
+                # _purge_spawn_reconcile() above — assigning the _spawned_agents
+                # attribute was a no-op (the registry is read via recall()).
+            _reset.reset_all(agent)
+            # Clear the in-memory lifetime cost ledger + global accumulator too, or
+            # the headline total re-pins to the old high-water once _hard_resetting
+            # clears and heartbeats resume (mirrors /api/cost/reset).
+            _lifetime_cost.clear()
+            try:
+                from .agents.llm_agent import reset_global_cost
+                reset_global_cost()
+            except Exception as exc:
+                logger.debug("[reset] reset_global_cost skipped: %s", exc)
+            state["agents"].clear()
+            state["nodes"].clear()
+            state["alerts"].clear()
+            state["log_feed"].clear()
+            await broadcast({"type": "reset", "scope": "all", "agent": None, "state": {
+                "agents": [], "nodes": [], "alerts": [], "log_feed": [],
+                "total_cost_usd": 0, "total_messages": 0,
+            }})
+        finally:
+            _hard_resetting = False
+        return web.json_response({"status": "ok", "scope": "all", "agent": None})
     elif scope == "chat":
         _reset.reset_chat(agent)
+        # Also clear the LIVE in-memory conversation on running actors. reset_chat
+        # only clears the persisted chat_log/kv, so without this the agent still
+        # "remembers" the conversation (and re-persists it on the next turn) until
+        # a restart — the same live-vs-disk gap the metrics scope guards against.
+        live_actors = list(registry.all_actors()) if registry is not None else []
+        for actor in live_actors:
+            if agent and actor.name != agent:
+                continue
+            if hasattr(actor, "_conversation_history"):
+                actor._conversation_history = []
+            if hasattr(actor, "_history_summary"):
+                actor._history_summary = ""
     elif scope == "state":
         if agent:
             _reset.reset_agent_state(agent)
@@ -1735,13 +1934,53 @@ async def reset_handler(request):
             _reset._reset_all_pickles()
     elif scope == "metrics":
         _reset.reset_metrics(agent)
+        # Also zero the LIVE in-memory counters on running actors. reset_metrics
+        # only clears the persisted kv snapshot, so without this the next
+        # heartbeat re-reports the old totals and the dashboard looks unchanged
+        # until a restart. Scoped to metrics/cost fields only (not history).
+        live_actors = list(registry.all_actors()) if registry is not None else []
+        for actor in live_actors:
+            if agent and actor.name != agent:
+                continue
+            actor.metrics.messages_processed = 0
+            if hasattr(actor, "total_cost_usd"):
+                actor.total_cost_usd      = 0.0
+                actor.total_input_tokens  = 0
+                actor.total_output_tokens = 0
+        # The headline total is max(live + historical, lifetime ledger).
+        # reset_metrics cleared the kv ledger, but the in-memory _lifetime_cost
+        # high-water survives in THIS process and pins the headline to its old
+        # value — so the total only "drops" by the live component and never
+        # zeroes. Clear it here, mirroring /api/cost/reset.
+        if agent:
+            aid = next((getattr(a, "actor_id", None)
+                        for a in live_actors if a.name == agent), None)
+            if aid:
+                _lifetime_cost.pop(aid, None)
+        else:
+            _lifetime_cost.clear()
+            try:
+                from .agents.llm_agent import reset_global_cost
+                reset_global_cost()
+            except Exception as exc:
+                logger.debug("[reset] reset_global_cost skipped: %s", exc)
     elif scope == "spawns":
+        # Clear live state + retained desired_state FIRST (it needs the registry
+        # to learn the affected nodes), then wipe the kv on disk. Without this,
+        # clearing the registry left desired_state behind and a runner reconnect
+        # reconciled the agents straight back.
+        await _purge_spawn_reconcile(agent)
         _reset.reset_spawns(agent)
     elif scope == "logs":
         _reset.reset_logs()
+        # The activity feed mirrors the log files we just truncated, so drop the
+        # in-memory entries too — otherwise the UI keeps showing stale lines.
+        state["log_feed"].clear()
 
-    # Clear in-memory dashboard state for the affected agents
-    if scope in ("all", "chat", "metrics"):
+    # Clear in-memory dashboard cost/message state for the affected agents.
+    # Scoped to "metrics" only — clearing chat history must not zero cost/
+    # message counters or wipe the alerts/activity feed.
+    if scope == "metrics":
         if agent:
             aid = next(
                 (k for k, v in state["agents"].items() if v.get("name") == agent), None
@@ -1750,6 +1989,9 @@ async def reset_handler(request):
                 state["agents"][aid].pop("cost_usd", None)
                 state["agents"][aid].pop("messages_processed", None)
         else:
+            for aid in state["agents"]:
+                state["agents"][aid].pop("cost_usd", None)
+                state["agents"][aid].pop("messages_processed", None)
             state["alerts"].clear()
             state["log_feed"].clear()
 

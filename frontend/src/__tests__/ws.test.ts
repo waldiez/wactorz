@@ -361,6 +361,8 @@ describe("WSChatClient", () => {
   // ── reset message ──────────────────────────────────────────────────────────
 
   it("reset message calls onStatePatch and clears log_feed via onLogFeed", () => {
+    // A scoped (non-"all") reset applies the state patch; "all" early-returns
+    // through af-wipe-all and is covered separately below.
     const c = new WSChatClient();
     const patchSpy = vi.fn();
     const feedSpy = vi.fn();
@@ -370,7 +372,7 @@ describe("WSChatClient", () => {
     ws().emit("message", {
       data: JSON.stringify({
         type: "reset",
-        scope: "all",
+        scope: "state",
         state: {
           agents: [{ agent_id: "a1", name: "alpha" }],
           log_feed: [{ ts: 1, msg: "hi" }],
@@ -394,11 +396,11 @@ describe("WSChatClient", () => {
     expect(eventSpy).toHaveBeenCalled();
   });
 
-  it("reset message with scope='all' dispatches af-reset-chat event", () => {
+  it("reset message with scope='all' dispatches af-wipe-all event", () => {
     const c = new WSChatClient();
     c.connect("ws://localhost/ws");
     const eventSpy = vi.fn();
-    document.addEventListener("af-reset-chat", eventSpy, { once: true });
+    document.addEventListener("af-wipe-all", eventSpy, { once: true });
     ws().emit("message", {
       data: JSON.stringify({ type: "reset", scope: "all", state: { agents: [] } }),
     });

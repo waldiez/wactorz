@@ -56,19 +56,38 @@ jobs:
             echo "ref=${{ github.event.inputs.ref }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Point the build at the requested wactorz ref
+      - name: Map arch → platform + base image
+        id: arch
         run: |
-          sed -i "s|^  WACTORZ_REF: .*|  WACTORZ_REF: ${{ steps.meta.outputs.ref }}|" \
-            ha-addon/build.yaml
-          echo "build.yaml args:" && grep WACTORZ_REF ha-addon/build.yaml
+          case "${{ matrix.arch }}" in
+            aarch64) platform=linux/arm64; base=ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.20 ;;
+            amd64)   platform=linux/amd64; base=ghcr.io/home-assistant/amd64-base-python:3.12-alpine3.20 ;;
+            *) echo "unknown arch ${{ matrix.arch }}"; exit 1 ;;
+          esac
+          echo "platform=${platform}" >> "$GITHUB_OUTPUT"
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build & push ${{ matrix.arch }}
-        uses: home-assistant/builder@master
+        uses: docker/build-push-action@v6
         with:
-          args: |
-            --${{ matrix.arch }} \
-            --target /data/ha-addon \
-            --image "wactorz-addon-{arch}" \
-            --docker-hub "ghcr.io/waldiez" \
-            --version "${{ steps.meta.outputs.tag }}" \
-            --addon
+          context: ./ha-addon
+          platforms: ${{ steps.arch.outputs.platform }}
+          push: true
+          # Single-arch image manifest (no attestation index) so Supervisor pulls
+          # {image}:{version} cleanly per arch.
+          provenance: false
+          build-args: |
+            BUILD_FROM=${{ steps.arch.outputs.base }}
+            WACTORZ_REF=${{ steps.meta.outputs.ref }}
+            BUILD_VERSION=${{ steps.meta.outputs.tag }}
+          tags: ghcr.io/waldiez/wactorz-addon-${{ matrix.arch }}:${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.title=Wactorz Home Assistant add-on
+            org.opencontainers.image.source=https://github.com/waldiez/wactorz
+            org.opencontainers.image.licenses=Apache-2.0

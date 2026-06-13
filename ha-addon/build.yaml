@@ -1,9 +1,10 @@
 # Home Assistant add-on build config.
 #
-# Used by `home-assistant/builder` in CI (.github/workflows/addon-image.yml) and
-# by the Supervisor for local source builds. `build_from` pins the correct HA
-# Python base image per architecture so a multi-arch build uses the right base
-# (the Dockerfile starts FROM $BUILD_FROM, which Supervisor/builder sets from here).
+# Used by the HA Supervisor for local source builds (when no `image:` key is set).
+# `build_from` pins the correct HA Python base image per architecture so a build
+# uses the right base (the Dockerfile starts FROM $BUILD_FROM, which Supervisor
+# sets from here). CI (.github/workflows/addon-image.yml) passes the same base +
+# WACTORZ_REF inline as build-args to docker/build-push-action.
 build_from:
   aarch64: ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.20
   amd64: ghcr.io/home-assistant/amd64-base-python:3.12-alpine3.20
@@ -11,9 +12,9 @@ args:
   # Git ref (branch / tag / sha) of wactorz to pip-install into the image.
   # Override locally to test a branch without editing the Dockerfile, e.g.
   #   WACTORZ_REF: my-feature-branch
-  # CI rewrites this from the workflow's `ref` input.
+  # CI passes its own WACTORZ_REF as a build-arg (it does not read this file).
   WACTORZ_REF: main
 labels:
   org.opencontainers.image.title: "Wactorz Home Assistant add-on"
   org.opencontainers.image.source: "https://github.com/waldiez/wactorz"
-  org.opencontainers.image.licenses: "MIT"
+  org.opencontainers.image.licenses: "Apache-2.0"

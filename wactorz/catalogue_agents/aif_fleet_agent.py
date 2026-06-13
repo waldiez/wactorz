@@ -67,7 +67,10 @@ async def setup(agent):
         MODEL_PATH, ZONE_INDEX,
         heat_low=HEAT_LOW, heat_high=HEAT_HIGH,
         cool_low=COOL_LOW, cool_high=COOL_HIGH,
-        policy_len=POLICY_LEN, lr_pB=LR_PB, freeze_B=FREEZE_B,
+        comfort_weight=COMFORT_WEIGHT, energy_weight=ENERGY_WEIGHT,
+        policy_len=POLICY_LEN, lr_pB=LR_PB, pB_prior_scale=PB_PRIOR_SCALE,
+        epistemic_weight=EPISTEMIC_WEIGHT, unocc_gate=UNOCC_GATE,
+        deadband_weight=DEADBAND_WEIGHT, freeze_B=FREEZE_B, override=OVERRIDE,
     )
     agent.state["last_ep"] = None
     agent.state["acted"]   = 0
@@ -154,7 +157,14 @@ DEFAULTS = {
     "heat_high":    22.0,
     "cool_low":     24.0,
     "cool_high":    30.0,
-    "policy_len":   4,           # AIF planning horizon (match training)
+    "policy_len":   4,           # AIF planning horizon (match training!)
+    "comfort_weight":  1.0,      # EFE comfort term scale (match training)
+    "energy_weight":   0.5,      # EFE energy term scale  (match training!)
+    "epistemic_weight":0.2,      # EFE info-gain term scale (match training)
+    "unocc_gate":      0.1,      # unoccupied comfort gate (match training)
+    "deadband_weight": 4.0,      # deadband penalty scale  (match training)
+    "pB_prior_scale":  2.0,      # init pseudo-counts (overwritten by checkpoint)
+    "override":     "safety",    # reactive safety-net mode: safety | aggressive
     "freeze_B":     False,       # False = keep adapting B_T online (matches v7
                                  # run_simulation default / the deploy baseline);
                                  # True = frozen inference (B_T fixed as trained)
@@ -233,6 +243,12 @@ async def _launch(agent, cfg):
                     f"clg[{bounds['cool_low']},{bounds['cool_high']}] — these MUST "
                     f"match the trained env / the bridge's denormalization.",
                     level="info" if src == "env_info" else "warning")
+    await agent.log(
+        "aif-fleet planning cfg (MUST match the v7 training run): "
+        f"policy_len={cfg['policy_len']} energy_weight={cfg['energy_weight']} "
+        f"comfort_weight={cfg['comfort_weight']} epistemic_weight={cfg['epistemic_weight']} "
+        f"unocc_gate={cfg['unocc_gate']} deadband_weight={cfg['deadband_weight']} "
+        f"override={cfg['override']!r} freeze_B={cfg['freeze_B']} lr_pB={cfg['lr_pB']}")
 
     DynamicAgent = type(agent._actor)   # avoid hard-coding the package path
     env_id    = cfg["env_id"]
@@ -257,6 +273,13 @@ async def _launch(agent, cfg):
             f"COOL_LOW = {bounds['cool_low']!r}\n"
             f"COOL_HIGH = {bounds['cool_high']!r}\n"
             f"POLICY_LEN = {int(cfg['policy_len'])}\n"
+            f"COMFORT_WEIGHT = {float(cfg['comfort_weight'])!r}\n"
+            f"ENERGY_WEIGHT = {float(cfg['energy_weight'])!r}\n"
+            f"EPISTEMIC_WEIGHT = {float(cfg['epistemic_weight'])!r}\n"
+            f"UNOCC_GATE = {float(cfg['unocc_gate'])!r}\n"
+            f"DEADBAND_WEIGHT = {float(cfg['deadband_weight'])!r}\n"
+            f"PB_PRIOR_SCALE = {float(cfg['pB_prior_scale'])!r}\n"
+            f"OVERRIDE = {cfg['override']!r}\n"
             f"FREEZE_B = {bool(cfg['freeze_B'])!r}\n"
             f"LR_PB = {float(cfg['lr_pB'])!r}\n"
             f"PUBLISH_MODE = {cfg['publish_mode']!r}\n\n"
@@ -358,7 +381,9 @@ async def handle_task(agent, payload):
     cfg = _cfg(agent)
     for k in ("env_id", "model_path", "zones", "info_timeout", "infer_dir",
               "aif_src_dir", "heat_low", "heat_high", "cool_low", "cool_high",
-              "policy_len", "freeze_B", "lr_pB", "publish_mode"):
+              "policy_len", "comfort_weight", "energy_weight", "epistemic_weight",
+              "unocc_gate", "deadband_weight", "pB_prior_scale", "override",
+              "freeze_B", "lr_pB", "publish_mode"):
         if req.get(k) is not None:
             cfg[k] = req[k]
 

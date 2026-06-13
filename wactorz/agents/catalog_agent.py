@@ -325,6 +325,39 @@ def _build_catalog() -> dict:
         }
         logger.info("[catalog] Loaded aif-fleet recipe")
 
+    # ── aif-controller (single-batch, exact v7 parity) ─────────────────
+    code = _load_recipe("aif_controller_agent.py")
+    if code:
+        catalog["aif-controller"] = {
+            "name":         "aif-controller",
+            "type":         "dynamic",
+            "description":  "Single-agent AIF OfficeMedium controller: runs all zones as one batch (exact v7 parity) and publishes per-zone normalized actions. Use instead of aif-fleet when bit-exact parity with a full-batch v7 run matters.",
+            "capabilities": ["sinergym", "active_inference", "pymdp", "aif",
+                             "rl_inference", "building_control", "energy_optimization"],
+            "install":      ["torch", "numpy", "aiomqtt"],
+            "input_schema": {
+                "action":          "str  — launch | stop | status",
+                "env_id":          "str  — Sinergym env ID (must match the bridge)",
+                "model_path":      "str  — absolute path to trained aif_model.pkl",
+                "zones":           "list — explicit zone names in bridge order",
+                "infer_dir":       "str  — dir with aif_infer.py + pymdp_office_v7_torch.py",
+                "aif_src_dir":     "str  — dir holding pymdp_office_v7_torch.py if separate",
+                "heat_low":        "float", "heat_high": "float",
+                "cool_low":        "float", "cool_high": "float",
+                "policy_len":      "int  — AIF planning horizon (match training!)",
+                "energy_weight":   "float — EFE energy scale (match training!)",
+                "comfort_weight":  "float", "epistemic_weight": "float",
+                "unocc_gate":      "float", "deadband_weight": "float",
+                "pB_prior_scale":  "float", "override": "str",
+                "freeze_B":        "bool — match v7 run (default eval = False)",
+                "lr_pB":           "float", "publish_mode": "str — normalized | setpoints",
+            },
+            "output_schema": {"ok": "bool", "zones": "list", "message": "str"},
+            "poll_interval": 3600,
+            "code":          code,
+        }
+        logger.info("[catalog] Loaded aif-controller recipe")
+
     code = _load_recipe("sinergym_hsml_agent.py")
     if code:
         catalog["sinergym-hsml"] = {

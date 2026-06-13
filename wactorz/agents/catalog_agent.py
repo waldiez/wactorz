@@ -285,7 +285,46 @@ def _build_catalog() -> dict:
             "code":          code,
         }
         logger.info("[catalog] Loaded maddpg-fleet recipe")
-        
+
+    # ── aif-fleet ──────────────────────────────────────────────────────
+    code = _load_recipe("aif_fleet_agent.py")
+    if code:
+        catalog["aif-fleet"] = {
+            "name":         "aif-fleet",
+            "type":         "dynamic",
+            "description":  "Deploys the trained Factored Active Inference OfficeMedium policy as a fleet of per-zone inference agents (one per zone). Inference only — slices aif_model.pkl per zone (freeze_B), no retraining. Publishes normalized [-1,1] actions, so it is wire-compatible with the MADDPG bridge.",
+            "capabilities": ["sinergym", "active_inference", "pymdp", "aif",
+                             "rl_inference", "multi_agent", "building_control",
+                             "energy_optimization"],
+            "install":      ["torch", "numpy", "aiomqtt"],
+            "input_schema": {
+                "action":       "str  — launch | stop | status",
+                "env_id":       "str  — Sinergym env ID (must match the bridge)",
+                "model_path":   "str  — absolute path to trained aif_model.pkl",
+                "zones":        "list — optional explicit zone names in bridge order",
+                "info_timeout": "float — seconds to wait for env_info, default 30",
+                "infer_dir":    "str  — dir with aif_infer.py + pymdp_office_v7_torch.py; default = aif_model.pkl dir",
+                "aif_src_dir":  "str  — dir holding pymdp_office_v7_torch.py if not next to aif_infer.py; default = infer_dir",
+                "heat_low":     "float — htg action min (must match trained env)",
+                "heat_high":    "float — htg action max (must match trained env)",
+                "cool_low":     "float — clg action min (must match trained env)",
+                "cool_high":    "float — clg action max (must match trained env)",
+                "policy_len":   "int  — AIF planning horizon, default 4",
+                "freeze_B":     "bool — False keeps adapting B_T online (matches v7 eval default, reproduces the deploy baseline); True = frozen inference",
+                "lr_pB":        "float — Dirichlet learning rate when freeze_B is False, default 1.0",
+                "publish_mode": "str  — normalized | setpoints, default normalized",
+            },
+            "output_schema": {
+                "ok":       "bool",
+                "children": "list — spawned zone agent names",
+                "zones":    "list",
+                "message":  "str",
+            },
+            "poll_interval": 3600,
+            "code":          code,
+        }
+        logger.info("[catalog] Loaded aif-fleet recipe")
+
     code = _load_recipe("sinergym_hsml_agent.py")
     if code:
         catalog["sinergym-hsml"] = {
@@ -391,6 +430,37 @@ def _build_catalog() -> dict:
             "code":          code,
         }
         logger.info("[catalog] Loaded sinergym-anomaly recipe")
+
+    # ── aif-anomaly ────────────────────────────────────────────────────
+    code = _load_recipe("aif_anomaly_agent.py")
+    if code:
+        catalog["aif-anomaly"] = {
+            "name":         "aif-anomaly",
+            "type":         "dynamic",
+            "description":  "Live anomaly detection on the Sinergym observation "
+                            "stream using the AIF-trained detector "
+                            "(detector_aif_v3.pkl). Subscribes to the global obs "
+                            "topic, publishes alerts on .../anomaly, and records "
+                            "them in Fuseki with provenance (agent-scoped IRIs) so "
+                            "it can be scored alongside the forecast detector.",
+            "capabilities": ["sinergym", "anomaly_detection", "fault_detection",
+                            "monitoring", "active_inference", "aif", "hvac_fault",
+                            "sensor_drift"],
+            "install":      ["torch", "numpy"],
+            "input_schema": {
+                "action":          "str — optional: status | reset | config",
+                "detector_path":   "str — path to detector_aif_v3.pkl",
+                "detector_module": "str — module exposing the detector class",
+                "detector_class":  "str — detector class name (has .load/.update)",
+                "infer_dir":       "str — dir with the detector module + .pkl",
+                "env_id":          "str — optional",
+                "fuseki_url":      "str — optional",
+            },
+            "output_schema": {"status": "str"},
+            "poll_interval": 3600,
+            "code":          code,
+        }
+        logger.info("[catalog] Loaded aif-anomaly recipe")
 
     return catalog
 

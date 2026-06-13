@@ -820,3 +820,18 @@ window.addEventListener("beforeunload", () => {
   wsChat.disconnect();
   scene.dispose();
 });
+
+// wipe all
+document.addEventListener("af-wipe-all", () => {
+  scene.clearAll();
+  feed.clear();
+  _logFeedMaxTs = 0;
+});
+
+// A scoped reset (metrics / logs) cleared the server-side activity log — drop
+// the on-screen feed too, since onLogFeed only ever appends and would otherwise
+// keep showing stale lines until the next event.
+document.addEventListener("af-clear-feed", () => {
+  feed.clear();
+  _logFeedMaxTs = 0;
+});

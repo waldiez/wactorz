@@ -371,6 +371,12 @@ export class SceneManager {
 
   // ── Cleanup ─────────────────────────────────────────────────────────────────
 
+  clearAll(): void {
+    for (const id of [...this.agents.keys()]) this.removeAgent(id);
+    this.setTotalCostUsd(0);
+    this.setTotalMessages(0);
+  }
+
   dispose(): void {
     this.cardDashboard?.destroy();
     this.socialDashboard?.destroy();

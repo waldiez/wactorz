@@ -43,7 +43,8 @@
     <link rel="icon"             href="./icon.ico" />
     <link rel="apple-touch-icon" href="./icon.png" />
     <link rel="icon" href="./icon.png" type="image/png" sizes="512x512" />
-    <link rel="manifest"         href="./site.webmanifest" />
+    <!-- crossorigin: send the ingress auth cookie, else HA ingress 401s the manifest -->
+    <link rel="manifest"         href="./site.webmanifest" crossorigin="use-credentials" />
     <style>
       /* ── Reset ──────────────────────────────────────────────────────────── */
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

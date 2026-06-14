@@ -6,8 +6,10 @@
 HERE="$(dirname "$(readlink -f "$0")")"
 export QTWEBENGINE_DISABLE_SANDBOX=1
 export QT_API=PySide6
-# Under native Wayland (e.g. GNOME) the bundled Qt fails to show the webview
-# content and the window comes up unthemed (white frame, no min/max/close), so
-# default to X11/XWayland. Overridable: QT_QPA_PLATFORM=wayland ./Wactorz…AppImage
-export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+# GNOME breaks the bundled QtWebEngine under Wayland (no webview content, unthemed
+# window: white frame, no min/max/close), so force XWayland there. Other desktops
+# (KDE, …) handle Wayland fine. Overridable: QT_QPA_PLATFORM=wayland ./Wactorz…AppImage
+if printf %s "${XDG_CURRENT_DESKTOP:-}" | grep -qi gnome; then
+    export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+fi
 exec "$HERE/usr/bin/wactorz-desktop/wactorz-desktop" "$@"

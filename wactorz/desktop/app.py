@@ -279,6 +279,11 @@ def _load_when_ready(window) -> None:
 
 def launch_desktop() -> None:
     global _backend, _window
+    # On Linux, Qt fails to render QtWebEngine under native Wayland and the window
+    # comes up unthemed; force X11/XWayland (overridable). AppRun does the same
+    # for the AppImage; this covers source/dev runs that don't go through AppRun.
+    if sys.platform.startswith("linux"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
     _set_app_user_model_id()
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)

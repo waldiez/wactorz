@@ -6,6 +6,8 @@
 # AppImage runs on as many hosts as possible.
 set -euo pipefail
 
+export QT_API=PySide6
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 VERSION="$(cd "$ROOT" && python3 -c 'import wactorz._version as v; print(v.__version__)')"

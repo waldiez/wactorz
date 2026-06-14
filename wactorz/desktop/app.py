@@ -1,5 +1,16 @@
-"""Wactorz desktop shell: native window (PyWebView) + tray (pystray) wrapping
-the Python backend.
+"""Wactorz desktop shell.
+
+A native window (PyWebView) wrapping the local Wactorz backend, with an
+optional system-tray icon.
+
+One process: this script is the window/shell. It launches the backend as a
+child (`python -m wactorz`, or `<exe> --run-backend` when frozen) and points
+the window at the backend's local web server.
+
+Tray: uses Qt (QSystemTrayIcon), which the AppImage already bundles for the
+webview. Builds are imported lazily, so a build without PySide6 (e.g. the
+deb/rpm flavour, which uses the system WebKit2GTK webview) simply runs without
+a tray rather than failing to start.
 """
 from __future__ import annotations
 
@@ -12,33 +23,45 @@ import urllib.request
 from pathlib import Path
 
 import webview
-import pystray
-from dotenv import load_dotenv, find_dotenv
-from PIL import Image
-
+from dotenv import find_dotenv, load_dotenv
 
 load_dotenv(find_dotenv())
 
 APP_NAME = "Wactorz"
+APP_ID = "io.waldiez.wactorz"          # desktop-file id / WM_CLASS
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("MONITOR_PORT", "8888"))
 URL = f"http://{HOST}:{PORT}"
 FROZEN = getattr(sys, "frozen", False)
 ICON_EXT = {"win32": "ico", "darwin": "icns"}.get(sys.platform, "png")
-APP_ICON = Path(__file__).with_name("assets") / f"icon.{ICON_EXT}"
-SPLASH_BG = "#0A0E1A"          # window surface colour while the app document paints
+
+# When frozen, the entry script's __file__ is not under the package, so resolve
+# bundled assets from the PyInstaller extraction dir instead of relative to it.
+_ASSETS = (
+    Path(sys._MEIPASS) / "wactorz" / "desktop" / "assets"  # type: ignore[attr-defined]
+    if FROZEN
+    else Path(__file__).with_name("assets")
+)
+APP_ICON = _ASSETS / f"icon.{ICON_EXT}"
+
+SPLASH_BG = "#0A0E1A"          # window surface colour while the page paints
+
+# Child stdout/stderr go here so a frozen app's backend failures are diagnosable.
+BACKEND_LOG = (
+    Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    / "wactorz"
+    / "backend.log"
+)
 
 _backend: "subprocess.Popen | None" = None
 _window = None
 _hidden = False
-_shown = False                 # window is revealed only once the app has painted
+_shown = False                 # the window is revealed only once the page paints
+_tray = None                   # kept alive for the lifetime of the process
+_tray_ok = False               # True only when a tray icon is actually shown
 
-
-# ── Initial / error documents ─────────────────────────────────────────────────
-# The window stays hidden until the app page has painted — its in-page boot
-# overlay (frontend/index.html) is the single splash, so the only document the
-# user ever sees is the app itself (no native splash → app doc-swap flash, no
-# WebKitGTK white). This blank dark page is the never-shown initial document.
+# Never-shown initial document. The window stays hidden until the real page has
+# painted (see _on_app_loaded), so the only document the user sees is the app.
 _BLANK_HTML = (
     '<!doctype html><html><body '
     'style="margin:0;height:100vh;background:#0A0E1A"></body></html>'
@@ -47,20 +70,15 @@ _ERROR_HTML = (
     '<!doctype html><html><body style="margin:0;height:100vh;display:flex;'
     'align-items:center;justify-content:center;font-family:sans-serif;'
     'background:#0A0E1A;color:#f87171;font-size:14px">'
-    'Backend did not start — check logs and reopen.</body></html>'
+    "Backend did not start — check logs and reopen.</body></html>"
 )
 
 
-# ── backend child ───────────────────────────────────────────────────────────
-# The backend log — child stdout/stderr go here so failures are diagnosable
-# (a frozen app has no console). Referenced in the error page.
-BACKEND_LOG = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "wactorz" / "backend.log"
-
-
+# ── backend child ─────────────────────────────────────────────────────────────
 def _spawn_backend() -> "subprocess.Popen":
-    # INTERFACE=rest is essential: without it the backend defaults to "cli"
-    # (interactive terminal mode) outside DEV_MODE and never serves the web UI,
-    # so the window can never load. We want the REST/web server on MONITOR_PORT.
+    # INTERFACE=rest makes the backend serve its web/REST UI on MONITOR_PORT.
+    # Without it, the backend defaults to "cli" (interactive) outside dev mode
+    # and never binds the port the window needs.
     env = dict(os.environ, MONITOR_PORT=str(PORT), INTERFACE="rest")
     cmd = [sys.executable, "--run-backend"] if FROZEN else [sys.executable, "-m", "wactorz"]
     try:
@@ -68,30 +86,30 @@ def _spawn_backend() -> "subprocess.Popen":
         log = open(BACKEND_LOG, "w")
         return subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
     except Exception:
-        # Fall back to inherited stdio if the log file can't be opened.
         return subprocess.Popen(cmd, env=env)
 
 
 def run_backend() -> None:
-    """Invoked as `<exe> --run-backend` (frozen) — equivalent to `python -m wactorz`."""
+    """Entry for `<exe> --run-backend` (frozen) — same as `python -m wactorz`."""
     import runpy
+
     sys.argv = ["wactorz"]
     runpy.run_module("wactorz", run_name="__main__")
 
 
 def _wait_for_backend(timeout: float = 30.0) -> bool:
-    # Probe the REST /health endpoint (always 200 once the server is up) rather
-    # than "/", which depends on static assets and would 404 → false negative.
+    # Probe the REST /health endpoint (returns 200 once the server is up). "/"
+    # depends on static assets and could 404, which would read as not-ready.
     health = f"{URL}/health"
     deadline = time.time() + timeout
     while time.time() < deadline:
         if _backend is not None and _backend.poll() is not None:
-            return False   # child already exited — see BACKEND_LOG
+            return False   # child exited before serving — see BACKEND_LOG
         try:
             with urllib.request.urlopen(health, timeout=1):
                 return True
         except Exception:
-            time.sleep(0.15)   # poll often so we swap in the app the moment it's up
+            time.sleep(0.15)
     return False
 
 
@@ -104,19 +122,14 @@ class Api:
 def _notify(title: str, body: str) -> None:
     try:
         from plyer import notification
+
         notification.notify(title=title, message=body, app_name=APP_NAME)
     except Exception:
         pass
 
 
-# ── tray ────────────────────────────────────────────────────────────────────
-def _load_icon() -> Image.Image:
-    if APP_ICON.exists():
-        return Image.open(APP_ICON)
-    return Image.new("RGBA", (64, 64), (90, 120, 255, 255))  # fallback swatch
-
-
-def _toggle(icon=None, item=None) -> None:
+# ── tray (Qt) ─────────────────────────────────────────────────────────────────
+def _toggle() -> None:
     global _hidden
     if _window is None:
         return
@@ -127,26 +140,95 @@ def _toggle(icon=None, item=None) -> None:
     _hidden = not _hidden
 
 
-def _quit(icon, item) -> None:
-    if _window is not None:
-        _window.hide()
-    icon.stop()
-    _shutdown()
+def _build_tray() -> bool:
+    """Create a Qt system-tray icon. Returns True only if one is shown.
 
+    PySide6 ships in the AppImage (same toolkit as the webview). Builds without
+    it, or hosts without a tray area, get no tray and the function is a no-op.
+    """
+    global _tray, _tray_ok
+    try:
+        from PySide6.QtGui import QAction, QIcon
+        from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+    except ImportError:
+        return False
 
-def _build_tray() -> pystray.Icon:
-    menu = pystray.Menu(
-        pystray.MenuItem("Show / Hide", _toggle, default=True),
-        pystray.MenuItem("Quit Wactorz", _quit),
+    app = QApplication.instance() or QApplication(sys.argv)
+    # Set the app identity so the window's WM_CLASS / Wayland app_id matches the
+    # installed desktop file (taskbar grouping, correct icon).
+    app.setApplicationName(APP_NAME)
+    app.setOrganizationName("Wactorz")
+    app.setOrganizationDomain("io.waldiez.wactorz")
+    app.setDesktopFileName(APP_ID)
+
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        return False
+
+    _tray = QSystemTrayIcon(QIcon(str(APP_ICON)))
+    menu = QMenu()
+    show_hide = QAction("Show / Hide", menu)
+    show_hide.triggered.connect(_toggle)
+    quit_item = QAction("Quit Wactorz", menu)
+    quit_item.triggered.connect(_shutdown)
+    menu.addAction(show_hide)
+    menu.addAction(quit_item)
+    _tray.setContextMenu(menu)
+    _tray.activated.connect(
+        lambda reason: _toggle()
+        if reason == QSystemTrayIcon.ActivationReason.Trigger
+        else None
     )
-    return pystray.Icon("wactorz", _load_icon(), APP_NAME, menu)
+    _tray.setToolTip(APP_NAME)
+    _tray.show()
+    _tray_ok = True
+    return True
 
 
-def _start_tray(icon: pystray.Icon) -> None:
-    icon.run_detached()
+def _build_pystray_tray() -> bool:
+    """macOS / Windows tray via pystray's native backend (no Qt, no GTK).
+
+    Used only off Linux: pywebview runs a native loop there, so a Qt tray can't
+    work, and pystray's darwin/win32 backends are lightweight (OS APIs, own
+    thread). Returns True only if a tray is shown.
+    """
+    global _tray, _tray_ok
+    try:
+        import pystray
+        from PIL import Image
+    except ImportError:
+        return False
+    try:
+        image = Image.open(_ASSETS / "icon.png")   # PNG is always PIL-readable
+    except Exception:
+        return False
+
+    menu = pystray.Menu(
+        pystray.MenuItem("Show / Hide", lambda icon, item: _toggle(), default=True),
+        pystray.MenuItem("Quit Wactorz", lambda icon, item: _shutdown()),
+    )
+    _tray = pystray.Icon("wactorz", image, APP_NAME, menu)
+    try:
+        _tray.run_detached()
+    except Exception:
+        return False   # e.g. macOS main-thread limitation — fall back to no tray
+    _tray_ok = True
+    return True
 
 
-# ── lifecycle ───────────────────────────────────────────────────────────────
+# ── lifecycle ─────────────────────────────────────────────────────────────────
+def _set_app_user_model_id() -> None:
+    """Windows: set the AppUserModelID so the taskbar groups the window under our
+    icon. Must run before the window is created; a no-op on other platforms."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
 def _shutdown(*_) -> None:
     global _backend
     if _backend and _backend.poll() is None:
@@ -159,12 +241,17 @@ def _shutdown(*_) -> None:
 
 
 def _on_closing() -> bool:
-    """Window 'X' hides to tray instead of quitting; quit is tray-only."""
+    """Close button: hide to tray if there is one, otherwise quit.
+
+    Without a tray, hiding would leave the window unreachable, so we quit.
+    """
     global _hidden
-    if _window:
+    if _tray_ok and _window is not None:
         _window.hide()
         _hidden = True
-    return False  # cancel the real close
+        return False   # cancel the real close
+    _shutdown()
+    return True
 
 
 def _on_app_loaded(*_) -> None:
@@ -176,50 +263,51 @@ def _on_app_loaded(*_) -> None:
     _window.show()
 
 
-def launch_desktop() -> None:
-    global _backend, _window
-    signal.signal(signal.SIGINT, _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
-
-    _window = webview.create_window(
-        APP_NAME, html=_BLANK_HTML,
-        width=1200, height=700, min_size=(900, 600), js_api=Api(),
-        background_color=SPLASH_BG,
-    )
-    _backend = _spawn_backend()
-
-    _window.events.closing += _on_closing
-    _start_tray(_build_tray())
-
-    # Webview backend selection (Linux ships two flavours):
-    #   • AppImage   — only PySide6 is bundled → WACTORZ_WEBVIEW_GUI=qt
-    #   • deb / rpm  — system WebKit2GTK present → unset, pywebview picks gtk
-    # Unset/empty means let pywebview auto-detect. macOS/Windows ignore this.
-    _gui = os.environ.get("WACTORZ_WEBVIEW_GUI", "").strip().lower()
-    _start_kwargs = {"icon": APP_ICON}
-    if _gui:
-        _start_kwargs["gui"] = _gui
-    # _load_when_ready runs on a worker thread once the GUI loop is up.
-    webview.start(_load_when_ready, _window, **_start_kwargs)   # blocks main thread
-    _shutdown()
-
-
 def _load_when_ready(window) -> None:
-    """Worker thread: wait for the backend, load the app, then reveal the window.
-
-    The window is shown by _on_app_loaded once the document paints (its in-page
-    boot overlay covers the SPA boot), so there's no visible splash→app
-    transition and no white flash.
-    """
+    """Worker (runs after the GUI loop starts): wait for the backend, load the
+    app, then reveal the window once its document has painted."""
     if _wait_for_backend():
         window.events.loaded += _on_app_loaded
         window.load_url(URL)
-        time.sleep(2.0)        # fallback reveal in case 'loaded' doesn't fire
+        time.sleep(2.0)        # fallback reveal if the 'loaded' event doesn't fire
         _on_app_loaded()
     else:
         _notify(APP_NAME, "Backend did not start in time")
         window.load_html(_ERROR_HTML)
         _on_app_loaded()
+
+
+def launch_desktop() -> None:
+    global _backend, _window
+    _set_app_user_model_id()
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+
+    _window = webview.create_window(
+        APP_NAME,
+        html=_BLANK_HTML,
+        width=1200,
+        height=700,
+        min_size=(900, 600),
+        js_api=Api(),
+        background_color=SPLASH_BG,
+    )
+    _window.events.closing += _on_closing
+
+    _backend = _spawn_backend()
+
+    # Tray backend matches the webview backend: Qt on Linux (shares pywebview's
+    # QApplication), pystray's native backend on macOS / Windows.
+    if sys.platform.startswith("linux"):
+        _build_tray()
+    else:
+        _build_pystray_tray()
+
+    start_kwargs = {"icon": APP_ICON}
+    if sys.platform.startswith("linux"):
+        start_kwargs["gui"] = "qt"
+    webview.start(_load_when_ready, _window, **start_kwargs)   # blocks the main thread
+    _shutdown()
 
 
 def main() -> None:

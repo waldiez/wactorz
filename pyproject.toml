@@ -59,12 +59,13 @@ tts       = [
 ]
 desktop = [
     "pywebview[pyside6]>=5.1",
-    "pystray>=0.19.5",
-    "pillow>=10.0",
     "plyer>=2.1",
-    # "pygobject>=3.46; sys_platform == 'linux'",   # GTK/WebKit2 binding [if QT does not work]
     "pythonnet>=3.0;  sys_platform == 'win32'",    # Edge WebView2 backend
-    # macOS: pyobjc is pulled in by pywebview
+    # Tray on macOS/Windows uses pystray's native backend. Linux uses the Qt
+    # tray (QSystemTrayIcon), so pystray/Pillow are excluded there to keep the
+    # AppImage/Flatpak free of GTK.
+    "pystray>=0.19.5; sys_platform != 'linux'",
+    "pillow>=10.0;    sys_platform != 'linux'",
 ]
 docs      = [
     "markdown>=3.10.2",

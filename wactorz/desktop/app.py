@@ -15,7 +15,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-import webview          # pywebview
+import webview
 import pystray
 from dotenv import load_dotenv, find_dotenv
 from PIL import Image
@@ -24,16 +24,16 @@ from PIL import Image
 load_dotenv(find_dotenv())
 
 APP_NAME = "Wactorz"
-HOST = "127.0.0.1"      # never "localhost" — may resolve to ::1 only
+HOST = "127.0.0.1"
 PORT = int(os.environ.get("MONITOR_PORT", "8888"))
 URL = f"http://{HOST}:{PORT}"
 FROZEN = getattr(sys, "frozen", False)
-ICON_PNG = Path(__file__).with_name("assets") / "icon.png"
+ICON_EXT = "ico" if "win" in sys.platform else "png"
+APP_ICON = Path(__file__).with_name("assets") / f"icon.{ICON_EXT}"
 
 _backend: "subprocess.Popen | None" = None
 _window = None
 _hidden = False
-_tray_ref = None  # keeps the Linux AppIndicator alive (else GC'd)
 
 
 # ── backend child ───────────────────────────────────────────────────────────
@@ -77,8 +77,8 @@ def _notify(title: str, body: str) -> None:
 
 # ── tray ────────────────────────────────────────────────────────────────────
 def _load_icon() -> Image.Image:
-    if ICON_PNG.exists():
-        return Image.open(ICON_PNG)
+    if APP_ICON.exists():
+        return Image.open(APP_ICON)
     return Image.new("RGBA", (64, 64), (90, 120, 255, 255))  # fallback swatch
 
 
@@ -94,6 +94,8 @@ def _toggle(icon=None, item=None) -> None:
 
 
 def _quit(icon, item) -> None:
+    if _window is not None:
+        _window.hide()
     icon.stop()
     _shutdown()
 
@@ -107,10 +109,6 @@ def _build_tray() -> pystray.Icon:
 
 
 def _start_tray(icon: pystray.Icon) -> None:
-    # mac/Win: run_detached integrates with the existing Cocoa/Win32 run loop.
-    # (Linux is handled separately by _build_tray_linux — pystray's GTK backend
-    # would try to run a SECOND GLib main loop and fight pywebview for the
-    # default main context.)
     icon.run_detached()
 
 
@@ -136,7 +134,7 @@ def _on_closing() -> bool:
 
 
 def launch_desktop() -> None:
-    global _backend, _window, _tray_ref
+    global _backend, _window
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
@@ -150,11 +148,9 @@ def launch_desktop() -> None:
     _window.events.closing += _on_closing
     _start_tray(_build_tray())
     if sys.platform.startswith("linux"):
-        # _tray_ref = _build_tray_linux()
-        webview.start(gui="qt", icon=ICON_PNG)
+        webview.start(gui="qt", icon=APP_ICON)
     else:
-        # _start_tray(_build_tray())
-        webview.start(icon=ICON_PNG)      # blocks on the main thread
+        webview.start(icon=APP_ICON)      # blocks on the main thread
     _shutdown()
 
 

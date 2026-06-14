@@ -736,7 +736,9 @@ voiceSelect?.addEventListener("change", () => {
   tts.setVoice(voiceSelect.value);
 });
 
-// Probe server TTS availability + load voice list
+// Probe server TTS availability + load voice list (base must be set first so
+// the request stays inside the ingress prefix / Tauri host — not bare "/api").
+tts.setApiBase(_apiBase);
 tts.init();
 
 // ── Connect ───────────────────────────────────────────────────────────────────

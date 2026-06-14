@@ -14,6 +14,7 @@
 
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import { agentImageGen } from "../io/AgentImageGen";
+import { escapeHtml } from "./escapeHtml";
 
 /** DiceBear robot URL — instant, no API key needed. */
 function dicebearFor(name: string): string {
@@ -281,7 +282,7 @@ export class ChatPanel {
         row.dataset["name"] = agent.name;
         row.innerHTML = `
           <span class="af-chat-agent-dot"></span>
-          <span class="af-chat-agent-name">${agent.name}</span>
+          <span class="af-chat-agent-name">${escapeHtml(agent.name)}</span>
           <span class="af-chat-agent-lock" aria-hidden="true"></span>
         `;
         // Use delegated name lookup so the closure always reflects latest state

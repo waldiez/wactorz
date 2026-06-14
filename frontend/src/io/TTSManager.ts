@@ -29,10 +29,18 @@ export class TTSManager {
   /** null = unknown, true = server responded ok, false = unavailable (503/network) */
   private _serverAvailable: boolean | null = null;
   private _voices: TTSVoice[] = [];
+  /** API base — empty for plain web, ingress prefix behind HA, localhost in Tauri.
+   *  Must be set (main.ts) before init(); bare "/api/…" escapes the ingress prefix. */
+  private _apiBase = "";
 
   constructor() {
     this._beepEnabled = localStorage.getItem(LS_BEEP) !== "0";
     this._ttsEnabled  = localStorage.getItem(LS_TTS)  === "1";
+  }
+
+  /** Set the API base (ingress prefix / Tauri host). Call before init(). */
+  setApiBase(base: string): void {
+    this._apiBase = base;
   }
 
   /**
@@ -47,7 +55,7 @@ export class TTSManager {
 
   private async _checkServer(): Promise<boolean> {
     try {
-      const res = await fetch("/api/tts/voices");
+      const res = await fetch(`${this._apiBase}/api/tts/voices`);
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
@@ -173,7 +181,7 @@ export class TTSManager {
     const voice = this.selectedVoice;
     if (voice) params.set("voice", voice);
 
-    fetch(`/api/tts?${params}`)
+    fetch(`${this._apiBase}/api/tts?${params}`)
       .then(res => {
         if (res.status === 503 || res.status === 404) {
           this._serverAvailable = false;

@@ -57,6 +57,15 @@ influx    = [
 tts       = [
     "edge-tts>=6.1.9",
 ]
+desktop = [
+    "pywebview[pyside6]>=5.1",
+    "pystray>=0.19.5",
+    "pillow>=10.0",
+    "plyer>=2.1",
+    # "pygobject>=3.46; sys_platform == 'linux'",   # GTK/WebKit2 binding [if QT does not work]
+    "pythonnet>=3.0;  sys_platform == 'win32'",    # Edge WebView2 backend
+    # macOS: pyobjc is pulled in by pywebview
+]
 docs      = [
     "markdown>=3.10.2",
     "pygments>=2.19.2",
@@ -84,6 +93,7 @@ all = [
     "wactorz[otel]",
     "wactorz[influx]",
     "wactorz[tts]",
+    "wactorz[desktop]",
 ]
 
 [project.scripts]
@@ -91,6 +101,7 @@ wactorz         = "wactorz.cli:main"
 wactorz-monitor = "wactorz.monitor_server:cli_main"
 wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
+wactorz-desktop = "wactorz.desktop.app:main"
 
 [project.urls]
 Homepage      = "https://docs.waldiez.io/wactorz/"

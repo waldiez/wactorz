@@ -559,7 +559,6 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
 
             if remote_node:
                 import uuid as _uuid, json as _json
-                import aiomqtt
                 reply_topic = f"main/reply/io-gateway/{_uuid.uuid4().hex[:8]}"
                 payload = {
                     "text":          text,
@@ -1217,12 +1216,6 @@ def _snapshot() -> dict:
 
 async def mqtt_listener():
     global mqtt_client_ref
-    try:
-        import aiomqtt
-    except ImportError:
-        logger.error("aiomqtt not installed: pip install aiomqtt")
-        return
-
     logger.info(f"Connecting to MQTT {MQTT_BROKER}:{MQTT_PORT}...")
     try:
         while True:

@@ -73,9 +73,8 @@ _KB: dict[str, str] = {
     "deploy": (
         "**Deployment modes**\n\n"
         "1. Docker Compose (`compose.yaml`) — full stack\n"
-        "2. Pre-built image — `scripts/package-release.sh` (39 MB image)\n"
-        "3. Native binary (`compose.native.yaml`) — Rust binary on host; Docker runs nginx + mosquitto\n"
-        "4. Dev mode (`compose.dev.yaml`) — mosquitto + mock-agents only"
+        "2. Pre-built image — `scripts/package-release.sh`\n"
+        "3. Dev mode (`compose.dev.yaml`) — mosquitto + mock-agents only"
     ),
     "hlc-wid": (
         "**HLC-WID — Hybrid Logical Clock WID**\n\n"
@@ -87,12 +86,6 @@ _KB: dict[str, str] = {
         "**WID — Message IDs**\n\n"
         "Individual messages use plain WID (random, compact). Actor IDs use HLC-WID (time-ordered).\n"
         "Both are provided by the same `waldiez-wid` / `@waldiez/wid` package."
-    ),
-    "rust": (
-        "**Rust port (`rust/`)**\n\n"
-        "Full port using tokio (async), rumqttc (MQTT), and Rhai (dynamic scripting).\n"
-        "Crates: `wactorz-core`, `wactorz-agents`, `wactorz-mqtt`.\n"
-        "Binary ~12 MB. Minimum Rust toolchain: 1.93 (bookworm). All actor IDs are HLC-WID strings."
     ),
     "babylon": (
         "**Babylon.js frontend**\n\n"
@@ -125,7 +118,7 @@ _KB: dict[str, str] = {
     "dynamic": (
         "**DynamicAgent — LLM-generated code executor**\n\n"
         "Receives Python source with `setup()` / `handle_task()` hooks and runs it via `exec()`.\n"
-        "Rhai scripting is the Rust equivalent. agentType: `dynamic`."
+        "agentType: `dynamic`."
     ),
     "main": (
         "**main-actor — LLM orchestrator**\n\n"
@@ -177,7 +170,7 @@ _ALIASES: dict[str, str] = {
     "finance": "wif", "financier": "wif",
     "coding": "dynamic", "exec": "dynamic", "script": "dynamic",
     "3d": "babylon", "graph": "babylon", "galaxy": "babylon",
-    "docker": "deploy", "deployment": "deploy", "native": "deploy", "binary": "rust",
+    "docker": "deploy", "deployment": "deploy",
 }
 
 _TOPICS = ", ".join(sorted(_KB.keys()))

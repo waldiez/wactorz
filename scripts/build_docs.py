@@ -359,27 +359,7 @@ def build(site_dir: Path = SITE) -> None:
     print(f"\n✓  site built → {site_dir}")
 
 
-# ── Rust + JS/TS docs ──────────────────────────────────────────────────────────
-
-def build_rust(site_dir: Path = SITE) -> None:
-    out_dir = site_dir / "api" / "rust"
-    print("  building rustdoc …")
-    try:
-        r = subprocess.run(["cargo", "doc", "--no-deps", "--workspace"], cwd=ROOT, check=False)
-    except FileNotFoundError:
-        print("  [skip] cargo not found")
-        return
-    if r.returncode != 0:
-        print("  [warn] cargo doc failed")
-        return
-    doc_src = ROOT / "target" / "doc"
-    if doc_src.is_dir():
-        shutil.copytree(doc_src, out_dir, dirs_exist_ok=True)
-        print(f"  rustdoc  → static/docs/api/rust/")
-    index_script = ROOT / "scripts" / "rustdoc_index.py"
-    if index_script.exists():
-        subprocess.run([sys.executable, str(index_script), str(out_dir)], check=False)
-
+# ── JS/TS docs ─────────────────────────────────────────────────────────────────
 
 def build_jsdocs(site_dir: Path = SITE) -> None:
     frontend_dir = ROOT / "frontend"
@@ -544,7 +524,6 @@ def _start_watchdog_watcher() -> None:
 def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
     build()
     if full:
-        build_rust()
         build_jsdocs()
         build_pydocs()
 
@@ -577,7 +556,6 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
         url = f"http://localhost:{port}/"
         print(f"\n  docs      → {url}")
         print(f"  guide     → {url}guide/")
-        print(f"  api/rust  → {url}api/rust/")
         print(f"  api/js    → {url}api/js/")
         print(f"  api/python→ {url}api/python/")
         print(f"\nPress Ctrl-C to stop.\n")
@@ -595,7 +573,7 @@ if __name__ == "__main__":
     parser.add_argument("--serve", nargs="?", const=8001, type=int, metavar="PORT",
                         help="serve after building (default port 8001)")
     parser.add_argument("--full", action="store_true",
-                        help="also build rustdoc and typedoc")
+                        help="also build typedoc and pydoc")
     parser.add_argument("--reload", action="store_true",
                         help="watch docs/ and rebuild on changes (implies --serve)")
     args = parser.parse_args()
@@ -608,6 +586,5 @@ if __name__ == "__main__":
     else:
         build()
         if args.full:
-            build_rust()
             build_jsdocs()
             build_pydocs()

@@ -156,7 +156,6 @@ CLAUDE.md
 .codex
 .gemini/
 __pycache__/
-rust/**/target/
 /target/
 **.log
 
@@ -213,6 +212,3 @@ coverage/
 
 
 yolov8n.pt
-# Tauri
-frontend/src-tauri/target/
-frontend/src-tauri/gen/

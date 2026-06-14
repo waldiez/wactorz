@@ -39,13 +39,6 @@ docker compose --profile python up -d
 
 Open `http://localhost:8888` (monitor UI) or `http://localhost:8000` (REST API).
 
-For the Rust server + nginx dashboard instead:
-
-```bash
-docker compose --profile rust up -d
-# Open: http://localhost/
-```
-
 ### Services
 
 Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring up more services.
@@ -56,8 +49,6 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 | `python` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
 | `python` | monitor UI | `wactorz-python:8888` | `:8888` |
 | `python` | prometheus | `wactorz-prometheus:9090` | `:9090` |
-| `rust` / `full` | wactorz-server (Rust) | `wactorz-server:8080` | `:8080` (API), `:8081` (WS) |
-| `rust` / `full` | nginx (dashboard) | — | `:80` |
 | `full` | home-assistant | `homeassistant:8123` | `:8123` |
 
 ```bash
@@ -216,12 +207,9 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `MQTT_PASSWORD` | _(blank)_ | Broker password |
 | `PORT` | `8000` | Python REST API listen port |
 | `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
-| `API_ADDR` | `0.0.0.0:8080` | Rust server REST listen address _(Rust only)_ |
-| `WS_ADDR` | `0.0.0.0:8081` | Rust server WS bridge listen address _(Rust only)_ |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
 | `PROMETHEUS_SCRAPE_INTERVAL` | `15s` | Global Prometheus scrape interval |
 | `PROMETHEUS_MONITOR_MOSQUITTO` | `1` | Enable Mosquitto TCP availability probe |
-| `DASHBOARD_EXTERNAL_PORT` | `80` | nginx host port |
 | `NAUTILUS_SSH_KEY` | _(default key)_ | Path to SSH private key |
 | `NAUTILUS_STRICT_HOST_KEYS` | `0` | `1` = enforce strict host-key checking |
 | `NAUTILUS_CONNECT_TIMEOUT` | `10` | SSH timeout in seconds |
@@ -232,8 +220,6 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `DEPLOY_SKIP_BINARY` | `0` | `1` = frontend-only deploy |
 | `DEPLOY_NGINX_MODE` | `docker` | `docker` or `existing` (host nginx already running) |
 | `DEPLOY_NGINX_CONF` | `/etc/nginx/conf.d/wactorz.conf` | Remote path for the nginx snippet |
-| `CARGO_BUILD_TARGET` | _(host arch)_ | e.g. `x86_64-unknown-linux-gnu` |
-| `RUST_LOG` | `wactorz=info` | Logging filter |
 
 ---
 

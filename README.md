@@ -143,12 +143,11 @@ LLM_API_KEY=your-key-here
 |---|---|
 | `wactorz/` | Python actor runtime, built-in agents, interfaces, monitoring, HA integration |
 | `frontend/` | Vite + TypeScript + Babylon.js dashboard |
-| `rust/` | Rust backend crates and MQTT/interface support |
 | `mobile/` | Flutter companion app |
 | `ha-addon/` | Home Assistant Supervisor addon |
 | `docs/` | Markdown docs source |
 | `infra/` | Mosquitto, Prometheus, OpenTelemetry, nginx, and HA configs |
-| `tests/` | Python test suite and backend parity harness |
+| `tests/` | Python test suite |
 
 ---
 

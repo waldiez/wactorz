@@ -110,7 +110,6 @@ path = "scripts/hooks/build_hook.py"
 [tool.hatch.build.targets.wheel]
 packages = ["wactorz", "wactorz.*"]
 exclude = [
-    "rust",
     "node_modules",
     "persist",
     "__pycache__",
@@ -134,7 +133,6 @@ testpaths = ["tests"]
 # ── sdist (source distribution for PyPI) ──────────────────────────────────────
 [tool.hatch.build.targets.sdist]
 exclude = [
-    "rust",
     "node_modules",
     "persist",
     "__pycache__",

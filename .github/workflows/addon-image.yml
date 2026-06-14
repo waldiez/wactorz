@@ -1,9 +1,5 @@
-name: Add-on Image 🏠🐳
+name: Add-on Image
 # yamllint disable rule:truthy
-# Builds and pushes the Home Assistant ADD-ON image (ha-addon/) per-arch so the
-# Supervisor PULLS it (with progress) instead of building on-device. This is
-# distinct from image.yml, which builds the standalone app image from the repo
-# root Dockerfile.
 on:
   push:
     tags:
@@ -45,9 +41,6 @@ jobs:
         id: meta
         run: |
           if [[ "${{ github.event_name }}" == "push" ]]; then
-            # Tag push (e.g. v1.2.3): build that release from main. Strip the
-            # leading 'v' so the image tag matches config.yaml `version`, which
-            # is what Supervisor pulls ({image}:{version}).
             tag="${GITHUB_REF_NAME#v}"
             echo "tag=${tag}" >> "$GITHUB_OUTPUT"
             echo "ref=main" >> "$GITHUB_OUTPUT"
@@ -79,8 +72,6 @@ jobs:
           context: ./ha-addon
           platforms: ${{ steps.arch.outputs.platform }}
           push: true
-          # Single-arch image manifest (no attestation index) so Supervisor pulls
-          # {image}:{version} cleanly per arch.
           provenance: false
           build-args: |
             BUILD_FROM=${{ steps.arch.outputs.base }}

@@ -62,7 +62,6 @@ NAV = [
     #    ("MQTT Topics",          "mqtt_topics.md"),
     #    ("Python API",           "python-api.md"),
     #]),
-    #("Rust Docs ↗",   "https://waldiez.github.io/wactorz/api/rust/"),
     #("JS/TS Docs ↗",  "https://waldiez.github.io/wactorz/api/js/"),
     #("Python Docs ↗", "https://waldiez.github.io/wactorz/api/python/"),
 ]

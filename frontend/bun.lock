@@ -5,9 +5,6 @@
     "": {
       "name": "wactorz-dashboard",
       "dependencies": {
-        "@babylonjs/core": "^8.55.1",
-        "@babylonjs/gui": "^8.55.1",
-        "@babylonjs/loaders": "^8.55.1",
         "@waldiez/wid": "github:waldiez/wid",
         "mqtt": "^5.15.0",
       },
@@ -31,12 +28,6 @@
     "@babel/runtime": ["@babel/runtime@7.28.6", "", {}, "sha512-05WQkdpL9COIMz4LjTxGpPNCdlpyimKppYNoJ5Di5EUObifl8t4tuLuUBBZEpoLYOmfvIWrsp9fCl0HoPRVTdA=="],
 
     "@babel/types": ["@babel/types@7.29.0", "", { "dependencies": { "@babel/helper-string-parser": "^7.27.1", "@babel/helper-validator-identifier": "^7.28.5" } }, "sha512-LwdZHpScM4Qz8Xw2iKSzS+cfglZzJGvofQICy7W7v4caru4EaAmyUuO6BGrbyQ2mYV11W0U8j5mBhd14dd3B0A=="],
-
-    "@babylonjs/core": ["@babylonjs/core@8.55.1", "", {}, "sha512-C4vLcglBdM5B6vsDFZSIsW0Kn+8KbXMqiyLUifKW2S4kr//i3SPPucw98IYKvO1H3F0yk+f9rkrTRb7oLBSUOw=="],
-
-    "@babylonjs/gui": ["@babylonjs/gui@8.55.1", "", { "peerDependencies": { "@babylonjs/core": "^8.0.0" } }, "sha512-7SQze/O9wgRrPHLVx40FTMsoN27EPMQnV2DnY6FJLLIF7gRje8/oQGD5b7h/4f1eZtYCSlaca73qFn719ERYfw=="],
-
-    "@babylonjs/loaders": ["@babylonjs/loaders@8.55.1", "", { "peerDependencies": { "@babylonjs/core": "^8.0.0", "babylonjs-gltf2interface": "^8.0.0" } }, "sha512-k8Q7xFHWMEs3ZIzem6SCP+po39jNwehkjJapi62tLtgPcyetOPSMyiHpikdJEyjTIpogXbYspCgNI83XbyS5GQ=="],
 
     "@bcoe/v8-coverage": ["@bcoe/v8-coverage@1.0.2", "", {}, "sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA=="],
 
@@ -149,8 +140,6 @@
     "assertion-error": ["assertion-error@2.0.1", "", {}, "sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA=="],
 
     "ast-v8-to-istanbul": ["ast-v8-to-istanbul@1.0.0", "", { "dependencies": { "@jridgewell/trace-mapping": "^0.3.31", "estree-walker": "^3.0.3", "js-tokens": "^10.0.0" } }, "sha512-1fSfIwuDICFA4LKkCzRPO7F0hzFf0B7+Xqrl27ynQaa+Rh0e1Es0v6kWHPott3lU10AyAr7oKHa65OppjLn3Rg=="],
-
-    "babylonjs-gltf2interface": ["babylonjs-gltf2interface@7.54.3", "", {}, "sha512-ZAWYFyE+SOczfWT19O4e3YRkCZ5i57SiD2eK2kqc+Tow/t9X1S45xgSFNuHZff++dd5BlVIEQDSnFV+McFLSnQ=="],
 
     "balanced-match": ["balanced-match@1.0.2", "", {}, "sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw=="],
 

@@ -2,18 +2,17 @@
  * Wactorz Dashboard — entry point.
  *
  * Bootstrap order:
- * 1. Create SceneManager (Babylon.js engine + scene + camera)
+ * 1. Create SceneManager (agent-state store + CardDashboard coordinator)
  * 2. Create MQTTClient and connect to broker
- * 3. Create UI components (HUD, ThemeSwitcher, ChatPanel, IOBar, ActivityFeed)
+ * 3. Create UI components (HUD, ChatPanel, IOBar, ActivityFeed)
  * 4. Create MentionPopup (needs SceneManager for agent list)
  * 5. Wire MQTT events → SceneManager + HUD + ActivityFeed
- * 6. Wire DOM events (theme-change, agent-selected) → SceneManager + ChatPanel
+ * 6. Wire DOM events (agent-selected) → SceneManager + ChatPanel
  */
 
 import { SceneManager } from "./scene/SceneManager";
 import { MQTTClient } from "./mqtt/MQTTClient";
 import { AgentHUD } from "./ui/AgentHUD";
-import { ThemeSwitcher } from "./ui/ThemeSwitcher";
 import { ChatPanel } from "./ui/ChatPanel";
 import { IOBar } from "./ui/IOBar";
 import { ActivityFeed } from "./ui/ActivityFeed";
@@ -26,7 +25,7 @@ import { tts } from "./io/TTSManager";
 import { desktopNotifyBackground, clearUnreadBadge, initNotifications } from "./io/DesktopNotify";
 import { toast } from "./ui/ToastManager";
 
-import type { AgentInfo, AgentState, ThemeChangeEvent } from "./types/agent";
+import type { AgentInfo, AgentState } from "./types/agent";
 
 function nameFromWid(raw: string): string {
   const m = raw.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
@@ -51,8 +50,7 @@ const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 canvas.style.display = "none";
 const scene = new SceneManager(canvas);
 
-// Always start with cards. Reset localStorage so ThemeSwitcher doesn't
-// override this with a stale value ("graph", "social", etc.) via its setTimeout.
+// Cards is the only view; clear any stale persisted theme from older builds.
 localStorage.setItem("wactorz-theme", "cards");
 scene.setTheme("cards");
 
@@ -108,7 +106,6 @@ const mqtt = new MQTTClient(MQTT_BROKER);
 // ── UI ────────────────────────────────────────────────────────────────────────
 
 const hud = new AgentHUD();
-const themeSwitcher = new ThemeSwitcher();
 const chatPanel = new ChatPanel();
 chatPanel.setApiBase(_apiBase);
 const voice = new VoiceInput();
@@ -636,14 +633,6 @@ mqtt.on("error", (err) => {
 
 // ── DOM event → Scene wiring ──────────────────────────────────────────────────
 
-document.addEventListener("theme-change", (e) => {
-  const evt = e as CustomEvent<ThemeChangeEvent>;
-  scene.setTheme(evt.detail.theme);
-  // Sync switcher state if theme was changed externally (e.g. CardDashboard ⊞ Social button)
-  const t = evt.detail.theme;
-  if (t === "cards" || t === "social") themeSwitcher.syncState(t);
-});
-
 // Camera fly-to when agent is selected (panel open)
 document.addEventListener("agent-selected", (e) => {
   const evt = e as CustomEvent<{ agent: { id: string } }>;
@@ -658,7 +647,7 @@ document.addEventListener("af-stream-end", (e) => {
   desktopNotifyBackground(from, text.slice(0, 120));
 });
 
-// Agent commands from CardDashboard / SocialDashboard → WebSocket
+// Agent commands from CardDashboard → WebSocket
 document.addEventListener("af-agent-command", (e) => {
   const { command, agentId } = (
     e as CustomEvent<{ command: string; agentId: string }>

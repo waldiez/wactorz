@@ -19,9 +19,6 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@babylonjs/core": "^8.55.1",
-    "@babylonjs/gui": "^8.55.1",
-    "@babylonjs/loaders": "^8.55.1",
     "@waldiez/wid": "github:waldiez/wid",
     "mqtt": "^5.15.0"
   },

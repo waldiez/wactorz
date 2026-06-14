@@ -12,6 +12,8 @@
  * Persistence: toggle state and selected voice are stored in localStorage.
  */
 
+import { ambient } from "./AmbientManager";
+
 const LS_BEEP  = "wactorz.beep";
 const LS_TTS   = "wactorz.tts";
 const LS_VOICE = "wactorz.ttsVoice";
@@ -176,7 +178,7 @@ export class TTSManager {
 
   private _speakServer(text: string): void {
     // duck ambient while server audio plays
-    import("./AmbientManager").then(({ ambient }) => ambient.duck(true)).catch(() => {});
+    ambient.duck(true);
     const params = new URLSearchParams({ text });
     const voice = this.selectedVoice;
     if (voice) params.set("voice", voice);
@@ -202,11 +204,11 @@ export class TTSManager {
           src.buffer = decoded;
           src.connect(ctx.destination);
           src.onended = () => {
-            import("./AmbientManager").then(({ ambient }) => ambient.duck(false)).catch(() => {});
+            ambient.duck(false);
           };
           src.start();
         }).catch(() => {
-          import("./AmbientManager").then(({ ambient }) => ambient.duck(false)).catch(() => {});
+          ambient.duck(false);
           this._speakBrowser(text);
         });
       })

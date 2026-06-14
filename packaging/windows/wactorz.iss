@@ -74,3 +74,19 @@ begin
     RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', pv) or
     RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', pv);
 end;
+
+{ On uninstall, offer to remove the per-user data dir (logs, DB, state). Kept by
+  default so a reinstall preserves data; only the uninstalling user's dir. }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  dataDir: String;
+begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    dataDir := ExpandConstant('{localappdata}\wactorz');
+    if DirExists(dataDir) then
+      if MsgBox('Also delete Wactorz data (logs, database, settings) at'#13#10 +
+                dataDir + ' ?', mbConfirmation, MB_YESNO) = IDYES then
+        DelTree(dataDir, True, True, True);
+  end;
+end;

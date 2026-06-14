@@ -1,0 +1,9 @@
+#!/bin/sh
+# AppRun — entry point inside the Wactorz AppImage.
+# Bundles PySide6/QtWebEngine, so force the Qt backend. QtWebEngine's Chromium
+# sandbox needs a SUID helper that AppImages can't ship; disable it (the app
+# only ever loads its own localhost backend).
+HERE="$(dirname "$(readlink -f "$0")")"
+export WACTORZ_WEBVIEW_GUI=qt
+export QTWEBENGINE_DISABLE_SANDBOX=1
+exec "$HERE/usr/bin/wactorz-desktop/wactorz-desktop" "$@"

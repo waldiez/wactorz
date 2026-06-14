@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <component type="desktop-application">
+    <id>io.waldiez.wactorz</id>
+    <metadata_license>CC0-1.0</metadata_license>
+    <project_license>Apache-2.0</project_license>
+
+    <name>Wactorz</name>
+    <summary>Multi-agent orchestration dashboard</summary>
+
+    <description>
+      <p>
+        Wactorz is a desktop dashboard for monitoring, chatting with, and
+        controlling AI agents in real time. It runs the agent backend locally and
+        presents a live overview of agent state, costs, and activity.
+      </p>
+    </description>
+
+
+    <launchable type="desktop-id">io.waldiez.wactorz.desktop</launchable>
+
+    <url type="homepage">https://github.com/waldiez/wactorz</url>
+    <url type="bugtracker">https://github.com/waldiez/wactorz/issues</url>
+
+    <developer id="io.waldiez">
+      <name>Wactorz Contributors</name>
+    </developer>
+
+    <!-- Prevents an "unknown" rating in software centers -->
+    <content_rating type="oars-1.1" />
+
+    <categories>
+      <category>Utility</category>
+    </categories>
+
+    <!-- TODO: un-comment when on main
+    <screenshots>
+      <screenshot type="default">
+        <caption>Agent overview dashboard</caption>
+        <image>https://raw.githubusercontent.com/waldiez/wactorz/main/frontend/public/screenshots/dashboard.png</image>
+      </screenshot>
+    </screenshots>
+    -->
+    <keywords>
+      <keyword>agents</keyword>
+      <keyword>orchestration</keyword>
+      <keyword>dashboard</keyword>
+      <keyword>MQTT</keyword>
+    </keywords>
+
+
+    <releases>
+      <release version="@VERSION@" date="@DATE@" />
+    </releases>
+  </component>

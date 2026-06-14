@@ -1,7 +1,8 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-backend precommit-install precommit-run build build-frontend build-py check fmt lint format clean \
         up down logs shell \
         run run-py test test-py coverage coverage-py ci \
-        install install-py install-docs install-dev install-frontend docs-serve docs-build publish
+        install install-py install-docs install-dev install-frontend docs-serve docs-build publish \
+        package-appimage
 
 COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
@@ -57,6 +58,9 @@ build-frontend: ## Build Vite frontend and sync to installed package
 	  echo "Syncing static/app → $$INST"; \
 	  cp -r static/app/ "$$INST/"; \
 	fi
+
+package-appimage: build-frontend ## Build the Linux AppImage (needs pyinstaller + appimagetool; set ARCH to override)
+	bash packaging/linux/build-appimage.sh
 
 check: ## Typecheck the frontend (fast)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run typecheck

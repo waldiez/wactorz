@@ -4,6 +4,6 @@
 # sandbox needs a SUID helper that AppImages can't ship; disable it (the app
 # only ever loads its own localhost backend).
 HERE="$(dirname "$(readlink -f "$0")")"
-export WACTORZ_WEBVIEW_GUI=qt
 export QTWEBENGINE_DISABLE_SANDBOX=1
+export QT_API=PySide6
 exec "$HERE/usr/bin/wactorz-desktop/wactorz-desktop" "$@"

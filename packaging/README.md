@@ -1,46 +1,54 @@
 # Packaging — Linux desktop
 
-Builds the `wactorz-desktop` pywebview app into three Linux formats. Two
-distinct strategies share one codebase via the `WACTORZ_WEBVIEW_GUI` env var
-(see `wactorz/desktop/app.py`):
+Builds the `wactorz-desktop` pywebview app for Linux. One webview engine
+everywhere: **Qt / QtWebEngine** (PySide6). No GTK path.
 
-| Format | Strategy | Webview | Size | Portability |
-|--------|----------|---------|------|-------------|
-| **AppImage** | PyInstaller frozen, self-contained | bundled Qt/QtWebEngine | large (~300 MB+) | runs anywhere |
-| **.deb / .rpm** | venv in `/opt/wactorz` + declared deps | host WebKit2GTK | small | needs distro WebKit2GTK 4.1 |
+| Format | Strategy | Webview | Size | Notes |
+|--------|----------|---------|------|-------|
+| **AppImage** | PyInstaller frozen, self-contained | bundled Qt/QtWebEngine | large (~300 MB) | runs on any distro, no install |
+| **Flatpak** | runtime-provided Qt, sandboxed | Qt/QtWebEngine from runtime | small | Flathub distribution + portal/desktop integration |
+
+The tray follows the engine: Qt `QSystemTrayIcon` on Linux (both formats);
+pystray's native backend is used only on macOS/Windows (see `wactorz/desktop/app.py`).
 
 ## Layout
 ```
 packaging/
-  pyinstaller/wactorz-desktop.spec   # onedir freeze (Qt) — AppImage only
-  appimage/AppRun                    # forces gui=qt, disables QtWebEngine sandbox
-  appimage/wactorz.desktop
-  appimage/build-appimage.sh         # pyinstaller → AppDir → appimagetool
-  linux/wactorz.desktop              # deb/rpm desktop entry
-  linux/build-deb-rpm.sh             # stage venv (no PySide6) → fpm x2
-  build-all.sh
+  pyinstaller/wactorz-desktop.spec                # onedir freeze (Qt) — AppImage
+  linux/AppRun                                    # disables QtWebEngine sandbox, sets QT_API
+  linux/io.waldiez.wactorz.desktop                # desktop entry (shared by both formats)
+  linux/io.waldiez.wactorz.metainfo.template.xml  # AppStream metainfo (required by Flatpak)
+  linux/build-appimage.sh                         # pyinstaller → AppDir → appimagetool
+  linux/build-all.sh                              # convenience wrapper
 ```
 
-## Prerequisites
-- **AppImage**: `pip install pyinstaller`, plus `appimagetool` on `PATH`
-  (or `APPIMAGETOOL=/path/to/appimagetool`). Build on the oldest glibc you
-  support (e.g. an Ubuntu 22.04 container).
-- **deb/rpm**: `python3 >= 3.10` and [`fpm`](https://fpm.readthedocs.io).
-  Build `.deb` on Debian/Ubuntu and `.rpm` on Fedora.
-
-## Build
+## AppImage
+Prereqs: `pip install pyinstaller`, plus `appimagetool` on `PATH` (or
+`APPIMAGETOOL=/path/to/appimagetool`). Build on the **oldest glibc** you support
+(e.g. an Ubuntu 22.04 container) so the AppImage runs broadly.
 ```sh
-ARCH=x86_64 bash packaging/appimage/build-appimage.sh   # → dist/Wactorz-x86_64.AppImage
-bash packaging/linux/build-deb-rpm.sh                   # → dist/*.deb, dist/*.rpm
-# or everything on the current host:
-bash packaging/build-all.sh
+ARCH=x86_64 bash packaging/linux/build-appimage.sh   # → dist/Wactorz-x86_64.AppImage
+```
+
+## Flatpak (TODO — not yet scaffolded)
+Planned: a `io.waldiez.wactorz.yml` manifest on `org.kde.Platform` (provides Qt6
++ QtWebEngine), Python deps generated via `flatpak-pip-generator`, reusing the
+same `.desktop` + metainfo. Built with `flatpak-builder`, published to Flathub.
+
+Or via Make (rebuilds the frontend first):
+```sh
+make package-appimage              # arch auto-detected from the host
+```
+
+## aarch64
+AppImages are **not cross-built** — PyInstaller freezes for the host arch. To
+get an aarch64 AppImage, run the **same** build on an aarch64 machine (the build
+auto-detects the arch); you just need `pyinstaller` and an **aarch64**
+`appimagetool` there:
+```sh
+make package-appimage              # on the arm64 laptop → dist/Wactorz-aarch64.AppImage
 ```
 
 ## Notes / TODO
-- Runtime-test both paths: the GTK path (deb/rpm) is what runs today on dev
-  laptops; the Qt/AppImage path needs its own smoke test (sandbox flag).
-- deb/rpm assume **WebKit2GTK 4.1** (`gir1.2-webkit2gtk-4.1` / `webkit2gtk4.1`).
-  Older LTS distros ship 4.0 (different gir name) — pin supported distros.
-- `aarch64` AppImage: build on an arm64 host with `ARCH=aarch64` and an
-  aarch64 `appimagetool`.
-- A `make package-linux` target wiring these in is a sensible follow-up.
+- Build on the oldest glibc you support (e.g. an Ubuntu 22.04 container per arch)
+  so the AppImage runs broadly.

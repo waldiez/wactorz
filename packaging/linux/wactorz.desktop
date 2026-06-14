@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Wactorz
-Comment=Wactorz desktop
-Exec=/usr/bin/wactorz-desktop
-Icon=wactorz
-Categories=Utility;
-Terminal=false

@@ -8,9 +8,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+VERSION="$(cd "$ROOT" && python3 -c 'import wactorz._version as v; print(v.__version__)')"
 DIST="$ROOT/dist"
 APPDIR="$DIST/Wactorz.AppDir"
-ARCH="${ARCH:-x86_64}"
+# AppImages are not cross-built (PyInstaller freezes for the host arch), so the
+# arch is the host's unless explicitly overridden. Build the aarch64 AppImage on
+# an aarch64 machine.
+ARCH="${ARCH:-$(uname -m)}"
 APPIMAGETOOL="${APPIMAGETOOL:-appimagetool}"
 
 echo "==> [1/3] Freezing with PyInstaller"
@@ -18,13 +22,24 @@ pyinstaller --noconfirm --clean \
     --distpath "$DIST" --workpath "$DIST/pyi-build" \
     "$ROOT/packaging/pyinstaller/wactorz-desktop.spec"
 
+# Trim QtWebEngine's non-English locale .pak files (~tens of MB). The exact path
+# varies by PySide6 layout, so glob for it and keep only en-US.
+while IFS= read -r loc; do
+    find "$loc" -name '*.pak' ! -name 'en-US.pak' -delete
+    echo "    pruned locales in $loc"
+done < <(find "$DIST/wactorz-desktop" -type d -name qtwebengine_locales 2>/dev/null)
+
 echo "==> [2/3] Assembling AppDir"
 rm -rf "$APPDIR"
-mkdir -p "$APPDIR/usr/bin"
+mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/metainfo"
 cp -r "$DIST/wactorz-desktop" "$APPDIR/usr/bin/wactorz-desktop"
 install -m 755 "$HERE/AppRun"          "$APPDIR/AppRun"
-install -m 644 "$HERE/wactorz.desktop" "$APPDIR/wactorz.desktop"
+install -m 644 "$HERE/io.waldiez.wactorz.desktop" "$APPDIR/io.waldiez.wactorz.desktop"
 install -m 644 "$ROOT/wactorz/desktop/assets/icon.png" "$APPDIR/wactorz.png"
+# metainfo — version-stamped from the shared template
+sed -e "s/@VERSION@/$VERSION/" -e "s/@DATE@/$(date +%F)/" \
+    "$HERE/io.waldiez.wactorz.metainfo.template.xml" \
+    > "$APPDIR/usr/share/metainfo/io.waldiez.wactorz.metainfo.xml"
 
 echo "==> [3/3] Building AppImage"
 ARCH="$ARCH" "$APPIMAGETOOL" "$APPDIR" "$DIST/Wactorz-$ARCH.AppImage"

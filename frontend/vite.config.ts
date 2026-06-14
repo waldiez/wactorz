@@ -5,7 +5,7 @@ export default defineConfig({
   envDir: "..",
   server: {
     port: 3000,
-    // Don't auto-open a browser tab — Tauri opens its own WebView window.
+    // Don't auto-open a browser tab — Frontend opens its own WebView window.
     // Set VITE_OPEN=true to restore the plain-browser dev experience.
     open: process.env["VITE_OPEN"] === "true",
     proxy: {

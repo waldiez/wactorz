@@ -122,7 +122,7 @@ describe("resolveAgentName", () => {
 // ── normaliseHeartbeat ────────────────────────────────────────────────────────
 
 describe("normaliseHeartbeat", () => {
-  it("accepts camelCase Rust payload", () => {
+  it("accepts camelCase payload", () => {
     const hb = normaliseHeartbeat({
       agentId: "20260325T151725.0000Z-alpha",
       agentName: "alpha",

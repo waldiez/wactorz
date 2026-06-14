@@ -13,7 +13,7 @@ def update_python_version(new_version):
         print(f"Updated {version_file}")
 
 def update_package_json(new_version):
-    files = [Path("frontend/package.json"), Path("node/package.json")]
+    files = [Path("frontend/package.json")]
     for package_file in files:
         if package_file.exists():
             with open(package_file, 'r') as f:
@@ -24,16 +24,6 @@ def update_package_json(new_version):
                 f.write('\n')
             print(f"Updated {package_file}")
 
-def update_tauri_conf(new_version):
-    tauri_file = Path("frontend/src-tauri/tauri.conf.json")
-    if tauri_file.exists():
-        with open(tauri_file, 'r') as f:
-            data = json.load(f, strict=False)
-        data['version'] = new_version
-        with open(tauri_file, 'w') as f:
-            json.dump(data, f, indent=2)
-            f.write('\n')
-        print(f"Updated {tauri_file}")
 
 def update_ha_addon_config(new_version):
     ha_file = Path("ha-addon/config.yaml")
@@ -108,7 +98,6 @@ def main():
 
     update_python_version(new_version)
     update_package_json(new_version)
-    update_tauri_conf(new_version)
     update_ha_addon_config(new_version)
     update_cargo_toml(new_version)
     update_docs_landing(new_version)

@@ -342,10 +342,6 @@ export class MQTTClient {
 }
 
 // ── Payload normalisers ───────────────────────────────────────────────────────
-// Python publishes snake_case keys and timestamp in seconds (time.time()).
-// Rust  publishes camelCase keys and timestampMs in milliseconds.
-// These helpers accept either form and return the canonical TypeScript shape.
-
 type RawObj = Record<string, unknown>;
 
 /** Convert a raw epoch value to milliseconds.

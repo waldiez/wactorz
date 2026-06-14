@@ -127,11 +127,6 @@ export interface AgentSelectedEvent {
   agent: AgentInfo;
 }
 
-/** Custom DOM event payload for theme switching. */
-export interface ThemeChangeEvent {
-  theme: "social" | "cards";
-}
-
 /** Host-level system stats from the backend. */
 export interface HostStats {
   cpu?: number;

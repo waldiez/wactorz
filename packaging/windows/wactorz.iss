@@ -18,6 +18,9 @@
 AppId={{B1F4A2C0-9E3D-4C7A-AC21-7B6E2F1D9A30}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+; Show just "Wactorz" in Installed apps (version stays in its own column),
+; instead of the default "Wactorz version x.y.z".
+UninstallDisplayName={#MyAppName}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
@@ -29,6 +32,10 @@ OutputBaseFilename=Wactorz-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Branding: custom installer icon + wizard images (generated from the app icon).
+SetupIconFile=..\..\wactorz\desktop\assets\icon.ico
+WizardImageFile=wizard-large.bmp
+WizardSmallImageFile=wizard-small.bmp
 ; Per-user install by default; user may switch to all-users in the wizard.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog

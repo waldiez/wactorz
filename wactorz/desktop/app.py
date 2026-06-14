@@ -46,12 +46,18 @@ APP_ICON = _ASSETS / f"icon.{ICON_EXT}"
 
 SPLASH_BG = "#0A0E1A"          # window surface colour while the page paints
 
-# Child stdout/stderr go here so a frozen app's backend failures are diagnosable.
-BACKEND_LOG = (
-    Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    / "wactorz"
-    / "backend.log"
-)
+def _data_dir() -> Path:
+    """Per-user writable directory for backend state + logs."""
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / "wactorz"
+
+
+DATA_DIR = _data_dir()
+# Desktop shell's capture of the backend child's stdout/stderr.
+BACKEND_LOG = DATA_DIR / "desktop-backend.log"
 
 _backend: "subprocess.Popen | None" = None
 _window = None
@@ -76,17 +82,25 @@ _ERROR_HTML = (
 
 # ── backend child ─────────────────────────────────────────────────────────────
 def _spawn_backend() -> "subprocess.Popen":
-    # INTERFACE=rest makes the backend serve its web/REST UI on MONITOR_PORT.
-    # Without it, the backend defaults to "cli" (interactive) outside dev mode
-    # and never binds the port the window needs.
-    env = dict(os.environ, MONITOR_PORT=str(PORT), INTERFACE="rest")
+    # Run from a per-user writable dir: the backend writes wactorz.log,
+    # monitor.log and ./state relative to its cwd, which fails under an
+    # all-users install (e.g. C:\Program Files). INTERFACE=rest makes it serve
+    # the web/REST UI on MONITOR_PORT (its default "cli" mode never binds it).
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    env = dict(
+        os.environ,
+        MONITOR_PORT=str(PORT),
+        INTERFACE="rest",
+        WACTORZ_STATE_DIR=str(DATA_DIR / "state"),
+    )
     cmd = [sys.executable, "--run-backend"] if FROZEN else [sys.executable, "-m", "wactorz"]
     try:
-        BACKEND_LOG.parent.mkdir(parents=True, exist_ok=True)
         log = open(BACKEND_LOG, "w")
-        return subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
+        return subprocess.Popen(
+            cmd, env=env, cwd=str(DATA_DIR), stdout=log, stderr=subprocess.STDOUT
+        )
     except Exception:
-        return subprocess.Popen(cmd, env=env)
+        return subprocess.Popen(cmd, env=env, cwd=str(DATA_DIR))
 
 
 def run_backend() -> None:

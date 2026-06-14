@@ -19,8 +19,22 @@ APPDIR="$DIST/Wactorz.AppDir"
 ARCH="${ARCH:-$(uname -m)}"
 APPIMAGETOOL="${APPIMAGETOOL:-appimagetool}"
 
+# Freeze from a dedicated, isolated venv (in gitignored .local/) so the bundle
+# is reproducible and never polluted by whatever's in the dev env. Delete
+# .local/build-venv to refresh its deps.
+VENV="$ROOT/.local/build-venv"
+if [ ! -x "$VENV/bin/pyinstaller" ]; then
+    echo "==> [0/3] Creating build venv: $VENV"
+    mkdir -p "$ROOT/.local"
+    python3 -m venv "$VENV"
+    "$VENV/bin/pip" install --upgrade pip pyinstaller >/dev/null
+    # [all] = LLM providers + integrations + desktop, minus the heavy ml/torch
+    # extra. WACTORZ_FRONTEND_STALE keeps the build hook from rebuilding the SPA.
+    WACTORZ_FRONTEND_STALE=99999999 "$VENV/bin/pip" install -e "$ROOT[all]"
+fi
+
 echo "==> [1/3] Freezing with PyInstaller"
-pyinstaller --noconfirm --clean \
+"$VENV/bin/pyinstaller" --noconfirm --clean \
     --distpath "$DIST" --workpath "$DIST/pyi-build" \
     "$ROOT/packaging/pyinstaller/wactorz-desktop.spec"
 

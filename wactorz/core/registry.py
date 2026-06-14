@@ -718,8 +718,7 @@ class _MQTTPublisher:
 
         if qos >= 1:
             # Durable: persist to SQLite first, then enqueue
-            row_id = self._save_to_db(topic, payload if isinstance(payload, str)
-                                      else payload, retain, qos)
+            row_id = self._save_to_db(topic, payload, retain, qos)
             await self._queue.put((topic, payload, retain, qos, row_id))
         else:
             # Best-effort: in-memory only

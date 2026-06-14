@@ -1,7 +1,7 @@
 {
   "name": "Wactorz Dashboard",
   "short_name": "Wactorz",
-  "description": "Real-time multi-agent orchestration dashboard. Monitor and control AI agents via an immersive 3D network visualization.",
+  "description": "Wactorz: real-time multi-agent orchestration dashboard. Monitor, chat with, and control AI agents.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -28,6 +28,15 @@
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/dashboard.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Dashboard overview"
     }
   ]
 }

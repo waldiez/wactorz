@@ -58,7 +58,10 @@ tts       = [
     "edge-tts>=6.1.9",
 ]
 desktop = [
-    "pywebview[pyside6]>=5.1",
+    "pywebview>=5.1",
+    # Linux: Qt/QtWebEngine webview + Qt tray. Windows uses the Edge WebView2
+    # backend and macOS the native Cocoa one, so PySide6 ships on Linux only.
+    "pywebview[pyside6]>=5.1; sys_platform == 'linux'",
     "plyer>=2.1",
     "pythonnet>=3.0;  sys_platform == 'win32'",    # Edge WebView2 backend
     # Tray on macOS/Windows uses pystray's native backend. Linux uses the Qt

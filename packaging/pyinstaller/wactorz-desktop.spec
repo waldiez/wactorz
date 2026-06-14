@@ -8,11 +8,15 @@ monitor backend (see wactorz/desktop/app.py), so the whole app is one exe.
 This build bundles PySide6 / QtWebEngine. The Flatpak build (see README) gets
 Qt from its runtime instead and does not use PyInstaller.
 """
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).resolve().parents[1]  # noqa: F821  (SPECPATH injected by PyInstaller)
+
+# EXE icon format per platform (Linux ignores it; Windows needs .ico, macOS .icns).
+_ICON = {"win32": "icon.ico", "darwin": "icon.icns"}.get(sys.platform, "icon.png")
 
 datas = [
     (str(ROOT / "static"), "static"),                              # SPA + docs site
@@ -58,7 +62,7 @@ exe = EXE(
     exclude_binaries=True,
     name="wactorz-desktop",
     console=False,
-    icon=str(ROOT / "wactorz" / "desktop" / "assets" / "icon.png"),
+    icon=str(ROOT / "wactorz" / "desktop" / "assets" / _ICON),
 )
 coll = COLLECT(
     exe,

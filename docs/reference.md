@@ -1294,7 +1294,6 @@ Ensure **Message Content Intent** is enabled in the Discord Developer Portal (Bo
 ```
 wactorz/
 ├── __main__.py                                Entry point — runs `cli.app()` via `python -m wactorz`
-├── main.py                                    Embedded application entry — used by ha-addon and tests
 ├── cli.py                                     argparse, supervision tree wiring, interface dispatch
 ├── config.py                                  Env-driven `AppConfig` (LLM_*, MQTT_*, HA_*, …)
 ├── remote_runner.py                           Self-contained edge node runner — deploy to any Pi or machine

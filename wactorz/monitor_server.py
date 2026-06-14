@@ -559,7 +559,6 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
 
             if remote_node:
                 import uuid as _uuid, json as _json
-                import aiomqtt
                 reply_topic = f"main/reply/io-gateway/{_uuid.uuid4().hex[:8]}"
                 payload = {
                     "text":          text,
@@ -1217,12 +1216,6 @@ def _snapshot() -> dict:
 
 async def mqtt_listener():
     global mqtt_client_ref
-    try:
-        import aiomqtt
-    except ImportError:
-        logger.error("aiomqtt not installed: pip install aiomqtt")
-        return
-
     logger.info(f"Connecting to MQTT {MQTT_BROKER}:{MQTT_PORT}...")
     try:
         while True:
@@ -1741,7 +1734,12 @@ async def send_message_handler(request):
     actor = registry.get(actor_id) or registry.find_by_name(actor_id)
     if actor is None:
         return web.json_response({"error": "actor not found"}, status=404)
-    asyncio.create_task(_route_chat(content, lambda t: None))
+    # This endpoint names an explicit target, but _route_chat re-derives the
+    # target from the text and defaults to main — so without this the addressed
+    # actor is dropped. Prepend the mention to route there, unless the caller
+    # already addressed someone (@) or it's a slash command (/).
+    routed = content if content.startswith(("@", "/")) else f"@{actor.name} {content}"
+    asyncio.create_task(_route_chat(routed, lambda t: None))
     return web.json_response({"status": "sent"})
 
 
@@ -2077,7 +2075,10 @@ async def rest_chat_handler(request):
     target = registry.find_by_name(agent_name)
     if target is None:
         return web.json_response({"error": f"agent '{agent_name}' not found"}, status=404)
-    asyncio.create_task(_route_chat(message, lambda t: None))
+    # As above: route to the named agent, since _route_chat would otherwise
+    # default to main when the message carries no @mention.
+    routed = message if message.startswith(("@", "/")) else f"@{target.name} {message}"
+    asyncio.create_task(_route_chat(routed, lambda t: None))
     return web.json_response({"status": "sent", "agent": agent_name})
 
 

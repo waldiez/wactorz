@@ -2,7 +2,7 @@
 
 // ── Agent info ────────────────────────────────────────────────────────────────
 
-/** Lifecycle state of an agent (mirrors Rust WactorState). */
+/** Lifecycle state of an agent. */
 export type AgentState =
   | "initializing"
   | "running"

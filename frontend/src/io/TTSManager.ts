@@ -29,7 +29,7 @@ export class TTSManager {
   /** null = unknown, true = server responded ok, false = unavailable (503/network) */
   private _serverAvailable: boolean | null = null;
   private _voices: TTSVoice[] = [];
-  /** API base — empty for plain web, ingress prefix behind HA, localhost in Tauri.
+  /** API base — empty for plain web, ingress prefix behind HA.
    *  Must be set (main.ts) before init(); bare "/api/…" escapes the ingress prefix. */
   private _apiBase = "";
 
@@ -38,7 +38,7 @@ export class TTSManager {
     this._ttsEnabled  = localStorage.getItem(LS_TTS)  === "1";
   }
 
-  /** Set the API base (ingress prefix / Tauri host). Call before init(). */
+  /** Set the API base (plain-relative or ingress prefix). Call before init(). */
   setApiBase(base: string): void {
     this._apiBase = base;
   }

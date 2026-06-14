@@ -5,6 +5,5 @@ __pycache__
 myenv/
 node_modules/
 frontend/node_modules/
-rust/
 .git/
 state/

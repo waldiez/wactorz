@@ -26,6 +26,8 @@ packaging/
   linux/build-all.sh
   windows/wactorz.iss                             # Inno Setup installer
   windows/build-windows.ps1                       # pyinstaller → iscc → Setup.exe
+  macos/entitlements.plist                        # hardened-runtime entitlements
+  macos/build-macos.sh                            # pyinstaller → codesign → dmg → notarize
 ```
 
 ## AppImage (Linux)
@@ -57,6 +59,23 @@ Planned: `io.waldiez.wactorz.yml` on `org.kde.Platform` (Qt6 + QtWebEngine from
 the runtime), Python deps via `flatpak-pip-generator`, reusing the `.desktop` +
 metainfo. Built with `flatpak-builder`, published to Flathub.
 
-## macOS — TODO
-Cocoa webview + pystray work today from source; a `.app`/`.dmg` build is not yet
-scaffolded.
+## macOS (signed + notarized .dmg)
+Uses the system Cocoa/WKWebView (no Qt bundled → small), pystray's darwin tray.
+Build **on Apple Silicon** (arm64; no cross-build). Prereqs: Xcode CLT, a
+"Developer ID Application" cert, and a notarytool keychain profile:
+```sh
+xcrun notarytool store-credentials wactorz-notary \
+    --apple-id <id> --team-id <TEAMID> --password <app-specific-password>
+```
+Then:
+```sh
+export MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+bash packaging/macos/build-macos.sh        # → dist/Wactorz-<ver>-arm64.dmg
+```
+Notes:
+- `Info.plist` allows local-network http so WKWebView can load the backend
+  (`NSAppTransportSecurity → NSAllowsLocalNetworking`).
+- Tray: pystray's darwin backend wants the main run loop (pywebview owns it too)
+  — verify the tray actually appears; it falls back to none if not.
+- `--deep` signing covers PyInstaller's nested dylibs; if notarization flags
+  unsigned nested code, sign inner binaries individually.

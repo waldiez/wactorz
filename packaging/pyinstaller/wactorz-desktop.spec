@@ -18,6 +18,11 @@ ROOT = Path(SPECPATH).resolve().parents[1]  # noqa: F821  (SPECPATH injected by 
 # EXE icon format per platform (Linux ignores it; Windows needs .ico, macOS .icns).
 _ICON = {"win32": "icon.ico", "darwin": "icon.icns"}.get(sys.platform, "icon.png")
 
+# App version (read without importing the package).
+_ver_ns: dict = {}
+exec((ROOT / "wactorz" / "_version.py").read_text(), _ver_ns)
+VERSION = _ver_ns.get("__version__", "0.0.0")
+
 datas = [
     (str(ROOT / "static"), "static"),                              # SPA + docs site
     (str(ROOT / "wactorz" / "desktop" / "assets"), "wactorz/desktop/assets"),
@@ -72,3 +77,22 @@ coll = COLLECT(
     upx=False,
     name="wactorz-desktop",
 )
+
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="Wactorz.app",
+        icon=str(ROOT / "wactorz" / "desktop" / "assets" / "icon.icns"),
+        bundle_identifier="io.waldiez.wactorz",
+        version=VERSION,
+        info_plist={
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion": VERSION,
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "11.0",
+            # WKWebView blocks plain http by default; the app loads its local
+            # backend over http://127.0.0.1, so allow local networking.
+            "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
+        },
+    )
+

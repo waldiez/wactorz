@@ -1,8 +1,10 @@
 name: Wactorz
-version: "0.4.5"
+version: "0.4.4"
 slug: wactorz
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
 url: https://github.com/waldiez/wactorz
+# Remove in local test copies to build from source.
+image: "ghcr.io/waldiez/wactorz-addon-{arch}"
 arch:
   - aarch64
   - amd64

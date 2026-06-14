@@ -177,14 +177,14 @@ fi
 # startup — which left the addon serving a blank page on boot. Probe briefly so
 # agents connect cleanly. Bounded: we proceed regardless (wactorz retries MQTT).
 if [ "$MOSQUITTO_EMBEDDED" != "true" ]; then
-    mqtt_auth=""
+    mqtt_auth=()
     if [ -n "${MQTT_USERNAME:-}" ]; then
-        mqtt_auth="-u ${MQTT_USERNAME} -P ${MQTT_PASSWORD}"
+        mqtt_auth=(-u "$MQTT_USERNAME" -P "$MQTT_PASSWORD")
     fi
     bashio::log.info "Waiting for MQTT broker at ${MQTT_HOST}:${MQTT_PORT} (up to 15s)..."
     i=0
     while [ $i -lt 15 ]; do
-        if mosquitto_pub -h "$MQTT_HOST" -p "$MQTT_PORT" $mqtt_auth \
+        if mosquitto_pub -h "$MQTT_HOST" -p "$MQTT_PORT" "${mqtt_auth[@]}" \
                -t "wactorz/probe" -m "" -q 0 2>/dev/null; then
             bashio::log.info "MQTT broker reachable at ${MQTT_HOST}:${MQTT_PORT}"
             break

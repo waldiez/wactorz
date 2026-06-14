@@ -1,0 +1,11 @@
+# Home Assistant Supervisor source-build settings.
+build_from:
+  aarch64: ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.20
+  amd64: ghcr.io/home-assistant/amd64-base-python:3.12-alpine3.20
+args:
+  # Override in a local test copy to build from a branch, tag, or SHA.
+  WACTORZ_REF: main
+labels:
+  org.opencontainers.image.title: "Wactorz Home Assistant add-on"
+  org.opencontainers.image.source: "https://github.com/waldiez/wactorz"
+  org.opencontainers.image.licenses: "Apache-2.0"

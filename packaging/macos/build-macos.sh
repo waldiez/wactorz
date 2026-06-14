@@ -49,9 +49,14 @@ codesign --force --deep --options runtime --timestamp \
     --sign "$IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 
-echo "==> [3/5] Building .dmg"
+echo "==> [3/5] Building .dmg (with drag-to-Applications)"
+STAGE="$DIST/dmg-stage"
+rm -rf "$STAGE"; mkdir -p "$STAGE"
+ditto "$APP" "$STAGE/Wactorz.app"          # ditto preserves the code signature
+ln -s /Applications "$STAGE/Applications"  # so users can drag the app across
 rm -f "$DMG"
-hdiutil create -volname "Wactorz" -srcfolder "$APP" -ov -format UDZO "$DMG"
+hdiutil create -volname "Wactorz" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+rm -rf "$STAGE"
 codesign --force --timestamp --sign "$IDENTITY" "$DMG"
 
 echo "==> [4/5] Notarizing (can take a few minutes)"

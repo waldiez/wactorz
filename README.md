@@ -163,7 +163,7 @@ LLM_API_KEY=your-key-here
 | [Remote nodes](https://docs.waldiez.io/wactorz/guide/remote-nodes.html) | Edge deployment over SSH |
 | [Interfaces](https://docs.waldiez.io/wactorz/guide/interfaces.html) | CLI, REST, chat platforms, dashboard, MCP |
 | [API reference](https://github.com/waldiez/wactorz/blob/main/docs/api.md) | REST endpoints and payloads |
-| [Deployment](https://docs.waldiez.io/wactorz/guide/deployment.html) | Docker, native binary, systemd, staging, HA addon |
+| [Deployment](https://docs.waldiez.io/wactorz/guide/deployment.html) | Docker, Home Assistant add-on, environment setup |
 | [Prometheus](https://docs.waldiez.io/wactorz/guide/prometheus.html) | Metrics and monitoring |
 | [Technical reference](https://github.com/waldiez/wactorz/blob/main/docs/reference.md) | Deeper internals |
 

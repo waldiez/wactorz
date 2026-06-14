@@ -70,7 +70,7 @@ wactorz/          Python package source
 ├── core/           Actor base, registry, supervisor
 └── interfaces/     CLI, REST, Discord, WhatsApp, Telegram interfaces
 
-frontend/           Babylon.js web dashboard (TypeScript + Vite)
+frontend/           Web card dashboard (TypeScript + Vite)
 docs/               Documentation (MkDocs + custom landing page)
 tests/              Python test suite
 ```

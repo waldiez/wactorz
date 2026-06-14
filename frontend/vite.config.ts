@@ -24,20 +24,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: (id) => {
-          // Babylon.js core + GUI + loaders → dedicated chunk (large but cacheable)
-          if (id.includes("@babylonjs/core")) return "babylon-core";
-          if (id.includes("@babylonjs/gui")) return "babylon-gui";
-          if (id.includes("@babylonjs/loaders")) return "babylon-loaders";
           // mqtt.js + ws deps
           if (id.includes("mqtt") || id.includes("node_modules")) return "vendor";
         },
       },
     },
-    // Babylon.js is a 3D engine; its chunk is legitimately large (≈1.1 MB gz)
-    chunkSizeWarningLimit: 6000,
-  },
-  optimizeDeps: {
-    // Babylon.js uses dynamic imports internally; exclude from pre-bundling
-    exclude: ["@babylonjs/core", "@babylonjs/gui", "@babylonjs/loaders"],
   },
 });

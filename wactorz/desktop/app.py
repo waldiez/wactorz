@@ -28,7 +28,7 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("MONITOR_PORT", "8888"))
 URL = f"http://{HOST}:{PORT}"
 FROZEN = getattr(sys, "frozen", False)
-ICON_EXT = "ico" if "win" in sys.platform else "png"
+ICON_EXT = {"win32": "ico", "darwin": "icns"}.get(sys.platform, "png")
 APP_ICON = Path(__file__).with_name("assets") / f"icon.{ICON_EXT}"
 
 _backend: "subprocess.Popen | None" = None

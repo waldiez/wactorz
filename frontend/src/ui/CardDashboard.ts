@@ -1375,17 +1375,25 @@ export class CardDashboard {
         // optimistic message has id "user-<ts>" and the persisted one
         // "hist-…", so plain id de-dup misses them and the user's message
         // renders twice. Match the persisted user message to a pending
-        // optimistic one (same target + content) and adopt its id instead of
-        // adding a duplicate. .find returns the first match, so repeated
-        // identical messages reconcile one-to-one (each adopted id no longer
-        // starts with "user-").
+        // optimistic one (same target + content + near-identical timestamp) and
+        // adopt its id instead of adding a duplicate.
+        //
+        // The timestamp window is essential: matching on content alone would
+        // wrongly collapse a NEW message that happens to repeat an OLDER one
+        // ("ok" today vs "ok" yesterday), dropping a bubble the user did send.
+        // A persisted copy of a just-sent message is logged within seconds of
+        // its optimistic echo, so a tight window only ever matches the real
+        // pair. If no optimistic copy exists (the message was never rendered),
+        // nothing matches and the persisted one is added — so this never hides
+        // a message that wasn't already on screen.
         if (m.from === "user") {
           const opt = this.chatMessages.find(
             (x) =>
               x.id.startsWith("user-") &&
               x.from === "user" &&
               x.to === m.to &&
-              x.content === m.content,
+              x.content === m.content &&
+              Math.abs(x.timestampMs - m.timestampMs) < 120_000,
           );
           if (opt) {
             opt.id = m.id;

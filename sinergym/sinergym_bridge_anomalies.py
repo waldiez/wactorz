@@ -402,7 +402,8 @@ def _catalog_body(env_id: str, obs_names: list, act_names: list,
 
 
 def _obs_body(env_id: str, ep: int, step: int, obs: list, action_norm: list,
-              action_real: list, reward: float, done: bool, mode: str) -> str:
+              action_real: list, reward: float, done: bool, mode: str,
+              reward_custom=None, reward_hourly=None) -> str:
     iri    = _obs_iri(env_id, ep, step)
     ep_iri = _episode_iri(env_id, ep)
     env    = _env_iri(env_id)
@@ -415,7 +416,14 @@ def _obs_body(env_id: str, ep: int, step: int, obs: list, action_norm: list,
     lines.append(f"  sosa:hasFeatureOfInterest {env} ;")
     lines.append(f'  sgy:episode {_literal(ep)} ;')
     lines.append(f'  sgy:step {_literal(step)} ;')
+    # sgy:reward stays the native Sinergym linear (original) reward for
+    # backwards compatibility; the two extra rewards are added alongside it.
     lines.append(f'  sgy:reward {_literal(reward)} ;')
+    lines.append(f'  sgy:rewardOriginal {_literal(reward)} ;')
+    if reward_custom is not None:
+        lines.append(f'  sgy:rewardCustom {_literal(float(reward_custom))} ;')
+    if reward_hourly is not None:
+        lines.append(f'  sgy:rewardHourly {_literal(float(reward_hourly))} ;')
     lines.append(f'  sgy:done {_literal(done)} ;')
     lines.append(f'  sgy:mode "{_esc(mode)}" ;')
     lines.append(f'  sgy:obsVector "{_esc(json.dumps(obs))}" ;')
@@ -606,6 +614,17 @@ def _episode_end_body(env_id: str, ep: int, stats: dict) -> str:
     lines.append(f'  sgy:steps {_literal(stats.get("steps", 0))} ;')
     lines.append(f'  sgy:totalReward {_literal(stats.get("total_reward", 0.0))} ;')
     lines.append(f'  sgy:meanReward {_literal(stats.get("mean_reward", 0.0))} ;')
+    # Three rewards (mirror pymdp v7 reporting): original/native linear,
+    # custom (training-shaped) and hourly-schedule linear.
+    lines.append(f'  sgy:originalRewardTotal {_literal(stats.get("original_reward", stats.get("total_reward", 0.0)))} ;')
+    if stats.get("custom_reward") is not None:
+        lines.append(f'  sgy:customRewardTotal {_literal(stats.get("custom_reward", 0.0))} ;')
+    if stats.get("hourly_reward") is not None:
+        lines.append(f'  sgy:hourlyRewardTotal {_literal(stats.get("hourly_reward", 0.0))} ;')
+    if stats.get("comfort_score") is not None:
+        lines.append(f'  sgy:comfortScore {_literal(stats.get("comfort_score", 0.0))} ;')
+    if stats.get("comfort_score_occ") is not None:
+        lines.append(f'  sgy:comfortScoreOcc {_literal(stats.get("comfort_score_occ", 0.0))} ;')
     lines.append(f'  sgy:totalEnergyW {_literal(stats.get("total_energy_W", 0.0))} ;')
     lines.append(f'  sgy:comfortViolations {_literal(stats.get("comfort_violations_degC_steps", 0.0))} ;')
     lines.append(f'  sgy:violationTimesteps {_literal(stats.get("violation_timesteps", 0))} ;')
@@ -676,11 +695,13 @@ class SinergymFusekiBridge:
 
     def push_obs(self, env_id: str, ep: int, step: int, obs: list,
                  action_norm: list, action_real: list,
-                 reward: float, done: bool, mode: str) -> None:
+                 reward: float, done: bool, mode: str,
+                 reward_custom=None, reward_hourly=None) -> None:
         if not self._enabled:
             return
         body = _obs_body(env_id, ep, step, obs, action_norm, action_real,
-                         reward, done, mode)
+                         reward, done, mode,
+                         reward_custom=reward_custom, reward_hourly=reward_hourly)
         self._enqueue(("append_graph", GRAPH_SGY_OBS, body))
         self._step_counter += 1
         # Prune old observations every OBS_RETENTION_STEPS steps
@@ -1679,7 +1700,11 @@ class SinergymBridgeMAS:
         mo_ok = mo_chk = 0
         mo_dev_sum = 0.0
         mo_dev_steps = 0
-        mo_cs = self._cre_cs_cls() if self._custom_ok else None
+        mo_cs = self._cre_cs_cls() if self._metrics_ok else None
+        cs_ep = self._cre_cs_cls() if self._metrics_ok else None   # whole-episode CS
+        total_hlr = 0.0           # hourly-schedule linear reward (episode total)
+        mo_hlr    = 0.0           # ... and current-month running sum
+        mo_orig   = 0.0           # current-month native (original) reward sum
         t0        = time.time()
         self._fallback_steps = 0
 
@@ -1704,12 +1729,32 @@ class SinergymBridgeMAS:
             # If the custom-reward wrapper is active, info carries BOTH rewards.
             # Accumulate the custom (shaped) reward; revert `reward` to the native
             # env reward so all existing publishing / Fuseki / parity stay intact.
+            reward_custom_step = None
             if self._custom_ok and info and ("custom_reward" in info):
-                custom_total += float(info["custom_reward"])
-                mo_reward    += float(info["custom_reward"])
+                reward_custom_step = float(info["custom_reward"])
+                custom_total += reward_custom_step
+                mo_reward    += reward_custom_step
                 reward = float(info.get("original_reward", reward))
             total_rew += float(reward)
+            mo_orig   += float(reward)
             self._total_steps += 1
+
+            # Hourly-schedule linear reward (same metric pymdp v7 accumulates).
+            reward_hourly_step = None
+            if self._hlr_ok:
+                try:
+                    _hlr = self._hlr_fn(np.asarray(next_obs, dtype=np.float64))
+                    reward_hourly_step = float(_hlr[0] if isinstance(_hlr, (tuple, list)) else _hlr)
+                    total_hlr += reward_hourly_step
+                    mo_hlr    += reward_hourly_step
+                except Exception:
+                    reward_hourly_step = None
+            # Whole-episode comfort score (CS), updated every step.
+            if cs_ep is not None:
+                try:
+                    cs_ep.update(np.asarray(next_obs, dtype=np.float32))
+                except Exception:
+                    pass
 
             self._extract_reward_components(info)
 
@@ -1747,7 +1792,7 @@ class SinergymBridgeMAS:
                 pass
 
             # ── eval-format per-month metrics (mirror maddpg_v3.evaluate) ─────
-            if self._custom_ok:
+            if self._metrics_ok:
                 try:
                     _no = np.asarray(next_obs, dtype=np.float32)
                     m_now = int(_no[0])
@@ -1758,13 +1803,17 @@ class SinergymBridgeMAS:
                             _dev = (mo_dev_sum / mo_dev_steps) if mo_dev_steps > 0 else 0.0
                             _zt  = _no[9:24]
                             print(f"  Month {cur_month:2d} [{season}] | "
-                                  f"R: {mo_reward:8.2f} | "
+                                  f"OR: {mo_orig:10.0f} | "
+                                  f"CR: {mo_reward:8.2f} | "
+                                  f"HLR: {mo_hlr:8.2f} | "
                                   f"T: {float(np.mean(_zt)):5.1f}°C "
                                   f"[{float(np.min(_zt)):.1f}-{float(np.max(_zt)):.1f}] | "
                                   f"CS: {mo_cs.mean:.3f} (occ:{mo_cs.mean_occ:.3f}) | "
                                   f"ZCR: {_zcr:5.1f}% | Dev: {_dev:.3f}°C")
                         cur_month = m_now
                         mo_reward = 0.0
+                        mo_hlr = 0.0
+                        mo_orig = 0.0
                         mo_ok = mo_chk = 0
                         mo_dev_sum = 0.0
                         mo_dev_steps = 0
@@ -1777,8 +1826,12 @@ class SinergymBridgeMAS:
                     mo_dev_sum += _d
                     mo_dev_steps += _n
                     mo_cs.update(_no)
-                except Exception:
-                    pass
+                except Exception as _e:
+                    if not getattr(self, "_monthly_err_logged", False):
+                        self._monthly_err_logged = True
+                        import traceback
+                        print(f"[MONTHLY] metrics disabled — first error: {_e!r}")
+                        traceback.print_exc()
             # Scalars (hvac_fault_active, hvac_efficiency, anomaly_step, ...) already
             # pass the scalar filter below; the list-valued keys (active labels,
             # kinds, event ids) would be dropped, so JSON-stringify them so they
@@ -1799,7 +1852,12 @@ class SinergymBridgeMAS:
                 "obs":         obs.tolist(),
                 "action":      action_norm.tolist(),
                 "action_real": action_real.tolist(),
-                "reward":      float(reward),
+                "reward":         float(reward),          # native linear (original)
+                "reward_original": float(reward),
+                "reward_custom":  reward_custom_step,     # training-shaped (or None)
+                "reward_hourly":  reward_hourly_step,     # hourly-schedule (or None)
+                "cs":      round(cs_ep.mean, 4)     if cs_ep is not None else None,
+                "cs_occ":  round(cs_ep.mean_occ, 4) if cs_ep is not None else None,
                 "done":        bool(done),
                 "info":        info_serial,
                 "step":        step,
@@ -1820,6 +1878,8 @@ class SinergymBridgeMAS:
                     reward=float(reward),
                     done=bool(done),
                     mode=self.mode,
+                    reward_custom=reward_custom_step,
+                    reward_hourly=reward_hourly_step,
                 )
 
             # ── Publish + store per-zone observations ─────────────────────────
@@ -1861,6 +1921,10 @@ class SinergymBridgeMAS:
             "mean_deviation_degC":    round(mean_dev, 3),
             "deadband_violation_pct": round(db_rate, 1),
             "custom_reward":          round(custom_total, 2) if self._custom_ok else None,
+            "original_reward":        round(total_rew, 2),
+            "hourly_reward":          round(total_hlr, 2) if self._hlr_ok else None,
+            "comfort_score":          round(cs_ep.mean, 4)     if cs_ep is not None else None,
+            "comfort_score_occ":      round(cs_ep.mean_occ, 4) if cs_ep is not None else None,
             "duration_s":     round(duration, 2),
             "env_id":         self.env_id,
             "mode":           self.mode,
@@ -1898,6 +1962,14 @@ class SinergymBridgeMAS:
             + (f"\n  EVALUATION RESULTS:"
                f"\n  Custom Reward:        {custom_total:.2f} "
                f"(mean/step: {custom_total/max(step,1):.4f})" if self._custom_ok else "")
+            + (f"\n  Hourly Reward:        {total_hlr:.2f}" if self._hlr_ok else "")
+            + (f"\n  Original Reward:      {total_rew:.2f}"
+               f"\n  ── three rewards (mirror pymdp v7) ──"
+               f"\n    Original (linear):  {total_rew:.2f}"
+               + (f"\n    Custom (shaped):    {custom_total:.2f}" if self._custom_ok else "")
+               + (f"\n    Hourly (schedule):  {total_hlr:.2f}" if self._hlr_ok else ""))
+            + (f"\n  CS (weighted/occ):    {cs_ep.mean:.4f} / {cs_ep.mean_occ:.4f}"
+               if cs_ep is not None else "")
             + f"\n  Duration:             {duration/3600:.2f}h"
             f"\n{'─'*60}"
         )
@@ -1963,27 +2035,53 @@ class SinergymBridgeMAS:
             except Exception as e:
                 print(f"[ANOMALY] Injection requested but failed to enable: {e}")
 
-        # ── Custom (training-shaped) reward + eval-format metrics ─────────────
-        # Reuse the EXACT wrapper/helpers MADDPG was evaluated with so the
-        # "Custom Reward" matches maddpg_v3.evaluate (no reimplementation drift).
-        # The wrapper sets info['custom_reward'] and info['original_reward'];
-        # we keep using the native reward everywhere and only ACCUMULATE custom.
-        self._custom_ok = False
+        # ── Reporting metrics (CS / ZCR / deviation / seasonal / monthly) ─────
+        # Self-contained — no maddpg / ensemble_controller dependency. These
+        # drive the per-month log + the comfort-score reporting and are always
+        # available as long as metrics_utils.py is on the path.
+        self._metrics_ok = False
         try:
-            from maddpg_v3 import (CustomRewardWrapper, get_seasonal_comfort,
-                                   COMFORT_SUMMER, CSAccumulator,
-                                   compute_zone_comfort_rate, compute_mean_deviation)
+            from metrics_utils import (get_seasonal_comfort, COMFORT_SUMMER,
+                                       CSAccumulator, compute_zone_comfort_rate,
+                                       compute_mean_deviation)
             self._cre_seasonal = get_seasonal_comfort
             self._cre_summer   = COMFORT_SUMMER
             self._cre_cs_cls   = CSAccumulator
             self._cre_zcr      = compute_zone_comfort_rate
             self._cre_dev      = compute_mean_deviation
-            env = CustomRewardWrapper(env)   # default config = the one eval uses
-            self._custom_ok = True
-            print("[CUSTOM-REWARD] Wrapped env in CustomRewardWrapper; "
-                  "per-month + Custom Reward metrics enabled.")
+            self._metrics_ok = True
+            print("[METRICS] metrics_utils loaded — monthly + comfort-score "
+                  "(CS/ZCR/deviation) metrics enabled.")
         except Exception as e:
-            print(f"[CUSTOM-REWARD] Disabled (could not import training code): {e}")
+            print(f"[METRICS] Disabled (could not import metrics_utils): {e}")
+
+        # ── Custom (training-shaped) reward — now self-contained ──────────────
+        # CustomRewardWrapper is inlined in metrics_utils (verbatim from
+        # maddpg_v2), so no maddpg / ensemble_controller dependency remains.
+        self._custom_ok = False
+        try:
+            from metrics_utils import CustomRewardWrapper
+            if CustomRewardWrapper is None:
+                raise ImportError("gymnasium unavailable in metrics_utils")
+            env = CustomRewardWrapper(env)   # default RewardConfig = the eval one
+            self._custom_ok = True
+            print("[CUSTOM-REWARD] Wrapped env via metrics_utils.CustomRewardWrapper "
+                  "— Custom Reward enabled (no maddpg needed).")
+        except Exception as e:
+            print(f"[CUSTOM-REWARD] Disabled ({e}); running original + hourly "
+                  "rewards and metrics only.")
+
+        # ── Hourly-schedule linear reward (re-exported via metrics_utils) ────
+        self._hlr_ok = False
+        try:
+            from metrics_utils import compute_hourly_linear_reward
+            if compute_hourly_linear_reward is None:
+                raise ImportError("hourly_reward_metric not importable")
+            self._hlr_fn = compute_hourly_linear_reward
+            self._hlr_ok = True
+            print("[HOURLY-REWARD] compute_hourly_linear_reward enabled (via metrics_utils).")
+        except Exception as e:
+            print(f"[HOURLY-REWARD] Disabled (could not import hourly metric): {e}")
         self._act_low  = env.action_space.low.copy()  if hasattr(env.action_space, 'low')  else np.zeros(1)
         self._act_high = env.action_space.high.copy() if hasattr(env.action_space, 'high') else np.ones(1)
 

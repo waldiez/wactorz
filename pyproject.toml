@@ -57,11 +57,14 @@ influx    = [
 tts       = [
     "edge-tts>=6.1.9",
 ]
+# Backend-agnostic desktop core. macOS uses the native Cocoa webview (pyobjc,
+# pulled by pywebview) and Windows the Edge WebView2 backend (pythonnet), so both
+# get a webview out of the box. On Linux no GUI toolkit is pinned here — pick a
+# backend extra below — so this install never fails on a missing PySide6 wheel
+# (e.g. aarch64 on older glibc). app.py errors clearly at launch if, on Linux,
+# neither Qt nor GTK is importable.
 desktop = [
     "pywebview>=5.1",
-    # Linux: Qt/QtWebEngine webview + Qt tray. Windows uses the Edge WebView2
-    # backend and macOS the native Cocoa one, so PySide6 ships on Linux only.
-    "pywebview[pyside6]>=5.1; sys_platform == 'linux'",
     "plyer>=2.1",
     "pythonnet>=3.0;  sys_platform == 'win32'",    # Edge WebView2 backend
     # Tray on macOS/Windows uses pystray's native backend. Linux uses the Qt
@@ -69,6 +72,25 @@ desktop = [
     # AppImage/Flatpak free of GTK.
     "pystray>=0.19.5; sys_platform != 'linux'",
     "pillow>=10.0;    sys_platform != 'linux'",
+]
+# Linux Qt backend: QtWebEngine webview + Qt tray. The AppImage and recommended
+# pip path. Split out so a failed PySide6 resolution never aborts a plain
+# wactorz[desktop] (or wactorz[all]) install.
+desktop-qt = [
+    "wactorz[desktop]",
+    "pywebview[pyside6]>=5.1; sys_platform == 'linux'",
+]
+# Linux GTK/WebKit2 backend: uses system GObject-introspection + WebKit
+# (e.g. `apt install python3-gi gir1.2-webkit2-4.1`). No system tray.
+desktop-gtk = [
+    "wactorz[desktop]",
+    "pywebview[gtk]>=5.1; sys_platform == 'linux'",
+    # Optional GTK tray via pystray's AppIndicator backend (needs the system lib,
+    # e.g. `apt install gir1.2-ayatanaappindicator3-0.1`). Linux-only and kept
+    # out of [desktop] so it never enters the Qt AppImage bundle (which builds
+    # from [all,desktop-qt], not desktop-gtk).
+    "pystray>=0.19.5; sys_platform == 'linux'",
+    "pillow>=10.0;    sys_platform == 'linux'",
 ]
 docs      = [
     "markdown>=3.10.2",

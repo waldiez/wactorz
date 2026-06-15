@@ -29,8 +29,10 @@ if [ ! -x "$VENV/bin/pyinstaller" ]; then
     python3 -m venv "$VENV"
     "$VENV/bin/pip" install --upgrade pip pyinstaller >/dev/null
     # [all] = LLM providers + integrations + desktop, minus the heavy ml/torch
-    # extra. WACTORZ_FRONTEND_STALE keeps the build hook from rebuilding the SPA.
-    WACTORZ_FRONTEND_STALE=99999999 "$VENV/bin/pip" install -e "$ROOT[all]"
+    # extra. desktop-qt adds PySide6 (the AppImage's Qt/QtWebEngine backend),
+    # which [desktop] no longer pins. WACTORZ_FRONTEND_STALE keeps the build hook
+    # from rebuilding the SPA.
+    WACTORZ_FRONTEND_STALE=99999999 "$VENV/bin/pip" install -e "$ROOT[all,desktop-qt]"
 fi
 
 echo "==> [1/3] Freezing with PyInstaller"

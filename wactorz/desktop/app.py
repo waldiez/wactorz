@@ -297,6 +297,12 @@ def _qt_available() -> bool:
     return importlib.util.find_spec("PySide6") is not None
 
 
+def _gtk_available() -> bool:
+    """True if PyGObject (the GTK/WebKit2 webview backend) is importable."""
+    import importlib.util
+    return importlib.util.find_spec("gi") is not None
+
+
 def launch_desktop() -> None:
     global _backend, _window
     # On Linux we prefer the Qt (QtWebEngine) backend the AppImage bundles, but a
@@ -305,6 +311,15 @@ def launch_desktop() -> None:
     # Only force gui="qt" — and the Qt-only tweaks below — when Qt is present.
     _linux = sys.platform.startswith("linux")
     _use_qt = _linux and _qt_available()
+    # No install-time guarantee of a Linux backend (PySide6/GTK are separate
+    # extras), so fail clearly here instead of crashing deep inside pywebview.
+    if _linux and not _use_qt and not _gtk_available():
+        sys.stderr.write(
+            "wactorz-desktop: no GUI backend found on Linux. Install one of:\n"
+            "  pip install 'wactorz[desktop-qt]'                  # Qt (PySide6)\n"
+            "  sudo apt install python3-gi gir1.2-webkit2-4.1     # system GTK/WebKit\n"
+        )
+        sys.exit(1)
     # GNOME breaks the bundled QtWebEngine under Wayland (no webview content,
     # unthemed window), so force XWayland on GNOME only — KDE/others handle
     # Wayland fine. Overridable. AppRun does the same for the AppImage; this
@@ -328,13 +343,13 @@ def launch_desktop() -> None:
 
     _backend = _spawn_backend()
 
-    # Tray backend matches the webview backend: Qt on Linux (shares pywebview's
-    # QApplication), pystray's native backend on macOS / Windows. The GTK
-    # fallback (no PySide6) has no tray — _tray_ok stays False, so closing the
-    # window shuts the app down instead of hiding it.
-    if _linux:
-        if _use_qt:
-            _build_tray()
+    # Tray backend matches the webview backend: the Qt tray (QSystemTrayIcon,
+    # shares pywebview's QApplication) when Qt is used, otherwise pystray's
+    # native backend — macOS/Windows, or the Linux GTK fallback when pystray is
+    # installed (wactorz[desktop-gtk]). If no tray can be shown, _tray_ok stays
+    # False and closing the window shuts the app down instead of hiding it.
+    if _use_qt:
+        _build_tray()
     else:
         _build_pystray_tray()
 

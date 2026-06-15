@@ -24,6 +24,17 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 STALE_AFTER: int = int(os.getenv("WACTORZ_FRONTEND_STALE", "600"))
 
 
+def _flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Never invoke a JS toolchain — use the committed static/app as-is.
+SKIP_BUILD = _flag("WACTORZ_SKIP_FRONTEND_BUILD")
+# Make a missing toolchain / failed build fatal (for release & CI builds).
+# Default is non-fatal so `pip install` never fails for lack of bun/node/npm.
+STRICT = _flag("WACTORZ_FRONTEND_STRICT")
+
+
 def _pkg_manager(frontend_dir: Path) -> list[str]:
     """Return the detected package-manager command prefix."""
     pkg_json = frontend_dir / "package.json"
@@ -69,6 +80,12 @@ class CustomBuildHook(BuildHookInterface):
         frontend   = root / "frontend"
         dist_index = root / "static" / "app" / "index.html"
 
+        if SKIP_BUILD:
+            self.app.display_info(
+                "[build-hook] WACTORZ_SKIP_FRONTEND_BUILD set — using committed static/app"
+            )
+            return
+
         if not _is_stale(dist_index):
             self.app.display_info("[build-hook] static/app is fresh — skipping rebuild")
             return
@@ -86,11 +103,15 @@ class CustomBuildHook(BuildHookInterface):
                     "static/app already present (committed), skipping rebuild"
                 )
                 return
-            self.app.display_error(
+            msg = (
                 f"[build-hook] {pm[0]} not found and static/app/index.html is missing. "
                 f"Install {pm[0]} (or bun/pnpm/npm) to build the frontend."
             )
-            sys.exit(1)
+            if STRICT:
+                self.app.display_error(msg)
+                sys.exit(1)
+            self.app.display_warning(msg + " — continuing without the bundled SPA")
+            return
 
         self.app.display_info(f"[build-hook] building frontend with {pm[0]} …")
 
@@ -106,7 +127,10 @@ class CustomBuildHook(BuildHookInterface):
             _run(pm + ["install", "--frozen-lockfile"] if pm[0] != "npm" else pm + ["ci"])
             _run(pm + ["run", "build"])
         except RuntimeError as exc:
-            self.app.display_error(str(exc))
-            sys.exit(1)
+            if STRICT:
+                self.app.display_error(str(exc))
+                sys.exit(1)
+            self.app.display_warning(str(exc) + " — continuing with existing static/app")
+            return
 
         self.app.display_info("[build-hook] frontend build complete ✓")

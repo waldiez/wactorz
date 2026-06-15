@@ -1368,7 +1368,33 @@ export class CardDashboard {
     const liveIds = () => new Set(this.chatMessages.map((m) => m.id));
     const prepend = (msgs: ChatMessage[]) => {
       const ids = liveIds();
-      this.chatMessages.unshift(...msgs.filter((m) => !ids.has(m.id)));
+      const toAdd: ChatMessage[] = [];
+      for (const m of msgs) {
+        if (ids.has(m.id)) continue;
+        // Reconcile optimistic user echoes with their persisted copies. The
+        // optimistic message has id "user-<ts>" and the persisted one
+        // "hist-…", so plain id de-dup misses them and the user's message
+        // renders twice. Match the persisted user message to a pending
+        // optimistic one (same target + content) and adopt its id instead of
+        // adding a duplicate. .find returns the first match, so repeated
+        // identical messages reconcile one-to-one (each adopted id no longer
+        // starts with "user-").
+        if (m.from === "user") {
+          const opt = this.chatMessages.find(
+            (x) =>
+              x.id.startsWith("user-") &&
+              x.from === "user" &&
+              x.to === m.to &&
+              x.content === m.content,
+          );
+          if (opt) {
+            opt.id = m.id;
+            continue;
+          }
+        }
+        toAdd.push(m);
+      }
+      this.chatMessages.unshift(...toAdd);
       this._renderChatThread();
     };
     try {

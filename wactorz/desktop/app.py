@@ -291,15 +291,25 @@ def _load_when_ready(window) -> None:
         _on_app_loaded()
 
 
+def _qt_available() -> bool:
+    """True if PySide6 is importable — the Qt webview + tray backend."""
+    import importlib.util
+    return importlib.util.find_spec("PySide6") is not None
+
+
 def launch_desktop() -> None:
     global _backend, _window
+    # On Linux we prefer the Qt (QtWebEngine) backend the AppImage bundles, but a
+    # source/pip install without PySide6 (e.g. a system WebKit2GTK box such as a
+    # Raspberry Pi) should fall back to pywebview's GTK backend rather than crash.
+    # Only force gui="qt" — and the Qt-only tweaks below — when Qt is present.
+    _linux = sys.platform.startswith("linux")
+    _use_qt = _linux and _qt_available()
     # GNOME breaks the bundled QtWebEngine under Wayland (no webview content,
     # unthemed window), so force XWayland on GNOME only — KDE/others handle
     # Wayland fine. Overridable. AppRun does the same for the AppImage; this
-    # covers source/dev runs that don't go through AppRun.
-    if sys.platform.startswith("linux") and "gnome" in os.environ.get(
-        "XDG_CURRENT_DESKTOP", ""
-    ).lower():
+    # covers source/dev runs that don't go through AppRun. (Qt-only.)
+    if _use_qt and "gnome" in os.environ.get("XDG_CURRENT_DESKTOP", "").lower():
         os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
     _set_app_user_model_id()
     signal.signal(signal.SIGINT, _shutdown)
@@ -319,14 +329,17 @@ def launch_desktop() -> None:
     _backend = _spawn_backend()
 
     # Tray backend matches the webview backend: Qt on Linux (shares pywebview's
-    # QApplication), pystray's native backend on macOS / Windows.
-    if sys.platform.startswith("linux"):
-        _build_tray()
+    # QApplication), pystray's native backend on macOS / Windows. The GTK
+    # fallback (no PySide6) has no tray — _tray_ok stays False, so closing the
+    # window shuts the app down instead of hiding it.
+    if _linux:
+        if _use_qt:
+            _build_tray()
     else:
         _build_pystray_tray()
 
     start_kwargs = {"icon": APP_ICON}
-    if sys.platform.startswith("linux"):
+    if _use_qt:
         start_kwargs["gui"] = "qt"
     webview.start(_load_when_ready, _window, **start_kwargs)   # blocks the main thread
     _shutdown()

@@ -79,3 +79,29 @@ Notes:
   — verify the tray actually appears; it falls back to none if not.
 - `--deep` signing covers PyInstaller's nested dylibs; if notarization flags
   unsigned nested code, sign inner binaries individually.
+
+## Troubleshooting
+
+**"Wactorz backend didn't start" after the loading splash.** The desktop shell
+launches the backend as a child process and waits ~30 s for it to answer on
+`http://127.0.0.1:8888`. The most common reason it never does is an
+**unreachable MQTT broker** — the backend needs its configured MQTT host to be
+running and reachable from this machine. Check that first, then reopen.
+
+The child's stdout/stderr is captured to `desktop-backend.log` in the per-user
+data dir:
+
+| OS | Log path |
+|----|----------|
+| Linux / macOS | `~/.local/share/wactorz/desktop-backend.log` (or `$XDG_DATA_HOME/wactorz/`) |
+| Windows | `%LOCALAPPDATA%\wactorz\desktop-backend.log` |
+
+**Linux: blank window / no title-bar buttons under GNOME-Wayland.** The bundled
+QtWebEngine misbehaves on GNOME's Wayland session; the AppImage forces XWayland
+there automatically (`QT_QPA_PLATFORM=xcb`). KDE/others render fine on Wayland.
+
+**Linux: choosing a webview backend.** The AppImage bundles Qt. For a `pip`
+install pick a backend extra: `wactorz[desktop-qt]` (PySide6/QtWebEngine) or
+`wactorz[desktop-gtk]` (system PyGObject + WebKit2GTK, e.g.
+`apt install python3-gi gir1.2-webkit2-4.1`). With neither present the app exits
+at launch with install instructions.

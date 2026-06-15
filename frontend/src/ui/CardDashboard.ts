@@ -1668,7 +1668,15 @@ export class CardDashboard {
       document.dispatchEvent(new CustomEvent("af-mic-toggle")),
     );
 
-    if ((document.body as any).__voiceUnavailable) {
+    // Hide the mic when voice can't work: no Web Speech API, or an insecure
+    // context (HTTP) where getUserMedia is unavailable — e.g. the HA add-on's
+    // ingress iframe. Checked directly (not just via __voiceUnavailable) so it
+    // holds regardless of when IOBar initialises relative to this bar.
+    const voiceUnavailable =
+      (document.body as any).__voiceUnavailable ||
+      !window.isSecureContext ||
+      !navigator.mediaDevices?.getUserMedia;
+    if (voiceUnavailable) {
       micBtn.style.display = "none";
     }
 

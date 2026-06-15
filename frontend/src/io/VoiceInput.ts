@@ -82,14 +82,32 @@ export class VoiceInput {
   /** Called when ambient listening stops permanently (permission denied, no mic). */
   onAmbientStop: (() => void) | null = null;
 
+  /** Why voice is unavailable (for UI messaging); "" when available. */
+  unavailableReason: "" | "no-api" | "insecure" = "";
+
   constructor() {
     const win = window as unknown as Record<string, unknown>;
     const API = (win["SpeechRecognition"] ?? win["webkitSpeechRecognition"]) as
       | SpeechRecognitionConstructor
       | undefined;
 
+    // getUserMedia + SpeechRecognition only work in a secure context (HTTPS or
+    // localhost). The HA add-on serves the UI over HTTP via ingress, so
+    // navigator.mediaDevices is undefined and the mic can never start — treat
+    // that as unavailable rather than showing a button that silently fails.
+    const secure =
+      window.isSecureContext && !!navigator.mediaDevices?.getUserMedia;
+
     if (!API) {
+      this.unavailableReason = "no-api";
       console.warn("[VoiceInput] Web Speech API not available in this browser.");
+      return;
+    }
+    if (!secure) {
+      this.unavailableReason = "insecure";
+      console.warn(
+        "[VoiceInput] mic unavailable: insecure context (needs HTTPS or localhost).",
+      );
       return;
     }
 

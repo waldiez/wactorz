@@ -117,6 +117,18 @@ document.addEventListener("af-mic-toggle", () => {
   else void ioBar.startMic();
 });
 
+// Voice needs a secure context (HTTPS/localhost). The HA add-on serves the UI
+// over HTTP via ingress, so the mic can't work there — say so once instead of
+// leaving a dead button.
+if (!voice.isAvailable && voice.unavailableReason === "insecure") {
+  toast.show({
+    type: "alert-warning",
+    title: "Voice input unavailable",
+    message:
+      "Microphone needs HTTPS. Use the desktop app, or open the dashboard over https://.",
+  });
+}
+
 const feed = new ActivityFeed();
 
 // ── Direct WebSocket chat (bypasses MQTT/IOAgent when server has registry) ────

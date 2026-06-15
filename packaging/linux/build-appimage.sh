@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build the self-contained Wactorz AppImage (bundles PySide6/QtWebEngine).
 #
-# Requires: pyinstaller, and appimagetool on PATH (or set APPIMAGETOOL).
+# Requires: pyinstaller. appimagetool is auto-downloaded to ~/.local/bin if it
+# is not already on PATH (override with APPIMAGETOOL=/path/to/appimagetool).
 # Build on the OLDEST glibc you support (e.g. an Ubuntu 22.04 container) so the
 # AppImage runs on as many hosts as possible.
 set -euo pipefail
@@ -18,6 +19,28 @@ APPDIR="$DIST/Wactorz.AppDir"
 # an aarch64 machine.
 ARCH="${ARCH:-$(uname -m)}"
 APPIMAGETOOL="${APPIMAGETOOL:-appimagetool}"
+
+# Ensure appimagetool is available; if not, fetch the official AppImage for this
+# arch into ~/.local/bin (and add it to PATH for this build).
+if ! command -v "$APPIMAGETOOL" >/dev/null 2>&1; then
+    BIN_DIR="$HOME/.local/bin"
+    TOOL="$BIN_DIR/appimagetool"
+    if [ ! -x "$TOOL" ]; then
+        echo "==> appimagetool not found — downloading for $ARCH"
+        mkdir -p "$BIN_DIR"
+        wget -O "$TOOL" \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$ARCH.AppImage"
+        chmod +x "$TOOL"
+    fi
+    APPIMAGETOOL="$TOOL"
+    case ":$PATH:" in
+        *":$BIN_DIR:"*) ;;
+        *) export PATH="$BIN_DIR:$PATH" ;;
+    esac
+    # appimagetool is itself an AppImage and needs FUSE to run; build hosts
+    # (old-glibc containers) often lack it, so self-extract instead.
+    export APPIMAGE_EXTRACT_AND_RUN=1
+fi
 
 # Freeze from a dedicated, isolated venv (in gitignored .local/) so the bundle
 # is reproducible and never polluted by whatever's in the dev env. Delete

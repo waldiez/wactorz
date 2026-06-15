@@ -622,6 +622,8 @@ class ForecastAnomalyDetector:
                  diff_sigma_scale: float = 0.7,
                  common_mode_persist: int = 4,
                  common_mode_h: float = 3.0,
+                 mz_fault_zones: int = 2,
+                 drift_dominance_ratio: float = 3.0,
                  device: str = "auto",
                  verbose: bool = True):
         if not _HAVE_TORCH:
@@ -655,6 +657,18 @@ class ForecastAnomalyDetector:
         self.drift_persist = int(drift_persist)
         self.cooldown = int(cooldown)
         self.drift_min_signed_frac = float(drift_min_signed_frac)
+        # Multi-zone adjudication (added after AIF-controller diagnostics):
+        #   mz_fault_zones        — >= this many simultaneous drift-style
+        #                           candidates fire as a multizone hvac_fault
+        #                           instead of being silently suppressed.
+        #   drift_dominance_ratio — if the strongest candidate's severity is
+        #                           >= ratio x the runner-up, treat it as a
+        #                           single-zone drift even with co-candidates
+        #                           (a controller compensating a drifted
+        #                           sensor drags same-loop neighbors into the
+        #                           candidate list; the true drift dominates).
+        self._mz_fault_zones = int(mz_fault_zones)
+        self._drift_dominance_ratio = float(drift_dominance_ratio)
         self.verbose = bool(verbose)
  
         # Built in fit()
@@ -2052,11 +2066,21 @@ class ForecastAnomalyDetector:
                     sev = float(self._level_cusum_neg[i] / self._level_cusum_h)
                     candidates.append((i, sev, -1, "level_cusum"))
  
-        # If multiple zones look like drift simultaneously, it's
-        # probably not drift — drift is single-sensor by physical
-        # definition. Suppress to avoid mislabeling a structural shift.
-        if (not cooled
-                and len(candidates) == 1):
+        # ── Candidate adjudication ────────────────────────────────────
+        # Drift is single-sensor by physical definition, BUT a controller
+        # that compensates a drifted sensor (AIF especially) physically
+        # drags same-loop neighbors into the candidate list. So:
+        #   * exactly one candidate, OR one candidate that DOMINATES the
+        #     runner-up by drift_dominance_ratio  -> sensor_drift
+        #   * >= mz_fault_zones comparable candidates -> multizone
+        #     hvac_fault (held fault: per-zone level offsets with the
+        #     cross-zone median moving along, so z_common stays quiet)
+        candidates.sort(key=lambda c: -c[1])
+        _single = len(candidates) == 1
+        _dominant = (len(candidates) >= 2 and candidates[1][1] > 1e-9 and
+                     candidates[0][1] >= self._drift_dominance_ratio
+                     * candidates[1][1])
+        if (not cooled and candidates and (_single or _dominant)):
             zi_occ, sev, sign_i, path_tag = candidates[0]
             global_zone = self.occupied_zone_indices[zi_occ]
             direction = "high" if sign_i > 0 else "low"
@@ -2170,6 +2194,43 @@ class ForecastAnomalyDetector:
                               kind="sensor_drift")
             return alert
  
+        # ── Multizone level fault: comparable drift-style candidates on
+        # several zones at once. This is the held-fault signature under a
+        # compensating controller: per-zone level offsets persist while
+        # the per-step differential and the common-mode channel stay
+        # quiet (the cross-zone median moves with the fault).
+        if (not cooled and len(candidates) >= self._mz_fault_zones):
+            zones_g = [self.occupied_zone_indices[c[0]] for c in candidates]
+            sev = float(np.mean([c[1] for c in candidates]))
+            alert = Alert(
+                step=self._step_count,
+                message=(f"[hvac_fault] multizone level offset on "
+                         f"{len(candidates)} zones {zones_g}; "
+                         f"mean sev={sev:.2f}; step={self._step_count}"),
+                kind_guess="hvac_fault",
+                sources=["forecast_multizone_level"],
+                severity=sev,
+                zone_idx=None,
+                detector_name="forecast",
+            )
+            self._n_alerts += 1
+            self._n_fault_alerts += 1
+            self._cooldown_left = self.cooldown
+            for c in candidates:
+                i = c[0]
+                self._streak_pos[i] = 0
+                self._streak_neg[i] = 0
+                self._cusum_pos[i] = 0.0
+                self._cusum_neg[i] = 0.0
+                self._level_cusum_pos[i] = 0.0
+                self._level_cusum_neg[i] = 0.0
+                self._level_streak_pos[i] = 0
+                self._level_streak_neg[i] = 0
+            self._record_diag(info, fired=True,
+                              source="forecast_multizone_level",
+                              kind="hvac_fault")
+            return alert
+
         # No alert this step — still record the snapshot (clean or
         # missed-anomaly) so we can analyze near-misses and FPs.
         self._record_diag(info, fired=False, source=None, kind=None)
@@ -2546,6 +2607,8 @@ class ForecastAnomalyDetector:
                 "diff_sigma_scale": self._diff_sigma_scale,
                 "common_mode_persist": self._common_mode_persist,
                 "common_mode_h": self._common_mode_h,
+                "mz_fault_zones": self._mz_fault_zones,
+                "drift_dominance_ratio": self._drift_dominance_ratio,
             },
             "model_state": (self.model.state_dict()
                             if self.model is not None else None),

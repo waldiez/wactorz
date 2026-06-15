@@ -472,22 +472,28 @@ def _build_catalog() -> dict:
             "type":         "dynamic",
             "description":  "Live anomaly detection on the Sinergym observation "
                             "stream using the AIF-trained detector "
-                            "(detector_aif_v3.pkl). Subscribes to the global obs "
-                            "topic, publishes alerts on .../anomaly, and records "
-                            "them in Fuseki with provenance (agent-scoped IRIs) so "
-                            "it can be scored alongside the forecast detector.",
+                            "(detector_aif_v3.pkl). Collapses consecutive alerts "
+                            "into episodes (burst window) and labels each TP/FP "
+                            "live from the bridge's injector ground-truth, "
+                            "publishing episode events on .../anomaly_episode with "
+                            "a running precision/recall scoreboard, plus Fuseki "
+                            "records. '@aif-anomaly report' dumps the scoreboard.",
             "capabilities": ["sinergym", "anomaly_detection", "fault_detection",
                             "monitoring", "active_inference", "aif", "hvac_fault",
                             "sensor_drift"],
             "install":      ["torch", "numpy"],
             "input_schema": {
-                "action":          "str — optional: status | reset | config",
+                "action":          "str — optional: status | report | reset | config",
                 "detector_path":   "str — path to detector_aif_v3.pkl",
                 "detector_module": "str — module exposing the detector class",
                 "detector_class":  "str — detector class name (has .load/.update)",
                 "infer_dir":       "str — dir with the detector module + .pkl",
                 "env_id":          "str — optional",
                 "fuseki_url":      "str — optional",
+                "burst_steps":     "int — alerts within this gap collapse into one episode (default 16)",
+                "gt_grace":        "int — steps after a GT window a detection still counts TP (default 12)",
+                "publish_raw":     "bool — also publish every raw per-step alert (default False)",
+                "score_live":      "bool — label episodes TP/FP from injector ground-truth (default True)",
             },
             "output_schema": {"status": "str"},
             "poll_interval": 3600,

@@ -2161,7 +2161,7 @@ class MainActor(LLMAgent):
             lines = [f"Active pipeline rules ({len(rules)}):"]
             for rule_id, rule in sorted(rules.items(), key=lambda x: x[1].get("created_at", 0)):
                 agents = rule.get("agents", [])
-                task = rule.get("task", "")[:80]
+                task = rule.get("task", "")[:]
                 import datetime
                 ts = rule.get("created_at", 0)
                 created = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "unknown"

@@ -89,6 +89,25 @@ OPTIONS_PATH=/tmp/options.json bash ha-addon/run.sh
 
 For a full addon integration test use the [HA addon development environment](https://developers.home-assistant.io/docs/add-ons/testing).
 
+## Troubleshooting
+
+### Voice input (mic button) doesn't work in the addon
+
+The mic uses the browser Web Speech API + `getUserMedia`, which only work in a
+**secure context** (HTTPS or `localhost`). Behind HA's **ingress** the UI is
+served over plain HTTP inside an iframe, so `navigator.mediaDevices` is
+`undefined` and the mic can't start — the dashboard hides the mic button there
+and shows a one-time notice. This is a browser restriction, not an addon bug.
+
+Voice works where the page is a secure context:
+- the **desktop app** (loads `http://127.0.0.1`, treated as secure), or
+- opening the dashboard over **HTTPS** in a standalone browser tab.
+
+Note that even over HTTPS, mic access *inside the ingress iframe* may still be
+blocked because HA's ingress iframe does not grant the `microphone` permission —
+so the reliable place for voice is the desktop app or a standalone HTTPS tab,
+not the embedded ingress view.
+
 ## Versioning
 
 The addon version lives in `config.yaml` (`version: "x.y.z"`) and must match the **published image tag** — Supervisor pulls `{image}:{version}` (e.g. `ghcr.io/waldiez/wactorz-addon-{arch}:0.4.4`). Bumping it is what triggers Supervisor to offer users an update. On a release, push a `vX.Y.Z` tag: `addon-image.yml` builds + pushes the matching per-arch image (stripping the `v`), and `scripts/sync_versions.py` keeps all version sources in lockstep. (For a local source build with no `image:`, bumping `version` instead busts the Dockerfile's pip layer cache via `BUILD_VERSION`.)

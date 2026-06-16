@@ -74,6 +74,12 @@ Spawned by MainActor for every `PIPELINE`-classified request. The planner querie
 
 After spawning, the planner fires a background `_bootstrap_ha_entity_states()` task that extracts HA entity IDs from the plan (generated code, `ha_actuator` actions, MQTT topics, and the enriched task string) and sends a `get_entities_state` request to `home-assistant-agent`. This re-publishes the current HA state over MQTT so freshly-spawned agents that subscribe to `homeassistant/state_changes/#` fire immediately — without waiting for the next real HA state change.
 
+#### Camera URL resolution
+
+Before generating the plan, the planner resolves real stream and snapshot URLs for any camera entities mentioned in the task by sending `get_camera_stream_url` and `get_camera_snapshot_url` A2A requests to `home-assistant-agent`. Resolved URLs are injected into the LLM prompt so generated agents use exact, working URLs rather than guessing `/dev/video0` or inventing proxy paths.
+
+MJPEG proxy URLs (`/api/camera_proxy_stream/…`) require an `Authorization: Bearer` header; the planner injects an `OPENCV_FFMPEG_CAPTURE_OPTIONS` hint into the PATTERN 3 template so OpenCV passes the header automatically.
+
 #### Supported patterns
 
 | Pattern | Trigger | Action | Agents spawned |
@@ -84,6 +90,7 @@ After spawning, the planner fires a background `_bootstrap_ha_entity_states()` t
 | 4 | Webcam detection (YOLO) | Discord/webhook notification | dynamic YOLO + dynamic notify |
 | 5 | Timer/schedule | HA service call OR notification | `scheduled` + `ha_actuator` (or `scheduled` + `dynamic` notify) |
 | 6 | MQTT sensor + condition | HA service call | dynamic monitor + `ha_actuator` |
+| 7 | One-shot camera snapshot | Process/save still image | single dynamic agent (`httpx`) |
 
 #### Code validation
 
@@ -207,7 +214,10 @@ Camera tools also support **A2A structured dispatch** — a peer agent can send 
 {"operation": "list_cameras"}
 {"operation": "get_camera_snapshot", "camera_entity_id": "camera.front_door"}
 {"operation": "get_camera_stream_url", "camera_entity_id": "camera.backyard"}
+{"operation": "get_camera_snapshot_url", "camera_entity_id": "camera.backyard"}
 ```
+
+`get_camera_snapshot_url` returns only the URL (no HTTP fetch) — useful when a peer agent (e.g. PlannerAgent) needs to embed the URL in generated code rather than fetch the image itself. The response `data.snapshot_url` is the `/api/camera_proxy/{entity_id}` path and requires an `Authorization: Bearer <HA_TOKEN>` header to fetch.
 
 #### Prompts
 

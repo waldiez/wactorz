@@ -28,6 +28,7 @@ import time
 from typing import Any
 
 from ..core.actor import Actor, ActorState, Message, MessageType
+from ..core.mqtt import mqtt_client
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ class WizAgent(Actor):
 
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     for t in topics:
                         await client.subscribe(t)
                     async for message in client.messages:

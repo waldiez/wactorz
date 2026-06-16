@@ -2,32 +2,29 @@
  * Wactorz Dashboard — entry point.
  *
  * Bootstrap order:
- * 1. Create SceneManager (Babylon.js engine + scene + camera)
+ * 1. Create SceneManager (agent-state store + CardDashboard coordinator)
  * 2. Create MQTTClient and connect to broker
- * 3. Create UI components (HUD, ThemeSwitcher, ChatPanel, IOBar, ActivityFeed)
- * 4. Create MentionPopup (needs SceneManager for agent list)
- * 5. Wire MQTT events → SceneManager + HUD + ActivityFeed
- * 6. Wire DOM events (theme-change, agent-selected) → SceneManager + ChatPanel
+ * 3. Create UI components (HUD, ChatPanel, ActivityFeed)
+ * 4. Wire MQTT events → SceneManager + HUD + ActivityFeed
+ * 5. Wire DOM events (agent-selected) → SceneManager + ChatPanel
+ *
+ * The chat input lives entirely in CardDashboard's in-card bar (the single
+ * chat-input surface); it owns its own mention popup and send handling.
  */
 
 import { SceneManager } from "./scene/SceneManager";
 import { MQTTClient } from "./mqtt/MQTTClient";
 import { AgentHUD } from "./ui/AgentHUD";
-import { ThemeSwitcher } from "./ui/ThemeSwitcher";
 import { ChatPanel } from "./ui/ChatPanel";
-import { IOBar } from "./ui/IOBar";
 import { ActivityFeed } from "./ui/ActivityFeed";
-import { MentionPopup } from "./ui/MentionPopup";
-import { VoiceInput } from "./io/VoiceInput";
 import { IOManager } from "./io/IOManager";
 import { WSChatClient } from "./io/WSChatClient";
 import type { LogFeedItem } from "./io/WSChatClient";
 import { tts } from "./io/TTSManager";
-import { SettingsPanel } from "./ui/SettingsPanel";
-import { desktopNotifyBackground, desktopNotify, clearUnreadBadge, initNotifications } from "./io/DesktopNotify";
+import { desktopNotifyBackground, clearUnreadBadge, initNotifications } from "./io/DesktopNotify";
 import { toast } from "./ui/ToastManager";
 
-import type { AgentInfo, AgentState, ThemeChangeEvent } from "./types/agent";
+import type { AgentInfo, AgentState } from "./types/agent";
 
 function nameFromWid(raw: string): string {
   const m = raw.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
@@ -52,43 +49,35 @@ const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 canvas.style.display = "none";
 const scene = new SceneManager(canvas);
 
-// Always start with cards. Reset localStorage so ThemeSwitcher doesn't
-// override this with a stale value ("graph", "social", etc.) via its setTimeout.
+// Cards is the only view; clear any stale persisted theme from older builds.
 localStorage.setItem("wactorz-theme", "cards");
 scene.setTheme("cards");
 
 // ── Backend base URL ──────────────────────────────────────────────────────────
-// Three deployment contexts, handled in priority order:
+// Two deployment contexts, both served same-origin:
 //
-//   1. Tauri desktop  — __WACTORZ_API_PORT is injected as an initialization
-//                       script; the embedded Rust server owns that port.
-//   2. HA addon       — __WACTORZ_INGRESS_PATH is injected by the Python
+//   1. HA addon       — __WACTORZ_INGRESS_PATH is injected by the Python
 //                       server when the page is served behind HA's ingress
 //                       proxy (e.g. /api/hassio_ingress/<slug>).
-//   3. Direct browser — both are absent; relative URLs resolve correctly.
+//   2. Direct browser / pywebview desktop — the monitor server serves this
+//                       page, so relative URLs resolve correctly. The desktop
+//                       shell loads http://127.0.0.1:<port>, i.e. same-origin.
 //
 // Never use window.location.host to build absolute URLs: inside the HAOS
 // webview that host is the HA instance itself, not the addon backend.
 
-// Request notification permission early so the macOS dialog appears on first launch
 initNotifications();
 
-const _apiPort = (window as any).__WACTORZ_API_PORT as number | undefined;
 const _ingressPath: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
-const _isTauri = _apiPort != null;
 
-// For fetch: absolute when Tauri, ingress-prefixed (or plain-relative) otherwise.
-const _apiBase = _isTauri ? `http://localhost:${_apiPort}` : _ingressPath;
+// For fetch: ingress-prefixed under HA, plain-relative everywhere else.
+const _apiBase = _ingressPath;
 
-const _wsProto = _isTauri
-  ? "ws:"
-  : window.location.protocol === "https:"
-    ? "wss:"
-    : "ws:";
+const _wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
 
-// For WebSocket: Tauri uses localhost; browser uses the page host + ingress prefix.
-const _wsHost = _isTauri ? `localhost:${_apiPort}` : window.location.host;
-const _wsBase = `${_wsProto}//${_wsHost}${_isTauri ? "" : _ingressPath}`;
+// For WebSocket: page host + ingress prefix.
+const _wsHost = window.location.host;
+const _wsBase = `${_wsProto}//${_wsHost}${_ingressPath}`;
 
 // ── MQTT ──────────────────────────────────────────────────────────────────────
 
@@ -116,17 +105,9 @@ const mqtt = new MQTTClient(MQTT_BROKER);
 // ── UI ────────────────────────────────────────────────────────────────────────
 
 const hud = new AgentHUD();
-const themeSwitcher = new ThemeSwitcher();
 const chatPanel = new ChatPanel();
 chatPanel.setApiBase(_apiBase);
-const voice = new VoiceInput();
 const ioManager = new IOManager(mqtt, chatPanel);
-const ioBar = new IOBar(voice, ioManager);
-
-document.addEventListener("af-mic-toggle", () => {
-  if (voice.isRecording) ioBar.stopMic();
-  else void ioBar.startMic();
-});
 
 const feed = new ActivityFeed();
 
@@ -372,14 +353,8 @@ fetch(`${_apiBase}/api/config`)
     };
     seedFromServer("wactorz-ha-url", cfg.ha?.url ?? "");
     seedFromServer("wactorz-ha-token", cfg.ha?.token ?? "");
-    seedFromServer("wactorz-fuseki-url", cfg.fuseki?.url ?? "");
-    seedFromServer("wactorz-fuseki-dataset", cfg.fuseki?.dataset ?? "");
   })
   .catch(() => {});
-
-// MentionPopup needs the textarea and the agent list from SceneManager
-const textInput = document.getElementById("text-input") as HTMLTextAreaElement;
-new MentionPopup(textInput, () => scene.getAgents());
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -434,11 +409,10 @@ mqtt.on("alert", (payload) => {
     title: alertAgent,
     message: alertMsg.slice(0, 120),
   });
-  if (isError) {
-    desktopNotify(`⚠ ${alertAgent}`, alertMsg.slice(0, 100));
-  } else {
-    desktopNotifyBackground(alertAgent, alertMsg.slice(0, 100));
-  }
+  desktopNotifyBackground(
+    isError ? `⚠ ${alertAgent}` : alertAgent,
+    alertMsg.slice(0, 100),
+  );
 });
 
 mqtt.on("chat", (msg) => {
@@ -647,14 +621,6 @@ mqtt.on("error", (err) => {
 
 // ── DOM event → Scene wiring ──────────────────────────────────────────────────
 
-document.addEventListener("theme-change", (e) => {
-  const evt = e as CustomEvent<ThemeChangeEvent>;
-  scene.setTheme(evt.detail.theme);
-  // Sync switcher state if theme was changed externally (e.g. CardDashboard ⊞ Social button)
-  const t = evt.detail.theme;
-  if (t === "cards" || t === "social") themeSwitcher.syncState(t);
-});
-
 // Camera fly-to when agent is selected (panel open)
 document.addEventListener("agent-selected", (e) => {
   const evt = e as CustomEvent<{ agent: { id: string } }>;
@@ -669,7 +635,7 @@ document.addEventListener("af-stream-end", (e) => {
   desktopNotifyBackground(from, text.slice(0, 120));
 });
 
-// Agent commands from CardDashboard / SocialDashboard → WebSocket
+// Agent commands from CardDashboard → WebSocket
 document.addEventListener("af-agent-command", (e) => {
   const { command, agentId } = (
     e as CustomEvent<{ command: string; agentId: string }>
@@ -701,65 +667,6 @@ document.addEventListener("af-send-message", (e) => {
 const haLink = document.getElementById("ha-link") as HTMLAnchorElement | null;
 if (haLink) {
   haLink.href = `${window.location.protocol}//${window.location.hostname}:8123`;
-}
-
-// ── Sound / TTS toggles ───────────────────────────────────────────────────────
-
-// ── Settings (Tauri desktop only) ─────────────────────────────────────────────
-
-const btnSettings = document.getElementById(
-  "btn-settings",
-) as HTMLButtonElement | null;
-if (_isTauri && btnSettings) {
-  btnSettings.style.display = "block";
-  const settingsPanel = new SettingsPanel();
-  btnSettings.addEventListener("click", () => settingsPanel.open());
-
-  // Cmd+, (mac) / Ctrl+, (win/linux) → open settings
-  document.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === ",") {
-      e.preventDefault();
-      settingsPanel.open();
-    }
-  });
-
-  // First-launch: greet + prompt for API key if not configured
-  const _tauri = (window as any).__TAURI_INTERNALS__;
-  if (_tauri?.invoke) {
-    _tauri
-      .invoke("get_config")
-      .then((cfg: { llm_api_key?: string }) => {
-        if (!cfg.llm_api_key) {
-          setTimeout(() => {
-            toast.show({
-              type: "welcome",
-              title: "Welcome to Wactorz",
-              message: "Set your LLM API key to bring your agents to life.",
-              durationMs: 12000,
-              actions: [
-                {
-                  label: "Open Settings",
-                  primary: true,
-                  onClick: () => settingsPanel.open(),
-                },
-              ],
-            });
-            desktopNotify("Welcome to Wactorz", "Open Settings to add your API key.");
-          }, 1200);
-        } else {
-          setTimeout(() => {
-            toast.show({
-              type: "system",
-              title: "Wactorz",
-              message: "Backend starting up — agents will appear shortly.",
-              durationMs: 4000,
-            });
-            desktopNotify("Wactorz", "Backend starting up…");
-          }, 800);
-        }
-      })
-      .catch(() => {});
-  }
 }
 
 // ── Sound / TTS toggles ───────────────────────────────────────────────────────
@@ -806,7 +713,9 @@ voiceSelect?.addEventListener("change", () => {
   tts.setVoice(voiceSelect.value);
 });
 
-// Probe server TTS availability + load voice list
+// Probe server TTS availability + load voice list (base must be set first so
+// the request stays inside the ingress prefix instead of bare "/api").
+tts.setApiBase(_apiBase);
 tts.init();
 
 // ── Connect ───────────────────────────────────────────────────────────────────
@@ -821,4 +730,19 @@ window.addEventListener("beforeunload", () => {
   mqtt.disconnect();
   wsChat.disconnect();
   scene.dispose();
+});
+
+// wipe all
+document.addEventListener("af-wipe-all", () => {
+  scene.clearAll();
+  feed.clear();
+  _logFeedMaxTs = 0;
+});
+
+// A scoped reset (metrics / logs) cleared the server-side activity log — drop
+// the on-screen feed too, since onLogFeed only ever appends and would otherwise
+// keep showing stale lines until the next event.
+document.addEventListener("af-clear-feed", () => {
+  feed.clear();
+  _logFeedMaxTs = 0;
 });

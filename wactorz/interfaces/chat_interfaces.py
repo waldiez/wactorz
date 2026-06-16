@@ -9,6 +9,7 @@ import os
 from typing import Any
 from typing import TYPE_CHECKING
 
+from ..core.mqtt import mqtt_client
 from ..monitoring import PrometheusMonitor
 
 if TYPE_CHECKING:
@@ -136,7 +137,7 @@ class CLIInterface:
 
         async def _listen_for_reply():
             try:
-                async with aiomqtt.Client(main._mqtt_broker, main._mqtt_port) as client:
+                async with mqtt_client(main._mqtt_broker, main._mqtt_port) as client:
                     await client.subscribe(reply_topic)
                     async for msg in client.messages:
                         try:

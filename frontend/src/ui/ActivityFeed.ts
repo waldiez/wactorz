@@ -188,6 +188,16 @@ export class ActivityFeed {
     }
   }
 
+  /** Empty the feed — used when a reset clears the server-side activity log. */
+  clear(): void {
+    this.items = [];
+    this.list.innerHTML = "";
+    this.capBanner = null;
+    this.unseenCount = 0;
+    this.totalReceived = 0;
+    this.updateBadge();
+  }
+
   // ── Private ─────────────────────────────────────────────────────────────────
 
   private toggle(): void {

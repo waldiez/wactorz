@@ -50,7 +50,7 @@ If you have a Discord webhook stored, the planner injects it automatically. Stor
 
 ## Canonical patterns
 
-PlannerAgent uses six canonical wiring patterns. Every pipeline request maps to one of these.
+PlannerAgent uses seven canonical wiring patterns. Every pipeline request maps to one of these.
 
 ---
 
@@ -109,11 +109,14 @@ Agent 1  (dynamic)  name: <slug>-notify
 
 ### Pattern 3 — Webcam / camera detection → HA action
 
-Object detection on a local webcam triggers a Home Assistant service call — e.g. person detected unlocks the door, cat detected turns on the pet feeder.
+Object detection on a live camera stream triggers a Home Assistant service call — e.g. person detected unlocks the door, cat detected turns on the pet feeder.
+
+Camera stream URLs are resolved from Home Assistant before the plan is generated and injected into the prompt. MJPEG proxy URLs (`/api/camera_proxy_stream/…`) require a Bearer token; the planner sets `OPENCV_FFMPEG_CAPTURE_OPTIONS` so OpenCV passes the header automatically.
 
 ```
 Agent 1  (dynamic)  name: <slug>-camera-detect
-  setup(): load YOLO model, open camera
+  setup(): set OPENCV_FFMPEG_CAPTURE_OPTIONS with HA Bearer token
+           load YOLO model, open stream with exact URL from CAMERA STREAM URLS
   process(): capture frame, run inference
              publish custom/detections/<slug>
              {"detected": bool, "target": "person", "objects": [...]}
@@ -129,7 +132,7 @@ Agent 2  (ha_actuator)  name: <slug>-actuator
 #### Example
 
 ```
-"unlock the front door when a person is detected on the webcam"
+"unlock the front door when a person is detected on the front camera"
 ```
 
 ---
@@ -215,6 +218,35 @@ Agent 2  (ha_actuator)  name: <slug>-actuator
 
 ```
 "if the lamp is on and the temperature goes above 20, turn off the lamp"
+```
+
+---
+
+### Pattern 7 — One-shot camera snapshot
+
+Fetches a single still image from a camera — e.g. "take a snapshot of the office camera". Use this instead of Pattern 3 when the task needs a single image, not a continuous detection loop.
+
+Snapshot URLs are resolved from Home Assistant before the plan is generated. The URL (`/api/camera_proxy/{entity_id}`) requires an `Authorization: Bearer` header; always read the token from `os.environ['HA_TOKEN']`.
+
+```
+Agent  (dynamic)  name: <slug>-snapshot
+  setup(agent) or process(agent):
+      import httpx, os
+      headers = {"Authorization": f"Bearer {os.environ['HA_TOKEN']}"}
+      async with httpx.AsyncClient() as client:
+          resp = await client.get("<url-from-CAMERA-SNAPSHOT-URLS>", headers=headers)
+          image_bytes = resp.content
+      # process image_bytes (save to disk, run YOLO once, etc.)
+  install: httpx
+```
+
+If the result feeds an HA action (e.g. "if a desk is visible, turn on the light"), publish the detection result to a topic and pair with an `ha_actuator` (same second-agent wiring as Pattern 3).
+
+#### Example
+
+```
+"take a snapshot of the garden camera and save it to /tmp/garden.jpg"
+"check if the office camera shows anyone sitting at a desk"
 ```
 
 ---

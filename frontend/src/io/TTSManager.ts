@@ -12,13 +12,11 @@
  * Persistence: toggle state and selected voice are stored in localStorage.
  */
 
+import { ambient } from "./AmbientManager";
+
 const LS_BEEP  = "wactorz.beep";
 const LS_TTS   = "wactorz.tts";
 const LS_VOICE = "wactorz.ttsVoice";
-
-/** Patterns that indicate the user wants the reply spoken aloud. */
-const SPEAK_REQUEST =
-  /\b(speak|narrate|recite|read|say|tell me|voice|out ?loud|aloud|read ?(it|that|this) ?(?:out|back)|say ?(it|that|this)? ?(?:out ?loud|aloud))\b/i;
 
 export interface TTSVoice {
   name: string;
@@ -29,15 +27,22 @@ export interface TTSVoice {
 export class TTSManager {
   private _beepEnabled: boolean;
   private _ttsEnabled: boolean;
-  private _forceNext = false;
   private _audioCtx: AudioContext | null = null;
   /** null = unknown, true = server responded ok, false = unavailable (503/network) */
   private _serverAvailable: boolean | null = null;
   private _voices: TTSVoice[] = [];
+  /** API base — empty for plain web, ingress prefix behind HA.
+   *  Must be set (main.ts) before init(); bare "/api/…" escapes the ingress prefix. */
+  private _apiBase = "";
 
   constructor() {
     this._beepEnabled = localStorage.getItem(LS_BEEP) !== "0";
     this._ttsEnabled  = localStorage.getItem(LS_TTS)  === "1";
+  }
+
+  /** Set the API base (plain-relative or ingress prefix). Call before init(). */
+  setApiBase(base: string): void {
+    this._apiBase = base;
   }
 
   /**
@@ -52,7 +57,7 @@ export class TTSManager {
 
   private async _checkServer(): Promise<boolean> {
     try {
-      const res = await fetch("/api/tts/voices");
+      const res = await fetch(`${this._apiBase}/api/tts/voices`);
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
@@ -107,15 +112,6 @@ export class TTSManager {
     localStorage.setItem(LS_VOICE, name);
   }
 
-  /**
-   * Call with the user's outgoing message text.
-   * If it contains a speech request, the next reply will be spoken once
-   * even if the TTS toggle is off.
-   */
-  checkUserIntent(text: string): void {
-    if (SPEAK_REQUEST.test(text)) this._forceNext = true;
-  }
-
   toggleBeep(): boolean {
     this._beepEnabled = !this._beepEnabled;
     localStorage.setItem(LS_BEEP, this._beepEnabled ? "1" : "0");
@@ -132,8 +128,9 @@ export class TTSManager {
   /** Call on incoming agent message. Beeps and/or speaks depending on settings. */
   notify(text: string, _from?: string): void {
     if (this._beepEnabled) this._beep();
-    if (this._ttsEnabled || this._forceNext) {
-      this._forceNext = false;
+    // TTS off means no speech — full stop. There is deliberately no keyword
+    // "intent" override; speaking only ever happens when the toggle is on.
+    if (this._ttsEnabled) {
       this._speak(text);
     }
   }
@@ -181,12 +178,12 @@ export class TTSManager {
 
   private _speakServer(text: string): void {
     // duck ambient while server audio plays
-    import("./AmbientManager").then(({ ambient }) => ambient.duck(true)).catch(() => {});
+    ambient.duck(true);
     const params = new URLSearchParams({ text });
     const voice = this.selectedVoice;
     if (voice) params.set("voice", voice);
 
-    fetch(`/api/tts?${params}`)
+    fetch(`${this._apiBase}/api/tts?${params}`)
       .then(res => {
         if (res.status === 503 || res.status === 404) {
           this._serverAvailable = false;
@@ -207,11 +204,11 @@ export class TTSManager {
           src.buffer = decoded;
           src.connect(ctx.destination);
           src.onended = () => {
-            import("./AmbientManager").then(({ ambient }) => ambient.duck(false)).catch(() => {});
+            ambient.duck(false);
           };
           src.start();
         }).catch(() => {
-          import("./AmbientManager").then(({ ambient }) => ambient.duck(false)).catch(() => {});
+          ambient.duck(false);
           this._speakBrowser(text);
         });
       })

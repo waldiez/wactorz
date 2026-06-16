@@ -161,7 +161,11 @@ class _RemoteStreamWindow:
             return
         while True:
             try:
-                async with aiomqtt.Client(self._broker, self._port) as client:
+                async with aiomqtt.Client(
+                    self._broker, self._port,
+                    username=os.environ.get("MQTT_USERNAME") or None,
+                    password=os.environ.get("MQTT_PASSWORD") or None,
+                ) as client:
                     await client.subscribe(self.topic)
                     async for msg in client.messages:
                         try:
@@ -502,7 +506,11 @@ class _RemoteAgentAPI:
                 return
             while True:
                 try:
-                    async with aiomqtt.Client(broker, port) as client:
+                    async with aiomqtt.Client(
+                        broker, port,
+                        username=os.environ.get("MQTT_USERNAME") or None,
+                        password=os.environ.get("MQTT_PASSWORD") or None,
+                    ) as client:
                         await client.subscribe(topic)
                         logger.info(f"[{agent_name}] Subscribed to {topic}")
                         async for msg in client.messages:
@@ -559,7 +567,11 @@ class _RemoteAgentAPI:
 
         async def _fetch():
             try:
-                async with aiomqtt.Client(broker, port) as client:
+                async with aiomqtt.Client(
+                    broker, port,
+                    username=os.environ.get("MQTT_USERNAME") or None,
+                    password=os.environ.get("MQTT_PASSWORD") or None,
+                ) as client:
                     await client.subscribe(topic)
                     async for msg in client.messages:
                         try:
@@ -1479,6 +1491,9 @@ class _RemoteRunner:
 
         def _connect():
             c = paho_mqtt.Client(client_id=f"runner-pub-{self.node_name}-{uuid.uuid4().hex[:6]}")
+            _user = os.environ.get("MQTT_USERNAME") or None
+            if _user:
+                c.username_pw_set(_user, os.environ.get("MQTT_PASSWORD") or None)
             c.connect(self.broker, self.port, keepalive=60)
             c.loop_start()
             return c
@@ -1539,7 +1554,11 @@ class _RemoteRunner:
 
         while self._running:
             try:
-                async with aiomqtt.Client(self.broker, self.port) as client:
+                async with aiomqtt.Client(
+                    self.broker, self.port,
+                    username=os.environ.get("MQTT_USERNAME") or None,
+                    password=os.environ.get("MQTT_PASSWORD") or None,
+                ) as client:
                     for topic in topics:
                         await client.subscribe(topic)
                     logger.info(f"[runner] Subscribed to control topics on node '{self.node_name}'")

@@ -2,7 +2,7 @@
 
 // ── Agent info ────────────────────────────────────────────────────────────────
 
-/** Lifecycle state of an agent (mirrors Rust WactorState). */
+/** Lifecycle state of an agent. */
 export type AgentState =
   | "initializing"
   | "running"
@@ -125,11 +125,6 @@ export interface ChatMessage {
 /** Custom DOM event payload for agent selection. */
 export interface AgentSelectedEvent {
   agent: AgentInfo;
-}
-
-/** Custom DOM event payload for theme switching. */
-export interface ThemeChangeEvent {
-  theme: "social" | "cards";
 }
 
 /** Host-level system stats from the backend. */

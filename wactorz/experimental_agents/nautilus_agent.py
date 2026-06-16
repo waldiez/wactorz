@@ -62,8 +62,7 @@ class NautilusAgent(Actor):
         super().__init__(**kwargs)
         self.protected = False
         self._ssh_key    = CONFIG.nautilus_ssh_key
-        strict_env       = CONFIG.nautilus_strict_host_keys
-        self._strict     = strict_env in ("1", "true")
+        self._strict     = CONFIG.nautilus_strict_host_keys
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 

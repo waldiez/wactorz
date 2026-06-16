@@ -15,14 +15,6 @@ body:
     validations:
       required: true
 
-  - type: dropdown
-    id: backend
-    attributes:
-      label: Backend
-      options: ["Python", "Rust", "Both"]
-    validations:
-      required: true
-
   - type: textarea
     id: description
     attributes:

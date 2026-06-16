@@ -27,7 +27,6 @@ Options are defined in three places that must stay in sync:
 
 - **Base image**: Keep `aarch64-base-python` and `amd64-base-python` in sync. The `BUILD_FROM` ARG is resolved by the Supervisor build matrix; only one Dockerfile is needed.
 - **System packages** (`apk add`): Add to the existing `RUN apk add --no-cache` line — avoid extra layers.
-- **Fuseki version**: Change the `FUSEKI_VERSION` ARG. Verify the tarball exists at `archive.apache.org/dist/jena/binaries/` before bumping.
 - **Wactorz version**: The pip install always pulls `@main`. Version pinning for stable releases happens at the addon `version:` field level, not inside the Dockerfile.
 - **New binaries/services**: Add them to the same Alpine RUN block or a dedicated RUN block. If the service needs a config file, `COPY` it alongside `run.sh` and reference it in the entrypoint.
 
@@ -36,7 +35,7 @@ Options are defined in three places that must stay in sync:
 `run.sh` is the addon entrypoint. Keep it readable:
 
 - Use `jq -r '.key // "default"'` for every option read — never assume the key exists.
-- Start embedded services before Wactorz and wait for them to be ready (`mosquitto` / `fuseki-server &` then a short health poll).
+- Start embedded services before Wactorz and wait for them to be ready (`mosquitto &` then a short health poll).
 - `exec wactorz` at the end so Wactorz is PID 1's child and receives signals correctly.
 - Test changes locally with `OPTIONS_PATH=/tmp/options.json bash ha-addon/run.sh` (see `README.md` for a sample `options.json`).
 

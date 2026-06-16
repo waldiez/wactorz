@@ -19,11 +19,11 @@ function staticAvatar(name: string, type?: string): string | null {
 
   // Orchestrator / main actor
   if (n === "main" || n === "main-actor" || t.includes("orchestrator"))
-    return "/avatars/captain.webp";
+    return "./avatars/captain.webp";
 
   // Monitor / supervisor / anomaly-detector
   if (n.includes("monitor") || n.includes("anomaly") || t.includes("monitor"))
-    return "/avatars/manager.webp";
+    return "./avatars/manager.webp";
 
   // Code execution / dynamic / reasoning
   if (
@@ -32,7 +32,7 @@ function staticAvatar(name: string, type?: string): string | null {
     n.includes("reasoning") ||
     t.includes("script")
   )
-    return "/avatars/reasoning.webp";
+    return "./avatars/reasoning.webp";
 
   // Manual / assistant / knowledge / udx
   if (
@@ -41,7 +41,7 @@ function staticAvatar(name: string, type?: string): string | null {
     n.includes("udx") ||
     n.includes("rag")
   )
-    return "/avatars/assistant.webp";
+    return "./avatars/assistant.webp";
 
   // Remote / home-assistant / nautilus
   if (
@@ -49,15 +49,15 @@ function staticAvatar(name: string, type?: string): string | null {
     n.includes("nautilus") ||
     n.includes("remote")
   )
-    return "/avatars/remote.webp";
+    return "./avatars/remote.webp";
 
   // IO / user gateway
   if (n.includes("io") || t.includes("gateway") || t.includes("io"))
-    return "/avatars/user.webp";
+    return "./avatars/user.webp";
 
-  // Docs / knowledge / fuseki
-  if (n.includes("fuseki") || n.includes("docs") || n.includes("rag"))
-    return "/avatars/rag.webp";
+  // Docs / knowledge
+  if (n.includes("docs") || n.includes("rag"))
+    return "./avatars/rag.webp";
 
   return null; // fall through to DiceBear
 }

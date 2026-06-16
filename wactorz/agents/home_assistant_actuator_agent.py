@@ -24,6 +24,7 @@ from wactorz.config import CONFIG
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import normalize_ha_ws_url
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
+from ..core.mqtt import mqtt_client
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +241,7 @@ class HomeAssistantActuatorAgent(Actor):
 
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     for topic in self.config.mqtt_topics:
                         await client.subscribe(topic)
                     logger.info("[%s] subscribed to %r", self.name, self.config.mqtt_topics)

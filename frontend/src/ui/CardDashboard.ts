@@ -78,7 +78,7 @@ function relTime(ms: number): string {
   return `${Math.floor(s / 60)}m ago`;
 }
 
-type View = "overview" | "feed" | "chat" | "ha" | "fuseki" | "settings";
+type View = "overview" | "feed" | "chat" | "ha" | "settings";
 type ConnState = "live" | "connecting" | "demo";
 
 // ── CardDashboard ─────────────────────────────────────────────────────────────
@@ -126,6 +126,8 @@ export class CardDashboard {
   private _evEnd: ((e: Event) => void) | null = null;
   private _evConn: ((e: Event) => void) | null = null;
   private _evResetChat: ((e: Event) => void) | null = null;
+  private _wipeAll: ((e: Event) => void) | null = null;
+  private _clearFeed: ((e: Event) => void) | null = null;
   private _evSendMessage: ((e: Event) => void) | null = null;
   // True while _sendMessage() is dispatching — prevents the listener from
   // double-adding a message that _sendMessage() already rendered locally.
@@ -150,24 +152,6 @@ export class CardDashboard {
     return localStorage.getItem("wactorz-ha-token") || null;
   }
 
-  // ── Fuseki config (localStorage) ─────────────────────────────────────────
-
-  private get fusekiUrl(): string | null {
-    return localStorage.getItem("wactorz-fuseki-url") || null;
-  }
-
-  private get fusekiDataset(): string {
-    return localStorage.getItem("wactorz-fuseki-dataset") || "wactorz";
-  }
-
-  private get fusekiUser(): string {
-    return localStorage.getItem("wactorz-fuseki-user") || "admin";
-  }
-
-  private get fusekiPass(): string {
-    return localStorage.getItem("wactorz-fuseki-pass") || "";
-  }
-
   constructor() {
     this.root = this.buildRoot();
     document.body.appendChild(this.root);
@@ -182,7 +166,6 @@ export class CardDashboard {
       if (!resp.ok) return;
       const cfg = await resp.json() as {
         ha?:     { url?: string; token?: string };
-        fuseki?: { url?: string; dataset?: string; user?: string; password?: string };
       };
       let changed = false;
       const seed = (key: string, val: string | undefined | null) => {
@@ -191,10 +174,6 @@ export class CardDashboard {
           changed = true;
         }
       };
-      seed("wactorz-fuseki-url",     cfg.fuseki?.url);
-      seed("wactorz-fuseki-dataset", cfg.fuseki?.dataset);
-      seed("wactorz-fuseki-user",    cfg.fuseki?.user);
-      seed("wactorz-fuseki-pass",    cfg.fuseki?.password);
       seed("wactorz-ha-url",         cfg.ha?.url);
       seed("wactorz-ha-token",       cfg.ha?.token);
       if (changed) {
@@ -528,6 +507,23 @@ export class CardDashboard {
     };
     document.addEventListener("af-reset-chat", this._evResetChat);
 
+    this._wipeAll = (e: Event) => {
+      this.feedItems = [];
+      this.chatMessages = [];
+      this._historyLoaded.clear();
+      this._renderView();
+    };
+    document.addEventListener("af-wipe-all", this._wipeAll);
+
+    // A metrics/logs reset cleared the server-side activity log — drop this
+    // dashboard's own feed too. (The slide-out ActivityFeed in main.ts is a
+    // SEPARATE component with its own handler; this clears the in-card feed.)
+    this._clearFeed = (_e: Event) => {
+      this.feedItems = [];
+      this._renderView();
+    };
+    document.addEventListener("af-clear-feed", this._clearFeed);
+
     // Display the user's message in the chat UI for any send path (keyboard
     // OR voice/wake-word). Keyboard sends go through _sendMessage() which
     // already adds the message locally and sets _selfDispatching; those are
@@ -585,6 +581,14 @@ export class CardDashboard {
       document.removeEventListener("af-reset-chat", this._evResetChat);
       this._evResetChat = null;
     }
+    if (this._wipeAll) {
+      document.removeEventListener("af-wipe-all", this._wipeAll);
+      this._wipeAll = null;
+    }
+    if (this._clearFeed) {
+      document.removeEventListener("af-clear-feed", this._clearFeed);
+      this._clearFeed = null;
+    }
     if (this._evSendMessage) {
       document.removeEventListener("af-send-message", this._evSendMessage);
       this._evSendMessage = null;
@@ -594,14 +598,14 @@ export class CardDashboard {
   // ── Private: floating UI ──────────────────────────────────────────────────
 
   private _hideFloatingUI(): void {
-    ["hud", "hud-stats", "io-bar", "chat-panel"].forEach((id) => {
+    ["hud", "hud-stats", "chat-panel"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.style.display = "none";
     });
   }
 
   private _showFloatingUI(): void {
-    ["hud", "hud-stats", "io-bar", "feed-toggle"].forEach((id) => {
+    ["hud", "hud-stats", "feed-toggle"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.style.display = "";
     });
@@ -621,7 +625,6 @@ export class CardDashboard {
     if (this.view === "overview") body.appendChild(this._buildOverview());
     else if (this.view === "feed") body.appendChild(this._buildFeedView());
     else if (this.view === "ha") body.appendChild(this._buildHAView());
-    else if (this.view === "fuseki") body.appendChild(this._buildFusekiView());
     else if (this.view === "settings")
       body.appendChild(this._buildSettingsView());
     else if (this.view === "chat") {
@@ -650,15 +653,21 @@ export class CardDashboard {
     }
   }
 
-  /** Ensure chatTarget is a live agent, defaulting to "main" → "main-actor" → first. */
+  /**
+   * Ensure chatTarget is a live, messageable agent so the target <select>
+   * always has a valid selection. Prefers "main"/"main-actor", else the first
+   * messageable agent alphabetically. Only considers agents that pass
+   * canDirectMessage — the same filter the <select> options use — so the chosen
+   * target is guaranteed to exist as an option.
+   */
   private _syncChatTarget(): void {
-    const agents = [...this.agents.values()];
-    if (!agents.length) return;
-    if (agents.some((a) => a.name === this.chatTarget)) return;
-    const main = agents.find(
+    const messageable = [...this.agents.values()].filter(canDirectMessage);
+    if (!messageable.length) return;
+    if (messageable.some((a) => a.name === this.chatTarget)) return;
+    const main = messageable.find(
       (a) => a.name === "main" || a.name === "main-actor",
     );
-    const fallback = [...agents].sort((a, b) =>
+    const fallback = [...messageable].sort((a, b) =>
       a.name.localeCompare(b.name),
     )[0];
     this.chatTarget = main?.name ?? fallback?.name ?? this.chatTarget;
@@ -1365,7 +1374,41 @@ export class CardDashboard {
     const liveIds = () => new Set(this.chatMessages.map((m) => m.id));
     const prepend = (msgs: ChatMessage[]) => {
       const ids = liveIds();
-      this.chatMessages.unshift(...msgs.filter((m) => !ids.has(m.id)));
+      const toAdd: ChatMessage[] = [];
+      for (const m of msgs) {
+        if (ids.has(m.id)) continue;
+        // Reconcile optimistic user echoes with their persisted copies. The
+        // optimistic message has id "user-<ts>" and the persisted one
+        // "hist-…", so plain id de-dup misses them and the user's message
+        // renders twice. Match the persisted user message to a pending
+        // optimistic one (same target + content + near-identical timestamp) and
+        // adopt its id instead of adding a duplicate.
+        //
+        // The timestamp window is essential: matching on content alone would
+        // wrongly collapse a NEW message that happens to repeat an OLDER one
+        // ("ok" today vs "ok" yesterday), dropping a bubble the user did send.
+        // A persisted copy of a just-sent message is logged within seconds of
+        // its optimistic echo, so a tight window only ever matches the real
+        // pair. If no optimistic copy exists (the message was never rendered),
+        // nothing matches and the persisted one is added — so this never hides
+        // a message that wasn't already on screen.
+        if (m.from === "user") {
+          const opt = this.chatMessages.find(
+            (x) =>
+              x.id.startsWith("user-") &&
+              x.from === "user" &&
+              x.to === m.to &&
+              x.content === m.content &&
+              Math.abs(x.timestampMs - m.timestampMs) < 120_000,
+          );
+          if (opt) {
+            opt.id = m.id;
+            continue;
+          }
+        }
+        toAdd.push(m);
+      }
+      this.chatMessages.unshift(...toAdd);
       this._renderChatThread();
     };
     try {
@@ -1651,25 +1694,7 @@ export class CardDashboard {
       this._clearGhost(input, ghost);
     });
 
-    // Wake button hidden for 0.5 — create with hidden id so IOBar refs don't throw
-    const wakeBtn = document.createElement("button");
-    wakeBtn.id = "af-wake-btn-cd";
-    wakeBtn.style.display = "none";
-
-    const micBtn = document.createElement("button");
-    micBtn.className = "af-voice-btn";
-    micBtn.id = "af-mic-btn-cd";
-    micBtn.title = "Tap to speak";
-    micBtn.innerHTML = `<svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M7.5 1.5a2.5 2.5 0 0 0-2.5 2.5v4a2.5 2.5 0 0 0 5 0V4a2.5 2.5 0 0 0-2.5-2.5Z" fill="currentColor"/><path d="M3 7.5a4.5 4.5 0 0 0 9 0" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/><line x1="7.5" y1="12" x2="7.5" y2="13.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/><line x1="5" y1="13.5" x2="10" y2="13.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg>`;
-    micBtn.addEventListener("click", () =>
-      document.dispatchEvent(new CustomEvent("af-mic-toggle")),
-    );
-
-    if ((document.body as any).__voiceUnavailable) {
-      micBtn.style.display = "none";
-    }
-
-    bar.append(wakeBtn, micBtn, select, inputWrap, sendBtn);
+    bar.append(select, inputWrap, sendBtn);
     return bar;
   }
 
@@ -1692,6 +1717,17 @@ export class CardDashboard {
         opt.textContent = `@${agent.name}`;
         select.appendChild(opt);
       });
+    // Make sure chatTarget is a live, messageable agent, then guarantee the
+    // <select> shows a selection: if chatTarget isn't an option (e.g. it's still
+    // the "main-actor" default but the agent is named "main"), fall back to the
+    // first option instead of rendering a blank control.
+    this._syncChatTarget();
+    const hasTarget = [...select.options].some(
+      (o) => o.value === this.chatTarget,
+    );
+    if (!hasTarget && select.options.length) {
+      this.chatTarget = select.options[0]!.value;
+    }
     select.value = this.chatTarget;
   }
 
@@ -2541,7 +2577,6 @@ export class CardDashboard {
     ];
 
     views.push({ key: "ha", label: "🏠 Devices" });
-    views.push({ key: "fuseki", label: "⬡ Graph" });
     views.push({ key: "settings", label: "⚙ Settings" });
 
     views.forEach(({ key, label }) => {
@@ -2592,10 +2627,15 @@ export class CardDashboard {
         const r = resetBtn.getBoundingClientRect();
         resetPop.style.top   = `${r.bottom + 6}px`;
         resetPop.style.right = `${window.innerWidth - r.right}px`;
+      } else {
+        (resetPop as any)._resetArmed?.();
       }
     });
     document.addEventListener("click", (e) => {
-      if (!resetPop.contains(e.target as Node)) resetPop.classList.remove("open");
+      if (!resetPop.contains(e.target as Node)) {
+        (resetPop as any)._resetArmed?.();
+        resetPop.classList.remove("open");
+      }
     });
 
     header.append(left, center, right);
@@ -2608,476 +2648,6 @@ export class CardDashboard {
 
     root.append(header, body, bottomNav, iobar);
     return root;
-  }
-
-  // ── Private: Fuseki view ───────────────────────────────────────────────────
-
-  private _buildFusekiView(): HTMLElement {
-    const el = document.createElement("div");
-    el.className = "af-overview";
-
-    if (!this.fusekiUrl) {
-      el.appendChild(this._buildFusekiConfigForm());
-      return el;
-    }
-
-    const base = this.fusekiUrl;
-    const ds = this.fusekiDataset;
-
-    // ── Preset queries ─────────────────────────────────────────────────────
-    const PRESETS: { label: string; icon: string; sparql: string }[] = [
-      {
-        label: "All graphs",
-        icon: "◌",
-        sparql: `SELECT ?g (COUNT(*) AS ?triples) WHERE {
-  GRAPH ?g { ?s ?p ?o }
-} GROUP BY ?g ORDER BY ?g`,
-      },
-      {
-        label: "Top predicates",
-        icon: "≡",
-        sparql: `SELECT ?p (COUNT(*) AS ?count) WHERE {
-  GRAPH ?g { ?s ?p ?o }
-} GROUP BY ?p ORDER BY DESC(?count) LIMIT 50`,
-      },
-      {
-        label: "Sample triples",
-        icon: "⋯",
-        sparql: `SELECT ?g ?s ?p ?o WHERE {
-  GRAPH ?g { ?s ?p ?o }
-} LIMIT 50`,
-      },
-      {
-        label: "Current states",
-        icon: "◉",
-        sparql: `SELECT ?g ?entity ?state ?unit WHERE {
-  VALUES ?g { <urn:ha:current> <urn:wactorz:current> }
-  GRAPH ?g {
-    ?entity ?statePred ?state .
-    FILTER(?statePred IN (syn:state, saref:hasState))
-    OPTIONAL {
-      ?entity ?unitPred ?unit .
-      FILTER(?unitPred IN (syn:unit, saref:hasUnitOfMeasure))
-    }
-  }
-} ORDER BY ?entity LIMIT 200`,
-      },
-      {
-        label: "Recent observations",
-        icon: "⏱",
-        sparql: `SELECT ?g ?obs ?entity ?result ?ts WHERE {
-  VALUES ?g { <urn:ha:history> <urn:wactorz:history> }
-  GRAPH ?g {
-    ?obs a sosa:Observation .
-    OPTIONAL { ?obs sosa:madeBySensor ?entity . }
-    OPTIONAL { ?obs sosa:hasSimpleResult ?result . }
-    OPTIONAL { ?obs sosa:resultTime ?ts . }
-  }
-} ORDER BY DESC(?ts) LIMIT 100`,
-      },
-      {
-        label: "Device catalog",
-        icon: "⊡",
-        sparql: `SELECT ?entity ?label ?state ?area WHERE {
-  GRAPH <urn:ha:devices> {
-    ?entity rdfs:label ?label ;
-            syn:state   ?state .
-    OPTIONAL { ?entity syn:areaName ?area . }
-    FILTER(!STRSTARTS(STR(?entity), "urn:ha:bridge:"))
-  }
-} ORDER BY ?area ?label LIMIT 500`,
-      },
-      {
-        label: "Agents",
-        icon: "⚙",
-        sparql: `SELECT ?entity ?label ?state ?protected ?actorId WHERE {
-  GRAPH <urn:wactorz:agents> {
-    ?entity rdfs:label ?label .
-    OPTIONAL { ?entity syn:state ?state . }
-    OPTIONAL { ?entity syn:protected ?protected . }
-    OPTIONAL { ?entity syn:actorId ?actorId . }
-  }
-} ORDER BY ?label LIMIT 200`,
-      },
-      {
-        label: "Sensors with units",
-        icon: "📡",
-        sparql: `SELECT ?g ?entity ?state ?unit WHERE {
-  VALUES ?g { <urn:ha:current> <urn:wactorz:current> }
-  GRAPH ?g {
-    ?entity a sosa:Sensor ;
-            ?statePred ?state .
-    FILTER(?statePred IN (syn:state, saref:hasState))
-    OPTIONAL {
-      ?entity ?unitPred ?unit .
-      FILTER(?unitPred IN (syn:unit, saref:hasUnitOfMeasure))
-    }
-  }
-} ORDER BY ?entity LIMIT 200`,
-      },
-      {
-        label: "Graph sizes",
-        icon: "∑",
-        sparql: `SELECT ?g (COUNT(*) AS ?triples) WHERE {
-  VALUES ?g { <urn:ha:current> <urn:ha:history> <urn:ha:devices> <urn:wactorz:agents> }
-  GRAPH ?g { ?s ?p ?o }
-} GROUP BY ?g ORDER BY ?g`,
-      },
-    ];
-
-    const wrapper = document.createElement("div");
-    wrapper.style.cssText =
-      "display:flex;flex-direction:column;gap:14px;height:100%;min-height:0;";
-
-    // ── Header bar ─────────────────────────────────────────────────────────
-    const hdr = document.createElement("div");
-    hdr.style.cssText =
-      "display:flex;align-items:center;gap:10px;flex-shrink:0;";
-    hdr.innerHTML = `
-      <span style="font-size:20px;line-height:1;">⬡</span>
-      <span style="font-weight:700;font-size:14px;color:rgba(255,255,255,0.92);">Knowledge Graph</span>
-      <span class="af-fuseki-ds-badge">${ds}</span>
-      <a href="${base}" target="_blank" rel="noopener"
-         style="font-size:11px;opacity:0.4;color:inherit;text-decoration:none;margin-left:2px;">${base} ↗</a>
-      <div style="flex:1;"></div>
-      <button id="fsk-reconfigure" class="af-mini-btn" style="font-size:10px;">⚙ Configure</button>
-    `;
-    hdr.querySelector("#fsk-reconfigure")?.addEventListener("click", () => {
-      wrapper.innerHTML = "";
-      wrapper.appendChild(this._buildFusekiConfigForm());
-    });
-    wrapper.appendChild(hdr);
-
-    const hint = document.createElement("div");
-    hint.style.cssText =
-      "font-size:12px;line-height:1.45;color:rgba(255,255,255,0.6);padding:10px 12px;border:1px solid rgba(255,255,255,0.08);border-radius:10px;background:rgba(255,255,255,0.03);";
-    hint.innerHTML =
-      "This panel only shows data already stored in Fuseki. If the dataset is empty, all presets return 0 rows even when the endpoint is reachable.";
-    wrapper.appendChild(hint);
-
-    // ── Presets + editor row ───────────────────────────────────────────────
-    const mainRow = document.createElement("div");
-    mainRow.style.cssText =
-      "display:flex;gap:14px;flex:1;min-height:0;overflow:hidden;";
-
-    // Left: preset buttons
-    const sidebar = document.createElement("div");
-    sidebar.className = "af-fuseki-sidebar";
-    PRESETS.forEach((p) => {
-      const btn = document.createElement("button");
-      btn.className = "af-fuseki-preset-btn";
-      btn.innerHTML = `<span class="af-fuseki-preset-icon">${p.icon}</span><span>${p.label}</span>`;
-      btn.addEventListener("click", () => {
-        editor.value = p.sparql;
-        void runQuery(p.sparql);
-      });
-      sidebar.appendChild(btn);
-    });
-    mainRow.appendChild(sidebar);
-
-    // Right: editor + results
-    const editorPanel = document.createElement("div");
-    editorPanel.style.cssText =
-      "flex:1;display:flex;flex-direction:column;gap:10px;min-width:0;overflow:hidden;";
-
-    const editorRow = document.createElement("div");
-    editorRow.style.cssText =
-      "display:flex;gap:8px;align-items:flex-start;flex-shrink:0;";
-
-    const editor = document.createElement("textarea");
-    editor.className = "af-fuseki-editor";
-    editor.spellcheck = false;
-    editor.placeholder = "SELECT * WHERE { ?s ?p ?o } LIMIT 10";
-    editor.rows = 6;
-    editor.value = PRESETS[0]?.sparql ?? "";
-
-    const runBtn = document.createElement("button");
-    runBtn.className = "af-mini-btn af-fuseki-run-btn";
-    runBtn.innerHTML = "▶ Run";
-    editorRow.append(editor, runBtn);
-    editorPanel.appendChild(editorRow);
-
-    // Status line
-    const status = document.createElement("div");
-    status.className = "af-fuseki-status";
-    status.textContent = "Ready.";
-    editorPanel.appendChild(status);
-
-    // Results
-    const results = document.createElement("div");
-    results.className = "af-fuseki-results";
-    editorPanel.appendChild(results);
-
-    mainRow.appendChild(editorPanel);
-    wrapper.appendChild(mainRow);
-    el.appendChild(wrapper);
-
-    // ── SPARQL runner ──────────────────────────────────────────────────────
-    const datasetPath = encodeURIComponent(ds);
-    const _ingress: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
-    const sparqlUrl = `${_ingress}/api/fuseki/${datasetPath}/sparql`;
-    const updateUrl = `${_ingress}/api/fuseki/${datasetPath}/update`;
-
-    const SPARQL_PREFIXES = `PREFIX syn:    <https://synapse.waldiez.io/ns#>
-PREFIX sosa:   <http://www.w3.org/ns/sosa/>
-PREFIX ssn:    <http://www.w3.org/ns/ssn/>
-PREFIX saref:  <https://saref.etsi.org/core/>
-PREFIX rdfs:   <http://www.w3.org/2000/01/rdf-schema#>
-PREFIX rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-PREFIX xsd:    <http://www.w3.org/2001/XMLSchema#>
-PREFIX prov:   <http://www.w3.org/ns/prov#>
-`;
-
-    const withPrefixes = (q: string): string => {
-      // Only inject prefixes that aren't already declared in the query
-      const declared = new Set(
-        [...q.matchAll(/^\s*PREFIX\s+(\w*:)/gim)].map((m) => m[1]),
-      );
-      const needed = SPARQL_PREFIXES.split("\n")
-        .filter((line) => {
-          const m = line.match(/^PREFIX\s+(\w*:)/);
-          return m && !declared.has(m[1]);
-        })
-        .join("\n");
-      return needed ? needed + "\n" + q : q;
-    };
-
-    const runQuery = async (q: string): Promise<void> => {
-      const trimmed = q.trim();
-      if (!trimmed) return;
-
-      status.textContent = "Running…";
-      status.style.color = "rgba(255,255,255,0.4)";
-      results.innerHTML = "";
-
-      const isUpdate =
-        /^\s*(INSERT|DELETE|DROP|CREATE|LOAD|CLEAR|ADD|MOVE|COPY)/i.test(
-          trimmed,
-        );
-      const full = withPrefixes(trimmed);
-      const headers: Record<string, string> = {};
-
-      try {
-        let resp: Response;
-        if (isUpdate) {
-          headers["Content-Type"] = "application/x-www-form-urlencoded";
-          resp = await fetch(updateUrl, {
-            method: "POST",
-            headers,
-            body: `update=${encodeURIComponent(full)}`,
-          });
-        } else {
-          headers["Accept"] = "application/sparql-results+json";
-          headers["Content-Type"] = "application/x-www-form-urlencoded";
-          resp = await fetch(sparqlUrl, {
-            method: "POST",
-            headers,
-            body: `query=${encodeURIComponent(full)}`,
-          });
-        }
-
-        if (!resp.ok) {
-          const text = await resp.text();
-          status.textContent = `Error ${resp.status}`;
-          status.style.color = "#f87171";
-          results.innerHTML = `<pre class="af-fuseki-error">${text.slice(0, 600)}</pre>`;
-          return;
-        }
-
-        if (isUpdate) {
-          status.textContent = "Update OK";
-          status.style.color = "#34d399";
-          return;
-        }
-
-        const json = (await resp.json()) as {
-          head: { vars: string[] };
-          results?: {
-            bindings: Record<string, { value: string; type: string }>[];
-          };
-          boolean?: boolean;
-        };
-
-        // ASK query
-        if (typeof json.boolean === "boolean") {
-          status.textContent = `Result: ${json.boolean}`;
-          status.style.color = json.boolean ? "#34d399" : "#fbbf24";
-          return;
-        }
-
-        const vars = json.head?.vars ?? [];
-        const bindings = json.results?.bindings ?? [];
-        status.textContent = `${bindings.length} row${bindings.length !== 1 ? "s" : ""}`;
-        status.style.color = "rgba(255,255,255,0.45)";
-
-        if (bindings.length === 0) {
-          const looksLikeHaGraphQuery =
-            /urn:ha:(current|history|devices)/i.test(trimmed);
-          results.innerHTML = looksLikeHaGraphQuery
-            ? `<div class="af-fuseki-empty">No results.<br><span style="opacity:0.65">Fuseki is reachable, but the expected HA graphs appear empty.</span></div>`
-            : `<div class="af-fuseki-empty">No results.</div>`;
-          return;
-        }
-
-        const table = document.createElement("table");
-        table.className = "af-fuseki-table";
-
-        const thead = table.createTHead();
-        const hrow = thead.insertRow();
-        vars.forEach((v) => {
-          const th = document.createElement("th");
-          th.textContent = v;
-          hrow.appendChild(th);
-        });
-
-        const tbody = table.createTBody();
-        bindings.forEach((row) => {
-          const tr = tbody.insertRow();
-          vars.forEach((v) => {
-            const td = tr.insertCell();
-            const cell = row[v];
-            if (!cell) {
-              td.textContent = "";
-              return;
-            }
-            const val = cell.value;
-            // shorten long URIs
-            const display =
-              val.length > 60
-                ? `<span title="${val}">${val.slice(0, 58)}…</span>`
-                : val;
-            const isUri = cell.type === "uri";
-            td.innerHTML = isUri
-              ? `<span class="af-fuseki-uri">${display}</span>`
-              : display;
-          });
-          tbody.appendChild(tr);
-        });
-
-        results.appendChild(table);
-      } catch (err) {
-        status.textContent = "Network error";
-        status.style.color = "#f87171";
-        results.innerHTML = `<pre class="af-fuseki-error">${String(err)}</pre>`;
-      }
-    };
-
-    runBtn.addEventListener("click", () => void runQuery(editor.value));
-    editor.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        void runQuery(editor.value);
-      }
-    });
-
-    // Auto-run first preset
-    void runQuery(PRESETS[0]?.sparql ?? "");
-
-    return el;
-  }
-
-  private _buildFusekiConfigForm(): HTMLElement {
-    const form = document.createElement("div");
-    form.className = "af-panel";
-    form.style.cssText =
-      "max-width:440px;margin:40px auto;display:flex;flex-direction:column;gap:16px;";
-
-    const stored = {
-      url: this.fusekiUrl?.replace(/^https?:\/\//, "") ?? "",
-      tls: (this.fusekiUrl ?? "").startsWith("https://"),
-      ds: this.fusekiDataset,
-      user: this.fusekiUser,
-      pass: this.fusekiPass,
-    };
-
-    form.innerHTML = `
-      <div class="af-panel-head">
-        <h3>⬡ Knowledge Graph (Fuseki)</h3>
-      </div>
-      <p style="font-size:12px;opacity:0.6;margin:0;">
-        Connect to an Apache Jena Fuseki instance.<br>
-        Credentials are stored locally in your browser.
-      </p>
-      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
-        Host / IP
-        <input id="fsk-cfg-url" type="text" placeholder="localhost:3030"
-          value="${stored.url}"
-          class="af-cfg-input">
-      </label>
-      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">
-        <input id="fsk-cfg-tls" type="checkbox" ${stored.tls ? "checked" : ""}
-          style="width:14px;height:14px;accent-color:#38bdf8;">
-        Use HTTPS (TLS)
-      </label>
-      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
-        Dataset
-        <input id="fsk-cfg-ds" type="text" placeholder="wactorz"
-          value="${stored.ds}"
-          class="af-cfg-input">
-      </label>
-      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
-        Username <span style="opacity:0.5;">(optional)</span>
-        <input id="fsk-cfg-user" type="text" placeholder="admin"
-          value="${stored.user}"
-          class="af-cfg-input">
-      </label>
-      <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
-        Password <span style="opacity:0.5;">(optional)</span>
-        <input id="fsk-cfg-pass" type="password" placeholder=""
-          value="${stored.pass}"
-          class="af-cfg-input">
-      </label>
-      <div style="display:flex;gap:8px;">
-        <button id="fsk-cfg-save" class="af-mini-btn" style="flex:1;padding:8px;">Save &amp; Connect</button>
-        ${stored.url ? `<button id="fsk-cfg-clear" class="af-mini-btn danger" style="padding:8px 12px;">Reset</button>` : ""}
-      </div>
-      <div id="fsk-cfg-msg" style="font-size:12px;min-height:16px;"></div>
-    `;
-
-    form.querySelector("#fsk-cfg-save")?.addEventListener("click", () => {
-      const raw = (
-        form.querySelector<HTMLInputElement>("#fsk-cfg-url")?.value ?? ""
-      ).trim();
-      if (!raw) {
-        const msg = form.querySelector<HTMLElement>("#fsk-cfg-msg")!;
-        msg.style.color = "#f87171";
-        msg.textContent = "Host is required.";
-        return;
-      }
-      const tls = form.querySelector<HTMLInputElement>("#fsk-cfg-tls")?.checked;
-      const proto = tls ? "https" : "http";
-      const hasProto = /^https?:\/\//i.test(raw);
-      const url = hasProto ? raw : `${proto}://${raw}`;
-      const ds =
-        (
-          form.querySelector<HTMLInputElement>("#fsk-cfg-ds")?.value ??
-          "wactorz"
-        ).trim() || "wactorz";
-      const user = (
-        form.querySelector<HTMLInputElement>("#fsk-cfg-user")?.value ?? ""
-      ).trim();
-      const pass =
-        form.querySelector<HTMLInputElement>("#fsk-cfg-pass")?.value ?? "";
-
-      localStorage.setItem("wactorz-fuseki-url", url);
-      localStorage.setItem("wactorz-fuseki-dataset", ds);
-      localStorage.setItem("wactorz-fuseki-user", user);
-      localStorage.setItem("wactorz-fuseki-pass", pass);
-
-      this._renderView();
-    });
-
-    form.querySelector("#fsk-cfg-clear")?.addEventListener("click", () => {
-      [
-        "wactorz-fuseki-url",
-        "wactorz-fuseki-dataset",
-        "wactorz-fuseki-user",
-        "wactorz-fuseki-pass",
-      ].forEach((k) => localStorage.removeItem(k));
-      this._renderView();
-    });
-
-    return form;
   }
 
   // ── Private: settings view ────────────────────────────────────────────────
@@ -3105,35 +2675,6 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
           key: "wactorz-ha-token",
           label: "Token",
           placeholder: "Long-lived access token",
-          type: "password",
-        },
-      ]),
-    );
-
-    el.appendChild(
-      this._buildSettingsSection("⬡ Knowledge Graph (Fuseki)", [
-        {
-          key: "wactorz-fuseki-url",
-          label: "URL",
-          placeholder: "http://localhost:3030",
-          type: "text",
-        },
-        {
-          key: "wactorz-fuseki-dataset",
-          label: "Dataset",
-          placeholder: "wactorz",
-          type: "text",
-        },
-        {
-          key: "wactorz-fuseki-user",
-          label: "Username",
-          placeholder: "admin",
-          type: "text",
-        },
-        {
-          key: "wactorz-fuseki-pass",
-          label: "Password",
-          placeholder: "",
           type: "password",
         },
       ]),
@@ -3388,7 +2929,6 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
     sheet.className = "af-bottom-sheet";
 
     const secondary: { key: View; icon: string; label: string }[] = [
-      { key: "fuseki",   icon: "⬡", label: "Graph"    },
       { key: "settings", icon: "⚙", label: "Settings" },
     ];
     secondary.forEach(({ key, icon, label }) => {
@@ -3566,6 +3106,7 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
       { scope: "all",     label: "Wipe everything", danger: true },
     ];
 
+    const armResets: Array<() => void> = [];
     scopes.forEach(({ scope, label, danger }, i) => {
       if (danger) {
         const hr = document.createElement("div");
@@ -3583,31 +3124,39 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
       ].join("");
       btn.innerHTML = `${ICON[scope] ?? ""}<span>${label}</span>`;
 
-      // Two-step confirm: first click arms, second fires
+      // Two-step confirm: first click arms, second fires.
+      const span = btn.querySelector("span")!;
       let armed = false;
       let armTimer: ReturnType<typeof setTimeout> | null = null;
 
+      // Reset this button back to its resting label/style. Registered ONCE so
+      // _resetArmed() can disarm every button, and called on the fire path too
+      // (otherwise the label stays stuck on "Confirm …?" after a reset fires).
+      const disarm = () => {
+        if (armTimer) { clearTimeout(armTimer); armTimer = null; }
+        armed = false;
+        span.textContent = label;
+        btn.style.background = "";
+      };
+      armResets.push(disarm);
+
       btn.addEventListener("click", async () => {
         if (!armed) {
+          // Only one button armed at a time — disarm any others first.
+          armResets.forEach((fn) => fn !== disarm && fn());
           armed = true;
-          const span = btn.querySelector("span")!;
-          const orig = span.textContent!;
           span.textContent = `Confirm ${label.toLowerCase()}?`;
           btn.style.background = danger ? "rgba(248,113,113,.15)" : "rgba(255,255,255,.1)";
-          armTimer = setTimeout(() => {
-            armed = false;
-            span.textContent = orig;
-            btn.style.background = "";
-          }, 3000);
+          armTimer = setTimeout(disarm, 3000);
           return;
         }
 
-        if (armTimer) clearTimeout(armTimer);
-        armed = false;
+        disarm();
         pop.classList.remove("open");
 
         try {
-          const res = await fetch("/api/reset", {
+          const ingress: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+          const res = await fetch(`${ingress}/api/reset`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ scope }),
@@ -3625,7 +3174,7 @@ PREFIX prov:   <http://www.w3.org/ns/prov#>
 
       pop.appendChild(btn);
     });
-
+    (pop as any)._resetArmed = () => armResets.forEach(fn => fn());
     return pop;
   }
 }

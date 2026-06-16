@@ -92,7 +92,6 @@ export class IOManager {
       timestampMs: Date.now(),
     };
 
-    tts.checkUserIntent(text);
     _feedPush({
       type: "chat",
       label: text,

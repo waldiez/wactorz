@@ -50,6 +50,27 @@ function nameFromWid(raw: string | undefined): string {
   return m?.[1] ?? raw;
 }
 
+/**
+ * Best-effort icon for an HA area header.
+ *
+ * Home Assistant area icons are MDI *names* (e.g. "mdi:sofa"), not hex code
+ * points — so the old `String.fromCodePoint(parseInt(name, 16))` produced NaN
+ * (most names) or an out-of-range value (all-hex names like "deadbeef"), both
+ * of which throw RangeError. We only render a glyph when the suffix is a valid
+ * Unicode code point; otherwise fall back to a house emoji.
+ */
+export function areaIconText(icon?: string | null): string {
+  const fallback = "🏠";
+  if (!icon) return fallback;
+  const cp = parseInt(icon.replace(/^mdi:/, ""), 16);
+  if (!Number.isFinite(cp) || cp < 0 || cp > 0x10ffff) return fallback;
+  try {
+    return String.fromCodePoint(cp);
+  } catch {
+    return fallback;
+  }
+}
+
 function stateColor(state: AgentState): string {
   if (typeof state === "object") return "#f87171";
   switch (state as string) {
@@ -2152,7 +2173,7 @@ export class CardDashboard {
         "padding:8px 16px 6px;font-size:10px;font-weight:700;letter-spacing:0.08em;" +
         "color:rgba(255,255,255,0.35);text-transform:uppercase;display:flex;align-items:center;gap:6px;" +
         "border-bottom:1px solid rgba(255,255,255,0.06);";
-      const roomIcon = area?.icon ? String.fromCodePoint(parseInt(area.icon.replace(/^mdi:/, ""), 16)) : "🏠";
+      const roomIcon = areaIconText(area?.icon);
       header.innerHTML = `<span>${area ? roomIcon : "📦"}</span><span>${area?.name ?? "Other"}</span>` +
         `<span style="opacity:0.4;font-weight:400">${sectionEntities.length}</span>`;
       section.appendChild(header);

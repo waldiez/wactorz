@@ -598,14 +598,14 @@ export class CardDashboard {
   // ── Private: floating UI ──────────────────────────────────────────────────
 
   private _hideFloatingUI(): void {
-    ["hud", "hud-stats", "io-bar", "chat-panel"].forEach((id) => {
+    ["hud", "hud-stats", "chat-panel"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.style.display = "none";
     });
   }
 
   private _showFloatingUI(): void {
-    ["hud", "hud-stats", "io-bar", "feed-toggle"].forEach((id) => {
+    ["hud", "hud-stats", "feed-toggle"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.style.display = "";
     });
@@ -653,15 +653,21 @@ export class CardDashboard {
     }
   }
 
-  /** Ensure chatTarget is a live agent, defaulting to "main" → "main-actor" → first. */
+  /**
+   * Ensure chatTarget is a live, messageable agent so the target <select>
+   * always has a valid selection. Prefers "main"/"main-actor", else the first
+   * messageable agent alphabetically. Only considers agents that pass
+   * canDirectMessage — the same filter the <select> options use — so the chosen
+   * target is guaranteed to exist as an option.
+   */
   private _syncChatTarget(): void {
-    const agents = [...this.agents.values()];
-    if (!agents.length) return;
-    if (agents.some((a) => a.name === this.chatTarget)) return;
-    const main = agents.find(
+    const messageable = [...this.agents.values()].filter(canDirectMessage);
+    if (!messageable.length) return;
+    if (messageable.some((a) => a.name === this.chatTarget)) return;
+    const main = messageable.find(
       (a) => a.name === "main" || a.name === "main-actor",
     );
-    const fallback = [...agents].sort((a, b) =>
+    const fallback = [...messageable].sort((a, b) =>
       a.name.localeCompare(b.name),
     )[0];
     this.chatTarget = main?.name ?? fallback?.name ?? this.chatTarget;
@@ -1688,33 +1694,7 @@ export class CardDashboard {
       this._clearGhost(input, ghost);
     });
 
-    // Wake button hidden for 0.5 — create with hidden id so IOBar refs don't throw
-    const wakeBtn = document.createElement("button");
-    wakeBtn.id = "af-wake-btn-cd";
-    wakeBtn.style.display = "none";
-
-    const micBtn = document.createElement("button");
-    micBtn.className = "af-voice-btn";
-    micBtn.id = "af-mic-btn-cd";
-    micBtn.title = "Tap to speak";
-    micBtn.innerHTML = `<svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M7.5 1.5a2.5 2.5 0 0 0-2.5 2.5v4a2.5 2.5 0 0 0 5 0V4a2.5 2.5 0 0 0-2.5-2.5Z" fill="currentColor"/><path d="M3 7.5a4.5 4.5 0 0 0 9 0" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/><line x1="7.5" y1="12" x2="7.5" y2="13.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/><line x1="5" y1="13.5" x2="10" y2="13.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg>`;
-    micBtn.addEventListener("click", () =>
-      document.dispatchEvent(new CustomEvent("af-mic-toggle")),
-    );
-
-    // Hide the mic when voice can't work: no Web Speech API, or an insecure
-    // context (HTTP) where getUserMedia is unavailable — e.g. the HA add-on's
-    // ingress iframe. Checked directly (not just via __voiceUnavailable) so it
-    // holds regardless of when IOBar initialises relative to this bar.
-    const voiceUnavailable =
-      (document.body as any).__voiceUnavailable ||
-      !window.isSecureContext ||
-      !navigator.mediaDevices?.getUserMedia;
-    if (voiceUnavailable) {
-      micBtn.style.display = "none";
-    }
-
-    bar.append(wakeBtn, micBtn, select, inputWrap, sendBtn);
+    bar.append(select, inputWrap, sendBtn);
     return bar;
   }
 
@@ -1737,6 +1717,17 @@ export class CardDashboard {
         opt.textContent = `@${agent.name}`;
         select.appendChild(opt);
       });
+    // Make sure chatTarget is a live, messageable agent, then guarantee the
+    // <select> shows a selection: if chatTarget isn't an option (e.g. it's still
+    // the "main-actor" default but the agent is named "main"), fall back to the
+    // first option instead of rendering a blank control.
+    this._syncChatTarget();
+    const hasTarget = [...select.options].some(
+      (o) => o.value === this.chatTarget,
+    );
+    if (!hasTarget && select.options.length) {
+      this.chatTarget = select.options[0]!.value;
+    }
     select.value = this.chatTarget;
   }
 

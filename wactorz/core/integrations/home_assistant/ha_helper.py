@@ -3,10 +3,13 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 import hashlib
+import logging
 import re
 import time
 
 import aiohttp
+
+logger = logging.getLogger(__name__)
 
 from .ha_web_socket_client import HAWebSocketClient
 
@@ -537,6 +540,157 @@ async def get_states(ws_url: str, token: str) -> list[dict[str, Any]]:
     async with HAWebSocketClient(ws_url, token) as ha:
         states = await ha.call("get_states")
         return states or []
+
+
+async def get_camera_entities(ws_url: str, token: str) -> list[dict[str, Any]]:
+    """Return camera entities from HA states, each with entity_id, state, and friendly_name."""
+    states = await get_states(ws_url, token)
+    return [
+        {
+            "entity_id": s["entity_id"],
+            "state": s.get("state"),
+            "friendly_name": s.get("attributes", {}).get("friendly_name"),
+        }
+        for s in states
+        if s.get("entity_id", "").startswith("camera.")
+    ]
+
+
+async def get_camera_snapshot(
+    rest_base: str, token: str, camera_entity_id: str
+) -> dict[str, Any]:
+    """Fetch a JPEG snapshot from HA and return it base64-encoded.
+
+    rest_base must be an http/https URL (use normalize_ha_base_url first).
+    Returns {"image_base64": str, "content_type": str, "entity_id": str}
+    or {"error": str, "status": int, "detail": str, "entity_id": str} on failure.
+    """
+    import base64
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{rest_base}/api/camera_proxy/{camera_entity_id}"
+    logger.debug("Camera snapshot request: %s", url)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as resp:
+                logger.debug("Camera snapshot response: %s %s", resp.status, resp.content_type)
+                if resp.status != 200:
+                    detail = ""
+                    try:
+                        detail = await resp.text()
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "Camera snapshot failed for %s: HTTP %s — %s",
+                        camera_entity_id, resp.status, detail[:200] if detail else "(no body)",
+                    )
+                    return {
+                        "error": f"HTTP {resp.status}",
+                        "status": resp.status,
+                        "detail": detail[:200] if detail else "",
+                        "entity_id": camera_entity_id,
+                    }
+                content_type = resp.headers.get("Content-Type", "image/jpeg")
+                raw = await resp.read()
+                return {
+                    "image_base64": base64.b64encode(raw).decode("ascii"),
+                    "content_type": content_type,
+                    "entity_id": camera_entity_id,
+                }
+    except Exception as exc:
+        logger.warning("Camera snapshot exception for %s: %s", camera_entity_id, exc)
+        return {"error": str(exc), "entity_id": camera_entity_id}
+
+
+def get_camera_stream_url(rest_base: str, camera_entity_id: str) -> str:
+    """Return the MJPEG stream URL for a camera entity (no HTTP call)."""
+    return f"{rest_base}/api/camera_proxy_stream/{camera_entity_id}"
+
+
+def get_camera_snapshot_url(rest_base: str, camera_entity_id: str) -> str:
+    """Return the single-image snapshot URL for a camera entity (no HTTP call).
+
+    Requires an Authorization: Bearer <HA_TOKEN> header to fetch.
+    """
+    return f"{rest_base}/api/camera_proxy/{camera_entity_id}"
+
+
+async def get_camera_stream_urls(
+    ws_url: str, token: str, camera_entity_id: str
+) -> dict[str, Any]:
+    """Collect all available stream URLs for a camera entity from three sources.
+
+    Sources attempted in order (failures are logged and skipped):
+    1. MJPEG proxy  — always present, no API call.
+    2. Expose Camera Stream Source custom integration — REST GET
+       /api/camera_source/{entity_id}; silently skipped on 404 (not installed).
+    3. HA WebSocket camera/capabilities → camera/stream per supported format.
+       ``web_rtc`` is reported in capabilities but skipped for stream URL calls
+       (requires browser-side SDP negotiation, cannot yield a plain URL).
+
+    Returns:
+        {
+          "entity_id": str,
+          "streams": {
+            "mjpeg_proxy": "http://ha.local:8123/api/camera_proxy_stream/...",
+            "camera_source": "rtsp://...",              # if integration present
+            "hls": "http://ha.local:8123/api/hls/...", # if camera supports it
+            ...
+          },
+          "capabilities": ["hls", "web_rtc", ...],  # raw from HA, or []
+        }
+    """
+    rest_base = normalize_ha_base_url(ws_url)
+    streams: dict[str, str] = {}
+    capabilities: list[str] = []
+
+    # 1. MJPEG proxy — always available
+    streams["mjpeg_proxy"] = f"{rest_base}/api/camera_proxy_stream/{camera_entity_id}"
+
+    # 2. Expose Camera Stream Source custom integration
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        url = f"{rest_base}/api/camera_stream_source/{camera_entity_id}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    source_url = (await resp.text()).strip()
+                    if source_url:
+                        streams["camera_source"] = source_url
+                elif resp.status != 404:
+                    logger.debug(
+                        "Expose Camera Stream Source returned HTTP %s for %s",
+                        resp.status, camera_entity_id,
+                    )
+    except Exception as exc:
+        logger.debug("Expose Camera Stream Source unavailable for %s: %s", camera_entity_id, exc)
+
+    # 3. WebSocket camera/capabilities → camera/stream per supported format
+    ws_url_normalized = normalize_ha_ws_url(ws_url)
+    try:
+        async with HAWebSocketClient(ws_url_normalized, token) as ha:
+            caps_result = await ha.call("camera/capabilities", entity_id=camera_entity_id)
+            capabilities = list((caps_result or {}).get("frontend_stream_types", []))
+
+            for fmt in capabilities:
+                if fmt == "web_rtc":
+                    continue
+                try:
+                    stream_result = await ha.call(
+                        "camera/stream", entity_id=camera_entity_id, format=fmt
+                    )
+                    stream_url = (stream_result or {}).get("url", "")
+                    if stream_url:
+                        if stream_url.startswith("/"):
+                            stream_url = f"{rest_base}{stream_url}"
+                        streams[fmt] = stream_url
+                except Exception as exc:
+                    logger.debug(
+                        "camera/stream format=%s failed for %s: %s", fmt, camera_entity_id, exc
+                    )
+    except Exception as exc:
+        logger.debug("camera/capabilities WS call failed for %s: %s", camera_entity_id, exc)
+
+    return {"entity_id": camera_entity_id, "streams": streams, "capabilities": capabilities}
 
 
 async def get_config_entries(ws_url: str, token: str) -> list[dict[str, Any]]:

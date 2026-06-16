@@ -74,6 +74,12 @@ Spawned by MainActor for every `PIPELINE`-classified request. The planner querie
 
 After spawning, the planner fires a background `_bootstrap_ha_entity_states()` task that extracts HA entity IDs from the plan (generated code, `ha_actuator` actions, MQTT topics, and the enriched task string) and sends a `get_entities_state` request to `home-assistant-agent`. This re-publishes the current HA state over MQTT so freshly-spawned agents that subscribe to `homeassistant/state_changes/#` fire immediately — without waiting for the next real HA state change.
 
+#### Camera URL resolution
+
+Before generating the plan, the planner resolves real stream and snapshot URLs for any camera entities mentioned in the task by sending `get_camera_stream_url` and `get_camera_snapshot_url` A2A requests to `home-assistant-agent`. Resolved URLs are injected into the LLM prompt so generated agents use exact, working URLs rather than guessing `/dev/video0` or inventing proxy paths.
+
+MJPEG proxy URLs (`/api/camera_proxy_stream/…`) require an `Authorization: Bearer` header; the planner injects an `OPENCV_FFMPEG_CAPTURE_OPTIONS` hint into the PATTERN 3 template so OpenCV passes the header automatically.
+
 #### Supported patterns
 
 | Pattern | Trigger | Action | Agents spawned |
@@ -84,6 +90,7 @@ After spawning, the planner fires a background `_bootstrap_ha_entity_states()` t
 | 4 | Webcam detection (YOLO) | Discord/webhook notification | dynamic YOLO + dynamic notify |
 | 5 | Timer/schedule | HA service call OR notification | `scheduled` + `ha_actuator` (or `scheduled` + `dynamic` notify) |
 | 6 | MQTT sensor + condition | HA service call | dynamic monitor + `ha_actuator` |
+| 7 | One-shot camera snapshot | Process/save still image | single dynamic agent (`httpx`) |
 
 #### Code validation
 
@@ -189,7 +196,28 @@ Wraps the Home Assistant REST API. Uses multiple internal LLM calls to classify 
 | `edit_automation` | Identify and update an existing automation |
 | `delete_automation` | Remove an automation |
 | `get_entities_state` | Fetch current state for explicit entity IDs and re-publish to MQTT — used by PlannerAgent bootstrap |
-| `other` | Answer open-ended HA questions via a short LLM tool-call loop backed by `get_simplified_ha_data` |
+| `other` | Answer open-ended HA questions via a short LLM tool-call loop backed by `get_simplified_ha_data`, plus camera tools (see below) |
+
+#### Camera tools
+
+Camera requests route through the `other` intent path. The LLM tool-call loop has access to three camera-specific tools:
+
+| Tool | Description |
+|------|-------------|
+| `list_camera_entities` | Returns all `camera.*` entities with state and friendly name |
+| `get_camera_snapshot` | Fetches a JPEG from `/api/camera_proxy/{entity_id}` and returns it base64-encoded. The agent appends an inline markdown image tag (`![…](data:image/jpeg;base64,…)`) so the chat panel renders it. |
+| `get_camera_stream_url` | Aggregates stream URLs from three sources: MJPEG proxy (always present), [Expose Camera Stream Source](https://github.com/felipecrs/hass-expose-camera-stream-source) custom integration (skipped silently if 404), and HLS/other formats via HA WebSocket `camera/capabilities` + `camera/stream`. |
+
+Camera tools also support **A2A structured dispatch** — a peer agent can send a payload directly to `home-assistant-agent` without any LLM call:
+
+```json
+{"operation": "list_cameras"}
+{"operation": "get_camera_snapshot", "camera_entity_id": "camera.front_door"}
+{"operation": "get_camera_stream_url", "camera_entity_id": "camera.backyard"}
+{"operation": "get_camera_snapshot_url", "camera_entity_id": "camera.backyard"}
+```
+
+`get_camera_snapshot_url` returns only the URL (no HTTP fetch) — useful when a peer agent (e.g. PlannerAgent) needs to embed the URL in generated code rather than fetch the image itself. The response `data.snapshot_url` is the `/api/camera_proxy/{entity_id}` path and requires an `Authorization: Bearer <HA_TOKEN>` header to fetch.
 
 #### Prompts
 

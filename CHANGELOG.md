@@ -40,6 +40,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Agent → UI notifications** — `Actor.notify_user(text)` pushes a message to the chat panel (via `agents/{id}/chat`); the monitor bridges it to a live chat frame. Previously agent messages only hit the dashboard.
 - **`agent.run_in_background(coro)`** — schedules a coroutine tracked on the actor, for long work that shouldn't block `handle_task`.
 - **`<delegate>` blocks** — `main` can delegate via `<delegate>{"agent": "...", "task": "..."}</delegate>`, alongside `@mentions`.
+- **HomeAssistantAgent — camera tools** — three new tools exposed to the LLM tool-call loop and to A2A structured dispatch:
+  - `list_camera_entities` — returns all `camera.*` entities with their current state and friendly name.
+  - `get_camera_snapshot` — fetches a JPEG from `/api/camera_proxy/{entity_id}`, returns it base64-encoded; the agent appends an inline `![…](data:image/jpeg;base64,…)` markdown tag to the final reply so the chat panel renders the image.
+  - `get_camera_stream_url` — aggregates stream URLs from three sources: the always-available MJPEG proxy (`/api/camera_proxy_stream/{entity_id}`), the [Expose Camera Stream Source](https://github.com/felipecrs/hass-expose-camera-stream-source) custom integration if installed (`/api/camera_stream_source/{entity_id}`, returns plain-text URL, silently skipped on 404), and HLS/other formats via HA WebSocket `camera/capabilities` + `camera/stream` (relative URLs are resolved to absolute).
+- **HomeAssistantAgent — A2A camera dispatch** — a peer agent can send a structured payload to `home-assistant-agent` without triggering any LLM call: `{"operation": "list_cameras"}`, `{"operation": "get_camera_snapshot", "camera_entity_id": "camera.x"}`, `{"operation": "get_camera_stream_url", "camera_entity_id": "camera.x"}`, or `{"operation": "get_camera_snapshot_url", "camera_entity_id": "camera.x"}` (returns only the URL, no HTTP fetch).
+- **ha_helper — camera helpers** — five new functions: `get_camera_entities`, `get_camera_snapshot`, `get_camera_stream_url` (sync, MJPEG proxy URL only), `get_camera_stream_urls` (async, all sources), `get_camera_snapshot_url` (sync, returns `/api/camera_proxy/{entity_id}` URL without fetching).
+- **PlannerAgent — camera URL resolution** — before generating a plan, the planner resolves real stream and snapshot URLs for camera entities mentioned in the task via A2A requests to `home-assistant-agent`. Resolved URLs are injected into the LLM prompt so generated agents never guess `/dev/video0` or invent proxy paths. MJPEG proxy URLs require a Bearer token; the planner injects an `OPENCV_FFMPEG_CAPTURE_OPTIONS` hint into PATTERN 3 so OpenCV passes the header automatically.
+- **PlannerAgent — PATTERN 7** — new plan pattern for one-shot camera snapshots (e.g. "take a snapshot of the office camera"). Uses `httpx` to fetch the snapshot URL with an `Authorization: Bearer` header rather than opening a continuous `cv2.VideoCapture` stream.
 
 ### Changed
 
@@ -65,6 +73,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Tests** — `mqtt.test.ts`: updated stale assertion for the 6 s disconnect-debounce introduced in a prior PR.
 - **Tests** — `test_persistence_writes.py`: new coverage for the real `WactorzDB` write path (the suite previously only used an in-memory fake), including a guard against reintroducing version-gated SQLite functions in the schema.
+- **Tests** — `test_ha_helper.py`: 17 new tests in `HomeAssistantHelperCameraTest` covering all four camera helper functions, including URL normalisation, relative-URL resolution, silent 404 skip, web_rtc stream-call exclusion, and exception fallbacks.
+- **Tests** — `test_home_assistant_agent.py`: 23 new tests in `HomeAssistantAgentCameraTest` covering the LLM tool loop, A2A structured dispatch, heuristic routing, and snapshot image appending for all three camera tools (plus the `get_camera_snapshot_url` A2A operation added in the follow-up commit).
 
 ## [0.4.3] - 2026-06-01
 

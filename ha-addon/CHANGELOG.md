@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.5
+## 0.4.4.2
 
 - Removed: Apache Jena Fuseki / SPARQL entirely. Gone are the bundled JRE 17 + Fuseki tarball (~170 MB), the `fuseki_embedded` option, all `fuseki_url` / `fuseki_dataset` / `fuseki_user` / `fuseki_password` options, and addon port `3030`. The UI "Graph" tab has also been removed. Wactorz runs without a triplestore.
 

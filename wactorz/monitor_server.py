@@ -954,7 +954,9 @@ def parse_topic(topic: str, payload_str: str):
                 if "name"      in data: state["agents"][agent_id]["name"]      = data["name"]
                 if "state"     in data: state["agents"][agent_id]["state"]     = data["state"]
                 if "protected" in data: state["agents"][agent_id]["protected"] = data["protected"]
-            add_log({"type": "status", "agent_id": agent_id, "status": data, "timestamp": time.time()})
+            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            add_log({"type": "status", "agent_id": agent_id, "name": name,
+                     "status": data, "timestamp": time.time()})
 
         elif metric == "heartbeat":
             update_agent(agent_id, "heartbeat", data)
@@ -986,10 +988,17 @@ def parse_topic(topic: str, payload_str: str):
                     _record_lifetime_cost(agent_id, data.get("cost_usd"))
 
         elif metric == "logs":
-            add_log({"type": "log", "agent_id": agent_id, "timestamp": time.time(),
+            # Log frames carry only the agent id; resolve the friendly name the
+            # same way alert/completed do so the feed never shows a bare id.
+            # `**data` last lets a payload that already includes a name win.
+            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            add_log({"type": "log", "agent_id": agent_id, "name": name, "timestamp": time.time(),
                      **(data if isinstance(data, dict) else {})})
         elif metric == "spawned":
-            add_log({"type": "spawned", "agent_id": agent_id, "timestamp": time.time(),
+            # Payload carries child_name/child_id, not name — resolve the (parent)
+            # agent's name from state so the feed row isn't attributed to a bare id.
+            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            add_log({"type": "spawned", "agent_id": agent_id, "name": name, "timestamp": time.time(),
                      **(data if isinstance(data, dict) else {})})
         elif metric == "chat":
             # User-facing message pushed by an agent via Actor.notify_user().
@@ -1018,7 +1027,8 @@ def parse_topic(topic: str, payload_str: str):
             return {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
         elif metric == "completed":
             update_agent(agent_id, "last_completed", data)
-            add_log({"type": "completed", "agent_id": agent_id, "timestamp": time.time()})
+            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            add_log({"type": "completed", "agent_id": agent_id, "name": name, "timestamp": time.time()})
         elif metric == "alert":
             if isinstance(data, dict):
                 data["agent_id"] = agent_id

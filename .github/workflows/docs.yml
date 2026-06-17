@@ -8,7 +8,6 @@ on:
       - 'static/docs/**'
       - 'scripts/build_docs.py'
       - 'wactorz/**'
-      - 'rust/**'
       - 'frontend/**'
   workflow_dispatch:
 
@@ -29,14 +28,6 @@ jobs:
 
       - name: Install Python deps
         run: pip install -e ".[all,docs]"
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
 
       - uses: oven-sh/setup-bun@v2
 

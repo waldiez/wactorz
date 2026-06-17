@@ -335,7 +335,7 @@ class AnthropicProvider(LLMProvider):
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         response = await self.client.messages.create(
             model=self.model,
-            max_tokens=kwargs.get("max_tokens", 4096),
+            max_tokens=kwargs.get("max_tokens", 16384),
             system=system,
             messages=messages,
         )
@@ -358,7 +358,7 @@ class AnthropicProvider(LLMProvider):
     ) -> ToolCompletion:
         response = await self.client.messages.create(
             model=self.model,
-            max_tokens=kwargs.get("max_tokens", 4096),
+            max_tokens=kwargs.get("max_tokens", 16384),
             system=system,
             messages=self._anthropic_messages(messages),
             tools=self._anthropic_tools(tools),
@@ -444,7 +444,7 @@ class AnthropicProvider(LLMProvider):
         input_tokens = output_tokens = 0
         async with self.client.messages.stream(
             model=self.model,
-            max_tokens=kwargs.get("max_tokens", 4096),
+            max_tokens=kwargs.get("max_tokens", 16384),
             system=system,
             messages=messages,
         ) as s:
@@ -472,7 +472,7 @@ class OpenAIProvider(LLMProvider):
         params = {
             "model": self.model,
             "messages": full_messages,
-            "max_completion_tokens": kwargs.get("max_tokens", 4096),
+            "max_completion_tokens": kwargs.get("max_tokens", 16384),
         }
         reasoning_effort = kwargs.get("reasoning_effort")
         if reasoning_effort:
@@ -511,7 +511,7 @@ class OpenAIProvider(LLMProvider):
             messages=full_messages,
             tools=_openai_tools(tools),
             tool_choice=kwargs.get("tool_choice", "auto"),
-            max_completion_tokens=kwargs.get("max_tokens", 4096),
+            max_completion_tokens=kwargs.get("max_tokens", 16384),
         )
         message = response.choices[0].message
         raw_calls = getattr(message, "tool_calls", None) or []
@@ -553,7 +553,7 @@ class OpenAIProvider(LLMProvider):
         params = {
             "model": self.model,
             "messages": full_messages,
-            "max_completion_tokens": kwargs.get("max_tokens", 4096),
+            "max_completion_tokens": kwargs.get("max_tokens", 16384),
             "stream": True,
             "stream_options": {"include_usage": True},
         }
@@ -739,7 +739,7 @@ class NIMProvider(LLMProvider):
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=full_messages,
-            max_tokens=kwargs.get("max_tokens", 4096),
+            max_tokens=kwargs.get("max_tokens", 8192),
         )
         text = response.choices[0].message.content
         input_tok  = response.usage.prompt_tokens     if response.usage else 0
@@ -768,7 +768,7 @@ class NIMProvider(LLMProvider):
                 messages=full_messages,
                 tools=_openai_tools(tools),
                 tool_choice=kwargs.get("tool_choice", "auto"),
-                max_tokens=kwargs.get("max_tokens", 4096),
+                max_tokens=kwargs.get("max_tokens", 8192),
             )
         except Exception as exc:
             raise RuntimeError(
@@ -814,7 +814,7 @@ class NIMProvider(LLMProvider):
         async with await self.client.chat.completions.create(
             model=self.model,
             messages=full_messages,
-            max_tokens=kwargs.get("max_tokens", 4096),
+            max_tokens=kwargs.get("max_tokens", 8192),
             stream=True,
         ) as s:
             async for chunk in s:

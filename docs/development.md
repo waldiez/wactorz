@@ -136,6 +136,9 @@ WACTORZ_API_KEY=              # optional; mirrors API_KEY for REST auth
 # Only needed if using an external broker instead of the embedded one
 MQTT_HOST=localhost
 MQTT_PORT=1883
+# Optional — set for a broker with allow_anonymous false; blank = anonymous
+MQTT_USERNAME=
+MQTT_PASSWORD=
 ```
 
 #### Web dashboard
@@ -238,7 +241,7 @@ Wactorz ships with a `Dockerfile` and Docker Compose files for running the full 
 
 ```bash
 cp .env.template .env
-# edit .env and set LLM_API_KEY, FUSEKI_PASSWORD, etc.
+# edit .env and set LLM_API_KEY, etc.
 ```
 
 ### Production stack (profiles)
@@ -246,19 +249,13 @@ cp .env.template .env
 The main `compose.yaml` uses profiles so you only start what you need:
 
 ```bash
-# Python agents + MQTT + Fuseki (recommended)
-docker compose --profile python-full up -d
-
-# Python agents + MQTT only (no Fuseki)
+# Python agents + MQTT
 docker compose --profile python up -d
 
 # MQTT broker only (default)
 docker compose up -d
 
-# Rust server + nginx dashboard
-docker compose --profile rust up -d
-
-# Everything (Rust + Fuseki + Home Assistant)
+# Everything (Python + Home Assistant)
 docker compose --profile full up -d
 ```
 
@@ -266,9 +263,7 @@ docker compose --profile full up -d
 |---|---|---|
 | *(default)* | mosquitto | :1883, :9001 |
 | `python` | + wactorz-python | + :8000, :8888 |
-| `python-full` | + wactorz-python, fuseki | + :8000, :8888, :3030 |
-| `rust` | + wactorz-server, dashboard | + :8080, :8081, :80 |
-| `full` | + rust, fuseki, homeassistant | + :8080, :8081, :80, :3030, :8123 |
+| `full` | + wactorz-python, homeassistant | + :8000, :8888, :8123 |
 
 Once running:
 
@@ -276,32 +271,31 @@ Once running:
 |---|---|---|
 | Web UI | http://localhost:8888 | — |
 | REST API | http://localhost:8000 | — |
-| Fuseki | http://localhost:3030 | admin / `FUSEKI_PASSWORD` from `.env` |
 
 ### Stopping and teardown
 
 ```bash
 # Stop services
-docker compose --profile python-full down
+docker compose --profile python down
 
 # Stop and remove all volumes and persisted data
-docker compose --profile python-full down -v
+docker compose --profile python down -v
 ```
 
 ### Rebuilding after code changes or a fresh start
 
 ```bash
 # Rebuild and restart just the Python app
-docker compose --profile python-full up -d --build wactorz-python
+docker compose --profile python up -d --build wactorz-python
 
 # Full teardown and clean rebuild
-docker compose --profile python-full down -v
-docker compose --profile python-full up -d --build
+docker compose --profile python down -v
+docker compose --profile python up -d --build
 ```
 
 ### Development stack
 
-For local development, `compose.dev.yaml` starts MQTT + Fuseki + the Python app together with a single command:
+For local development, `compose.dev.yaml` starts MQTT + the Python app together with a single command:
 
 ```bash
 # Start everything
@@ -319,7 +313,6 @@ Services started:
 | Container | Port | Description |
 |---|---|---|
 | `wactorz-app` | :8000, :8888 | Python agent system (REST API + Web UI) |
-| `wactorz-fuseki` | :3030 | Apache Jena Fuseki (knowledge graph) |
 | `wactorz-dev-mosquitto` | :1883, :9001 | MQTT broker (TCP + WebSocket) |
 
 ### Environment variables in Docker
@@ -329,16 +322,7 @@ Your `.env` file is loaded automatically via `env_file`. The compose files overr
 ```env
 # These are set automatically by compose — do not override in .env
 MQTT_HOST=mosquitto         # container name, not localhost
-FUSEKI_URL=http://fuseki:3030
 ```
-
-> **Warning (Windows line endings):** If Fuseki fails with `exec /entrypoint.sh: no such file or directory`, the shell script has Windows CRLF line endings. Fix with:
-> ```bash
-> docker run --rm -v "$PWD/config/fuseki-container:/work" alpine sh -c "sed -i 's/\r//' /work/entrypoint.sh"
-> ```
-> Then rebuild: `docker compose --profile python-full up -d --build fuseki`
-
-> **Fuseki admin UI:** After starting Fuseki, the admin UI is at `http://localhost:3030`. Default credentials: **admin / admin** (set via `FUSEKI_ADMIN_PASSWORD` in your `.env`).
 
 ---
 

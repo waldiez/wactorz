@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Wactorz — Actor-model multi-agent AI framework</title>
-  <meta name="description" content="Spawn, coordinate and monitor AI agents at runtime. Python · Rust · MQTT." />
+  <meta name="description" content="Spawn, coordinate and monitor AI agents at runtime. Python · MQTT." />
   <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -518,8 +518,7 @@
   </a>
   <ul class="nav-links">
     <li><a href="./guide/">Guide</a></li>
-    <!-- <li><a href="./api/python/">Python API</a></li>
-    <li><a href="./api/rust/">Rust Docs</a></li> -->
+    <!-- <li><a href="./api/python/">Python API</a></li> -->
     <!-- <li><a href="./api/js/">JS Docs</a></li> -->
     <li>
       <a href="https://github.com/waldiez/wactorz" class="nav-gh" target="_blank" rel="noopener">
@@ -535,7 +534,7 @@
   <canvas id="hero-canvas"></canvas>
 
   <div class="hero-content">
-    <div class="hero-badge">v0.4.2 · Alpha</div>
+    <div class="hero-badge">v0.5.0 · Alpha</div>
 
     <h1>Wac<span>torZ</span></h1>
 
@@ -578,7 +577,7 @@
     <div class="features-header">
       <p class="section-label">// capabilities</p>
       <h2 class="section-title">Built for production<br/>multi-agent systems</h2>
-      <p class="section-sub">Erlang/OTP-style supervision, real-time MQTT telemetry, and a live 3D web dashboard — out of the box.</p>
+      <p class="section-sub">Erlang/OTP-style supervision, real-time MQTT telemetry, and a live web dashboard — out of the box.</p>
     </div>
 
     <div class="features-grid">
@@ -605,9 +604,9 @@
 
       <div class="feature-card">
         <div class="feature-icon">◉</div>
-        <div class="feature-title">Live 3D Dashboard</div>
-        <p class="feature-desc">Babylon.js web UI renders agent graphs, galaxy views, and card layouts. Chat, monitor and command agents in-browser.</p>
-        <span class="feature-tag">Babylon.js · MQTT WS</span>
+        <div class="feature-title">Live Web Dashboard</div>
+        <p class="feature-desc">A real-time card dashboard renders every agent's state, cost and activity. Chat, monitor and command agents in-browser.</p>
+        <span class="feature-tag">HTML/CSS · MQTT WS</span>
       </div>
     </div>
   </div>
@@ -624,7 +623,7 @@
     <div class="code-block">
       <div class="code-bar">
         <div class="code-bar-dots"><span></span><span></span><span></span></div>
-        <span class="code-bar-label">main.py</span>
+        <span class="code-bar-label">example.py</span>
       </div>
       <div class="code-body"><pre><span class="cm"># 1. Install</span>
 <span class="cm">#    pip install wactorz[all]</span>
@@ -678,20 +677,13 @@
         <div class="docs-card-icon">🐍</div>
         <div class="docs-card-title">Python API Reference</div>
         <p class="docs-card-desc">Auto-generated API docs for all agents, core actors, registry, config, and interfaces.</p>
-      </a>
-
-      <a href="./api/rust/" class="docs-card">
-        <span class="docs-arrow">↗</span>
-        <div class="docs-card-icon">⚙️</div>
-        <div class="docs-card-title">Rust Crate Docs</div>
-        <p class="docs-card-desc">Rustdoc for wactorz-core, wactorz-interfaces, and the axum WS bridge crates.</p>
       </a> -->
 
       <!-- <a href="./api/js/" class="docs-card">
         <span class="docs-arrow">↗</span>
         <div class="docs-card-icon">🟨</div>
         <div class="docs-card-title">JS / TypeScript Docs</div>
-        <p class="docs-card-desc">TypeDoc for the Wactorz browser client — MQTT over WebSocket, Babylon.js dashboard.</p>
+        <p class="docs-card-desc">TypeDoc for the Wactorz browser client — MQTT over WebSocket, card dashboard.</p>
       </a> -->
     </div>
   </div>
@@ -707,7 +699,6 @@
     <ul class="footer-links">
       <li><a href="./guide/">Guide</a></li>
       <!-- <li><a href="./api/python/">Python API</a></li>
-      <li><a href="./api/rust/">Rust Docs</a></li>
       <li><a href="./api/js/">JS Docs</a></li> -->
       <li><a href="https://github.com/waldiez/wactorz" target="_blank" rel="noopener">GitHub</a></li>
       <li><a href="https://pypi.org/project/wactorz/" target="_blank" rel="noopener">PyPI</a></li>

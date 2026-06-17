@@ -6,7 +6,7 @@ Wactorz supports three deployment modes:
 |---|---|
 | **Docker Hub** | New users; no repo clone needed — just Docker Desktop |
 | **Full Docker** | Full stack via `git clone`; everything in containers |
-| **Native binary** | Better SSH key access, faster cold start, smaller footprint |
+| **Home Assistant add-on** | Home Assistant OS or Supervised installs |
 
 ---
 
@@ -39,13 +39,6 @@ docker compose --profile python up -d
 
 Open `http://localhost:8888` (monitor UI) or `http://localhost:8000` (REST API).
 
-For the Rust server + nginx dashboard instead:
-
-```bash
-docker compose --profile rust up -d
-# Open: http://localhost/
-```
-
 ### Services
 
 Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring up more services.
@@ -53,12 +46,9 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 | Profile | Service | Internal address | External port |
 |---|---|---|---|
 | _(all)_ | mosquitto | `mosquitto:1883` / `:9001` | `:1883`, `:9001` |
-| `python` / `python-full` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
-| `python` / `python-full` | monitor UI | `wactorz-python:8888` | `:8888` |
-| `python` / `python-full` | prometheus | `wactorz-prometheus:9090` | `:9090` |
-| `python-full` / `full` | fuseki | `fuseki:3030` | `:3030` |
-| `rust` / `full` | wactorz-server (Rust) | `wactorz-server:8080` | `:8080` (API), `:8081` (WS) |
-| `rust` / `full` | nginx (dashboard) | — | `:80` |
+| `python` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
+| `python` | monitor UI | `wactorz-python:8888` | `:8888` |
+| `python` | prometheus | `wactorz-prometheus:9090` | `:9090` |
 | `full` | home-assistant | `homeassistant:8123` | `:8123` |
 
 ```bash
@@ -69,133 +59,13 @@ docker compose --profile python up -d
 
 ---
 
-## Native binary  (`compose.native.yaml`)
+## Home Assistant add-on
 
-Only Mosquitto and nginx run in Docker.  The `wactorz` binary runs directly on the host OS.
+Use the add-on when Wactorz should run inside Home Assistant OS or a Supervised
+Home Assistant install. The add-on uses prebuilt multi-arch images from GHCR, so
+Supervisor updates pull an image instead of building Wactorz on the device.
 
-### Advantages
-
-| | Full Docker | Native binary |
-|---|---|---|
-| SSH keys (NautilusAgent) | Needs volume mounts | `~/.ssh/` works automatically |
-| Cold start | Container init | `< 100 ms` |
-| Binary size | 39 MB image | ~12 MB binary |
-| Cross-compile | buildx + QEMU | `cargo build --target …` |
-
-### Prerequisites
-
-- Docker + Compose plugin (for Mosquitto + nginx)
-- The `wactorz` binary (see below)
-
-### Bootstrap (first deploy)
-
-#### Option A — use the package script
-
-```bash
-# On the build machine:
-bash scripts/package-native.sh
-# → wactorz-native-YYYYMMDD.tar.gz
-
-# Transfer to target host:
-scp wactorz-native-*.tar.gz user@host:~/
-ssh user@host
-tar xzf wactorz-native-*.tar.gz
-cd wactorz-native-*/
-bash deploy-native.sh        # interactive wizard
-```
-
-#### Option B — use `scripts/deploy.sh`
-
-```bash
-# 1. Configure .env
-cp .env.template .env
-nano .env
-# Set: LLM_API_KEY, DEPLOY_HOST, DEPLOY_PATH, NAUTILUS_SSH_KEY
-# If the remote already has nginx running (certbot/SSL), also set:
-#   DEPLOY_NGINX_MODE=existing
-
-# 2. Run the deploy wizard (builds frontend + binary, rsyncs, restarts)
-bash scripts/deploy.sh
-```
-
-The wizard will:
-1. Check / generate an SSH key (`~/.ssh/wactorz_deploy`)
-2. Build the frontend (`npm run build`)
-3. Build the binary via `cargo build --release` or Docker buildx
-4. rsync `static/app/` and the binary to the remote host
-5. Create `.env` from `.env.template` on the remote (preserves existing)
-6. Start Mosquitto via Docker + configure nginx (see modes below)
-7. Install + start the `wactorz` systemd service
-
-#### nginx modes
-
-| `DEPLOY_NGINX_MODE` | What happens |
-|---|---|
-| `docker` (default) | Starts the Docker nginx container from `compose.native.yaml` on port 80 |
-| `existing` | Skips Docker nginx; uploads `infra/nginx/wactorz-snippet.conf` to `DEPLOY_NGINX_CONF` on the remote and reloads the host nginx |
-
-**If you already have nginx running (e.g. with certbot/SSL):**
-
-```bash
-# In your local .env:
-DEPLOY_NGINX_MODE=existing
-DEPLOY_NGINX_CONF=/etc/nginx/conf.d/wactorz.conf   # adjust if needed
-
-# Run deploy normally:
-bash scripts/deploy.sh
-```
-
-Then, on the remote, include the snippet inside your SSL `server { }` block (once):
-
-```nginx
-# /etc/nginx/sites-enabled/your-site.conf  (inside server { } block)
-include /etc/nginx/conf.d/wactorz.conf;
-```
-
-After `sudo nginx -t && sudo systemctl reload nginx`, the dashboard is live at your existing HTTPS URL.
-
-**Important: MQTT_HOST must be `localhost` in native mode.**
-The wactorz binary connects to Mosquitto on `localhost:1883`.
-If you copied `.env` from a Docker setup, change `MQTT_HOST=mosquitto` → `MQTT_HOST=localhost`.
-
-### Subsequent deploys — from the Wactorz dashboard
-
-Once the system is running, use **NautilusAgent** from the IO bar:
-
-```
-# Frontend only (fastest — no binary rebuild needed)
-@nautilus-agent push ./static/app/ deploy@host:/opt/wactorz/static/app/
-@nautilus-agent exec deploy@host sudo systemctl restart wactorz
-
-# Binary + frontend
-@nautilus-agent push /path/to/wactorz deploy@host:/opt/wactorz/wactorz
-@nautilus-agent exec deploy@host chmod +x /opt/wactorz/wactorz
-@nautilus-agent exec deploy@host sudo systemctl restart wactorz
-```
-
-Or re-run the script locally:
-
-```bash
-DEPLOY_SKIP_BINARY=1 bash scripts/deploy.sh   # frontend-only redeploy
-bash scripts/deploy.sh                         # full redeploy
-```
-
----
-
-## systemd service (persistent, starts on boot)
-
-```bash
-# On the target host (after initial deploy):
-sudo cp systemd/wactorz.service /etc/systemd/system/
-sudo nano /etc/systemd/system/wactorz.service
-# Edit: WorkingDirectory, EnvironmentFile, ExecStart, User
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now wactorz
-journalctl -u wactorz -f
-```
-
-The unit template at `systemd/wactorz.service` has comments for every field.
+See `ha-addon/README.md` for install and local testing details.
 
 ---
 
@@ -213,27 +83,16 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `LLM_COST_LIMIT_PERIOD` | `monthly` | Reset period: `daily`, `weekly`, or `monthly` |
 | `MQTT_HOST` | `localhost` | Use `mosquitto` inside Docker |
 | `MQTT_PORT` | `1883` | |
+| `MQTT_USERNAME` | _(blank)_ | Broker username — blank = anonymous; required for brokers with `allow_anonymous false` (e.g. the official Mosquitto add-on) |
+| `MQTT_PASSWORD` | _(blank)_ | Broker password |
 | `PORT` | `8000` | Python REST API listen port |
 | `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
-| `API_ADDR` | `0.0.0.0:8080` | Rust server REST listen address _(Rust only)_ |
-| `WS_ADDR` | `0.0.0.0:8081` | Rust server WS bridge listen address _(Rust only)_ |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
 | `PROMETHEUS_SCRAPE_INTERVAL` | `15s` | Global Prometheus scrape interval |
 | `PROMETHEUS_MONITOR_MOSQUITTO` | `1` | Enable Mosquitto TCP availability probe |
-| `PROMETHEUS_MONITOR_FUSEKI` | `0` | Enable Fuseki HTTP availability probe |
-| `DASHBOARD_EXTERNAL_PORT` | `80` | nginx host port |
 | `NAUTILUS_SSH_KEY` | _(default key)_ | Path to SSH private key |
 | `NAUTILUS_STRICT_HOST_KEYS` | `0` | `1` = enforce strict host-key checking |
 | `NAUTILUS_CONNECT_TIMEOUT` | `10` | SSH timeout in seconds |
-| `DEPLOY_HOST` | _(required for deploy.sh)_ | `user@hostname` |
-| `DEPLOY_PATH` | `/opt/wactorz` | Remote base directory |
-| `DEPLOY_SSH_PORT` | `22` | SSH port on remote host |
-| `DEPLOY_RESTART_CMD` | `systemctl restart wactorz` | Service restart command |
-| `DEPLOY_SKIP_BINARY` | `0` | `1` = frontend-only deploy |
-| `DEPLOY_NGINX_MODE` | `docker` | `docker` or `existing` (host nginx already running) |
-| `DEPLOY_NGINX_CONF` | `/etc/nginx/conf.d/wactorz.conf` | Remote path for the nginx snippet |
-| `CARGO_BUILD_TARGET` | _(host arch)_ | e.g. `x86_64-unknown-linux-gnu` |
-| `RUST_LOG` | `wactorz=info` | Logging filter |
 
 ---
 
@@ -251,7 +110,7 @@ ssh-copy-id -i ~/.ssh/wactorz_deploy.pub -p 22 user@host
 echo "NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy" >> .env
 ```
 
-`scripts/deploy.sh` will generate the key interactively if `NAUTILUS_SSH_KEY` is unset and `~/.ssh/wactorz_deploy` does not exist.
+Use `NAUTILUS_SSH_KEY` when NautilusAgent needs to reach remote hosts over SSH.
 
 ---
 

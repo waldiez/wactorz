@@ -18,7 +18,6 @@ class PrometheusConfigTest(unittest.TestCase):
                 "PROMETHEUS_PYTHON_TARGET": "wactorz-python",
                 "REST_EXTERNAL_PORT": "8000",
                 "PROMETHEUS_MONITOR_MOSQUITTO": "1",
-                "PROMETHEUS_MONITOR_FUSEKI": "0",
             }
         )
         env.update(env_overrides)
@@ -36,18 +35,10 @@ class PrometheusConfigTest(unittest.TestCase):
         rendered = self._render()
 
         self.assertIn("job_name: mosquitto-blackbox", rendered)
-        self.assertNotIn("job_name: fuseki-blackbox", rendered)
-
-    def test_fuseki_job_can_be_enabled(self):
-        rendered = self._render(PROMETHEUS_MONITOR_FUSEKI="true")
-
-        self.assertIn("job_name: fuseki-blackbox", rendered)
 
     def test_optional_jobs_can_be_disabled(self):
         rendered = self._render(
             PROMETHEUS_MONITOR_MOSQUITTO="0",
-            PROMETHEUS_MONITOR_FUSEKI="0",
         )
 
         self.assertNotIn("job_name: mosquitto-blackbox", rendered)
-        self.assertNotIn("job_name: fuseki-blackbox", rendered)

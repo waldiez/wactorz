@@ -1,6 +1,6 @@
 # Wactorz — development stack
 #
-# Runs MQTT + Fuseki + the Python app with hot-reload friendly settings.
+# Runs MQTT + the Python app with hot-reload friendly settings.
 #
 # Usage:
 #   docker compose -f compose.dev.yaml up -d
@@ -45,39 +45,6 @@ services:
       timeout: 3s
       retries: 5
 
-  # ── Apache Jena Fuseki ───────────────────────────────────────────────────────
-  fuseki:
-    container_name: wactorz-fuseki
-    image: wactorz-fuseki
-    build:
-      context: config/fuseki-container
-      dockerfile: Containerfile
-    restart: unless-stopped
-    ports:
-      - "${FUSEKI_EXTERNAL_PORT:-3030}:3030"
-    environment:
-      - ADMIN_USER=${FUSEKI_USER:-admin}
-      - ADMIN_PASSWORD=${FUSEKI_PASSWORD:-${FUSEKI_ADMIN_PASSWORD:-admin}}
-      - JVM_ARGS=-Xmx2g
-      - TBD=2
-      - FUSEKI_CREATE_DATASETS=true
-      - FUSEKI_DATASET_1=wactorz
-      - FUSEKI_DATASET_2=synapse
-      - FUSEKI_DATASET_3=spatial
-    volumes:
-      - fuseki-data:/fuseki/databases
-      - ./infra/fuseki/ontology:/fuseki/ontology:ro
-    networks:
-      - wactorz-net
-    command: >
-      /jena-fuseki/fuseki-server --update
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:3030/$/ping"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
   # ── Wactorz Python app ───────────────────────────────────────────────────────
   wactorz:
     build:
@@ -90,10 +57,6 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      FUSEKI_URL: "${FUSEKI_URL:-http://fuseki:3030}"
-      FUSEKI_DATASET: "${FUSEKI_DATASET:-wactorz}"
-      FUSEKI_USER: "${FUSEKI_USER:-admin}"
-      FUSEKI_PASSWORD: "${FUSEKI_PASSWORD:-${FUSEKI_ADMIN_PASSWORD:-admin}}"
       INFLUX_URL: "${INFLUX_URL:-}"
       INFLUX_TOKEN: "${INFLUX_TOKEN:-}"
       INFLUX_ORG: "${INFLUX_ORG:-wactorz}"
@@ -109,35 +72,11 @@ services:
     depends_on:
       mosquitto:
         condition: service_healthy
-      fuseki:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8888"]
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # ── Wactorz Fuseki bridge ─────────────────────────────────────────────────────
-  wactorz-fuseki:
-    image: wactorz-python:latest
-    container_name: wactorz-fuseki-bridge
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      MQTT_BROKER: mosquitto
-      MQTT_PORT: "1883"
-      FUSEKI_URL: http://fuseki:3030
-      FUSEKI_USER: "${FUSEKI_USER:-admin}"
-      FUSEKI_PASSWORD: "${FUSEKI_PASSWORD:-admin}"
-    networks:
-      - wactorz-net
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      fuseki:
-        condition: service_healthy
-    command: ["wactorz-fuseki"]
 
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -150,7 +89,6 @@ services:
       PROMETHEUS_SCRAPE_INTERVAL: "${PROMETHEUS_SCRAPE_INTERVAL:-15s}"
       PROMETHEUS_PYTHON_TARGET: "${PROMETHEUS_PYTHON_TARGET:-wactorz}"
       PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
-      PROMETHEUS_MONITOR_FUSEKI: "${PROMETHEUS_MONITOR_FUSEKI:-0}"
     ports:
       - "${PROMETHEUS_EXTERNAL_PORT:-9090}:9090"
     extra_hosts:
@@ -238,7 +176,6 @@ services:
 volumes:
   mosquitto-data:
   mosquitto-logs:
-  fuseki-data:
   influxdb-data:
   prometheus-data:
 

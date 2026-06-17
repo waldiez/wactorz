@@ -576,6 +576,30 @@ class GlobalCostAccumulationTest(unittest.TestCase):
             self.L.reset_global_cost()
             self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 0.0, places=6)
 
+    def test_alltime_counter_survives_period_rollover(self):
+        """All-time spend keeps accruing across months while the monthly bucket resets."""
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
+            self.L._accumulate_global_cost(2.0)
+            self.assertAlmostEqual(self.L.get_global_alltime_cost(), 2.0, places=6)
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 7, 1)):
+            self.L._accumulate_global_cost(1.5)
+            # New month: "this period" resets, but all-time keeps both months.
+            self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 1.5, places=6)
+            self.assertAlmostEqual(self.L.get_global_alltime_cost(), 3.5, places=6)
+
+    def test_alltime_counter_never_below_period_spend(self):
+        """Invariant the dashboard relies on: all-time floor >= this-period spend."""
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
+            self.L._accumulate_global_cost(0.2157)
+            info = self.L.get_global_cost_info()
+        self.assertGreaterEqual(self.L.get_global_alltime_cost(), info["spend_usd"])
+
+    def test_reset_zeroes_alltime_too(self):
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
+            self.L._accumulate_global_cost(3.0)
+            self.L.reset_global_cost()
+            self.assertAlmostEqual(self.L.get_global_alltime_cost(), 0.0, places=6)
+
     def test_weekly_key_is_iso_week(self):
         # 2026-01-01 is a Thursday → ISO week 2026-W01 (not the %W "W00" partial)
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 1, 1)):
@@ -583,6 +607,34 @@ class GlobalCostAccumulationTest(unittest.TestCase):
         # late-December days that belong to next year's ISO week 1
         with patch.object(self.L, "datetime", _fixed_datetime(2025, 12, 29)):
             self.assertEqual(self.L._period_key("weekly"), "2026-W01")
+
+    def test_planner_usage_feeds_period_spend(self):
+        from wactorz.agents.planner_agent import PlannerAgent
+
+        agent = PlannerAgent(llm_provider=None)
+        with patch("wactorz.agents.planner_agent._accumulate_global_cost") as accrue:
+            agent._accrue_usage({"input_tokens": 2, "output_tokens": 3, "cost_usd": 0.0123})
+            agent._accrue_usage({"input_tokens": 4, "output_tokens": 5, "cost_usd": 0.004})
+
+        self.assertAlmostEqual(agent.total_cost_usd, 0.0163, places=6)
+        deltas = [c.args[0] for c in accrue.call_args_list]
+        self.assertAlmostEqual(deltas[0], 0.0123, places=6)
+        self.assertAlmostEqual(deltas[1], 0.004, places=6)
+
+    def test_one_off_actuator_usage_feeds_period_spend(self):
+        from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
+
+        agent = OneOffActuatorAgent(
+            request="turn on the lamp",
+            llm_provider=None,
+            task_id="task-12345678",
+            reply_to_id="main",
+        )
+        with patch("wactorz.agents.one_off_actuator_agent._accumulate_global_cost") as accrue:
+            agent._accumulate_usage({"input_tokens": 7, "output_tokens": 8, "cost_usd": 0.0395})
+
+        self.assertAlmostEqual(agent.total_cost_usd, 0.0395, places=6)
+        accrue.assert_called_once_with(0.0395)
 
 
 if __name__ == "__main__":

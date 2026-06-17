@@ -32,7 +32,7 @@ import { DropZone } from "./ui/DropZone";
 import { UPLOADS_ENABLED } from "./ui/dashboard/uploads";
 import type { AgentInfo } from "./types/agent";
 import { resolveAgentName } from "./agents/naming";
-import { toAgentInfo, mapLogFeedItem } from "./agents/mapping";
+import { toAgentInfo, mapLogFeedItem, buildNameIndex } from "./agents/mapping";
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 canvas.style.display = "none";
@@ -202,12 +202,19 @@ let _logFeedInitialized = false;
 let _mqttLive = false;
 
 wsChat.onLogFeed(items => {
+    // Nameless entries (e.g. `log`) borrow their friendly name from the
+    // `spawned` entry in the same batch, then from the live scene — so reloads
+    // attribute them by name instead of a raw id.
+    const nameIndex = buildNameIndex(items);
+    const resolveName = (id: string): string | undefined =>
+        nameIndex.get(id) ?? scene.getAgents().find(a => a.id === id)?.name;
+
     if (!_logFeedInitialized) {
         _logFeedInitialized = true;
         _logFeedMaxTs = items.length ? Math.max(...items.map(i => i.timestamp ?? 0)) : 0;
         // Push historical items (happened before browser connected — MQTT won't re-deliver them).
         [...items].reverse().forEach(item => {
-            const mapped = mapLogFeedItem(item);
+            const mapped = mapLogFeedItem(item, resolveName);
             if (mapped) {
                 pushFeed(mapped);
             }
@@ -229,7 +236,7 @@ wsChat.onLogFeed(items => {
 
     // Push new items oldest-first so the feed stays chronological.
     [...newItems].reverse().forEach(item => {
-        const mapped = mapLogFeedItem(item);
+        const mapped = mapLogFeedItem(item, resolveName);
         if (mapped) {
             pushFeed(mapped);
         }

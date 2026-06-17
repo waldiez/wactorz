@@ -93,11 +93,40 @@ const FEED_MAPPERS: Record<string, (item: LogFeedItem, ctx: FeedCtx) => FeedItem
     },
 };
 
-/** Map a WS `log_feed` entry to a feed item, or null when it should be dropped. */
-export function mapLogFeedItem(item: LogFeedItem): FeedItem | null {
+/**
+ * Build an `agent_id → friendly name` index from a log_feed batch.
+ *
+ * Many entries (notably `log`) carry only the agent's id; the friendly name
+ * arrives on the `spawned` entry for the same agent. Scanning the whole batch
+ * first lets us attribute those nameless entries on reload, when no live MQTT
+ * spawn event is available to populate the scene.
+ */
+export function buildNameIndex(items: LogFeedItem[]): Map<string, string> {
+    const index = new Map<string, string>();
+    for (const item of items) {
+        const id = item.agent_id;
+        const name = item.name ?? item.agentName;
+        if (id && name) {
+            index.set(id, resolveAgentName(name, id));
+        }
+    }
+    return index;
+}
+
+/**
+ * Map a WS `log_feed` entry to a feed item, or null when it should be dropped.
+ *
+ * `resolveName` supplies a friendly name for entries that carry only an id
+ * (see {@link buildNameIndex}); it typically combines the batch index with the
+ * live scene. Falls back to the id-derived name only when nothing else resolves.
+ */
+export function mapLogFeedItem(
+    item: LogFeedItem,
+    resolveName?: (agentId: string) => string | undefined,
+): FeedItem | null {
     const agentId = item.agent_id ?? "";
-    const agentName =
-        item.name ?? item.agentName ?? (nameFromWid(agentId) || agentId.slice(0, 8) || "system");
+    const resolved = item.name ?? item.agentName ?? resolveName?.(agentId);
+    const agentName = resolved ?? (nameFromWid(agentId) || agentId.slice(0, 8) || "system");
     const ts = item.timestamp ? item.timestamp * 1000 : Date.now();
     return FEED_MAPPERS[item.type]?.(item, { agentName, ts }) ?? null;
 }

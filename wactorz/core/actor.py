@@ -687,6 +687,12 @@ class Actor(ABC):
     async def _mqtt_publish(self, topic: str, payload: Any, retain: bool = False, qos: int = 0):
         if self._mqtt_client:
             try:
+                # Stamp telemetry frames with the agent's own name. logs/spawned
+                # payloads carry only the topic id, and while an agent is being
+                # spawned or installing deps it isn't in any registry yet — but it
+                # always knows self.name, so the feed can attribute the row.
+                if isinstance(payload, dict) and (topic.endswith("/logs") or topic.endswith("/spawned")):
+                    payload.setdefault("name", self.name)
                 # Empty bytes = clear a retained message (MQTT spec)
                 # Must send raw empty bytes, not JSON-encoded
                 if payload == b"" or payload is None and retain:

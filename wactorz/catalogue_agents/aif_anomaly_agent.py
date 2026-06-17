@@ -1,6 +1,6 @@
 """
 aif_anomaly_agent.py — live anomaly detection over the Sinergym obs stream using
-the AIF-trained detector (detector_aif_v3.pkl). Structural twin of
+the AIF-trained detector (detector_aif_v6.pkl). Structural twin of
 sinergym_anomaly_agent.py; only the defaults, identity, and Fuseki IRI differ so
 the two detectors can run side-by-side without clobbering each other's records.
 
@@ -26,7 +26,7 @@ Detector module
 ---------------
 By default this loads forecast_anomaly_detector.ForecastAnomalyDetector (the same
 class the forecast detector uses) — set `detector_module` / `detector_class` in
-the launch params if detector_aif_v3.pkl is produced by a different class. The
+the launch params if detector_aif_v6.pkl is produced by a different class. The
 loader calls <class>.load(path); a version/format mismatch surfaces as a clear
 load error in the logs rather than silently no-op'ing.
 
@@ -34,13 +34,13 @@ Files (place beside the model)
 ------------------------------
   <infer_dir>/   (default: state/maddpg_office, override via SINERGYM_MODEL_DIR)
       <detector module>.py           (imported)
-      detector_aif_v3.pkl            (the trained pickle — loaded)
+      detector_aif_v6.pkl            (the trained pickle — loaded)
 
 Launch params (defaults shown)
 ------------------------------
   env_id          "officeMedium-multiagent"
   infer_dir       "state/maddpg_office"  (or $SINERGYM_MODEL_DIR)
-  detector_path   "<infer_dir>/detector_aif_v3.pkl"
+  detector_path   "<infer_dir>/detector_aif_v6.pkl"
   detector_module "forecast_anomaly_detector"
   detector_class  "ForecastAnomalyDetector"
   fuseki_url/dataset/user/password   (same store the bridge writes to)
@@ -61,7 +61,7 @@ import sys
 ENV_ID_DEFAULT = "officeMedium-multiagent"
 # Portable default: relative to the wactorz working dir (repo root), overridable via env.
 INFER_DIR_DEFAULT = os.environ.get("SINERGYM_MODEL_DIR", "state/maddpg_office")
-DETECTOR_FILE_DEFAULT = "detector_aif_v3.pkl"
+DETECTOR_FILE_DEFAULT = "detector_aif_v6.pkl"
 DETECTOR_MODULE_DEFAULT = "forecast_anomaly_detector"
 DETECTOR_CLASS_DEFAULT  = "ForecastAnomalyDetector"
 
@@ -556,7 +556,7 @@ async def handle_task(agent, payload):
 #           "type":         "dynamic",
 #           "description":  "Live anomaly detection on the Sinergym observation "
 #                           "stream using the AIF-trained detector "
-#                           "(detector_aif_v3.pkl). Subscribes to the global obs "
+#                           "(detector_aif_v6.pkl). Subscribes to the global obs "
 #                           "topic, publishes alerts on .../anomaly, and records "
 #                           "them in Fuseki with provenance (agent-scoped IRIs) so "
 #                           "it can be scored alongside the forecast detector.",
@@ -566,7 +566,7 @@ async def handle_task(agent, payload):
 #           "install":      ["torch", "numpy"],
 #           "input_schema": {
 #               "action":          "str — optional: status | reset | config",
-#               "detector_path":   "str — path to detector_aif_v3.pkl",
+#               "detector_path":   "str — path to detector_aif_v6.pkl",
 #               "detector_module": "str — module exposing the detector class",
 #               "detector_class":  "str — detector class name (has .load/.update)",
 #               "infer_dir":       "str — dir with the detector module + .pkl",

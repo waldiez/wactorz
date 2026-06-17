@@ -472,7 +472,7 @@ def _build_catalog() -> dict:
             "type":         "dynamic",
             "description":  "Live anomaly detection on the Sinergym observation "
                             "stream using the AIF-trained detector "
-                            "(detector_aif_v3.pkl). Collapses consecutive alerts "
+                            "(detector_aif_v6.pkl). Collapses consecutive alerts "
                             "into episodes (burst window) and labels each TP/FP "
                             "live from the bridge's injector ground-truth, "
                             "publishing episode events on .../anomaly_episode with "
@@ -484,7 +484,7 @@ def _build_catalog() -> dict:
             "install":      ["torch", "numpy"],
             "input_schema": {
                 "action":          "str — optional: status | report | reset | config",
-                "detector_path":   "str — path to detector_aif_v3.pkl",
+                "detector_path":   "str — path to detector_aif_v6.pkl",
                 "detector_module": "str — module exposing the detector class",
                 "detector_class":  "str — detector class name (has .load/.update)",
                 "infer_dir":       "str — dir with the detector module + .pkl",

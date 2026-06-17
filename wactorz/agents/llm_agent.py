@@ -33,6 +33,65 @@ def _global_cost_kv_key(period: str) -> str:
     return f"_global_cost_{_period_key(period)}"
 
 
+_GLOBAL_COST_BOOTSTRAP_KEY = "_global_cost_bootstrap_v2"
+
+
+def _known_persisted_cost_total(db) -> float:
+    """Best available durable lifetime cost, used only for one-time migration."""
+    total = 0.0
+    try:
+        rows = db.conn.execute(
+            "SELECT value FROM kv_store WHERE key = '_final_cost'"
+        ).fetchall()
+        for row in rows:
+            try:
+                value = row[0]
+                if isinstance(value, str):
+                    import json as _json
+                    value = _json.loads(value)
+                if isinstance(value, dict):
+                    total += float(value.get("cost_usd") or 0.0)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        ledger = db.kv_get("_system", "_lifetime_cost_ledger")
+        if isinstance(ledger, dict):
+            ledger_total = sum(float(v) for v in ledger.values())
+            total = max(total, ledger_total)
+    except Exception:
+        pass
+    return round(total, 6)
+
+
+def _bootstrap_active_global_cost(db, period: str) -> None:
+    """Top up the active period counter once when upgrading stored cost data.
+
+    Older builds can have durable _final_cost / lifetime-ledger rows but no
+    matching period spend, or can create a too-low period key on the first new
+    call after an add-on update. After restart, LLMAgent restores lifetime totals
+    as its persisted baseline, so future calls only add deltas and the cap
+    counter appears to reset. On first run after this fix, raise the active cap
+    period to the known durable total if it is lower. A deliberate reset after
+    this migration writes explicit zero keys and is not undone.
+    """
+    try:
+        if db.kv_get("_system", _GLOBAL_COST_BOOTSTRAP_KEY):
+            return
+    except Exception:
+        return
+    total = _known_persisted_cost_total(db)
+    key = _global_cost_kv_key(period)
+    try:
+        current = float(db.kv_get("_system", key) or 0.0)
+        if total > current:
+            db.kv_set("_system", key, total)
+        db.kv_set("_system", _GLOBAL_COST_BOOTSTRAP_KEY, True)
+    except Exception as exc:
+        logger.debug("[cost-limit] bootstrap failed (%s): %s", period, exc)
+
+
 def get_global_cost_info() -> dict:
     """Return current period spend and limit. Used by GET /api/cost."""
     from ..config import CONFIG
@@ -48,6 +107,7 @@ def get_global_cost_info() -> dict:
                 period = override.get("period", period)
         except Exception:
             pass
+        _bootstrap_active_global_cost(db, period)
     key = _global_cost_kv_key(period)
     spend = 0.0
     if db is not None:

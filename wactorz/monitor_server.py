@@ -742,6 +742,13 @@ async def ws_handler(request):
     # with the full content, not a row per chunk.
     _stream_buffer: list[str] = []
 
+    # The agent the current turn is addressed to. Reply frames and chat_log are
+    # attributed to it instead of the generic "io-gateway" transport id, so the
+    # UI (and persisted/reloaded history) shows the agent that actually answered
+    # rather than the gateway. Set per turn from the user's @mention before
+    # routing; defaults to the gateway id until a chat turn arrives.
+    _reply_from = {"name": IO_GATEWAY_ID}
+
     def _persist_chat(role: str, content: str, agent_name: str = "main") -> None:
         """Best-effort write to chat_log. Never raises into the WS path."""
         if db is None or not content:
@@ -760,13 +767,13 @@ async def ws_handler(request):
         try:
             await ws.send_str(json.dumps({
                 "type":      "chat",
-                "from":      IO_GATEWAY_ID,
+                "from":      _reply_from["name"],
                 "content":   text,
                 "timestamp": time.time(),
             }))
             # Non-streamed replies (slash command output, errors, system
             # messages) — persist immediately.
-            _persist_chat("assistant", text)
+            _persist_chat("assistant", text, _reply_from["name"])
         except Exception:
             pass
 
@@ -774,7 +781,7 @@ async def ws_handler(request):
         try:
             await ws.send_str(json.dumps({
                 "type":      "stream_chunk",
-                "from":      IO_GATEWAY_ID,
+                "from":      _reply_from["name"],
                 "content":   chunk,
                 "timestamp": time.time(),
             }))
@@ -788,21 +795,21 @@ async def ws_handler(request):
         try:
             await ws.send_str(json.dumps({
                 "type":      "stream_end",
-                "from":      IO_GATEWAY_ID,
+                "from":      _reply_from["name"],
                 "timestamp": time.time(),
             }))
             # Now persist the full assembled assistant turn — once.
             if _stream_buffer:
                 full = "".join(_stream_buffer)
                 _stream_buffer.clear()
-                _persist_chat("assistant", full)
+                _persist_chat("assistant", full, _reply_from["name"])
         except Exception:
             # Even if the send_str failed, flush anything we accumulated
             # so the user's session isn't lost on a transient ws hiccup.
             if _stream_buffer:
                 full = "".join(_stream_buffer)
                 _stream_buffer.clear()
-                _persist_chat("assistant", full)
+                _persist_chat("assistant", full, _reply_from["name"])
 
     try:
         async for msg in ws:
@@ -817,9 +824,18 @@ async def ws_handler(request):
                     elif msg_type == "chat":
                         content = (data.get("content") or "").strip()
                         if content and registry is not None:
+                            # Attribute the whole turn to the agent it addresses
+                            # (slash commands and un-mentioned text default to
+                            # "main", matching _route_chat's own resolution) so the
+                            # reply frames and chat_log group under that agent
+                            # instead of the io-gateway transport id.
+                            _reply_from["name"] = (
+                                "main" if content.startswith("/")
+                                else _parse_mention(content)[0]
+                            )
                             # Persist the user's turn first so chat_log has the
                             # request even if the assistant reply errors out.
-                            _persist_chat("user", content)
+                            _persist_chat("user", content, _reply_from["name"])
                             async def _safe_route(c=content):
                                 try:
                                     await _route_chat(c, ws_reply,
@@ -938,7 +954,9 @@ def parse_topic(topic: str, payload_str: str):
                 if "name"      in data: state["agents"][agent_id]["name"]      = data["name"]
                 if "state"     in data: state["agents"][agent_id]["state"]     = data["state"]
                 if "protected" in data: state["agents"][agent_id]["protected"] = data["protected"]
-            add_log({"type": "status", "agent_id": agent_id, "status": data, "timestamp": time.time()})
+            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            add_log({"type": "status", "agent_id": agent_id, "name": name,
+                     "status": data, "timestamp": time.time()})
 
         elif metric == "heartbeat":
             update_agent(agent_id, "heartbeat", data)
@@ -970,10 +988,17 @@ def parse_topic(topic: str, payload_str: str):
                     _record_lifetime_cost(agent_id, data.get("cost_usd"))
 
         elif metric == "logs":
-            add_log({"type": "log", "agent_id": agent_id, "timestamp": time.time(),
+            # Log frames carry only the agent id; resolve the friendly name the
+            # same way alert/completed do so the feed never shows a bare id.
+            # `**data` last lets a payload that already includes a name win.
+            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            add_log({"type": "log", "agent_id": agent_id, "name": name, "timestamp": time.time(),
                      **(data if isinstance(data, dict) else {})})
         elif metric == "spawned":
-            add_log({"type": "spawned", "agent_id": agent_id, "timestamp": time.time(),
+            # Payload carries child_name/child_id, not name — resolve the (parent)
+            # agent's name from state so the feed row isn't attributed to a bare id.
+            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            add_log({"type": "spawned", "agent_id": agent_id, "name": name, "timestamp": time.time(),
                      **(data if isinstance(data, dict) else {})})
         elif metric == "chat":
             # User-facing message pushed by an agent via Actor.notify_user().
@@ -1002,7 +1027,8 @@ def parse_topic(topic: str, payload_str: str):
             return {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
         elif metric == "completed":
             update_agent(agent_id, "last_completed", data)
-            add_log({"type": "completed", "agent_id": agent_id, "timestamp": time.time()})
+            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            add_log({"type": "completed", "agent_id": agent_id, "name": name, "timestamp": time.time()})
         elif metric == "alert":
             if isinstance(data, dict):
                 data["agent_id"] = agent_id
@@ -1201,7 +1227,21 @@ def _snapshot() -> dict:
     # monotonic, so clamp the headline total up to whichever is larger — spend is
     # never lost, and the live path still covers the fresh-boot window before the
     # first heartbeat repopulates the ledger.
-    total_cost = max(live_cost + _historical_cost_usd(live_names), _lifetime_cost_total())
+    # The all-time call-time counter is delete-proof (a deleted agent's _final_cost
+    # row is purged and its lifetime-ledger high-water can be missed/popped, but
+    # the counter accrued its spend at call time). Use it as a third floor so the
+    # headline never drops below money already spent — and so it can never read
+    # lower than the "this period" spend shown beside it.
+    try:
+        from .agents.llm_agent import get_global_alltime_cost
+        alltime_cost = get_global_alltime_cost()
+    except Exception:
+        alltime_cost = 0.0
+    total_cost = max(
+        live_cost + _historical_cost_usd(live_names),
+        _lifetime_cost_total(),
+        alltime_cost,
+    )
     total_msgs = live_msgs + _historical_messages(live_names)
     return {
         "agents":           list(state["agents"].values()),

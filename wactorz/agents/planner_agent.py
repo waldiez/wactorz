@@ -25,7 +25,7 @@ from typing import Optional
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.mqtt import mqtt_client
-from .llm_agent import LLMProvider
+from .llm_agent import LLMProvider, _accumulate_global_cost
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,7 @@ class PlannerAgent(Actor):
         self.total_input_tokens:  int   = 0
         self.total_output_tokens: int   = 0
         self.total_cost_usd:      float = 0.0
+        self._last_period_cost_usd: float = 0.0
 
     def _current_task_description(self) -> str:
         return self._task[:60] if self._task else "waiting for task"
@@ -115,6 +116,10 @@ class PlannerAgent(Actor):
         self.total_input_tokens  += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)
         self.total_cost_usd      += usage.get("cost_usd", 0.0)
+        delta = self.total_cost_usd - self._last_period_cost_usd
+        if delta > 0:
+            _accumulate_global_cost(delta)
+            self._last_period_cost_usd = self.total_cost_usd
 
     # ── Message handling ───────────────────────────────────────────────────
 

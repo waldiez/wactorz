@@ -292,6 +292,48 @@ class LifetimeCostLedgerTest(unittest.TestCase):
         self.assertEqual(self._ms._lifetime_cost_total(), 0.05)
 
 
+class ResetActorCostTest(unittest.TestCase):
+    """A wipe / metrics-reset must realign the per-call accrual baseline, or the
+    global period and all-time counters stop advancing afterward because
+    delta = total_cost_usd - baseline goes negative (the "limit count stopped
+    counting after a wipe" bug)."""
+
+    def setUp(self):
+        import wactorz.monitor_server as ms
+        self._ms = ms
+
+    def test_zeroes_counters_and_baselines(self):
+        class _Actor:
+            total_cost_usd        = 0.42
+            total_input_tokens    = 1000
+            total_output_tokens   = 500
+            _last_persisted_usd   = 0.42
+            _last_period_cost_usd = 0.42
+        a = _Actor()
+        self._ms._reset_actor_cost(a)
+        self.assertEqual(a.total_cost_usd, 0.0)
+        self.assertEqual(a.total_input_tokens, 0)
+        self.assertEqual(a.total_output_tokens, 0)
+        self.assertEqual(a._last_persisted_usd, 0.0)
+        self.assertEqual(a._last_period_cost_usd, 0.0)
+
+    def test_next_delta_is_positive_after_reset(self):
+        """The first new spend after a wipe must yield a positive accrual delta
+        (was negative because the baseline kept the pre-wipe total)."""
+        class _Actor:
+            total_cost_usd      = 0.42
+            total_input_tokens  = 0
+            total_output_tokens = 0
+            _last_persisted_usd = 0.42
+        a = _Actor()
+        self._ms._reset_actor_cost(a)
+        a.total_cost_usd += 0.01   # one new LLM call after the wipe
+        self.assertGreater(a.total_cost_usd - a._last_persisted_usd, 0)
+
+    def test_actor_without_cost_attrs_is_noop(self):
+        self._ms._reset_actor_cost(object())  # must not raise
+
+
 class SnapshotTotalsTest(unittest.TestCase):
     """_snapshot() headline totals must match the cards the dashboard renders,
     including remote / spawned agents that live in state but not in this

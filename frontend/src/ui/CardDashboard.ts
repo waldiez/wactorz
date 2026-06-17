@@ -50,6 +50,27 @@ function nameFromWid(raw: string | undefined): string {
   return m?.[1] ?? raw;
 }
 
+/**
+ * Best-effort icon for an HA area header.
+ *
+ * Home Assistant area icons are MDI *names* (e.g. "mdi:sofa"), not hex code
+ * points — so the old `String.fromCodePoint(parseInt(name, 16))` produced NaN
+ * (most names) or an out-of-range value (all-hex names like "deadbeef"), both
+ * of which throw RangeError. We only render a glyph when the suffix is a valid
+ * Unicode code point; otherwise fall back to a house emoji.
+ */
+export function areaIconText(icon?: string | null): string {
+  const fallback = "🏠";
+  if (!icon) return fallback;
+  const cp = parseInt(icon.replace(/^mdi:/, ""), 16);
+  if (!Number.isFinite(cp) || cp < 0 || cp > 0x10ffff) return fallback;
+  try {
+    return String.fromCodePoint(cp);
+  } catch {
+    return fallback;
+  }
+}
+
 function stateColor(state: AgentState): string {
   if (typeof state === "object") return "#f87171";
   switch (state as string) {
@@ -598,14 +619,14 @@ export class CardDashboard {
   // ── Private: floating UI ──────────────────────────────────────────────────
 
   private _hideFloatingUI(): void {
-    ["hud", "hud-stats", "io-bar", "chat-panel"].forEach((id) => {
+    ["hud", "hud-stats", "chat-panel"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.style.display = "none";
     });
   }
 
   private _showFloatingUI(): void {
-    ["hud", "hud-stats", "io-bar", "feed-toggle"].forEach((id) => {
+    ["hud", "hud-stats", "feed-toggle"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.style.display = "";
     });
@@ -653,15 +674,21 @@ export class CardDashboard {
     }
   }
 
-  /** Ensure chatTarget is a live agent, defaulting to "main" → "main-actor" → first. */
+  /**
+   * Ensure chatTarget is a live, messageable agent so the target <select>
+   * always has a valid selection. Prefers "main"/"main-actor", else the first
+   * messageable agent alphabetically. Only considers agents that pass
+   * canDirectMessage — the same filter the <select> options use — so the chosen
+   * target is guaranteed to exist as an option.
+   */
   private _syncChatTarget(): void {
-    const agents = [...this.agents.values()];
-    if (!agents.length) return;
-    if (agents.some((a) => a.name === this.chatTarget)) return;
-    const main = agents.find(
+    const messageable = [...this.agents.values()].filter(canDirectMessage);
+    if (!messageable.length) return;
+    if (messageable.some((a) => a.name === this.chatTarget)) return;
+    const main = messageable.find(
       (a) => a.name === "main" || a.name === "main-actor",
     );
-    const fallback = [...agents].sort((a, b) =>
+    const fallback = [...messageable].sort((a, b) =>
       a.name.localeCompare(b.name),
     )[0];
     this.chatTarget = main?.name ?? fallback?.name ?? this.chatTarget;
@@ -1368,7 +1395,41 @@ export class CardDashboard {
     const liveIds = () => new Set(this.chatMessages.map((m) => m.id));
     const prepend = (msgs: ChatMessage[]) => {
       const ids = liveIds();
-      this.chatMessages.unshift(...msgs.filter((m) => !ids.has(m.id)));
+      const toAdd: ChatMessage[] = [];
+      for (const m of msgs) {
+        if (ids.has(m.id)) continue;
+        // Reconcile optimistic user echoes with their persisted copies. The
+        // optimistic message has id "user-<ts>" and the persisted one
+        // "hist-…", so plain id de-dup misses them and the user's message
+        // renders twice. Match the persisted user message to a pending
+        // optimistic one (same target + content + near-identical timestamp) and
+        // adopt its id instead of adding a duplicate.
+        //
+        // The timestamp window is essential: matching on content alone would
+        // wrongly collapse a NEW message that happens to repeat an OLDER one
+        // ("ok" today vs "ok" yesterday), dropping a bubble the user did send.
+        // A persisted copy of a just-sent message is logged within seconds of
+        // its optimistic echo, so a tight window only ever matches the real
+        // pair. If no optimistic copy exists (the message was never rendered),
+        // nothing matches and the persisted one is added — so this never hides
+        // a message that wasn't already on screen.
+        if (m.from === "user") {
+          const opt = this.chatMessages.find(
+            (x) =>
+              x.id.startsWith("user-") &&
+              x.from === "user" &&
+              x.to === m.to &&
+              x.content === m.content &&
+              Math.abs(x.timestampMs - m.timestampMs) < 120_000,
+          );
+          if (opt) {
+            opt.id = m.id;
+            continue;
+          }
+        }
+        toAdd.push(m);
+      }
+      this.chatMessages.unshift(...toAdd);
       this._renderChatThread();
     };
     try {
@@ -1654,25 +1715,7 @@ export class CardDashboard {
       this._clearGhost(input, ghost);
     });
 
-    // Wake button hidden for 0.5 — create with hidden id so IOBar refs don't throw
-    const wakeBtn = document.createElement("button");
-    wakeBtn.id = "af-wake-btn-cd";
-    wakeBtn.style.display = "none";
-
-    const micBtn = document.createElement("button");
-    micBtn.className = "af-voice-btn";
-    micBtn.id = "af-mic-btn-cd";
-    micBtn.title = "Tap to speak";
-    micBtn.innerHTML = `<svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M7.5 1.5a2.5 2.5 0 0 0-2.5 2.5v4a2.5 2.5 0 0 0 5 0V4a2.5 2.5 0 0 0-2.5-2.5Z" fill="currentColor"/><path d="M3 7.5a4.5 4.5 0 0 0 9 0" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/><line x1="7.5" y1="12" x2="7.5" y2="13.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/><line x1="5" y1="13.5" x2="10" y2="13.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg>`;
-    micBtn.addEventListener("click", () =>
-      document.dispatchEvent(new CustomEvent("af-mic-toggle")),
-    );
-
-    if ((document.body as any).__voiceUnavailable) {
-      micBtn.style.display = "none";
-    }
-
-    bar.append(wakeBtn, micBtn, select, inputWrap, sendBtn);
+    bar.append(select, inputWrap, sendBtn);
     return bar;
   }
 
@@ -1695,6 +1738,17 @@ export class CardDashboard {
         opt.textContent = `@${agent.name}`;
         select.appendChild(opt);
       });
+    // Make sure chatTarget is a live, messageable agent, then guarantee the
+    // <select> shows a selection: if chatTarget isn't an option (e.g. it's still
+    // the "main-actor" default but the agent is named "main"), fall back to the
+    // first option instead of rendering a blank control.
+    this._syncChatTarget();
+    const hasTarget = [...select.options].some(
+      (o) => o.value === this.chatTarget,
+    );
+    if (!hasTarget && select.options.length) {
+      this.chatTarget = select.options[0]!.value;
+    }
     select.value = this.chatTarget;
   }
 
@@ -2119,7 +2173,7 @@ export class CardDashboard {
         "padding:8px 16px 6px;font-size:10px;font-weight:700;letter-spacing:0.08em;" +
         "color:rgba(255,255,255,0.35);text-transform:uppercase;display:flex;align-items:center;gap:6px;" +
         "border-bottom:1px solid rgba(255,255,255,0.06);";
-      const roomIcon = area?.icon ? String.fromCodePoint(parseInt(area.icon.replace(/^mdi:/, ""), 16)) : "🏠";
+      const roomIcon = areaIconText(area?.icon);
       header.innerHTML = `<span>${area ? roomIcon : "📦"}</span><span>${area?.name ?? "Other"}</span>` +
         `<span style="opacity:0.4;font-weight:400">${sectionEntities.length}</span>`;
       section.appendChild(header);

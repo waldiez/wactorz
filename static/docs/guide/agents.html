@@ -238,6 +238,9 @@
 </table>
 <p>Spawned by MainActor for every <code>PIPELINE</code>-classified request. The planner queries <code>home-assistant-agent</code> for the full list of real entity IDs, samples live topic schemas from the TopicBus, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is one of three types: an <code>ha_actuator</code> agent (declarative HA service call), a <code>scheduled</code> agent (first-class time trigger — see <a href="#scheduledagent-spawned">ScheduledAgent</a>), or a <code>dynamic</code> agent (Python code string). The planner spawns all agents, registers the pipeline rule with main, and exits.</p>
 <p>After spawning, the planner fires a background <code>_bootstrap_ha_entity_states()</code> task that extracts HA entity IDs from the plan (generated code, <code>ha_actuator</code> actions, MQTT topics, and the enriched task string) and sends a <code>get_entities_state</code> request to <code>home-assistant-agent</code>. This re-publishes the current HA state over MQTT so freshly-spawned agents that subscribe to <code>homeassistant/state_changes/#</code> fire immediately — without waiting for the next real HA state change.</p>
+<h4 id="camera-url-resolution">Camera URL resolution</h4>
+<p>Before generating the plan, the planner resolves real stream and snapshot URLs for any camera entities mentioned in the task by sending <code>get_camera_stream_url</code> and <code>get_camera_snapshot_url</code> A2A requests to <code>home-assistant-agent</code>. Resolved URLs are injected into the LLM prompt so generated agents use exact, working URLs rather than guessing <code>/dev/video0</code> or inventing proxy paths.</p>
+<p>MJPEG proxy URLs (<code>/api/camera_proxy_stream/…</code>) require an <code>Authorization: Bearer</code> header; the planner injects an <code>OPENCV_FFMPEG_CAPTURE_OPTIONS</code> hint into the PATTERN 3 template so OpenCV passes the header automatically.</p>
 <h4 id="supported-patterns">Supported patterns</h4>
 <table>
 <thead>
@@ -284,6 +287,12 @@
 <td>MQTT sensor + condition</td>
 <td>HA service call</td>
 <td>dynamic monitor + <code>ha_actuator</code></td>
+</tr>
+<tr>
+<td>7</td>
+<td>One-shot camera snapshot</td>
+<td>Process/save still image</td>
+<td>single dynamic agent (<code>httpx</code>)</td>
 </tr>
 </tbody>
 </table>
@@ -469,10 +478,42 @@
 </tr>
 <tr>
 <td><code>other</code></td>
-<td>Answer open-ended HA questions via a short LLM tool-call loop backed by <code>get_simplified_ha_data</code></td>
+<td>Answer open-ended HA questions via a short LLM tool-call loop backed by <code>get_simplified_ha_data</code>, plus camera tools (see below)</td>
 </tr>
 </tbody>
 </table>
+<h4 id="camera-tools">Camera tools</h4>
+<p>Camera requests route through the <code>other</code> intent path. The LLM tool-call loop has access to three camera-specific tools:</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>list_camera_entities</code></td>
+<td>Returns all <code>camera.*</code> entities with state and friendly name</td>
+</tr>
+<tr>
+<td><code>get_camera_snapshot</code></td>
+<td>Fetches a JPEG from <code>/api/camera_proxy/{entity_id}</code> and returns it base64-encoded. The agent appends an inline markdown image tag (<code>![…](data:image/jpeg;base64,…)</code>) so the chat panel renders it.</td>
+</tr>
+<tr>
+<td><code>get_camera_stream_url</code></td>
+<td>Aggregates stream URLs from three sources: MJPEG proxy (always present), <a href="https://github.com/felipecrs/hass-expose-camera-stream-source">Expose Camera Stream Source</a> custom integration (skipped silently if 404), and HLS/other formats via HA WebSocket <code>camera/capabilities</code> + <code>camera/stream</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Camera tools also support <strong>A2A structured dispatch</strong> — a peer agent can send a payload directly to <code>home-assistant-agent</code> without any LLM call:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;list_cameras&quot;</span><span class="p">}</span>
+<span class="p">{</span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;get_camera_snapshot&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;camera_entity_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;camera.front_door&quot;</span><span class="p">}</span>
+<span class="p">{</span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;get_camera_stream_url&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;camera_entity_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;camera.backyard&quot;</span><span class="p">}</span>
+<span class="p">{</span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;get_camera_snapshot_url&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;camera_entity_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;camera.backyard&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<p><code>get_camera_snapshot_url</code> returns only the URL (no HTTP fetch) — useful when a peer agent (e.g. PlannerAgent) needs to embed the URL in generated code rather than fetch the image itself. The response <code>data.snapshot_url</code> is the <code>/api/camera_proxy/{entity_id}</code> path and requires an <code>Authorization: Bearer &lt;HA_TOKEN&gt;</code> header to fetch.</p>
 <h4 id="prompts">Prompts</h4>
 <p>All LLM system prompts used by this agent live in <code>wactorz/agents/prompts/home_assistant_prompts.py</code>.</p>
 <h4 id="configuration">Configuration</h4>

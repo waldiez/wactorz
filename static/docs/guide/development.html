@@ -286,6 +286,9 @@ HA_STATE_BRIDGE_PER_ENTITY=0 # 0 = flat topic (default), 1 = per-entity topics
 <div class="highlight"><pre><span></span><code><span class="gh">#</span> Only needed if using an external broker instead of the embedded one
 MQTT_HOST=localhost
 MQTT_PORT=1883
+<span class="gh">#</span> Optional — set for a broker with allow_anonymous false; blank = anonymous
+MQTT_USERNAME=
+MQTT_PASSWORD=
 </code></pre></div>
 
 <h4 id="web-dashboard">Web dashboard</h4>
@@ -377,10 +380,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <span class="c1"># MQTT broker only (default)</span>
 docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
 
-<span class="c1"># Rust server + nginx dashboard</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>rust<span class="w"> </span>up<span class="w"> </span>-d
-
-<span class="c1"># Everything (Rust + Home Assistant)</span>
+<span class="c1"># Everything (Python + Home Assistant)</span>
 docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
@@ -404,14 +404,9 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <td>+ :8000, :8888</td>
 </tr>
 <tr>
-<td><code>rust</code></td>
-<td>+ wactorz-server, dashboard</td>
-<td>+ :8080, :8081, :80</td>
-</tr>
-<tr>
 <td><code>full</code></td>
-<td>+ rust, homeassistant</td>
-<td>+ :8080, :8081, :80, :8123</td>
+<td>+ wactorz-python, homeassistant</td>
+<td>+ :8000, :8888, :8123</td>
 </tr>
 </tbody>
 </table>

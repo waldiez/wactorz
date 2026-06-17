@@ -4,20 +4,19 @@
  * Bootstrap order:
  * 1. Create SceneManager (agent-state store + CardDashboard coordinator)
  * 2. Create MQTTClient and connect to broker
- * 3. Create UI components (HUD, ChatPanel, IOBar, ActivityFeed)
- * 4. Create MentionPopup (needs SceneManager for agent list)
- * 5. Wire MQTT events → SceneManager + HUD + ActivityFeed
- * 6. Wire DOM events (agent-selected) → SceneManager + ChatPanel
+ * 3. Create UI components (HUD, ChatPanel, ActivityFeed)
+ * 4. Wire MQTT events → SceneManager + HUD + ActivityFeed
+ * 5. Wire DOM events (agent-selected) → SceneManager + ChatPanel
+ *
+ * The chat input lives entirely in CardDashboard's in-card bar (the single
+ * chat-input surface); it owns its own mention popup and send handling.
  */
 
 import { SceneManager } from "./scene/SceneManager";
 import { MQTTClient } from "./mqtt/MQTTClient";
 import { AgentHUD } from "./ui/AgentHUD";
 import { ChatPanel } from "./ui/ChatPanel";
-import { IOBar } from "./ui/IOBar";
 import { ActivityFeed } from "./ui/ActivityFeed";
-import { MentionPopup } from "./ui/MentionPopup";
-import { VoiceInput } from "./io/VoiceInput";
 import { IOManager } from "./io/IOManager";
 import { WSChatClient } from "./io/WSChatClient";
 import type { LogFeedItem } from "./io/WSChatClient";
@@ -108,14 +107,7 @@ const mqtt = new MQTTClient(MQTT_BROKER);
 const hud = new AgentHUD();
 const chatPanel = new ChatPanel();
 chatPanel.setApiBase(_apiBase);
-const voice = new VoiceInput();
 const ioManager = new IOManager(mqtt, chatPanel);
-const ioBar = new IOBar(voice, ioManager);
-
-document.addEventListener("af-mic-toggle", () => {
-  if (voice.isRecording) ioBar.stopMic();
-  else void ioBar.startMic();
-});
 
 const feed = new ActivityFeed();
 
@@ -363,10 +355,6 @@ fetch(`${_apiBase}/api/config`)
     seedFromServer("wactorz-ha-token", cfg.ha?.token ?? "");
   })
   .catch(() => {});
-
-// MentionPopup needs the textarea and the agent list from SceneManager
-const textInput = document.getElementById("text-input") as HTMLTextAreaElement;
-new MentionPopup(textInput, () => scene.getAgents());
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

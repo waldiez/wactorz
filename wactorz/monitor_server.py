@@ -1227,7 +1227,21 @@ def _snapshot() -> dict:
     # monotonic, so clamp the headline total up to whichever is larger — spend is
     # never lost, and the live path still covers the fresh-boot window before the
     # first heartbeat repopulates the ledger.
-    total_cost = max(live_cost + _historical_cost_usd(live_names), _lifetime_cost_total())
+    # The all-time call-time counter is delete-proof (a deleted agent's _final_cost
+    # row is purged and its lifetime-ledger high-water can be missed/popped, but
+    # the counter accrued its spend at call time). Use it as a third floor so the
+    # headline never drops below money already spent — and so it can never read
+    # lower than the "this period" spend shown beside it.
+    try:
+        from .agents.llm_agent import get_global_alltime_cost
+        alltime_cost = get_global_alltime_cost()
+    except Exception:
+        alltime_cost = 0.0
+    total_cost = max(
+        live_cost + _historical_cost_usd(live_names),
+        _lifetime_cost_total(),
+        alltime_cost,
+    )
     total_msgs = live_msgs + _historical_messages(live_names)
     return {
         "agents":           list(state["agents"].values()),

@@ -1136,6 +1136,28 @@ def _lifetime_cost_total() -> float:
     return sum(_lifetime_cost.values())
 
 
+def _reset_actor_cost(actor) -> None:
+    """Zero a live actor's cost/token counters AND its per-call accrual baseline.
+
+    The baseline must move with total_cost_usd: _persist_cost / _accrue_usage
+    accumulate (total_cost_usd - baseline) into the global period and all-time
+    counters. Zeroing total_cost_usd on a reset without also zeroing the baseline
+    leaves the baseline at the pre-reset total, so every subsequent call yields a
+    negative delta and the period/all-time counters stop advancing until spend
+    climbs back past the old total — the "limit count stopped counting after a
+    wipe" bug.
+    """
+    if not hasattr(actor, "total_cost_usd"):
+        return
+    actor.total_cost_usd      = 0.0
+    actor.total_input_tokens  = 0
+    actor.total_output_tokens = 0
+    if hasattr(actor, "_last_persisted_usd"):
+        actor._last_persisted_usd = 0.0
+    if hasattr(actor, "_last_period_cost_usd"):
+        actor._last_period_cost_usd = 0.0
+
+
 def _historical_cost_usd(live_names: set) -> float:
     """Sum _final_cost for agents not in live_names."""
     if db is None:
@@ -1915,10 +1937,7 @@ async def reset_handler(request):
                 actor.metrics.errors = 0
                 actor.metrics.tasks_completed = 0
                 actor.metrics.tasks_failed = 0
-                if hasattr(actor, "total_cost_usd"):
-                    actor.total_cost_usd      = 0.0
-                    actor.total_input_tokens  = 0
-                    actor.total_output_tokens = 0
+                _reset_actor_cost(actor)
                 if hasattr(actor, "_conversation_history"):
                     actor._conversation_history = []
                 if hasattr(actor, "_history_summary"):
@@ -1981,10 +2000,7 @@ async def reset_handler(request):
             if agent and actor.name != agent:
                 continue
             actor.metrics.messages_processed = 0
-            if hasattr(actor, "total_cost_usd"):
-                actor.total_cost_usd      = 0.0
-                actor.total_input_tokens  = 0
-                actor.total_output_tokens = 0
+            _reset_actor_cost(actor)
         # The headline total is max(live + historical, lifetime ledger).
         # reset_metrics cleared the kv ledger, but the in-memory _lifetime_cost
         # high-water survives in THIS process and pins the headline to its old

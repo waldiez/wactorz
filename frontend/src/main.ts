@@ -460,19 +460,21 @@ mqtt.on("logs", payload => {
     if (!msg) {
         return;
     }
+    const knownAgent = scene.getAgents().find(a => a.id === payload.agentId);
     pushFeed({
         type: "chat",
         label: msg,
-        agentName: payload.agentName,
+        agentName: knownAgent?.name ?? payload.agentName,
         timestamp: Date.now(),
     });
 });
 
 mqtt.on("completed", payload => {
+    const knownAgent = scene.getAgents().find(a => a.id === payload.agentId);
     pushFeed({
         type: "spawn",
         label: "task completed",
-        agentName: payload.agentName,
+        agentName: knownAgent?.name ?? payload.agentName,
         timestamp: Date.now(),
     });
 });

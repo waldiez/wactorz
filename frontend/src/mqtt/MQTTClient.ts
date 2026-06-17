@@ -314,9 +314,10 @@ export class MQTTClient {
         });
     }
 
-    /** Resolve a display name from the payload, falling back to a short id. */
+    /** Resolve a display name from the payload, falling back to name-from-id. */
     private _agentName(p: Record<string, unknown>, agentId: string): string {
-        return (p["agentName"] as string) ?? (p["name"] as string) ?? agentId.slice(0, 8);
+        const explicit = (p["agentName"] as string | undefined) ?? (p["name"] as string | undefined);
+        return resolveAgentName(explicit, agentId);
     }
 }
 

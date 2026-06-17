@@ -1,0 +1,124 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/* ── Settings view ────────────────────────────────────────────── */
+.af-settings {
+  padding: 24px 28px;
+  max-width: 680px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  overflow-y: auto;
+  height: 100%;
+}
+.af-settings-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+  margin: 0;
+}
+.af-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 18px 20px;
+}
+.af-settings-section-heading {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.75);
+  margin: 0;
+}
+.af-settings-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.af-settings-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  cursor: default;
+}
+.af-settings-label {
+  width: 90px;
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11px;
+}
+.af-settings-field .af-cfg-input {
+  flex: 1;
+}
+.af-settings-origin {
+  font-size: 11px;
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.2);
+  transition: color 0.15s;
+}
+.af-settings-origin.set {
+  color: #34d399;
+}
+.af-settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 2px;
+}
+.af-settings-msg {
+  font-size: 11px;
+}
+.af-settings-note {
+  font-size: 11px;
+  color: #fbbf24;
+  margin: 4px 0 0;
+}
+.af-settings-eye {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+.af-settings-eye:hover {
+  color: #e5e7eb;
+}
+
+.af-cfg-input {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.88);
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+}
+.af-cfg-input:focus {
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.08);
+}
+select.af-cfg-input option {
+  background: #1a1d2e;
+  color: rgba(255, 255, 255, 0.88);
+}
+select.af-cfg-input option:checked {
+  background: #2a3a5c;
+}
+.af-mini-btn.danger {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #f87171;
+}
+.af-mini-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.28);
+}

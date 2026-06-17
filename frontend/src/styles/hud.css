@@ -1,0 +1,121 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/* ── HUD (top-left) ─────────────────────────────────────────────────── */
+#hud {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top, 0px));
+  left: max(16px, env(safe-area-inset-left, 0px));
+  padding: 12px 18px;
+  min-width: 200px;
+  z-index: 100;
+  pointer-events: none;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0.3) transparent;
+}
+#hud .hud-title {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #6aabff;
+  opacity: 0.7;
+  margin-bottom: 6px;
+}
+#hud .hud-count {
+  font-size: 28px;
+  font-weight: 700;
+  color: #c8d8ff;
+}
+#hud .hud-label {
+  font-size: 12px;
+  color: #7a90c0;
+  margin-top: 2px;
+}
+#hud .hud-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+#hud .hud-badge.healthy {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+#hud .hud-badge.alert {
+  background: rgba(251, 113, 133, 0.15);
+  color: #fb7185;
+  border: 1px solid rgba(251, 113, 133, 0.3);
+}
+#hud .hud-badge::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+
+/* ── HUD stats breakdown ────────────────────────────────────────────── */
+#hud-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 6px;
+}
+.hud-stat {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: 0.04em;
+}
+.hud-stat-run {
+  background: rgba(52, 211, 153, 0.12);
+  color: #34d399;
+}
+.hud-stat-pause {
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+}
+.hud-stat-stop {
+  background: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+}
+.hud-stat-fail {
+  background: rgba(251, 113, 133, 0.12);
+  color: #fb7185;
+}
+.hud-stat-alert {
+  background: rgba(251, 113, 133, 0.12);
+  color: #fb7185;
+}
+.hud-stat-msgs {
+  background: rgba(99, 102, 241, 0.12);
+  color: #a5b4fc;
+}
+.hud-stat-cost {
+  background: rgba(52, 211, 153, 0.12);
+  color: #34d399;
+}

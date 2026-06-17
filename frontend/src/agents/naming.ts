@@ -1,0 +1,39 @@
+/**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/**
+ * Canonical agent-name resolution — the single source of truth shared by the
+ * scene wiring (main.ts), the dashboard and the MQTT normalisers.
+ *
+ * Agent ids are WID strings of the form `<timestamp>Z-<name>[-<6 hex>]`; the
+ * human-facing name is the `<name>` segment.
+ */
+
+/** Extract the embedded `<name>` from a WID id, or return the input unchanged. */
+export function nameFromWid(raw: string | undefined): string {
+    if (!raw) {
+        return "";
+    }
+    const m = raw.match(/Z-(.+?)(?:-[0-9a-f]{6})?$/i);
+    return m?.[1] ?? raw;
+}
+
+/** Resolve a WID/name to a name and shorten a bare UUID (no friendly name) to
+ *  its first segment so the UI never shows a full 36-char id. */
+export function displayName(raw: string | undefined): string {
+    const name = nameFromWid(raw);
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i.test(name) ? name.slice(0, 8) : name;
+}
+
+/**
+ * Resolve a human-readable display name from whatever the backend sends.
+ * - If name is empty or looks like a raw timestamp (all digits), extract from the WID id.
+ * - If name is itself a WID string (contains "Z-"), extract the embedded name.
+ * - Otherwise trust the name as-is.
+ */
+export function resolveAgentName(name: string | undefined, id: string): string {
+    const n = (name ?? "").trim();
+    const isTimestampOnly = !n || /^\d+$/.test(n);
+    return isTimestampOnly ? nameFromWid(id) : nameFromWid(n);
+}

@@ -8,6 +8,7 @@ main thread silently no-ops. Other platforms use plyer.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -135,6 +136,21 @@ def request_authorization() -> None:
         pass
 
 
+def _host_env() -> dict:
+    """Environment for running a host binary from inside the (AppImage/PyInstaller)
+    bundle. The bundle sets LD_LIBRARY_PATH to its own libs; a host tool like
+    notify-send must NOT inherit that or it loads the bundle's (possibly older,
+    ABI-mismatched) libs and fails. PyInstaller stashes the real value in
+    LD_LIBRARY_PATH_ORIG — restore it (or drop the override)."""
+    env = os.environ.copy()
+    orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if orig:
+        env["LD_LIBRARY_PATH"] = orig
+    else:
+        env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
 def _notify_linux(title: str, body: str) -> bool:
     """Use notify-send (libnotify) directly. Avoids plyer's hard dbus-python
     dependency (a C extension we don't bundle). notify-send ships on essentially
@@ -144,9 +160,9 @@ def _notify_linux(title: str, body: str) -> bool:
         if APP_ICON.exists():
             cmd += ["-i", str(APP_ICON)]
         cmd += [title, body]
-        # Silence output: if no notification daemon is running, notify-send spews
-        # a GDBus "org.freedesktop.Notifications ... ServiceUnknown" error.
-        subprocess.run(cmd, check=False,
+        # Run with the host's library path (see _host_env) and silence output:
+        # with no notification daemon, notify-send spews a GDBus ServiceUnknown.
+        subprocess.run(cmd, check=False, env=_host_env(),
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except Exception:

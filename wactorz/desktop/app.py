@@ -21,48 +21,26 @@ import subprocess
 import sys
 import time
 import urllib.request
-from pathlib import Path
 
 import webview
 from dotenv import find_dotenv, load_dotenv
 
-from wactorz.desktop import pages
+from wactorz.desktop import notifications, pages, updates
+from wactorz.desktop.config import (
+    _ASSETS,
+    APP_ICON,
+    APP_ID,
+    APP_NAME,
+    BACKEND_LOG,
+    DATA_DIR,
+    FROZEN,
+    PORT,
+    SPLASH_BG,
+    URL,
+    WINDOW_STATE_FILE,
+)
 
 load_dotenv(find_dotenv())
-
-APP_NAME = "Wactorz"
-APP_ID = "io.waldiez.wactorz"          # desktop-file id / WM_CLASS
-HOST = "127.0.0.1"
-PORT = int(os.environ.get("MONITOR_PORT", "8888"))
-URL = f"http://{HOST}:{PORT}"
-FROZEN = getattr(sys, "frozen", False)
-ICON_EXT = {"win32": "ico", "darwin": "icns"}.get(sys.platform, "png")
-
-# When frozen, the entry script's __file__ is not under the package, so resolve
-# bundled assets from the PyInstaller extraction dir instead of relative to it.
-_ASSETS = (
-    Path(sys._MEIPASS) / "wactorz" / "desktop" / "assets"  # type: ignore[attr-defined]
-    if FROZEN
-    else Path(__file__).with_name("assets")
-)
-APP_ICON = _ASSETS / f"icon.{ICON_EXT}"
-
-SPLASH_BG = "#0A0E1A"          # window surface colour while the page paints
-
-def _data_dir() -> Path:
-    """Per-user writable directory for backend state + logs."""
-    if os.name == "nt":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    else:
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return base / "wactorz"
-
-
-DATA_DIR = _data_dir()
-# Desktop shell's capture of the backend child's stdout/stderr.
-BACKEND_LOG = DATA_DIR / "desktop-backend.log"
-# Last window geometry, restored on the next launch.
-WINDOW_STATE_FILE = DATA_DIR / "window_state.json"
 
 _DEFAULT_WINDOW_STATE = {"width": 1280, "height": 720, "x": None, "y": None}
 
@@ -223,99 +201,7 @@ def _wait_for_backend(timeout: float = 30.0) -> bool:
 # ── JS bridge (window.pywebview.api.*) ──────────────────────────────────────
 class Api:
     def notify(self, title: str, body: str) -> None:
-        _notify(title, body)
-
-
-# Retained because NSUserNotificationCenter.delegate is a non-owning reference —
-# if the Python delegate is collected, foreground presentation stops working.
-_macos_notif_delegate = None
-
-
-def _notify_macos_native(title: str, body: str) -> None:
-    """Post an NSUserNotification via pyobjc (already provided by pywebview's
-    Cocoa backend — no extra dependency). Installs a delegate that forces the
-    banner to show even when Wactorz is the frontmost app; macOS suppresses it
-    for the active app otherwise."""
-    global _macos_notif_delegate
-    try:
-        from Foundation import NSObject, NSUserNotification, NSUserNotificationCenter
-
-        center = NSUserNotificationCenter.defaultUserNotificationCenter()
-        if center is None:
-            return
-        if _macos_notif_delegate is None:
-            class _PresentAlways(NSObject):
-                def userNotificationCenter_shouldPresentNotification_(self, center, note):
-                    return True
-
-            _macos_notif_delegate = _PresentAlways.alloc().init()
-        center.setDelegate_(_macos_notif_delegate)
-        note = NSUserNotification.alloc().init()
-        note.setTitle_(title)
-        note.setInformativeText_(body)
-        center.deliverNotification_(note)
-    except Exception:
-        pass
-
-
-def _notify(title: str, body: str) -> None:
-    # macOS: post NSUserNotification ourselves via pyobjc with a delegate that
-    # presents the banner even when we are frontmost. plyer's macOS backend goes
-    # through pyobjus, whose delegate support is unreliable, so it only shows when
-    # backgrounded — and pyobjc needs no pyobjus dependency.
-    if sys.platform == "darwin":
-        _notify_macos_native(title, body)
-        return
-    try:
-        from plyer import notification
-
-        notification.notify(title=title, message=body, app_name=APP_NAME)
-    except Exception:
-        pass
-
-
-# ── updates ─────────────────────────────────────────────────────────────────
-_LATEST_RELEASE_URL = "https://api.github.com/repos/waldiez/wactorz/releases/latest"
-
-
-def _version_tuple(v: str) -> tuple:
-    """Parse a dotted version into ints for comparison; non-numeric parts drop."""
-    return tuple(int(p) for p in v.split(".") if p.isdigit())
-
-
-def _is_newer(latest: str, current: str) -> bool:
-    """True if `latest` is a newer release than `current`. Zero-pads to equal
-    length so e.g. 0.5 vs 0.5.0 compare equal rather than older."""
-    a, b = _version_tuple(latest), _version_tuple(current)
-    if not a:
-        return False
-    n = max(len(a), len(b))
-    return a + (0,) * (n - len(a)) > b + (0,) * (n - len(b))
-
-
-def _check_for_updates() -> None:
-    """Manual update check (tray). Runs off the GUI thread so it never blocks."""
-    import threading
-
-    threading.Thread(target=_update_check_task, daemon=True).start()
-
-
-def _update_check_task() -> None:
-    try:
-        from wactorz import __version__ as current
-
-        req = urllib.request.Request(
-            _LATEST_RELEASE_URL,
-            headers={"User-Agent": "Wactorz-Desktop", "Accept": "application/vnd.github+json"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            latest = json.loads(resp.read().decode()).get("tag_name", "").lstrip("v")
-        if latest and _is_newer(latest, current):
-            _notify(APP_NAME, f"Update available: v{latest} (you have v{current}).")
-        else:
-            _notify(APP_NAME, f"Wactorz is up to date (v{current}).")
-    except Exception:
-        _notify(APP_NAME, "Could not check for updates — see your connection and try again.")
+        notifications.notify(title, body)
 
 
 # ── tray (Qt) ─────────────────────────────────────────────────────────────────
@@ -359,7 +245,7 @@ def _build_tray() -> bool:
     show_hide = QAction("Show / Hide", menu)
     show_hide.triggered.connect(_toggle)
     check_updates = QAction("Check for Updates...", menu)
-    check_updates.triggered.connect(_check_for_updates)
+    check_updates.triggered.connect(updates.check_for_updates)
     quit_item = QAction("Quit Wactorz", menu)
     quit_item.triggered.connect(_shutdown)
     menu.addAction(show_hide)
@@ -398,7 +284,7 @@ def _build_pystray_tray() -> bool:
 
     menu = pystray.Menu(
         pystray.MenuItem("Show / Hide", lambda icon, item: _toggle(), default=True),
-        pystray.MenuItem("Check for Updates...", lambda icon, item: _check_for_updates()),
+        pystray.MenuItem("Check for Updates...", lambda icon, item: updates.check_for_updates()),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit Wactorz", lambda icon, item: _shutdown()),
     )
@@ -471,7 +357,7 @@ def _load_when_ready(window) -> None:
         time.sleep(2.0)        # fallback reveal if the 'loaded' event doesn't fire
         _on_app_loaded()
     else:
-        _notify(APP_NAME, "Backend did not start in time")
+        notifications.notify(APP_NAME, "Backend did not start in time")
         window.load_html(pages.error_html(str(BACKEND_LOG)))
         _on_app_loaded()
 

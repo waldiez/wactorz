@@ -144,7 +144,10 @@ def _notify_linux(title: str, body: str) -> bool:
         if APP_ICON.exists():
             cmd += ["-i", str(APP_ICON)]
         cmd += [title, body]
-        subprocess.run(cmd, check=False)
+        # Silence output: if no notification daemon is running, notify-send spews
+        # a GDBus "org.freedesktop.Notifications ... ServiceUnknown" error.
+        subprocess.run(cmd, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except Exception:
         return False

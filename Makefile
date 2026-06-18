@@ -7,7 +7,7 @@
 COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
 FRONTEND_DIR := frontend
-PKG_MGR      := $(shell command -v bun /dev/null 2>/dev/null || (command -v pnpm 2>/dev/null && echo pnpm) || echo npm)
+PKG_MGR      := $(shell command -v bun >/dev/null 2>&1 && echo bun || (command -v pnpm >/dev/null 2>&1 && echo pnpm || echo npm))
 PYTHON       := python3
 
 help: ## Show this help
@@ -70,8 +70,8 @@ fmt: ## Format TypeScript
 
 format: fmt ## Format TypeScript
 
-lint: ## TS typecheck
-	cd $(FRONTEND_DIR) && $(PKG_MGR) run typecheck
+lint: ## Full frontend lint (typecheck + prettier + eslint)
+	cd $(FRONTEND_DIR) && $(PKG_MGR) run lint
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 

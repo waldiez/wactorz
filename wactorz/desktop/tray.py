@@ -3,12 +3,13 @@
 Qt (QSystemTrayIcon) on Linux, where pywebview uses Qt; pystray's native
 backend on macOS/Windows. Both builders are best-effort: they return the tray
 object (which the caller must keep a reference to) or None when no tray can be
-shown. The window/quit/update behaviours are passed in as callbacks so this
-module holds no shell state.
+shown. All behaviour and state access is injected via TrayHooks, so this module
+holds no shell state.
 """
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from typing import Callable
 
 from wactorz.desktop.config import _ASSETS, APP_ICON, APP_ID, APP_NAME
@@ -16,13 +17,19 @@ from wactorz.desktop.config import _ASSETS, APP_ICON, APP_ID, APP_NAME
 Callback = Callable[[], None]
 
 
-def build_qt_tray(
-    on_toggle: Callback,
-    on_check_updates: Callback,
-    on_quit: Callback,
-    autostart_enabled: Callable[[], bool],
-    set_autostart: Callable[[bool], None],
-):
+@dataclass
+class TrayHooks:
+    """Behaviour + state accessors the tray menu wires up."""
+    on_toggle: Callback                       # show/hide the window
+    on_check_updates: Callback                # manual update check
+    on_quit: Callback                         # quit the app
+    autostart_enabled: Callable[[], bool]
+    set_autostart: Callable[[bool], None]
+    auto_update_enabled: Callable[[], bool]
+    set_auto_update: Callable[[bool], None]
+
+
+def build_qt_tray(hooks: TrayHooks):
     """Create a Qt system-tray icon; return it, or None if PySide6 / a tray area
     is unavailable.
 
@@ -49,29 +56,39 @@ def build_qt_tray(
     tray = QSystemTrayIcon(QIcon(str(APP_ICON)))
     menu = QMenu()
     show_hide = QAction("Show / Hide", menu)
-    show_hide.triggered.connect(on_toggle)
+    show_hide.triggered.connect(lambda *_: hooks.on_toggle())
     check_updates = QAction("Check for Updates...", menu)
-    check_updates.triggered.connect(on_check_updates)
-    autostart = QAction("Start at login", menu)
-    autostart.setCheckable(True)
-    autostart.setChecked(autostart_enabled())
+    check_updates.triggered.connect(lambda *_: hooks.on_check_updates())
 
-    def _toggle_autostart(checked: bool) -> None:
-        set_autostart(checked)
-        autostart.setChecked(autostart_enabled())   # re-sync if the write failed
+    def _checkable(label: str, get: Callable[[], bool], set_: Callable[[bool], None]) -> QAction:
+        action = QAction(label, menu)
+        action.setCheckable(True)
+        action.setChecked(get())
 
-    autostart.triggered.connect(_toggle_autostart)
+        def _on(checked: bool) -> None:
+            set_(checked)
+            action.setChecked(get())   # re-sync if the write failed
+
+        action.triggered.connect(_on)
+        return action
+
+    autostart = _checkable("Start at login", hooks.autostart_enabled, hooks.set_autostart)
+    auto_update = _checkable(
+        "Check for updates automatically", hooks.auto_update_enabled, hooks.set_auto_update
+    )
     quit_item = QAction("Quit Wactorz", menu)
-    quit_item.triggered.connect(on_quit)
+    quit_item.triggered.connect(lambda *_: hooks.on_quit())
+
     menu.addAction(show_hide)
     menu.addAction(check_updates)
     menu.addSeparator()
     menu.addAction(autostart)
+    menu.addAction(auto_update)
     menu.addSeparator()
     menu.addAction(quit_item)
     tray.setContextMenu(menu)
     tray.activated.connect(
-        lambda reason: on_toggle()
+        lambda reason: hooks.on_toggle()
         if reason == QSystemTrayIcon.ActivationReason.Trigger
         else None
     )
@@ -80,13 +97,7 @@ def build_qt_tray(
     return tray
 
 
-def build_pystray_tray(
-    on_toggle: Callback,
-    on_check_updates: Callback,
-    on_quit: Callback,
-    autostart_enabled: Callable[[], bool],
-    set_autostart: Callable[[bool], None],
-):
+def build_pystray_tray(hooks: TrayHooks):
     """macOS / Windows tray via pystray's native backend (no Qt, no GTK); return
     the icon, or None.
 
@@ -104,18 +115,24 @@ def build_pystray_tray(
     except Exception:
         return None
 
-    def _toggle_autostart(icon, item) -> None:
-        set_autostart(not autostart_enabled())
-        icon.update_menu()   # re-render the checkmark from the new state
+    def _toggler(get: Callable[[], bool], set_: Callable[[bool], None]):
+        def _handler(icon, item) -> None:
+            set_(not get())
+            icon.update_menu()   # re-render the checkmark from the new state
+        return _handler
 
     menu = pystray.Menu(
-        pystray.MenuItem("Show / Hide", lambda icon, item: on_toggle(), default=True),
-        pystray.MenuItem("Check for Updates...", lambda icon, item: on_check_updates()),
+        pystray.MenuItem("Show / Hide", lambda icon, item: hooks.on_toggle(), default=True),
+        pystray.MenuItem("Check for Updates...", lambda icon, item: hooks.on_check_updates()),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Start at login", _toggle_autostart,
-                         checked=lambda item: autostart_enabled()),
+        pystray.MenuItem("Start at login",
+                         _toggler(hooks.autostart_enabled, hooks.set_autostart),
+                         checked=lambda item: hooks.autostart_enabled()),
+        pystray.MenuItem("Check for updates automatically",
+                         _toggler(hooks.auto_update_enabled, hooks.set_auto_update),
+                         checked=lambda item: hooks.auto_update_enabled()),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Quit Wactorz", lambda icon, item: on_quit()),
+        pystray.MenuItem("Quit Wactorz", lambda icon, item: hooks.on_quit()),
     )
     icon = pystray.Icon("wactorz", image, APP_NAME, menu)
     try:

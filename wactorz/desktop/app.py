@@ -25,7 +25,7 @@ import urllib.request
 import webview
 from dotenv import find_dotenv, load_dotenv
 
-from wactorz.desktop import autostart, notifications, pages, tray, updates
+from wactorz.desktop import autostart, notifications, pages, settings, tray, updates
 from wactorz.desktop.config import (
     APP_ICON,
     APP_ID,
@@ -279,6 +279,10 @@ def _load_when_ready(window) -> None:
         window.load_html(pages.error_html(str(BACKEND_LOG)))
         _on_app_loaded()
 
+    # Background update check on launch when enabled — silent unless one is found.
+    if settings.auto_update_check():
+        updates.check_for_updates(notify_if_current=False)
+
 
 def _qt_available() -> bool:
     """True if PySide6 is importable — the Qt webview + tray backend."""
@@ -343,11 +347,16 @@ def launch_desktop() -> None:
     # native backend — macOS/Windows, or the Linux GTK fallback when pystray is
     # installed (wactorz[desktop-gtk]). If no tray can be shown, _tray_ok stays
     # False and closing the window shuts the app down instead of hiding it.
-    builder = tray.build_qt_tray if _use_qt else tray.build_pystray_tray
-    _tray = builder(
-        _toggle, updates.check_for_updates, _shutdown,
-        autostart.is_enabled, autostart.set_enabled,
+    hooks = tray.TrayHooks(
+        on_toggle=_toggle,
+        on_check_updates=lambda: updates.check_for_updates(),
+        on_quit=_shutdown,
+        autostart_enabled=autostart.is_enabled,
+        set_autostart=autostart.set_enabled,
+        auto_update_enabled=settings.auto_update_check,
+        set_auto_update=settings.set_auto_update_check,
     )
+    _tray = (tray.build_qt_tray if _use_qt else tray.build_pystray_tray)(hooks)
     _tray_ok = _tray is not None
 
     start_kwargs = {"icon": APP_ICON}

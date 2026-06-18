@@ -26,12 +26,14 @@ def _is_newer(latest: str, current: str) -> bool:
     return a + (0,) * (n - len(a)) > b + (0,) * (n - len(b))
 
 
-def check_for_updates() -> None:
-    """Manual update check (tray). Runs off the GUI thread so it never blocks."""
-    threading.Thread(target=_update_check_task, daemon=True).start()
+def check_for_updates(notify_if_current: bool = True) -> None:
+    """Check for a newer release off the GUI thread. With notify_if_current False
+    (the startup/auto check) it stays silent unless an update is found; the
+    manual tray check leaves it True so the user always gets a result."""
+    threading.Thread(target=_update_check_task, args=(notify_if_current,), daemon=True).start()
 
 
-def _update_check_task() -> None:
+def _update_check_task(notify_if_current: bool) -> None:
     try:
         from wactorz import __version__ as current
 
@@ -43,7 +45,8 @@ def _update_check_task() -> None:
             latest = json.loads(resp.read().decode()).get("tag_name", "").lstrip("v")
         if latest and _is_newer(latest, current):
             notify(APP_NAME, f"Update available: v{latest} (you have v{current}).")
-        else:
+        elif notify_if_current:
             notify(APP_NAME, f"Wactorz is up to date (v{current}).")
     except Exception:
-        notify(APP_NAME, "Could not check for updates — see your connection and try again.")
+        if notify_if_current:
+            notify(APP_NAME, "Could not check for updates — see your connection and try again.")

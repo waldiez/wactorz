@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wactorz — Download</title>
+<style>
+  :root{--bg:#0A0E1A;--card:#11182e;--line:#1e2640;--text:#e2e8f0;--muted:#94a3b8;--accent:#6366f1}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+       font-family:-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.5}
+  .wrap{max-width:760px;margin:0 auto;padding:3rem 1.5rem}
+  h1{font-size:1.9rem;margin:0;letter-spacing:.02em}
+  .ver{color:var(--muted);font-size:.9rem;margin:.35rem 0 1.25rem}
+  .blurb{font-size:1.05rem;margin:0 0 1.5rem;max-width:60ch}
+  .hero{width:100%;border:1px solid var(--line);border-radius:12px;margin:0 0 2.25rem;display:block}
+  .grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1.25rem;
+        display:flex;flex-direction:column;gap:.5rem;transition:border-color .2s,transform .2s}
+  .card.you{border-color:var(--accent);transform:translateY(-2px)}
+  .os{font-size:1.05rem;font-weight:600}
+  .badge{align-self:flex-start;font-size:.65rem;text-transform:uppercase;letter-spacing:.06em;
+         color:var(--accent);border:1px solid var(--accent);border-radius:999px;padding:.1rem .5rem;
+         visibility:hidden}
+  .card.you .badge{visibility:visible}
+  .note{font-size:.78rem;color:var(--muted);min-height:2.4em}
+  a.btn{margin-top:.4rem;text-align:center;text-decoration:none;background:var(--accent);color:#fff;
+        border-radius:8px;padding:.55rem .9rem;font-size:.9rem;font-weight:600}
+  a.btn:hover{filter:brightness(1.1)}
+  .verify{margin-top:2rem;font-size:.8rem;color:var(--muted)}
+  .verify a{color:#c7d2fe}
+  code{background:#11182e;border:1px solid var(--line);border-radius:4px;padding:.05rem .35rem;font-size:.78rem}
+</style></head>
+<body><div class="wrap">
+  <h1>Wactorz</h1>
+  <div class="ver">Test build — v{{VERSION}}</div>
+  <p class="blurb">Spawn, coordinate and monitor AI agents at runtime — now as a
+     native desktop app. One download, no setup: it runs the full Wactorz backend
+     and dashboard in a single window.</p>
+  <img class="hero" src="dashboard.png" alt="Wactorz dashboard">
+
+  <div class="grid">
+    <div class="card" data-os="mac">
+      <span class="badge">Your system</span>
+      <div class="os">macOS</div>
+      <div class="note">Apple Silicon. Signed &amp; notarized — opens normally.</div>
+      <a class="btn" href="Wactorz-macos.dmg">Download .dmg</a>
+    </div>
+    <div class="card" data-os="win">
+      <span class="badge">Your system</span>
+      <div class="os">Windows</div>
+      <div class="note">Win10/11. SmartScreen may warn (unsigned) — <b>More info → Run anyway</b>.</div>
+      <a class="btn" href="Wactorz-Setup.exe">Download installer</a>
+    </div>
+    <div class="card" data-os="linux">
+      <span class="badge">Your system</span>
+      <div class="os">Linux</div>
+      <div class="note">AppImage. <code>chmod +x</code> it, then run (needs FUSE).</div>
+      <a class="btn" href="Wactorz-x86_64.AppImage">Download AppImage</a>
+    </div>
+  </div>
+
+  <p class="verify">Verify your download against <a href="SHA256SUMS">SHA256SUMS</a>
+     (<code>shasum -a 256 -c SHA256SUMS</code>).</p>
+</div>
+<script>
+  // Highlight the visitor's platform.
+  var ua = (navigator.userAgent + " " + (navigator.platform || "")).toLowerCase();
+  var os = ua.indexOf("win") > -1 ? "win"
+         : (ua.indexOf("mac") > -1 || ua.indexOf("iphone") > -1 || ua.indexOf("ipad") > -1) ? "mac"
+         : ua.indexOf("linux") > -1 ? "linux" : "";
+  if (os) {
+    var card = document.querySelector('.card[data-os="' + os + '"]');
+    if (card) { card.classList.add("you"); card.parentNode.prepend(card); }
+  }
+</script>
+</body></html>

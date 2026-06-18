@@ -1,0 +1,4 @@
+# Transient build/upload dirs — collected installers (large binaries) and the
+# assembled page live here; never commit them.
+incoming/
+out/

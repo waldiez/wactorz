@@ -76,6 +76,10 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
     banner = f'<div class="banner">{_html.escape(message)}</div>' if message else ""
     cancel = ('<button onclick="window.pywebview.api.close_config()" '
               'style="background:#334155;margin-left:.5rem">Cancel</button>' if can_cancel else "")
+    # No running app to return to → offer Retry (re-connect with current config)
+    # instead of Cancel, e.g. after starting the broker.
+    retry = ('<button onclick="window.pywebview.api.retry()" '
+             'style="background:#0ea5e9;margin-left:.5rem">Retry</button>' if not can_cancel else "")
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{{margin:0;height:100%;background:#0A0E1A;color:#e2e8f0;
        font-family:-apple-system,Segoe UI,Roboto,sans-serif}}
@@ -113,7 +117,7 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
     <label>Provider</label><select id="provider">{options}</select>
     <label>API key</label><input id="apikey" type="password" value="{val(active)}">
   </fieldset>
-  <button onclick="save()">Save &amp; Restart</button>{cancel}<span id="status"></span>
+  <button onclick="save()">Save &amp; Restart</button>{retry}{cancel}<span id="status"></span>
 <script>
   async function save() {{
     const v = {{}};

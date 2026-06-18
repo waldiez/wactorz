@@ -236,8 +236,9 @@ def _show_config(message: str = "") -> None:
     """Load the Configure form. Offer Cancel only when the backend is running,
     i.e. there's a live app to return to (not on first-run / failure)."""
     if _window is not None:
-        can_cancel = _backend is not None and _backend.poll() is None
-        _window.load_html(pages.config_html(backend_config.load(), message, can_cancel))
+        backend_up = _backend is not None and _backend.poll() is None
+        _window.load_html(pages.config_html(backend_config.load(), message, can_cancel=backend_up))
+        _reveal_window()   # bring it forward if opened from the tray while hidden
 
 
 def _defer_nav(action) -> None:
@@ -297,6 +298,12 @@ class Api:
         """Cancel: return to the running app without saving."""
         if _window is not None:
             _defer_nav(lambda: _window.load_url(URL))
+
+    def retry(self) -> bool:
+        """Retry connecting with the current config (e.g. after starting the
+        broker) without saving — restart the backend off-thread."""
+        threading.Thread(target=_restart_backend, daemon=True).start()
+        return True
 
     def save_config(self, values: dict) -> bool:
         """Persist config, then restart the backend off-thread so the call

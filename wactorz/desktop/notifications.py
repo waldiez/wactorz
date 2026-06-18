@@ -36,6 +36,9 @@ def _notify_macos_native(title: str, body: str) -> None:
         note = NSUserNotification.alloc().init()
         note.setTitle_(title)
         note.setInformativeText_(body)
+        # NSUserNotification shows an action button ("Show") by default; we don't
+        # handle activation, so drop it rather than present a dead button.
+        note.setHasActionButton_(False)
         center.deliverNotification_(note)
     except Exception:
         pass

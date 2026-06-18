@@ -212,7 +212,7 @@ class RewardConfig:
     W_ACTION      = 0.00
     W_DEADBAND    = 0.05
     W_TEMP_TARGET = 0.10
-    W_PEAK        = 0.10
+    W_PEAK        = 0.17
     W_TOU         = 0.08
 
 

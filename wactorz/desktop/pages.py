@@ -144,6 +144,14 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
   </fieldset>
   <button onclick="save()">Save &amp; Restart</button>{retry}{cancel}<span id="status"></span>
 <script>
+  // Config values (model ids, URLs, keys) are literal — turn off the WebView's
+  // autocapitalize/autocorrect/autocomplete/spellcheck so they aren't mangled.
+  document.querySelectorAll("input").forEach(function (el) {{
+    el.setAttribute("autocapitalize", "off");
+    el.setAttribute("autocorrect", "off");
+    el.setAttribute("autocomplete", "off");
+    el.setAttribute("spellcheck", "false");
+  }});
   async function save() {{
     const ids = ["LLM_PROVIDER","LLM_MODEL","LLM_API_KEY","OPENAI_URL","OLLAMA_URL",
                  "MQTT_HOST","MQTT_PORT","MQTT_USERNAME","MQTT_PASSWORD","HA_URL","HA_TOKEN"];

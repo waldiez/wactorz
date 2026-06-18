@@ -56,10 +56,10 @@ Source: "..\..\dist\wactorz-desktop\*"; DestDir: "{app}"; Flags: recursesubdirs 
 ; Source: "MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: not WebView2Installed
 
 [Icons]
-# Flat {autoprograms} entry (no program-group subfolder) and no shortcut
-# AppUserModelID — both can hide the app from the Windows 11 "All apps" list.
-# Taskbar grouping still works: the app sets its AUMID at runtime (see
-# _set_app_user_model_id). Uninstall is via Settings → Apps (AppId registers it).
+; Flat {autoprograms} entry (no program-group subfolder) and no shortcut
+; AppUserModelID - both can hide the app from the Windows 11 "All apps" list.
+; Taskbar grouping still works: the app sets its AUMID at runtime (see
+; _set_app_user_model_id). Uninstall is via Settings -> Apps (AppId registers it).
 Name: "{autoprograms}\{#MyAppName}";  Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}";   Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 

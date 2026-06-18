@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 
-from wactorz.desktop.config import APP_NAME
+from wactorz.desktop.config import APP_ICON, APP_NAME
 
 # UNAuthorizationOptions: Alert(4) | Sound(2).
 _UN_AUTH = 4 | 2
@@ -141,6 +141,9 @@ def notify(title: str, body: str) -> None:
     try:
         from plyer import notification
 
-        notification.notify(title=title, message=body, app_name=APP_NAME)
+        # app_icon gives the balloon/toast its icon on Windows (.ico) and Linux
+        # (.png); APP_ICON resolves to the bundled per-platform icon.
+        icon = str(APP_ICON) if APP_ICON.exists() else ""
+        notification.notify(title=title, message=body, app_name=APP_NAME, app_icon=icon)
     except Exception:
         pass

@@ -47,7 +47,8 @@ _DEFAULT_WINDOW_STATE = {"width": 1280, "height": 720, "x": None, "y": None}
 
 _backend: "subprocess.Popen | None" = None
 _window = None
-_hidden = False
+_hidden = False                # True when hidden to the tray (our hide(); no event)
+_minimized = False             # tracked from the minimized/restored window events
 _shown = False                 # the window is revealed only once the page paints
 _tray = None                   # kept alive for the lifetime of the process
 _tray_ok = False               # True only when a tray icon is actually shown
@@ -293,15 +294,28 @@ class Api:
 
 
 # ── tray ────────────────────────────────────────────────────────────────────
+def _on_minimized(*_) -> None:
+    global _minimized
+    _minimized = True
+
+
+def _on_restored(*_) -> None:
+    global _minimized
+    _minimized = False
+
+
 def _toggle() -> None:
+    """Tray Show/Hide. Bases the decision on real window state — a native
+    minimize (no hide event) would otherwise desync a simple flag and make the
+    first click a no-op."""
     global _hidden
     if _window is None:
         return
-    if _hidden:
-        _window.show()
+    if _hidden or _minimized:
+        _reveal_window()
     else:
         _window.hide()
-    _hidden = not _hidden
+        _hidden = True
 
 
 # ── lifecycle ─────────────────────────────────────────────────────────────────
@@ -352,11 +366,15 @@ _macos_app_delegate = None
 
 
 def _reveal_window() -> None:
-    """Show the window if it was hidden to the tray."""
-    global _hidden
-    if _window is not None:
-        _window.show()
-        _hidden = False
+    """Bring the window back whether it was hidden to the tray or minimized."""
+    global _hidden, _minimized
+    if _window is None:
+        return
+    if _minimized:
+        _window.restore()
+        _minimized = False
+    _window.show()
+    _hidden = False
 
 
 def _install_macos_quit_handler() -> None:
@@ -479,6 +497,8 @@ def launch_desktop() -> None:
     _window.events.closing += _on_closing
     _window.events.resized += _on_window_resized
     _window.events.moved += _on_window_moved
+    _window.events.minimized += _on_minimized
+    _window.events.restored += _on_restored
 
     _backend = _spawn_backend()
 

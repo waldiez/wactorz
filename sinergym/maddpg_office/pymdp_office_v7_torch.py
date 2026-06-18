@@ -27,8 +27,18 @@ import pickle
 import time
 import warnings
 from datetime import date
+
+# --- Determinism pins (MUST be set before numpy/torch import to take effect) ---
+# Different thread counts make BLAS reduce floats in a different order across
+# machines, which can flip a near-tied EFE argmax and desync the trajectory.
+# Single-threaded == identical reduction order everywhere (small speed cost).
+for _v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+           "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_v, "1")
+
 import numpy as np
 import torch
+torch.set_num_threads(1)
 warnings.filterwarnings('ignore')
 
 
@@ -680,6 +690,45 @@ class PyMDPOffice:
 # =============================================================================
 # SIMULATION RUNNER  (same harness as v6; lazy Sinergym/MADDPG imports)
 # =============================================================================
+def robust_reset(env, seed, first_obs_timeout=120.0):
+    """Reset once; if EnergyPlus loses Sinergym 3.11's hardcoded 10s startup race
+    and returns the random-sample fallback observation, DON'T re-race (that just
+    loses the same 10s window again). The real first observation lands in the
+    underlying EplusEnv queues moments later (right after 'System is ready'), so
+    block on those queues with a longer timeout to recover it, reconstructing the
+    return exactly as EplusEnv.reset does:
+        np.fromiter(obs_dict.values(), dtype=np.float32)
+    Assumes no observation-transforming wrapper sits above EplusEnv (v7 uses only
+    CustomRewardWrapper, which passes obs through unchanged). The seed is applied
+    on the single reset so the run stays deterministic."""
+    from queue import Empty
+
+    obs, info = env.reset(seed=seed)
+    m, d, h = float(obs[0]), float(obs[1]), float(obs[2])
+    if (1 <= m <= 12) and (1 <= d <= 31) and (0 <= h <= 23):
+        return obs, info
+
+    print(f"[reset] fallback obs (m={m:.0f} d={d:.0f} h={h:.0f}) — EnergyPlus lost "
+          f"the 10s init race. Waiting up to {first_obs_timeout:.0f}s for the real "
+          f"first observation instead of re-racing...")
+    raw = env.unwrapped                       # the EplusEnv (queues live here)
+    try:
+        obs_dict = raw.obs_queue.get(timeout=first_obs_timeout)
+        info     = raw.info_queue.get(timeout=first_obs_timeout)
+    except (Empty, AttributeError) as e:
+        print(f"[reset] WARNING: real observation never arrived ({type(e).__name__}); "
+              "proceeding with the fallback. Cross-machine results are unreliable.")
+        return obs, info
+
+    info.update({'timestep': raw.timestep})
+    raw.last_obs, raw.last_info = obs_dict, info
+    real_obs = np.fromiter(obs_dict.values(), dtype=np.float32)
+    print(f"[reset] recovered real observation "
+          f"(m={real_obs[0]:.0f} d={real_obs[1]:.0f} h={real_obs[2]:.0f}) "
+          f"after the slow init.")
+    return real_obs, info
+
+
 def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
                    comfort_weight=1.0, energy_weight=0.5, policy_len=4,
                    lr_pB=1.0, pB_prior_scale=2.0, epistemic_weight=0.2,
@@ -688,12 +737,19 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
                    checkpoint=None) -> dict:
 
     from register_env import make_custom_env
-    from maddpg_v3 import (
+    # NOTE: metrics + CustomRewardWrapper now come from metrics_utils (the SAME
+    # module the deployment bridge uses) so v7 and the bridge score an identical
+    # trajectory identically. This changes two reported numbers vs the old
+    # maddpg_v3 path: (a) mean custom_reward — metrics_utils uses a 1.5 unoccupied
+    # energy multiplier vs maddpg_v3's 1.1; (b) CSAccumulator.mean — metrics_utils
+    # averages active steps flat, maddpg_v3 state-weighted them. original_reward,
+    # compute_zone_comfort_rate and compute_mean_deviation are unchanged.
+    from metrics_utils import (
         CustomRewardWrapper, CSAccumulator,
         compute_zone_comfort_rate as maddpg_compute_zone_comfort_rate,
         compute_mean_deviation as maddpg_compute_mean_deviation,
+        compute_hourly_linear_reward,
     )
-    from hourly_reward_metric import compute_hourly_linear_reward
 
     def compute_zone_comfort_rate(obs):
         return maddpg_compute_zone_comfort_rate(obs, occupied_only=True)
@@ -731,9 +787,15 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
     all_rewards=[]; all_energy=[]; all_zcr=[]; all_dev=[]; all_custom=[]
     all_orig=[]; all_db=[]; all_cs=[]; all_cs_occ=[]; all_hlr=[]
 
+    RUN_SEED = 0  # fixed base seed -> reproducible across machines/runs
     for ep in range(episodes):
         agent.reset()
-        obs, info = env.reset()
+        # Seed reset so the RANDOM-FALLBACK observation (drawn from the env's
+        # np_random when EnergyPlus isn't ready yet — the "queue empty, returning
+        # a random observation" warning) is identical across machines instead of
+        # OS-entropy random. Deterministic weather is unaffected; this only pins
+        # the fallback RNG so the two machines start from the same obs.
+        obs, info = robust_reset(env, seed=RUN_SEED + ep)
         rewards=[]; energy_list=[]
         terminated=truncated=False; current_month=0
         total_zok=total_zc=0; total_dev=total_dc=0.0
@@ -750,6 +812,15 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
 
         while not (terminated or truncated):
             action = agent.get_action(obs, info)
+            # --- ACTION LOG (for cross-machine / cross-pipeline diffing) ---
+            with open("actions_v7.csv", "a") as _f:
+                _o = np.asarray(obs).ravel(); _a = np.asarray(action).ravel()
+                _f.write(",".join(f"{x:.6f}" for x in [_o[0], _o[1], _o[2], *_a]) + "\n")
+            # --- FULL OBS LOG (to check whether EnergyPlus feeds the agent the
+            #     SAME observation on both machines; higher precision so we can
+            #     see tiny physics differences, not just discretised actions) ---
+            with open("obs_v7.csv", "a") as _f:
+                _f.write(",".join(f"{x:.9g}" for x in np.asarray(obs).ravel()) + "\n")
             obs, reward, terminated, truncated, info = env.step(action)
             rewards.append(reward)
             custom_r=info.get('custom_reward',0.0); orig_r=info.get('original_reward',0.0)

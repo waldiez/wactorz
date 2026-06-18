@@ -134,6 +134,19 @@ async def _launch(agent, cfg):
     agent.state["env_id"]  = env_id
     agent.persist("config", cfg)
 
+    # setup() subscribed using the DEFAULT env_id (it runs before this launch
+    # task). Bind the obs/env_info subscriptions to the REAL env_id now, unless
+    # we already did. Subscribing to the (unused) default topic too is harmless.
+    obs_topic  = f"sinergym/env/{env_id}/observation"
+    info_topic = f"sinergym/env/{env_id}/env_info"
+    if agent.state.get("_obs_topic") != obs_topic and agent.state.get("_on_obs"):
+        agent.subscribe(obs_topic, agent.state["_on_obs"])
+        agent.state["_obs_topic"] = obs_topic
+        await agent.log(f"[aif-controller] now listening for observations on {obs_topic}")
+    if agent.state.get("_info_topic") != info_topic and agent.state.get("_on_info"):
+        agent.subscribe(info_topic, agent.state["_on_info"])
+        agent.state["_info_topic"] = info_topic
+
     await agent.log(
         f"[aif-controller] ready (single N={len(zones)} batch — exact v7 parity). "
         f"bounds[{bsrc}] htg[{bounds['heat_low']},{bounds['heat_high']}] "
@@ -187,7 +200,15 @@ async def setup(agent):
         agent.state["acted"] = agent.state.get("acted", 0) + 1
 
     agent.subscribe(info_topic, on_info)
-    agent.subscribe(f"sinergym/env/{cfg['env_id']}/observation", on_obs)
+    obs_topic = f"sinergym/env/{cfg['env_id']}/observation"
+    agent.subscribe(obs_topic, on_obs)
+    # Remember the handlers + the topic we bound, so _launch can (re)bind to the
+    # env_id supplied in the launch task — setup() runs at spawn time, before the
+    # launch task, so the default env_id here is usually NOT the real one.
+    agent.state["_on_obs"]   = on_obs
+    agent.state["_on_info"]  = on_info
+    agent.state["_obs_topic"]  = obs_topic
+    agent.state["_info_topic"] = info_topic
     await agent.log(f"aif-controller subscribed; waiting to launch on env {cfg['env_id']}")
 
     if os.path.exists(cfg["model_path"]):
@@ -262,4 +283,9 @@ async def handle_task(agent, payload):
 #           "poll_interval": 3600,
 #           "code":          code,
 #       }
+#       logger.info("[catalog] Loaded aif-controller recipe")
+#       logger.info("[catalog] Loaded aif-controller recipe")
+#       logger.info("[catalog] Loaded aif-controller recipe")
+#       logger.info("[catalog] Loaded aif-controller recipe")
+#       logger.info("[catalog] Loaded aif-controller recipe")
 #       logger.info("[catalog] Loaded aif-controller recipe")

@@ -112,6 +112,13 @@ import threading
 import time
 from datetime import datetime, timezone
 
+# --- Determinism pins (set before numpy import so BLAS picks them up) ---
+# Keep float reductions in the same order across machines. Harmless if the
+# bridge process does little heavy math; matches the v7 pins for consistency.
+for _v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+           "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_v, "1")
+
 import gymnasium as gym
 import numpy as np
 import paho.mqtt.client as mqtt
@@ -128,8 +135,14 @@ except ImportError:
 DEFAULT_ENV_ID           = "Eplus-5zone-hot-continuous-v1"
 DEFAULT_BROKER_HOST      = "host.docker.internal"
 DEFAULT_BROKER_PORT      = 1883
-ACTION_TIMEOUT           = 5.0    # global single-agent timeout (s)
-ZONE_ACTION_TIMEOUT      = 4.0    # per-zone agent timeout (s)
+# Timeouts raised from 5/4s. A cold controller's first forward pass can exceed a
+# few seconds; if it does, steps fall back to a default action, and how MANY
+# steps fall back depends on machine speed -> different action sequences across
+# machines. Generous timeouts mean a warmed controller never falls back (only
+# the unavoidable structural first step does, deterministically to the midpoint).
+# Override per-run with env vars if a genuinely dead controller should fail fast.
+ACTION_TIMEOUT           = float(os.environ.get("BRIDGE_ACTION_TIMEOUT", "30.0"))   # global single-agent timeout (s)
+ZONE_ACTION_TIMEOUT      = float(os.environ.get("BRIDGE_ZONE_ACTION_TIMEOUT", "30.0"))  # per-zone agent timeout (s)
 FALLBACK_WARN_EVERY      = 500
 
 # Fuseki defaults (overridable via env vars)
@@ -1649,7 +1662,33 @@ class SinergymBridgeMAS:
     # ── Episode ────────────────────────────────────────────────────────────────
 
     def _run_episode(self, env: gym.Env, ep: int) -> dict:
-        obs, info = env.reset()
+        obs, info = env.reset(seed=1000 + ep)
+        # --- EnergyPlus random-reset recovery (ported from v7 robust_reset) ----
+        # If EnergyPlus lost Sinergym 3.11's hardcoded 10s startup race, reset()
+        # returns a random-sample placeholder (garbage month like -39465768). The
+        # REAL first observation arrives in the underlying EplusEnv queues moments
+        # later. Recover it WITHOUT stepping the simulation, so no neutral priming
+        # actions perturb the trajectory and the start is identical regardless of
+        # machine speed. The priming loop below then no-ops (obs already valid).
+        # NOTE: env.unwrapped bypasses any obs-transforming wrapper; with anomaly
+        # injection ON the very first obs won't be perturbed (fine — anomalies are
+        # off for parity runs and normally start later anyway).
+        if not (1.0 <= float(np.asarray(obs).ravel()[0]) <= 12.0):
+            from queue import Empty
+            _raw = env.unwrapped
+            try:
+                _od  = _raw.obs_queue.get(timeout=120.0)
+                _inf = _raw.info_queue.get(timeout=120.0)
+                _inf.update({'timestep': _raw.timestep})
+                _raw.last_obs, _raw.last_info = _od, _inf
+                obs  = np.fromiter(_od.values(), dtype=np.float32)
+                info = _inf
+                print(f"[reset] recovered real observation "
+                      f"(m={obs[0]:.0f} d={obs[1]:.0f} h={obs[2]:.0f}) "
+                      f"without priming.")
+            except (Empty, AttributeError) as _e:
+                print(f"[reset] queue recovery failed ({type(_e).__name__}); "
+                      f"falling back to priming-by-stepping.")
         # Sinergym returns a placeholder observation from reset(); the first REAL
         # obs arrives on a subsequent step(), but exactly when can vary (sometimes
         # 1 step, sometimes a few) while EnergyPlus spins up. Step with a neutral

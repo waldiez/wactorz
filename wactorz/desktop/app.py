@@ -281,7 +281,7 @@ def _load_when_ready(window) -> None:
 
     # Background update check on launch when enabled — silent unless one is found.
     if settings.auto_update_check():
-        updates.check_for_updates(notify_if_current=False)
+        updates.check_for_updates(interactive=False)
 
 
 def _qt_available() -> bool:
@@ -355,6 +355,8 @@ def launch_desktop() -> None:
         set_autostart=autostart.set_enabled,
         auto_update_enabled=settings.auto_update_check,
         set_auto_update=settings.set_auto_update_check,
+        pending_update_version=updates.pending_version,
+        open_download=updates.open_download,
     )
     _tray = (tray.build_qt_tray if _use_qt else tray.build_pystray_tray)(hooks)
     _tray_ok = _tray is not None

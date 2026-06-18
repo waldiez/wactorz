@@ -27,6 +27,8 @@ class TrayHooks:
     set_autostart: Callable[[bool], None]
     auto_update_enabled: Callable[[], bool]
     set_auto_update: Callable[[bool], None]
+    pending_update_version: Callable[[], str]  # "" when no update is known
+    open_download: Callback                    # open the release page
 
 
 def build_qt_tray(hooks: TrayHooks):
@@ -59,6 +61,17 @@ def build_qt_tray(hooks: TrayHooks):
     show_hide.triggered.connect(lambda *_: hooks.on_toggle())
     check_updates = QAction("Check for Updates...", menu)
     check_updates.triggered.connect(lambda *_: hooks.on_check_updates())
+    download = QAction("Download update", menu)
+    download.triggered.connect(lambda *_: hooks.open_download())
+
+    def _refresh_download() -> None:
+        version = hooks.pending_update_version()
+        download.setVisible(bool(version))
+        if version:
+            download.setText(f"Download v{version}…")
+
+    menu.aboutToShow.connect(_refresh_download)   # re-evaluate each time it opens
+    _refresh_download()
 
     def _checkable(label: str, get: Callable[[], bool], set_: Callable[[bool], None]) -> QAction:
         action = QAction(label, menu)
@@ -81,6 +94,7 @@ def build_qt_tray(hooks: TrayHooks):
 
     menu.addAction(show_hide)
     menu.addAction(check_updates)
+    menu.addAction(download)
     menu.addSeparator()
     menu.addAction(autostart)
     menu.addAction(auto_update)
@@ -124,6 +138,9 @@ def build_pystray_tray(hooks: TrayHooks):
     menu = pystray.Menu(
         pystray.MenuItem("Show / Hide", lambda icon, item: hooks.on_toggle(), default=True),
         pystray.MenuItem("Check for Updates...", lambda icon, item: hooks.on_check_updates()),
+        pystray.MenuItem(lambda item: f"Download v{hooks.pending_update_version()}…",
+                         lambda icon, item: hooks.open_download(),
+                         visible=lambda item: bool(hooks.pending_update_version())),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Start at login",
                          _toggler(hooks.autostart_enabled, hooks.set_autostart),

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -201,6 +202,45 @@ def _wait_for_backend(timeout: float = 30.0) -> bool:
     return False
 
 
+def _mqtt_reachable(timeout: float = 3.0) -> bool:
+    """TCP-probe the configured MQTT broker. The backend can't start without it,
+    so a quick check lets us open Configure instead of waiting out the timeout."""
+    env = backend_config.env_for_backend()
+    host = env.get("MQTT_HOST") or os.environ.get("MQTT_HOST") or "localhost"
+    try:
+        port = int(env.get("MQTT_PORT") or os.environ.get("MQTT_PORT") or 1883)
+    except (TypeError, ValueError):
+        port = 1883
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _show_config(message: str = "") -> None:
+    """Load the Configure form. Offer Cancel only when the backend is running,
+    i.e. there's a live app to return to (not on first-run / failure)."""
+    if _window is not None:
+        can_cancel = _backend is not None and _backend.poll() is None
+        _window.load_html(pages.config_html(backend_config.load(), message, can_cancel))
+
+
+def _defer_nav(action) -> None:
+    """Run a window navigation just after the current JS-API call returns.
+    Navigating synchronously inside an Api method makes pywebview deliver the
+    call's return value on the new page (where the callback is gone) and raise,
+    so hand it to a worker that lets the call return first."""
+    def _run():
+        time.sleep(0.05)
+        try:
+            action()
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def _stop_backend() -> None:
     global _backend
     if _backend and _backend.poll() is None:
@@ -214,9 +254,12 @@ def _stop_backend() -> None:
 
 def _restart_backend() -> None:
     """Apply saved config: stop the child, show the splash, respawn with the new
-    env, then load the app (or the error page). Runs off the GUI thread."""
+    env, then load the app (or back to Configure / the error page). Off-thread."""
     global _backend
     _stop_backend()
+    if not _mqtt_reachable():
+        _show_config("MQTT broker still unreachable — check the host and port.")
+        return
     if _window is not None:
         _window.load_html(pages.LOADING_HTML)
     _backend = _spawn_backend()
@@ -234,8 +277,12 @@ class Api:
 
     def open_config(self) -> None:
         """Load the Configure form into the window (called from the error page)."""
+        _defer_nav(_show_config)
+
+    def close_config(self) -> None:
+        """Cancel: return to the running app without saving."""
         if _window is not None:
-            _window.load_html(pages.config_html(backend_config.load()))
+            _defer_nav(lambda: _window.load_url(URL))
 
     def save_config(self, values: dict) -> bool:
         """Persist config, then restart the backend off-thread so the call
@@ -305,7 +352,13 @@ def _load_when_ready(window) -> None:
     that screens are known, wait for the backend, load the app, then reveal the
     window once its document has painted."""
     _place_window()
-    if _wait_for_backend():
+    if not _mqtt_reachable():
+        # The backend can't start without MQTT; skip the long wait and configure.
+        _stop_backend()
+        notifications.notify(APP_NAME, "MQTT broker unreachable — opening configuration.")
+        _show_config("MQTT broker unreachable — check the host and port.")
+        _on_app_loaded()
+    elif _wait_for_backend():
         window.events.loaded += _on_app_loaded
         window.load_url(URL)
         time.sleep(2.0)        # fallback reveal if the 'loaded' event doesn't fire
@@ -385,6 +438,7 @@ def launch_desktop() -> None:
     # False and closing the window shuts the app down instead of hiding it.
     hooks = tray.TrayHooks(
         on_toggle=_toggle,
+        on_configure=lambda: _show_config(),
         on_check_updates=lambda: updates.check_for_updates(),
         on_quit=_shutdown,
         autostart_enabled=autostart.is_enabled,

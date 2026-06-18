@@ -21,6 +21,7 @@ Callback = Callable[[], None]
 class TrayHooks:
     """Behaviour + state accessors the tray menu wires up."""
     on_toggle: Callback                       # show/hide the window
+    on_configure: Callback                    # open the Configure form
     on_check_updates: Callback                # manual update check
     on_quit: Callback                         # quit the app
     autostart_enabled: Callable[[], bool]
@@ -59,6 +60,8 @@ def build_qt_tray(hooks: TrayHooks):
     menu = QMenu()
     show_hide = QAction("Show / Hide", menu)
     show_hide.triggered.connect(lambda *_: hooks.on_toggle())
+    configure = QAction("Configure...", menu)
+    configure.triggered.connect(lambda *_: hooks.on_configure())
     check_updates = QAction("Check for Updates...", menu)
     check_updates.triggered.connect(lambda *_: hooks.on_check_updates())
     download = QAction("Download update", menu)
@@ -93,6 +96,7 @@ def build_qt_tray(hooks: TrayHooks):
     quit_item.triggered.connect(lambda *_: hooks.on_quit())
 
     menu.addAction(show_hide)
+    menu.addAction(configure)
     menu.addAction(check_updates)
     menu.addAction(download)
     menu.addSeparator()
@@ -137,6 +141,7 @@ def build_pystray_tray(hooks: TrayHooks):
 
     menu = pystray.Menu(
         pystray.MenuItem("Show / Hide", lambda icon, item: hooks.on_toggle(), default=True),
+        pystray.MenuItem("Configure...", lambda icon, item: hooks.on_configure()),
         pystray.MenuItem("Check for Updates...", lambda icon, item: hooks.on_check_updates()),
         pystray.MenuItem(lambda item: f"Download v{hooks.pending_update_version()}…",
                          lambda icon, item: hooks.open_download(),

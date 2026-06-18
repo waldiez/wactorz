@@ -60,9 +60,11 @@ _LLM_PROVIDERS = [
 ]
 
 
-def config_html(values: dict) -> str:
+def config_html(values: dict, message: str = "", can_cancel: bool = False) -> str:
     """The Configure form, pre-filled from `values` (env var -> current value).
-    Submits back through window.pywebview.api.save_config()."""
+    Optional `message` shows a banner (e.g. why config opened). `can_cancel` adds
+    a Cancel button (only when there's a running app to return to). Submits back
+    through window.pywebview.api.save_config()."""
     def val(key: str) -> str:
         return _html.escape(values.get(key, ""), quote=True)
 
@@ -71,6 +73,9 @@ def config_html(values: dict) -> str:
         f'<option value="{k}"{" selected" if k == active else ""}>{label}</option>'
         for k, label in _LLM_PROVIDERS
     )
+    banner = f'<div class="banner">{_html.escape(message)}</div>' if message else ""
+    cancel = ('<button onclick="window.pywebview.api.close_config()" '
+              'style="background:#334155;margin-left:.5rem">Cancel</button>' if can_cancel else "")
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{{margin:0;height:100%;background:#0A0E1A;color:#e2e8f0;
        font-family:-apple-system,Segoe UI,Roboto,sans-serif}}
@@ -86,9 +91,12 @@ def config_html(values: dict) -> str:
   button{{background:#6366f1;color:#fff;border:0;border-radius:6px;padding:.6rem 1.2rem;
        font-size:.9rem;cursor:pointer;margin-top:.5rem}}
   #status{{font-size:.8rem;color:#22d3a0;margin-left:.75rem}}
+  .banner{{background:#3b1d1d;color:#fca5a5;border:1px solid #7f1d1d;border-radius:6px;
+       padding:.55rem .75rem;font-size:.8rem;margin:0 0 1rem}}
 </style></head><body><div class="wrap">
   <h1>Configure Wactorz</h1>
   <p class="sub">Saved securely on this machine. Saving restarts the backend.</p>
+  {banner}
   <fieldset><legend>MQTT broker</legend>
     <label>Host</label><input id="MQTT_HOST" value="{val('MQTT_HOST')}" placeholder="localhost">
     <div class="row">
@@ -105,7 +113,7 @@ def config_html(values: dict) -> str:
     <label>Provider</label><select id="provider">{options}</select>
     <label>API key</label><input id="apikey" type="password" value="{val(active)}">
   </fieldset>
-  <button onclick="save()">Save &amp; Restart</button><span id="status"></span>
+  <button onclick="save()">Save &amp; Restart</button>{cancel}<span id="status"></span>
 <script>
   async function save() {{
     const v = {{}};

@@ -25,9 +25,8 @@ import urllib.request
 import webview
 from dotenv import find_dotenv, load_dotenv
 
-from wactorz.desktop import notifications, pages, updates
+from wactorz.desktop import notifications, pages, tray, updates
 from wactorz.desktop.config import (
-    _ASSETS,
     APP_ICON,
     APP_ID,
     APP_NAME,
@@ -204,7 +203,7 @@ class Api:
         notifications.notify(title, body)
 
 
-# ── tray (Qt) ─────────────────────────────────────────────────────────────────
+# ── tray ────────────────────────────────────────────────────────────────────
 def _toggle() -> None:
     global _hidden
     if _window is None:
@@ -214,87 +213,6 @@ def _toggle() -> None:
     else:
         _window.hide()
     _hidden = not _hidden
-
-
-def _build_tray() -> bool:
-    """Create a Qt system-tray icon. Returns True only if one is shown.
-
-    PySide6 ships in the AppImage (same toolkit as the webview). Builds without
-    it, or hosts without a tray area, get no tray and the function is a no-op.
-    """
-    global _tray, _tray_ok
-    try:
-        from PySide6.QtGui import QAction, QIcon
-        from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
-    except ImportError:
-        return False
-
-    app = QApplication.instance() or QApplication(sys.argv)
-    # Set the app identity so the window's WM_CLASS / Wayland app_id matches the
-    # installed desktop file (taskbar grouping, correct icon).
-    app.setApplicationName(APP_NAME)
-    app.setOrganizationName("Wactorz")
-    app.setOrganizationDomain("io.waldiez.wactorz")
-    app.setDesktopFileName(APP_ID)
-
-    if not QSystemTrayIcon.isSystemTrayAvailable():
-        return False
-
-    _tray = QSystemTrayIcon(QIcon(str(APP_ICON)))
-    menu = QMenu()
-    show_hide = QAction("Show / Hide", menu)
-    show_hide.triggered.connect(_toggle)
-    check_updates = QAction("Check for Updates...", menu)
-    check_updates.triggered.connect(updates.check_for_updates)
-    quit_item = QAction("Quit Wactorz", menu)
-    quit_item.triggered.connect(_shutdown)
-    menu.addAction(show_hide)
-    menu.addAction(check_updates)
-    menu.addSeparator()
-    menu.addAction(quit_item)
-    _tray.setContextMenu(menu)
-    _tray.activated.connect(
-        lambda reason: _toggle()
-        if reason == QSystemTrayIcon.ActivationReason.Trigger
-        else None
-    )
-    _tray.setToolTip(APP_NAME)
-    _tray.show()
-    _tray_ok = True
-    return True
-
-
-def _build_pystray_tray() -> bool:
-    """macOS / Windows tray via pystray's native backend (no Qt, no GTK).
-
-    Used only off Linux: pywebview runs a native loop there, so a Qt tray can't
-    work, and pystray's darwin/win32 backends are lightweight (OS APIs, own
-    thread). Returns True only if a tray is shown.
-    """
-    global _tray, _tray_ok
-    try:
-        import pystray
-        from PIL import Image
-    except ImportError:
-        return False
-    try:
-        image = Image.open(_ASSETS / "icon.png")   # PNG is always PIL-readable
-    except Exception:
-        return False
-
-    menu = pystray.Menu(
-        pystray.MenuItem("Show / Hide", lambda icon, item: _toggle(), default=True),
-        pystray.MenuItem("Check for Updates...", lambda icon, item: updates.check_for_updates()),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Quit Wactorz", lambda icon, item: _shutdown()),
-    )
-    _tray = pystray.Icon("wactorz", image, APP_NAME, menu)
-    try:
-        _tray.run_detached()
-    except Exception:
-        return False   # e.g. macOS main-thread limitation — fall back to no tray
-    _tray_ok = True
-    return True
 
 
 # ── lifecycle ─────────────────────────────────────────────────────────────────
@@ -375,7 +293,7 @@ def _gtk_available() -> bool:
 
 
 def launch_desktop() -> None:
-    global _backend, _window
+    global _backend, _window, _tray, _tray_ok
     # On Linux we prefer the Qt (QtWebEngine) backend the AppImage bundles, but a
     # source/pip install without PySide6 (e.g. a system WebKit2GTK box such as a
     # Raspberry Pi) should fall back to pywebview's GTK backend rather than crash.
@@ -425,10 +343,9 @@ def launch_desktop() -> None:
     # native backend — macOS/Windows, or the Linux GTK fallback when pystray is
     # installed (wactorz[desktop-gtk]). If no tray can be shown, _tray_ok stays
     # False and closing the window shuts the app down instead of hiding it.
-    if _use_qt:
-        _build_tray()
-    else:
-        _build_pystray_tray()
+    builder = tray.build_qt_tray if _use_qt else tray.build_pystray_tray
+    _tray = builder(_toggle, updates.check_for_updates, _shutdown)
+    _tray_ok = _tray is not None
 
     start_kwargs = {"icon": APP_ICON}
     if _use_qt:

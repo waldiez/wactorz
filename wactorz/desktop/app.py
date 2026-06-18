@@ -441,6 +441,7 @@ def _load_when_ready(window) -> None:
     global _backend
     _place_window()
     _install_macos_quit_handler()
+    notifications.request_authorization()   # macOS: prompt for permission once
     if not _wait_for_mqtt():
         # The backend can't start without MQTT; configure instead of failing.
         notifications.notify(APP_NAME, "MQTT broker unreachable — opening configuration.")

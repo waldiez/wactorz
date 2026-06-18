@@ -14,6 +14,7 @@ a tray rather than failing to start.
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -58,6 +59,10 @@ def _data_dir() -> Path:
 DATA_DIR = _data_dir()
 # Desktop shell's capture of the backend child's stdout/stderr.
 BACKEND_LOG = DATA_DIR / "desktop-backend.log"
+# Last window geometry, restored on the next launch.
+WINDOW_STATE_FILE = DATA_DIR / "window_state.json"
+
+_DEFAULT_WINDOW_STATE = {"width": 1280, "height": 720, "x": None, "y": None}
 
 _backend: "subprocess.Popen | None" = None
 _window = None
@@ -65,6 +70,104 @@ _hidden = False
 _shown = False                 # the window is revealed only once the page paints
 _tray = None                   # kept alive for the lifetime of the process
 _tray_ok = False               # True only when a tray icon is actually shown
+# Live geometry, kept fresh by the resized/moved events so we never have to read
+# a hidden or torn-down window at shutdown. Seeded from the saved state on launch.
+_window_geometry = dict(_DEFAULT_WINDOW_STATE)
+
+
+def _sanitize_window_state(s: dict) -> dict:
+    """Coerce a loaded state dict to valid values (it may be hand-edited or a
+    partial/old file): positive int width/height; x/y int or None."""
+    out = dict(_DEFAULT_WINDOW_STATE)
+    try:
+        w, h = int(s["width"]), int(s["height"])
+        if w >= 1 and h >= 1:
+            out["width"], out["height"] = w, h
+    except (KeyError, TypeError, ValueError):
+        pass
+    for k in ("x", "y"):
+        try:
+            out[k] = None if s.get(k) is None else int(s[k])
+        except (TypeError, ValueError):
+            out[k] = None
+    return out
+
+
+def _load_window_state() -> dict:
+    """Last saved window geometry, sanitized — or defaults. Never raises; a
+    missing or corrupt file just yields the defaults."""
+    try:
+        if WINDOW_STATE_FILE.exists():
+            return _sanitize_window_state(json.loads(WINDOW_STATE_FILE.read_text()))
+    except Exception:
+        pass
+    return dict(_DEFAULT_WINDOW_STATE)
+
+
+def _on_window_resized(width, height) -> None:
+    _window_geometry["width"], _window_geometry["height"] = int(width), int(height)
+
+
+def _on_window_moved(x, y) -> None:
+    _window_geometry["x"], _window_geometry["y"] = int(x), int(y)
+
+
+def _place_window() -> None:
+    """After the GUI is up (screens are known): keep the window on a connected
+    screen and no larger than it. Fixes a saved position on a monitor that is no
+    longer present, and a saved size larger than the current display."""
+    if _window is None:
+        return
+    try:
+        screens = webview.screens or []
+        if not screens:
+            return
+        w, h = _window_geometry["width"], _window_geometry["height"]
+        x, y = _window_geometry["x"], _window_geometry["y"]
+
+        def _on(scr, px, py):
+            return scr.x <= px < scr.x + scr.width and scr.y <= py < scr.y + scr.height
+
+        # No saved position (first run / never moved): the window is already
+        # centered by create_window — only shrink it if it overflows the primary.
+        if x is None or y is None:
+            primary = screens[0]
+            nw, nh = min(w, primary.width), min(h, primary.height)
+            if (nw, nh) != (w, h):
+                _window.resize(nw, nh)
+                _window_geometry.update(width=nw, height=nh)
+            return
+
+        target = next((s for s in screens if _on(s, x, y)), None)
+        nw = min(w, (target or screens[0]).width)
+        nh = min(h, (target or screens[0]).height)
+        if target is not None:
+            # On a live screen: keep the position, nudge so it fits within it.
+            nx = min(max(x, target.x), target.x + target.width - nw)
+            ny = min(max(y, target.y), target.y + target.height - nh)
+        else:
+            # Saved screen is gone: center on the primary screen.
+            primary = screens[0]
+            nx = primary.x + (primary.width - nw) // 2
+            ny = primary.y + (primary.height - nh) // 2
+        if (nw, nh) != (w, h):
+            _window.resize(nw, nh)
+        if (nx, ny) != (x, y):
+            _window.move(nx, ny)
+        _window_geometry.update(width=nw, height=nh, x=nx, y=ny)
+    except Exception:
+        pass
+
+
+def _save_window_state() -> None:
+    """Persist the tracked geometry. Best-effort — never raises. Reads the
+    tracked dict (not the live window), so it is correct even when quitting from
+    the tray with the window hidden."""
+    try:
+        WINDOW_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        WINDOW_STATE_FILE.write_text(json.dumps(_window_geometry))
+    except Exception:
+        pass
 
 # Loading splash shown while the backend child starts (a few seconds, longer if
 # it is waiting on an MQTT broker). Self-contained — no external assets, since it
@@ -298,6 +401,7 @@ def _set_app_user_model_id() -> None:
 
 def _shutdown(*_) -> None:
     global _backend
+    _save_window_state()
     if _backend and _backend.poll() is None:
         _backend.terminate()
         try:
@@ -331,8 +435,10 @@ def _on_app_loaded(*_) -> None:
 
 
 def _load_when_ready(window) -> None:
-    """Worker (runs after the GUI loop starts): wait for the backend, load the
-    app, then reveal the window once its document has painted."""
+    """Worker (runs after the GUI loop starts): correct the window placement now
+    that screens are known, wait for the backend, load the app, then reveal the
+    window once its document has painted."""
+    _place_window()
     if _wait_for_backend():
         window.events.loaded += _on_app_loaded
         window.load_url(URL)
@@ -383,16 +489,22 @@ def launch_desktop() -> None:
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
+    state = _load_window_state()
+    _window_geometry.update(state)   # so an untouched session re-saves the same
     _window = webview.create_window(
         APP_NAME,
         html=_LOADING_HTML,
-        width=1280,
-        height=720,
+        width=state["width"],
+        height=state["height"],
+        x=state["x"],
+        y=state["y"],
         min_size=(900, 600),
         js_api=Api(),
         background_color=SPLASH_BG,
     )
     _window.events.closing += _on_closing
+    _window.events.resized += _on_window_resized
+    _window.events.moved += _on_window_moved
 
     _backend = _spawn_backend()
 

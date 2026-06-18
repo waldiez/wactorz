@@ -39,6 +39,38 @@ bash packaging/linux/build-appimage.sh    # → dist/Wactorz-<arch>.AppImage
 # or: make package-appimage               # (rebuilds the frontend first)
 ```
 
+### Portable build via Docker (recommended for releases)
+A native build inherits the build host's glibc as its floor and only bundles
+libraries present on that host — so it can crash on leaner machines (e.g. the
+QtWebEngine `libwebp.so.6` dependency missing). Build in the Ubuntu 22.04
+container instead (`Dockerfile.appimage`, glibc 2.35): it pins a low glibc,
+installs the Qt/X11/WebEngine deps (incl. an old `libwebp.so.6`) so PyInstaller
+bundles them, and bakes in `appimagetool`. One image builds either arch — pick
+with `--platform` (`build-appimage.sh` names the output per `uname -m`).
+
+```sh
+# aarch64 shown; for amd64 swap arm64 -> amd64. Apple Silicon runs arm64
+# natively; cross-arch needs qemu once: docker run --privileged --rm tonistiigi/binfmt --install all
+docker build --platform=linux/arm64 -t wactorz-appimage:arm64 -f packaging/linux/Dockerfile.appimage .
+
+rm -rf .local/build-venv          # the build venv is per host+arch+python — wipe
+                                  # it when switching arch, or away from a native build
+docker run --rm --platform=linux/arm64 -v "$PWD:/src" -w /src wactorz-appimage:arm64 \
+    bash packaging/linux/build-appimage.sh   # → dist/Wactorz-aarch64.AppImage
+```
+
+Then **audit** what the bundle still expects from the host (catches missing-lib
+gaps before a tester does — a lib-complete test box won't reveal them):
+```sh
+docker run --rm --platform=linux/arm64 -v "$PWD:/src" -w /src wactorz-appimage:arm64 \
+    bash packaging/linux/audit-appimage.sh dist/Wactorz.AppDir
+```
+A good result lists **only base libs** (linker, glibc, GL/GPU, DRM, Wayland/xcb)
+— those must come from the host and can't be bundled. Anything else (a codec, a
+Qt plugin lib, another `libwebp`-style straggler) is a portability risk → add
+its package to `Dockerfile.appimage` and rebuild. A clean build also shows no
+"Library not found" warnings during the PyInstaller freeze.
+
 ## Windows (Inno Setup)
 Uses the system **WebView2** runtime (preinstalled on Win10/11), so no Qt is
 bundled — the installer stays small. Build **on Windows**:
@@ -99,6 +131,13 @@ data dir:
 **Linux: blank window / no title-bar buttons under GNOME-Wayland.** The bundled
 QtWebEngine misbehaves on GNOME's Wayland session; the AppImage forces XWayland
 there automatically (`QT_QPA_PLATFORM=xcb`). KDE/others render fine on Wayland.
+
+**Linux: tray appears but no window (weak/quirky GPU).** Qt Quick's GL scene
+graph can't get a context on some GPUs (e.g. the Raspberry Pi's VideoCore), so
+the window never shows. AppRun falls back to Qt Quick's software rasterizer
+automatically on Raspberry Pi; force it anywhere with
+`WACTORZ_SOFTWARE_RENDER=1 ./Wactorz-*.AppImage`. GPU-capable machines are
+untouched (no perf cost). The web content still uses Chromium's own GPU.
 
 **Linux: choosing a webview backend.** The AppImage bundles Qt. For a `pip`
 install pick a backend extra: `wactorz[desktop-qt]` (PySide6/QtWebEngine) or

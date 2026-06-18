@@ -157,35 +157,41 @@ def compute_zone_comfort_rate(obs_raw: np.ndarray, occupied_only: bool = True) -
 class CSAccumulator:
     """Running comfort score over a window (episode or month).
 
-    .mean      — average comfort score over all *active* steps (occupied /
-                 pre-occupy / post-occupy; fully-unoccupied steps are skipped).
-    .mean_occ  — average comfort score over *occupied* steps only.
-    Built on compute_comfort_score (the same function the ensemble reports), so
-    the numbers match the controller's own reporting rather than a re-derivation.
+    STATE-WEIGHTED to match maddpg_v3.CSAccumulator: each active step is weighted
+    by its occupancy state_weight (occupied=1.0, pre_occupy=0.6, post_occupy=0.2;
+    fully-unoccupied steps are skipped). Built on compute_comfort_score.
+
+    .mean      — Σ(cs · w) / Σ(w)   (state-weighted average; max = 1.0)
+    .mean_occ  — Σ(cs) / n over fully-occupied steps only (w >= 1.0)
     """
 
     def __init__(self):
         self.reset()
 
     def reset(self):
-        self._sum = 0.0; self._n = 0
-        self._sum_occ = 0.0; self._n_occ = 0
+        self.cs_sum  = 0.0   # sum( cs * w )
+        self.w_sum   = 0.0   # sum( w )
+        self.occ_sum = 0.0   # sum( cs ) over fully-occupied steps
+        self.occ_n   = 0     # count of fully-occupied steps
 
     def update(self, obs):
-        score, info = compute_comfort_score(obs)
-        if score is None:
+        cs, cs_info = compute_comfort_score(obs)
+        if cs is None:
             return
-        self._sum += score; self._n += 1
-        if info.get('occ_state') == 'occupied':
-            self._sum_occ += score; self._n_occ += 1
+        w = cs_info.get('state_weight', 1.0)
+        self.cs_sum += cs * w
+        self.w_sum  += w
+        if w >= 1.0:
+            self.occ_sum += cs
+            self.occ_n   += 1
 
     @property
     def mean(self) -> float:
-        return (self._sum / self._n) if self._n > 0 else float('nan')
+        return (self.cs_sum / self.w_sum) if self.w_sum > 0 else float('nan')
 
     @property
     def mean_occ(self) -> float:
-        return (self._sum_occ / self._n_occ) if self._n_occ > 0 else float('nan')
+        return (self.occ_sum / self.occ_n) if self.occ_n > 0 else float('nan')
 
 
 # ============================================================================
@@ -283,7 +289,7 @@ if _GYM_OK:
             # 1. Energy penalty (log-normalised)
             energy_penalty = np.log1p(power / self.max_power) / np.log1p(1.0)
             energy_penalty = min(energy_penalty, 2.0)
-            energy_weight  = self.config.W_ENERGY * (1.5 if occ_state == 'unoccupied' else 1.0)
+            energy_weight  = self.config.W_ENERGY * (1.1 if occ_state == 'unoccupied' else 1.0)  # matches maddpg_v3 (was 1.5)
 
             # 2. Comfort penalty (4-tier occupancy)
             is_summer = get_seasonal_comfort(month, day) == COMFORT_SUMMER

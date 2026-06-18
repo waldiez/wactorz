@@ -38,6 +38,9 @@ hiddenimports = collect_submodules("wactorz")
 # static analysis misses — without this the frozen app has no keychain backend and
 # config secrets silently fail to persist. Bundle them all.
 hiddenimports += collect_submodules("keyring")
+# plyer likewise loads its per-OS notification backend dynamically — bundle it so
+# notifications work in the frozen app on Windows and Linux (macOS uses pyobjc).
+hiddenimports += collect_submodules("plyer")
 
 a = Analysis(
     [str(ROOT / "wactorz" / "desktop" / "app.py")],

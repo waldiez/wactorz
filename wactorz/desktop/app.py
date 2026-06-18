@@ -219,6 +219,19 @@ def _mqtt_reachable(timeout: float = 3.0) -> bool:
         return False
 
 
+def _wait_for_mqtt(timeout: float = 25.0) -> bool:
+    """Poll the MQTT broker until reachable or timeout. Covers the broker (often
+    a local Docker container) still starting up at login — a single probe would
+    lose that race and pop Configure even though it comes up a moment later."""
+    deadline = time.time() + timeout
+    while True:
+        if _mqtt_reachable(timeout=2.0):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(1.0)
+
+
 def _show_config(message: str = "") -> None:
     """Load the Configure form. Offer Cancel only when the backend is running,
     i.e. there's a live app to return to (not on first-run / failure)."""
@@ -416,26 +429,28 @@ def _install_macos_quit_handler() -> None:
 
 
 def _load_when_ready(window) -> None:
-    """Worker (runs after the GUI loop starts): correct the window placement now
-    that screens are known, wait for the backend, load the app, then reveal the
-    window once its document has painted."""
+    """Worker (runs after the GUI loop starts): correct the window placement,
+    wait for MQTT, start the backend, load the app, then reveal the window."""
+    global _backend
     _place_window()
     _install_macos_quit_handler()
-    if not _mqtt_reachable():
-        # The backend can't start without MQTT; skip the long wait and configure.
-        _stop_backend()
+    if not _wait_for_mqtt():
+        # The backend can't start without MQTT; configure instead of failing.
         notifications.notify(APP_NAME, "MQTT broker unreachable — opening configuration.")
         _show_config("MQTT broker unreachable — check the host and port.")
         _on_app_loaded()
-    elif _wait_for_backend():
-        window.events.loaded += _on_app_loaded
-        window.load_url(URL)
-        time.sleep(2.0)        # fallback reveal if the 'loaded' event doesn't fire
-        _on_app_loaded()
     else:
-        notifications.notify(APP_NAME, "Backend did not start in time")
-        window.load_html(pages.error_html(str(BACKEND_LOG)))
-        _on_app_loaded()
+        # Spawn only once MQTT is up, so the backend doesn't exit on a boot race.
+        _backend = _spawn_backend()
+        if _wait_for_backend():
+            window.events.loaded += _on_app_loaded
+            window.load_url(URL)
+            time.sleep(2.0)    # fallback reveal if the 'loaded' event doesn't fire
+            _on_app_loaded()
+        else:
+            notifications.notify(APP_NAME, "Backend did not start in time")
+            window.load_html(pages.error_html(str(BACKEND_LOG)))
+            _on_app_loaded()
 
     # Background update check on launch when enabled — silent unless one is found.
     if settings.auto_update_check():
@@ -500,7 +515,8 @@ def launch_desktop() -> None:
     _window.events.minimized += _on_minimized
     _window.events.restored += _on_restored
 
-    _backend = _spawn_backend()
+    # The backend is spawned later, in _load_when_ready, once MQTT is reachable
+    # (see _wait_for_mqtt) — spawning here would race a still-booting broker.
 
     # Tray backend matches the webview backend: the Qt tray (QSystemTrayIcon,
     # shares pywebview's QApplication) when Qt is used, otherwise pystray's

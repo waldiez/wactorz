@@ -12,4 +12,15 @@ export QT_API=PySide6
 if printf %s "${XDG_CURRENT_DESKTOP:-}" | grep -qi gnome; then
     export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
 fi
+# Qt Quick's GL scene graph (which composites the web view) fails to get a GL
+# context on some weak/quirky GPUs — the window then never appears. Fall back to
+# its software rasterizer there; the web content still uses Chromium's own GPU,
+# and GPU-capable machines are untouched. Auto-enabled on Raspberry Pi (VideoCore,
+# the known case); force anywhere with WACTORZ_SOFTWARE_RENDER=1. A reliable
+# generic GL probe isn't feasible in a launcher script, hence the targeted check.
+_model=""
+[ -r /proc/device-tree/model ] && _model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)"
+if [ "${WACTORZ_SOFTWARE_RENDER:-}" = "1" ] || printf %s "$_model" | grep -qi 'raspberry pi'; then
+    export QT_QUICK_BACKEND="${QT_QUICK_BACKEND:-software}"
+fi
 exec "$HERE/usr/bin/wactorz-desktop/wactorz-desktop" "$@"

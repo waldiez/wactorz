@@ -27,7 +27,16 @@ import urllib.request
 import webview
 from dotenv import find_dotenv, load_dotenv
 
-from wactorz.desktop import autostart, backend_config, notifications, pages, settings, tray, updates
+from wactorz.desktop import (
+    autostart,
+    backend_config,
+    desktop_entry,
+    notifications,
+    pages,
+    settings,
+    tray,
+    updates,
+)
 from wactorz.desktop.config import (
     APP_ICON,
     APP_ID,
@@ -484,6 +493,11 @@ def launch_desktop() -> None:
     # Raspberry Pi) should fall back to pywebview's GTK backend rather than crash.
     # Only force gui="qt" — and the Qt-only tweaks below — when Qt is present.
     _linux = sys.platform.startswith("linux")
+    if _linux:
+        # Install the menu entry + icon so the desktop portal can resolve the app
+        # id (silences the QDBus "App info not found" warning) and the taskbar
+        # shows our icon. Before window creation, when Qt registers with the portal.
+        desktop_entry.install()
     _use_qt = _linux and _qt_available()
     # No install-time guarantee of a Linux backend (PySide6/GTK are separate
     # extras), so fail clearly here instead of crashing deep inside pywebview.

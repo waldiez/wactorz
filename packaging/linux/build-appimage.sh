@@ -11,7 +11,10 @@ export QT_API=PySide6
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-VERSION="$(cd "$ROOT" && python3 -c 'import wactorz._version as v; print(v.__version__)')"
+# Read the version straight from the file — importing the wactorz package pulls
+# in the whole backend stack (psutil, …), which the build host's system python
+# need not have installed.
+VERSION="$(sed -n 's/.*__version__ *= *"\([^"]*\)".*/\1/p' "$ROOT/wactorz/_version.py")"
 DIST="$ROOT/dist"
 APPDIR="$DIST/Wactorz.AppDir"
 # AppImages are not cross-built (PyInstaller freezes for the host arch), so the

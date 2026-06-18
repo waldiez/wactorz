@@ -5,6 +5,7 @@ Supports Anthropic Claude, OpenAI, Ollama (local), and custom providers.
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -31,6 +32,45 @@ def _period_key(period: str) -> str:
 
 def _global_cost_kv_key(period: str) -> str:
     return f"_global_cost_{_period_key(period)}"
+
+
+# ── Live date/time context (shared by LLMAgent and non-LLMAgent actors) ───────
+
+def resolve_now(tz_name: Optional[str] = None) -> datetime:
+    """
+    Current time in the first usable timezone of:
+        tz_name (e.g. a user's pref_timezone) > WACTORZ_TZ env > TZ env > local.
+
+    Named zones are resolved with zoneinfo; any bad/unknown value falls through
+    to the next candidate so a turn never crashes on a typo. The final fallback
+    attaches the host's local offset via astimezone().
+    """
+    for name in (tz_name, os.getenv("WACTORZ_TZ"), os.getenv("TZ")):
+        if not name:
+            continue
+        try:
+            from zoneinfo import ZoneInfo
+            return datetime.now(ZoneInfo(name))
+        except Exception:
+            logger.debug("Unknown timezone '%s' — trying next candidate", name)
+    return datetime.now().astimezone()
+
+
+def current_time_context(tz_name: Optional[str] = None) -> str:
+    """
+    Live date/time preamble to prepend to any agent's system prompt so the LLM
+    anchors to the real present moment instead of its training-cutoff guess.
+    """
+    now = resolve_now(tz_name)
+    return (
+        "== CURRENT DATE & TIME (live, authoritative — trust over training data) ==\n"
+        f"It is now {now.strftime('%A, %d %B %Y, %H:%M')} "
+        f"{now.strftime('%Z')} (UTC{now.strftime('%z')}).\n"
+        "This is the real present moment. Your training data is older than this; "
+        "never infer the current year or date from memory. Resolve relative dates "
+        "like 'today', 'tonight', 'tomorrow', 'next Monday' against the time above "
+        "and use concrete calendar dates when scheduling.\n"
+    )
 
 
 _GLOBAL_COST_BOOTSTRAP_KEY = "_global_cost_bootstrap_v2"
@@ -1190,6 +1230,25 @@ class LLMAgent(Actor):
     def _current_task_description(self) -> str:
         return self._current_task
 
+    def _preferred_timezone_name(self) -> Optional[str]:
+        """
+        Override hook for subclasses that know the user's timezone.
+
+        Base LLMAgent has no access to user facts, so it returns None and
+        resolution falls through to the WACTORZ_TZ / TZ env vars and finally the
+        system-local zone. MainActor overrides this to return the persisted
+        ``pref_timezone`` fact.
+        """
+        return None
+
+    def _now_context(self) -> str:
+        """Live date/time block for this agent, honoring its preferred tz."""
+        return current_time_context(self._preferred_timezone_name())
+
+    def _system_prompt_with_now(self) -> str:
+        """System prompt with the live date/time block prepended every turn."""
+        return self._now_context() + "\n" + self.system_prompt
+
     async def on_start(self):
         _ = asyncio.create_task(_refresh_pricing())
         # Restore conversation history and rolling summary from persistence
@@ -1365,7 +1424,7 @@ class LLMAgent(Actor):
             ]
             response, usage = await self.llm.complete(
                 messages=safe_history,
-                system=self.system_prompt,
+                system=self._system_prompt_with_now(),
             )
 
             self._conversation_history.append({"role": "assistant", "content": response, "ts": time.time()})
@@ -1430,7 +1489,7 @@ class LLMAgent(Actor):
         ]
         response, usage = await self.llm.complete(
             messages=safe_history,
-            system=self.system_prompt,
+            system=self._system_prompt_with_now(),
         )
         ts_reply = time.time()
         self._conversation_history.append({"role": "assistant", "content": response, "ts": ts_reply})
@@ -1490,7 +1549,7 @@ class LLMAgent(Actor):
         try:
             async for chunk in self.llm.stream(
                 messages=safe_history,
-                system=self.system_prompt,
+                system=self._system_prompt_with_now(),
             ):
                 if isinstance(chunk, dict):
                     usage = chunk

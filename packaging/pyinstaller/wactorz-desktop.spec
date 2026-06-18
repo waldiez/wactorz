@@ -34,6 +34,10 @@ datas += collect_data_files("webview")  # pywebview JS/template assets
 # integrations with uninstalled heavy deps (torch, anthropic, …) are simply
 # skipped by PyInstaller with a warning.
 hiddenimports = collect_submodules("wactorz")
+# keyring discovers its OS backend dynamically (entry points), which PyInstaller's
+# static analysis misses — without this the frozen app has no keychain backend and
+# config secrets silently fail to persist. Bundle them all.
+hiddenimports += collect_submodules("keyring")
 
 a = Analysis(
     [str(ROOT / "wactorz" / "desktop" / "app.py")],

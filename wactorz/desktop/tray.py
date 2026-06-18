@@ -16,7 +16,13 @@ from wactorz.desktop.config import _ASSETS, APP_ICON, APP_ID, APP_NAME
 Callback = Callable[[], None]
 
 
-def build_qt_tray(on_toggle: Callback, on_check_updates: Callback, on_quit: Callback):
+def build_qt_tray(
+    on_toggle: Callback,
+    on_check_updates: Callback,
+    on_quit: Callback,
+    autostart_enabled: Callable[[], bool],
+    set_autostart: Callable[[bool], None],
+):
     """Create a Qt system-tray icon; return it, or None if PySide6 / a tray area
     is unavailable.
 
@@ -46,10 +52,21 @@ def build_qt_tray(on_toggle: Callback, on_check_updates: Callback, on_quit: Call
     show_hide.triggered.connect(on_toggle)
     check_updates = QAction("Check for Updates...", menu)
     check_updates.triggered.connect(on_check_updates)
+    autostart = QAction("Start at login", menu)
+    autostart.setCheckable(True)
+    autostart.setChecked(autostart_enabled())
+
+    def _toggle_autostart(checked: bool) -> None:
+        set_autostart(checked)
+        autostart.setChecked(autostart_enabled())   # re-sync if the write failed
+
+    autostart.triggered.connect(_toggle_autostart)
     quit_item = QAction("Quit Wactorz", menu)
     quit_item.triggered.connect(on_quit)
     menu.addAction(show_hide)
     menu.addAction(check_updates)
+    menu.addSeparator()
+    menu.addAction(autostart)
     menu.addSeparator()
     menu.addAction(quit_item)
     tray.setContextMenu(menu)
@@ -63,7 +80,13 @@ def build_qt_tray(on_toggle: Callback, on_check_updates: Callback, on_quit: Call
     return tray
 
 
-def build_pystray_tray(on_toggle: Callback, on_check_updates: Callback, on_quit: Callback):
+def build_pystray_tray(
+    on_toggle: Callback,
+    on_check_updates: Callback,
+    on_quit: Callback,
+    autostart_enabled: Callable[[], bool],
+    set_autostart: Callable[[bool], None],
+):
     """macOS / Windows tray via pystray's native backend (no Qt, no GTK); return
     the icon, or None.
 
@@ -81,9 +104,16 @@ def build_pystray_tray(on_toggle: Callback, on_check_updates: Callback, on_quit:
     except Exception:
         return None
 
+    def _toggle_autostart(icon, item) -> None:
+        set_autostart(not autostart_enabled())
+        icon.update_menu()   # re-render the checkmark from the new state
+
     menu = pystray.Menu(
         pystray.MenuItem("Show / Hide", lambda icon, item: on_toggle(), default=True),
         pystray.MenuItem("Check for Updates...", lambda icon, item: on_check_updates()),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Start at login", _toggle_autostart,
+                         checked=lambda item: autostart_enabled()),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit Wactorz", lambda icon, item: on_quit()),
     )

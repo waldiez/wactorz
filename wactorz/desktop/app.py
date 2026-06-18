@@ -25,7 +25,7 @@ import urllib.request
 import webview
 from dotenv import find_dotenv, load_dotenv
 
-from wactorz.desktop import notifications, pages, tray, updates
+from wactorz.desktop import autostart, notifications, pages, tray, updates
 from wactorz.desktop.config import (
     APP_ICON,
     APP_ID,
@@ -344,7 +344,10 @@ def launch_desktop() -> None:
     # installed (wactorz[desktop-gtk]). If no tray can be shown, _tray_ok stays
     # False and closing the window shuts the app down instead of hiding it.
     builder = tray.build_qt_tray if _use_qt else tray.build_pystray_tray
-    _tray = builder(_toggle, updates.check_for_updates, _shutdown)
+    _tray = builder(
+        _toggle, updates.check_for_updates, _shutdown,
+        autostart.is_enabled, autostart.set_enabled,
+    )
     _tray_ok = _tray is not None
 
     start_kwargs = {"icon": APP_ICON}

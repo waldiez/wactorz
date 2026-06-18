@@ -19,13 +19,14 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
 import webview
 from dotenv import find_dotenv, load_dotenv
 
-from wactorz.desktop import autostart, notifications, pages, settings, tray, updates
+from wactorz.desktop import autostart, backend_config, notifications, pages, settings, tray, updates
 from wactorz.desktop.config import (
     APP_ICON,
     APP_ID,
@@ -157,8 +158,11 @@ def _spawn_backend() -> "subprocess.Popen":
     # all-users install (e.g. C:\Program Files). INTERFACE=rest makes it serve
     # the web/REST UI on MONITOR_PORT (its default "cli" mode never binds it).
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    env = dict(
-        os.environ,
+    env = dict(os.environ)
+    # User config from the Configure view wins over the inherited shell/.env, so
+    # a stale shell var can't shadow it. The shell-owned vars below win over both.
+    env.update(backend_config.env_for_backend())
+    env.update(
         MONITOR_PORT=str(PORT),
         INTERFACE="rest",
         WACTORZ_STATE_DIR=str(DATA_DIR / "state"),
@@ -197,10 +201,48 @@ def _wait_for_backend(timeout: float = 30.0) -> bool:
     return False
 
 
+def _stop_backend() -> None:
+    global _backend
+    if _backend and _backend.poll() is None:
+        _backend.terminate()
+        try:
+            _backend.wait(timeout=5)
+        except Exception:
+            _backend.kill()
+    _backend = None
+
+
+def _restart_backend() -> None:
+    """Apply saved config: stop the child, show the splash, respawn with the new
+    env, then load the app (or the error page). Runs off the GUI thread."""
+    global _backend
+    _stop_backend()
+    if _window is not None:
+        _window.load_html(pages.LOADING_HTML)
+    _backend = _spawn_backend()
+    if _wait_for_backend():
+        if _window is not None:
+            _window.load_url(URL)
+    elif _window is not None:
+        _window.load_html(pages.error_html(str(BACKEND_LOG)))
+
+
 # ── JS bridge (window.pywebview.api.*) ──────────────────────────────────────
 class Api:
     def notify(self, title: str, body: str) -> None:
         notifications.notify(title, body)
+
+    def open_config(self) -> None:
+        """Load the Configure form into the window (called from the error page)."""
+        if _window is not None:
+            _window.load_html(pages.config_html(backend_config.load()))
+
+    def save_config(self, values: dict) -> bool:
+        """Persist config, then restart the backend off-thread so the call
+        returns promptly; the window reloads when the restart finishes."""
+        backend_config.save(values or {})
+        threading.Thread(target=_restart_backend, daemon=True).start()
+        return True
 
 
 # ── tray ────────────────────────────────────────────────────────────────────
@@ -230,14 +272,8 @@ def _set_app_user_model_id() -> None:
 
 
 def _shutdown(*_) -> None:
-    global _backend
     _save_window_state()
-    if _backend and _backend.poll() is None:
-        _backend.terminate()
-        try:
-            _backend.wait(timeout=5)
-        except Exception:
-            _backend.kill()
+    _stop_backend()
     os._exit(0)
 
 

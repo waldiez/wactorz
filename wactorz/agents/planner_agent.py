@@ -121,6 +121,23 @@ class PlannerAgent(Actor):
             _accumulate_global_cost(delta)
             self._last_period_cost_usd = self.total_cost_usd
 
+    def _now_context(self) -> str:
+        """
+        Live date/time block for planning prompts. Resolves the user's timezone
+        from main's facts (same source the scheduler uses) so a "tomorrow at 3pm"
+        request is decomposed against the correct calendar date and zone.
+        """
+        user_tz = None
+        if self._registry:
+            main = self._registry.find_by_name("main")
+            if main and hasattr(main, "get_user_facts"):
+                try:
+                    user_tz = main.get_user_facts().get("pref_timezone")
+                except Exception:
+                    pass
+        from .llm_agent import current_time_context
+        return current_time_context(user_tz)
+
     # ── Message handling ───────────────────────────────────────────────────
 
     async def handle_message(self, msg: Message):
@@ -1161,7 +1178,7 @@ class PlannerAgent(Actor):
             try:
                 feas_resp, _usage = await self.llm.complete(
                     messages=[{"role": "user", "content": feas_prompt}],
-                    system="Output only valid JSON. No markdown.",
+                    system=self._now_context() + "\nOutput only valid JSON. No markdown.",
                     max_tokens=400,
                 )
                 self._accrue_usage(_usage)
@@ -1495,7 +1512,7 @@ class PlannerAgent(Actor):
         try:
             response, _usage = await self.llm.complete(
                 messages=[{"role": "user", "content": prompt}],
-                system="You are a JSON-only pipeline architect. Output only a valid JSON array. No markdown, no explanation.",
+                system=self._now_context() + "\nYou are a JSON-only pipeline architect. Output only a valid JSON array. No markdown, no explanation.",
                 max_tokens=4000,
             )
             self._accrue_usage(_usage)
@@ -1923,7 +1940,7 @@ Example:
         try:
             response, _usage = await self.llm.complete(
                 messages=[{"role": "user", "content": prompt}],
-                system="You are a JSON-only task planner. Output only valid JSON arrays, nothing else.",
+                system=self._now_context() + "\nYou are a JSON-only task planner. Output only valid JSON arrays, nothing else.",
                 max_tokens=1500,
             )
             self._accrue_usage(_usage)

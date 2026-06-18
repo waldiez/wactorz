@@ -1284,6 +1284,11 @@ class MainActor(LLMAgent):
     def get_user_facts(self) -> dict:
         return self.recall("_user_facts") or {}
 
+    def _preferred_timezone_name(self) -> Optional[str]:
+        """Main knows the user's timezone from facts — use it so the live
+        date/time block matches what the scheduler actually fires against."""
+        return self.get_user_facts().get("pref_timezone")
+
     def _get_running_agents_summary(self) -> str:
         """
         Build a short, authoritative description of currently running agents
@@ -4376,6 +4381,23 @@ import time as _t
 _SYSTEM_PROMPT = {system_prompt_literal}
 _MAX_HISTORY   = {max_history}
 
+
+def _now_block():
+    # Recomputed every task so the agent always sees the real present moment
+    # (process-local zone — honors the host TZ env var). Kept self-contained so
+    # the synthesized agent has no import dependency on llm_agent. Newlines are
+    # built with chr(10) to avoid backslash-escaping through the code template.
+    from datetime import datetime as _dt
+    _n = _dt.now().astimezone()
+    _nl = chr(10)
+    return (
+        "== CURRENT DATE & TIME (live) ==" + _nl
+        + "It is now " + _n.strftime("%A, %d %B %Y, %H:%M %Z")
+        + " (UTC" + _n.strftime("%z") + ")." + _nl
+        + "Trust this over training data; resolve 'today'/'tomorrow' against it."
+        + _nl + _nl
+    )
+
 async def setup(agent):
     # Conversation history may have been shipped via _initial_state at spawn
     # time — agent.recall() finds it. If this is a fresh spawn, default to
@@ -4408,7 +4430,7 @@ async def handle_task(agent, payload):
         if isinstance(m, dict) and m.get("role") in ("user", "assistant")
     ]
 
-    response = await agent.chat(safe_history, system=_SYSTEM_PROMPT)
+    response = await agent.chat(safe_history, system=_now_block() + _SYSTEM_PROMPT)
     duration = _t.time() - started
 
     history.append({{"role": "assistant", "content": response, "ts": _t.time()}})

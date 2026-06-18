@@ -8,6 +8,7 @@ main thread silently no-ops. Other platforms use plyer.
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 
 from wactorz.desktop.config import APP_ICON, APP_NAME
@@ -134,15 +135,32 @@ def request_authorization() -> None:
         pass
 
 
+def _notify_linux(title: str, body: str) -> bool:
+    """Use notify-send (libnotify) directly. Avoids plyer's hard dbus-python
+    dependency (a C extension we don't bundle). notify-send ships on essentially
+    every Linux desktop. Returns True if the call ran."""
+    try:
+        cmd = ["notify-send", "-a", APP_NAME]
+        if APP_ICON.exists():
+            cmd += ["-i", str(APP_ICON)]
+        cmd += [title, body]
+        subprocess.run(cmd, check=False)
+        return True
+    except Exception:
+        return False
+
+
 def notify(title: str, body: str) -> None:
     if sys.platform == "darwin":
         _notify_macos_native(title, body)
         return
+    if sys.platform.startswith("linux") and _notify_linux(title, body):
+        return
     try:
         from plyer import notification
 
-        # app_icon gives the balloon/toast its icon on Windows (.ico) and Linux
-        # (.png); APP_ICON resolves to the bundled per-platform icon.
+        # Windows path (and Linux fallback). app_icon gives the toast its icon;
+        # APP_ICON resolves to the bundled per-platform icon.
         icon = str(APP_ICON) if APP_ICON.exists() else ""
         notification.notify(title=title, message=body, app_name=APP_NAME, app_icon=icon)
     except Exception:

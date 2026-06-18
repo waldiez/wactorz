@@ -347,11 +347,62 @@ def _on_app_loaded(*_) -> None:
     _window.show()
 
 
+# Retained: NSApp's delegate is a non-owning reference.
+_macos_app_delegate = None
+
+
+def _reveal_window() -> None:
+    """Show the window if it was hidden to the tray."""
+    global _hidden
+    if _window is not None:
+        _window.show()
+        _hidden = False
+
+
+def _install_macos_quit_handler() -> None:
+    """macOS: Dock-Quit / ⌘Q go through NSApp's applicationShouldTerminate, which
+    pywebview gates on the window 'closing' veto — so hide-to-tray also blocks
+    quitting. Install an app delegate that quits for real. The red close button
+    (windowShouldClose) is untouched, so it still hides to the tray."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from AppKit import NSApplication, NSTerminateNow
+        from Foundation import NSObject
+        from PyObjCTools import AppHelper
+
+        global _macos_app_delegate
+
+        class _QuitDelegate(NSObject):
+            def applicationShouldTerminate_(self, app):
+                _shutdown()              # saves state, stops backend, os._exit
+                return NSTerminateNow    # belt-and-suspenders if _shutdown returns
+
+            def applicationShouldHandleReopen_hasVisibleWindows_(self, app, has_visible):
+                # Dock-icon click while hidden to the tray → bring the window back.
+                if not has_visible:
+                    _reveal_window()
+                return True
+
+            def applicationSupportsSecureRestorableState_(self, app):
+                return True
+
+        _macos_app_delegate = _QuitDelegate.alloc().init()
+        # Set on the main thread (we run on a pywebview worker), after pywebview
+        # has already installed its own delegate during window creation.
+        AppHelper.callAfter(
+            lambda: NSApplication.sharedApplication().setDelegate_(_macos_app_delegate)
+        )
+    except Exception:
+        pass
+
+
 def _load_when_ready(window) -> None:
     """Worker (runs after the GUI loop starts): correct the window placement now
     that screens are known, wait for the backend, load the app, then reveal the
     window once its document has painted."""
     _place_window()
+    _install_macos_quit_handler()
     if not _mqtt_reachable():
         # The backend can't start without MQTT; skip the long wait and configure.
         _stop_backend()

@@ -15,10 +15,10 @@ from wactorz.desktop.config import APP_NAME
 _macos_notif_delegate = None
 
 
-def _notify_macos_native(title: str, body: str) -> None:
-    """Post an NSUserNotification via pyobjc. Installs a delegate that forces the
-    banner to show even when Wactorz is the frontmost app; macOS suppresses it
-    for the active app otherwise."""
+def _deliver_macos_notification(title: str, body: str) -> None:
+    """Build + deliver the NSUserNotification. MUST run on the main thread (see
+    _notify_macos_native). Installs a delegate that forces the banner to show
+    even when Wactorz is frontmost; macOS suppresses it for the active app."""
     global _macos_notif_delegate
     try:
         from Foundation import NSObject, NSUserNotification, NSUserNotificationCenter
@@ -40,6 +40,18 @@ def _notify_macos_native(title: str, body: str) -> None:
         # handle activation, so drop it rather than present a dead button.
         note.setHasActionButton_(False)
         center.deliverNotification_(note)
+    except Exception:
+        pass
+
+
+def _notify_macos_native(title: str, body: str) -> None:
+    """Post a notification, hopping to the main thread. Notifications are often
+    fired from worker threads (update check, backend wait), and AppKit delivery
+    off the main thread silently no-ops — so marshal it onto the main run loop."""
+    try:
+        from PyObjCTools import AppHelper
+
+        AppHelper.callAfter(_deliver_macos_notification, title, body)
     except Exception:
         pass
 

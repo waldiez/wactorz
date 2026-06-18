@@ -187,7 +187,7 @@ _LOADING_HTML = """\
 </style></head><body>
   <div class="ring"></div>
   <div class="name">Wactorz</div>
-  <div class="sub">Starting…</div>
+  <div class="sub">Starting...</div>
 </body></html>"""
 
 # Shown if the backend never answers. The usual cause is an unreachable MQTT
@@ -264,16 +264,30 @@ class Api:
         _notify(title, body)
 
 
+# Retained because NSUserNotificationCenter.delegate is a non-owning reference —
+# if the Python delegate is collected, foreground presentation stops working.
+_macos_notif_delegate = None
+
+
 def _notify_macos_native(title: str, body: str) -> None:
-    """macOS fallback for when plyer/pyobjus is unavailable: post via
-    NSUserNotification using pyobjc, which pywebview's Cocoa backend already
-    pulls in (no extra dependency). Same NSUserNotification API plyer wraps."""
+    """Post an NSUserNotification via pyobjc (already provided by pywebview's
+    Cocoa backend — no extra dependency). Installs a delegate that forces the
+    banner to show even when Wactorz is the frontmost app; macOS suppresses it
+    for the active app otherwise."""
+    global _macos_notif_delegate
     try:
-        from Foundation import NSUserNotification, NSUserNotificationCenter
+        from Foundation import NSObject, NSUserNotification, NSUserNotificationCenter
 
         center = NSUserNotificationCenter.defaultUserNotificationCenter()
         if center is None:
             return
+        if _macos_notif_delegate is None:
+            class _PresentAlways(NSObject):
+                def userNotificationCenter_shouldPresentNotification_(self, center, note):
+                    return True
+
+            _macos_notif_delegate = _PresentAlways.alloc().init()
+        center.setDelegate_(_macos_notif_delegate)
         note = NSUserNotification.alloc().init()
         note.setTitle_(title)
         note.setInformativeText_(body)
@@ -283,19 +297,63 @@ def _notify_macos_native(title: str, body: str) -> None:
 
 
 def _notify(title: str, body: str) -> None:
-    # Prefer plyer everywhere (uniform across platforms; its macOS backend wraps
-    # NSUserNotification via pyobjus, declared as a darwin dep). If plyer is
-    # unavailable, fall back on macOS to the same NSUserNotification call via
-    # pyobjc — no extra dependency.
+    # macOS: post NSUserNotification ourselves via pyobjc with a delegate that
+    # presents the banner even when we are frontmost. plyer's macOS backend goes
+    # through pyobjus, whose delegate support is unreliable, so it only shows when
+    # backgrounded — and pyobjc needs no pyobjus dependency.
+    if sys.platform == "darwin":
+        _notify_macos_native(title, body)
+        return
     try:
         from plyer import notification
 
         notification.notify(title=title, message=body, app_name=APP_NAME)
-        return
     except Exception:
         pass
-    if sys.platform == "darwin":
-        _notify_macos_native(title, body)
+
+
+# ── updates ─────────────────────────────────────────────────────────────────
+_LATEST_RELEASE_URL = "https://api.github.com/repos/waldiez/wactorz/releases/latest"
+
+
+def _version_tuple(v: str) -> tuple:
+    """Parse a dotted version into ints for comparison; non-numeric parts drop."""
+    return tuple(int(p) for p in v.split(".") if p.isdigit())
+
+
+def _is_newer(latest: str, current: str) -> bool:
+    """True if `latest` is a newer release than `current`. Zero-pads to equal
+    length so e.g. 0.5 vs 0.5.0 compare equal rather than older."""
+    a, b = _version_tuple(latest), _version_tuple(current)
+    if not a:
+        return False
+    n = max(len(a), len(b))
+    return a + (0,) * (n - len(a)) > b + (0,) * (n - len(b))
+
+
+def _check_for_updates() -> None:
+    """Manual update check (tray). Runs off the GUI thread so it never blocks."""
+    import threading
+
+    threading.Thread(target=_update_check_task, daemon=True).start()
+
+
+def _update_check_task() -> None:
+    try:
+        from wactorz import __version__ as current
+
+        req = urllib.request.Request(
+            _LATEST_RELEASE_URL,
+            headers={"User-Agent": "Wactorz-Desktop", "Accept": "application/vnd.github+json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            latest = json.loads(resp.read().decode()).get("tag_name", "").lstrip("v")
+        if latest and _is_newer(latest, current):
+            _notify(APP_NAME, f"Update available: v{latest} (you have v{current}).")
+        else:
+            _notify(APP_NAME, f"Wactorz is up to date (v{current}).")
+    except Exception:
+        _notify(APP_NAME, "Could not check for updates — see your connection and try again.")
 
 
 # ── tray (Qt) ─────────────────────────────────────────────────────────────────
@@ -338,9 +396,13 @@ def _build_tray() -> bool:
     menu = QMenu()
     show_hide = QAction("Show / Hide", menu)
     show_hide.triggered.connect(_toggle)
+    check_updates = QAction("Check for Updates...", menu)
+    check_updates.triggered.connect(_check_for_updates)
     quit_item = QAction("Quit Wactorz", menu)
     quit_item.triggered.connect(_shutdown)
     menu.addAction(show_hide)
+    menu.addAction(check_updates)
+    menu.addSeparator()
     menu.addAction(quit_item)
     _tray.setContextMenu(menu)
     _tray.activated.connect(
@@ -374,6 +436,8 @@ def _build_pystray_tray() -> bool:
 
     menu = pystray.Menu(
         pystray.MenuItem("Show / Hide", lambda icon, item: _toggle(), default=True),
+        pystray.MenuItem("Check for Updates...", lambda icon, item: _check_for_updates()),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit Wactorz", lambda icon, item: _shutdown()),
     )
     _tray = pystray.Icon("wactorz", image, APP_NAME, menu)

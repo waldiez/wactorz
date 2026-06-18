@@ -80,6 +80,14 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
     # instead of Cancel, e.g. after starting the broker.
     retry = ('<button onclick="window.pywebview.api.retry()" '
              'style="background:#0ea5e9;margin-left:.5rem">Retry</button>' if not can_cancel else "")
+    # Same action as the bottom button, as an icon at the top so it's reachable
+    # without scrolling: back-arrow to return to the app, or reload to retry.
+    if can_cancel:
+        top_action = ('<button class="iconbtn" title="Back to app" '
+                      'onclick="window.pywebview.api.close_config()">&#8592;</button>')
+    else:
+        top_action = ('<button class="iconbtn" title="Retry connection" '
+                      'onclick="window.pywebview.api.retry()">&#8635;</button>')
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{{margin:0;height:100%;background:#0A0E1A;color:#e2e8f0;
        font-family:-apple-system,Segoe UI,Roboto,sans-serif}}
@@ -97,9 +105,18 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
   #status{{font-size:.8rem;color:#22d3a0;margin-left:.75rem}}
   .banner{{background:#3b1d1d;color:#fca5a5;border:1px solid #7f1d1d;border-radius:6px;
        padding:.55rem .75rem;font-size:.8rem;margin:0 0 1rem}}
+  .topbar{{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}}
+  .iconbtn{{background:#11182e;border:1px solid #1e2640;color:#e2e8f0;border-radius:8px;
+       width:36px;height:36px;padding:0;margin:0;font-size:1.05rem;line-height:1;cursor:pointer}}
+  .iconbtn:hover{{border-color:#6366f1}}
 </style></head><body><div class="wrap">
-  <h1>Configure Wactorz</h1>
-  <p class="sub">Saved securely on this machine. Saving restarts the backend.</p>
+  <div class="topbar">
+    <div>
+      <h1>Configure Wactorz</h1>
+      <p class="sub">Saved securely on this machine. Saving restarts the backend.</p>
+    </div>
+    <div>{top_action}</div>
+  </div>
   {banner}
   <fieldset><legend>MQTT broker</legend>
     <label>Host</label><input id="MQTT_HOST" value="{val('MQTT_HOST')}" placeholder="localhost">

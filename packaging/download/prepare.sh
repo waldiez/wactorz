@@ -19,20 +19,25 @@ VERSION="$(sed -n 's/.*__version__ *= *"\([^"]*\)".*/\1/p' "$REPO/wactorz/_versi
 
 mkdir -p "$OUT"
 
-pick() {  # pick <glob> <stable-name>
-  local matches=("$SRC"/$1)
-  if [ "${#matches[@]}" -gt 0 ]; then
-    cp "${matches[0]}" "$OUT/$2"
-    echo "  $2  <-  $(basename "${matches[0]}")"
-  else
-    echo "  (skip $2 — no '$1' in $SRC)"
-  fi
+pick_first() {  # pick_first <stable-name> <glob>...  — copy the first match
+  local name="$1"; shift
+  local glob matches
+  for glob in "$@"; do
+    matches=("$SRC"/$glob)
+    if [ "${#matches[@]}" -gt 0 ]; then
+      cp "${matches[0]}" "$OUT/$name"
+      echo "  $name  <-  $(basename "${matches[0]}")"
+      return
+    fi
+  done
+  echo "  (skip $name — none of: $*)"
 }
 
 echo "[prepare] version $VERSION; artifacts from $SRC"
-pick "*.dmg"       "Wactorz-macos.dmg"
-pick "*Setup*.exe" "Wactorz-Setup.exe"
-pick "*.AppImage"  "Wactorz-x86_64.AppImage"
+pick_first "Wactorz-macos.dmg"         "*.dmg"
+pick_first "Wactorz-Setup.exe"         "*Setup*.exe" "*.exe"
+pick_first "Wactorz-x86_64.AppImage"   "*x86_64*.AppImage"
+pick_first "Wactorz-aarch64.AppImage"  "*aarch64*.AppImage" "*arm64*.AppImage"
 
 # Checksums over whatever was collected (skip if none).
 cd "$OUT"

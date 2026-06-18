@@ -1,32 +1,28 @@
 """Backend configuration the user edits from the desktop Configure view.
 
-Non-secret values live in DATA_DIR/user.env (KEY=VALUE); secrets go to the OS
-keychain via keyring. Both are merged into the backend child's environment at
-spawn, taking precedence over the inherited shell/.env so the desktop config is
-authoritative (this also sidesteps a stale shell var shadowing the real value).
+All values are stored in DATA_DIR/user.env (KEY=VALUE, chmod 0600 — owner only)
+and merged into the backend child's environment at spawn, taking precedence over
+the inherited shell/.env so the desktop config is authoritative (this also
+sidesteps a stale shell var shadowing the real value). Keys mirror .env.template.
 """
 from __future__ import annotations
+
+import os
+import stat
 
 from wactorz.desktop.config import DATA_DIR
 
 _USER_ENV = DATA_DIR / "user.env"
-_KEYRING_SERVICE = "wactorz-desktop"
 
-# Managed keys -> stored as a secret (keychain) rather than in user.env.
-_SECRET = {
-    "MQTT_HOST": False,
-    "MQTT_PORT": False,
-    "MQTT_USERNAME": False,
-    "MQTT_PASSWORD": True,
-    "HA_URL": False,
-    "HA_TOKEN": True,
-    "ANTHROPIC_API_KEY": True,
-    "OPENAI_API_KEY": True,
-    "GOOGLE_API_KEY": True,
-}
+# Managed keys, mirroring .env.template — everything the Configure view sets.
+KEYS = (
+    "LLM_PROVIDER", "LLM_MODEL", "LLM_API_KEY", "OPENAI_URL", "OLLAMA_URL",
+    "MQTT_HOST", "MQTT_PORT", "MQTT_USERNAME", "MQTT_PASSWORD",
+    "HA_URL", "HA_TOKEN",
+)
 
 
-def _read_user_env() -> dict[str, str]:
+def _read() -> dict[str, str]:
     out: dict[str, str] = {}
     try:
         for line in _USER_ENV.read_text().splitlines():
@@ -42,70 +38,37 @@ def _read_user_env() -> dict[str, str]:
     return out
 
 
-def _write_user_env(values: dict[str, str]) -> None:
+def _write(values: dict[str, str]) -> None:
     lines = [f"{k}={v}" for k, v in sorted(values.items()) if v]
     try:
         _USER_ENV.parent.mkdir(parents=True, exist_ok=True)
         _USER_ENV.write_text("\n".join(lines) + ("\n" if lines else ""))
-    except Exception:
-        pass
-
-
-def _get_secret(key: str) -> str:
-    try:
-        import keyring
-
-        return keyring.get_password(_KEYRING_SERVICE, key) or ""
-    except Exception:
-        return ""
-
-
-def _set_secret(key: str, value: str) -> None:
-    try:
-        import keyring
-
-        if value:
-            keyring.set_password(_KEYRING_SERVICE, key, value)
-        else:
-            try:
-                keyring.delete_password(_KEYRING_SERVICE, key)
-            except Exception:
-                pass
+        # Owner-only: it holds secrets (API key, HA token, MQTT password).
+        os.chmod(_USER_ENV, stat.S_IRUSR | stat.S_IWUSR)
     except Exception:
         pass
 
 
 def load() -> dict[str, str]:
-    """Current values of the managed keys (non-secrets from user.env, secrets
-    from the keychain). Only keys that have a value are included."""
-    env = _read_user_env()
-    values = {key: (_get_secret(key) if secret else env.get(key, ""))
-              for key, secret in _SECRET.items()}
-    return {k: v for k, v in values.items() if v}
+    """Current values of the managed keys (only those with a value)."""
+    env = _read()
+    return {k: env[k] for k in KEYS if env.get(k)}
 
 
 def save(values: dict[str, str]) -> None:
-    """Persist managed keys: non-secrets to user.env, secrets to the keychain.
-    A blank value clears that key. Unknown keys in user.env are left untouched."""
-    user_env = _read_user_env()
-    for key, secret in _SECRET.items():
+    """Persist the managed keys to user.env. A blank value clears that key;
+    unknown keys already in the file are left untouched."""
+    env = _read()
+    for key in KEYS:
         value = (values.get(key) or "").strip()
-        if secret:
-            _set_secret(key, value)
-        elif value:
-            user_env[key] = value
+        if value:
+            env[key] = value
         else:
-            user_env.pop(key, None)
-    _write_user_env(user_env)
+            env.pop(key, None)
+    _write(env)
 
 
 def env_for_backend() -> dict[str, str]:
-    """Non-empty config to inject into the backend child's environment: the whole
-    of user.env (including any hand-added keys) plus the managed secrets."""
-    env = dict(_read_user_env())
-    for key, secret in _SECRET.items():
-        if secret:
-            value = _get_secret(key)
-            if value:
-                env[key] = value
-    return {k: v for k, v in env.items() if v}
+    """Non-empty config to inject into the backend child's environment (the whole
+    user.env, including any hand-added keys)."""
+    return {k: v for k, v in _read().items() if v}

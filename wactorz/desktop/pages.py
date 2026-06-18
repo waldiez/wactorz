@@ -52,11 +52,14 @@ def error_html(log_path: str) -> str:
     return _ERROR_HTML.replace("{LOG_PATH}", log_path)
 
 
-# Provider -> env var for the LLM API key (one active at a time).
+# LLM_PROVIDER values (mirror .env.template).
 _LLM_PROVIDERS = [
-    ("ANTHROPIC_API_KEY", "Anthropic"),
-    ("OPENAI_API_KEY", "OpenAI"),
-    ("GOOGLE_API_KEY", "Google"),
+    ("anthropic", "Anthropic"),
+    ("openai", "OpenAI / compatible"),
+    ("ollama", "Ollama"),
+    ("gemini", "Gemini"),
+    ("nim", "NVIDIA NIM"),
+    ("none", "None"),
 ]
 
 
@@ -68,10 +71,10 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
     def val(key: str) -> str:
         return _html.escape(values.get(key, ""), quote=True)
 
-    active = next((k for k, _ in _LLM_PROVIDERS if values.get(k)), _LLM_PROVIDERS[0][0])
+    provider = values.get("LLM_PROVIDER") or "anthropic"
     options = "".join(
-        f'<option value="{k}"{" selected" if k == active else ""}>{label}</option>'
-        for k, label in _LLM_PROVIDERS
+        f'<option value="{pid}"{" selected" if pid == provider else ""}>{label}</option>'
+        for pid, label in _LLM_PROVIDERS
     )
     banner = f'<div class="banner">{_html.escape(message)}</div>' if message else ""
     cancel = ('<button onclick="window.pywebview.api.close_config()" '
@@ -113,11 +116,20 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
   <div class="topbar">
     <div>
       <h1>Configure Wactorz</h1>
-      <p class="sub">Saved securely on this machine. Saving restarts the backend.</p>
+      <p class="sub">Stored on this machine (owner-only). Saving restarts the backend.</p>
     </div>
     <div>{top_action}</div>
   </div>
   {banner}
+  <fieldset><legend>LLM</legend>
+    <label>Provider</label><select id="LLM_PROVIDER">{options}</select>
+    <label>Model</label><input id="LLM_MODEL" value="{val('LLM_MODEL')}" placeholder="claude-sonnet-4-6">
+    <label>API key</label><input id="LLM_API_KEY" type="password" value="{val('LLM_API_KEY')}">
+    <label>OpenAI-compatible URL <span style="color:#64748b">(OpenAI / Groq / vLLM …)</span></label>
+    <input id="OPENAI_URL" value="{val('OPENAI_URL')}" placeholder="https://api.openai.com/v1">
+    <label>Ollama URL <span style="color:#64748b">(when provider = Ollama)</span></label>
+    <input id="OLLAMA_URL" value="{val('OLLAMA_URL')}" placeholder="http://localhost:11434">
+  </fieldset>
   <fieldset><legend>MQTT broker</legend>
     <label>Host</label><input id="MQTT_HOST" value="{val('MQTT_HOST')}" placeholder="localhost">
     <div class="row">
@@ -126,21 +138,17 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
     </div>
     <label>Password</label><input id="MQTT_PASSWORD" type="password" value="{val('MQTT_PASSWORD')}">
   </fieldset>
-  <fieldset><legend>Home Assistant</legend>
+  <fieldset><legend>Home Assistant <span style="color:#64748b">(optional)</span></legend>
     <label>URL</label><input id="HA_URL" value="{val('HA_URL')}" placeholder="http://homeassistant.local:8123">
     <label>Token</label><input id="HA_TOKEN" type="password" value="{val('HA_TOKEN')}">
-  </fieldset>
-  <fieldset><legend>LLM</legend>
-    <label>Provider</label><select id="provider">{options}</select>
-    <label>API key</label><input id="apikey" type="password" value="{val(active)}">
   </fieldset>
   <button onclick="save()">Save &amp; Restart</button>{retry}{cancel}<span id="status"></span>
 <script>
   async function save() {{
+    const ids = ["LLM_PROVIDER","LLM_MODEL","LLM_API_KEY","OPENAI_URL","OLLAMA_URL",
+                 "MQTT_HOST","MQTT_PORT","MQTT_USERNAME","MQTT_PASSWORD","HA_URL","HA_TOKEN"];
     const v = {{}};
-    for (const id of ["MQTT_HOST","MQTT_PORT","MQTT_USERNAME","MQTT_PASSWORD","HA_URL","HA_TOKEN"])
-      v[id] = document.getElementById(id).value.trim();
-    v[document.getElementById("provider").value] = document.getElementById("apikey").value.trim();
+    for (const id of ids) v[id] = document.getElementById(id).value.trim();
     document.getElementById("status").textContent = "Saving & restarting…";
     await window.pywebview.api.save_config(v);
   }}

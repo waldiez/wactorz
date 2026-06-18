@@ -66,6 +66,7 @@ tts       = [
 desktop = [
     "pywebview>=5.1",
     "plyer>=2.1",                                  # notifications off macOS
+    "certifi",                                     # CA bundle for the update check (frozen TLS)
     # macOS notifications via UNUserNotificationCenter (prompts for permission);
     # pywebview pulls Cocoa/WebKit but not this framework. Falls back to legacy
     # NSUserNotification if absent.

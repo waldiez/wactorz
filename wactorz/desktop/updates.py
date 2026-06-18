@@ -8,6 +8,7 @@ check stays quiet unless an update is found.
 from __future__ import annotations
 
 import json
+import ssl
 import threading
 import urllib.request
 import webbrowser
@@ -65,7 +66,16 @@ def _update_check_task(interactive: bool) -> None:
             _LATEST_RELEASE_URL,
             headers={"User-Agent": "Wactorz-Desktop", "Accept": "application/vnd.github+json"},
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        # Use certifi's CA bundle (already shipped via the LLM SDKs): the frozen
+        # app's default OpenSSL cert paths don't resolve on the host, so a plain
+        # urllib HTTPS call fails TLS verification even though the network is fine.
+        try:
+            import certifi
+
+            ctx = ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            ctx = None
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
             data = json.loads(resp.read().decode())
         latest = (data.get("tag_name") or "").lstrip("v")
         url = data.get("html_url") or _RELEASES_PAGE

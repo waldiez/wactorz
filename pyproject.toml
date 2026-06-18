@@ -66,6 +66,7 @@ tts       = [
 desktop = [
     "pywebview>=5.1",
     "plyer>=2.1",
+    "pyobjus>=1.2.4;  sys_platform == 'darwin'",
     "pythonnet>=3.0;  sys_platform == 'win32'",    # Edge WebView2 backend
     # Tray on macOS/Windows uses pystray's native backend. Linux uses the Qt
     # tray (QSystemTrayIcon), so pystray/Pillow are excluded there to keep the

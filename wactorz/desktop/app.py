@@ -161,13 +161,38 @@ class Api:
         _notify(title, body)
 
 
+def _notify_macos_native(title: str, body: str) -> None:
+    """macOS fallback for when plyer/pyobjus is unavailable: post via
+    NSUserNotification using pyobjc, which pywebview's Cocoa backend already
+    pulls in (no extra dependency). Same NSUserNotification API plyer wraps."""
+    try:
+        from Foundation import NSUserNotification, NSUserNotificationCenter
+
+        center = NSUserNotificationCenter.defaultUserNotificationCenter()
+        if center is None:
+            return
+        note = NSUserNotification.alloc().init()
+        note.setTitle_(title)
+        note.setInformativeText_(body)
+        center.deliverNotification_(note)
+    except Exception:
+        pass
+
+
 def _notify(title: str, body: str) -> None:
+    # Prefer plyer everywhere (uniform across platforms; its macOS backend wraps
+    # NSUserNotification via pyobjus, declared as a darwin dep). If plyer is
+    # unavailable, fall back on macOS to the same NSUserNotification call via
+    # pyobjc — no extra dependency.
     try:
         from plyer import notification
 
         notification.notify(title=title, message=body, app_name=APP_NAME)
+        return
     except Exception:
         pass
+    if sys.platform == "darwin":
+        _notify_macos_native(title, body)
 
 
 # ── tray (Qt) ─────────────────────────────────────────────────────────────────

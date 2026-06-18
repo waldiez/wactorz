@@ -19,15 +19,19 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 DIST="$ROOT/dist"
-VERSION="$(cd "$ROOT" && python3 -c 'import wactorz._version as v; print(v.__version__)')"
+# Read the version from the file — importing the wactorz package pulls in the
+# whole backend stack (psutil, …), which the build host's system python need not
+# have installed.
+VERSION="$(sed -n 's/.*__version__ *= *"\([^"]*\)".*/\1/p' "$ROOT/wactorz/_version.py")"
 APP="$DIST/Wactorz.app"
 DMG="$DIST/Wactorz-$VERSION-arm64.dmg"
 IDENTITY="${MACOS_SIGN_IDENTITY:?set MACOS_SIGN_IDENTITY to your 'Developer ID Application: …' identity}"
 NOTARY_PROFILE="${MACOS_NOTARY_PROFILE:-wactorz-notary}"
 
 # Freeze from a dedicated, isolated venv (in gitignored .local/) for a clean,
-# reproducible bundle. Delete .local/build-venv to refresh its deps.
-VENV="$ROOT/.local/build-venv"
+# reproducible bundle. Per OS+arch so native and container builds don't clobber
+# each other's venv (a venv hard-codes its interpreter path). Delete to refresh.
+VENV="$ROOT/.local/build-venv-$(uname -s)-$(uname -m)"
 if [ ! -x "$VENV/bin/pyinstaller" ]; then
     echo "==> [0/5] Creating build venv: $VENV"
     mkdir -p "$ROOT/.local"

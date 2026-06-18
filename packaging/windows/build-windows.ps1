@@ -13,7 +13,9 @@ $ErrorActionPreference = "Stop"
 
 $here = $PSScriptRoot
 $root = (Resolve-Path (Join-Path $here "..\..")).Path
-$version = (& python -c "import wactorz._version as v; print(v.__version__)").Trim()
+# Read the version from the file — importing the wactorz package pulls in the
+# whole backend stack (psutil, …), which the build host's python need not have.
+$version = ([regex]::Match((Get-Content -Raw "$root\wactorz\_version.py"), '__version__\s*=\s*"([^"]+)"')).Groups[1].Value
 
 Push-Location $root
 try {

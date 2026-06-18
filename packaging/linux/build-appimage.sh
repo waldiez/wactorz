@@ -46,9 +46,10 @@ if ! command -v "$APPIMAGETOOL" >/dev/null 2>&1; then
 fi
 
 # Freeze from a dedicated, isolated venv (in gitignored .local/) so the bundle
-# is reproducible and never polluted by whatever's in the dev env. Delete
-# .local/build-venv to refresh its deps.
-VENV="$ROOT/.local/build-venv"
+# is reproducible and never polluted by whatever's in the dev env. Per OS+arch
+# so native and container builds don't clobber each other's venv (a venv
+# hard-codes its interpreter path). Delete the matching one to refresh its deps.
+VENV="$ROOT/.local/build-venv-$(uname -s)-$(uname -m)"
 if [ ! -x "$VENV/bin/pyinstaller" ]; then
     echo "==> [0/3] Creating build venv: $VENV"
     mkdir -p "$ROOT/.local"

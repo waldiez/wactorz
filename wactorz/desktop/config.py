@@ -2,13 +2,36 @@
 from __future__ import annotations
 
 import os
+import socket
 import sys
 from pathlib import Path
 
 APP_NAME = "Wactorz"
 APP_ID = "io.waldiez.wactorz"          # desktop-file id / WM_CLASS
 HOST = "127.0.0.1"
-PORT = int(os.environ.get("MONITOR_PORT", "8888"))
+
+
+def _free_port() -> int:
+    """An OS-assigned free loopback port, so the desktop's own backend never
+    collides with another wactorz already holding the default 8888 (which would
+    otherwise make the health probe attach to that instance's UI instead)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((HOST, 0))
+        return sock.getsockname()[1]
+
+
+def _resolve_port() -> int:
+    """Honour a valid MONITOR_PORT; otherwise grab a free port dynamically."""
+    raw = os.environ.get("MONITOR_PORT")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return _free_port()
+
+
+PORT = _resolve_port()
 URL = f"http://{HOST}:{PORT}"
 FROZEN = getattr(sys, "frozen", False)
 ICON_EXT = {"win32": "ico", "darwin": "icns"}.get(sys.platform, "png")

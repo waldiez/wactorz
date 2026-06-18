@@ -22,8 +22,15 @@ Order matters: agents must be subscribed **before** the bridge starts (episode-s
 
 ```
 @catalog spawn sinergym-labeler
+
+For DRL:
 @catalog spawn maddpg-fleet
 @catalog spawn sinergym-anomaly
+
+For AIF:
+@catalog spawn aif-fleet
+@catalog spawn aif-anomaly
+
 @catalog spawn sinergym-hsml
 ```
 
@@ -32,6 +39,13 @@ Launch the 15-zone fleet — **one line**, no spaces inside keys/zone names, Lin
 
 ```
 @maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"/home/tam/Projects/waldiez/wactorz/state/maddpg_office/model.pt","normalizer_path":"/home/tam/Projects/waldiez/wactorz/state/maddpg_office/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+```
+
+OR 
+
+```
+@aif-fleet
+{"action":"launch","env_id":"officeMedium-multiagent","model_path":"C:/Users/pkasn/Documents/wactorz_dev/wactorz/state/maddpg_office/aif_model.pkl","heat_low":15.0,"heat_high":22.0,"cool_low":24.0,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":4.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
 ```
 
 Sanity check (after the bridge starts, `env_info_seen` should be `true`):

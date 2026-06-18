@@ -73,6 +73,28 @@ while IFS= read -r loc; do
     echo "    pruned locales in $loc"
 done < <(find "$DIST/wactorz-desktop" -type d -name qtwebengine_locales 2>/dev/null)
 
+# Size trims (no functionality loss):
+#  - drop QtWebEngine's DevTools resources (we never open devtools);
+#  - keep only English Qt translations.
+# (No symbol stripping: stripping Qt/WebEngine plugins can break GL context
+#  creation — not worth the few MB.)
+find "$DIST/wactorz-desktop" -name 'qtwebengine_devtools_resources.pak' -delete 2>/dev/null || true
+while IFS= read -r tdir; do
+    find "$tdir" -maxdepth 1 -name '*.qm' ! -name 'en*' -delete 2>/dev/null || true
+    echo "    pruned translations in $tdir"
+done < <(find "$DIST/wactorz-desktop" -type d -name translations 2>/dev/null)
+
+# Never ship the graphics-driver stack: the GPU driver must match the HOST, so a
+# bundled Mesa/libGL shadows the host's and breaks hardware GL (blank window,
+# "EGL not available" — fine under LIBGL_ALWAYS_SOFTWARE=1, broken otherwise).
+# Delete any that PyInstaller bundled so the host's are always used.
+find "$DIST/wactorz-desktop" -type f \( \
+    -name 'libGL.so*'    -o -name 'libEGL.so*'   -o -name 'libGLX*.so*' -o \
+    -name 'libGLdispatch.so*' -o -name 'libgbm.so*'  -o -name 'libdrm.so*' -o \
+    -name 'libglapi.so*' -o -name 'libgallium*.so*' -o -name 'libEGL_*.so*' -o \
+    -name 'libdrm_*.so*' \) -delete 2>/dev/null || true
+echo "    excluded host graphics-stack libs"
+
 echo "==> [2/3] Assembling AppDir"
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/metainfo"

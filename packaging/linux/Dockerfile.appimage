@@ -28,5 +28,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libx11-6 libx11-xcb1 libxext6 libxfixes3 libxdamage1 libxcomposite1 \
       libxrandr2 libxi6 libxtst6 libxcb1 libxcb-render0 libxcb-shm0 \
       libxcb-cursor0 libxkbcommon0 libxkbcommon-x11-0 libxshmfence1 \
+      # extra Qt-plugin / QtWebEngine deps so PyInstaller bundles them (else the
+      # AppImage leans on the host having them). Resolves the "Library not found"
+      # build warnings — except libwebp.so.6 (Qt wants an old soname; 22.04 ships
+      # libwebp.so.7), which is harmless: Chromium uses its own bundled webp.
+      libxcb-shape0 libxcb-icccm4 libxcb-keysyms1 libice6 libsm6 \
+      libpulse0 libopus0 libminizip1 libxkbfile1 libxslt1.1 libevent-2.1-7 \
+      libwebp7 libwebpdemux2 libwebpmux3 \
     && rm -rf /var/lib/apt/lists/*
+
+# Qt's manylinux wheel links libwebp.so.6, but 22.04 ships libwebp.so.7 — so
+# without this PyInstaller can't bundle it and QtWebEngine crashes on hosts that
+# also lack .so.6. Fetch the matching old lib from Debian bullseye so it bundles.
+# (If the URL 404s after a bullseye point release, bump the version string.)
+RUN arch="$(dpkg --print-architecture)" && cd /tmp && \
+    wget -q "http://deb.debian.org/debian/pool/main/libw/libwebp/libwebp6_0.6.1-2.1+deb11u2_${arch}.deb" && \
+    dpkg -i libwebp6_*.deb && rm -f libwebp6_*.deb
+
+# Bake appimagetool into the image so build-appimage.sh skips the per-run
+# download. It's an AppImage needing FUSE (absent in containers), so run it in
+# extract-and-run mode — the env below covers the "already on PATH" path that
+# the script's download branch would otherwise set itself.
+RUN wget -qO /usr/local/bin/appimagetool \
+      "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$(uname -m).AppImage" \
+    && chmod +x /usr/local/bin/appimagetool
+ENV APPIMAGE_EXTRACT_AND_RUN=1
 WORKDIR /src

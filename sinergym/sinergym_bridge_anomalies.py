@@ -670,7 +670,7 @@ class SinergymFusekiBridge:
         enabled: bool        = True,
         batch_size: int      = 20,
     ) -> None:
-        self._base    = fuseki_url.rstrip("/")
+        self._base    = self._force_ipv4(fuseki_url.rstrip("/"))
         self._ds      = dataset
         self._auth    = (fuseki_user, fuseki_password) if fuseki_user else None
         self._enabled = enabled
@@ -679,6 +679,37 @@ class SinergymFusekiBridge:
         self._queue: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None
         self._step_counter = 0   # tracks total steps for retention pruning
+
+    @staticmethod
+    def _force_ipv4(url: str) -> str:
+        """Pin the URL's host to its IPv4 address.
+
+        Inside the bridge container `host.docker.internal` can resolve to an IPv6
+        address with no route, so urllib Fuseki writes fail with
+        `[Errno 101] Network is unreachable` (while host-side agents on IPv4
+        localhost write fine). Resolving to IPv4 here fixes it; Fuseki serves plain
+        HTTP with no name-based vhosts, so the Host header value is irrelevant.
+        Falls back to the original URL if no IPv4 is available.
+        """
+        import socket
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(url)
+        host = parts.hostname
+        if not host:
+            return url
+        try:
+            ipv4 = socket.getaddrinfo(
+                host, parts.port or 80, socket.AF_INET, socket.SOCK_STREAM
+            )[0][4][0]
+        except OSError:
+            return url
+        if ipv4 == host:
+            return url
+        netloc = ipv4 if parts.port is None else f"{ipv4}:{parts.port}"
+        if parts.username:
+            cred = parts.username + (f":{parts.password}" if parts.password else "")
+            netloc = f"{cred}@{netloc}"
+        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
     # ── Public API (called from main thread) ──────────────────────────────────
 

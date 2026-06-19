@@ -143,6 +143,10 @@ DEFAULT_BROKER_PORT      = 1883
 # Override per-run with env vars if a genuinely dead controller should fail fast.
 ACTION_TIMEOUT           = float(os.environ.get("BRIDGE_ACTION_TIMEOUT", "30.0"))   # global single-agent timeout (s)
 ZONE_ACTION_TIMEOUT      = float(os.environ.get("BRIDGE_ZONE_ACTION_TIMEOUT", "30.0"))  # per-zone agent timeout (s)
+# Fuseki HTTP write timeout. Generous default so a slow ingest (esp. the bridge
+# running amd64-emulated under QEMU on arm64) doesn't drop a batch; on native it
+# finishes in well under a second, so the high ceiling never bites.
+FUSEKI_HTTP_TIMEOUT      = float(os.environ.get("BRIDGE_FUSEKI_TIMEOUT", "60.0"))
 FALLBACK_WARN_EVERY      = 500
 
 # Fuseki defaults (overridable via env vars)
@@ -827,7 +831,7 @@ class SinergymFusekiBridge:
             headers={"Content-Type": "text/turtle"},
         )
         self._add_auth(req)
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=FUSEKI_HTTP_TIMEOUT) as r:
             if r.status not in (200, 201, 204):
                 print(f"[Fuseki] PUT {graph} → {r.status}")
 
@@ -840,7 +844,7 @@ class SinergymFusekiBridge:
             headers={"Content-Type": "text/turtle"},
         )
         self._add_auth(req)
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=FUSEKI_HTTP_TIMEOUT) as r:
             if r.status not in (200, 201, 204):
                 print(f"[Fuseki] POST {graph} → {r.status}")
 
@@ -856,7 +860,7 @@ class SinergymFusekiBridge:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         self._add_auth(req)
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=FUSEKI_HTTP_TIMEOUT) as r:
             if r.status not in (200, 204):
                 print(f"[Fuseki] SPARQL Update → {r.status}")
 

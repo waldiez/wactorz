@@ -13,7 +13,7 @@ def update_python_version(new_version):
         print(f"Updated {version_file}")
 
 def update_package_json(new_version):
-    files = [Path("frontend/package.json"), Path("node/package.json")]
+    files = [Path("frontend/package.json")]
     for package_file in files:
         if package_file.exists():
             with open(package_file, 'r') as f:

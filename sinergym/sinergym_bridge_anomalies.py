@@ -143,6 +143,10 @@ DEFAULT_BROKER_PORT      = 1883
 # Override per-run with env vars if a genuinely dead controller should fail fast.
 ACTION_TIMEOUT           = float(os.environ.get("BRIDGE_ACTION_TIMEOUT", "30.0"))   # global single-agent timeout (s)
 ZONE_ACTION_TIMEOUT      = float(os.environ.get("BRIDGE_ZONE_ACTION_TIMEOUT", "30.0"))  # per-zone agent timeout (s)
+# Fuseki HTTP write timeout. Generous default so a slow ingest (esp. the bridge
+# running amd64-emulated under QEMU on arm64) doesn't drop a batch; on native it
+# finishes in well under a second, so the high ceiling never bites.
+FUSEKI_HTTP_TIMEOUT      = float(os.environ.get("BRIDGE_FUSEKI_TIMEOUT", "60.0"))
 FALLBACK_WARN_EVERY      = 500
 
 # Fuseki defaults (overridable via env vars)
@@ -670,7 +674,7 @@ class SinergymFusekiBridge:
         enabled: bool        = True,
         batch_size: int      = 20,
     ) -> None:
-        self._base    = fuseki_url.rstrip("/")
+        self._base    = self._force_ipv4(fuseki_url.rstrip("/"))
         self._ds      = dataset
         self._auth    = (fuseki_user, fuseki_password) if fuseki_user else None
         self._enabled = enabled
@@ -679,6 +683,37 @@ class SinergymFusekiBridge:
         self._queue: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None
         self._step_counter = 0   # tracks total steps for retention pruning
+
+    @staticmethod
+    def _force_ipv4(url: str) -> str:
+        """Pin the URL's host to its IPv4 address.
+
+        Inside the bridge container `host.docker.internal` can resolve to an IPv6
+        address with no route, so urllib Fuseki writes fail with
+        `[Errno 101] Network is unreachable` (while host-side agents on IPv4
+        localhost write fine). Resolving to IPv4 here fixes it; Fuseki serves plain
+        HTTP with no name-based vhosts, so the Host header value is irrelevant.
+        Falls back to the original URL if no IPv4 is available.
+        """
+        import socket
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(url)
+        host = parts.hostname
+        if not host:
+            return url
+        try:
+            ipv4 = socket.getaddrinfo(
+                host, parts.port or 80, socket.AF_INET, socket.SOCK_STREAM
+            )[0][4][0]
+        except OSError:
+            return url
+        if ipv4 == host:
+            return url
+        netloc = ipv4 if parts.port is None else f"{ipv4}:{parts.port}"
+        if parts.username:
+            cred = parts.username + (f":{parts.password}" if parts.password else "")
+            netloc = f"{cred}@{netloc}"
+        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
     # ── Public API (called from main thread) ──────────────────────────────────
 
@@ -796,7 +831,7 @@ class SinergymFusekiBridge:
             headers={"Content-Type": "text/turtle"},
         )
         self._add_auth(req)
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=FUSEKI_HTTP_TIMEOUT) as r:
             if r.status not in (200, 201, 204):
                 print(f"[Fuseki] PUT {graph} → {r.status}")
 
@@ -809,7 +844,7 @@ class SinergymFusekiBridge:
             headers={"Content-Type": "text/turtle"},
         )
         self._add_auth(req)
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=FUSEKI_HTTP_TIMEOUT) as r:
             if r.status not in (200, 201, 204):
                 print(f"[Fuseki] POST {graph} → {r.status}")
 
@@ -825,7 +860,7 @@ class SinergymFusekiBridge:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         self._add_auth(req)
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=FUSEKI_HTTP_TIMEOUT) as r:
             if r.status not in (200, 204):
                 print(f"[Fuseki] SPARQL Update → {r.status}")
 
@@ -1359,9 +1394,9 @@ class SinergymBridgeMAS:
         client.loop_start()
         return client
 
-    def _publish(self, topic, payload):
+    def _publish(self, topic, payload, retain=False):
         if self._mqtt:
-            self._mqtt.publish(topic, json.dumps(payload), qos=0)
+            self._mqtt.publish(topic, json.dumps(payload), qos=0, retain=retain)
 
     # ── Env metadata ───────────────────────────────────────────────────────────
 
@@ -1410,6 +1445,11 @@ class SinergymBridgeMAS:
         obs_dim    = len(self._obs_variable_names) if self._obs_variable_names else None
         action_dim = len(self._act_low)
 
+        # retain=True so a fleet agent that subscribes AFTER episode start (its
+        # launch loads the model + builds N children, which is slower than the
+        # bridge's startup) still receives env_info immediately on subscribe.
+        # Without it the agent's info_timeout elapses with env_info_seen=False and
+        # every zone falls back to last-known actions. Cleared on shutdown.
         self._publish(env_info_topic(self.env_id), {
             "env_id":                self.env_id,
             "obs_variable_names":    self._obs_variable_names,
@@ -1422,7 +1462,7 @@ class SinergymBridgeMAS:
             "mode":                  self.mode,
             "zones":                 self.zones,
             "n_zones":               self.n_zones,
-        })
+        }, retain=True)
 
         for zone in self.zones:
             oi          = self.zone_obs_indices.get(zone, [])
@@ -1458,7 +1498,18 @@ class SinergymBridgeMAS:
                 "mode":                  self.mode,
                 "global_action_low":     self._act_low.tolist(),
                 "global_action_high":    self._act_high.tolist(),
-            })
+            }, retain=True)
+
+    def _clear_retained_env_info(self):
+        """Clear the retained env_info messages on shutdown so a later subscriber
+        can't pick up stale metadata from a stopped run. An empty retained payload
+        deletes the retained message on the broker."""
+        if not self._mqtt:
+            return
+        self._mqtt.publish(env_info_topic(self.env_id), payload=None, qos=0, retain=True)
+        for zone in self.zones:
+            self._mqtt.publish(zone_env_info_topic(self.env_id, zone),
+                               payload=None, qos=0, retain=True)
 
     # ── Zone obs slicing ───────────────────────────────────────────────────────
 
@@ -2174,6 +2225,7 @@ class SinergymBridgeMAS:
             print("\n[Bridge] Interrupted.")
         finally:
             env.close()
+            self._clear_retained_env_info()
             self._mqtt.loop_stop()
             self._mqtt.disconnect()
             self._fuseki.stop()

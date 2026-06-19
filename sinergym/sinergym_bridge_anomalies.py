@@ -1359,9 +1359,9 @@ class SinergymBridgeMAS:
         client.loop_start()
         return client
 
-    def _publish(self, topic, payload):
+    def _publish(self, topic, payload, retain=False):
         if self._mqtt:
-            self._mqtt.publish(topic, json.dumps(payload), qos=0)
+            self._mqtt.publish(topic, json.dumps(payload), qos=0, retain=retain)
 
     # ── Env metadata ───────────────────────────────────────────────────────────
 
@@ -1410,6 +1410,11 @@ class SinergymBridgeMAS:
         obs_dim    = len(self._obs_variable_names) if self._obs_variable_names else None
         action_dim = len(self._act_low)
 
+        # retain=True so a fleet agent that subscribes AFTER episode start (its
+        # launch loads the model + builds N children, which is slower than the
+        # bridge's startup) still receives env_info immediately on subscribe.
+        # Without it the agent's info_timeout elapses with env_info_seen=False and
+        # every zone falls back to last-known actions. Cleared on shutdown.
         self._publish(env_info_topic(self.env_id), {
             "env_id":                self.env_id,
             "obs_variable_names":    self._obs_variable_names,
@@ -1422,7 +1427,7 @@ class SinergymBridgeMAS:
             "mode":                  self.mode,
             "zones":                 self.zones,
             "n_zones":               self.n_zones,
-        })
+        }, retain=True)
 
         for zone in self.zones:
             oi          = self.zone_obs_indices.get(zone, [])
@@ -1458,7 +1463,18 @@ class SinergymBridgeMAS:
                 "mode":                  self.mode,
                 "global_action_low":     self._act_low.tolist(),
                 "global_action_high":    self._act_high.tolist(),
-            })
+            }, retain=True)
+
+    def _clear_retained_env_info(self):
+        """Clear the retained env_info messages on shutdown so a later subscriber
+        can't pick up stale metadata from a stopped run. An empty retained payload
+        deletes the retained message on the broker."""
+        if not self._mqtt:
+            return
+        self._mqtt.publish(env_info_topic(self.env_id), payload=None, qos=0, retain=True)
+        for zone in self.zones:
+            self._mqtt.publish(zone_env_info_topic(self.env_id, zone),
+                               payload=None, qos=0, retain=True)
 
     # ── Zone obs slicing ───────────────────────────────────────────────────────
 
@@ -2174,6 +2190,7 @@ class SinergymBridgeMAS:
             print("\n[Bridge] Interrupted.")
         finally:
             env.close()
+            self._clear_retained_env_info()
             self._mqtt.loop_stop()
             self._mqtt.disconnect()
             self._fuseki.stop()

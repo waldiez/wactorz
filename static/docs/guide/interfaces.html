@@ -115,6 +115,9 @@
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
       <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+      <a href="../guide/windows.html" class="">Windows</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
@@ -171,7 +174,7 @@
 <tr>
 <td><strong>Telegram</strong></td>
 <td><code>--interface telegram</code></td>
-<td>—</td>
+<td><code>python-telegram-bot</code></td>
 <td>Bot API, polling mode.</td>
 </tr>
 <tr>
@@ -267,7 +270,7 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 <tr>
 <td><code>POST</code></td>
 <td><code>/chat</code></td>
-<td>Send a message. Body: <code>{"message": "..."}</code>. Returns streamed or buffered response.</td>
+<td>Send a message. Body: <code>{"message": "..."}</code>. Returns a buffered JSON response.</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
@@ -279,10 +282,60 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 <td><code>/health</code></td>
 <td>System health check.</td>
 </tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/metrics</code></td>
+<td>Prometheus-format HTTP and actor metrics.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/ha-map</code></td>
+<td>Latest Home Assistant map snapshot, if available.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/actors</code></td>
+<td>Alias for <code>/agents</code>.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/actors/{actor_id}</code></td>
+<td>Get one actor's status payload.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/actors/{actor_id}/message</code></td>
+<td>Send a task payload to an actor. Body: <code>{"content": "..."}</code>.</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/actors/{actor_id}</code></td>
+<td>Stop and unregister a non-protected actor.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/actors/{actor_id}/pause</code></td>
+<td>Pause a non-protected actor.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/actors/{actor_id}/resume</code></td>
+<td>Resume a paused non-protected actor.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/actors/{actor_id}/metrics</code></td>
+<td>Get one actor's metrics payload.</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/agents/command</code></td>
+<td>Send <code>stop</code>, <code>pause</code>, or <code>resume</code> to a target actor.</td>
+</tr>
 </tbody>
 </table>
 <h4 id="authentication">Authentication</h4>
-<p>Set <code>API_KEY</code> in your <code>.env</code> to require an API key on all requests:</p>
+<p>Set <code>API_KEY</code> in your <code>.env</code> to require an API key on <code>/chat</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">API_KEY</span><span class="o">=</span>my-secret-key
 </code></pre></div>
 
@@ -355,7 +408,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </tr>
 <tr>
 <td><code>ask_agent(agent_name, message)</code></td>
-<td>Send a message to a named agent through <code>/chat</code>.</td>
+<td>Send a message through <code>/chat</code> with <code>agent_name</code> included in the payload.</td>
 </tr>
 <tr>
 <td><code>list_agents()</code></td>
@@ -474,7 +527,6 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </ol>
 <h4 id="configuration_1">Configuration</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">DISCORD_BOT_TOKEN</span><span class="o">=</span>MTI4...
-<span class="nv">DISCORD_PREFIX</span><span class="o">=</span>!<span class="w">        </span><span class="c1"># optional command prefix, default: none (mention or DM)</span>
 </code></pre></div>
 
 <blockquote>
@@ -522,7 +574,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </code></pre></div>
 
 <hr />
-<h2 id="telegram-built-in">Telegram <code>[built-in]</code></h2>
+<h2 id="telegram-requires-package">Telegram <code>[requires package]</code></h2>
 <p><strong>Flag:</strong> <code>--interface telegram</code></p>
 <table>
 <thead>
@@ -554,7 +606,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </ol>
 <h4 id="configuration_3">Configuration</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">TELEGRAM_BOT_TOKEN</span><span class="o">=</span><span class="m">1234567890</span>:AAF...
-<span class="nv">TELEGRAM_ALLOWED_USERS</span><span class="o">=</span><span class="m">123456789</span>,987654321<span class="w">   </span><span class="c1"># optional: restrict to user IDs</span>
+<span class="nv">TELEGRAM_ALLOWED_USER_ID</span><span class="o">=</span><span class="m">123456789</span><span class="w">   </span><span class="c1"># optional: restrict to a single user ID</span>
 </code></pre></div>
 
 <hr />

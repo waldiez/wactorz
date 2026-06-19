@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Deployment — Wactorz</title>
   <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
   <style>
@@ -105,9 +107,6 @@
   <nav class="topbar-links">
     <a href="https://github.com/waldiez/wactorz">GitHub</a>
     <a href="https://pypi.org/project/wactorz/">PyPI</a>
-    <a href="../api/rust/" target="_blank" rel="noopener">Rust Docs</a>
-    <a href="../api/js/" target="_blank" rel="noopener">JS Docs</a>
-    <a href="../api/python/" target="_blank" rel="noopener">Python Docs</a>
   </nav>
 </header>
 
@@ -116,20 +115,17 @@
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
       <a href="../guide/development.html" class="">Installation</a>
-      <a href="../guide/architecture.html" class="">Architecture</a>
-      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/deployment.html" class="active">Deployment</a>
       <a href="../guide/windows.html" class="">Windows</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/prometheus.html" class="">Prometheus</a>
     </div>
-    <div class="sidebar-group">
-      <div class="sidebar-label">Reference</div>
-      <a href="../reference/api.html" class="">REST & WebSocket API</a>
-      <a href="../reference/mqtt_topics.html" class="">MQTT Topics</a>
-      <a href="../reference/python-api.html" class="">Python API</a>
-    </div>
-    <a href="https://waldiez.github.io/wactorz/api/rust/" class="external" target="_blank" rel="noopener">Rust Docs ↗</a>
-    <a href="https://waldiez.github.io/wactorz/api/js/" class="external" target="_blank" rel="noopener">JS/TS Docs ↗</a>
-    <a href="https://waldiez.github.io/wactorz/api/python/" class="external" target="_blank" rel="noopener">Python Docs ↗</a>
   </aside>
   <main class="content">
 <h1 id="deployment">Deployment</h1>
@@ -143,15 +139,20 @@
 </thead>
 <tbody>
 <tr>
-<td><strong>Full Docker</strong></td>
-<td>Simplest; everything in containers</td>
+<td><strong>Docker Hub</strong></td>
+<td>New users; no repo clone needed — just Docker Desktop</td>
 </tr>
 <tr>
-<td><strong>Native binary</strong></td>
-<td>Better SSH key access, faster cold start, smaller footprint</td>
+<td><strong>Full Docker</strong></td>
+<td>Full stack via <code>git clone</code>; everything in containers</td>
 </tr>
 </tbody>
 </table>
+<p>For Home Assistant OS / Supervised, use the <a href="https://github.com/waldiez/wactorz/tree/main/ha-addon">Wactorz HA addon</a> instead.</p>
+<hr />
+<h2 id="docker-hub">Docker Hub</h2>
+<p>The fastest way to get started — no repo clone or Python needed. See the dedicated guide:</p>
+<p>→ <strong><a href="dockerhub.md">Quickstart: Docker Hub</a></strong></p>
 <hr />
 <h2 id="full-docker-composeyaml">Full Docker  (<code>compose.yaml</code>)</h2>
 <h3 id="prerequisites">Prerequisites</h3>
@@ -164,179 +165,71 @@
 <span class="nb">cd</span><span class="w"> </span>wactorz
 cp<span class="w"> </span>.env.template<span class="w"> </span>.env
 nano<span class="w"> </span>.env<span class="w">           </span><span class="c1"># set LLM_API_KEY at minimum</span>
-docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+
+<span class="c1"># Python stack (recommended starting point)</span>
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
-<p>Open <code>http://localhost/</code> (or <code>http://localhost:80/</code>).</p>
+<p>Open <code>http://localhost:8888</code> (monitor UI) or <code>http://localhost:8000</code> (REST API).</p>
 <h3 id="services">Services</h3>
+<p>Default profile (no flag) starts Mosquitto only. Add <code>--profile</code> flags to bring up more services.</p>
 <table>
 <thead>
 <tr>
+<th>Profile</th>
 <th>Service</th>
 <th>Internal address</th>
-<th>Public path</th>
+<th>External port</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>nginx (dashboard + proxy)</td>
-<td>—</td>
-<td><code>:80</code></td>
-</tr>
-<tr>
-<td>wactorz</td>
-<td><code>wactorz:8080</code> / <code>:8081</code></td>
-<td><code>/api/</code>, <code>/ws</code></td>
-</tr>
-<tr>
+<td><em>(all)</em></td>
 <td>mosquitto</td>
 <td><code>mosquitto:1883</code> / <code>:9001</code></td>
-<td><code>/mqtt</code></td>
+<td><code>:1883</code>, <code>:9001</code></td>
 </tr>
 <tr>
+<td><code>python</code> / <code>python-full</code></td>
+<td>wactorz-python</td>
+<td><code>wactorz-python:8000</code></td>
+<td><code>:8000</code> (REST API)</td>
+</tr>
+<tr>
+<td><code>python</code> / <code>python-full</code></td>
+<td>monitor UI</td>
+<td><code>wactorz-python:8888</code></td>
+<td><code>:8888</code></td>
+</tr>
+<tr>
+<td><code>python</code> / <code>python-full</code></td>
+<td>prometheus</td>
+<td><code>wactorz-prometheus:9090</code></td>
+<td><code>:9090</code></td>
+</tr>
+<tr>
+<td><code>python-full</code></td>
 <td>fuseki</td>
 <td><code>fuseki:3030</code></td>
-<td><code>/fuseki/</code></td>
+<td><code>:3030</code></td>
 </tr>
 <tr>
+<td><code>python-full</code></td>
 <td>home-assistant</td>
 <td><code>homeassistant:8123</code></td>
 <td><code>:8123</code></td>
 </tr>
 </tbody>
 </table>
-<hr />
-<h2 id="native-binary-composenativeyaml">Native binary  (<code>compose.native.yaml</code>)</h2>
-<p>Only Mosquitto and nginx run in Docker.  The <code>wactorz</code> binary runs directly on the host OS.</p>
-<h3 id="advantages">Advantages</h3>
-<table>
-<thead>
-<tr>
-<th></th>
-<th>Full Docker</th>
-<th>Native binary</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>SSH keys (NautilusAgent)</td>
-<td>Needs volume mounts</td>
-<td><code>~/.ssh/</code> works automatically</td>
-</tr>
-<tr>
-<td>Cold start</td>
-<td>Container init</td>
-<td><code>&lt; 100 ms</code></td>
-</tr>
-<tr>
-<td>Binary size</td>
-<td>39 MB image</td>
-<td>~12 MB binary</td>
-</tr>
-<tr>
-<td>Cross-compile</td>
-<td>buildx + QEMU</td>
-<td><code>cargo build --target …</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="prerequisites_1">Prerequisites</h3>
-<ul>
-<li>Docker + Compose plugin (for Mosquitto + nginx)</li>
-<li>The <code>wactorz</code> binary (see below)</li>
-</ul>
-<h3 id="bootstrap-first-deploy">Bootstrap (first deploy)</h3>
-<h4 id="option-a-use-the-package-script">Option A — use the package script</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># On the build machine:</span>
-bash<span class="w"> </span>scripts/package-native.sh
-<span class="c1"># → wactorz-native-YYYYMMDD.tar.gz</span>
-
-<span class="c1"># Transfer to target host:</span>
-scp<span class="w"> </span>wactorz-native-*.tar.gz<span class="w"> </span>user@host:~/
-ssh<span class="w"> </span>user@host
-tar<span class="w"> </span>xzf<span class="w"> </span>wactorz-native-*.tar.gz
-<span class="nb">cd</span><span class="w"> </span>wactorz-native-*/
-bash<span class="w"> </span>deploy-native.sh<span class="w">        </span><span class="c1"># interactive wizard</span>
-</code></pre></div>
-
-<h4 id="option-b-use-scriptsdeploysh">Option B — use <code>scripts/deploy.sh</code></h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># 1. Configure .env</span>
-cp<span class="w"> </span>.env.template<span class="w"> </span>.env
-nano<span class="w"> </span>.env
-<span class="c1"># Set: LLM_API_KEY, DEPLOY_HOST, DEPLOY_PATH, NAUTILUS_SSH_KEY</span>
-<span class="c1"># If the remote already has nginx running (certbot/SSL), also set:</span>
-<span class="c1">#   DEPLOY_NGINX_MODE=existing</span>
-
-<span class="c1"># 2. Run the deploy wizard (builds frontend + binary, rsyncs, restarts)</span>
-bash<span class="w"> </span>scripts/deploy.sh
-</code></pre></div>
-
-<p>The wizard will:
-1. Check / generate an SSH key (<code>~/.ssh/wactorz_deploy</code>)
-2. Build the frontend (<code>npm run build</code>)
-3. Build the binary via <code>cargo build --release</code> or Docker buildx
-4. rsync <code>static/app/</code> and the binary to the remote host
-5. Create <code>.env</code> from <code>.env.template</code> on the remote (preserves existing)
-6. Start Mosquitto via Docker + configure nginx (see modes below)
-7. Install + start the <code>wactorz</code> systemd service</p>
-<h4 id="nginx-modes">nginx modes</h4>
-<table>
-<thead>
-<tr>
-<th><code>DEPLOY_NGINX_MODE</code></th>
-<th>What happens</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>docker</code> (default)</td>
-<td>Starts the Docker nginx container from <code>compose.native.yaml</code> on port 80</td>
-</tr>
-<tr>
-<td><code>existing</code></td>
-<td>Skips Docker nginx; uploads <code>infra/nginx/wactorz-snippet.conf</code> to <code>DEPLOY_NGINX_CONF</code> on the remote and reloads the host nginx</td>
-</tr>
-</tbody>
-</table>
-<p><strong>If you already have nginx running (e.g. with certbot/SSL):</strong></p>
-<div class="highlight"><pre><span></span><code><span class="c1"># In your local .env:</span>
-<span class="nv">DEPLOY_NGINX_MODE</span><span class="o">=</span>existing
-<span class="nv">DEPLOY_NGINX_CONF</span><span class="o">=</span>/etc/nginx/conf.d/wactorz.conf<span class="w">   </span><span class="c1"># adjust if needed</span>
-
-<span class="c1"># Run deploy normally:</span>
-bash<span class="w"> </span>scripts/deploy.sh
-</code></pre></div>
-
-<p>Then, on the remote, include the snippet inside your SSL <code>server { }</code> block (once):</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># /etc/nginx/sites-enabled/your-site.conf  (inside server { } block)</span>
-<span class="k">include</span><span class="w"> </span><span class="n">/etc/nginx/conf.d/wactorz.conf</span>;
-</code></pre></div>
-
-<p>After <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>, the dashboard is live at your existing HTTPS URL.</p>
-<p><strong>Important: MQTT_HOST must be <code>localhost</code> in native mode.</strong>
-The wactorz binary connects to Mosquitto on <code>localhost:1883</code>.
-If you copied <code>.env</code> from a Docker setup, change <code>MQTT_HOST=mosquitto</code> → <code>MQTT_HOST=localhost</code>.</p>
-<h3 id="subsequent-deploys-from-the-wactorz-dashboard">Subsequent deploys — from the Wactorz dashboard</h3>
-<p>Once the system is running, use <strong>NautilusAgent</strong> from the IO bar:</p>
-<div class="highlight"><pre><span></span><code><span class="err">#</span><span class="w"> </span><span class="n">Frontend</span><span class="w"> </span><span class="k">only</span><span class="w"> </span><span class="p">(</span><span class="n">fastest</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="k">no</span><span class="w"> </span><span class="nc">binary</span><span class="w"> </span><span class="n">rebuild</span><span class="w"> </span><span class="n">needed</span><span class="p">)</span>
-<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">push</span><span class="w"> </span><span class="p">.</span><span class="o">/</span><span class="k">static</span><span class="o">/</span><span class="n">app</span><span class="o">/</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@host</span><span class="err">:</span><span class="o">/</span><span class="n">opt</span><span class="o">/</span><span class="n">wactorz</span><span class="o">/</span><span class="k">static</span><span class="o">/</span><span class="n">app</span><span class="o">/</span>
-<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="k">exec</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@host</span><span class="w"> </span><span class="n">sudo</span><span class="w"> </span><span class="n">systemctl</span><span class="w"> </span><span class="n">restart</span><span class="w"> </span><span class="n">wactorz</span>
-
-<span class="err">#</span><span class="w"> </span><span class="nc">Binary</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">frontend</span>
-<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">push</span><span class="w"> </span><span class="o">/</span><span class="k">path</span><span class="o">/</span><span class="k">to</span><span class="o">/</span><span class="n">wactorz</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@host</span><span class="err">:</span><span class="o">/</span><span class="n">opt</span><span class="o">/</span><span class="n">wactorz</span><span class="o">/</span><span class="n">wactorz</span>
-<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="k">exec</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@host</span><span class="w"> </span><span class="n">chmod</span><span class="w"> </span><span class="o">+</span><span class="n">x</span><span class="w"> </span><span class="o">/</span><span class="n">opt</span><span class="o">/</span><span class="n">wactorz</span><span class="o">/</span><span class="n">wactorz</span>
-<span class="nv">@nautilus</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="k">exec</span><span class="w"> </span><span class="n">deploy</span><span class="nv">@host</span><span class="w"> </span><span class="n">sudo</span><span class="w"> </span><span class="n">systemctl</span><span class="w"> </span><span class="n">restart</span><span class="w"> </span><span class="n">wactorz</span>
-</code></pre></div>
-
-<p>Or re-run the script locally:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">DEPLOY_SKIP_BINARY</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>bash<span class="w"> </span>scripts/deploy.sh<span class="w">   </span><span class="c1"># frontend-only redeploy</span>
-bash<span class="w"> </span>scripts/deploy.sh<span class="w">                         </span><span class="c1"># full redeploy</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># App + Fuseki + Home Assistant</span>
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
 <hr />
 <h2 id="systemd-service-persistent-starts-on-boot">systemd service (persistent, starts on boot)</h2>
-<div class="highlight"><pre><span></span><code><span class="c1"># On the target host (after initial deploy):</span>
-sudo<span class="w"> </span>cp<span class="w"> </span>systemd/wactorz.service<span class="w"> </span>/etc/systemd/system/
+<p>To run the Python backend directly on a host (with a containerised or host-native
+Mosquitto), install the unit template:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>cp<span class="w"> </span>systemd/wactorz.service<span class="w"> </span>/etc/systemd/system/
 sudo<span class="w"> </span>nano<span class="w"> </span>/etc/systemd/system/wactorz.service
 <span class="c1"># Edit: WorkingDirectory, EnvironmentFile, ExecStart, User</span>
 
@@ -345,7 +238,9 @@ sudo<span class="w"> </span>systemctl<span class="w"> </span><span class="nb">en
 journalctl<span class="w"> </span>-u<span class="w"> </span>wactorz<span class="w"> </span>-f
 </code></pre></div>
 
-<p>The unit template at <code>systemd/wactorz.service</code> has comments for every field.</p>
+<p>The unit runs <code>run.sh</code> (which activates <code>./.venv</code> if present and starts
+<code>python3 -m wactorz</code>). The template at <code>systemd/wactorz.service</code> has comments for
+every field.</p>
 <hr />
 <h2 id="environment-variables">Environment variables</h2>
 <p>See <code>.env.template</code> for the full annotated list.  The most important ones:</p>
@@ -361,7 +256,7 @@ journalctl<span class="w"> </span>-u<span class="w"> </span>wactorz<span class="
 <tr>
 <td><code>LLM_PROVIDER</code></td>
 <td><code>anthropic</code></td>
-<td><code>anthropic</code> / <code>openai</code> / <code>ollama</code></td>
+<td><code>anthropic</code> / <code>openai</code> / <code>ollama</code> / <code>gemini</code> / <code>nim</code></td>
 </tr>
 <tr>
 <td><code>LLM_MODEL</code></td>
@@ -370,8 +265,23 @@ journalctl<span class="w"> </span>-u<span class="w"> </span>wactorz<span class="
 </tr>
 <tr>
 <td><code>LLM_API_KEY</code></td>
-<td><em>(required)</em></td>
-<td>API key</td>
+<td><em>(required for cloud providers)</em></td>
+<td>API key — not needed for Ollama only</td>
+</tr>
+<tr>
+<td><code>OPENAI_URL</code></td>
+<td><em>(unset)</em></td>
+<td>Redirect <code>openai</code> provider to a compatible endpoint (Groq, Together, vLLM, etc.)</td>
+</tr>
+<tr>
+<td><code>LLM_COST_LIMIT_USD</code></td>
+<td><code>0</code> (disabled)</td>
+<td>Hard spend cap per period — set <code>0</code> to disable</td>
+</tr>
+<tr>
+<td><code>LLM_COST_LIMIT_PERIOD</code></td>
+<td><code>monthly</code></td>
+<td>Reset period: <code>daily</code>, <code>weekly</code>, or <code>monthly</code></td>
 </tr>
 <tr>
 <td><code>MQTT_HOST</code></td>
@@ -384,19 +294,49 @@ journalctl<span class="w"> </span>-u<span class="w"> </span>wactorz<span class="
 <td></td>
 </tr>
 <tr>
-<td><code>API_ADDR</code></td>
-<td><code>0.0.0.0:8080</code></td>
-<td>REST listen address</td>
+<td><code>PORT</code></td>
+<td><code>8000</code></td>
+<td>Python REST API listen port</td>
 </tr>
 <tr>
-<td><code>WS_ADDR</code></td>
-<td><code>0.0.0.0:8081</code></td>
-<td>WS bridge listen address</td>
+<td><code>WS_PORT</code> / <code>MONITOR_PORT</code></td>
+<td><code>8888</code></td>
+<td>Web UI / monitor server port</td>
 </tr>
 <tr>
-<td><code>DASHBOARD_EXTERNAL_PORT</code></td>
-<td><code>80</code></td>
-<td>nginx host port</td>
+<td><code>PROMETHEUS_EXTERNAL_PORT</code></td>
+<td><code>9090</code></td>
+<td>Prometheus host port</td>
+</tr>
+<tr>
+<td><code>PROMETHEUS_SCRAPE_INTERVAL</code></td>
+<td><code>15s</code></td>
+<td>Global Prometheus scrape interval</td>
+</tr>
+<tr>
+<td><code>PROMETHEUS_MONITOR_MOSQUITTO</code></td>
+<td><code>1</code></td>
+<td>Enable Mosquitto TCP availability probe</td>
+</tr>
+<tr>
+<td><code>PROMETHEUS_MONITOR_FUSEKI</code></td>
+<td><code>0</code></td>
+<td>Enable Fuseki HTTP availability probe</td>
+</tr>
+<tr>
+<td><code>FUSEKI_URL</code></td>
+<td><em>(unset)</em></td>
+<td>Fuseki SPARQL endpoint for the Knowledge Graph view</td>
+</tr>
+<tr>
+<td><code>FUSEKI_DATASET</code></td>
+<td><code>wactorz</code></td>
+<td>Default dataset name</td>
+</tr>
+<tr>
+<td><code>FUSEKI_USER</code> / <code>FUSEKI_PASSWORD</code></td>
+<td><code>admin</code> / <em>(unset)</em></td>
+<td>Fuseki credentials (if auth is enabled)</td>
 </tr>
 <tr>
 <td><code>NAUTILUS_SSH_KEY</code></td>
@@ -413,56 +353,11 @@ journalctl<span class="w"> </span>-u<span class="w"> </span>wactorz<span class="
 <td><code>10</code></td>
 <td>SSH timeout in seconds</td>
 </tr>
-<tr>
-<td><code>DEPLOY_HOST</code></td>
-<td><em>(required for deploy.sh)</em></td>
-<td><code>user@hostname</code></td>
-</tr>
-<tr>
-<td><code>DEPLOY_PATH</code></td>
-<td><code>/opt/wactorz</code></td>
-<td>Remote base directory</td>
-</tr>
-<tr>
-<td><code>DEPLOY_SSH_PORT</code></td>
-<td><code>22</code></td>
-<td>SSH port on remote host</td>
-</tr>
-<tr>
-<td><code>DEPLOY_RESTART_CMD</code></td>
-<td><code>systemctl restart wactorz</code></td>
-<td>Service restart command</td>
-</tr>
-<tr>
-<td><code>DEPLOY_SKIP_BINARY</code></td>
-<td><code>0</code></td>
-<td><code>1</code> = frontend-only deploy</td>
-</tr>
-<tr>
-<td><code>DEPLOY_NGINX_MODE</code></td>
-<td><code>docker</code></td>
-<td><code>docker</code> or <code>existing</code> (host nginx already running)</td>
-</tr>
-<tr>
-<td><code>DEPLOY_NGINX_CONF</code></td>
-<td><code>/etc/nginx/conf.d/wactorz.conf</code></td>
-<td>Remote path for the nginx snippet</td>
-</tr>
-<tr>
-<td><code>CARGO_BUILD_TARGET</code></td>
-<td><em>(host arch)</em></td>
-<td>e.g. <code>x86_64-unknown-linux-gnu</code></td>
-</tr>
-<tr>
-<td><code>RUST_LOG</code></td>
-<td><code>wactorz=info</code></td>
-<td>Logging filter</td>
-</tr>
 </tbody>
 </table>
 <hr />
-<h2 id="ssh-key-management">SSH key management</h2>
-<p>Generate a dedicated deploy key (recommended):</p>
+<h2 id="ssh-key-management-nautilusagent">SSH key management (NautilusAgent)</h2>
+<p>Generate a dedicated key (recommended):</p>
 <div class="highlight"><pre><span></span><code>ssh-keygen<span class="w"> </span>-t<span class="w"> </span>ed25519<span class="w"> </span>-C<span class="w"> </span><span class="s2">&quot;wactorz-deploy&quot;</span><span class="w"> </span>-f<span class="w"> </span>~/.ssh/wactorz_deploy<span class="w"> </span>-N<span class="w"> </span><span class="s2">&quot;&quot;</span>
 
 <span class="c1"># Authorise on the target host</span>
@@ -472,20 +367,37 @@ ssh-copy-id<span class="w"> </span>-i<span class="w"> </span>~/.ssh/wactorz_depl
 <span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>.env
 </code></pre></div>
 
-<p><code>scripts/deploy.sh</code> will generate the key interactively if <code>NAUTILUS_SSH_KEY</code> is unset and <code>~/.ssh/wactorz_deploy</code> does not exist.</p>
 <hr />
 <h2 id="updating-home-assistant-integration">Updating Home Assistant integration</h2>
 <p>Wactorz can send REST commands to Home Assistant and receive automations.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># infra/homeassistant/configuration.yaml</span>
 <span class="nt">rest_command</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">wactorz_chat</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://wactorz:8080/api/chat&quot;</span>
+<span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://wactorz-python:8000/api/chat&quot;</span>
 <span class="w">    </span><span class="nt">method</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">POST</span>
 <span class="w">    </span><span class="nt">content_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;application/json&quot;</span>
 <span class="w">    </span><span class="nt">payload</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;{&quot;to&quot;:&quot;main-actor&quot;,&quot;content&quot;:&quot;{{</span><span class="nv"> </span><span class="s">message</span><span class="nv"> </span><span class="s">}}&quot;}&#39;</span>
 </code></pre></div>
 
-<p>Set <code>HOMEASSISTANT_URL</code> and <code>HOMEASSISTANT_TOKEN</code> in <code>.env</code>.</p>
+<p>Set <code>HA_URL</code> and <code>HA_TOKEN</code> in <code>.env</code>.</p>
+<hr />
+<h2 id="connecting-to-an-existing-home-assistant-instance">Connecting to an existing Home Assistant instance</h2>
+<p>If you already have Home Assistant running (in Docker or elsewhere), point Wactorz at it via <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># .env</span>
+<span class="nv">HA_URL</span><span class="o">=</span>http://192.168.1.x:8123<span class="w">   </span><span class="c1"># or http://homeassistant.local:8123</span>
+<span class="nv">HA_TOKEN</span><span class="o">=</span>eyJ...<span class="w">                  </span><span class="c1"># Long-lived access token from HA → Profile → Security</span>
+</code></pre></div>
+
+<p>Then start only the Wactorz stack (no embedded HA):</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<p>The <code>python-full</code> profile starts a fresh Home Assistant container alongside Wactorz on
+the same Docker network — useful for a clean dev environment, not for connecting to an
+existing production HA.</p>
+<blockquote>
+<p><strong>Home Assistant OS / Supervised users</strong> — use the <a href="https://github.com/waldiez/wactorz/tree/main/ha-addon">Wactorz HA addon</a> instead. It runs inside the Supervisor and connects to your existing HA instance automatically.</p>
+</blockquote>
   </main>
 </div>
 

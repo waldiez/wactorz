@@ -115,6 +115,9 @@
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
       <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+      <a href="../guide/windows.html" class="">Windows</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/mqtt_auto_wiring.html" class="active">Auto-Wiring</a>
@@ -173,7 +176,7 @@
 
 <hr />
 <h2 id="step-1-topiccontract-what-an-agent-declares">Step 1: TopicContract — What an Agent Declares</h2>
-<p>Every agent that publishes or subscribes to MQTT topics has a <code>TopicContract</code> — a dataclass that declares its data interface:</p>
+<p>Agents that publish or subscribe through the DynamicAgent API, declare a contract, or are spawned with topic fields get a <code>TopicContract</code> — a dataclass that declares their data interface:</p>
 <div class="highlight"><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">TopicContract</span><span class="p">:</span>
     <span class="n">name</span><span class="p">:</span>             <span class="nb">str</span>                    <span class="c1"># agent name</span>
@@ -182,9 +185,10 @@
     <span class="n">triggers_when</span><span class="p">:</span>    <span class="nb">dict</span>                   <span class="c1"># conditions that trigger action</span>
     <span class="n">produces_schema</span><span class="p">:</span>  <span class="nb">dict</span>                   <span class="c1"># declared field names + types</span>
     <span class="n">consumes_schema</span><span class="p">:</span>  <span class="nb">dict</span>                   <span class="c1"># expected input field names</span>
-    <span class="n">observed_samples</span><span class="p">:</span> <span class="nb">dict</span>                   <span class="c1"># AUTO-CAPTURED real payloads</span>
     <span class="n">node</span><span class="p">:</span>             <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>          <span class="c1"># remote node name (if edge)</span>
     <span class="n">actor_id</span><span class="p">:</span>         <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>          <span class="c1"># unique actor ID</span>
+    <span class="n">timestamp</span><span class="p">:</span>        <span class="nb">float</span>                  <span class="c1"># registration/update time</span>
+    <span class="n">observed_samples</span><span class="p">:</span> <span class="nb">dict</span>                   <span class="c1"># AUTO-CAPTURED real payloads</span>
 </code></pre></div>
 
 <p>Contracts are registered in the <code>TopicRegistry</code> — a global in-memory index accessible from anywhere via <code>get_topic_bus().registry</code>.</p>
@@ -210,6 +214,9 @@ When <code>agent.subscribe(topic, callback)</code> is called, the topic is added
 <span class="k">if</span> <span class="n">existing</span><span class="p">:</span>
     <span class="k">if</span> <span class="n">topic</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">existing</span><span class="o">.</span><span class="n">subscribes</span><span class="p">:</span>
         <span class="n">existing</span><span class="o">.</span><span class="n">subscribes</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">topic</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">contract</span> <span class="o">=</span> <span class="n">TopicContract</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">subscribes</span><span class="o">=</span><span class="p">[</span><span class="n">topic</span><span class="p">],</span> <span class="n">actor_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">actor_id</span><span class="p">)</span>
+    <span class="n">bus</span><span class="o">.</span><span class="n">register_contract</span><span class="p">(</span><span class="n">contract</span><span class="p">)</span>
 </code></pre></div>
 
 <p><strong>Path 3 — Explicit via <code>agent.declare_contract()</code>:</strong>
@@ -223,7 +230,7 @@ Agents can declare their full contract in <code>setup()</code>:</p>
     <span class="p">)</span>
 </code></pre></div>
 
-<p><code>declare_contract()</code> accepts common LLM kwarg variants (<code>schema</code> → <code>produces_schema</code>, <code>topics</code> → <code>publishes</code>, etc.) and coerces bare strings to lists.</p>
+<p><code>declare_contract()</code> accepts common LLM kwarg variants (<code>schema</code>, <code>output_schema</code>, <code>produce_schema</code> → <code>produces_schema</code>; <code>input_schema</code>, <code>consume_schema</code> → <code>consumes_schema</code>; <code>topics</code>, <code>publish</code> → <code>publishes</code>; <code>subscribe</code> → <code>subscribes</code>) and coerces bare strings to lists.</p>
 <hr />
 <h2 id="step-2-observed-schema-capture-the-vocabulary-solution">Step 2: Observed Schema Capture — The Vocabulary Solution</h2>
 <h3 id="the-problem-in-detail">The Problem in Detail</h3>
@@ -288,13 +295,13 @@ Agents can declare their full contract in <code>setup()</code>:</p>
 <h3 id="fallback-live-topic-sampling">Fallback: Live Topic Sampling</h3>
 <p>If <code>observed_samples</code> is empty (the producer started before the schema-capture code was deployed, or the agent hasn't published yet), the planner falls back to <code>_sample_live_topics()</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">_sample_live_topics</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bus</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
-    <span class="c1"># Single MQTT connection subscribes to ALL known publish topics</span>
+    <span class="c1"># Single MQTT connection subscribes to up to 10 known publish topics</span>
     <span class="c1"># Collects one real message per topic with a global timeout</span>
     <span class="c1"># Stores results back into contracts for future calls</span>
 </code></pre></div>
 
 <p>This method:
-1. Gathers all publish topics from all registered contracts
+1. Gathers up to 10 publish topics from registered contracts (up to 5 per contract)
 2. Opens one MQTT connection and subscribes to all of them
 3. Waits up to 15 seconds total (not per-topic) for messages to arrive
 4. Parses each payload, extracts field names and types
@@ -339,7 +346,7 @@ Agents can declare their full contract in <code>setup()</code>:</p>
 
 <p>If multiple topics match, all candidates are provided to the LLM to pick the most relevant one. If none match, the task is enriched with a note and the planner proceeds anyway (it may create a new producer).</p>
 <h3 id="42-schema-context-injection">4.2 Schema Context Injection</h3>
-<p>Before generating code, the planner builds schema context from two sources:</p>
+<p>Before generating code, the planner builds schema context from three sources:</p>
 <p><strong>Source A — <code>observed_samples</code> on contracts:</strong></p>
 <div class="highlight"><pre><span></span><code><span class="k">for</span> <span class="n">contract</span> <span class="ow">in</span> <span class="n">bus</span><span class="o">.</span><span class="n">registry</span><span class="o">.</span><span class="n">all_contracts</span><span class="p">():</span>
     <span class="n">samples</span> <span class="o">=</span> <span class="n">contract</span><span class="o">.</span><span class="n">observed_samples</span> <span class="ow">or</span> <span class="p">{}</span>
@@ -422,7 +429,7 @@ Agents can declare their full contract in <code>setup()</code>:</p>
 - The next time the planner generates a consumer, it sees the new field names
 - Existing consumers are NOT automatically updated (they use the field names baked into their code)</p>
 <h3 id="manifest-propagation">Manifest Propagation</h3>
-<p>Each agent publishes a retained MQTT manifest at <code>agents/{id}/manifest</code> that includes <code>observed_samples</code>. This means:
+<p>Dynamic agents and actors that call <code>publish_manifest()</code> publish a retained MQTT manifest at <code>agents/{id}/manifest</code> that includes <code>observed_samples</code> when available. This means:
 - MainActor's manifest listener picks it up and stores it in <code>_agent_manifests</code>
 - The planner can query manifests even for agents it didn't spawn
 - Schema data survives agent restarts (retained MQTT messages persist in the broker)</p>
@@ -440,9 +447,6 @@ Agents can declare their full contract in <code>setup()</code>:</p>
 
   [temp-simulator]
     publishes : sensors/data
-    OBSERVED on &#39;sensors/data&#39;: fields={&#39;temp&#39;: &#39;float&#39;, &#39;humidity&#39;: &#39;float&#39;}
-                                example={&#39;temp&#39;: 30.5, &#39;humidity&#39;: 47.7}
-
   [mean-logger]
     subscribes: sensors/data
 
@@ -489,7 +493,7 @@ Auto-wiring opportunities:
 <h2 id="end-to-end-example">End-to-End Example</h2>
 <p>User says: <em>"spawn an agent to log the mean of the last 5 temperature values"</em></p>
 <div class="highlight"><pre><span></span><code><span class="mf">1.</span><span class="w"> </span><span class="n">MainActor</span><span class="w"> </span><span class="n">classifies</span><span class="w"> </span><span class="n">intent</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">PIPELINE</span>
-<span class="mf">2.</span><span class="w"> </span><span class="n">PlannerAgent</span><span class="w"> </span><span class="n">spawned</span>
+<span class="mf">2.</span><span class="w"> </span><span class="n">PlannerAgent</span><span class="w"> </span><span class="n">spawned</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="n">plan</span><span class="o">-</span><span class="n">only</span><span class="w"> </span><span class="n">mode</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="n">returns</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">pending</span><span class="w"> </span><span class="n">proposal</span>
 
 <span class="mf">3.</span><span class="w"> </span><span class="n">Topic</span><span class="w"> </span><span class="n">resolution</span><span class="o">:</span>
 <span class="w">   </span><span class="n">_resolve_data_references</span><span class="p">()</span><span class="w"> </span><span class="n">finds</span><span class="w"> </span><span class="s">&quot;temperature&quot;</span><span class="w"> </span><span class="n">keywords</span>
@@ -507,22 +511,25 @@ Auto-wiring opportunities:
 <span class="w">   </span><span class="s">&quot;OBSERVED on &#39;sensors/data&#39;: fields={&#39;temp&#39;: &#39;float&#39;, &#39;humidity&#39;: &#39;float&#39;}&quot;</span>
 <span class="w">   </span><span class="s">&quot;CRITICAL: Use payload[&#39;temp&#39;] — NOT payload[&#39;temperature&#39;]&quot;</span>
 
-<span class="mf">6.</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">generates</span><span class="w"> </span><span class="n">spawn</span><span class="w"> </span><span class="n">config</span><span class="o">:</span>
+<span class="mf">6.</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">generates</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="n">item</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="err">`</span><span class="n">spawn_config</span><span class="err">`</span><span class="o">:</span>
 <span class="w">   </span><span class="p">{</span>
 <span class="w">     </span><span class="s">&quot;name&quot;</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;temp-mean-logger&quot;</span><span class="p">,</span>
-<span class="w">     </span><span class="s">&quot;type&quot;</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;dynamic&quot;</span><span class="p">,</span>
-<span class="w">     </span><span class="s">&quot;code&quot;</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;</span>
-<span class="w">       </span><span class="n">async</span><span class="w"> </span><span class="n">def</span><span class="w"> </span><span class="n">setup</span><span class="p">(</span><span class="n">agent</span><span class="p">)</span><span class="o">:</span>
-<span class="w">           </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span>
-<span class="w">           </span><span class="n">async</span><span class="w"> </span><span class="n">def</span><span class="w"> </span><span class="n">on_temp</span><span class="p">(</span><span class="n">payload</span><span class="p">)</span><span class="o">:</span>
-<span class="w">               </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">].</span><span class="n">append</span><span class="p">(</span><span class="n">payload</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="err">&#39;</span><span class="n">temp</span><span class="err">&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span><span class="w">  </span><span class="err">#</span><span class="w"> </span><span class="err">←</span><span class="w"> </span><span class="n">correct</span><span class="w"> </span><span class="n">field</span><span class="w"> </span><span class="n">name</span>
-<span class="w">               </span><span class="k">if</span><span class="w"> </span><span class="n">len</span><span class="p">(</span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">])</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">5</span><span class="o">:</span>
-<span class="w">                   </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">][</span><span class="mi">-5</span><span class="o">:</span><span class="p">]</span>
-<span class="w">               </span><span class="k">if</span><span class="w"> </span><span class="n">len</span><span class="p">(</span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">])</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">5</span><span class="o">:</span>
-<span class="w">                   </span><span class="n">mean</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sum</span><span class="p">(</span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">])</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">5</span>
-<span class="w">                   </span><span class="n">await</span><span class="w"> </span><span class="n">agent</span><span class="p">.</span><span class="n">log</span><span class="p">(</span><span class="n">f</span><span class="err">&#39;</span><span class="n">Mean</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">last</span><span class="w"> </span><span class="mi">5</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="n">mean</span><span class="o">:</span><span class="mf">.2f</span><span class="p">}</span><span class="err">°</span><span class="n">C</span><span class="err">&#39;</span><span class="p">)</span>
-<span class="w">           </span><span class="n">agent</span><span class="p">.</span><span class="n">subscribe</span><span class="p">(</span><span class="err">&#39;</span><span class="n">sensors</span><span class="o">/</span><span class="n">data</span><span class="err">&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">on_temp</span><span class="p">)</span>
-<span class="w">     </span><span class="s">&quot;</span>
+<span class="w">     </span><span class="s">&quot;description&quot;</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;Logs the rolling mean of temperature readings&quot;</span><span class="p">,</span>
+<span class="w">     </span><span class="s">&quot;spawn_config&quot;</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">       </span><span class="s">&quot;type&quot;</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;dynamic&quot;</span><span class="p">,</span>
+<span class="w">       </span><span class="s">&quot;code&quot;</span><span class="o">:</span><span class="w"> </span><span class="s">&quot;</span>
+<span class="w">         </span><span class="n">async</span><span class="w"> </span><span class="n">def</span><span class="w"> </span><span class="n">setup</span><span class="p">(</span><span class="n">agent</span><span class="p">)</span><span class="o">:</span>
+<span class="w">             </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span>
+<span class="w">             </span><span class="n">async</span><span class="w"> </span><span class="n">def</span><span class="w"> </span><span class="n">on_temp</span><span class="p">(</span><span class="n">payload</span><span class="p">)</span><span class="o">:</span>
+<span class="w">                 </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">].</span><span class="n">append</span><span class="p">(</span><span class="n">payload</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="err">&#39;</span><span class="n">temp</span><span class="err">&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span><span class="w">  </span><span class="err">#</span><span class="w"> </span><span class="err">←</span><span class="w"> </span><span class="n">correct</span><span class="w"> </span><span class="n">field</span><span class="w"> </span><span class="n">name</span>
+<span class="w">                 </span><span class="k">if</span><span class="w"> </span><span class="n">len</span><span class="p">(</span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">])</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">5</span><span class="o">:</span>
+<span class="w">                     </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">][</span><span class="mi">-5</span><span class="o">:</span><span class="p">]</span>
+<span class="w">                 </span><span class="k">if</span><span class="w"> </span><span class="n">len</span><span class="p">(</span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">])</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">5</span><span class="o">:</span>
+<span class="w">                     </span><span class="n">mean</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sum</span><span class="p">(</span><span class="n">agent</span><span class="p">.</span><span class="n">state</span><span class="p">[</span><span class="err">&#39;</span><span class="n">buffer</span><span class="err">&#39;</span><span class="p">])</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">5</span>
+<span class="w">                     </span><span class="n">await</span><span class="w"> </span><span class="n">agent</span><span class="p">.</span><span class="n">log</span><span class="p">(</span><span class="n">f</span><span class="err">&#39;</span><span class="n">Mean</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">last</span><span class="w"> </span><span class="mi">5</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="n">mean</span><span class="o">:</span><span class="mf">.2f</span><span class="p">}</span><span class="err">°</span><span class="n">C</span><span class="err">&#39;</span><span class="p">)</span>
+<span class="w">             </span><span class="n">agent</span><span class="p">.</span><span class="n">subscribe</span><span class="p">(</span><span class="err">&#39;</span><span class="n">sensors</span><span class="o">/</span><span class="n">data</span><span class="err">&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">on_temp</span><span class="p">)</span>
+<span class="w">       </span><span class="s">&quot;</span>
+<span class="w">     </span><span class="p">}</span>
 <span class="w">   </span><span class="p">}</span>
 
 <span class="mf">7.</span><span class="w"> </span><span class="n">_validate_pipeline_code</span><span class="p">()</span><span class="o">:</span>
@@ -530,7 +537,7 @@ Auto-wiring opportunities:
 <span class="w">   </span><span class="o">-</span><span class="w"> </span><span class="n">No</span><span class="w"> </span><span class="n">raw</span><span class="w"> </span><span class="n">aiomqtt</span><span class="w"> </span><span class="err">✓</span>
 <span class="w">   </span><span class="o">-</span><span class="w"> </span><span class="n">No</span><span class="w"> </span><span class="n">direct</span><span class="w"> </span><span class="n">HA</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">calls</span><span class="w"> </span><span class="err">✓</span>
 
-<span class="mf">8.</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">spawned</span><span class="p">,</span><span class="w"> </span><span class="n">TopicBus</span><span class="w"> </span><span class="n">logs</span><span class="o">:</span>
+<span class="mf">8.</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="n">approves</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">proposal</span><span class="p">,</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">agent</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">spawned</span><span class="p">,</span><span class="w"> </span><span class="n">and</span><span class="w"> </span><span class="n">TopicBus</span><span class="w"> </span><span class="n">logs</span><span class="o">:</span>
 <span class="w">   </span><span class="p">[</span><span class="n">TopicBus</span><span class="p">]</span><span class="w"> </span><span class="n">Auto</span><span class="o">-</span><span class="n">wiring</span><span class="w"> </span><span class="n">opportunity</span><span class="o">:</span><span class="w"> </span><span class="n">temp</span><span class="o">-</span><span class="n">simulator</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">temp</span><span class="o">-</span><span class="n">mean</span><span class="o">-</span><span class="n">logger</span><span class="w"> </span><span class="n">via</span><span class="w"> </span><span class="n">sensors</span><span class="o">/</span><span class="n">data</span>
 
 <span class="mf">9.</span><span class="w"> </span><span class="n">Agent</span><span class="w"> </span><span class="n">receives</span><span class="w"> </span><span class="n">messages</span><span class="p">,</span><span class="w"> </span><span class="n">computes</span><span class="w"> </span><span class="n">means</span><span class="o">:</span>
@@ -569,7 +576,7 @@ Auto-wiring opportunities:
 <tr>
 <td><strong>Removing a producer</strong></td>
 <td>Consumers silently break</td>
-<td>TopicBus shows which consumers are orphaned</td>
+<td>Stale contracts are pruned before planning</td>
 </tr>
 <tr>
 <td><strong>Schema documentation</strong></td>

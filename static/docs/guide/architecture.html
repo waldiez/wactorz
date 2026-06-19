@@ -115,6 +115,9 @@
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
       <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+      <a href="../guide/windows.html" class="">Windows</a>
       <a href="../guide/architecture.html" class="active">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
@@ -142,18 +145,23 @@
 <span class="err">│</span><span class="w">  </span><span class="nx">Supervisor</span><span class="w">  </span><span class="err">──</span><span class="w">  </span><span class="nx">ONE_FOR_ONE</span><span class="w"> </span><span class="nx">restart</span><span class="w"> </span><span class="nx">strategy</span><span class="w"> </span><span class="nx">per</span><span class="w"> </span><span class="nx">actor</span><span class="w">                </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">ActorRegistry</span><span class="w">  </span><span class="err">──</span><span class="w">  </span><span class="nx">name</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="nx">actor</span><span class="w"> </span><span class="nx">lookup</span><span class="p">,</span><span class="w"> </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">publisher</span><span class="w">                </span><span class="err">│</span>
 <span class="err">│</span><span class="w">                                                                        </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">MainActor</span><span class="w">           </span><span class="nx">LLM</span><span class="w"> </span><span class="nx">orchestrator</span><span class="p">,</span><span class="w"> </span><span class="nx">intent</span><span class="w"> </span><span class="nx">routing</span><span class="p">,</span><span class="w"> </span><span class="nx">spawn</span><span class="w"> </span><span class="nx">registry</span><span class="w">  </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">MonitorAgent</span><span class="w">        </span><span class="nx">heartbeat</span><span class="w"> </span><span class="nx">watchdog</span><span class="p">,</span><span class="w"> </span><span class="nx">alerts</span><span class="w"> </span><span class="nx">main</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">failure</span><span class="w">        </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">IOAgent</span><span class="w">             </span><span class="nx">MQTT</span><span class="err">↔</span><span class="nx">UI</span><span class="w"> </span><span class="nx">gateway</span><span class="p">,</span><span class="w"> </span><span class="nx">routes</span><span class="w"> </span><span class="nx">chat</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">main</span><span class="w">             </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">CatalogAgent</span><span class="w">        </span><span class="nx">pre</span><span class="o">-</span><span class="nx">built</span><span class="w"> </span><span class="nx">recipe</span><span class="w"> </span><span class="kn">library</span><span class="p">,</span><span class="w"> </span><span class="nx">spawns</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">request</span><span class="w">       </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">InstallerAgent</span><span class="w">      </span><span class="nx">pip</span><span class="w"> </span><span class="nx">installs</span><span class="w"> </span><span class="nx">deps</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nx">dynamic</span><span class="w"> </span><span class="nx">agents</span><span class="w">              </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">HomeAssistantAgent</span><span class="w">  </span><span class="nx">HA</span><span class="w"> </span><span class="nx">REST</span><span class="w"> </span><span class="nx">API</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="nx">entities</span><span class="p">,</span><span class="w"> </span><span class="nx">services</span><span class="p">,</span><span class="w"> </span><span class="nx">automations</span><span class="w">     </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">PlannerAgent</span><span class="w">        </span><span class="nx">spawned</span><span class="w"> </span><span class="nx">per</span><span class="o">-</span><span class="nx">request</span><span class="p">,</span><span class="w"> </span><span class="nx">builds</span><span class="w"> </span><span class="nx">multi</span><span class="o">-</span><span class="nx">agent</span><span class="w"> </span><span class="nx">pipelines</span><span class="w"> </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">DynamicAgent</span><span class="o">*</span><span class="w">       </span><span class="nx">LLM</span><span class="o">-</span><span class="nx">generated</span><span class="w"> </span><span class="nx">Python</span><span class="p">,</span><span class="w"> </span><span class="nx">spawned</span><span class="w"> </span><span class="nx">at</span><span class="w"> </span><span class="nx">runtime</span><span class="w">         </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">MainActor</span><span class="w">                  </span><span class="nx">LLM</span><span class="w"> </span><span class="nx">orchestrator</span><span class="p">,</span><span class="w"> </span><span class="nx">intent</span><span class="w"> </span><span class="nx">routing</span><span class="p">,</span><span class="w"> </span><span class="nx">spawn</span><span class="w"> </span><span class="nx">reg</span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">MonitorAgent</span><span class="w">               </span><span class="nx">heartbeat</span><span class="w"> </span><span class="nx">watchdog</span><span class="p">,</span><span class="w"> </span><span class="nx">alerts</span><span class="w"> </span><span class="nx">main</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">failure</span><span class="w"> </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">IOAgent</span><span class="w">                    </span><span class="nx">MQTT</span><span class="err">↔</span><span class="nx">UI</span><span class="w"> </span><span class="nx">gateway</span><span class="p">,</span><span class="w"> </span><span class="nx">routes</span><span class="w"> </span><span class="nx">chat</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">main</span><span class="w">      </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">CatalogAgent</span><span class="w">               </span><span class="nx">pre</span><span class="o">-</span><span class="nx">built</span><span class="w"> </span><span class="nx">recipe</span><span class="w"> </span><span class="kn">library</span><span class="p">,</span><span class="w"> </span><span class="nx">spawns</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">demand</span><span class="w"> </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">InstallerAgent</span><span class="w">             </span><span class="nx">pip</span><span class="w"> </span><span class="nx">installs</span><span class="w"> </span><span class="nx">deps</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nx">dynamic</span><span class="w"> </span><span class="nx">agents</span><span class="w">       </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">HomeAssistantAgent</span><span class="w">         </span><span class="nx">HA</span><span class="w"> </span><span class="nx">REST</span><span class="w"> </span><span class="nx">API</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="nx">entities</span><span class="p">,</span><span class="w"> </span><span class="nx">services</span><span class="p">,</span><span class="w"> </span><span class="nx">automa</span><span class="err">…</span><span class="w">  </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">HomeAssistantStateBridge</span><span class="w">   </span><span class="nx">streams</span><span class="w"> </span><span class="nx">HA</span><span class="w"> </span><span class="nx">state</span><span class="w"> </span><span class="nx">changes</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="nx">MQTT</span><span class="w">            </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">HomeAssistantMapAgent</span><span class="w">      </span><span class="nx">entity</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="nx">friendly</span><span class="w"> </span><span class="nx">name</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">domain</span><span class="w"> </span><span class="nx">resolver</span><span class="w">   </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">TimeSeriesCollector</span><span class="w">        </span><span class="nx">writes</span><span class="w"> </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">streams</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">SQLite</span><span class="w"> </span><span class="nx">time</span><span class="o">-</span><span class="nx">series</span><span class="w">  </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">PlannerAgent</span><span class="o">*</span><span class="w">              </span><span class="nx">per</span><span class="o">-</span><span class="nx">request</span><span class="w"> </span><span class="nx">planner</span><span class="p">,</span><span class="w"> </span><span class="nx">exits</span><span class="w"> </span><span class="nx">after</span><span class="w"> </span><span class="nx">planning</span><span class="w">  </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">DynamicAgent</span><span class="o">*</span><span class="w">              </span><span class="nx">LLM</span><span class="o">-</span><span class="nx">generated</span><span class="w"> </span><span class="nx">Python</span><span class="p">,</span><span class="w"> </span><span class="nx">spawned</span><span class="w"> </span><span class="nx">at</span><span class="w"> </span><span class="nx">runtime</span><span class="w">   </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">ScheduledAgent</span><span class="o">*</span><span class="w">            </span><span class="nx">first</span><span class="o">-</span><span class="kd">class</span><span class="w"> </span><span class="nx">time</span><span class="w"> </span><span class="nx">triggers</span><span class="w">                  </span><span class="err">│</span>
 <span class="err">└────────────────────────────┬───────────────────────────────────────────┘</span>
+<span class="w">   </span><span class="o">*</span><span class="w"> </span><span class="k">not</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="nx">the</span><span class="w"> </span><span class="nx">supervised</span><span class="w"> </span><span class="nx">set</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="nx">spawned</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="nx">managed</span><span class="w"> </span><span class="nx">by</span><span class="w"> </span><span class="nx">the</span><span class="w"> </span><span class="nx">spawn</span><span class="w"> </span><span class="nx">registry</span>
 <span class="w">                             </span><span class="err">│</span><span class="w">  </span><span class="nx">pub</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">sub</span>
 <span class="w">                             </span><span class="err">▼</span>
-<span class="w">                    </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">broker</span><span class="w">  </span><span class="p">(</span><span class="nx">embedded</span><span class="p">,</span><span class="w"> </span><span class="nx">starts</span><span class="w"> </span><span class="nx">with</span><span class="w"> </span><span class="nx">wactorz</span><span class="p">)</span>
+<span class="w">                    </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">broker</span><span class="w">  </span><span class="p">(</span><span class="nx">separate</span><span class="w"> </span><span class="nx">process</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="nx">Mosquitto</span><span class="p">)</span>
 <span class="w">                    </span><span class="p">:</span><span class="mi">1883</span><span class="w"> </span><span class="nx">TCP</span><span class="w">  </span><span class="p">(</span><span class="k">default</span><span class="p">)</span>
 <span class="w">                             </span><span class="err">│</span>
 <span class="w">              </span><span class="err">┌──────────────┴──────────────┐</span>
@@ -163,7 +171,7 @@
 </code></pre></div>
 
 <blockquote>
-<p><strong>💡 One command to start</strong> — Running <code>wactorz</code> starts everything — the actor system, and the web dashboard. Note a separate MQTT broker process needed.</p>
+<p><strong>💡 One command to start</strong> — Running <code>wactorz</code> starts the actor system and the web dashboard. A separate MQTT broker (Mosquitto) must be running first — start it with <code>docker compose up -d</code> from the repo root.</p>
 </blockquote>
 <hr />
 <h2 id="components">Components</h2>
@@ -246,7 +254,8 @@
 
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_message</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">Message</span><span class="p">):</span>
         <span class="c1"># Called for every message in the inbox.</span>
-        <span class="c1"># msg.type is TASK, RESULT, HEARTBEAT, ERROR, or COMMAND.</span>
+        <span class="c1"># msg.type is one of: START, STOP, PAUSE, RESUME, DELETE,</span>
+        <span class="c1"># TASK, RESULT, HEARTBEAT, SPAWN, TICK, STATUS_REQUEST, STATUS_RESPONSE.</span>
         <span class="k">if</span> <span class="n">msg</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="n">MessageType</span><span class="o">.</span><span class="n">TASK</span><span class="p">:</span>
             <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_do_work</span><span class="p">(</span><span class="n">msg</span><span class="o">.</span><span class="n">payload</span><span class="p">)</span>
             <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">msg</span><span class="o">.</span><span class="n">reply_to</span><span class="p">,</span> <span class="n">MessageType</span><span class="o">.</span><span class="n">RESULT</span><span class="p">,</span> <span class="n">result</span><span class="p">)</span>
@@ -351,10 +360,12 @@
 <span class="n">Interface</span><span class="w"> </span><span class="p">(</span><span class="n">CLIInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">DiscordInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">RESTInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">WhatsAppInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TelegramInterface</span><span class="p">)</span>
 <span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">calls</span><span class="w"> </span><span class="n">main_actor</span><span class="o">.</span><span class="n">process_user_input</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
 <span class="w">  </span><span class="err">▼</span>
-<span class="n">MainActor</span><span class="o">.</span><span class="n">_classify_intent</span><span class="p">()</span><span class="w">     </span><span class="err">←</span><span class="w"> </span><span class="n">one</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">call</span><span class="p">:</span><span class="w"> </span><span class="n">HA</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">PIPELINE</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">OTHER</span>
+<span class="n">MainActor</span><span class="o">.</span><span class="n">_classify_intent</span><span class="p">()</span><span class="w">     </span><span class="err">←</span><span class="w"> </span><span class="n">one</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">call</span><span class="p">:</span><span class="w"> </span><span class="n">ACTUATE</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">HA</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">PIPELINE</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">OTHER</span>
 <span class="w">  </span><span class="err">│</span>
-<span class="w">  </span><span class="err">├──</span><span class="w"> </span><span class="n">OTHER</span><span class="w">  </span><span class="err">→</span><span class="w">  </span><span class="n">main</span><span class="o">.</span><span class="n">chat</span><span class="p">()</span><span class="w">       </span><span class="err">←</span><span class="w"> </span><span class="n">conversational</span><span class="w"> </span><span class="n">reply</span>
-<span class="w">  </span><span class="err">├──</span><span class="w"> </span><span class="n">HA</span><span class="w">     </span><span class="err">→</span><span class="w">  </span><span class="n">send</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">home</span><span class="o">-</span><span class="n">assistant</span><span class="o">-</span><span class="n">agent</span>
+<span class="w">  </span><span class="err">├──</span><span class="w"> </span><span class="n">ACTUATE</span><span class="w">  </span><span class="err">→</span><span class="w"> </span><span class="n">OneOffActuatorAgent</span><span class="w"> </span><span class="p">(</span><span class="n">ephemeral</span><span class="p">)</span><span class="w"> </span><span class="err">←</span><span class="w"> </span><span class="n">immediate</span><span class="w"> </span><span class="n">HA</span><span class="w"> </span><span class="n">device</span><span class="w"> </span><span class="n">control</span>
+<span class="w">  </span><span class="err">├──</span><span class="w"> </span><span class="n">HA</span><span class="w">       </span><span class="err">→</span><span class="w"> </span><span class="n">send</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">home</span><span class="o">-</span><span class="n">assistant</span><span class="o">-</span><span class="n">agent</span>
+<span class="w">  </span><span class="err">├──</span><span class="w"> </span><span class="n">PIPELINE</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">spawn</span><span class="w"> </span><span class="n">PlannerAgent</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">multi</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="n">pipeline</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">persisted</span><span class="w"> </span><span class="n">rule</span>
+<span class="w">  </span><span class="err">├──</span><span class="w"> </span><span class="n">OTHER</span><span class="w">    </span><span class="err">→</span><span class="w"> </span><span class="n">main</span><span class="o">.</span><span class="n">chat</span><span class="p">()</span><span class="w">       </span><span class="err">←</span><span class="w"> </span><span class="n">conversational</span><span class="w"> </span><span class="n">reply</span>
 <span class="w">  </span><span class="err">└──</span><span class="w"> </span><span class="err">@</span><span class="n">mention</span><span class="w"> </span><span class="n">detected</span><span class="w">  </span><span class="err">→</span><span class="w">  </span><span class="n">send</span><span class="w"> </span><span class="n">directly</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">named</span><span class="w"> </span><span class="n">actor</span>
 <span class="w">          </span><span class="err">│</span>
 <span class="w">          </span><span class="err">▼</span>
@@ -393,7 +404,7 @@ Discord channel
 <th>Provider</th>
 <th>Flag</th>
 <th>Env var</th>
-<th>Default model</th>
+<th>Example model</th>
 </tr>
 </thead>
 <tbody>
@@ -401,7 +412,7 @@ Discord channel
 <td><code>AnthropicProvider</code></td>
 <td><code>--llm anthropic</code></td>
 <td><code>ANTHROPIC_API_KEY</code></td>
-<td><code>claude-sonnet-4-6</code></td>
+<td><code>claude-sonnet-4-6</code> (also the global <code>LLM_MODEL</code> default)</td>
 </tr>
 <tr>
 <td><code>OpenAIProvider</code></td>
@@ -412,20 +423,20 @@ Discord channel
 <tr>
 <td><code>OllamaProvider</code></td>
 <td><code>--llm ollama --ollama-model llama3</code></td>
-<td>—</td>
-<td>local</td>
+<td>— (local; uses <code>OLLAMA_URL</code>)</td>
+<td><code>llama3</code>, <code>mistral</code>, etc.</td>
 </tr>
 <tr>
 <td><code>NIMProvider</code></td>
 <td><code>--llm nim --nim-model meta/llama-3.3-70b-instruct</code></td>
 <td><code>NIM_API_KEY</code></td>
-<td>free tier</td>
+<td><code>meta/llama-3.3-70b-instruct</code></td>
 </tr>
 <tr>
 <td><code>GeminiProvider</code></td>
 <td><code>--llm gemini --gemini-model gemini-2.5-flash</code></td>
 <td><code>GEMINI_API_KEY</code></td>
-<td><code>gemini-2.5-flash</code></td>
+<td><code>gemini-2.5-flash</code> (gemini-only fallback when <code>LLM_MODEL</code> is unset)</td>
 </tr>
 </tbody>
 </table>
@@ -442,10 +453,10 @@ Discord channel
   <span class="c1"># ... etc</span>
 </code></pre></div>
 
-<p>Dynamic agents (spawned by main or planner) are <strong>not</strong> in the supervision tree — they are managed by the spawn registry. On restart, main re-spawns them from the saved code in <code>state/main/state.pkl</code>.</p>
+<p>Dynamic agents (spawned by main or planner) are <strong>not</strong> in the supervision tree — they are managed by the spawn registry. On restart, main re-spawns them from the persisted <code>_spawned_agents</code> key in <code>state/wactorz.db</code> (SQLite).</p>
 <hr />
 <h2 id="running-wactorz">Running Wactorz</h2>
-<p>The <code>wactorz</code> command starts everything — the actor system, an embedded MQTT broker, and the web dashboard. No separate broker process is needed.</p>
+<p>The <code>wactorz</code> command starts the actor system and the web dashboard. It connects to an <strong>external MQTT broker</strong> (Mosquitto) that must already be running. The simplest way is <code>docker compose up -d</code> from the repo, which starts Mosquitto on <code>:1883</code>.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Start with Anthropic Claude (default interface: CLI)</span>
 wactorz
 

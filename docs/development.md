@@ -255,20 +255,15 @@ docker compose --profile python up -d
 # MQTT broker only (default)
 docker compose up -d
 
-# Rust server + nginx dashboard
-docker compose --profile rust up -d
-
-# Everything (Rust + Fuseki + Home Assistant)
-docker compose --profile full up -d
+# Everything (app + Fuseki + Home Assistant)
+docker compose --profile python-full up -d
 ```
 
 | Profile | Services | Ports |
 |---|---|---|
 | *(default)* | mosquitto | :1883, :9001 |
 | `python` | + wactorz-python | + :8000, :8888 |
-| `python-full` | + wactorz-python, fuseki | + :8000, :8888, :3030 |
-| `rust` | + wactorz-server, dashboard | + :8080, :8081, :80 |
-| `full` | + rust, fuseki, homeassistant | + :8080, :8081, :80, :3030, :8123 |
+| `python-full` | + wactorz-python, fuseki, homeassistant | + :8000, :8888, :3030, :8123 |
 
 Once running:
 

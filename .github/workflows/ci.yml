@@ -28,39 +28,6 @@ jobs:
       - name: Test
         run: python -m unittest discover -s tests -p 'test_*.py'
 
-  test-rust:
-    name: Rust
-    runs-on: ubuntu-latest
-    env:
-      CARGO_NET_RETRY: 5
-      CARGO_NET_GIT_FETCH_WITH_CLI: true
-    steps:
-      - uses: actions/checkout@v6.0.2
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
-
-      - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
-      - name: Test
-        working-directory: rust
-        run: cargo test --workspace
-
-      - name: Clippy
-        working-directory: rust
-        run: cargo clippy --workspace -- -D warnings
-
   test-frontend:
     name: Frontend
     runs-on: ubuntu-latest

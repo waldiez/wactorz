@@ -72,10 +72,9 @@ _KB: dict[str, str] = {
     ),
     "deploy": (
         "**Deployment modes**\n\n"
-        "1. Docker Compose (`compose.yaml`) — full stack\n"
-        "2. Pre-built image — `scripts/package-release.sh` (39 MB image)\n"
-        "3. Native binary (`compose.native.yaml`) — Rust binary on host; Docker runs nginx + mosquitto\n"
-        "4. Dev mode (`compose.dev.yaml`) — mosquitto + mock-agents only"
+        "1. Docker Compose (`compose.yaml`) — full stack (`--profile python` / `python-full`)\n"
+        "2. pip install + systemd (`systemd/wactorz.service`) — Python app on the host\n"
+        "3. Dev mode (`compose.dev.yaml`) — mosquitto + mock-agents only"
     ),
     "hlc-wid": (
         "**HLC-WID — Hybrid Logical Clock WID**\n\n"

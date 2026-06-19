@@ -115,6 +115,9 @@
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
       <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+      <a href="../guide/windows.html" class="">Windows</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
@@ -135,6 +138,7 @@
 <li>process/runtime metrics from the Python process</li>
 <li>Prometheus in Docker Compose</li>
 <li>optional Mosquitto and Fuseki availability probes controlled by <code>.env</code></li>
+<li>optional OpenTelemetry Collector scrape target controlled by <code>.env</code></li>
 </ul>
 <h2 id="what-is-monitored">What Is Monitored</h2>
 <h3 id="python-app">Python app</h3>
@@ -159,7 +163,7 @@
 <div class="highlight"><pre><span></span><code>GET /metrics
 </code></pre></div>
 
-<h3 id="mosquitto-and-fuseki">Mosquitto and Fuseki</h3>
+<h3 id="mosquitto-fuseki-and-opentelemetry-collector">Mosquitto, Fuseki, and OpenTelemetry Collector</h3>
 <p>Mosquitto and Fuseki are <strong>optional</strong> Prometheus targets.</p>
 <p>They are monitored with the Blackbox Exporter:</p>
 <ul>
@@ -167,6 +171,7 @@
 <li>Fuseki: HTTP probe to <code>http://fuseki:3030/$/ping</code></li>
 </ul>
 <p>This is availability monitoring, not deep service-specific exporter telemetry.</p>
+<p>The OpenTelemetry Collector is also an optional direct scrape target at <code>otelcol:8889</code>.</p>
 <h2 id="environment-flags">Environment Flags</h2>
 <p>Add or adjust these in <code>.env</code>:</p>
 <div class="highlight"><pre><span></span><code>PROMETHEUS_EXTERNAL_PORT=9090
@@ -174,15 +179,18 @@ PROMETHEUS_SCRAPE_INTERVAL=15s
 PROMETHEUS_PYTHON_TARGET=wactorz-python
 PROMETHEUS_MONITOR_MOSQUITTO=0
 PROMETHEUS_MONITOR_FUSEKI=0
+PROMETHEUS_MONITOR_OTELCOL=0
+REST_EXTERNAL_PORT=8000
 </code></pre></div>
 
 <p>Notes:</p>
 <ul>
-<li><code>PROMETHEUS_PYTHON_TARGET</code> chooses what Prometheus scrapes for Python metrics.</li>
+<li><code>PROMETHEUS_PYTHON_TARGET</code> chooses the host or service name Prometheus scrapes for Python metrics; <code>REST_EXTERNAL_PORT</code> is appended as the scrape port.</li>
 <li>If Wactorz runs in Compose, use the service name such as <code>wactorz-python</code> or <code>wactorz</code>.</li>
 <li>If Wactorz runs from the terminal on the host, use <code>host.docker.internal</code>.</li>
 <li><code>PROMETHEUS_MONITOR_MOSQUITTO=1</code> enables the Mosquitto TCP probe.</li>
 <li><code>PROMETHEUS_MONITOR_FUSEKI=1</code> enables the Fuseki health probe.</li>
+<li><code>PROMETHEUS_MONITOR_OTELCOL=1</code> enables the OpenTelemetry Collector scrape target.</li>
 </ul>
 <h2 id="docker-compose">Docker Compose</h2>
 <h3 id="main-stack">Main stack</h3>

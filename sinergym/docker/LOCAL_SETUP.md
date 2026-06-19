@@ -65,18 +65,30 @@ In the wactorz console:
 
 ```
 @catalog spawn sinergym-labeler
+@catalog spawn sinergym-hsml
+
+# DRL (MADDPG):
 @catalog spawn maddpg-fleet
 @catalog spawn sinergym-anomaly
-@catalog spawn sinergym-hsml
+
+# …or AIF (custom active inference):
+@catalog spawn aif-fleet
+@catalog spawn aif-anomaly
+
+# point the host-side agents at Fuseki (use whichever anomaly agent you spawned):
 @sinergym-hsml    {"action":"config","fuseki_url":"http://localhost:3030"}
-@sinergym-anomaly {"action":"config","fuseki_url":"http://localhost:3030"}
+@sinergym-anomaly {"action":"config","fuseki_url":"http://localhost:3030"}   # or @aif-anomaly for the AIF path
 ```
 
 Launch the 15-zone fleet — `env_id` MUST be explicit (the recipe default differs), paths
 may be relative to the repo root, `infer_dir` is auto-derived from `model_path`:
 
 ```
+# DRL (MADDPG):
 @maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"state/maddpg_office/model.pt","normalizer_path":"state/maddpg_office/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+
+# …or AIF (custom active inference) — model_path is the .pkl; no normalizer:
+@aif-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"state/maddpg_office/aif_model.pkl","heat_low":15.0,"heat_high":22.0,"cool_low":24.0,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":4.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
 ```
 
 Start the bridge **last** (env_info + first obs at episode start are not retained):

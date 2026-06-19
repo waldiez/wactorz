@@ -380,6 +380,30 @@ def _aprop_iri(actor_id: str, direction: str, field: str) -> str:
     return f"wactprop:{_safe(actor_id)}_{direction}_{_safe(field)}"
 
 
+def _cap_class(cap: str) -> str:
+    """Derive a syn: class IRI from a capability label so the *kind* of action
+    lives on rdf:type, not just rdfs:label.
+
+    Normalizes case and punctuation so that capabilities such as "Summarize",
+    "summarize" and "summarize-text" collapse to a single class
+    (``syn:Summarize``, ``syn:Summarize``, ``syn:SummarizeText``). This makes
+    capability coverage countable as a real type:
+
+        SELECT (COUNT(DISTINCT ?t) AS ?kinds) WHERE {
+          GRAPH <urn:wactorz:agents> {
+            ?n a syn:Action ; a ?t .
+            FILTER(?t != syn:Action)
+          }
+        }
+
+    Note: this does *not* unify true synonyms (e.g. "summarize" vs "summarise"
+    vs "condense"). Add an alias map here if a canonical vocabulary is needed.
+    """
+    parts = re.findall(r"[A-Za-z0-9]+", cap.lower())
+    name = "".join(p.capitalize() for p in parts)
+    return f"syn:{name}" if name else "syn:Action"
+
+
 def _parse_schema_desc(spec: Any) -> str:
     """Extract human description from schema values like 'str — some description'."""
     s = str(spec)
@@ -453,13 +477,20 @@ def _agent_manifest_body(manifest: dict[str, Any]) -> str:
         lines.append(f"  syn:claimedBy {agent_iri} .")
         lines.append("")
 
-    # ── Capabilities → syn:Action ─────────────────────────────────────────────
+    # ── Capabilities → syn:Action (+ derived capability class) ────────────────
+    # The label is kept verbatim, but we also mint a class IRI from it so the
+    # *kind* of capability lives on rdf:type. This lets coverage be counted as a
+    # real type (COUNT(DISTINCT ?t) over the action classes) instead of by
+    # string-bucketing free-text labels, and collapses per-agent duplicates of
+    # the same capability onto one shared class.
     for cap in capabilities:
         if not isinstance(cap, str):
             continue
         cap_iri = _aprop_iri(actor_id, "cap", cap)
+        cap_cls = _cap_class(cap)
+        type_str = "syn:Action" if cap_cls == "syn:Action" else f"syn:Action, {cap_cls}"
         lines.append(f"{cap_iri}")
-        lines.append(f"  a syn:Action ;")
+        lines.append(f"  a {type_str} ;")
         lines.append(f'  rdfs:label "{_esc(cap)}" ;')
         lines.append(f"  syn:claimedBy {agent_iri} .")
         lines.append("")
@@ -660,11 +691,17 @@ WHERE {{
         Atomically replace all triples for *actor_id* and its properties in *graph*:
           1. SPARQL DELETE WHERE for the agent IRI and all properties it owns
           2. GSP POST to append the new triples
+
+        Registry-owned runtime fields (syn:state, syn:protected) are *preserved*
+        — they're written by seed_agent_registry / upsert_agent_registry, not by
+        the manifest, so wiping them here would clobber an agent's status every
+        time its manifest is re-published.
         """
         full_iri = f"urn:wactorz:agent:{_safe(actor_id)}"
 
         delete_q = f"""
 PREFIX ssn:  <http://www.w3.org/ns/ssn/>
+PREFIX syn:  <https://synapse.waldiez.io/ns#>
 
 DELETE {{
   GRAPH <{graph}> {{
@@ -678,12 +715,95 @@ WHERE {{
       <{full_iri}> ssn:hasProperty ?prop .
       ?prop ?pp ?po .
     }}
-    OPTIONAL {{ <{full_iri}> ?ap ?ao . }}
+    OPTIONAL {{
+      <{full_iri}> ?ap ?ao .
+      FILTER(?ap NOT IN (syn:state, syn:protected))
+    }}
   }}
 }}
 """
         await self.sparql_update(delete_q)
         await self.append_graph(graph, ttl)
+
+    async def upsert_agent_registry(
+        self,
+        graph: str,
+        actor_id: str,
+        name: str,
+        state: str,
+        protected: bool,
+    ) -> None:
+        """Merge registry-owned fields for ONE agent without touching anything
+        the manifest bridge writes (type beyond the base classes, capabilities,
+        schemas, channels).
+
+        syn:state / syn:protected are deleted+reinserted (the registry owns them
+        exclusively). The base type, label and actorId are inserted idempotently
+        so an agent that has not yet published a manifest still appears as a
+        typed, labelled node. Keyed by actor_id to match the manifest bridge, so
+        registry status and manifest catalog data land on the SAME node.
+
+        This replaces the previous whole-graph replace, which wiped every
+        manifest-supplied agent on each seed.
+        """
+        full_iri = f"urn:wactorz:agent:{_safe(actor_id)}"
+        prot = "true" if protected else "false"
+        query = f"""
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX syn:  <https://synapse.waldiez.io/ns#>
+PREFIX core: <https://www.spatialwebfoundation.org/ns/hsml/core#>
+
+DELETE {{
+  GRAPH <{graph}> {{
+    <{full_iri}> syn:state ?s .
+    <{full_iri}> syn:protected ?p .
+  }}
+}}
+INSERT {{
+  GRAPH <{graph}> {{
+    <{full_iri}> a syn:Agent, prov:SoftwareAgent, core:Thing ;
+                 rdfs:label {_literal(name)} ;
+                 syn:actorId {_literal(actor_id)} ;
+                 syn:state {_literal(state)} ;
+                 syn:protected "{prot}"^^xsd:boolean .
+  }}
+}}
+WHERE {{
+  GRAPH <{graph}> {{
+    OPTIONAL {{ <{full_iri}> syn:state ?s . }}
+    OPTIONAL {{ <{full_iri}> syn:protected ?p . }}
+  }}
+}}
+"""
+        await self.sparql_update(query)
+
+    async def prune_miskeyed_agents(self, graph: str) -> None:
+        """Delete agent nodes whose IRI does not match their own syn:actorId,
+        i.e. <urn:wactorz:agent:X> where X != actorId.
+
+        These are leftovers from the previous registry seed, which keyed nodes
+        by agent *name* while recording the UUID actor_id as a literal. The
+        current code keys every node by actor_id, so a correctly-written node
+        always has IRI == urn:wactorz:agent:{actorId} and is never touched here.
+        Safe to run on every seed: for a clean graph it deletes nothing.
+        """
+        q = f"""
+PREFIX syn: <https://synapse.waldiez.io/ns#>
+
+DELETE {{
+  GRAPH <{graph}> {{ ?a ?p ?o . }}
+}}
+WHERE {{
+  GRAPH <{graph}> {{
+    ?a syn:actorId ?aid .
+    FILTER( STR(?a) != CONCAT("urn:wactorz:agent:", STR(?aid)) )
+    ?a ?p ?o .
+  }}
+}}
+"""
+        await self.sparql_update(q)
 
     async def replace_agent_channels(
         self, graph: str, actor_id: str, ttl: str
@@ -1065,35 +1185,62 @@ async def seed_agent_registry(
     fuseki_user: str = "",
     fuseki_password: str = "",
 ) -> None:
-    """One-shot: write all currently registered actors to urn:wactorz:agents graph."""
+    """Merge each registered actor's runtime fields (state, protected, plus a
+    fallback type/label/actorId) into urn:wactorz:agents.
+
+    This MERGES per agent — it no longer does a whole-graph replace. The old
+    replace_graph wiped every manifest-supplied agent (capabilities, schemas,
+    channels written by AgentManifestBridge) on each seed. Each agent is keyed
+    by actor_id to match the manifest bridge, so registry status and manifest
+    catalog data accumulate on the SAME node instead of on two divergent
+    name-keyed vs actor_id-keyed nodes.
+    """
     if not fuseki_url or not fuseki_dataset:
         return
     auth = aiohttp.BasicAuth(fuseki_user, fuseki_password) if fuseki_user else None
-    lines: list[str] = [TTL_PREFIXES]
-    lines.append(
-        "<urn:wactorz:bridge:agent-registry>\n"
-        '  rdfs:label "wactorz agent registry bridge" .\n'
-    )
-    for actor in actors:
-        name = getattr(actor, "name", "unknown")
-        actor_id = getattr(actor, "actor_id", name)
-        state = str(getattr(actor, "state", "running"))
-        protected = getattr(actor, "protected", False)
-        iri = f"<urn:wactorz:agent:{_safe(name)}>"
-        lines.append(
-            f"{iri}\n"
-            f"  rdfs:label {_literal(name)} ;\n"
-            f"  syn:actorId {_literal(actor_id)} ;\n"
-            f"  syn:state {_literal(state)} ;\n"
-            f'  syn:protected "{str(protected).lower()}"^^xsd:boolean .\n'
-        )
-    ttl = "\n".join(lines)
     connector = aiohttp.TCPConnector(ssl=False, force_close=True)
     try:
         async with aiohttp.ClientSession(connector=connector) as http:
             fuseki = FusekiClient(fuseki_url, fuseki_dataset, http, auth)
-            await fuseki.replace_graph(GRAPH_AGENTS, ttl)
-            log.info("Agent registry seeded: %d actors → Fuseki", len(actors))
+
+            # Remove stale name-keyed orphan nodes from older builds (idempotent;
+            # deletes nothing on a clean graph).
+            try:
+                await fuseki.prune_miskeyed_agents(GRAPH_AGENTS)
+            except Exception as exc:
+                log.warning("Prune of mis-keyed agent nodes failed: %s", exc)
+
+            # Register the bridge node (idempotent — identical triples dedupe).
+            try:
+                await fuseki.append_graph(
+                    GRAPH_AGENTS,
+                    _ttl(
+                        "<urn:wactorz:bridge:agent-registry>\n"
+                        "  a syn:Agent, prov:SoftwareAgent ;\n"
+                        '  rdfs:label "wactorz agent registry bridge" .\n'
+                    ),
+                )
+            except Exception as exc:
+                log.warning("Registry bridge node write failed: %s", exc)
+
+            count = 0
+            for actor in actors:
+                name = getattr(actor, "name", "unknown")
+                actor_id = getattr(actor, "actor_id", name)
+                state = str(getattr(actor, "state", "running"))
+                protected = bool(getattr(actor, "protected", False))
+                try:
+                    await fuseki.upsert_agent_registry(
+                        GRAPH_AGENTS, actor_id, name, state, protected
+                    )
+                    count += 1
+                except Exception as exc:
+                    log.warning("Registry upsert failed for %s: %s", actor_id, exc)
+
+            log.info(
+                "Agent registry merged: %d/%d actors → Fuseki (no full-graph replace)",
+                count, len(actors),
+            )
     except Exception as exc:
         log.warning("Agent registry seed failed (Fuseki not ready?): %s", exc)
 

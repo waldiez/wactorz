@@ -180,6 +180,44 @@ async def _seed_fuseki_registry(registry) -> None:
     )
 
 
+async def _run_fuseki_manifest_bridge(mqtt_broker: str, mqtt_port: int) -> None:
+    """Run AgentManifestBridge so agent manifests (capabilities, input/output
+    schemas, channels) are written into Fuseki.
+
+    Without this task only _seed_fuseki_registry runs, so the agents graph gets
+    syn:state/syn:protected but never any capabilities — which is exactly what
+    import_manifests.py was patching by hand. The bridge subscribes to
+    agents/+/manifest, drains the retained manifests on connect, and keeps
+    writing live updates. Reconnects with backoff so a momentary MQTT/Fuseki
+    blip doesn't kill it permanently.
+    """
+    if not CONFIG.fuseki_url:
+        logger.info("Fuseki not configured — manifest bridge disabled.")
+        return
+    from wactorz.fuseki import AgentManifestBridge
+    bridge = AgentManifestBridge(
+        mqtt_broker=mqtt_broker,
+        mqtt_port=mqtt_port,
+        fuseki_url=CONFIG.fuseki_url,
+        fuseki_dataset=CONFIG.fuseki_dataset,
+        fuseki_user=CONFIG.fuseki_user,
+        fuseki_password=CONFIG.fuseki_password,
+    )
+    backoff = 5.0
+    while True:
+        try:
+            await bridge.run()
+            backoff = 5.0
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Fuseki manifest bridge error: %s — retrying in %.0fs", exc, backoff
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)
+
+
 async def build_system(args: argparse.Namespace):
     from wactorz.core.registry import ActorSystem
     from wactorz.core.actor import SupervisorStrategy
@@ -343,6 +381,12 @@ async def build_system(args: argparse.Namespace):
     await system.supervisor.start()
 
     asyncio.create_task(_seed_fuseki_registry(system.registry))
+    asyncio.create_task(
+        _run_fuseki_manifest_bridge(
+            args.mqtt_broker or CONFIG.mqtt_host,
+            args.mqtt_port or CONFIG.mqtt_port,
+        )
+    )
 
     main_actor = system.registry.find_by_name("main")
 

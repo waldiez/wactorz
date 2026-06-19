@@ -48,6 +48,8 @@ NAV = [
     ("Guide", "guide", [
         ("Installation", "development.md"),
         ("Docker Hub",   "dockerhub.md"),
+        ("Deployment",   "deployment.md"),
+        ("Windows",      "windows.md"),
         ("Architecture", "architecture.md"),
         ("Agents",       "agents.md"),
         ("Auto-Wiring",       "mqtt_auto_wiring.md"),

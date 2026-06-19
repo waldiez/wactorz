@@ -115,6 +115,9 @@
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
       <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+      <a href="../guide/windows.html" class="">Windows</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="active">Agents</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
@@ -235,7 +238,7 @@
 </tr>
 </tbody>
 </table>
-<p>Spawned by MainActor for every <code>PIPELINE</code>-classified request. The planner queries <code>home-assistant-agent</code> for the full list of real entity IDs, samples live topic schemas from the TopicBus, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is either a <code>dynamic</code> agent (Python code string) or an <code>ha_actuator</code> agent (declarative HA service call). The planner spawns all agents, registers the pipeline rule with main, and exits.</p>
+<p>Spawned by MainActor for every <code>PIPELINE</code>-classified request. The planner queries <code>home-assistant-agent</code> for the full list of real entity IDs, samples live topic schemas from the TopicBus, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is one of three types: an <code>ha_actuator</code> agent (declarative HA service call), a <code>scheduled</code> agent (first-class time trigger — see <a href="#scheduledagent-spawned">ScheduledAgent</a>), or a <code>dynamic</code> agent (Python code string). The planner spawns all agents, registers the pipeline rule with main, and exits.</p>
 <p>After spawning, the planner fires a background <code>_bootstrap_ha_entity_states()</code> task that extracts HA entity IDs from the plan (generated code, <code>ha_actuator</code> actions, MQTT topics, and the enriched task string) and sends a <code>get_entities_state</code> request to <code>home-assistant-agent</code>. This re-publishes the current HA state over MQTT so freshly-spawned agents that subscribe to <code>homeassistant/state_changes/#</code> fire immediately — without waiting for the next real HA state change.</p>
 <h4 id="supported-patterns">Supported patterns</h4>
 <table>
@@ -275,8 +278,8 @@
 <tr>
 <td>5</td>
 <td>Timer/schedule</td>
-<td>HA service call</td>
-<td>dynamic timer + <code>ha_actuator</code></td>
+<td>HA service call OR notification</td>
+<td><code>scheduled</code> + <code>ha_actuator</code> (or <code>scheduled</code> + <code>dynamic</code> notify)</td>
 </tr>
 <tr>
 <td>6</td>
@@ -318,7 +321,7 @@
 </tr>
 </tbody>
 </table>
-<p>Tracks heartbeat timestamps from every registered actor. If an actor's last heartbeat is older than <code>heartbeat_timeout</code> seconds it publishes an alert to <code>agents/{monitor_id}/alert</code> and notifies MainActor directly. Does <em>not</em> auto-restart actors — restart policy belongs to the Supervisor. Infrastructure agents (monitor, installer, main, home-assistant-agent) are excluded from user-facing notifications.</p>
+<p>Tracks heartbeat timestamps from every registered actor. If an actor's last heartbeat is older than <code>heartbeat_timeout</code> seconds it publishes an alert to <code>agents/{monitor_id}/alert</code> and notifies MainActor directly. Does <em>not</em> auto-restart actors — restart policy belongs to the Supervisor. Infrastructure agents (<code>monitor</code>, <code>installer</code>, <code>main</code>, <code>home-assistant-agent</code>, <code>code-agent</code>, <code>anomaly-detector</code>) are excluded from user-facing notifications.</p>
 <hr />
 <h3 id="ioagent-core">IOAgent <code>[core]</code></h3>
 <p><strong>File:</strong> <code>wactorz/agents/io_agent.py</code></p>
@@ -387,11 +390,11 @@
 </tr>
 <tr>
 <td><strong>recipes dir</strong></td>
-<td><code>catalogue_agents/</code></td>
+<td><code>wactorz/catalogue_agents/</code></td>
 </tr>
 </tbody>
 </table>
-<p>Pre-built agent recipe library. On startup it loads every <code>AGENT_CODE</code> string from <code>catalogue_agents/*.py</code> and injects a manifest for each recipe into MainActor so the LLM is aware of what can be spawned. When asked to spawn a recipe it first asks InstallerAgent to install any declared dependencies, then creates a DynamicAgent with the recipe code and <code>trusted=True</code> — bypassing the code safety validator since catalog agents are pre-built and tested.</p>
+<p>Pre-built agent recipe library. On startup it loads every <code>AGENT_CODE</code> string from <code>wactorz/catalogue_agents/*.py</code> and injects a manifest for each recipe into MainActor so the LLM is aware of what can be spawned. When asked to spawn a recipe it first asks InstallerAgent to install any declared dependencies, then creates a DynamicAgent with the recipe code and <code>trusted=True</code> — bypassing the code safety validator since catalog agents are pre-built and tested.</p>
 <h4 id="usage">Usage</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">@catalog</span><span class="w"> </span><span class="n">list</span>
 <span class="nv">@catalog</span><span class="w"> </span><span class="n">info</span><span class="w"> </span><span class="n">anomaly</span><span class="o">-</span><span class="n">detector</span>
@@ -452,7 +455,7 @@
 </tr>
 <tr>
 <td><code>create_automation</code></td>
-<td>Generate and POST a YAML automation via HA REST API</td>
+<td><strong>Temporarily disabled</strong> — currently routed to <code>recommend_hardware</code> instead of generating an automation</td>
 </tr>
 <tr>
 <td><code>edit_automation</code></td>
@@ -472,6 +475,8 @@
 </tr>
 </tbody>
 </table>
+<h4 id="prompts">Prompts</h4>
+<p>All LLM system prompts used by this agent live in <code>wactorz/agents/prompts/home_assistant_prompts.py</code>.</p>
 <h4 id="configuration">Configuration</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">HA_URL</span><span class="o">=</span>http://homeassistant.local:8123
 <span class="nv">HA_TOKEN</span><span class="o">=</span>eyJ...<span class="w">   </span><span class="c1"># Long-lived access token</span>
@@ -603,6 +608,59 @@
 </table>
 <p>Maintains a live map of entity IDs to friendly names and domains. Used by PlannerAgent and OneOffActuatorAgent to resolve user-friendly device names ("the living room lamp") to actual HA entity IDs before generating pipeline code or executing service calls.</p>
 <hr />
+<h3 id="scheduledagent-spawned">ScheduledAgent <code>[spawned]</code></h3>
+<p><strong>File:</strong> <code>wactorz/agents/scheduled_agent.py</code></p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>name</strong></td>
+<td>set at spawn time (e.g. <code>evening-lights-trigger</code>)</td>
+</tr>
+<tr>
+<td><strong>spawned by</strong></td>
+<td>PlannerAgent (pattern 5 — scheduled trigger)</td>
+</tr>
+<tr>
+<td><strong>persists</strong></td>
+<td><code>_schedule_state</code> (last fire time, fire count) → SQLite</td>
+</tr>
+</tbody>
+</table>
+<p>First-class scheduled trigger primitive. Sleeps until the next fire time, publishes to its topic, then loops. Replaces the broken <code>while True: if datetime.now()…</code> patterns that LLM-generated dynamic agents kept producing for time-based rules.</p>
+<h4 id="schedule-spec">Schedule spec</h4>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;daily&quot;</span><span class="p">,</span>    <span class="s2">&quot;at&quot;</span><span class="p">:</span> <span class="s2">&quot;17:00&quot;</span><span class="p">}</span>
+<span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;weekly&quot;</span><span class="p">,</span>   <span class="s2">&quot;at&quot;</span><span class="p">:</span> <span class="s2">&quot;07:00&quot;</span><span class="p">,</span> <span class="s2">&quot;days&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;mon&quot;</span><span class="p">,</span> <span class="s2">&quot;tue&quot;</span><span class="p">,</span> <span class="s2">&quot;wed&quot;</span><span class="p">,</span> <span class="s2">&quot;thu&quot;</span><span class="p">,</span> <span class="s2">&quot;fri&quot;</span><span class="p">]}</span>
+<span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;interval&quot;</span><span class="p">,</span> <span class="s2">&quot;seconds&quot;</span><span class="p">:</span> <span class="mi">1800</span><span class="p">}</span>
+<span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;once&quot;</span><span class="p">,</span>     <span class="s2">&quot;at&quot;</span><span class="p">:</span> <span class="s2">&quot;2026-05-02T17:00:00&quot;</span><span class="p">}</span>    <span class="c1"># ISO-8601 local time</span>
+<span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;cron&quot;</span><span class="p">,</span>     <span class="s2">&quot;expr&quot;</span><span class="p">:</span> <span class="s2">&quot;0 17 * * *&quot;</span><span class="p">}</span>            <span class="c1"># escape hatch</span>
+</code></pre></div>
+
+<p>Day names: <code>mon|tue|wed|thu|fri|sat|sun</code> (full names also accepted).</p>
+<h4 id="fire-topic">Fire topic</h4>
+<p>Publishes to <code>schedule/{name}/fired</code> with payload:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;fired_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;ISO-8601 UTC&gt;&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;schedule_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;daily&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;evening-lights-trigger&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<p>A downstream <code>ha_actuator</code> or <code>dynamic</code> agent subscribes to this topic and performs the actual action.</p>
+<h4 id="timezone-resolution">Timezone resolution</h4>
+<ol>
+<li>Schedule spec's optional <code>"tz"</code> field (e.g. <code>"Europe/Athens"</code>)</li>
+<li><code>timezone</code> kwarg injected by MainActor from the user's <code>pref_timezone</code> fact</li>
+<li>System local timezone</li>
+</ol>
+<h4 id="catch-up-behaviour-on-restart">Catch-up behaviour on restart</h4>
+<ul>
+<li><strong><code>once</code> schedules</strong> — fire if missed within the last 5 minutes; otherwise the agent self-deletes silently.</li>
+<li><strong>Recurring schedules</strong> — never catch up. Resume from the next fire time.</li>
+</ul>
+<p>The internal sleep is bounded to 5 minutes so DST transitions, system clock jumps, and laptop sleep don't strand the agent.</p>
+<hr />
 <h3 id="timeseriescollector-core">TimeSeriesCollector <code>[core]</code></h3>
 <p><strong>File:</strong> <code>wactorz/agents/timeseries_collector.py</code></p>
 <table>
@@ -700,8 +758,8 @@
 </table>
 <p>SPARQL interface to Apache Jena Fuseki. Executes <code>SELECT</code>, <code>CONSTRUCT</code>, <code>DESCRIBE</code>, and <code>ASK</code> queries against the configured triplestore. No LLM involved — pure graph query agent.</p>
 <h4 id="configuration_1">Configuration</h4>
-<div class="highlight"><pre><span></span><code><span class="nv">FUSEKI_URL</span><span class="o">=</span>http://fuseki:3030<span class="w">   </span><span class="c1"># default</span>
-<span class="nv">FUSEKI_DATASET</span><span class="o">=</span>/ds<span class="w">              </span><span class="c1"># default</span>
+<div class="highlight"><pre><span></span><code><span class="nv">FUSEKI_URL</span><span class="o">=</span>http://localhost:3030<span class="w">   </span><span class="c1"># default</span>
+<span class="nv">FUSEKI_DATASET</span><span class="o">=</span>wactorz<span class="w">             </span><span class="c1"># default</span>
 </code></pre></div>
 
 <h4 id="commands_2">Commands</h4>
@@ -931,7 +989,7 @@
 <td><code>OpenAIProvider</code></td>
 <td><code>--llm openai</code></td>
 <td><code>OPENAI_API_KEY</code></td>
-<td>Any OpenAI-compatible endpoint via <code>--openai-base-url</code>.</td>
+<td>Any OpenAI-compatible endpoint.</td>
 </tr>
 <tr>
 <td><code>OllamaProvider</code></td>
@@ -957,9 +1015,19 @@
 <h4 id="cost-tracking">Cost tracking</h4>
 <p>All providers track token usage and compute cost in USD per call. Costs are accumulated in <code>LLMAgent.metrics</code> and published with every heartbeat.</p>
 <p>Pricing is resolved dynamically: on startup, <code>LLMAgent</code> fetches live per-token rates from the <a href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json">LiteLLM model catalogue</a> and caches them for 24 hours. If the fetch fails or the model isn't listed, it falls back to the hardcoded <code>_FALLBACK_PRICING</code> table in <code>llm_agent.py</code>. To debug which source a model is using, call <code>pricing_info(model_name)</code> — it returns <code>source</code> (<code>"live"</code> or <code>"fallback"</code>), rates, and cache age.</p>
+<h4 id="spend-limit">Spend limit</h4>
+<p>A hard cap on LLM API spend can be set per period. When the limit is reached, further LLM calls are blocked and the agent replies with a "limit reached" message instead of calling the API.</p>
+<p>Configure via env vars (startup default):</p>
+<div class="highlight"><pre><span></span><code>LLM_COST_LIMIT_USD=0.70
+LLM_COST_LIMIT_PERIOD=daily   # daily | weekly | monthly | total
+</code></pre></div>
+
+<p>The limit can also be updated at runtime from the dashboard Settings tab or via <code>POST /api/cost/limit</code> — the runtime value persists in SQLite and takes priority over the env var. Spend resets automatically at period boundaries (midnight UTC for daily, Monday for weekly, first of the month for monthly). To reset manually, call <code>POST /api/cost/reset</code>.</p>
+<p>The dashboard COST tile shows a progress bar: yellow at 80% of the limit, red at 100%.</p>
+<p>See <a href="api.md#cost-management">API reference</a> for the full endpoint spec.</p>
 <hr />
 <h2 id="catalog-recipes">Catalog recipes</h2>
-<p>Recipes live in <code>catalogue_agents/</code> as plain Python files exporting an <code>AGENT_CODE</code> string. They are loaded by <code>CatalogAgent</code> at startup and spawned on demand as DynamicAgents with <code>trusted=True</code> (safety validator bypassed).</p>
+<p>Recipes live in <code>wactorz/catalogue_agents/</code> as plain Python files exporting an <code>AGENT_CODE</code> string. They are loaded by <code>CatalogAgent</code> at startup and spawned on demand as DynamicAgents with <code>trusted=True</code> (safety validator bypassed).</p>
 <table>
 <thead>
 <tr>
@@ -970,18 +1038,6 @@
 </tr>
 </thead>
 <tbody>
-<tr>
-<td><code>discord-notify-agent</code></td>
-<td><code>discord_notify_agent.py</code></td>
-<td>Subscribes to any MQTT topic and posts a message to a Discord webhook when a triggering event arrives. Configurable cooldown, trigger key/value filter, and message template.</td>
-<td><code>aiohttp</code>, <code>aiomqtt</code></td>
-</tr>
-<tr>
-<td><code>homeassistant-actuator-agent</code></td>
-<td><code>home_assistant_actuator_agent.py</code></td>
-<td>Subscribes to an MQTT topic and calls a Home Assistant service when a detection filter matches the payload. Used as the action side of HA pipelines.</td>
-<td><code>aiomqtt</code></td>
-</tr>
 <tr>
 <td><code>image-gen-agent</code></td>
 <td><code>image_gen_agent.py</code></td>
@@ -1012,10 +1068,16 @@
 <td>Learns normal patterns from time-series data (HA sensors and Sinergym), detects anomalies in real-time. Statistical z-score, percentile range, rate-of-change, and absence detection. Works with both real-world HA devices and simulated building data.</td>
 <td><code>aiomqtt</code>, <code>numpy</code></td>
 </tr>
+<tr>
+<td><code>manual-agent</code></td>
+<td><code>manual_agent.py</code></td>
+<td>Searches the web for device manuals, downloads PDFs, extracts text, and answers questions about them using the agent's LLM.</td>
+<td><code>httpx</code>, <code>pdfplumber</code>, <code>duckduckgo_search</code></td>
+</tr>
 </tbody>
 </table>
 <blockquote>
-<p><strong>💡 Adding a recipe</strong> — Create <code>catalogue_agents/my_agent.py</code> exporting <code>AGENT_CODE = r'''...'''</code>, then add an entry to <code>_build_catalog()</code> in <code>catalog_agent.py</code>. The recipe is available on the next restart without any other changes.</p>
+<p><strong>💡 Adding a recipe</strong> — Create <code>wactorz/catalogue_agents/my_agent.py</code> exporting <code>AGENT_CODE = r'''...'''</code>, then add an entry to <code>_build_catalog()</code> in <code>wactorz/agents/catalog_agent.py</code>. The recipe is available on the next restart without any other changes.</p>
 </blockquote>
 <hr />
 <h2 id="writing-a-new-core-agent">Writing a new core agent</h2>

@@ -13,7 +13,7 @@ environment plumbing differs.
 
 | Topic | `../SETUP.md` (Windows) | This path (Linux) |
 |---|---|---|
-| EnergyPlus + Sinergym | hand-built devcontainer: 3.11.0 source, Dockerfile edited to force EnergyPlus 24.1.0 (§3a/§3b) | `docker/Dockerfile.bridge`: base `sailugr/sinergym:v3.10.0-lite` (already EnergyPlus 24.1.0) + `pip install sinergym==3.11.0` — same end state, no from-source EnergyPlus build |
+| EnergyPlus + Sinergym | hand-built devcontainer: 3.11.0 source, Dockerfile edited to force EnergyPlus 24.1.0 (§3a/§3b) | `docker/Dockerfile.bridge`: base `sailugr/sinergym:v3.12.0-lite` (already Sinergym 3.12.0 + EnergyPlus 25.1.0) — no from-source EnergyPlus build |
 | Image size | full devcontainer | `-lite` base (0.7 GB pull) — the DRL/torch stack is dropped because inference runs host-side in wactorz |
 | MQTT + Fuseki | three Docker services started by hand | already running via repo `compose.yaml` (`wactorz-mosquitto`, `wactorz-fuseki`); only the `sinergym` dataset had to be created |
 | Model/detector dir | `C:/Users/pkasn/.../state/maddpg_office/` | `state/maddpg_office/` (host paths; relative paths work in the launch payload) |
@@ -44,14 +44,16 @@ mkdir -p state/maddpg_office && cp sinergym/maddpg_office/* state/maddpg_office/
 
 # 4. Build the bridge image (from wactorz/sinergym/)
 cd sinergym
-docker build -f docker/Dockerfile.bridge -t wactorz-sinergym-bridge:3.11.0-ep24.1.0 .
+docker build -f docker/Dockerfile.bridge -t wactorz-sinergym-bridge:3.12.0-ep25.1.0 .
+# On arm64 (Apple Silicon): the base is amd64-only, so add --platform linux/amd64
+#   docker build --platform linux/amd64 -f docker/Dockerfile.bridge -t wactorz-sinergym-bridge:3.12.0-ep25.1.0 .
 ```
 
 Verified versions inside the built image / host venv:
 
 ```
-EnergyPlus, Version 24.1.0-9d7789a3ac
-Sinergym 3.11.0
+EnergyPlus, Version 25.1.0-1c11a3d85f
+Sinergym 3.12.0
 host torch 2.12.0+cpu | numpy 2.4.6
 ```
 

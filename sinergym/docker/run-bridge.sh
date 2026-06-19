@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the Sinergym <-> MQTT <-> Fuseki bridge inside the 24.1.0 / 3.11.0 container.
+# Run the Sinergym <-> MQTT <-> Fuseki bridge inside the EnergyPlus 25.1.0 / Sinergym 3.12.0 container.
 #
 # The bridge needs to reach the host's MQTT broker (:1883) and Fuseki (:3030).
 # On Linux, host.docker.internal is NOT automatic — the --add-host line below maps
@@ -22,7 +22,7 @@
 set -euo pipefail
 
 SGY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # wactorz/sinergym
-IMAGE="wactorz-sinergym-bridge:3.11.0-ep24.1.0"
+IMAGE="wactorz-sinergym-bridge:3.12.0-ep25.1.0"
 FUSEKI_HOST_URL="${FUSEKI_HOST_URL:-http://localhost:3030}"
 
 # Strip --clean (the bridge doesn't understand it); wipe the dataset host-side first.
@@ -53,11 +53,12 @@ CMD=(python sinergym_bridge_anomalies.py
      --fuseki-url http://host.docker.internal:3030 --fuseki-dataset sinergym
      --fuseki-user admin --fuseki-password admin
      --broker host.docker.internal --port 1883
-     "${ARGS[@]}")
+     "${ARGS[@]+"${ARGS[@]}"}")   # guard empty array under `set -u` (macOS bash 3.2)
 
 # Use an interactive TTY only when we actually have one (so this also works backgrounded).
 TTY=""; [ -t 0 ] && [ -t 1 ] && TTY="-it"
 exec docker run --rm $TTY \
+  --platform=linux/amd64 \
   --add-host=host.docker.internal:host-gateway \
   -v "$SGY_DIR":/work \
   -v "$INJECTOR_DIR":/injector:ro \

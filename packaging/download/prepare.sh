@@ -53,8 +53,12 @@ else
   echo "[prepare] no installers found — page will have dead links"
 fi
 
-# Stamp the version into the page and bring along the hero screenshot.
+# Stamp the version into the page and bring along the hero screenshot and the favicon.
 sed "s/{{VERSION}}/$VERSION/g" "$HERE/index.html" > "$OUT/index.html"
 cp "$REPO/frontend/public/screenshots/dashboard.png" "$OUT/dashboard.png" 2>/dev/null \
   || echo "[prepare] note: dashboard.png not found — hero image will be missing"
+
+cp "$REPO/frontend/public/icon.ico" "$OUT/favicon.ico" 2>/dev/null \
+  || echo "[prepare] note: icon.ico not found — favicon will be missing"
+
 echo "[prepare] ready in $OUT — upload its contents to the VM."

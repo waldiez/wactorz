@@ -1,23 +1,22 @@
-# Sinergym bridge image — reproduces the SETUP.md target locally on Linux.
+# Sinergym bridge image — Sinergym 3.12.0 on EnergyPlus 25.1.0.
 #
-# SETUP.md requires Sinergym 3.11.0 *code* running on EnergyPlus *24.1.0*.
-# There is no published image for that exact combo:
-#   - sailugr/sinergym:v3.10.0  → EnergyPlus 24.1.0 (SHA 9d7789a3ac)   ← right engine
-#   - sailugr/sinergym:v3.11.0  → EnergyPlus 25.1.0                     ← wrong engine
-# So we take the v3.10.0 base (correct EnergyPlus) and pip-upgrade the Python
-# package to 3.11.0 on top — exactly what SETUP §3b achieves (3.11.0 source +
-# EnergyPlus 24.1.0), but without a slow from-source EnergyPlus build.
+# The base sailugr/sinergym:v3.12.0-lite already ships Sinergym 3.12.0 on
+# EnergyPlus 25.1.0, so no from-source EnergyPlus build or version juggling is
+# needed (unlike the older 3.11.0/EnergyPlus-24.1.0 combo, which had no matching
+# published image). The *-lite* variant (~0.7 GB vs 13 GB) bundles Sinergym +
+# EnergyPlus but omits the DRL stack (stable-baselines3 / torch): the bridge only
+# drives the simulation and talks MQTT/Fuseki — all policy inference runs
+# host-side in wactorz — so none of that weight is needed here.
 #
-# The *-lite* variant (0.7 GB vs 13 GB) is used deliberately: it bundles Sinergym +
-# EnergyPlus but omits the DRL stack (stable-baselines3 / torch). The bridge only
-# drives the simulation and talks MQTT/Fuseki — all policy inference runs host-side
-# in wactorz — so none of that weight is needed here.
-FROM sailugr/sinergym:v3.10.0-lite
+# The base is published amd64-only. On arm64 hosts (e.g. Apple Silicon) build and
+# run with `--platform=linux/amd64` (QEMU emulation) — passing the flag avoids the
+# BuildKit "constant FROM --platform" lint; run-bridge.sh already passes it on run.
+FROM sailugr/sinergym:v3.12.0-lite
 
-# 3.11.0 Python code; EnergyPlus stays 24.1.0 from the base layer.
-# paho-mqtt is needed by the bridge (the only non-stdlib dep it adds; Fuseki
-# writes use stdlib urllib).
-RUN pip install --no-cache-dir --force-reinstall --no-deps "sinergym==3.11.0" \
+# Pin Sinergym to 3.12.0 — a confirming no-op on a matching base, but explicit so
+# the image stays reproducible if the base tag drifts. paho-mqtt is the bridge's
+# only non-stdlib dep (Fuseki writes use stdlib urllib).
+RUN pip install --no-cache-dir --force-reinstall --no-deps "sinergym==3.12.0" \
  && pip install --no-cache-dir "paho-mqtt>=2.0"
 
 # Drop the 15-zone OfficeMedium building + its env config into the dirs Sinergym

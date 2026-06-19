@@ -7,8 +7,12 @@ natural-language Q&A agent over the data.
 
 This document is a complete, from-scratch setup guide. Follow the parts in order.
 
-> **On Linux?** This runbook builds a Windows VS Code devcontainer. For a Linux
-> container-only path (no devcontainer), see [`docker/LOCAL_SETUP.md`](docker/LOCAL_SETUP.md).
+> **Prefer a plain container (no VS Code devcontainer)?** This runbook builds a
+> VS Code devcontainer, but the container-only path works the same on Linux,
+> macOS, and Docker-on-Windows — see [`docker/LOCAL_SETUP.md`](docker/LOCAL_SETUP.md).
+> That path uses a prebuilt **Sinergym 3.12.0 / EnergyPlus 25.1.0** image instead
+> of the from-source build below. (This runbook targets **24.1.0 / 3.11.0**, the
+> versions the bundled policy was trained on — see §3.)
 
 ---
 
@@ -125,7 +129,7 @@ pip show sinergym        # expect: Version: 3.11.0
 > patched bridge — rename `sinergym_bridge_mas.py` to that, or adjust the command.
 
 ### 4b. Model/detector directory — `…/state/maddpg_office/`
-`C:/Users/pkasn/Documents/wactorz_dev/wactorz/state/maddpg_office/`
+`<WACTORZ_DIR>/state/maddpg_office/` (replace `<WACTORZ_DIR>` with your absolute wactorz path)
 | File | Used by |
 |---|---|
 | `model.pt` | maddpg-fleet (the trained actor checkpoint) |
@@ -154,7 +158,9 @@ Each recipe file ends with a commented **REGISTER block**. Paste each one inside
 **restart wactorz** — recipe code is read at startup.
 
 Agents registered: `maddpg-fleet`, `sinergym-labeler`, `sinergym-anomaly`,
-`sinergym-hsml`, and optionally `sinergym-schema`.
+`sinergym-hsml`, and optionally `sinergym-schema`. The AIF (custom
+active-inference) variants `aif-fleet` and `aif-anomaly` are drop-in
+alternatives to `maddpg-fleet` / `sinergym-anomaly` — see §11.
 
 ---
 
@@ -176,7 +182,7 @@ Agents registered: `maddpg-fleet`, `sinergym-labeler`, `sinergym-anomaly`,
    ```
 5. Launch the MADDPG fleet (15 children):
    ```
-   @maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"path_to_wactorz/wactorz/state/maddpg_office/model.pt","normalizer_path":"C:/Users/pkasn/Documents/wactorz_dev/wactorz/state/maddpg_office/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+   @maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"<WACTORZ_DIR>/state/maddpg_office/model.pt","normalizer_path":"<WACTORZ_DIR>/state/maddpg_office/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
    ```
    The 15 zones must be in **this order** (it is the actor index order the policy expects).
 6. Run the bridge inside the Sinergym container (Part 7).
@@ -329,6 +335,19 @@ rows / `write failures` climb in `@sinergym-anomaly {"action":"status"}`.
 (`maddpg-zone-00..14`), each subscribing to global obs, inferring, and publishing a
 normalized `[-1,1]` action to its zone's action topic with provenance
 (`agent`, `policy`).
+
+### aif-fleet (custom active inference — alternative to maddpg-fleet)
+Same `launch` / `stop` / `status` interface and 15 supervised children
+(`aif-zone-00..14`), but driven by a custom active-inference policy instead of the
+DRL model. `model_path` is the `aif_model.pkl` (no `normalizer_path`); the launch
+also takes the comfort/energy band + weight params (`heat_low/high`, `cool_low/high`,
+`policy_len`, `energy_weight`, `comfort_weight`, `epistemic_weight`, …) — see the
+launch line in [`RUN.md`](RUN.md) / [`docker/LOCAL_SETUP.md`](docker/LOCAL_SETUP.md).
+
+### aif-anomaly (alternative to sinergym-anomaly)
+Same role as `sinergym-anomaly` (obs-watching detector → `…/anomaly` + Fuseki
+`sgy:Alert` triples) but loads the AIF detector (`detector_aif_v6.pkl`). Use it with
+`aif-fleet`.
 
 ### sinergym-labeler
 Republishes obs as a **flat keyed dict** on `…/observation/labeled` — read variables by

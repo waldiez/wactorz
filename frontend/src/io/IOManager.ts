@@ -1,4 +1,8 @@
 /**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/**
  * IO Manager: routes user input to the appropriate agent.
  *
  * All messages go through the IOAgent via the fixed `io/chat` topic.
@@ -20,156 +24,156 @@ import { tts } from "./TTSManager";
 
 const _widGen = new HLCWidGen({ node: "browser", W: 4 });
 
-function _feedPush(item: {
-  type: string;
-  label: string;
-  agentName: string;
-  timestamp: number;
-}): void {
-  document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
+function _feedPush(item: { type: string; label: string; agentName: string; timestamp: number }): void {
+    document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
 }
 
 export class IOManager {
-  /** Tracks the last typing key so we can clear it when any reply arrives. */
-  private _lastTypingKey = "";
-  private _lastStreamFrom = "";
-  private _ws: WSChatClient | null = null;
+    /** Tracks the last typing key so we can clear it when any reply arrives. */
+    private _lastTypingKey = "";
+    private _lastStreamFrom = "";
+    private _ws: WSChatClient | null = null;
 
-  constructor(
-    private readonly mqtt: MQTTClient,
-    private readonly chatPanel: ChatPanel,
-  ) {}
+    constructor(
+        private readonly mqtt: MQTTClient,
+        private readonly chatPanel: ChatPanel,
+    ) {}
 
-  /** Wire in a WSChatClient so send() can use direct WebSocket when available. */
-  setWSClient(ws: WSChatClient): void {
-    this._ws = ws;
+    /** Wire in a WSChatClient so send() can use direct WebSocket when available. */
+    setWSClient(ws: WSChatClient): void {
+        this._ws = ws;
 
-    ws.onStreamChunk((chunk, from) => {
-      this._lastStreamFrom = from;
-      this.chatPanel.streamChunk(chunk, from);
-      document.dispatchEvent(
-        new CustomEvent("af-stream-chunk", { detail: { chunk, from } }),
-      );
-    });
-
-    ws.onStreamEnd(() => {
-      this.chatPanel.hideTyping(this._lastTypingKey);
-      this.chatPanel.finalizeStream();
-      const text = this.chatPanel.lastStreamedText;
-      const from = this._lastStreamFrom || "main-actor";
-      if (text) tts.notify(text);
-      _feedPush({
-        type: "chat",
-        label: text ?? "(stream)",
-        agentName: from,
-        timestamp: Date.now(),
-      });
-      document.dispatchEvent(
-        new CustomEvent("af-stream-end", { detail: { text, from } }),
-      );
-    });
-  }
-
-  /**
-   * Send `text` to the appropriate agent via `io/chat`.
-   *
-   * Opens the chat panel if it isn't already visible so the user immediately
-   * sees their message and the typing indicator.
-   */
-  async send(text: string, agent: AgentInfo | null): Promise<void> {
-    let content = text;
-
-    // Prepend @name if a specific agent is selected and no prefix given
-    if (agent && !text.startsWith("@")) {
-      content = `@${agent.name} ${text}`;
-    }
-
-    const msg: ChatMessage = {
-      id: _widGen.next(),
-      from: "user",
-      to: agent?.name ?? "main-actor",
-      content: text, // show original (without @-prefix) in panel
-      timestampMs: Date.now(),
-    };
-
-    tts.checkUserIntent(text);
-    _feedPush({
-      type: "chat",
-      label: text,
-      agentName: "user",
-      timestamp: msg.timestampMs,
-    });
-
-    // Make the panel visible before appending so the user sees the message
-    this.chatPanel.ensureOpen(agent?.name ?? "main-actor");
-
-    // Show message immediately
-    this.chatPanel.appendMessage(msg);
-
-    // Show typing indicator and remember the key so we can clear it on reply
-    const typingKey = agent?.name ?? "main-actor";
-    this._lastTypingKey = typingKey;
-    this.chatPanel.showTyping(typingKey, typingKey);
-
-    // direct_ws mode: send over WebSocket only — never fall back to MQTT.
-    // Falling back would let IOAgent pick up the message and double-handle it.
-    if (this._ws?.chatMode === "direct_ws") {
-      const sent = this._ws.send(content, agent?.name ?? "main-actor");
-      if (!sent) {
-        setTimeout(() => {
-          this.chatPanel.hideTyping(typingKey);
-          this.chatPanel.appendMessage({
-            id: _widGen.next(),
-            from: "system",
-            to: "user",
-            content: "⚠ WebSocket disconnected — reconnecting, please retry.",
-            timestampMs: Date.now(),
-          });
-        }, 300);
-      }
-      return;
-    }
-
-    // mqtt mode (legacy / no registry): publish to io/chat.
-    const published = this.mqtt.publish("io/chat", {
-      id: msg.id,
-      from: "user",
-      to: msg.to,
-      content,
-      timestampMs: msg.timestampMs,
-    });
-
-    if (!published) {
-      setTimeout(() => {
-        this.chatPanel.hideTyping(typingKey);
-        this.chatPanel.appendMessage({
-          id: _widGen.next(),
-          from: "system",
-          to: "user",
-          content:
-            "⚠ Not connected — start the backend:\n  docker compose up -d  &&  wactorz",
-          timestampMs: Date.now(),
+        ws.onStreamChunk((chunk, from) => {
+            this._lastStreamFrom = from;
+            this.chatPanel.streamChunk(chunk, from);
+            document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk, from } }));
         });
-      }, 800);
+
+        ws.onStreamEnd(() => {
+            this.chatPanel.hideTyping(this._lastTypingKey);
+            this.chatPanel.finalizeStream();
+            const text = this.chatPanel.lastStreamedText;
+            const from = this._lastStreamFrom || "main-actor";
+            // A stream_end with no streamed text (e.g. agents that reply via a
+            // single non-streamed `chat` frame) must NOT create a feed row —
+            // that produced a phantom empty bubble attributed to the default name.
+            if (text) {
+                tts.notify(text);
+                _feedPush({
+                    type: "chat",
+                    label: text,
+                    agentName: from,
+                    timestamp: Date.now(),
+                });
+            }
+            document.dispatchEvent(new CustomEvent("af-stream-end", { detail: { text, from } }));
+        });
     }
-  }
 
-  /** Route an incoming agent→user chat message to the panel. */
-  receiveAgentMessage(msg: ChatMessage): void {
-    // In direct_ws mode the WebSocket delivers all replies — suppress MQTT duplicates.
-    if (this._ws?.chatMode === "direct_ws") return;
+    /**
+     * Send `text` to the appropriate agent via `io/chat`.
+     *
+     * Opens the chat panel if it isn't already visible so the user immediately
+     * sees their message and the typing indicator.
+     */
+    async send(text: string, agent: AgentInfo | null): Promise<void> {
+        let content = text;
 
-    // Ignore agent↔agent background chatter — only handle user-directed replies.
-    // Allow empty/missing `to` (older agents omit it) but drop explicit non-user targets.
-    if (msg.to && msg.to !== "user") return;
+        // Prepend @name if a specific agent is selected and no prefix given
+        if (agent && !text.startsWith("@")) {
+            content = `@${agent.name} ${text}`;
+        }
 
-    // Clear typing indicators: by responder name AND by the key we showed
-    // (they differ when Python's io-agent replies to a "main-actor" request)
-    if (msg.from) this.chatPanel.hideTyping(msg.from);
-    if (this._lastTypingKey && this._lastTypingKey !== msg.from) {
-      this.chatPanel.hideTyping(this._lastTypingKey);
+        const msg: ChatMessage = {
+            id: _widGen.next(),
+            from: "user",
+            to: agent?.name ?? "main-actor",
+            content: text, // show original (without @-prefix) in panel
+            timestampMs: Date.now(),
+        };
+
+        _feedPush({
+            type: "chat",
+            label: text,
+            agentName: "user",
+            timestamp: msg.timestampMs,
+        });
+
+        // Make the panel visible before appending so the user sees the message
+        this.chatPanel.ensureOpen(agent?.name ?? "main-actor");
+
+        // Show message immediately
+        this.chatPanel.appendMessage(msg);
+
+        // Show typing indicator and remember the key so we can clear it on reply
+        const typingKey = agent?.name ?? "main-actor";
+        this._lastTypingKey = typingKey;
+        this.chatPanel.showTyping(typingKey, typingKey);
+
+        // direct_ws mode: send over WebSocket only — never fall back to MQTT.
+        // Falling back would let IOAgent pick up the message and double-handle it.
+        if (this._ws?.chatMode === "direct_ws") {
+            const sent = this._ws.send(content, agent?.name ?? "main-actor");
+            if (!sent) {
+                setTimeout(() => {
+                    this.chatPanel.hideTyping(typingKey);
+                    this.chatPanel.appendMessage({
+                        id: _widGen.next(),
+                        from: "system",
+                        to: "user",
+                        content: "⚠ WebSocket disconnected — reconnecting, please retry.",
+                        timestampMs: Date.now(),
+                    });
+                }, 300);
+            }
+            return;
+        }
+
+        // mqtt mode (legacy / no registry): publish to io/chat.
+        const published = this.mqtt.publish("io/chat", {
+            id: msg.id,
+            from: "user",
+            to: msg.to,
+            content,
+            timestampMs: msg.timestampMs,
+        });
+
+        if (!published) {
+            setTimeout(() => {
+                this.chatPanel.hideTyping(typingKey);
+                this.chatPanel.appendMessage({
+                    id: _widGen.next(),
+                    from: "system",
+                    to: "user",
+                    content: "⚠ Not connected — start the backend:\n  docker compose up -d  &&  wactorz",
+                    timestampMs: Date.now(),
+                });
+            }, 800);
+        }
     }
-    this.chatPanel.appendMessage(msg);
-    tts.notify(msg.content, msg.from);
-  }
+
+    /** Route an incoming agent→user chat message to the panel. */
+    receiveAgentMessage(msg: ChatMessage): void {
+        // In direct_ws mode the WebSocket delivers all replies — suppress MQTT duplicates.
+        if (this._ws?.chatMode === "direct_ws") {
+            return;
+        }
+
+        // Ignore agent↔agent background chatter — only handle user-directed replies.
+        // Allow empty/missing `to` (older agents omit it) but drop explicit non-user targets.
+        if (msg.to && msg.to !== "user") {
+            return;
+        }
+
+        // Clear typing indicators: by responder name AND by the key we showed
+        // (they differ when Python's io-agent replies to a "main-actor" request)
+        if (msg.from) {
+            this.chatPanel.hideTyping(msg.from);
+        }
+        if (this._lastTypingKey && this._lastTypingKey !== msg.from) {
+            this.chatPanel.hideTyping(this._lastTypingKey);
+        }
+        this.chatPanel.appendMessage(msg);
+        tts.notify(msg.content, msg.from);
+    }
 }

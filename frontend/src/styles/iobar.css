@@ -1,0 +1,199 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/* ── IO bar (bottom) ────────────────────────────────────────────────── */
+
+/* ── Pending attachment chips (compose tray) ─────────────────────────── */
+.af-attach-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.af-attach-tray:empty {
+  display: none;
+}
+.af-attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 2px 10px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.18);
+  border: 1px solid rgba(37, 99, 235, 0.4);
+  font-size: 11px;
+  color: #bfdbfe;
+}
+.af-attach-chip-label {
+  white-space: nowrap;
+}
+.af-attach-chip-x {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.7;
+  padding: 0 2px;
+}
+.af-attach-chip-x:hover {
+  opacity: 1;
+}
+#io-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  padding-left: max(12px, env(safe-area-inset-left, 0px));
+  padding-right: max(12px, env(safe-area-inset-right, 0px));
+  background: rgba(4, 8, 16, 0.95);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-top: 1px solid rgba(37, 99, 235, 0.15);
+  z-index: 400;
+}
+#mic-btn,
+#wake-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.12);
+  border: 1px solid rgba(37, 99, 235, 0.3);
+  color: #93c5fd;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+#mic-btn:hover,
+#wake-btn:hover {
+  background: rgba(37, 99, 235, 0.22);
+}
+#mic-btn.recording {
+  background: rgba(251, 113, 133, 0.2);
+  border-color: rgba(251, 113, 133, 0.5);
+  color: #fb7185;
+  animation: mic-pulse 1s ease-in-out infinite;
+}
+@keyframes mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(251, 113, 133, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(251, 113, 133, 0);
+  }
+}
+#wake-btn.ambient {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.4);
+  color: #4ade80;
+  animation: wake-pulse 2s ease-in-out infinite;
+}
+#wake-btn.triggered {
+  background: rgba(234, 179, 8, 0.2);
+  border-color: rgba(234, 179, 8, 0.5);
+  color: #facc15;
+  animation: none;
+}
+@keyframes wake-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(34, 197, 94, 0);
+  }
+}
+#text-input {
+  flex: 1;
+  min-height: 36px;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #d0e0ff;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+  font-family: inherit;
+  resize: none;
+  overflow: hidden;
+  line-height: 1.5;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+#text-input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+#text-input:focus {
+  border-color: rgba(37, 99, 235, 0.5);
+}
+#send-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: #2563eb;
+  border: none;
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease;
+}
+#send-btn:hover {
+  background: #3b82f6;
+}
+#send-btn.sending {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── @mention popup ─────────────────────────────────────────────────── */
+#mention-popup {
+  display: none;
+  position: fixed;
+  background: rgba(8, 12, 40, 0.97);
+  border: 1px solid rgba(100, 160, 255, 0.25);
+  border-radius: 10px;
+  padding: 4px 0;
+  list-style: none;
+  z-index: 300;
+  max-height: 200px;
+  overflow-y: auto;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 32px rgba(0, 0, 20, 0.5);
+}
+#mention-popup li {
+  padding: 7px 14px;
+  font-size: 13px;
+  color: #a0b8d8;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-family: "JetBrains Mono", monospace;
+}
+#mention-popup li:hover,
+#mention-popup li.focused {
+  background: rgba(100, 160, 255, 0.14);
+  color: #c8e0ff;
+}

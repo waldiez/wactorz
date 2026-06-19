@@ -6,11 +6,10 @@ Covers x86-64 (Intel/AMD) and **ARM64** (Snapdragon X, Surface Pro X, Copilot+ P
 
 ## Which option fits you?
 
-| Option | Docker needed | Rust needed | Node.js needed | ARM64 native | Best for |
-|---|---|---|---|---|---|
-| **A — Full Docker** | ✅ | ✗ | ✗ | ✅ via emulation | Fastest start, production-like |
-| **B — Dev mode** | ✅ | ✗ | ✅ | ✅ | Frontend development |
-| **C — Native binary** | partial | ✅ | ✅ | ✅ | Maximum performance, SSH access |
+| Option | Docker needed | Node.js needed | ARM64 native | Best for |
+|---|---|---|---|---|
+| **A — Full Docker** | ✅ | ✗ | ✅ via emulation | Fastest start, production-like |
+| **B — Dev mode** | ✅ | ✅ | ✅ | Frontend development |
 
 **Recommended starting point**: Option A for a working dashboard in under 5 minutes.
 
@@ -44,32 +43,14 @@ After install, open Docker Desktop and wait for the engine to start.
 
 **ARM64 note:** Docker Desktop on ARM64 Windows (Snapdragon X, Surface Pro) runs
 `linux/arm64` containers natively and `linux/amd64` via QEMU emulation.
-The pre-built Wactorz images are `linux/amd64`; they run fine on ARM64 via emulation,
-or you can build a native `linux/arm64` image yourself (see below).
 
-### Install Node.js (needed for Options B and C)
+### Install Node.js (needed for Option B)
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
 ```
 
 ARM64 native builds are available and installed automatically by `winget`.
-
-### Install Rust (needed for Option C)
-
-```powershell
-winget install Rustlang.Rustup
-```
-
-After install, open a new terminal and verify:
-
-```powershell
-rustc --version   # should show 1.93+
-cargo --version
-```
-
-ARM64: `rustup` installs `aarch64-pc-windows-msvc` as the default target automatically.
-The MSVC toolchain is used; the Visual Studio Build Tools are installed by `rustup`.
 
 ---
 
@@ -85,40 +66,25 @@ notepad .env   # set LLM_API_KEY at minimum
 ```
 
 ```powershell
-docker compose up -d
+docker compose --profile python-full up -d
 ```
 
-Open **http://localhost/** — all agents should appear within a few seconds.
+Open **http://localhost:8888/** — the monitor dashboard. All agents should appear
+within a few seconds. (The `python-full` profile also starts Fuseki on `:3030` and
+Home Assistant on `:8123`; use `--profile python` for the app + MQTT only.)
 
 To stop:
 
 ```powershell
-docker compose down
-```
-
-### ARM64 note for Option A
-
-The default `compose.yaml` pulls `linux/amd64` images and runs them via QEMU.
-Performance is acceptable for development. For better performance, build a native image:
-
-```powershell
-docker buildx build --platform linux/arm64 --tag wactorz-server:local --load .\rust
-```
-
-Then in `compose.yaml`, change:
-
-```yaml
-wactorz:
-  image: wactorz-server:local   # ← replace the build section with this
-  platform: linux/arm64
+docker compose --profile python-full down
 ```
 
 ---
 
-## Option B — Dev mode (no Rust build, no LLM key)
+## Option B — Dev mode (no LLM key)
 
 The mock simulator publishes realistic MQTT events so you can develop the frontend
-without a running Rust backend.
+without a running backend.
 
 ```powershell
 # Terminal 1 — MQTT broker + mock agents
@@ -132,8 +98,8 @@ npm run dev
 
 Open **http://localhost:3000**.
 
-8 agents appear immediately (main-actor, monitor-agent, io-agent, qa-agent, nautilus,
-udx, weather, news). Chat, heartbeats, alerts, and dynamic spawns are all simulated.
+Agents appear immediately (main-actor, monitor-agent, io-agent, qa-agent, nautilus,
+weather, news). Chat, heartbeats, alerts, and dynamic spawns are all simulated.
 
 To stop the mock stack:
 
@@ -143,134 +109,7 @@ docker compose -f compose.dev.yaml down
 
 ---
 
-## Option C — Native binary on Windows
-
-The Rust binary runs directly on Windows. Only Mosquitto runs in Docker.
-
-### 1. Clone and configure
-
-```powershell
-git clone https://github.com/waldiez/wactorz
-cd wactorz
-copy .env.template .env
-notepad .env   # set LLM_API_KEY and MQTT_HOST=localhost
-```
-
-### 2. Build the frontend
-
-```powershell
-cd frontend
-npm install
-npm run build   # → frontend\dist\
-cd ..
-```
-
-### 3. Build the Rust binary
-
-```powershell
-cd rust
-cargo build --release --bin wactorz
-cd ..
-```
-
-The binary is at `rust\target\release\wactorz.exe`.
-
-**ARM64**: `cargo build` uses the native `aarch64-pc-windows-msvc` target by default —
-no cross-compilation flags needed. First build takes ~5-8 min (downloading + compiling
-dependencies); subsequent builds are ~30 s.
-
-### 4. Start Mosquitto
-
-```powershell
-docker compose -f compose.native.yaml up -d mosquitto
-```
-
-### 5. Serve the frontend
-
-**Option 5a — Use Docker nginx** (simplest):
-
-```powershell
-docker compose -f compose.native.yaml up -d
-```
-
-**Option 5b — Use a simple static server** (no Docker nginx):
-
-```powershell
-cd frontend
-npx serve dist -p 80
-```
-
-Or install nginx for Windows and point `root` to `frontend\dist\`.
-
-### 6. Start wactorz
-
-In PowerShell:
-
-```powershell
-# Load .env variables into the current session
-Get-Content .\.env | Where-Object { $_ -match '^\s*[^#]' } | ForEach-Object {
-    $parts = $_ -split '=', 2
-    if ($parts.Count -eq 2) { [System.Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), "Process") }
-}
-
-.\rust\target\release\wactorz.exe --no-cli
-```
-
-Or in Git Bash:
-
-```bash
-source .env 2>/dev/null || true
-./rust/target/release/wactorz.exe --no-cli
-```
-
-Open **http://localhost/** (nginx) or **http://localhost:3000** (Vite dev server).
-
----
-
-## Cross-compiling for Linux deployment
-
-If you develop on Windows but deploy to a Linux server, you need a Linux binary.
-
-### Option X1 — Docker buildx (easiest, works on all Windows)
-
-```powershell
-docker buildx build --platform linux/amd64 --tag wactorz:linux --load .\rust
-```
-
-Extract the binary from the image:
-
-```powershell
-$id = docker create --platform linux/amd64 wactorz:linux
-docker cp "${id}:/app/wactorz" .\wactorz-linux-amd64
-docker rm $id
-```
-
-### Option X2 — WSL2 (fastest compilation, native Linux toolchain)
-
-```powershell
-# Install WSL2 with Ubuntu
-wsl --install
-
-# Inside WSL2:
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source ~/.cargo/env
-cd /mnt/c/Users/<your-name>/wactorz/rust
-cargo build --release --bin wactorz
-# → target/release/wactorz  (native linux/amd64 binary)
-```
-
-### Option X3 — Cross-compile to linux/arm64 (for ARM64 server targets)
-
-```powershell
-rustup target add aarch64-unknown-linux-gnu
-# Install a cross-linker via the 'cross' tool:
-cargo install cross
-cross build --release --bin wactorz --target aarch64-unknown-linux-gnu
-```
-
----
-
-## Running bash scripts (`deploy.sh`, `package-native.sh`, etc.)
+## Running bash scripts on Windows
 
 The `scripts/` directory contains bash (`.sh`) scripts. On Windows, run them via:
 
@@ -279,7 +118,7 @@ The `scripts/` directory contains bash (`.sh`) scripts. On Windows, run them via
 ```bash
 # Open Git Bash terminal, then:
 cd /c/Users/<your-name>/wactorz
-bash scripts/deploy.sh
+bash scripts/<script>.sh
 ```
 
 ### WSL2 (best compatibility)
@@ -287,24 +126,7 @@ bash scripts/deploy.sh
 ```bash
 # Inside WSL2 Ubuntu:
 cd /mnt/c/Users/<your-name>/wactorz
-bash scripts/deploy.sh
-```
-
-### PowerShell equivalent (no bash needed)
-
-The three most common script tasks can be done directly in PowerShell:
-
-```powershell
-# Build frontend
-cd frontend; npm run build; cd ..
-
-# Build Rust binary
-cd rust; cargo build --release --bin wactorz; cd ..
-
-# rsync to remote (requires OpenSSH + rsync; easiest via Git Bash or WSL2)
-# PowerShell alternative: use SCP
-scp -r .\frontend\dist\ user@host:/opt/wactorz/frontend/
-scp .\rust\target\release\wactorz user@host:/opt/wactorz/wactorz
+bash scripts/<script>.sh
 ```
 
 ---
@@ -337,21 +159,6 @@ Options:
 
 For the last option, ensure Git Bash's `bin` is on `PATH` or point `NAUTILUS_RSYNC_PATH`
 to the binary.
-
----
-
-## ARM64 Windows — summary
-
-| Task | Status | Notes |
-|---|---|---|
-| `docker compose up -d` | ✅ | Runs linux/amd64 via QEMU; native arm64 with custom build |
-| `npm install && npm run dev` | ✅ | Node.js has native ARM64 Windows builds |
-| `cargo build --release` | ✅ | Produces native `aarch64-pc-windows-msvc` `.exe` |
-| Cross-compile to linux/amd64 | ✅ slow | Docker buildx uses QEMU (~10-15 min first build) |
-| Cross-compile to linux/arm64 | ✅ fast | `cross` + `aarch64-unknown-linux-gnu` target |
-| `bash scripts/deploy.sh` | via WSL2 | Or Git Bash |
-| NautilusAgent ssh | ✅ | Windows OpenSSH Client included |
-| NautilusAgent rsync | via WSL2 | Or Chocolatey `rsync` |
 
 ---
 
@@ -390,54 +197,32 @@ Run Docker commands in PowerShell, or add Docker to Git Bash's PATH:
 export PATH="$PATH:/c/Program Files/Docker/Docker/resources/bin"
 ```
 
-### `cargo build` fails: `link.exe not found`
+### Monitor port 8888 already in use
 
-The MSVC linker is missing. Install Visual Studio Build Tools:
-
-```powershell
-winget install Microsoft.VisualStudio.2022.BuildTools
-```
-
-During install, select **"Desktop development with C++"** workload.
-
-### Port 80 already in use
-
-IIS (Internet Information Services) often occupies port 80 on Windows.
-Either stop IIS or change the port in `.env`:
+Change the published port in `.env`:
 
 ```env
-DASHBOARD_EXTERNAL_PORT=8080
+MONITOR_EXTERNAL_PORT=8889
 ```
 
-Then open **http://localhost:8080/**.
-
-To stop IIS temporarily:
-
-```powershell
-net stop w3svc
-```
+Then open **http://localhost:8889/**.
 
 ### `MQTT_HOST` connection refused
 
 Ensure Mosquitto is running:
 
 ```powershell
-docker compose -f compose.native.yaml ps
+docker compose --profile python ps
 ```
 
-For native binary mode, set `MQTT_HOST=localhost` in `.env` (not `mosquitto`).
+When running the app inside Docker, `MQTT_HOST` should be `mosquitto`; when running
+the Python app directly on the host against a containerised broker, use `localhost`.
 
 ### ARM64: Docker image `exec format error`
 
-The pulled image is `linux/amd64`; you need to enable QEMU emulation in Docker Desktop:
-Settings → Docker Engine → add `"experimental": true`.
-Or build a native `linux/arm64` image:
-
-```powershell
-docker buildx build --platform linux/arm64 --tag wactorz-server:arm64 --load .\rust
-```
-
-Then update `compose.yaml` to use `image: wactorz-server:arm64` and `platform: linux/arm64`.
+The pulled image is `linux/amd64`; enable QEMU emulation in Docker Desktop
+(Settings → Docker Engine → add `"experimental": true`), or pull/build a native
+`linux/arm64` image.
 
 ### `rsync: command not found` (NautilusAgent)
 
@@ -461,7 +246,7 @@ Or use WSL2 where rsync comes pre-installed.
 
 ```powershell
 # 1. Install prerequisites
-winget install Git.Git Microsoft.WindowsTerminal OpenJS.NodeJS.LTS Rustlang.Rustup Docker.DockerDesktop
+winget install Git.Git Microsoft.WindowsTerminal OpenJS.NodeJS.LTS Docker.DockerDesktop
 
 # 2. Enable WSL2 (for bash scripts and rsync)
 wsl --install   # installs Ubuntu by default; reboot when prompted
@@ -472,18 +257,9 @@ cd wactorz
 copy .env.template .env
 notepad .env   # set LLM_API_KEY
 
-# 4. Start the mock dev stack (no Rust build needed)
+# 4. Start the mock dev stack
 docker compose -f compose.dev.yaml up -d
 cd frontend && npm install && npm run dev
 
 # → http://localhost:3000  ✓
-```
-
-To move to a full stack later, build in WSL2 (faster than QEMU cross-compile):
-
-```bash
-# In WSL2:
-cd /mnt/c/Users/<you>/wactorz/rust
-cargo build --release --bin wactorz
-# Produces native linux/amd64 binary for deployment
 ```

@@ -24,18 +24,14 @@ cd frontend && bun install && bun run build && cd ..
 
 # Docs (optional — only needed if you change docs/ source files)
 # make docs-build    → regenerates static/docs/ (guide + reference pages)
-# API reference docs (JS/Python/Rust) are not committed; they are built
+# API reference docs (JS/Python) are not committed; they are built
 # by CI and published to https://waldiez.github.io/wactorz/api/
-
-# Rust (optional)
-cargo build
 ```
 
 Run the tests:
 
 ```bash
 make test-py        # Python unit tests
-make test-rust      # Rust tests (requires Rust toolchain)
 ```
 
 ## Pull Request Process
@@ -51,8 +47,7 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 
 ## Code Style
 
-- **Python**: unit tests and backend parity checks via pre-commit hooks
-- **Rust**: `cargo fmt` + `cargo clippy`
+- **Python**: unit tests via pre-commit hooks
 - **TypeScript**: Prettier formatting and `bun run typecheck`
 
 Install pre-commit hooks: `pre-commit install`
@@ -75,8 +70,7 @@ wactorz/          Python package source
 ├── core/           Actor base, registry, supervisor
 └── interfaces/     CLI, REST, Discord, WhatsApp, Telegram interfaces
 
-frontend/           Babylon.js web dashboard (TypeScript + Vite)
-rust/               Rust WS bridge and server crates
+frontend/           Web dashboard (TypeScript + Vite)
 docs/               Documentation (MkDocs + custom landing page)
 tests/              Python test suite
 ```

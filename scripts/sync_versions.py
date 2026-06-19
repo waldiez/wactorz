@@ -32,35 +32,6 @@ def update_ha_addon_config(new_version):
         ha_file.write_text(new_content)
         print(f"Updated {ha_file}")
 
-def update_cargo_toml(new_version):
-    cargo_file = Path("Cargo.toml")
-    if cargo_file.exists():
-        content = cargo_file.read_text()
-        # Look for [workspace.package] section and then version
-        lines = content.splitlines()
-        in_workspace_package = False
-        new_lines = []
-        updated = False
-        for line in lines:
-            if line.strip() == "[workspace.package]":
-                in_workspace_package = True
-                new_lines.append(line)
-            elif in_workspace_package and line.strip().startswith("version ="):
-                new_lines.append(f'version = "{new_version}"')
-                in_workspace_package = False
-                updated = True
-            else:
-                new_lines.append(line)
-        
-        if not updated:
-             # Fallback to simple regex if line-by-line failed
-             new_content = re.sub(r'version = ".*"', f'version = "{new_version}"', content, count=1)
-        else:
-             new_content = "\n".join(new_lines) + "\n"
-             
-        cargo_file.write_text(new_content)
-        print(f"Updated {cargo_file}")
-
 def update_docs_landing(new_version):
     landing_file = Path("docs/_landing.html")
     if landing_file.exists():
@@ -98,7 +69,6 @@ def main():
     update_python_version(new_version)
     update_package_json(new_version)
     update_ha_addon_config(new_version)
-    update_cargo_toml(new_version)
     update_docs_landing(new_version)
     update_docs_versions_json(new_version)
 

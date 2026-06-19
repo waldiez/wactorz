@@ -30,8 +30,7 @@ pip install wactorz[all]
 - **[Remote Nodes](remote-nodes.md)** — Edge deployment via `remote_runner.py`
 - **[Python API](python-api.md)** — Core classes, supervision, persistence
 - **[Home Assistant Addon](../ha-addon/DOCS.md)** — Install and configure the HA Supervisor addon (requires HAOS or Supervised)
-<!-- - **[Rust Docs](https://waldiez.github.io/wactorz/api/rust/)** — Rustdoc for wactorz-core and wactorz-interfaces
-- **[JS/TS Docs](https://waldiez.github.io/wactorz/api/js/)** — TypeDoc for the Babylon.js frontend -->
+<!-- - **[JS/TS Docs](https://waldiez.github.io/wactorz/api/js/)** — TypeDoc for the frontend -->
 
 ## Links
 

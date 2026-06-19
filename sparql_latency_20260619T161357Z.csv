@@ -1,0 +1,6 @@
+timestamp,via,query,triples,runs,errors,p50_ms,p95_ms,p99_ms,min_ms,max_ms,mean_ms,pass
+2026-06-19T16:13:57.013235+00:00,direct,point_lookup,2756,40,0,19.4,37.6,91.7,13.5,91.7,22.8,True
+2026-06-19T16:13:57.013235+00:00,direct,catalog_scan,2756,40,0,61.5,98.8,104.7,30.1,104.7,66.1,True
+2026-06-19T16:13:57.013235+00:00,direct,aggregation_capability_kinds,2756,40,0,25.3,64.0,82.5,12.5,82.5,32.1,True
+2026-06-19T16:13:57.013235+00:00,direct,device_catalog,2756,40,0,63.4,79.1,80.7,28.5,80.7,60.6,True
+2026-06-19T16:13:57.013235+00:00,direct,channel_topics,2756,40,0,54.5,78.7,84.2,23.9,84.2,54.5,True

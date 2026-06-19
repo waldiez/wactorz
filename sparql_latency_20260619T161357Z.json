@@ -1,0 +1,90 @@
+{
+  "timestamp": "2026-06-19T16:13:57.013235+00:00",
+  "config": {
+    "direct_endpoint": "http://localhost:3030/wactorz/sparql",
+    "proxy_endpoint": "http://localhost:8000/api/fuseki/wactorz/sparql",
+    "runs": 40,
+    "warmup": 5,
+    "threshold_ms": 500.0,
+    "percentile": 95.0
+  },
+  "triples": 2756,
+  "kpi_pass": true,
+  "results": [
+    {
+      "endpoint": "http://localhost:3030/wactorz/sparql",
+      "query": "point_lookup",
+      "runs": 40,
+      "errors": 0,
+      "p50_ms": 19.4,
+      "p95_ms": 37.6,
+      "p99_ms": 91.7,
+      "min_ms": 13.5,
+      "max_ms": 91.7,
+      "mean_ms": 22.8,
+      "pass": true,
+      "via": "direct",
+      "triples": 2756
+    },
+    {
+      "endpoint": "http://localhost:3030/wactorz/sparql",
+      "query": "catalog_scan",
+      "runs": 40,
+      "errors": 0,
+      "p50_ms": 61.5,
+      "p95_ms": 98.8,
+      "p99_ms": 104.7,
+      "min_ms": 30.1,
+      "max_ms": 104.7,
+      "mean_ms": 66.1,
+      "pass": true,
+      "via": "direct",
+      "triples": 2756
+    },
+    {
+      "endpoint": "http://localhost:3030/wactorz/sparql",
+      "query": "aggregation_capability_kinds",
+      "runs": 40,
+      "errors": 0,
+      "p50_ms": 25.3,
+      "p95_ms": 64.0,
+      "p99_ms": 82.5,
+      "min_ms": 12.5,
+      "max_ms": 82.5,
+      "mean_ms": 32.1,
+      "pass": true,
+      "via": "direct",
+      "triples": 2756
+    },
+    {
+      "endpoint": "http://localhost:3030/wactorz/sparql",
+      "query": "device_catalog",
+      "runs": 40,
+      "errors": 0,
+      "p50_ms": 63.4,
+      "p95_ms": 79.1,
+      "p99_ms": 80.7,
+      "min_ms": 28.5,
+      "max_ms": 80.7,
+      "mean_ms": 60.6,
+      "pass": true,
+      "via": "direct",
+      "triples": 2756
+    },
+    {
+      "endpoint": "http://localhost:3030/wactorz/sparql",
+      "query": "channel_topics",
+      "runs": 40,
+      "errors": 0,
+      "p50_ms": 54.5,
+      "p95_ms": 78.7,
+      "p99_ms": 84.2,
+      "min_ms": 23.9,
+      "max_ms": 84.2,
+      "mean_ms": 54.5,
+      "pass": true,
+      "via": "direct",
+      "triples": 2756
+    }
+  ]
+}

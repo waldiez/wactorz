@@ -72,6 +72,7 @@ function buildHeaderRight(view: View, onSetView: (v: View) => void): HTMLElement
         { key: "feed", label: "Feed", icon: "list" },
         { key: "chat", label: "Chat", icon: "chat" },
         { key: "ha", label: "Devices", icon: "home" },
+        { key: "fuseki", label: "Graph", icon: "hexagon" },
         { key: "settings", label: "Settings", icon: "settings" },
     ];
     views.forEach(({ key, label, icon }) => {
@@ -151,6 +152,7 @@ export function buildBottomNav(opts: { view: View; onSetView: (v: View) => void 
     });
 
     const secondary: { key: View; icon: IconName; label: string }[] = [
+        { key: "fuseki", icon: "hexagon", label: "Graph" },
         { key: "settings", icon: "settings", label: "Settings" },
     ];
     secondary.forEach(({ key, icon, label }) => {

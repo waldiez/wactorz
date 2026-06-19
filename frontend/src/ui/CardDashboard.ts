@@ -25,6 +25,7 @@ import { renderHADevices, areaIconText } from "./dashboard/haDevices";
 import { stateLabel, relTime, sortAgents } from "./dashboard/agentState";
 import { buildFeedView, appendFeedItemToView, feedItemEl, feedKey } from "./dashboard/feedView";
 import { buildHAView } from "./dashboard/haView";
+import { buildFusekiView } from "./dashboard/fusekiView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import { MetricsController } from "./dashboard/metrics";
@@ -33,7 +34,7 @@ import { seedHaConfigFromServer } from "./dashboard/haConfig";
 // Re-exported for tests; implemented in dashboard/haDevices.
 export { areaIconText };
 
-type View = "overview" | "feed" | "chat" | "ha" | "settings";
+type View = "overview" | "feed" | "chat" | "ha" | "fuseki" | "settings";
 type ConnState = "live" | "connecting" | "demo";
 
 export class CardDashboard {
@@ -415,6 +416,8 @@ export class CardDashboard {
             body.appendChild(this._buildFeedView());
         } else if (this.view === "ha") {
             body.appendChild(this._buildHAView());
+        } else if (this.view === "fuseki") {
+            body.appendChild(this._buildFusekiView());
         } else if (this.view === "settings") {
             body.appendChild(this._buildSettingsView());
         } else if (this.view === "chat") {
@@ -582,5 +585,9 @@ export class CardDashboard {
 
     private _buildSettingsView(): HTMLElement {
         return this._metrics.buildSettingsView();
+    }
+
+    private _buildFusekiView(): HTMLElement {
+        return buildFusekiView(() => this._renderView());
     }
 }

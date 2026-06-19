@@ -286,7 +286,10 @@ export function buildSettingsView(info: CostLimitInfo | null, cb: CostLimitCallb
             },
         ]),
     );
-    // No MQTT URL field: the dashboard always connects to the same-origin /mqtt
-    // proxy (derived from window.location), so there is nothing to configure.
+    // No Fuseki section: the SPARQL proxy connects to the server-configured
+    // FUSEKI_URL, so there is nothing host/credential-wise to set in the browser.
+    // The only client-side Fuseki setting (the dataset name) lives in the Graph
+    // view's header. No MQTT URL field either — the dashboard always uses the
+    // same-origin /mqtt proxy.
     return el;
 }

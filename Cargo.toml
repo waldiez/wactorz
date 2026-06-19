@@ -6,7 +6,6 @@ members = [
     "rust/crates/wactorz-agents",
     "rust/crates/wactorz-interfaces",
     "rust/crates/wactorz-server",
-    "frontend/src-tauri",
 ]
 
 [workspace.package]

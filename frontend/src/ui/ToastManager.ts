@@ -1,4 +1,8 @@
 /**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/**
  * ToastManager — rich in-app notification toasts.
  *
  * Always shown inside the app window (unlike OS notifications which only fire
@@ -6,79 +10,81 @@
  * stack in the bottom-right corner and auto-dismiss after a configurable delay.
  */
 
-export type ToastType =
-  | "chat"
-  | "spawn"
-  | "alert-error"
-  | "alert-warning"
-  | "welcome"
-  | "system";
+export type ToastType = "chat" | "spawn" | "alert-error" | "alert-warning" | "welcome" | "system";
 
-export interface ToastOptions {
-  type?: ToastType;
-  title: string;
-  message: string;
-  durationMs?: number;
-  actions?: { label: string; primary?: boolean; onClick: () => void }[];
+export interface ToastAction {
+    label: string;
+    primary?: boolean;
+    onClick: () => void;
 }
 
-// ── Visual theme per type ─────────────────────────────────────────────────────
+export interface ToastOptions {
+    type?: ToastType;
+    title: string;
+    message: string;
+    durationMs?: number;
+    actions?: ToastAction[];
+}
 
-const THEME: Record<
-  ToastType,
-  { strip: string; avatar: string; badge: string; badgeBg: string; progress: string; label: string }
-> = {
-  chat: {
-    strip: "linear-gradient(90deg,#f59e0b,#f97316)",
-    avatar: "linear-gradient(135deg,#f59e0b,#ea580c)",
-    badge: "#fbbf24",
-    badgeBg: "rgba(245,158,11,0.15)",
-    progress: "#f97316",
-    label: "reply",
-  },
-  spawn: {
-    strip: "linear-gradient(90deg,#10b981,#06b6d4)",
-    avatar: "linear-gradient(135deg,#10b981,#0891b2)",
-    badge: "#34d399",
-    badgeBg: "rgba(16,185,129,0.15)",
-    progress: "#10b981",
-    label: "spawned",
-  },
-  "alert-error": {
-    strip: "linear-gradient(90deg,#ef4444,#f43f5e)",
-    avatar: "linear-gradient(135deg,#ef4444,#e11d48)",
-    badge: "#f87171",
-    badgeBg: "rgba(239,68,68,0.15)",
-    progress: "#ef4444",
-    label: "error",
-  },
-  "alert-warning": {
-    strip: "linear-gradient(90deg,#f59e0b,#eab308)",
-    avatar: "linear-gradient(135deg,#f59e0b,#ca8a04)",
-    badge: "#fbbf24",
-    badgeBg: "rgba(245,158,11,0.15)",
-    progress: "#f59e0b",
-    label: "warning",
-  },
-  welcome: {
-    strip: "linear-gradient(90deg,#8b5cf6,#6366f1,#3b82f6)",
-    avatar: "linear-gradient(135deg,#8b5cf6,#4f46e5)",
-    badge: "#a78bfa",
-    badgeBg: "rgba(139,92,246,0.15)",
-    progress: "#8b5cf6",
-    label: "welcome",
-  },
-  system: {
-    strip: "linear-gradient(90deg,#6366f1,#8b5cf6)",
-    avatar: "linear-gradient(135deg,#6366f1,#7c3aed)",
-    badge: "#818cf8",
-    badgeBg: "rgba(99,102,241,0.15)",
-    progress: "#6366f1",
-    label: "system",
-  },
+interface ThemeEntry {
+    strip: string;
+    avatar: string;
+    badge: string;
+    badgeBg: string;
+    progress: string;
+    label: string;
+}
+
+const THEME: Record<ToastType, ThemeEntry> = {
+    chat: {
+        strip: "linear-gradient(90deg,#f59e0b,#f97316)",
+        avatar: "linear-gradient(135deg,#f59e0b,#ea580c)",
+        badge: "#fbbf24",
+        badgeBg: "rgba(245,158,11,0.15)",
+        progress: "#f97316",
+        label: "reply",
+    },
+    spawn: {
+        strip: "linear-gradient(90deg,#10b981,#06b6d4)",
+        avatar: "linear-gradient(135deg,#10b981,#0891b2)",
+        badge: "#34d399",
+        badgeBg: "rgba(16,185,129,0.15)",
+        progress: "#10b981",
+        label: "spawned",
+    },
+    "alert-error": {
+        strip: "linear-gradient(90deg,#ef4444,#f43f5e)",
+        avatar: "linear-gradient(135deg,#ef4444,#e11d48)",
+        badge: "#f87171",
+        badgeBg: "rgba(239,68,68,0.15)",
+        progress: "#ef4444",
+        label: "error",
+    },
+    "alert-warning": {
+        strip: "linear-gradient(90deg,#f59e0b,#eab308)",
+        avatar: "linear-gradient(135deg,#f59e0b,#ca8a04)",
+        badge: "#fbbf24",
+        badgeBg: "rgba(245,158,11,0.15)",
+        progress: "#f59e0b",
+        label: "warning",
+    },
+    welcome: {
+        strip: "linear-gradient(90deg,#8b5cf6,#6366f1,#3b82f6)",
+        avatar: "linear-gradient(135deg,#8b5cf6,#4f46e5)",
+        badge: "#a78bfa",
+        badgeBg: "rgba(139,92,246,0.15)",
+        progress: "#8b5cf6",
+        label: "welcome",
+    },
+    system: {
+        strip: "linear-gradient(90deg,#6366f1,#8b5cf6)",
+        avatar: "linear-gradient(135deg,#6366f1,#7c3aed)",
+        badge: "#818cf8",
+        badgeBg: "rgba(99,102,241,0.15)",
+        progress: "#6366f1",
+        label: "system",
+    },
 };
-
-// ── CSS (injected once) ───────────────────────────────────────────────────────
 
 const CSS = `
 .wz-toasts {
@@ -249,62 +255,64 @@ const CSS = `
 }
 `;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
 export function initials(name: string): string {
-  const parts = name.trim().split(/[\s\-_]+/);
-  if (parts.length >= 2) {
-    const a = parts[0] ? parts[0][0] ?? "" : "";
-    const b = parts[1] ? parts[1][0] ?? "" : "";
-    return (a + b).toUpperCase();
-  }
-  return name.slice(0, 2).toUpperCase();
+    const parts = name.trim().split(/[\s\-_]+/);
+    if (parts.length >= 2) {
+        const a = parts[0] ? (parts[0][0] ?? "") : "";
+        const b = parts[1] ? (parts[1][0] ?? "") : "";
+        return (a + b).toUpperCase();
+    }
+    return name.slice(0, 2).toUpperCase();
 }
 
 function timeLabel(): string {
-  const d = new Date();
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const d = new Date();
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-// ── ToastManager ──────────────────────────────────────────────────────────────
-
 class ToastManager {
-  private container!: HTMLElement;
-  private active: HTMLElement[] = [];
-  private readonly MAX = 4;
+    private container!: HTMLElement;
+    private active: HTMLElement[] = [];
+    private readonly MAX = 4;
 
-  constructor() {
-    if (typeof document === "undefined") return;
-    this.injectCSS();
-    this.createContainer();
-  }
+    constructor() {
+        if (typeof document === "undefined") {
+            return;
+        }
+        this.injectCSS();
+        this.createContainer();
+    }
 
-  private injectCSS(): void {
-    if (document.getElementById("wz-toast-css")) return;
-    const style = document.createElement("style");
-    style.id = "wz-toast-css";
-    style.textContent = CSS;
-    document.head.appendChild(style);
-  }
+    private injectCSS(): void {
+        if (document.getElementById("wz-toast-css")) {
+            return;
+        }
+        const style = document.createElement("style");
+        style.id = "wz-toast-css";
+        style.textContent = CSS;
+        document.head.appendChild(style);
+    }
 
-  private createContainer(): void {
-    this.container = document.createElement("div");
-    this.container.className = "wz-toasts";
-    document.body.appendChild(this.container);
-  }
+    private createContainer(): void {
+        this.container = document.createElement("div");
+        this.container.className = "wz-toasts";
+        document.body.appendChild(this.container);
+    }
 
-  show(opts: ToastOptions): void {
-    const type: ToastType = opts.type ?? "system";
-    const theme = THEME[type];
-    const duration = opts.durationMs ?? (opts.actions?.length ? 8000 : 5000);
+    show(opts: ToastOptions): void {
+        const type: ToastType = opts.type ?? "system";
+        const theme = THEME[type];
+        const duration = opts.durationMs ?? (opts.actions?.length ? 8000 : 5000);
 
-    // Evict oldest if at cap
-    if (this.active.length >= this.MAX) this.dismiss(this.active[0]!);
+        // Evict oldest if at cap
+        if (this.active.length >= this.MAX) {
+            this.dismiss(this.active[0]!);
+        }
 
-    const el = document.createElement("div");
-    el.className = "wz-toast";
+        const el = document.createElement("div");
+        el.className = "wz-toast";
 
-    el.innerHTML = `
+        el.innerHTML = `
       <div class="wz-toast__strip" style="background:${theme.strip}"></div>
       <div class="wz-toast__body">
         <div class="wz-toast__avatar" style="background:${theme.avatar}">${initials(opts.title)}</div>
@@ -323,69 +331,76 @@ class ToastManager {
       </div>
     `;
 
-    // Action buttons
-    if (opts.actions?.length) {
-      const actionsEl = el.querySelector(".wz-toast__actions")!;
-      for (const action of opts.actions) {
-        const btn = document.createElement("button");
-        btn.className =
-          "wz-toast__btn" + (action.primary ? " wz-toast__btn--primary" : "");
-        btn.style.cssText = action.primary
-          ? `border-color:${theme.badge}55;background:${theme.badgeBg};color:${theme.badge}`
-          : "";
-        btn.textContent = action.label;
-        btn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          action.onClick();
-          this.dismiss(el);
-        });
-        actionsEl.appendChild(btn);
-      }
+        // Action buttons
+        if (opts.actions?.length) {
+            this._renderActions(el, opts.actions, theme);
+        }
+
+        // Click anywhere to dismiss
+        el.addEventListener("click", () => this.dismiss(el));
+
+        this.container.appendChild(el);
+        this.active.push(el);
+
+        this._animateAndSchedule(el, duration);
     }
 
-    // Click anywhere to dismiss
-    el.addEventListener("click", () => this.dismiss(el));
+    /** Build and wire the action buttons into the toast's actions container. */
+    private _renderActions(el: HTMLElement, actions: ToastAction[], theme: ThemeEntry): void {
+        const actionsEl = el.querySelector(".wz-toast__actions")!;
+        for (const action of actions) {
+            const btn = document.createElement("button");
+            btn.className = "wz-toast__btn" + (action.primary ? " wz-toast__btn--primary" : "");
+            btn.style.cssText = action.primary
+                ? `border-color:${theme.badge}55;background:${theme.badgeBg};color:${theme.badge}`
+                : "";
+            btn.textContent = action.label;
+            btn.addEventListener("click", e => {
+                e.stopPropagation();
+                action.onClick();
+                this.dismiss(el);
+            });
+            actionsEl.appendChild(btn);
+        }
+    }
 
-    this.container.appendChild(el);
-    this.active.push(el);
+    /** Trigger the enter animation, run the progress countdown and schedule auto-dismiss. */
+    private _animateAndSchedule(el: HTMLElement, duration: number): void {
+        // Animate in (next frame so transition fires)
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => el.classList.add("wz-toast--in"));
+        });
 
-    // Animate in (next frame so transition fires)
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => el.classList.add("wz-toast--in"));
-    });
+        // Progress bar countdown
+        const bar = el.querySelector<HTMLElement>(".wz-toast__progress-bar")!;
+        bar.style.transition = `transform ${duration}ms linear`;
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                bar.style.transform = "scaleX(0)";
+            });
+        });
 
-    // Progress bar countdown
-    const bar = el.querySelector<HTMLElement>(".wz-toast__progress-bar")!;
-    bar.style.transition = `transform ${duration}ms linear`;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        bar.style.transform = "scaleX(0)";
-      });
-    });
+        // Auto-dismiss
+        const timer = window.setTimeout(() => this.dismiss(el), duration);
+        el.dataset["timer"] = String(timer);
+    }
 
-    // Auto-dismiss
-    const timer = window.setTimeout(() => this.dismiss(el), duration);
-    el.dataset["timer"] = String(timer);
-  }
-
-  private dismiss(el: HTMLElement): void {
-    if (!el.isConnected) return;
-    clearTimeout(Number(el.dataset["timer"]));
-    el.classList.remove("wz-toast--in");
-    el.classList.add("wz-toast--out");
-    this.active = this.active.filter((t) => t !== el);
-    el.addEventListener("transitionend", () => el.remove(), { once: true });
-    // Safety net if transitionend never fires
-    window.setTimeout(() => el.isConnected && el.remove(), 600);
-  }
+    private dismiss(el: HTMLElement): void {
+        if (!el.isConnected) {
+            return;
+        }
+        clearTimeout(Number(el.dataset["timer"]));
+        el.classList.remove("wz-toast--in");
+        el.classList.add("wz-toast--out");
+        this.active = this.active.filter(t => t !== el);
+        el.addEventListener("transitionend", () => el.remove(), { once: true });
+        // Safety net if transitionend never fires
+        window.setTimeout(() => el.isConnected && el.remove(), 600);
+    }
 }
 
 export function escHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 export const toast = new ToastManager();

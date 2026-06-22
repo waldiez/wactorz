@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.5.0] - 2026-06-16
+## [0.5.0] - 2026-06-22
 
 ### Added
 
@@ -743,7 +743,11 @@ One round-trip instead of zero, live state every time.
 - Docker Compose stacks (dev and production)
 - `pyproject.toml` with optional dependency groups
 
-[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/waldiez/wactorz/compare/v0.4.4...v0.5.0
+[0.4.4]: https://github.com/waldiez/wactorz/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/waldiez/wactorz/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/waldiez/wactorz/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/waldiez/wactorz/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/waldiez/wactorz/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/waldiez/wactorz/compare/v0.2.0...v0.3.0

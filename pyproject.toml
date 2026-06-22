@@ -63,6 +63,10 @@ docs      = [
     "watchdog>=6.0.0",
     "pdoc>=16.0.0",
 ]
+tui       = [
+    "textual>=0.80",
+    "rich>=13.0",
+]
 # Note: docs extras are only needed to *rebuild* site/ (run build_docs.py).
 # The pre-built site/ is committed to the repo and bundled into the wheel as-is.
 dev       = [
@@ -84,6 +88,7 @@ all = [
     "wactorz[otel]",
     "wactorz[influx]",
     "wactorz[tts]",
+    "wactorz[tui]",
 ]
 
 [project.scripts]
@@ -91,6 +96,7 @@ wactorz         = "wactorz.cli:main"
 wactorz-monitor = "wactorz.monitor_server:cli_main"
 wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
+wactorz-tui     = "wactorz.tui.app:run"
 
 [project.urls]
 Homepage      = "https://docs.waldiez.io/wactorz/"

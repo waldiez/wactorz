@@ -116,7 +116,7 @@ def _start_reloader() -> None:
 
 def get_args():
 	parser = argparse.ArgumentParser(description="Wactorz - Multi-Agent Framework")
-	parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp", "telegram"])
+	parser.add_argument("--interface", choices=["cli", "tui", "rest", "discord", "whatsapp", "telegram"])
 	parser.add_argument("--port", type=int)
 	parser.add_argument("--llm", choices=["anthropic", "openai", "ollama", "nim", "gemini", "none"])
 	parser.add_argument("--ollama-model",
@@ -360,11 +360,18 @@ async def app():
     )
 
     interface = args.interface or CONFIG.interface
-    
+
     try:
         if interface == "cli":
             iface = CLIInterface(main_actor)
             await asyncio.gather(iface.run(), system.run_forever())
+        elif interface == "tui":
+            try:
+                from wactorz.tui.app import run_async as _tui_run
+            except ImportError:
+                logger.error("TUI needs the 'tui' extra — pip install 'wactorz[tui]'")
+                sys.exit(1)
+            await _tui_run()
         elif interface == "rest":
             port = args.port or CONFIG.port
             iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)

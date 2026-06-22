@@ -143,7 +143,7 @@ DEFAULTS = {
     # them in the "launch" task. If model_path does not exist on start, the fleet
     # waits for an explicit launch task instead of auto-starting.
     "env_id":       "Eplus-officeMedium-MultiAgent-v1",
-    "model_path":   "/models/aif/aif_model.pkl",
+    "model_path":   "models/aif/aif_model.pkl",
     "zones":        None,        # optional explicit zone list, in bridge order
     "info_timeout": 30.0,        # seconds to wait for env_info before giving up
     "infer_dir":    None,        # dir with aif_infer.py + pymdp_office_v7_torch.py;

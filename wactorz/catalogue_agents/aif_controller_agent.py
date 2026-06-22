@@ -37,7 +37,7 @@ import sys as _sys
 
 DEFAULTS = {
     "env_id":       "Eplus-officeMedium-MultiAgent-v1",
-    "model_path":   "/models/aif/aif_model.pkl",
+    "model_path":   "models/aif/aif_model.pkl",
     "zones":        None,
     "info_timeout": 30.0,
     "infer_dir":    None,

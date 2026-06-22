@@ -9,7 +9,7 @@ previously mangled queries like "weather tomorrow".
 """
 
 import unittest
-from datetime import date
+from datetime import date, timedelta
 
 from wactorz.agents.weather_agent import (
     WeatherAgent,
@@ -229,9 +229,12 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
 
             async def _forecast(self, location: str, units: str = "celsius", **kwargs) -> dict:
                 label = "Athens, Attica, Greece" if "athens" in location.lower() else location
+                # Use tomorrow relative to today so the agent labels it "tomorrow"
+                # (the agent anchors to the real current date; a fixed date rots).
+                tomorrow = (date.today() + timedelta(days=1)).isoformat()
                 return {
                     "kind": "forecast", "location": label,
-                    "forecast": [{"date": "2026-06-04", "temp_min": 22.0, "temp_max": 31.0,
+                    "forecast": [{"date": tomorrow, "temp_min": 22.0, "temp_max": 31.0,
                                   "precip_mm": 0.0, "precip_prob": 5, "code": 0, "condition": "clear"}],
                 }
 

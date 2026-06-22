@@ -718,8 +718,7 @@ class _MQTTPublisher:
 
         if qos >= 1:
             # Durable: persist to SQLite first, then enqueue
-            row_id = self._save_to_db(topic, payload if isinstance(payload, str)
-                                      else payload, retain, qos)
+            row_id = self._save_to_db(topic, payload, retain, qos)
             await self._queue.put((topic, payload, retain, qos, row_id))
         else:
             # Best-effort: in-memory only
@@ -751,12 +750,13 @@ class _MQTTPublisher:
         - Messages are NOT dequeued until successfully published (no loss on disconnect)
         """
         import aiomqtt
+        from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
         backoff = 1.0
         _last_exc_str: str | None = None
 
         while True:
             try:
-                async with aiomqtt.Client(
+                async with mqtt_client(
                     broker, port,
                     identifier   = self._client_id,
                     clean_session = False,

@@ -26,6 +26,8 @@ import types
 from typing import Any, Optional
 
 from ..core.actor import Actor, Message, MessageType, ActorState
+from ..core.mqtt import mqtt_client
+from .llm_agent import _accumulate_global_cost
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,7 @@ class DynamicAgent(Actor):
         self.total_input_tokens  = 0
         self.total_output_tokens = 0
         self.total_cost_usd      = 0.0
+        self._last_period_cost_usd = 0.0
 
         # Error tracking for health classification
         self._consecutive_errors: int   = 0
@@ -723,9 +726,7 @@ class DynamicAgent(Actor):
             )
             # Track cost
             if hasattr(self, "total_input_tokens"):
-                self.total_input_tokens  += usage.get("input_tokens", 0)
-                self.total_output_tokens += usage.get("output_tokens", 0)
-                self.total_cost_usd      += usage.get("cost_usd", 0.0)
+                self._accrue_usage(usage)
 
             # Strip markdown fences the LLM may add despite instructions
             fixed = response.strip()
@@ -891,9 +892,7 @@ class DynamicAgent(Actor):
                 max_tokens=4096,
             )
             if hasattr(self, "total_input_tokens"):
-                self.total_input_tokens  += usage.get("input_tokens", 0)
-                self.total_output_tokens += usage.get("output_tokens", 0)
-                self.total_cost_usd      += usage.get("cost_usd", 0.0)
+                self._accrue_usage(usage)
 
             fixed = response.strip()
             if fixed.startswith("```"):
@@ -1237,6 +1236,17 @@ class DynamicAgent(Actor):
     def _current_task_description(self) -> str:
         return self.description or "running dynamic code"
 
+    def _accrue_usage(self, usage: dict) -> None:
+        if not isinstance(usage, dict):
+            return
+        self.total_input_tokens  += usage.get("input_tokens", 0)
+        self.total_output_tokens += usage.get("output_tokens", 0)
+        self.total_cost_usd      += usage.get("cost_usd", 0.0)
+        delta = self.total_cost_usd - self._last_period_cost_usd
+        if delta > 0:
+            _accumulate_global_cost(delta)
+            self._last_period_cost_usd = self.total_cost_usd
+
 
 class _LLMInterface:
     """
@@ -1259,9 +1269,7 @@ class _LLMInterface:
             response, usage = await provider.complete(messages=messages, system=system)
             # Track cost on the actor metrics if it has those fields
             if hasattr(self._actor, "total_input_tokens"):
-                self._actor.total_input_tokens  += usage.get("input_tokens", 0)
-                self._actor.total_output_tokens += usage.get("output_tokens", 0)
-                self._actor.total_cost_usd      += usage.get("cost_usd", 0.0)
+                self._actor._accrue_usage(usage)
                 await self._actor._mqtt_publish(
                     f"agents/{self._actor.actor_id}/metrics",
                     self._actor._build_metrics(),
@@ -1278,9 +1286,7 @@ class _LLMInterface:
             return "[No LLM configured]"
         response, usage = await provider.complete(messages=messages, system=system)
         if hasattr(self._actor, "total_input_tokens"):
-            self._actor.total_input_tokens  += usage.get("input_tokens", 0)
-            self._actor.total_output_tokens += usage.get("output_tokens", 0)
-            self._actor.total_cost_usd      += usage.get("cost_usd", 0.0)
+            self._actor._accrue_usage(usage)
             await self._actor._mqtt_publish(
                 f"agents/{self._actor.actor_id}/metrics",
                 self._actor._build_metrics(),
@@ -1547,7 +1553,7 @@ class _AgentAPI:
                 return
             while True:
                 try:
-                    async with aiomqtt.Client(actor._mqtt_broker, actor._mqtt_port) as client:
+                    async with mqtt_client(actor._mqtt_broker, actor._mqtt_port) as client:
                         await client.subscribe(topic)
                         logger.info(f"[{actor.name}] Subscribed to {topic}")
                         async for msg in client.messages:
@@ -1842,7 +1848,7 @@ class _AgentAPI:
                 import aiomqtt
                 broker = getattr(self._actor, "_mqtt_broker", "localhost")
                 port   = getattr(self._actor, "_mqtt_port", 1883)
-                async with aiomqtt.Client(broker, port) as client:
+                async with mqtt_client(broker, port) as client:
                     await client.subscribe(reply_topic)
                     async for msg in client.messages:
                         try:
@@ -2013,7 +2019,7 @@ class _AgentAPI:
         result = []
         async def _fetch():
             try:
-                async with aiomqtt.Client(actor._mqtt_broker, actor._mqtt_port) as client:
+                async with mqtt_client(actor._mqtt_broker, actor._mqtt_port) as client:
                     await client.subscribe(topic)
                     async for msg in client.messages:
                         try:

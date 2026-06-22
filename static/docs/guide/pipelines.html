@@ -115,6 +115,7 @@
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
       <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
@@ -128,7 +129,7 @@
 <h1 id="pipelines">Pipelines</h1>
 <p>A pipeline is a set of persistent agents that react to events automatically — no user interaction required after setup. Describe what you want in plain language and Wactorz builds and wires the agents for you.</p>
 <h2 id="overview">Overview</h2>
-<p>Pipelines are created by <strong>PlannerAgent</strong>, which is spawned automatically whenever MainActor classifies a request as <code>PIPELINE</code>. The planner queries your Home Assistant entities, generates a plan, spawns the required agents, and registers a rule that persists across restarts.</p>
+<p>Pipelines are created by <strong>PlannerAgent</strong>, which is spawned automatically whenever MainActor classifies a request as <code>PIPELINE</code>. By default the planner queries your Home Assistant entities, generates a plan, and stores it as a pending proposal; after approval it spawns the required agents and registers a rule that persists across restarts. Prefix with <code>pipeline!</code>, <code>coordinate!</code>, or <code>@planner!</code> to bypass approval and execute immediately.</p>
 <div class="highlight"><pre><span></span><code><span class="n">You</span><span class="w"> </span><span class="nl">say:</span><span class="w">  </span><span class="s">&quot;notify me on Discord when the front door opens&quot;</span>
 
 <span class="n">MainActor</span><span class="w">  </span><span class="err">→</span><span class="w">  </span><span class="n">classifies</span><span class="w"> </span><span class="n">as</span><span class="w"> </span><span class="n">PIPELINE</span>
@@ -136,7 +137,8 @@
 
 <span class="n">PlannerAgent</span><span class="w">  </span><span class="err">→</span><span class="w">  </span><span class="n">queries</span><span class="w"> </span><span class="n">home</span><span class="o">-</span><span class="n">assistant</span><span class="o">-</span><span class="n">agent</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">entity</span><span class="w"> </span><span class="n">list</span>
 <span class="w">              </span><span class="err">→</span><span class="w">  </span><span class="n">LLM</span><span class="w"> </span><span class="n">generates</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="p">(</span><span class="n">JSON</span><span class="w"> </span><span class="n">array</span><span class="w"> </span><span class="n">of</span><span class="w"> </span><span class="n">agent</span><span class="w"> </span><span class="n">specs</span><span class="p">)</span>
-<span class="w">              </span><span class="err">→</span><span class="w">  </span><span class="n">spawns</span><span class="w"> </span><span class="n">agents</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">plan</span>
+<span class="w">              </span><span class="err">→</span><span class="w">  </span><span class="n">returns</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">pending</span><span class="w"> </span><span class="n">proposal</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">approval</span>
+<span class="w">              </span><span class="err">→</span><span class="w">  </span><span class="n">after</span><span class="w"> </span><span class="n">approval</span><span class="p">,</span><span class="w"> </span><span class="n">spawns</span><span class="w"> </span><span class="n">agents</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">plan</span>
 <span class="w">              </span><span class="err">→</span><span class="w">  </span><span class="n">saves</span><span class="w"> </span><span class="n">rule</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">MainActor</span><span class="p">&#39;</span><span class="n">s</span><span class="w"> </span><span class="n">registry</span>
 <span class="w">              </span><span class="err">→</span><span class="w">  </span><span class="n">exits</span>
 
@@ -153,6 +155,7 @@
 <span class="s2">&quot;if the temperature goes above 28 degrees, turn on the fan&quot;</span>
 </code></pre></div>
 
+<p>The default flow is a dry-run proposal. Reply <code>yes</code> or <code>approve</code>, or run <code>/plans approve &lt;id&gt;</code>, to spawn the agents. Use a bypass prefix (<code>pipeline! &lt;task&gt;</code>, <code>coordinate! &lt;task&gt;</code>, or <code>@planner! &lt;task&gt;</code>) only when you want to skip approval.</p>
 <p>If you have a Discord webhook stored, the planner injects it automatically. Store one with:</p>
 <div class="highlight"><pre><span></span><code>/webhook discord https://discord.com/api/webhooks/...
 </code></pre></div>
@@ -162,7 +165,7 @@
 </blockquote>
 <hr />
 <h2 id="canonical-patterns">Canonical patterns</h2>
-<p>PlannerAgent uses five canonical wiring patterns. Every pipeline request maps to one of these.</p>
+<p>PlannerAgent uses seven canonical wiring patterns. Every pipeline request maps to one of these.</p>
 <hr />
 <h3 id="pattern-1-ha-sensor-ha-action">Pattern 1 — HA sensor → HA action</h3>
 <p>A Home Assistant sensor triggers a Home Assistant service call — e.g. motion sensor turns on a light, door sensor locks a switch, temperature sensor activates AC.</p>
@@ -206,9 +209,11 @@
 </blockquote>
 <hr />
 <h3 id="pattern-3-webcam-camera-detection-ha-action">Pattern 3 — Webcam / camera detection → HA action</h3>
-<p>Object detection on a local webcam triggers a Home Assistant service call — e.g. person detected unlocks the door, cat detected turns on the pet feeder.</p>
+<p>Object detection on a live camera stream triggers a Home Assistant service call — e.g. person detected unlocks the door, cat detected turns on the pet feeder.</p>
+<p>Camera stream URLs are resolved from Home Assistant before the plan is generated and injected into the prompt. MJPEG proxy URLs (<code>/api/camera_proxy_stream/…</code>) require a Bearer token; the planner sets <code>OPENCV_FFMPEG_CAPTURE_OPTIONS</code> so OpenCV passes the header automatically.</p>
 <div class="highlight"><pre><span></span><code><span class="n">Agent</span><span class="w"> </span><span class="mi">1</span><span class="w">  </span><span class="p">(</span><span class="n">dynamic</span><span class="p">)</span><span class="w">  </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="o">&lt;</span><span class="n">slug</span><span class="o">&gt;-</span><span class="n">camera</span><span class="o">-</span><span class="n">detect</span>
-<span class="w">  </span><span class="n">setup</span><span class="p">():</span><span class="w"> </span><span class="nb">load</span><span class="w"> </span><span class="n">YOLO</span><span class="w"> </span><span class="n">model</span><span class="p">,</span><span class="w"> </span><span class="n">open</span><span class="w"> </span><span class="n">camera</span>
+<span class="w">  </span><span class="n">setup</span><span class="p">():</span><span class="w"> </span><span class="n">set</span><span class="w"> </span><span class="n">OPENCV_FFMPEG_CAPTURE_OPTIONS</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">HA</span><span class="w"> </span><span class="n">Bearer</span><span class="w"> </span><span class="n">token</span>
+<span class="w">           </span><span class="nb">load</span><span class="w"> </span><span class="n">YOLO</span><span class="w"> </span><span class="n">model</span><span class="p">,</span><span class="w"> </span><span class="n">open</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">exact</span><span class="w"> </span><span class="n">URL</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">CAMERA</span><span class="w"> </span><span class="n">STREAM</span><span class="w"> </span><span class="n">URLS</span>
 <span class="w">  </span><span class="n">process</span><span class="p">():</span><span class="w"> </span><span class="n">capture</span><span class="w"> </span><span class="n">frame</span><span class="p">,</span><span class="w"> </span><span class="n">run</span><span class="w"> </span><span class="n">inference</span>
 <span class="w">             </span><span class="n">publish</span><span class="w"> </span><span class="n">custom</span><span class="o">/</span><span class="n">detections</span><span class="o">/&lt;</span><span class="n">slug</span><span class="o">&gt;</span>
 <span class="w">             </span><span class="p">{</span><span class="s2">&quot;detected&quot;</span><span class="p">:</span><span class="w"> </span><span class="nb nb-Type">bool</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;person&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;objects&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">...</span><span class="p">]}</span>
@@ -222,7 +227,7 @@
 </code></pre></div>
 
 <h4 id="example_1">Example</h4>
-<div class="highlight"><pre><span></span><code>&quot;unlock the front door when a person is detected on the webcam&quot;
+<div class="highlight"><pre><span></span><code><span class="s2">&quot;unlock the front door when a person is detected on the front camera&quot;</span>
 </code></pre></div>
 
 <hr />
@@ -240,27 +245,83 @@
 </code></pre></div>
 
 <hr />
-<h3 id="pattern-5-timer-ha-action">Pattern 5 — Timer → HA action</h3>
-<p>A scheduled trigger fires a Home Assistant service call at a fixed time or interval.</p>
-<div class="highlight"><pre><span></span><code>Agent 1  (dynamic)  name: &lt;slug&gt;-timer
-  process(): check current time against schedule
-             if match: publish custom/triggers/&lt;slug&gt; {&quot;triggered&quot;: true}
-  poll_interval: 60s
+<h3 id="pattern-5-scheduled-trigger-ha-action-or-notification">Pattern 5 — Scheduled trigger → HA action or notification</h3>
+<p>A scheduled trigger fires a Home Assistant service call (or notification) at a fixed time or interval. Always uses <code>type: scheduled</code> for the trigger — never a <code>dynamic</code> agent polling <code>datetime.now()</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="nx">Agent</span><span class="w"> </span><span class="mi">1</span><span class="w">  </span><span class="p">(</span><span class="nx">scheduled</span><span class="p">)</span><span class="w">  </span><span class="nx">name</span><span class="p">:</span><span class="w"> </span><span class="p">&lt;</span><span class="nx">slug</span><span class="p">&gt;</span><span class="o">-</span><span class="nx">trigger</span>
+<span class="w">  </span><span class="nx">schedule</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;daily&quot;</span><span class="p">,</span><span class="w">    </span><span class="s">&quot;at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;17:00&quot;</span><span class="p">}</span>
+<span class="w">         </span><span class="k">or</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;weekly&quot;</span><span class="p">,</span><span class="w">   </span><span class="s">&quot;at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;07:00&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;days&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s">&quot;mon&quot;</span><span class="p">,</span><span class="s">&quot;tue&quot;</span><span class="p">,</span><span class="s">&quot;wed&quot;</span><span class="p">,</span><span class="s">&quot;thu&quot;</span><span class="p">,</span><span class="s">&quot;fri&quot;</span><span class="p">]}</span>
+<span class="w">         </span><span class="k">or</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;interval&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1800</span><span class="p">}</span>
+<span class="w">         </span><span class="k">or</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;once&quot;</span><span class="p">,</span><span class="w">     </span><span class="s">&quot;at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&lt;ISO8601-timestamp&gt;&quot;</span><span class="p">}</span>
+<span class="w">  </span><span class="nx">publish_topic</span><span class="p">:</span><span class="w"> </span><span class="err">&#39;</span><span class="nx">schedule</span><span class="o">/</span><span class="p">&lt;</span><span class="nx">slug</span><span class="p">&gt;</span><span class="o">-</span><span class="nx">trigger</span><span class="o">/</span><span class="nx">fired</span><span class="err">&#39;</span>
 
-Agent 2  (ha_actuator)  name: &lt;slug&gt;-actuator
-  mqtt_topics: [&quot;custom/triggers/&lt;slug&gt;&quot;]
-  detection_filter: {&quot;triggered&quot;: true}
-  actions: [HA service call]
+<span class="nx">Agent</span><span class="w"> </span><span class="mi">2</span><span class="w">  </span><span class="p">(</span><span class="nx">ha_actuator</span><span class="w"> </span><span class="nx">OR</span><span class="w"> </span><span class="nx">dynamic</span><span class="p">)</span><span class="w">  </span><span class="nx">name</span><span class="p">:</span><span class="w"> </span><span class="p">&lt;</span><span class="nx">slug</span><span class="p">&gt;</span><span class="o">-</span><span class="nx">action</span>
+<span class="w">  </span><span class="nx">subscribes</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="err">&#39;</span><span class="nx">schedule</span><span class="o">/</span><span class="p">&lt;</span><span class="nx">slug</span><span class="p">&gt;</span><span class="o">-</span><span class="nx">trigger</span><span class="o">/</span><span class="nx">fired</span><span class="err">&#39;</span>
+<span class="w">  </span><span class="nx">ha_actuator</span><span class="p">:</span><span class="w"> </span><span class="nx">detection_filter</span><span class="w"> </span><span class="nx">null</span><span class="p">,</span><span class="w"> </span><span class="nx">actions</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="nx">HA</span><span class="w"> </span><span class="nx">service</span><span class="w"> </span><span class="nx">call</span><span class="p">]</span>
+<span class="w">  </span><span class="nx">dynamic</span><span class="p">:</span><span class="w">     </span><span class="nx">setup</span><span class="p">()</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">subscribe</span><span class="p">(</span><span class="o">...</span><span class="p">),</span><span class="w"> </span><span class="nx">callback</span><span class="w"> </span><span class="nx">does</span><span class="w"> </span><span class="nx">HTTP</span><span class="o">/</span><span class="nx">work</span>
 </code></pre></div>
 
 <h4 id="examples_1">Examples</h4>
 <div class="highlight"><pre><span></span><code>&quot;turn off all lights every day at midnight&quot;
 &quot;turn on the coffee maker at 07:30 on weekdays&quot;
+&quot;remind me tomorrow at 9am to call the dentist&quot;
+</code></pre></div>
+
+<blockquote>
+<p><strong>⚠ Never poll for clock time</strong> — the planner prompt explicitly forbids <code>while True: sleep(60)</code> waiting for a time. Always use <code>type: scheduled</code>.</p>
+</blockquote>
+<hr />
+<h3 id="pattern-6-mqtt-sensor-condition-ha-action">Pattern 6 — MQTT sensor + condition → HA action</h3>
+<p>Combines multiple MQTT data sources, evaluates a condition across them, and triggers an HA action when the condition is met. Used for "if X and Y then Z" style rules.</p>
+<div class="highlight"><pre><span></span><code><span class="n">Agent</span><span class="w"> </span><span class="mi">1</span><span class="w">  </span><span class="p">(</span><span class="n">dynamic</span><span class="p">)</span><span class="w">  </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="o">&lt;</span><span class="n">slug</span><span class="o">&gt;-</span><span class="n">monitor</span>
+<span class="w">  </span><span class="n">setup</span><span class="p">(</span><span class="n">agent</span><span class="p">):</span>
+<span class="w">      </span><span class="n">agent</span><span class="o">.</span><span class="n">state</span><span class="p">[</span><span class="s1">&#39;lamp_on&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">False</span>
+<span class="w">      </span><span class="n">agent</span><span class="o">.</span><span class="n">state</span><span class="p">[</span><span class="s1">&#39;temp&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span>
+<span class="w">      </span><span class="n">async</span><span class="w"> </span><span class="n">def</span><span class="w"> </span><span class="n">on_temp</span><span class="p">(</span><span class="n">payload</span><span class="p">):</span>
+<span class="w">          </span><span class="n">agent</span><span class="o">.</span><span class="n">state</span><span class="p">[</span><span class="s1">&#39;temp&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">payload</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;temp&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+<span class="w">          </span><span class="n">await</span><span class="w"> </span><span class="n">check_and_trigger</span><span class="p">()</span>
+<span class="w">      </span><span class="n">async</span><span class="w"> </span><span class="n">def</span><span class="w"> </span><span class="n">on_lamp</span><span class="p">(</span><span class="n">payload</span><span class="p">):</span>
+<span class="w">          </span><span class="n">agent</span><span class="o">.</span><span class="n">state</span><span class="p">[</span><span class="s1">&#39;lamp_on&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">payload</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;state&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s1">&#39;on&#39;</span>
+<span class="w">          </span><span class="n">await</span><span class="w"> </span><span class="n">check_and_trigger</span><span class="p">()</span>
+<span class="w">      </span><span class="n">async</span><span class="w"> </span><span class="n">def</span><span class="w"> </span><span class="n">check_and_trigger</span><span class="p">():</span>
+<span class="w">          </span><span class="k">if</span><span class="w"> </span><span class="n">agent</span><span class="o">.</span><span class="n">state</span><span class="p">[</span><span class="s1">&#39;lamp_on&#39;</span><span class="p">]</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="n">agent</span><span class="o">.</span><span class="n">state</span><span class="p">[</span><span class="s1">&#39;temp&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">20</span><span class="p">:</span>
+<span class="w">              </span><span class="n">await</span><span class="w"> </span><span class="n">agent</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s1">&#39;custom/triggers/&lt;slug&gt;&#39;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s1">&#39;triggered&#39;</span><span class="p">:</span><span class="w"> </span><span class="n">True</span><span class="p">})</span>
+<span class="w">      </span><span class="n">agent</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="s1">&#39;custom/sensors/temp_humidity&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">on_temp</span><span class="p">)</span>
+<span class="w">      </span><span class="n">agent</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="s1">&#39;lamp/status&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">on_lamp</span><span class="p">)</span>
+
+<span class="n">Agent</span><span class="w"> </span><span class="mi">2</span><span class="w">  </span><span class="p">(</span><span class="n">ha_actuator</span><span class="p">)</span><span class="w">  </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="o">&lt;</span><span class="n">slug</span><span class="o">&gt;-</span><span class="n">actuator</span>
+<span class="w">  </span><span class="n">mqtt_topics</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;custom/triggers/&lt;slug&gt;&quot;</span><span class="p">]</span>
+<span class="w">  </span><span class="n">detection_filter</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="s2">&quot;triggered&quot;</span><span class="p">:</span><span class="w"> </span><span class="bp">true</span><span class="p">}</span>
+<span class="w">  </span><span class="n">actions</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="n">HA</span><span class="w"> </span><span class="n">service</span><span class="w"> </span><span class="n">call</span><span class="p">]</span>
+</code></pre></div>
+
+<h4 id="example_3">Example</h4>
+<div class="highlight"><pre><span></span><code><span class="s2">&quot;if the lamp is on and the temperature goes above 20, turn off the lamp&quot;</span>
+</code></pre></div>
+
+<hr />
+<h3 id="pattern-7-one-shot-camera-snapshot">Pattern 7 — One-shot camera snapshot</h3>
+<p>Fetches a single still image from a camera — e.g. "take a snapshot of the office camera". Use this instead of Pattern 3 when the task needs a single image, not a continuous detection loop.</p>
+<p>Snapshot URLs are resolved from Home Assistant before the plan is generated. The URL (<code>/api/camera_proxy/{entity_id}</code>) requires an <code>Authorization: Bearer</code> header; always read the token from <code>os.environ['HA_TOKEN']</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="n">Agent</span>  <span class="p">(</span><span class="n">dynamic</span><span class="p">)</span>  <span class="n">name</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">slug</span><span class="o">&gt;-</span><span class="n">snapshot</span>
+  <span class="n">setup</span><span class="p">(</span><span class="n">agent</span><span class="p">)</span> <span class="ow">or</span> <span class="n">process</span><span class="p">(</span><span class="n">agent</span><span class="p">):</span>
+      <span class="kn">import</span><span class="w"> </span><span class="nn">httpx</span><span class="o">,</span><span class="w"> </span><span class="nn">os</span>
+      <span class="n">headers</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Bearer </span><span class="si">{</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s1">&#39;HA_TOKEN&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">}</span>
+      <span class="k">async</span> <span class="k">with</span> <span class="n">httpx</span><span class="o">.</span><span class="n">AsyncClient</span><span class="p">()</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+          <span class="n">resp</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;&lt;url-from-CAMERA-SNAPSHOT-URLS&gt;&quot;</span><span class="p">,</span> <span class="n">headers</span><span class="o">=</span><span class="n">headers</span><span class="p">)</span>
+          <span class="n">image_bytes</span> <span class="o">=</span> <span class="n">resp</span><span class="o">.</span><span class="n">content</span>
+      <span class="c1"># process image_bytes (save to disk, run YOLO once, etc.)</span>
+  <span class="n">install</span><span class="p">:</span> <span class="n">httpx</span>
+</code></pre></div>
+
+<p>If the result feeds an HA action (e.g. "if a desk is visible, turn on the light"), publish the detection result to a topic and pair with an <code>ha_actuator</code> (same second-agent wiring as Pattern 3).</p>
+<h4 id="example_4">Example</h4>
+<div class="highlight"><pre><span></span><code><span class="s2">&quot;take a snapshot of the garden camera and save it to /tmp/garden.jpg&quot;</span>
+<span class="s2">&quot;check if the office camera shows anyone sitting at a desk&quot;</span>
 </code></pre></div>
 
 <hr />
 <h2 id="managing-pipelines">Managing pipelines</h2>
-<p>Every pipeline is saved as a rule in MainActor's spawn registry. Rules persist across restarts — agents are automatically re-spawned when Wactorz starts.</p>
+<p>Every active pipeline is saved as a rule in MainActor's pipeline-rules registry, and each spawned agent is also added to the spawn registry. Rules persist across restarts — agents are automatically re-spawned when Wactorz starts.</p>
 <h4 id="list-active-rules">List active rules</h4>
 <div class="highlight"><pre><span></span><code>/rules
 </code></pre></div>
@@ -307,11 +368,12 @@ Agent 2  (ha_actuator)  name: &lt;slug&gt;-actuator
 <h2 id="how-it-works-internally">How it works internally</h2>
 <p>When MainActor classifies a message as <code>PIPELINE</code> it spawns a short-lived <strong>PlannerAgent</strong> that:</p>
 <ol>
-<li>Sends a <code>list_entities</code> task to <code>home-assistant-agent</code> and waits for the full entity list (up to 180 s)</li>
+<li>Sends a <code>list_entities</code> task to <code>home-assistant-agent</code> and waits for the full entity list (up to 60 s inside the planner; MainActor waits up to 180 s for the planner result)</li>
 <li>Builds a prompt containing the entity list, available agent types, canonical patterns, stored webhook URLs, and the user's request</li>
-<li>Calls the LLM once to produce a JSON plan — an array of agent specs, each with <code>name</code>, <code>type</code>, <code>code</code> (for dynamic agents) or <code>actions</code> (for ha_actuator agents)</li>
-<li>Spawns each agent from the plan via <code>DynamicAgent</code></li>
-<li>Sends a <code>save_pipeline_rule</code> message to MainActor with the list of agent names</li>
+<li>Calls the LLM once to produce a JSON plan — an array of agent specs, each with <code>name</code>, <code>description</code>, and <code>spawn_config</code> (<code>dynamic</code>, <code>ha_actuator</code>, or <code>scheduled</code>)</li>
+<li>In the default dry-run path, returns the plan to MainActor as a pending proposal without spawning</li>
+<li>After approval, spawns each agent from the plan via the matching agent type</li>
+<li>Calls <code>MainActor.save_pipeline_rule()</code> with the list of agent names</li>
 <li>Fires a background <code>_bootstrap_ha_entity_states()</code> task — extracts HA entity IDs from the plan and asks <code>home-assistant-agent</code> to re-publish their current state to <code>homeassistant/state_changes/{entity_id}</code> over MQTT. This lets freshly-spawned agents evaluate the current state immediately, rather than waiting for the next real HA state change to arrive.</li>
 <li>Exits — the spawned agents run indefinitely from this point</li>
 </ol>
@@ -337,6 +399,11 @@ Agent 2  (ha_actuator)  name: &lt;slug&gt;-actuator
 <td><code>ha_actuator</code></td>
 <td>Declarative: MQTT topic + detection filter + list of HA service calls</td>
 <td>When the only job is to call an HA service when a payload matches</td>
+</tr>
+<tr>
+<td><code>scheduled</code></td>
+<td>Declarative: schedule spec + publish topic</td>
+<td>Clock-time, recurring, interval, or one-time triggers</td>
 </tr>
 </tbody>
 </table>

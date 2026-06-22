@@ -5,13 +5,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.5.0] - 2026-06-22
 
 ### Added
 
+- **`WACTORZ_TZ` env var** — optional override for the timezone used in agents' date/time context. Precedence: a user's `pref_timezone` fact > `WACTORZ_TZ` > standard `TZ` env var > host local zone. Blank = unchanged (falls through to `TZ` / system local), and any unknown zone value falls through to the next candidate rather than erroring.
+- **MQTT broker authentication** — optional `MQTT_USERNAME` / `MQTT_PASSWORD` (add-on options `mqtt_username` / `mqtt_password`) inject broker credentials into every in-process MQTT connection via a central `mqtt_client()` factory. Blank = anonymous, so the embedded/anonymous broker is unchanged; auth only engages when set. Fixes external brokers with `allow_anonymous false` — e.g. the official Home Assistant Mosquitto add-on — which previously rejected every connection. The dashboard's MQTT WebSocket proxy injects the same credentials into the browser's CONNECT server-side, so the live monitor keeps working under an authenticated broker without exposing credentials to the browser.
+
+### Changed
+
+- **TimeSeriesCollector** — moved from an auto-started supervised actor to an on-demand catalog agent (`@catalog spawn timeseries-collector`); no longer started at boot.
+
+### Removed
+
+- **Rust, Node, and Tauri backend surfaces** — removed the Rust workspace/backend, Node backend, Tauri desktop shell, native packaging scripts, desktop release workflow, and backend parity harness. Wactorz now ships the Python runtime, web dashboard, Docker/Compose paths, and Home Assistant add-on path.
+- **Apache Jena Fuseki / SPARQL — removed entirely** across the whole product. Gone are: the Python `fuseki.py` / `fuseki_proxy.py` / `fuseki_agent.py` / `sparql_context.py` / `smart_cities_agent.py` and their wiring (HA→Fuseki bridge, `/api/fuseki` proxy, `/api/ha/sync`, planner SPARQL enrichment, `config.py` fuseki fields, `wactorz-fuseki` entry point); the Rust `FusekiAgent`, the `/api/fuseki` proxy + its tests, the `--fuseki-*` CLI args, and the Fuseki RDF writes in the HA→state bridge (now HA→MQTT only); the Node `FusekiAgent`; the UI **Graph** tab + its HUD link/CSS; the embedded Fuseki in the HA add-on; the `fuseki` Docker services (`compose.yaml` / `compose.dev.yaml`) + image (`config/fuseki-container/`), the ontology (`infra/fuseki/`), the nginx `/fuseki/` proxy, the Prometheus Fuseki probe, and all `FUSEKI_*` env/docs. Wactorz no longer ships or depends on a triplestore.
+- **Stale `wactorz/main.py`** — removed the unused 5.6k-line embedded entry point (no longer importable, referenced nowhere). Internal cleanup; no runtime behaviour change.
+- **Babylon.js 3D dashboard layer** — removed the unused 3D scene engine and the disabled social/theme-switcher (graph/galaxy themes, `SocialDashboard`, `ThemeSwitcher`). The dashboard is cards-only; this drops the `@babylonjs/*` dependencies and the 6 MB `babylon-core` bundle, cutting the frontend from 2204 → 27 modules and the cold build from ~19s → ~2s. `SceneManager` is retained as a plain agent-state/dashboard coordinator (public API unchanged).
+
+### Fixed
+
+- **Agents now anchored to the real current date/time** — every LLM-backed agent receives a live "current date & time" block at the top of its system prompt on each turn, so requests like "notify me tomorrow at 3pm" resolve against today's actual date instead of the model's training-cutoff guess (which defaulted to 2025 and silently produced wrong schedule dates). Injected in three previously-static spots: `LLMAgent`'s `complete`/`stream` calls (covers main and every base-class agent), `PlannerAgent`'s feasibility / pipeline-architect / task-planner calls (where a request is decomposed into a `schedule_spec`), and the synthesized remote LLM-agent bridge. The timezone resolves from the user's `pref_timezone` fact — the same source `ScheduledAgent` already fires against — for main and the planner, so what the model thinks "tomorrow" means now matches what actually gets scheduled.
+- **HA add-on blank page on boot** — the monitor web UI now binds *before* the supervisor starts, so a slow, unreachable, or auth-rejecting MQTT broker no longer leaves the add-on serving a blank page; the dashboard is reachable immediately and the overview fills in as agents register. `run.sh` also probes an external (non-embedded) broker for up to 15s before launch so wactorz doesn't churn against an unreachable broker at boot.
+- **Headline cost total** — the dashboard's total no longer drops below the visible cards. It now resolves each agent's cost from the same three sources the cards use (MQTT state → live actor → persisted `_final_cost`), and a durable, monotonic per-`actor_id` ledger (fed by each agent's heartbeat `cost_usd`, persisted under `_system`) keeps deletions and hard kills from ever lowering the total. A full metrics reset clears the ledger so the total can still be zeroed deliberately.
+- **Headline cost total drops on agent deletion** — follow-up to the headline-total fix above. The total could still read *lower* than the "this period" spend shown beside it (an impossible state) because it derived from delete-fragile sources: per-agent `_final_cost` rows are purged on delete, and the heartbeat-fed per-`actor_id` lifetime ledger can miss/lose short-lived agents. A new durable `_global_cost_alltime` counter is accrued at call time via the same path as the per-period spend buckets — so it is never reduced by a single agent's deletion or per-agent metrics reset — and is used as a third floor for the headline total (`max(live + historical, lifetime ledger, all-time counter)`). Deleted agents' spend is now retained and `this period ≤ all-time` always holds. The counter is seeded once from existing durable totals on upgrade and zeroed by a full cost/metrics reset; cap enforcement is unchanged (it still reads the per-period counter).
+- **HA add-on ingress URL escaping** — TTS, agent-avatar, and PWA-manifest requests now stay inside HA's `/api/hassio_ingress/<token>/` prefix. `TTSManager` fetched bare `/api/tts/voices` and `/api/tts`, and `AgentImageGen` returned root-absolute `/avatars/*.webp` — all of which resolve against HA core and 404 under ingress (server edge-tts silently fell back to browser voices; agent avatars failed to load). TTS now uses the same ingress-aware `_apiBase` as the rest of the UI, avatars use relative `./avatars/*` paths, and the `<link rel="manifest">` gained `crossorigin="use-credentials"` so the browser sends the ingress auth cookie (was a 401 on `site.webmanifest`).
+- **Dashboard XSS hardening** — agent names, tasks, and bios (set by spawned/LLM agents over MQTT) were interpolated raw into `innerHTML` in the social-card and chat-list views. A new `escapeHtml()` helper now escapes them, so an agent named `<img onerror=…>` can no longer execute script in the dashboard.
+- **Duplicate user message after history load** — a user's chat message could render twice: the optimistic echo used id `user-<ts>` while the persisted copy from `/api/chats` used `hist-<agent>-<rowid>`, so `_loadHistory`'s id-based de-dup never matched them. The persisted copy is now reconciled with its pending optimistic echo (same target + content + a tight timestamp window), adopting the persisted id instead of appending a second bubble. The window avoids collapsing a new message that merely repeats an older identical one, and when no optimistic copy exists the persisted message is still added — so a message that wasn't on screen is never hidden.
+
+---
+
+## [0.4.4] - 2026-06-08
+
+### Added
+
+- **OpenAI-compatible endpoint support** — set `OPENAI_URL` to redirect the `openai` provider to any compatible API (Groq, Together, vLLM, LM Studio, llama.cpp server, etc.) without a separate provider choice. `OpenAIProvider` now accepts an optional `base_url`; `OPENAI_URL` in `.env` feeds it automatically. When unset, behaviour is identical to before.
 - **Agent → UI notifications** — `Actor.notify_user(text)` pushes a message to the chat panel (via `agents/{id}/chat`); the monitor bridges it to a live chat frame. Previously agent messages only hit the dashboard.
 - **`agent.run_in_background(coro)`** — schedules a coroutine tracked on the actor, for long work that shouldn't block `handle_task`.
 - **`<delegate>` blocks** — `main` can delegate via `<delegate>{"agent": "...", "task": "..."}</delegate>`, alongside `@mentions`.
+- **HomeAssistantAgent — camera tools** — three new tools exposed to the LLM tool-call loop and to A2A structured dispatch:
+  - `list_camera_entities` — returns all `camera.*` entities with their current state and friendly name.
+  - `get_camera_snapshot` — fetches a JPEG from `/api/camera_proxy/{entity_id}`, returns it base64-encoded; the agent appends an inline `![…](data:image/jpeg;base64,…)` markdown tag to the final reply so the chat panel renders the image.
+  - `get_camera_stream_url` — aggregates stream URLs from three sources: the always-available MJPEG proxy (`/api/camera_proxy_stream/{entity_id}`), the [Expose Camera Stream Source](https://github.com/felipecrs/hass-expose-camera-stream-source) custom integration if installed (`/api/camera_stream_source/{entity_id}`, returns plain-text URL, silently skipped on 404), and HLS/other formats via HA WebSocket `camera/capabilities` + `camera/stream` (relative URLs are resolved to absolute).
+- **HomeAssistantAgent — A2A camera dispatch** — a peer agent can send a structured payload to `home-assistant-agent` without triggering any LLM call: `{"operation": "list_cameras"}`, `{"operation": "get_camera_snapshot", "camera_entity_id": "camera.x"}`, `{"operation": "get_camera_stream_url", "camera_entity_id": "camera.x"}`, or `{"operation": "get_camera_snapshot_url", "camera_entity_id": "camera.x"}` (returns only the URL, no HTTP fetch).
+- **ha_helper — camera helpers** — five new functions: `get_camera_entities`, `get_camera_snapshot`, `get_camera_stream_url` (sync, MJPEG proxy URL only), `get_camera_stream_urls` (async, all sources), `get_camera_snapshot_url` (sync, returns `/api/camera_proxy/{entity_id}` URL without fetching).
+- **PlannerAgent — camera URL resolution** — before generating a plan, the planner resolves real stream and snapshot URLs for camera entities mentioned in the task via A2A requests to `home-assistant-agent`. Resolved URLs are injected into the LLM prompt so generated agents never guess `/dev/video0` or invent proxy paths. MJPEG proxy URLs require a Bearer token; the planner injects an `OPENCV_FFMPEG_CAPTURE_OPTIONS` hint into PATTERN 3 so OpenCV passes the header automatically.
+- **PlannerAgent — PATTERN 7** — new plan pattern for one-shot camera snapshots (e.g. "take a snapshot of the office camera"). Uses `httpx` to fetch the snapshot URL with an `Authorization: Bearer` header rather than opening a continuous `cv2.VideoCapture` stream.
 
 ### Changed
 
@@ -20,6 +59,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **HA add-on persistence** — state (chat, agents, cost, spawn registry) now reliably survives add-on **updates**, not just restarts. The state directory resolves from `WACTORZ_STATE_DIR` (absolute `/data/state` in the add-on) instead of a CWD-relative `./state`, so it no longer lands in the container's ephemeral layer; `wactorz-reset` honours the same path.
+- **HA add-on embedded Mosquitto** — retained messages (live overview/cost) now persist across restarts and updates: `persistence true` under `/data/mosquitto`, with the broker pinned to `user root` so it can actually write there.
 - **Delegation never dispatched** — bare `@agent <task>` mentions in `main`'s output were streamed as prose, not dispatched. `_execute_llm_delegations` now matches them (line/sentence-anchored).
 - **Recipe-agent replies dropped** — `DynamicAgent` RESULT replies didn't echo `_task_id`, so `delegate_task` hung until timeout. They now echo it, matching `LLMAgent`.
 - **Monitor UI** — "Demo fallback" MQTT badge no longer appears when `MONITOR_PORT` differs from the default 8888. `config_handler` was advertising a hardcoded `:8888` WebSocket URL to the frontend; it now uses the actual bound port (`WS_PORT`).
@@ -35,6 +76,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Tests** — `mqtt.test.ts`: updated stale assertion for the 6 s disconnect-debounce introduced in a prior PR.
 - **Tests** — `test_persistence_writes.py`: new coverage for the real `WactorzDB` write path (the suite previously only used an in-memory fake), including a guard against reintroducing version-gated SQLite functions in the schema.
+- **Tests** — `test_ha_helper.py`: 17 new tests in `HomeAssistantHelperCameraTest` covering all four camera helper functions, including URL normalisation, relative-URL resolution, silent 404 skip, web_rtc stream-call exclusion, and exception fallbacks.
+- **Tests** — `test_home_assistant_agent.py`: 23 new tests in `HomeAssistantAgentCameraTest` covering the LLM tool loop, A2A structured dispatch, heuristic routing, and snapshot image appending for all three camera tools (plus the `get_camera_snapshot_url` A2A operation added in the follow-up commit).
 
 ## [0.4.3] - 2026-06-01
 
@@ -700,7 +743,11 @@ One round-trip instead of zero, live state every time.
 - Docker Compose stacks (dev and production)
 - `pyproject.toml` with optional dependency groups
 
-[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/waldiez/wactorz/compare/v0.4.4...v0.5.0
+[0.4.4]: https://github.com/waldiez/wactorz/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/waldiez/wactorz/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/waldiez/wactorz/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/waldiez/wactorz/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/waldiez/wactorz/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/waldiez/wactorz/compare/v0.2.0...v0.3.0

@@ -95,7 +95,6 @@ all = [
 [project.scripts]
 wactorz         = "wactorz.cli:main"
 wactorz-monitor = "wactorz.monitor_server:cli_main"
-wactorz-fuseki  = "wactorz.fuseki:_cli_main"
 wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
 
@@ -117,7 +116,6 @@ path = "scripts/hooks/build_hook.py"
 [tool.hatch.build.targets.wheel]
 packages = ["wactorz", "wactorz.*"]
 exclude = [
-    "rust",
     "node_modules",
     "persist",
     "__pycache__",
@@ -146,7 +144,6 @@ dev = [
 # ── sdist (source distribution for PyPI) ──────────────────────────────────────
 [tool.hatch.build.targets.sdist]
 exclude = [
-    "rust",
     "node_modules",
     "persist",
     "__pycache__",

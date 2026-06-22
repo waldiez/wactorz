@@ -38,11 +38,11 @@
 - [ ] `nameFromWid()` used when displaying agent names from raw WID strings
 - [ ] `hideHeartbeats` toggle still works correctly
 
-### Touching the Babylon.js scene
+### Touching SceneManager
 
-- [ ] Tested in both `cards` and `graph` themes
-- [ ] Dispose of all meshes / materials / textures in the relevant `dispose()` method
-- [ ] No `console.log` left in scene code (use `console.info` for intentional dev output)
+- [ ] Public API (`setTheme`, agent CRUD, `onAgentSelected`, `dispose`) kept stable — it's the only coordinator `main.ts` wires to
+- [ ] Agent-state mutations go through `addOrUpdateAgent` / `removeAgent` so the CardDashboard stays in sync
+- [ ] No `console.log` left in coordinator code (use `console.info` for intentional dev output)
 
 ## Style guide
 

@@ -115,6 +115,7 @@
     <div class="sidebar-group">
       <div class="sidebar-label">Guide</div>
       <a href="../guide/development.html" class="active">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
@@ -126,7 +127,7 @@
   </aside>
   <main class="content">
 <h1 id="installation">Installation</h1>
-<p>Wactorz requires Python 3.10+ and a running MQTT broker. The <code>wactorz</code> command starts everything — the actor system, the embedded broker, and the web dashboard.</p>
+<p>Wactorz requires Python 3.10+ and a running MQTT broker (Mosquitto). The <code>wactorz</code> command starts the actor system and the web dashboard — start Mosquitto first with <code>docker compose up -d</code>.</p>
 <hr />
 <h2 id="install">Install</h2>
 <h4 id="from-pypi">From PyPI</h4>
@@ -167,7 +168,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </tr>
 <tr>
 <td><code>wactorz[google]</code></td>
-<td><code>google-generativeai</code></td>
+<td><code>google-genai</code></td>
 <td><code>--llm gemini</code></td>
 </tr>
 <tr>
@@ -184,6 +185,21 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <td><code>wactorz[mcp]</code></td>
 <td><code>mcp</code></td>
 <td>MCP-compatible clients</td>
+</tr>
+<tr>
+<td><code>wactorz[otel]</code></td>
+<td>OpenTelemetry SDK/exporter</td>
+<td>OTLP tracing</td>
+</tr>
+<tr>
+<td><code>wactorz[influx]</code></td>
+<td><code>influxdb-client</code></td>
+<td>InfluxDB time-series export</td>
+</tr>
+<tr>
+<td><code>wactorz[tts]</code></td>
+<td><code>edge-tts</code></td>
+<td>text-to-speech support</td>
 </tr>
 <tr>
 <td><code>wactorz[ml]</code></td>
@@ -270,11 +286,13 @@ HA_STATE_BRIDGE_PER_ENTITY=0 # 0 = flat topic (default), 1 = per-entity topics
 <div class="highlight"><pre><span></span><code><span class="gh">#</span> Only needed if using an external broker instead of the embedded one
 MQTT_HOST=localhost
 MQTT_PORT=1883
-MQTT_WS_PORT=9001
+<span class="gh">#</span> Optional — set for a broker with allow_anonymous false; blank = anonymous
+MQTT_USERNAME=
+MQTT_PASSWORD=
 </code></pre></div>
 
 <h4 id="web-dashboard">Web dashboard</h4>
-<div class="highlight"><pre><span></span><code>MONITOR_PORT=8888   # dashboard port, default 8888
+<div class="highlight"><pre><span></span><code>WS_PORT=8888   # dashboard port, default 8888
 </code></pre></div>
 
 <hr />
@@ -351,24 +369,18 @@ ha_list_entities, ha_get_state, ha_call_service
 <li>A <code>.env</code> file copied from <code>.env.template</code> with your secrets filled in</li>
 </ul>
 <div class="highlight"><pre><span></span><code>cp<span class="w"> </span>.env.template<span class="w"> </span>.env
-<span class="c1"># edit .env and set LLM_API_KEY, FUSEKI_PASSWORD, etc.</span>
+<span class="c1"># edit .env and set LLM_API_KEY, etc.</span>
 </code></pre></div>
 
 <h3 id="production-stack-profiles">Production stack (profiles)</h3>
 <p>The main <code>compose.yaml</code> uses profiles so you only start what you need:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Python agents + MQTT + Fuseki (recommended)</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>up<span class="w"> </span>-d
-
-<span class="c1"># Python agents + MQTT only (no Fuseki)</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># Python agents + MQTT</span>
 docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
 
 <span class="c1"># MQTT broker only (default)</span>
 docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
 
-<span class="c1"># Rust server + nginx dashboard</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>rust<span class="w"> </span>up<span class="w"> </span>-d
-
-<span class="c1"># Everything (Rust + Fuseki + Home Assistant)</span>
+<span class="c1"># Everything (Python + Home Assistant)</span>
 docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
@@ -392,19 +404,9 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <td>+ :8000, :8888</td>
 </tr>
 <tr>
-<td><code>python-full</code></td>
-<td>+ wactorz-python, fuseki</td>
-<td>+ :8000, :8888, :3030</td>
-</tr>
-<tr>
-<td><code>rust</code></td>
-<td>+ wactorz-server, dashboard</td>
-<td>+ :8080, :8081, :80</td>
-</tr>
-<tr>
 <td><code>full</code></td>
-<td>+ rust, fuseki, homeassistant</td>
-<td>+ :8080, :8081, :80, :3030, :8123</td>
+<td>+ wactorz-python, homeassistant</td>
+<td>+ :8000, :8888, :8123</td>
 </tr>
 </tbody>
 </table>
@@ -428,32 +430,27 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <td>http://localhost:8000</td>
 <td>—</td>
 </tr>
-<tr>
-<td>Fuseki</td>
-<td>http://localhost:3030</td>
-<td>admin / <code>FUSEKI_PASSWORD</code> from <code>.env</code></td>
-</tr>
 </tbody>
 </table>
 <h3 id="stopping-and-teardown">Stopping and teardown</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># Stop services</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>down
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>down
 
 <span class="c1"># Stop and remove all volumes and persisted data</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>down<span class="w"> </span>-v
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>down<span class="w"> </span>-v
 </code></pre></div>
 
 <h3 id="rebuilding-after-code-changes-or-a-fresh-start">Rebuilding after code changes or a fresh start</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># Rebuild and restart just the Python app</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build<span class="w"> </span>wactorz
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build<span class="w"> </span>wactorz-python
 
 <span class="c1"># Full teardown and clean rebuild</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>down<span class="w"> </span>-v
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>down<span class="w"> </span>-v
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
 </code></pre></div>
 
 <h3 id="development-stack">Development stack</h3>
-<p>For local development, <code>compose.dev.yaml</code> starts MQTT + Fuseki + the Python app together with a single command:</p>
+<p>For local development, <code>compose.dev.yaml</code> starts MQTT + the Python app together with a single command:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Start everything</span>
 docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
 
@@ -480,11 +477,6 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 <td>Python agent system (REST API + Web UI)</td>
 </tr>
 <tr>
-<td><code>wactorz-fuseki</code></td>
-<td>:3030</td>
-<td>Apache Jena Fuseki (knowledge graph)</td>
-</tr>
-<tr>
 <td><code>wactorz-dev-mosquitto</code></td>
 <td>:1883, :9001</td>
 <td>MQTT broker (TCP + WebSocket)</td>
@@ -495,16 +487,8 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 <p>Your <code>.env</code> file is loaded automatically via <code>env_file</code>. The compose files override a few values so services can reach each other by container name instead of <code>localhost</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="gh">#</span> These are set automatically by compose — do not override in .env
 MQTT_HOST=mosquitto         # container name, not localhost
-FUSEKI_URL=http://fuseki:3030
 </code></pre></div>
 
-<blockquote>
-<p><strong>Warning (Windows line endings):</strong> If Fuseki fails with <code>exec /entrypoint.sh: no such file or directory</code>, the shell script has Windows CRLF line endings. Fix with:
-<code>bash
-docker run --rm -v "$PWD/config/fuseki-container:/work" alpine sh -c "sed -i 's/\r//' /work/entrypoint.sh"</code>
-Then rebuild: <code>docker compose --profile python-full up -d --build fuseki</code></p>
-<p><strong>Fuseki admin UI:</strong> After starting Fuseki, the admin UI is at <code>http://localhost:3030</code>. Default credentials: <strong>admin / admin</strong> (set via <code>FUSEKI_ADMIN_PASSWORD</code> in your <code>.env</code>).</p>
-</blockquote>
 <hr />
 <h2 id="project-structure">Project structure</h2>
 <div class="highlight"><pre><span></span><code><span class="n">wactorz</span>/                         ← <span class="n">repo</span> <span class="n">root</span>
@@ -522,6 +506,8 @@ Then rebuild: <code>docker compose --profile python-full up -d --build fuseki</c
 │   │   ├── <span class="n">main_actor</span>.<span class="n">py</span>        ← <span class="n">LLM</span> <span class="n">orchestrator</span>
 │   │   ├── <span class="n">llm_agent</span>.<span class="n">py</span>         ← <span class="n">LLM</span> <span class="nb">base</span> + <span class="nb">all</span> <span class="n">providers</span>
 │   │   ├── <span class="n">home_assistant_agent</span>.<span class="n">py</span>
+│   │   ├── <span class="n">prompts</span>/
+│   │   │   └── <span class="n">home_assistant_prompts</span>.<span class="n">py</span>  ← <span class="n">HA</span> <span class="n">LLM</span> <span class="n">system</span> <span class="n">prompts</span>
 │   │   ├── <span class="n">home_assistant_state_bridge_agent</span>.<span class="n">py</span>
 │   │   ├── <span class="n">home_assistant_map_agent</span>.<span class="n">py</span>
 │   │   ├── <span class="n">monitor_agent</span>.<span class="n">py</span>
@@ -531,8 +517,6 @@ Then rebuild: <code>docker compose --profile python-full up -d --build fuseki</c
 │   ├── <span class="n">interfaces</span>/
 │   │   ├── <span class="n">chat_interfaces</span>.<span class="n">py</span>   ← <span class="n">CLI</span>, <span class="n">REST</span>, <span class="n">Discord</span>, <span class="n">WhatsApp</span>, <span class="n">Telegram</span>
 │   │   └── <span class="n">mcp_server</span>.<span class="n">py</span>        ← <span class="n">MCP</span> <span class="n">tools</span><span class="o">/</span><span class="n">resources</span> <span class="k">for</span> <span class="n">compatible</span> <span class="n">clients</span>
-│   └── <span class="n">static</span>/
-│       └── <span class="n">docs</span>/                ← <span class="n">documentation</span> (<span class="n">served</span> <span class="nb">at</span> /<span class="n">docs</span>/)
 ├── <span class="n">static</span>/                      ← <span class="nb">source</span> <span class="n">docs</span> + <span class="n">frontend</span> <span class="n">SPA</span>
 ├── <span class="k">state</span>/                       ← <span class="n">agent</span> <span class="n">persistence</span> (<span class="n">created</span> <span class="nb">at</span> <span class="n">runtime</span>)
 ├── <span class="n">Dockerfile</span>                   ← <span class="n">Python</span> <span class="n">app</span> <span class="n">container</span>
@@ -572,7 +556,7 @@ touch<span class="w"> </span>wactorz/catalogue_agents/my_agent.py
 
 <h3 id="running-tests">Running tests</h3>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[dev]&quot;</span>
-pytest
+python<span class="w"> </span>-m<span class="w"> </span>unittest<span class="w"> </span>discover<span class="w"> </span>-s<span class="w"> </span>tests<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;test_*.py&#39;</span>
 </code></pre></div>
 
 <hr />
@@ -591,21 +575,43 @@ pytest
 </code></pre></div>
 
 <h4 id="read-persistence-state">Read persistence state</h4>
+<p>The spawn registry, user facts, and pipeline rules now live in SQLite (<code>state/wactorz.db</code>), routed automatically by <code>PersistenceAPI</code>. Read them with:</p>
 <div class="highlight"><pre><span></span><code><span class="n">python3</span> <span class="o">-</span><span class="n">c</span> <span class="s2">&quot;</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pickle</span>
-<span class="n">data</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="nb">open</span><span class="p">(</span><span class="s1">&#39;state/main/state.pkl&#39;</span><span class="p">,</span> <span class="s1">&#39;rb&#39;</span><span class="p">))</span>
-<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Spawn registry:&#39;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;_spawned_agents&#39;</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
-<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;User facts:&#39;</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;_user_facts&#39;</span><span class="p">,</span> <span class="p">{}))</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sqlite3</span><span class="o">,</span><span class="w"> </span><span class="nn">json</span>
+<span class="n">conn</span> <span class="o">=</span> <span class="n">sqlite3</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s1">&#39;state/wactorz.db&#39;</span><span class="p">)</span>
+<span class="n">row</span> <span class="o">=</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+    \<span class="s2">&quot;SELECT value FROM kv_store WHERE agent=&#39;main&#39; AND key=&#39;_spawned_agents&#39;</span><span class="se">\&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span>
+<span class="n">spawned</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">if</span> <span class="n">row</span> <span class="k">else</span> <span class="p">{}</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Spawn registry:&#39;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">spawned</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
+
+<span class="n">row</span> <span class="o">=</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+    \<span class="s2">&quot;SELECT value FROM kv_store WHERE agent=&#39;main&#39; AND key=&#39;_user_facts&#39;</span><span class="se">\&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;User facts:&#39;</span><span class="p">,</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">if</span> <span class="n">row</span> <span class="k">else</span> <span class="p">{})</span>
 <span class="s2">&quot;</span>
+</code></pre></div>
+
+<p>The <code>spawn_registry</code> table also holds spawn configs in a structured form:</p>
+<div class="highlight"><pre><span></span><code>sqlite3<span class="w"> </span>state/wactorz.db<span class="w"> </span><span class="s2">&quot;SELECT name, node FROM spawn_registry;&quot;</span>
 </code></pre></div>
 
 <h4 id="remove-a-stuck-agent-from-the-spawn-registry">Remove a stuck agent from the spawn registry</h4>
 <div class="highlight"><pre><span></span><code><span class="n">python3</span> <span class="o">-</span><span class="n">c</span> <span class="s2">&quot;</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pickle</span>
-<span class="n">data</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="nb">open</span><span class="p">(</span><span class="s1">&#39;state/main/state.pkl&#39;</span><span class="p">,</span> <span class="s1">&#39;rb&#39;</span><span class="p">))</span>
-<span class="n">data</span><span class="p">[</span><span class="s1">&#39;_spawned_agents&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s1">&#39;my-stuck-agent&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
-<span class="n">pickle</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="nb">open</span><span class="p">(</span><span class="s1">&#39;state/main/state.pkl&#39;</span><span class="p">,</span> <span class="s1">&#39;wb&#39;</span><span class="p">))</span>
-<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Done. Remaining:&#39;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s1">&#39;_spawned_agents&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sqlite3</span><span class="o">,</span><span class="w"> </span><span class="nn">json</span>
+<span class="n">conn</span> <span class="o">=</span> <span class="n">sqlite3</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s1">&#39;state/wactorz.db&#39;</span><span class="p">)</span>
+<span class="n">row</span> <span class="o">=</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+    \<span class="s2">&quot;SELECT value FROM kv_store WHERE agent=&#39;main&#39; AND key=&#39;_spawned_agents&#39;</span><span class="se">\&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span>
+<span class="n">spawned</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">if</span> <span class="n">row</span> <span class="k">else</span> <span class="p">{}</span>
+<span class="n">spawned</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s1">&#39;my-stuck-agent&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+<span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+    \<span class="s2">&quot;UPDATE kv_store SET value=? WHERE agent=&#39;main&#39; AND key=&#39;_spawned_agents&#39;</span><span class="se">\&quot;</span><span class="s2">,</span>
+    <span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">spawned</span><span class="p">),),</span>
+<span class="p">)</span>
+<span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>\<span class="s2">&quot;DELETE FROM spawn_registry WHERE name=&#39;my-stuck-agent&#39;</span><span class="se">\&quot;</span><span class="s2">)</span>
+<span class="n">conn</span><span class="o">.</span><span class="n">commit</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Done. Remaining:&#39;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">spawned</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
 <span class="s2">&quot;</span>
 </code></pre></div>
   </main>

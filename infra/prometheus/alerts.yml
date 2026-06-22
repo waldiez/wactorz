@@ -22,7 +22,7 @@ groups:
   - name: wactorz-probes
     rules:
       - alert: OptionalDependencyProbeFailing
-        expr: probe_success{job=~"mosquitto-blackbox|fuseki-blackbox"} == 0
+        expr: probe_success{job=~"mosquitto-blackbox"} == 0
         for: 2m
         labels:
           severity: warning

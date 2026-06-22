@@ -407,11 +407,12 @@ class Actor(ABC):
             import aiomqtt
         except ImportError:
             return
+        from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
 
         topic = f"agents/{self.actor_id}/commands"
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe(topic)
                     logger.debug(f"[{self.name}] Subscribed to {topic}")
                     async for message in client.messages:
@@ -686,6 +687,12 @@ class Actor(ABC):
     async def _mqtt_publish(self, topic: str, payload: Any, retain: bool = False, qos: int = 0):
         if self._mqtt_client:
             try:
+                # Stamp telemetry frames with the agent's own name. logs/spawned
+                # payloads carry only the topic id, and while an agent is being
+                # spawned or installing deps it isn't in any registry yet — but it
+                # always knows self.name, so the feed can attribute the row.
+                if isinstance(payload, dict) and (topic.endswith("/logs") or topic.endswith("/spawned")):
+                    payload.setdefault("name", self.name)
                 # Empty bytes = clear a retained message (MQTT spec)
                 # Must send raw empty bytes, not JSON-encoded
                 if payload == b"" or payload is None and retain:

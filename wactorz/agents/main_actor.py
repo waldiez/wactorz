@@ -12,6 +12,7 @@ from typing import Optional
 from wactorz.config import CONFIG
 
 from ..core.actor import Actor, Message, MessageType, ActorState
+from ..core.mqtt import mqtt_client
 from .llm_agent import LLMAgent, LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,22 @@ SPAWN_REGISTRY_KEY   = "_spawned_agents"
 PIPELINE_RULES_KEY   = "_pipeline_rules"
 PENDING_PLANS_KEY    = "_pending_plans"     # dry-run proposals awaiting user approval
 NODE_REGISTRY_KEY  = "_known_nodes"       # tracks online remote nodes
+
+
+def _normalize_agent_name(name: str) -> str:
+    """Canonicalise an agent name for fuzzy matching.
+
+    Lowercases, turns spaces/underscores into dashes, and strips a redundant
+    trailing '-agent' suffix so 'Smart Energy Agent', 'smart_energy_agent',
+    and 'smart-energy' all collapse to 'smart-energy'.
+    """
+    norm = (name or "").lower().strip().replace("_", "-").replace(" ", "-")
+    while "--" in norm:
+        norm = norm.replace("--", "-")
+    norm = norm.strip("-")
+    if norm.endswith("-agent") and norm != "-agent":
+        norm = norm[:-len("-agent")]
+    return norm
 
 ORCHESTRATOR_PROMPT = """You are the main orchestrator in a multi-agent system.
 
@@ -1267,6 +1284,11 @@ class MainActor(LLMAgent):
     def get_user_facts(self) -> dict:
         return self.recall("_user_facts") or {}
 
+    def _preferred_timezone_name(self) -> Optional[str]:
+        """Main knows the user's timezone from facts — use it so the live
+        date/time block matches what the scheduler actually fires against."""
+        return self.get_user_facts().get("pref_timezone")
+
     def _get_running_agents_summary(self) -> str:
         """
         Build a short, authoritative description of currently running agents
@@ -2144,7 +2166,7 @@ class MainActor(LLMAgent):
             lines = [f"Active pipeline rules ({len(rules)}):"]
             for rule_id, rule in sorted(rules.items(), key=lambda x: x[1].get("created_at", 0)):
                 agents = rule.get("agents", [])
-                task = rule.get("task", "")[:80]
+                task = rule.get("task", "")[:]
                 import datetime
                 ts = rule.get("created_at", 0)
                 created = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "unknown"
@@ -2687,7 +2709,7 @@ class MainActor(LLMAgent):
                 async def _wait_reply():
                     try:
                         import aiomqtt
-                        async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                        async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                             await client.subscribe(reply_topic)
                             async for msg in client.messages:
                                 try:
@@ -3485,6 +3507,46 @@ class MainActor(LLMAgent):
 
         # ── Spawn ──────────────────────────────────────────────────────────────
 
+    def _match_catalog_recipe(self, name: str, capabilities: Optional[list] = None) -> Optional[str]:
+        """Return the name of a catalog recipe that already covers this request.
+
+        Used to stop the LLM from reimplementing an agent that the catalog
+        already provides (e.g. it writes a fresh 'smart-energy-agent' when the
+        catalog has 'smart-energy'). Matching is by normalised name only —
+        the safest signal. Capability overlap is intentionally NOT used here
+        because it produces false positives that would block genuinely new
+        agents.
+
+        Checks two sources so it doesn't depend on manifest-injection timing
+        (the catalog injects its recipe manifests into main on startup, but
+        that races with main coming up — if it lost the race, the manifests
+        wouldn't be here yet). The live catalog actor is the real source of
+        truth and is consulted as a fallback.
+        """
+        want = _normalize_agent_name(name)
+        if not want:
+            return None
+
+        # 1. Injected manifests (fast path)
+        for recipe_name, manifest in self._agent_manifests.items():
+            if not (manifest.get("spawnable") and manifest.get("catalog")):
+                continue
+            if _normalize_agent_name(recipe_name) == want:
+                return recipe_name
+
+        # 2. Live catalog actor — authoritative, immune to injection races
+        if self._registry:
+            cat = self._registry.find_by_name("catalog")
+            if cat and hasattr(cat, "list_recipes"):
+                try:
+                    for recipe_name in cat.list_recipes():
+                        if _normalize_agent_name(recipe_name) == want:
+                            return recipe_name
+                except Exception:
+                    pass
+
+        return None
+
     async def _resolve_or_spawn(self, agent_name: str):
         """
         Resolve an agent by name, auto-spawning it from a catalog recipe if it
@@ -3496,6 +3558,13 @@ class MainActor(LLMAgent):
         spawnable = False
         if not target:
             manifest = self._agent_manifests.get(agent_name, {})
+            # Fall back to a fuzzy catalog match so 'smart energy agent' or
+            # 'smart-energy-agent' still resolve to the 'smart-energy' recipe.
+            if not manifest:
+                matched = self._match_catalog_recipe(agent_name)
+                if matched:
+                    agent_name = matched
+                    manifest = self._agent_manifests.get(matched, {})
             spawnable = bool(manifest.get("spawnable") and manifest.get("catalog"))
             if spawnable:
                 catalog_actor = self._registry.find_by_name(manifest["catalog"]) if self._registry else None
@@ -3587,7 +3656,9 @@ class MainActor(LLMAgent):
             if not target:
                 result_str = f"[Could not reach {agent_name}]"
             else:
-                result_str = await self._run_delegation(agent_name, payload)
+                # Use the resolved actor's real name so delegation lands even
+                # when the LLM used a fuzzy alias ('smart energy agent').
+                result_str = await self._run_delegation(target.name, payload)
 
             results.append(result_str)
             response = response.replace(m.group(0), result_str)
@@ -3682,7 +3753,7 @@ class MainActor(LLMAgent):
                     continue
                 replacements.append((full_match, f"[Could not reach {agent_name}]"))
                 continue
-            result_str = await self._run_delegation(agent_name, payload)
+            result_str = await self._run_delegation(target.name, payload)
             replacements.append((full_match, result_str))
 
         for original, replacement in replacements:
@@ -3752,6 +3823,37 @@ class MainActor(LLMAgent):
         for match in re.findall(pattern, response, re.DOTALL):
             try:
                 config = self._parse_spawn_config(match.strip())
+
+                # ── Guard: don't let the LLM reimplement a catalog recipe ──────
+                # If the requested name maps to an existing catalog recipe, spawn
+                # THAT (the maintained, tested version) instead of the LLM's
+                # freshly-written duplicate. This is what stops "spawn the smart
+                # energy agent" from producing a brand-new 'smart-energy-agent'
+                # when the catalog already provides 'smart-energy'.
+                req_name = config.get("name", "")
+                if not config.get("replace"):
+                    recipe_name = self._match_catalog_recipe(req_name)
+                    if recipe_name:
+                        existing = self._registry.find_by_name(recipe_name) if self._registry else None
+                        if existing:
+                            logger.info(f"[{self.name}] '{req_name}' already covered by running "
+                                        f"catalog agent '{recipe_name}' — skipping LLM reimplementation")
+                            spawned.append(existing)
+                            continue
+                        catalog_actor = self._registry.find_by_name("catalog") if self._registry else None
+                        if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
+                            logger.info(f"[{self.name}] LLM tried to write '{req_name}'; spawning catalog "
+                                        f"recipe '{recipe_name}' instead")
+                            spawn_result = await catalog_actor._action_spawn(recipe_name, {})
+                            if spawn_result and spawn_result.get("ok"):
+                                await asyncio.sleep(0.5)
+                                actor = self._registry.find_by_name(recipe_name) if self._registry else None
+                                if actor:
+                                    spawned.append(actor)
+                                    continue
+                            logger.warning(f"[{self.name}] Catalog spawn of '{recipe_name}' failed "
+                                           f"({spawn_result}); falling back to LLM code")
+
                 # LLM agents have no "code" — only check for code if type is dynamic
                 agent_type = config.get("type", "dynamic")
                 has_code   = bool(config.get("code", "").strip())
@@ -4279,6 +4381,23 @@ import time as _t
 _SYSTEM_PROMPT = {system_prompt_literal}
 _MAX_HISTORY   = {max_history}
 
+
+def _now_block():
+    # Recomputed every task so the agent always sees the real present moment
+    # (process-local zone — honors the host TZ env var). Kept self-contained so
+    # the synthesized agent has no import dependency on llm_agent. Newlines are
+    # built with chr(10) to avoid backslash-escaping through the code template.
+    from datetime import datetime as _dt
+    _n = _dt.now().astimezone()
+    _nl = chr(10)
+    return (
+        "== CURRENT DATE & TIME (live) ==" + _nl
+        + "It is now " + _n.strftime("%A, %d %B %Y, %H:%M %Z")
+        + " (UTC" + _n.strftime("%z") + ")." + _nl
+        + "Trust this over training data; resolve 'today'/'tomorrow' against it."
+        + _nl + _nl
+    )
+
 async def setup(agent):
     # Conversation history may have been shipped via _initial_state at spawn
     # time — agent.recall() finds it. If this is a fresh spawn, default to
@@ -4311,7 +4430,7 @@ async def handle_task(agent, payload):
         if isinstance(m, dict) and m.get("role") in ("user", "assistant")
     ]
 
-    response = await agent.chat(safe_history, system=_SYSTEM_PROMPT)
+    response = await agent.chat(safe_history, system=_now_block() + _SYSTEM_PROMPT)
     duration = _t.time() - started
 
     history.append({{"role": "assistant", "content": response, "ts": _t.time()}})
@@ -4644,7 +4763,7 @@ async def handle_task(agent, payload):
         _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("agents/+/manifest")
                     logger.info("[main] Subscribed to agent manifests.")
                     _last_exc_str = None
@@ -4797,7 +4916,7 @@ async def handle_task(agent, payload):
         _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("nodes/+/state_return")
                     logger.info("[main] Subscribed to state_return topics.")
                     _last_exc_str = None
@@ -5341,7 +5460,7 @@ async def handle_task(agent, payload):
         _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("nodes/+/heartbeat")
                     await client.subscribe("nodes/+/migrate_result")
                     logger.info("[main] Subscribed to node heartbeats.")
@@ -5585,7 +5704,7 @@ async def handle_task(agent, payload):
         _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("main/llm_request")
                     logger.info("[main] LLM bridge listening on main/llm_request")
                     _last_exc_str = None
@@ -5706,7 +5825,7 @@ async def handle_task(agent, payload):
 
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     for pattern in ("agents/+/data/#", "custom/#", "sensors/#"):
                         await client.subscribe(pattern)
                     async for msg in client.messages:
@@ -5826,7 +5945,7 @@ async def handle_task(agent, payload):
         async def _wait_reply():
             try:
                 import aiomqtt
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe(reply_topic)
                     async for msg in client.messages:
                         try:

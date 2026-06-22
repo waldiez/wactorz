@@ -41,6 +41,19 @@ _PKG_DIR         = Path(__file__).resolve().parent   # wactorz/
 _RELOAD_CWD      = os.getcwd()
 
 
+def _state_dir() -> str:
+    """Resolve the persistent state directory.
+
+    Honours ``WACTORZ_STATE_DIR`` so deployments can pin an absolute,
+    durable location (the HA addon sets it to ``/data/state`` so chat /
+    pickle / SQLite state survives addon updates). Falls back to ``./state``
+    for local/dev runs. The directory is created if missing.
+    """
+    base = os.environ.get("WACTORZ_STATE_DIR", "./state")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
 def _start_reloader() -> None:
     """Watch wactorz/ for source changes and restart the process via os.execv."""
     try:
@@ -155,18 +168,6 @@ async def _start_web_ui(port: int, mqtt_broker: str, mqtt_port: int, actor_regis
         logger.info("Docs   →  http://localhost:%d/docs/", port)
 
 
-async def _seed_fuseki_registry(registry) -> None:
-    await asyncio.sleep(10)  # let agents finish registering
-    from wactorz.fuseki import seed_agent_registry
-    await seed_agent_registry(
-        actors=registry.all_actors(),
-        fuseki_url=CONFIG.fuseki_url,
-        fuseki_dataset=CONFIG.fuseki_dataset,
-        fuseki_user=CONFIG.fuseki_user,
-        fuseki_password=CONFIG.fuseki_password,
-    )
-
-
 async def build_system(args: argparse.Namespace):
     from wactorz.core.registry import ActorSystem
     from wactorz.core.actor import SupervisorStrategy
@@ -189,7 +190,7 @@ async def build_system(args: argparse.Namespace):
         provider = AnthropicProvider(model=CONFIG.llm_model, api_key=api_key)
     elif llm == "openai":
         api_key = os.getenv("OPENAI_API_KEY") or CONFIG.llm_api_key
-        provider = OpenAIProvider(model=CONFIG.llm_model, api_key=api_key)
+        provider = OpenAIProvider(model=CONFIG.llm_model, api_key=api_key, base_url=CONFIG.openai_url or None)
     elif llm == "ollama":
         ollama_model = args.ollama_model or CONFIG.llm_model
         provider = OllamaProvider(model=ollama_model, base_url=CONFIG.ollama_url)
@@ -207,11 +208,14 @@ async def build_system(args: argparse.Namespace):
         provider = None
         logger.warning("No LLM provider set. Agents will have limited capabilities.")
 
+    # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
+    _sd = _state_dir()
+
     # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
     system = ActorSystem(
         mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
         mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
-        state_dir="./state",
+        state_dir=_sd,
     )
     # MQTT client must exist before factories run so injected actors can publish
     system._mqtt_client = await __import__(
@@ -219,7 +223,7 @@ async def build_system(args: argparse.Namespace):
     )._MQTTPublisher.create(
         args.mqtt_broker or CONFIG.mqtt_host,
         args.mqtt_port or CONFIG.mqtt_port,
-        db_path="./state/mqtt_outbox.db",
+        db_path=os.path.join(_sd, "mqtt_outbox.db"),
     )
 
     # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────────────
@@ -239,9 +243,9 @@ async def build_system(args: argparse.Namespace):
     # .pkl data to the new stores.
     from wactorz.core.persistence import init_persistence, PersistenceAPI
     _db, _redis, _pickle_store = init_persistence(
-        db_path="./state/wactorz.db",
+        db_path=os.path.join(_sd, "wactorz.db"),
         redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379"),
-        state_dir="./state",
+        state_dir=_sd,
         run_migration=True,
     )
     logger.info("Persistence layer initialised (SQLite + %s + Pickle)",
@@ -299,17 +303,6 @@ async def build_system(args: argparse.Namespace):
         return _wire_persistence(
             CatalogAgent(name="catalog", persistence_dir="./state"))
 
-    # ── Register critical actors under the Supervisor ─────────────────────────
-    from wactorz.agents.timeseries_collector import TimeSeriesCollector
-
-    def make_ts_collector():
-        return _wire_persistence(
-            TimeSeriesCollector(
-                name="timeseries-collector",
-                retention_days=int(os.environ.get("TS_RETENTION_DAYS", "90")),
-                batch_interval=float(os.environ.get("TS_BATCH_INTERVAL", "5.0")),
-                persistence_dir="./state",
-            ))
 
     (
         system.supervisor
@@ -321,12 +314,25 @@ async def build_system(args: argparse.Namespace):
         .supervise("home-assistant-map-agent",   make_ha_map_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-state-bridge",make_ha_state_bridge, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
         .supervise("catalog",                    make_catalog,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
-        .supervise("timeseries-collector",       make_ts_collector,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=2.0)
     )
 
-    await system.supervisor.start()
+    # Bind the monitor web UI BEFORE starting the supervisor. Agent startup
+    # touches the MQTT broker, and on a slow/unreachable/auth-rejected broker
+    # that can stall — previously the UI started *after* supervisor.start(), so a
+    # stalled broker left the addon serving a blank page on boot. Starting the UI
+    # first means it is always reachable (showing "connecting…" rather than
+    # nothing) regardless of broker state. The registry is populated live as
+    # agents register, so the overview fills in as they come up.
+    if not getattr(args, "no_monitor", False):
+        await _start_web_ui(
+            port=args.monitor_port,
+            mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
+            mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
+            actor_registry=system.registry,
+            persistence_db=_db,
+        )
 
-    asyncio.create_task(_seed_fuseki_registry(system.registry))
+    await system.supervisor.start()
 
     main_actor = system.registry.find_by_name("main")
 
@@ -346,14 +352,8 @@ async def app():
     setup_otel(lambda: system.registry)
     setup_influx()
 
-    if not args.no_monitor:
-        await _start_web_ui(
-            port=args.monitor_port,
-            mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
-            mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
-            actor_registry=system.registry,
-            persistence_db=_db,
-        )
+    # NOTE: the monitor web UI is now started inside build_system(), before the
+    # supervisor, so it binds even if the broker stalls agent startup.
 
     from wactorz.interfaces.chat_interfaces import (
         CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface, TelegramInterface

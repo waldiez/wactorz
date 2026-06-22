@@ -21,14 +21,14 @@ GRU sequence never bridges across episodes.
 
 Files (place beside the MADDPG model)
 -------------------------------------
-  <infer_dir>/   (default: state/maddpg_office, override via SINERGYM_MODEL_DIR)
+  <infer_dir>/   (default: models/maddpg, override via SINERGYM_MODEL_DIR)
       forecast_anomaly_detector.py     (the detector module — imported)
       detector_forecast_v9_mixed.pkl   (the trained pickle — loaded; version forecast_v8)
 
 Launch params (defaults shown)
 ------------------------------
   env_id        "officeMedium-multiagent"
-  infer_dir     "state/maddpg_office"  (or $SINERGYM_MODEL_DIR)
+  infer_dir     "models/maddpg"  (or $SINERGYM_MODEL_DIR)
   detector_path "<infer_dir>/detector_forecast_v9_mixed.pkl"
   fuseki_url/dataset/user/password   (same store the bridge writes to)
 
@@ -48,7 +48,7 @@ import sys
 ENV_ID_DEFAULT = "officeMedium-multiagent"
 # Portable default: relative to the wactorz working dir (repo root), overridable via env.
 # (Was a hardcoded Windows path, which never resolved on other hosts → detector never loaded.)
-INFER_DIR_DEFAULT = os.environ.get("SINERGYM_MODEL_DIR", "state/maddpg_office")
+INFER_DIR_DEFAULT = os.environ.get("SINERGYM_MODEL_DIR", "models/maddpg")
 DETECTOR_FILE_DEFAULT = "detector_forecast_v9_mixed.pkl"
 
 SGY_NS  = "https://waldiez.github.io/wactorz/sinergym#"

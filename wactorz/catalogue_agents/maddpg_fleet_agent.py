@@ -118,8 +118,8 @@ DEFAULTS = {
     # them in the "launch" task. If model_path does not exist on start, the fleet
     # waits for an explicit launch task instead of auto-starting.
     "env_id":          "Eplus-officeMedium-MultiAgent-v1",
-    "model_path":      "/data/maddpg/model.pt",
-    "normalizer_path": "/data/maddpg/normalizer.npz",
+    "model_path":      "/models/maddpg/model.pt",
+    "normalizer_path": "/models/maddpg/normalizer.npz",
     "zones":           None,    # optional explicit zone list, in bridge order
     "info_timeout":    30.0,    # seconds to wait for env_info before giving up
     "infer_dir":       None,    # dir containing maddpg_infer.py; default = model.pt dir
@@ -287,8 +287,8 @@ async def handle_task(agent, payload):
         return {"ok": False,
                 "message": "no action parsed, e.g. "
                            "@maddpg-fleet {\"action\":\"launch\",\"env_id\":\"...\","
-                           "\"model_path\":\"state/maddpg_office/model.pt\","
-                           "\"normalizer_path\":\"state/maddpg_office/normalizer.npz\"} "
+                           "\"model_path\":\"models/maddpg/model.pt\","
+                           "\"normalizer_path\":\"models/maddpg/normalizer.npz\"} "
                            "— or @maddpg-fleet status"}
 
     if action == "launch":

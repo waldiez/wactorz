@@ -32,14 +32,14 @@ load error in the logs rather than silently no-op'ing.
 
 Files (place beside the model)
 ------------------------------
-  <infer_dir>/   (default: state/maddpg_office, override via SINERGYM_MODEL_DIR)
+  <infer_dir>/   (default: models/aif, override via SINERGYM_MODEL_DIR)
       <detector module>.py           (imported)
       detector_aif_v6.pkl            (the trained pickle — loaded)
 
 Launch params (defaults shown)
 ------------------------------
   env_id          "officeMedium-multiagent"
-  infer_dir       "state/maddpg_office"  (or $SINERGYM_MODEL_DIR)
+  infer_dir       "models/aif"  (or $SINERGYM_MODEL_DIR)
   detector_path   "<infer_dir>/detector_aif_v6.pkl"
   detector_module "forecast_anomaly_detector"
   detector_class  "ForecastAnomalyDetector"
@@ -60,7 +60,7 @@ import sys
 
 ENV_ID_DEFAULT = "officeMedium-multiagent"
 # Portable default: relative to the wactorz working dir (repo root), overridable via env.
-INFER_DIR_DEFAULT = os.environ.get("SINERGYM_MODEL_DIR", "state/maddpg_office")
+INFER_DIR_DEFAULT = os.environ.get("SINERGYM_MODEL_DIR", "models/aif")
 DETECTOR_FILE_DEFAULT = "detector_aif_v6.pkl"
 DETECTOR_MODULE_DEFAULT = "forecast_anomaly_detector"
 DETECTOR_CLASS_DEFAULT  = "ForecastAnomalyDetector"

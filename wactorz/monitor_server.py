@@ -1136,6 +1136,28 @@ def _lifetime_cost_total() -> float:
     return sum(_lifetime_cost.values())
 
 
+def _reset_actor_cost(actor) -> None:
+    """Zero a live actor's cost/token counters AND its per-call accrual baseline.
+
+    The baseline must move with total_cost_usd: _persist_cost / _accrue_usage
+    accumulate (total_cost_usd - baseline) into the global period and all-time
+    counters. Zeroing total_cost_usd on a reset without also zeroing the baseline
+    leaves the baseline at the pre-reset total, so every subsequent call yields a
+    negative delta and the period/all-time counters stop advancing until spend
+    climbs back past the old total — the "limit count stopped counting after a
+    wipe" bug.
+    """
+    if not hasattr(actor, "total_cost_usd"):
+        return
+    actor.total_cost_usd      = 0.0
+    actor.total_input_tokens  = 0
+    actor.total_output_tokens = 0
+    if hasattr(actor, "_last_persisted_usd"):
+        actor._last_persisted_usd = 0.0
+    if hasattr(actor, "_last_period_cost_usd"):
+        actor._last_period_cost_usd = 0.0
+
+
 def _historical_cost_usd(live_names: set) -> float:
     """Sum _final_cost for agents not in live_names."""
     if db is None:
@@ -1227,7 +1249,21 @@ def _snapshot() -> dict:
     # monotonic, so clamp the headline total up to whichever is larger — spend is
     # never lost, and the live path still covers the fresh-boot window before the
     # first heartbeat repopulates the ledger.
-    total_cost = max(live_cost + _historical_cost_usd(live_names), _lifetime_cost_total())
+    # The all-time call-time counter is delete-proof (a deleted agent's _final_cost
+    # row is purged and its lifetime-ledger high-water can be missed/popped, but
+    # the counter accrued its spend at call time). Use it as a third floor so the
+    # headline never drops below money already spent — and so it can never read
+    # lower than the "this period" spend shown beside it.
+    try:
+        from .agents.llm_agent import get_global_alltime_cost
+        alltime_cost = get_global_alltime_cost()
+    except Exception:
+        alltime_cost = 0.0
+    total_cost = max(
+        live_cost + _historical_cost_usd(live_names),
+        _lifetime_cost_total(),
+        alltime_cost,
+    )
     total_msgs = live_msgs + _historical_messages(live_names)
     return {
         "agents":           list(state["agents"].values()),
@@ -1901,10 +1937,7 @@ async def reset_handler(request):
                 actor.metrics.errors = 0
                 actor.metrics.tasks_completed = 0
                 actor.metrics.tasks_failed = 0
-                if hasattr(actor, "total_cost_usd"):
-                    actor.total_cost_usd      = 0.0
-                    actor.total_input_tokens  = 0
-                    actor.total_output_tokens = 0
+                _reset_actor_cost(actor)
                 if hasattr(actor, "_conversation_history"):
                     actor._conversation_history = []
                 if hasattr(actor, "_history_summary"):
@@ -1967,10 +2000,7 @@ async def reset_handler(request):
             if agent and actor.name != agent:
                 continue
             actor.metrics.messages_processed = 0
-            if hasattr(actor, "total_cost_usd"):
-                actor.total_cost_usd      = 0.0
-                actor.total_input_tokens  = 0
-                actor.total_output_tokens = 0
+            _reset_actor_cost(actor)
         # The headline total is max(live + historical, lifetime ledger).
         # reset_metrics cleared the kv ledger, but the in-memory _lifetime_cost
         # high-water survives in THIS process and pins the headline to its old

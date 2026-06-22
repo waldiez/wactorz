@@ -134,23 +134,72 @@ DEFAULT_DOMAINS: frozenset[str] = frozenset(
 )
 
 # domain → (rdf:type list, is_actuator)
+# ── HA domain → RDF type mapping ──────────────────────────────────────────────
+# Each entry: (list of rdf:type IRIs, is_actuator).
+#   is_actuator=True  -> entity gets a sosa:ActuatableProperty (commandable)
+#   is_actuator=False -> entity gets a sosa:ObservableProperty (readable)
+# Every entity is also core:Thing for HSML discoverability. SAREF classes are
+# used ONLY where a valid core-SAREF class exists; physical devices SAREF has no
+# class for fall back to saref:Sensor / saref:Actuator, and non-device domains
+# (helpers, processes, virtual feeds) use SYNAPSE / PROV-O / SOSA classes rather
+# than being mislabeled as tangible devices.
 _DOMAIN_TYPES: dict[str, tuple[list[str], bool]] = {
+    # ── Physical sensors (tangible, observe a property) ──────────────────────
     "sensor":         (["sosa:Sensor", "saref:Sensor", "core:Thing"], False),
     "binary_sensor":  (["sosa:Sensor", "saref:Sensor", "core:Thing"], False),
-    "light":          (["sosa:Actuator", "saref:LightingDevice", "core:Thing"], True),
+    "camera":         (["sosa:Sensor", "core:Thing"], False),
+    "button":         (["sosa:Sensor", "core:Thing"], False),
+    "event":          (["sosa:Sensor", "core:Thing"], False),
+    # ── Physical actuators (tangible, perform an action) ─────────────────────
+    "light":          (["sosa:Actuator", "saref:LightSwitch", "core:Thing"], True),
     "switch":         (["sosa:Actuator", "saref:Switch", "core:Thing"], True),
-    "cover":          (["sosa:Actuator", "saref:Device", "core:Thing"], True),
-    "climate":        (["sosa:Actuator", "saref:HVAC", "core:Thing"], True),
-    "device_tracker": (["syn:Person", "sosa:FeatureOfInterest", "core:Thing"], False),
-    "input_boolean":  (["sosa:Actuator", "saref:Switch", "core:Thing"], True),
-    "input_number":   (["sosa:Sensor", "core:Thing"], False),
-    "input_select":   (["saref:Device", "core:Thing"], False),
-    "automation":     (["saref:Device", "core:Thing"], False),
-    "script":         (["saref:Device", "core:Thing"], False),
-    "weather":        (["sosa:Sensor", "saref:Sensor", "core:Thing"], False),
-    "sun":            (["core:Thing"], False),
+    "cover":          (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "fan":            (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "lock":           (["sosa:Actuator", "sosa:Sensor", "saref:DoorSwitch", "core:Thing"], True),
+    "siren":          (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "valve":          (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "humidifier":     (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "vacuum":         (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "remote":         (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "media_player":   (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "lawn_mower":     (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "climate":        (["sosa:Actuator", "sosa:Sensor", "saref:HVAC", "core:Thing"], True),
+    "water_heater":   (["sosa:Actuator", "saref:HVAC", "core:Thing"], True),
+    "number":         (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
+    "select":         (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
+    # ── Virtual / software sensors (observe, but not a tangible device) ──────
+    "weather":        (["sosa:Sensor", "core:Thing"], False),
+    "sun":            (["sosa:Sensor", "core:Thing"], False),
+    "device_tracker": (["sosa:Sensor", "core:Thing"], False),
+    "person":         (["syn:Person", "sosa:FeatureOfInterest", "core:Thing"], False),
+    "zone":           (["sosa:FeatureOfInterest", "core:Thing"], False),
+    # ── Settable parameters / helpers (user-controllable values) ─────────────
+    "input_boolean":  (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
+    "input_number":   (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
+    "input_button":   (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
+    "input_select":   (["syn:Parameter", "core:Thing"], False),
+    "input_text":     (["syn:Parameter", "core:Thing"], False),
+    "input_datetime": (["syn:Parameter", "core:Thing"], False),
+    # ── Processes / behaviours (intangible — NOT devices) ────────────────────
+    "automation":     (["syn:Automation", "prov:Activity", "core:Thing"], False),
+    "script":         (["syn:Script", "prov:Activity", "core:Thing"], False),
+    "scene":          (["syn:Scene", "prov:Activity", "core:Thing"], False),
 }
 _DEFAULT_TYPES: tuple[list[str], bool] = (["saref:Device", "core:Thing"], False)
+
+
+# ── device_class refinement ───────────────────────────────────────────────────
+# Where HA exposes a device_class AND core SAREF has a matching subclass, promote
+# the entity to that more specific type. Only VERIFIED core-SAREF classes are
+# listed here; every other device_class keeps the generic domain type and stays
+# distinguishable via the syn:deviceClass literal recorded on the entity (so e.g.
+# soil-moisture vs illuminance vs uv sensors are still separable even though SAREF
+# core has no class for them).
+_DEVICE_CLASS_TYPES: dict[tuple[str, str], list[str]] = {
+    ("sensor", "temperature"):  ["saref:TemperatureSensor"],
+    ("sensor", "smoke"):        ["saref:SmokeSensor"],
+    ("binary_sensor", "smoke"): ["saref:SmokeSensor"],
+}
 
 
 # ── Small helpers ─────────────────────────────────────────────────────────────
@@ -265,7 +314,17 @@ def _device_body(
     attrs = state_obj.get("attributes") or {}
     friendly = attrs.get("friendly_name") or entity_id
     state_val = str(state_obj.get("state", ""))
+    device_class = attrs.get("device_class")
     types, is_actuator = _DOMAIN_TYPES.get(domain, _DEFAULT_TYPES)
+
+    # Refine by device_class: promote to a more specific (verified) SAREF class
+    # when one exists. Never mutate the shared list in _DOMAIN_TYPES.
+    types = list(types)
+    if device_class:
+        for t in reversed(_DEVICE_CLASS_TYPES.get((domain, str(device_class)), [])):
+            if t not in types:
+                types.insert(0, t)
+
     iri = _iri(entity_id)
     prop_iri = _prop_iri(entity_id)
 
@@ -277,6 +336,9 @@ def _device_body(
     lines.append(f"  a {type_str} ;")
     lines.append(f'  rdfs:label "{_esc(friendly)}" ;')
     lines.append(f"  syn:state {_literal(state_val)} ;")
+    if device_class:
+        # Keep the fine-grained HA classification even when SAREF has no class.
+        lines.append(f'  syn:deviceClass "{_esc(str(device_class))}" ;')
     if is_actuator:
         lines.append(f"  ssn:hasProperty {prop_iri} ;")
 
@@ -289,11 +351,12 @@ def _device_body(
     lines.append(f"  prov:wasAttributedTo {BRIDGE_AGENT_IRI} .")
     lines.append("")
 
-    # Observable/actuatable property
+    # Observable/actuatable property — labelled domain or domain/device_class
     prop_type = "sosa:ActuatableProperty" if is_actuator else "sosa:ObservableProperty"
+    prop_label = f"{domain}/{device_class}" if device_class else domain
     lines.append(f"{prop_iri}")
     lines.append(f"  a {prop_type} ;")
-    lines.append(f'  rdfs:label "{_esc(domain)}" .')
+    lines.append(f'  rdfs:label "{_esc(prop_label)}" .')
     lines.append("")
 
     return "\n".join(lines)

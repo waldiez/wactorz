@@ -1,5 +1,6 @@
 import json
 import importlib.util
+import sys
 import unittest
 from unittest import mock
 
@@ -7,6 +8,9 @@ if importlib.util.find_spec("mcp") is None:
     mcp_server = None
     MCP_IMPORT_ERROR = "mcp optional dependency is not installed"
 else:
+    aiohttp_module = sys.modules.get("aiohttp")
+    if aiohttp_module is not None and not hasattr(aiohttp_module, "__path__"):
+        sys.modules.pop("aiohttp", None)
     from wactorz.interfaces import mcp_server
 
     MCP_IMPORT_ERROR = ""

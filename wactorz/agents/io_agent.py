@@ -15,6 +15,7 @@ import logging
 import time
 
 from ..core.actor import Actor, ActorState, Message, MessageType
+from ..core.mqtt import mqtt_client
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,9 @@ class IOAgent(Actor):
     def __init__(self, **kwargs):
         kwargs.setdefault("name", "io-agent")
         super().__init__(**kwargs)
-        self.protected = False
+        # The io-agent is core infrastructure (the chat/IO gateway) — it must
+        # survive a "Wipe everything" reset like the other system actors.
+        self.protected = True
         self._pending_replies: dict[str, tuple[str, float]] = {}
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
@@ -66,7 +69,7 @@ class IOAgent(Actor):
         _last_chat_exc: str | None = None
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe(IO_CHAT_TOPIC, qos=1)
                     _last_chat_exc = None
                     async for mqtt_msg in client.messages:

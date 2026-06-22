@@ -293,6 +293,36 @@ def _build_catalog() -> dict:
         }
         logger.info("[catalog] Loaded manual-agent recipe")
 
+    # ── timeseries-collector ───────────────────────────────────────────────
+    code = _load_recipe("timeseries_collector_agent.py")
+    if code:
+        catalog["timeseries-collector"] = {
+            "name":         "timeseries-collector",
+            "type":         "dynamic",
+            "description":  "Collects device data from MQTT (sensors, detections, HA state changes, Sinergym) and writes it to SQLite time-series tables for historical queries and ML training. Batched writes, auto-pruned by retention window. No LLM.",
+            "capabilities": ["timeseries", "data_collection", "sensor_history", "ml_data",
+                             "mqtt_subscriber", "monitoring"],
+            "install":      ["aiomqtt"],
+            "input_schema": {
+                "action":               "str  — stats|prune|flush",
+                "topics":               "list  — MQTT topic patterns to collect (default: sensors/#, detections, HA state, sinergym)",
+                "batch_interval":       "float — seconds between SQLite flushes (default: 5.0)",
+                "batch_size":           "int  — buffered-row hint before flush (default: 200)",
+                "retention_days":       "int  — auto-prune data older than N days (default: 90)",
+                "prune_interval_hours": "float — hours between prune passes (default: 6.0)",
+            },
+            "output_schema": {
+                "total_received": "int  — MQTT messages seen",
+                "total_written":  "int  — rows written to SQLite",
+                "buffer_sizes":   "dict — pending rows per buffer",
+                "table_rows":     "dict — row counts per table",
+                "retention_days": "int",
+            },
+            "poll_interval": 3600,
+            "code":          code,
+        }
+        logger.info("[catalog] Loaded timeseries-collector recipe")
+
     return catalog
 
 

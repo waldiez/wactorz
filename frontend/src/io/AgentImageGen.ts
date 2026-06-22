@@ -1,4 +1,8 @@
 /**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/**
  * Agent profile image resolution.
  *
  * Priority order:
@@ -10,80 +14,69 @@
 
 import type { AgentInfo } from "../types/agent";
 
-// ── Static waldiez avatar mapping ─────────────────────────────────────────────
+/**
+ * Ordered avatar mapping rules. The first rule whose `exact` name, `names`
+ * substring, or `types` substring matches wins — order encodes priority.
+ */
+interface AvatarRule {
+    avatar: string;
+    exact?: string[];
+    names?: string[];
+    types?: string[];
+}
+
+const AVATAR_RULES: AvatarRule[] = [
+    // Orchestrator / main actor
+    { avatar: "captain.webp", exact: ["main", "main-actor"], types: ["orchestrator"] },
+    // Monitor / supervisor / anomaly-detector
+    { avatar: "manager.webp", names: ["monitor", "anomaly"], types: ["monitor"] },
+    // Code execution / dynamic / reasoning
+    { avatar: "reasoning.webp", names: ["code", "dynamic", "reasoning"], types: ["script"] },
+    // Manual / assistant / knowledge / udx
+    { avatar: "assistant.webp", names: ["manual", "assistant", "udx", "rag"] },
+    // Remote / home-assistant / nautilus
+    { avatar: "remote.webp", names: ["home-assistant", "nautilus", "remote"] },
+    // IO / user gateway
+    { avatar: "user.webp", names: ["io"], types: ["gateway", "io"] },
+    // Docs / knowledge
+    { avatar: "rag.webp", names: ["docs", "rag"] },
+];
 
 /** Maps agent name / type keywords → a static WebP path under /avatars/. */
 function staticAvatar(name: string, type?: string): string | null {
-  const n = name.toLowerCase();
-  const t = (type ?? "").toLowerCase();
+    const n = name.toLowerCase();
+    const t = (type ?? "").toLowerCase();
 
-  // Orchestrator / main actor
-  if (n === "main" || n === "main-actor" || t.includes("orchestrator"))
-    return "/avatars/captain.webp";
+    for (const rule of AVATAR_RULES) {
+        const hit =
+            rule.exact?.includes(n) ||
+            rule.names?.some(k => n.includes(k)) ||
+            rule.types?.some(k => t.includes(k));
+        if (hit) {
+            return `./avatars/${rule.avatar}`;
+        }
+    }
 
-  // Monitor / supervisor / anomaly-detector
-  if (n.includes("monitor") || n.includes("anomaly") || t.includes("monitor"))
-    return "/avatars/manager.webp";
-
-  // Code execution / dynamic / reasoning
-  if (
-    n.includes("code") ||
-    n.includes("dynamic") ||
-    n.includes("reasoning") ||
-    t.includes("script")
-  )
-    return "/avatars/reasoning.webp";
-
-  // Manual / assistant / knowledge / udx
-  if (
-    n.includes("manual") ||
-    n.includes("assistant") ||
-    n.includes("udx") ||
-    n.includes("rag")
-  )
-    return "/avatars/assistant.webp";
-
-  // Remote / home-assistant / nautilus
-  if (
-    n.includes("home-assistant") ||
-    n.includes("nautilus") ||
-    n.includes("remote")
-  )
-    return "/avatars/remote.webp";
-
-  // IO / user gateway
-  if (n.includes("io") || t.includes("gateway") || t.includes("io"))
-    return "/avatars/user.webp";
-
-  // Docs / knowledge / fuseki
-  if (n.includes("fuseki") || n.includes("docs") || n.includes("rag"))
-    return "/avatars/rag.webp";
-
-  return null; // fall through to DiceBear
+    return null; // fall through to DiceBear
 }
-
-// ── DiceBear fallback ─────────────────────────────────────────────────────────
 
 function dicebearUrl(name: string): string {
-  return (
-    `https://api.dicebear.com/9.x/bottts-neutral/svg` +
-    `?seed=${encodeURIComponent(name)}&backgroundColor=0d1117,111827&radius=50`
-  );
+    return (
+        `https://api.dicebear.com/9.x/bottts-neutral/svg` +
+        `?seed=${encodeURIComponent(name)}&backgroundColor=0d1117,111827&radius=50`
+    );
 }
 
-// ── Service ───────────────────────────────────────────────────────────────────
-
 export class AgentImageGen {
-  private cache = new Map<string, string>();
+    private cache = new Map<string, string>();
 
-  get(agent: Pick<AgentInfo, "id" | "name"> & { agentType?: string }): string {
-    if (!this.cache.has(agent.id)) {
-      const url =
-        staticAvatar(agent.name, agent.agentType) ?? dicebearUrl(agent.name);
-      this.cache.set(agent.id, url);
+    get(agent: Pick<AgentInfo, "id" | "name"> & { agentType?: string }): string {
+        if (!this.cache.has(agent.id)) {
+            const url = staticAvatar(agent.name, agent.agentType) ?? dicebearUrl(agent.name);
+            this.cache.set(agent.id, url);
+        }
+        return this.cache.get(agent.id)!;
     }
-    return this.cache.get(agent.id)!;
-  }
 }
 
 /** Singleton — import and call `.get(agent)` anywhere. */

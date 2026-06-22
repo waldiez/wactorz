@@ -1,24 +1,26 @@
 # Wactorz on Windows
 
-Covers x86-64 (Intel/AMD) and **ARM64** (Snapdragon X, Surface Pro X, Copilot+ PCs).
+This guide covers x86-64 and ARM64 Windows machines, including Snapdragon X,
+Surface Pro X, and Copilot+ PCs.
 
 ---
 
 ## Which option fits you?
 
-| Option | Docker needed | Rust needed | Node.js needed | ARM64 native | Best for |
-|---|---|---|---|---|---|
-| **A — Full Docker** | ✅ | ✗ | ✗ | ✅ via emulation | Fastest start, production-like |
-| **B — Dev mode** | ✅ | ✗ | ✅ | ✅ | Frontend development |
-| **C — Native binary** | partial | ✅ | ✅ | ✅ | Maximum performance, SSH access |
+| Option | Docker needed | Node.js needed | Best for |
+|---|---|---|---|
+| **A - Docker Compose** | yes | no | Full local stack from a repo clone |
+| **B - Docker Hub image** | yes | no | Fastest run without building locally |
+| **C - Frontend dev mode** | yes | yes | Dashboard development with mock agents |
 
-**Recommended starting point**: Option A for a working dashboard in under 5 minutes.
+Start with Option A if you are working from the repository. Use Option B if you
+only want to run Wactorz. Use Option C when you are editing the frontend.
 
 ---
 
 ## Prerequisites
 
-### Install Windows Terminal (highly recommended)
+### Install Windows Terminal
 
 ```powershell
 winget install Microsoft.WindowsTerminal
@@ -30,8 +32,8 @@ winget install Microsoft.WindowsTerminal
 winget install Git.Git
 ```
 
-Includes **Git Bash** — a minimal Unix shell that can run `.sh` scripts.
-After install: open Git Bash from the Start menu or Windows Terminal.
+Git for Windows includes Git Bash, which is useful for shell scripts and Unix-like
+commands.
 
 ### Install Docker Desktop
 
@@ -39,101 +41,89 @@ After install: open Git Bash from the Start menu or Windows Terminal.
 winget install Docker.DockerDesktop
 ```
 
-Requires Windows 10 22H2+ or Windows 11.
 After install, open Docker Desktop and wait for the engine to start.
 
-**ARM64 note:** Docker Desktop on ARM64 Windows (Snapdragon X, Surface Pro) runs
-`linux/arm64` containers natively and `linux/amd64` via QEMU emulation.
-The pre-built Wactorz images are `linux/amd64`; they run fine on ARM64 via emulation,
-or you can build a native `linux/arm64` image yourself (see below).
+ARM64 Windows can run `linux/arm64` containers natively and `linux/amd64`
+containers through emulation. Prefer the published multi-arch images when they
+are available.
 
-### Install Node.js (needed for Options B and C)
+### Install Node.js for frontend development
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
 ```
 
-ARM64 native builds are available and installed automatically by `winget`.
-
-### Install Rust (needed for Option C)
-
-```powershell
-winget install Rustlang.Rustup
-```
-
-After install, open a new terminal and verify:
-
-```powershell
-rustc --version   # should show 1.93+
-cargo --version
-```
-
-ARM64: `rustup` installs `aarch64-pc-windows-msvc` as the default target automatically.
-The MSVC toolchain is used; the Visual Studio Build Tools are installed by `rustup`.
+Node.js is only needed for Option C.
 
 ---
 
-## Option A — Full Docker (simplest)
+## Option A - Docker Compose from the repository
 
 ```powershell
 git clone https://github.com/waldiez/wactorz
 cd wactorz
-
-# Copy the example env and set your LLM key
 copy .env.template .env
-notepad .env   # set LLM_API_KEY at minimum
+notepad .env
 ```
+
+Set `LLM_API_KEY` for cloud providers, or configure Ollama in `.env`.
+
+Start the Python stack:
 
 ```powershell
-docker compose up -d
+docker compose --profile python up -d
 ```
 
-Open **http://localhost/** — all agents should appear within a few seconds.
+Open:
 
-To stop:
+- Dashboard: http://localhost:8888
+- REST API: http://localhost:8000
+- Prometheus: http://localhost:9090
+
+Stop the stack:
 
 ```powershell
 docker compose down
 ```
 
-### ARM64 note for Option A
-
-The default `compose.yaml` pulls `linux/amd64` images and runs them via QEMU.
-Performance is acceptable for development. For better performance, build a native image:
+To include the bundled Home Assistant dev container:
 
 ```powershell
-docker buildx build --platform linux/arm64 --tag wactorz-server:local --load .\rust
-```
-
-Then in `compose.yaml`, change:
-
-```yaml
-wactorz:
-  image: wactorz-server:local   # ← replace the build section with this
-  platform: linux/arm64
+docker compose --profile full up -d
 ```
 
 ---
 
-## Option B — Dev mode (no Rust build, no LLM key)
+## Option B - Docker Hub image
 
-The mock simulator publishes realistic MQTT events so you can develop the frontend
-without a running Rust backend.
+Use the Docker Hub quickstart when you do not need a repo clone:
+
+[Quickstart: Docker Hub](dockerhub.md)
+
+This is the simplest option for trying Wactorz on Windows.
+
+---
+
+## Option C - Frontend dev mode
+
+The mock stack publishes realistic MQTT activity so you can develop the dashboard
+without a live LLM key or Home Assistant instance.
+
+Terminal 1:
 
 ```powershell
-# Terminal 1 — MQTT broker + mock agents
 docker compose -f compose.dev.yaml up -d
+```
 
-# Terminal 2 — Vite dev server (hot-reload)
+Terminal 2:
+
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-Open **http://localhost:3000**.
-
-8 agents appear immediately (main-actor, monitor-agent, io-agent, qa-agent, nautilus,
-udx, weather, news). Chat, heartbeats, alerts, and dynamic spawns are all simulated.
+Open http://localhost:3000.
 
 To stop the mock stack:
 
@@ -143,175 +133,32 @@ docker compose -f compose.dev.yaml down
 
 ---
 
-## Option C — Native binary on Windows
+## Running Shell Scripts on Windows
 
-The Rust binary runs directly on Windows. Only Mosquitto runs in Docker.
+Use Git Bash or WSL2 for repository scripts that expect a Unix shell.
 
-### 1. Clone and configure
-
-```powershell
-git clone https://github.com/waldiez/wactorz
-cd wactorz
-copy .env.template .env
-notepad .env   # set LLM_API_KEY and MQTT_HOST=localhost
-```
-
-### 2. Build the frontend
-
-```powershell
-cd frontend
-npm install
-npm run build   # → frontend\dist\
-cd ..
-```
-
-### 3. Build the Rust binary
-
-```powershell
-cd rust
-cargo build --release --bin wactorz
-cd ..
-```
-
-The binary is at `rust\target\release\wactorz.exe`.
-
-**ARM64**: `cargo build` uses the native `aarch64-pc-windows-msvc` target by default —
-no cross-compilation flags needed. First build takes ~5-8 min (downloading + compiling
-dependencies); subsequent builds are ~30 s.
-
-### 4. Start Mosquitto
-
-```powershell
-docker compose -f compose.native.yaml up -d mosquitto
-```
-
-### 5. Serve the frontend
-
-**Option 5a — Use Docker nginx** (simplest):
-
-```powershell
-docker compose -f compose.native.yaml up -d
-```
-
-**Option 5b — Use a simple static server** (no Docker nginx):
-
-```powershell
-cd frontend
-npx serve dist -p 80
-```
-
-Or install nginx for Windows and point `root` to `frontend\dist\`.
-
-### 6. Start wactorz
-
-In PowerShell:
-
-```powershell
-# Load .env variables into the current session
-Get-Content .\.env | Where-Object { $_ -match '^\s*[^#]' } | ForEach-Object {
-    $parts = $_ -split '=', 2
-    if ($parts.Count -eq 2) { [System.Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), "Process") }
-}
-
-.\rust\target\release\wactorz.exe --no-cli
-```
-
-Or in Git Bash:
+Git Bash:
 
 ```bash
-source .env 2>/dev/null || true
-./rust/target/release/wactorz.exe --no-cli
-```
-
-Open **http://localhost/** (nginx) or **http://localhost:3000** (Vite dev server).
-
----
-
-## Cross-compiling for Linux deployment
-
-If you develop on Windows but deploy to a Linux server, you need a Linux binary.
-
-### Option X1 — Docker buildx (easiest, works on all Windows)
-
-```powershell
-docker buildx build --platform linux/amd64 --tag wactorz:linux --load .\rust
-```
-
-Extract the binary from the image:
-
-```powershell
-$id = docker create --platform linux/amd64 wactorz:linux
-docker cp "${id}:/app/wactorz" .\wactorz-linux-amd64
-docker rm $id
-```
-
-### Option X2 — WSL2 (fastest compilation, native Linux toolchain)
-
-```powershell
-# Install WSL2 with Ubuntu
-wsl --install
-
-# Inside WSL2:
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source ~/.cargo/env
-cd /mnt/c/Users/<your-name>/wactorz/rust
-cargo build --release --bin wactorz
-# → target/release/wactorz  (native linux/amd64 binary)
-```
-
-### Option X3 — Cross-compile to linux/arm64 (for ARM64 server targets)
-
-```powershell
-rustup target add aarch64-unknown-linux-gnu
-# Install a cross-linker via the 'cross' tool:
-cargo install cross
-cross build --release --bin wactorz --target aarch64-unknown-linux-gnu
-```
-
----
-
-## Running bash scripts (`deploy.sh`, `package-native.sh`, etc.)
-
-The `scripts/` directory contains bash (`.sh`) scripts. On Windows, run them via:
-
-### Git Bash (simplest)
-
-```bash
-# Open Git Bash terminal, then:
 cd /c/Users/<your-name>/wactorz
-bash scripts/deploy.sh
+./run.sh
 ```
 
-### WSL2 (best compatibility)
+WSL2:
 
 ```bash
-# Inside WSL2 Ubuntu:
 cd /mnt/c/Users/<your-name>/wactorz
-bash scripts/deploy.sh
+./run.sh
 ```
 
-### PowerShell equivalent (no bash needed)
-
-The three most common script tasks can be done directly in PowerShell:
-
-```powershell
-# Build frontend
-cd frontend; npm run build; cd ..
-
-# Build Rust binary
-cd rust; cargo build --release --bin wactorz; cd ..
-
-# rsync to remote (requires OpenSSH + rsync; easiest via Git Bash or WSL2)
-# PowerShell alternative: use SCP
-scp -r .\frontend\dist\ user@host:/opt/wactorz/frontend/
-scp .\rust\target\release\wactorz user@host:/opt/wactorz/wactorz
-```
+PowerShell can run Docker and npm commands directly, but it does not execute
+`.sh` scripts without a shell.
 
 ---
 
-## SSH keys (NautilusAgent + deploy)
+## SSH Keys for NautilusAgent
 
-Windows 10/11 includes OpenSSH Client. Generate a deploy key:
+Windows 10 and 11 include OpenSSH Client. Generate a dedicated key:
 
 ```powershell
 ssh-keygen -t ed25519 -C "wactorz-deploy" -f "$env:USERPROFILE\.ssh\wactorz_deploy" -N '""'
@@ -323,59 +170,37 @@ Copy the public key to the remote host:
 type "$env:USERPROFILE\.ssh\wactorz_deploy.pub" | ssh user@host "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
 ```
 
-Set in `.env`:
+Set the key path in `.env`:
 
 ```env
 NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy
 ```
 
-**NautilusAgent `rsync` command**: `rsync` is not available natively on Windows.
-Options:
-- Use WSL2 (rsync is installed by default)
-- Install `rsync` via Chocolatey: `choco install rsync`
-- Use Git for Windows rsync: `C:\Program Files\Git\usr\bin\rsync.exe`
-
-For the last option, ensure Git Bash's `bin` is on `PATH` or point `NAUTILUS_RSYNC_PATH`
-to the binary.
+`rsync` is not available natively on Windows. For NautilusAgent file sync, use
+WSL2, install `rsync` with Chocolatey, or point `NAUTILUS_RSYNC_PATH` at Git for
+Windows' rsync binary if installed.
 
 ---
 
-## ARM64 Windows — summary
+## Environment Variable Gotchas
 
-| Task | Status | Notes |
-|---|---|---|
-| `docker compose up -d` | ✅ | Runs linux/amd64 via QEMU; native arm64 with custom build |
-| `npm install && npm run dev` | ✅ | Node.js has native ARM64 Windows builds |
-| `cargo build --release` | ✅ | Produces native `aarch64-pc-windows-msvc` `.exe` |
-| Cross-compile to linux/amd64 | ✅ slow | Docker buildx uses QEMU (~10-15 min first build) |
-| Cross-compile to linux/arm64 | ✅ fast | `cross` + `aarch64-unknown-linux-gnu` target |
-| `bash scripts/deploy.sh` | via WSL2 | Or Git Bash |
-| NautilusAgent ssh | ✅ | Windows OpenSSH Client included |
-| NautilusAgent rsync | via WSL2 | Or Chocolatey `rsync` |
+Save `.env` as UTF-8 without BOM. VS Code and modern Notepad are usually fine.
 
----
-
-## Environment variable gotchas
-
-**`.env` file encoding**: save as **UTF-8 without BOM**. Notepad on Windows 11 defaults
-to UTF-8; older Notepad may default to ANSI. Use VS Code or Notepad++ if unsure.
-
-**Path separators**: in `.env`, always use forward slashes or escaped backslashes:
+Use forward slashes or escaped backslashes for paths:
 
 ```env
-# ✅ Works on all platforms
 NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy
-
-# ✅ Also works
 NAUTILUS_SSH_KEY=C:/Users/alice/.ssh/wactorz_deploy
+```
 
-# ❌ Will fail — backslash is escape character in some parsers
+Avoid unescaped Windows backslashes:
+
+```env
 NAUTILUS_SSH_KEY=C:\Users\alice\.ssh\wactorz_deploy
 ```
 
-**Line endings**: the `.env` file should use LF (Unix) endings. If you edit with
-Notepad, it may add CRLF (`\r\n`) which can break the parser. In VS Code:
-click the `CRLF` indicator in the bottom-right status bar → change to `LF`.
+If a shell script reads `.env`, LF line endings are safest. In VS Code, click the
+line-ending indicator in the status bar and choose `LF`.
 
 ---
 
@@ -383,107 +208,75 @@ click the `CRLF` indicator in the bottom-right status bar → change to `LF`.
 
 ### `docker: command not found` in Git Bash
 
-Docker Desktop adds itself to PATH for PowerShell and CMD but not always Git Bash.
-Run Docker commands in PowerShell, or add Docker to Git Bash's PATH:
+Docker Desktop may be available in PowerShell but not Git Bash. Run Docker
+commands in PowerShell, or add Docker to Git Bash's `PATH`:
 
 ```bash
 export PATH="$PATH:/c/Program Files/Docker/Docker/resources/bin"
 ```
 
-### `cargo build` fails: `link.exe not found`
+### Docker Desktop is not running
 
-The MSVC linker is missing. Install Visual Studio Build Tools:
+Open Docker Desktop from the Start menu and wait for the engine to start. Then
+rerun the Docker command.
 
-```powershell
-winget install Microsoft.VisualStudio.2022.BuildTools
-```
+### Port already in use
 
-During install, select **"Desktop development with C++"** workload.
-
-### Port 80 already in use
-
-IIS (Internet Information Services) often occupies port 80 on Windows.
-Either stop IIS or change the port in `.env`:
+Change the host port in `.env` or stop the process using that port. For example:
 
 ```env
 DASHBOARD_EXTERNAL_PORT=8080
 ```
 
-Then open **http://localhost:8080/**.
-
-To stop IIS temporarily:
-
-```powershell
-net stop w3svc
-```
+Then open http://localhost:8080.
 
 ### `MQTT_HOST` connection refused
 
-Ensure Mosquitto is running:
+For Docker Compose, use the service name inside the Docker network:
 
-```powershell
-docker compose -f compose.native.yaml ps
+```env
+MQTT_HOST=mosquitto
 ```
 
-For native binary mode, set `MQTT_HOST=localhost` in `.env` (not `mosquitto`).
+For a local Python process talking to a broker published on the host, use:
 
-### ARM64: Docker image `exec format error`
-
-The pulled image is `linux/amd64`; you need to enable QEMU emulation in Docker Desktop:
-Settings → Docker Engine → add `"experimental": true`.
-Or build a native `linux/arm64` image:
-
-```powershell
-docker buildx build --platform linux/arm64 --tag wactorz-server:arm64 --load .\rust
+```env
+MQTT_HOST=localhost
 ```
 
-Then update `compose.yaml` to use `image: wactorz-server:arm64` and `platform: linux/arm64`.
-
-### `rsync: command not found` (NautilusAgent)
-
-Install via Chocolatey:
+Check the broker container:
 
 ```powershell
-# Install Chocolatey first if needed:
-Set-ExecutionPolicy Bypass -Scope Process -Force
-[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-
-# Then install rsync:
-choco install rsync
+docker compose ps
 ```
 
-Or use WSL2 where rsync comes pre-installed.
+### ARM64 image issues
+
+If Docker reports an architecture error, update Docker Desktop and make sure it
+can run emulated Linux containers. Prefer published multi-arch images where
+possible.
 
 ---
 
-## Recommended setup for ARM64 Windows (Copilot+ / Snapdragon X)
+## Recommended ARM64 Windows Setup
 
 ```powershell
-# 1. Install prerequisites
-winget install Git.Git Microsoft.WindowsTerminal OpenJS.NodeJS.LTS Rustlang.Rustup Docker.DockerDesktop
+winget install Git.Git Microsoft.WindowsTerminal OpenJS.NodeJS.LTS Docker.DockerDesktop
+wsl --install
 
-# 2. Enable WSL2 (for bash scripts and rsync)
-wsl --install   # installs Ubuntu by default; reboot when prompted
-
-# 3. Clone the repo
 git clone https://github.com/waldiez/wactorz
 cd wactorz
 copy .env.template .env
-notepad .env   # set LLM_API_KEY
+notepad .env
 
-# 4. Start the mock dev stack (no Rust build needed)
-docker compose -f compose.dev.yaml up -d
-cd frontend && npm install && npm run dev
-
-# → http://localhost:3000  ✓
+docker compose --profile python up -d
 ```
 
-To move to a full stack later, build in WSL2 (faster than QEMU cross-compile):
+For frontend work:
 
-```bash
-# In WSL2:
-cd /mnt/c/Users/<you>/wactorz/rust
-cargo build --release --bin wactorz
-# Produces native linux/amd64 binary for deployment
+```powershell
+docker compose -f compose.dev.yaml up -d
+cd frontend
+npm install
+npm run dev
 ```

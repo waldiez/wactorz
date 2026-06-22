@@ -108,7 +108,7 @@ const UDX_RESPONSES = [
   "**UDX** here! Type `help` for a full command list, or try `docs architecture`, `explain mqtt`, `agents`, or `status`.",
   "**Wactorz actors** communicate via MQTT topics only — no shared state, no locks. Try `explain actor-model` for details.",
   "**Live agents** in this session: main-actor (orchestrator), monitor-agent (watchdog), io-agent (gateway), nautilus-agent (SSH/rsync), udx-agent (that's me!). Use `agents` for the full list.",
-  "**Deployment tip**: run `bash scripts/package-native.sh` to produce a self-contained `wactorz-native-*.tar.gz` (~12 MB) that runs without Docker. Use `docs deploy` for the full guide.",
+  "**Deployment tip**: use `docker compose --profile python up -d` for the local stack, or the Home Assistant add-on for HAOS/Supervised installs. Use `docs deploy` for the full guide.",
   "**NautilusAgent** bridges SSH/rsync — try `@nautilus-agent ping user@host`. Arguments are never shell-interpolated, so injection attacks are impossible.",
   "**MQTT topic structure**: `agents/{id}/spawn|heartbeat|status|alert|chat` + `system/health` + `io/chat`. Use `docs mqtt` for the full reference.",
   "**REST API** lives at `/api/`. Quick ref: `GET /api/actors`, `POST /api/actors/:id/pause`, `DELETE /api/actors/:id`. Use `docs api` for all endpoints.",

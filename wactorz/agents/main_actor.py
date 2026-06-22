@@ -12,6 +12,7 @@ from typing import Optional
 from wactorz.config import CONFIG
 
 from ..core.actor import Actor, Message, MessageType, ActorState
+from ..core.mqtt import mqtt_client
 from .llm_agent import LLMAgent, LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -1283,6 +1284,11 @@ class MainActor(LLMAgent):
     def get_user_facts(self) -> dict:
         return self.recall("_user_facts") or {}
 
+    def _preferred_timezone_name(self) -> Optional[str]:
+        """Main knows the user's timezone from facts — use it so the live
+        date/time block matches what the scheduler actually fires against."""
+        return self.get_user_facts().get("pref_timezone")
+
     def _get_running_agents_summary(self) -> str:
         """
         Build a short, authoritative description of currently running agents
@@ -2160,7 +2166,7 @@ class MainActor(LLMAgent):
             lines = [f"Active pipeline rules ({len(rules)}):"]
             for rule_id, rule in sorted(rules.items(), key=lambda x: x[1].get("created_at", 0)):
                 agents = rule.get("agents", [])
-                task = rule.get("task", "")[:80]
+                task = rule.get("task", "")[:]
                 import datetime
                 ts = rule.get("created_at", 0)
                 created = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "unknown"
@@ -2703,7 +2709,7 @@ class MainActor(LLMAgent):
                 async def _wait_reply():
                     try:
                         import aiomqtt
-                        async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                        async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                             await client.subscribe(reply_topic)
                             async for msg in client.messages:
                                 try:
@@ -4388,6 +4394,23 @@ import time as _t
 _SYSTEM_PROMPT = {system_prompt_literal}
 _MAX_HISTORY   = {max_history}
 
+
+def _now_block():
+    # Recomputed every task so the agent always sees the real present moment
+    # (process-local zone — honors the host TZ env var). Kept self-contained so
+    # the synthesized agent has no import dependency on llm_agent. Newlines are
+    # built with chr(10) to avoid backslash-escaping through the code template.
+    from datetime import datetime as _dt
+    _n = _dt.now().astimezone()
+    _nl = chr(10)
+    return (
+        "== CURRENT DATE & TIME (live) ==" + _nl
+        + "It is now " + _n.strftime("%A, %d %B %Y, %H:%M %Z")
+        + " (UTC" + _n.strftime("%z") + ")." + _nl
+        + "Trust this over training data; resolve 'today'/'tomorrow' against it."
+        + _nl + _nl
+    )
+
 async def setup(agent):
     # Conversation history may have been shipped via _initial_state at spawn
     # time — agent.recall() finds it. If this is a fresh spawn, default to
@@ -4420,7 +4443,7 @@ async def handle_task(agent, payload):
         if isinstance(m, dict) and m.get("role") in ("user", "assistant")
     ]
 
-    response = await agent.chat(safe_history, system=_SYSTEM_PROMPT)
+    response = await agent.chat(safe_history, system=_now_block() + _SYSTEM_PROMPT)
     duration = _t.time() - started
 
     history.append({{"role": "assistant", "content": response, "ts": _t.time()}})
@@ -4753,7 +4776,7 @@ async def handle_task(agent, payload):
         _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("agents/+/manifest")
                     logger.info("[main] Subscribed to agent manifests.")
                     _last_exc_str = None
@@ -4906,7 +4929,7 @@ async def handle_task(agent, payload):
         _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("nodes/+/state_return")
                     logger.info("[main] Subscribed to state_return topics.")
                     _last_exc_str = None
@@ -5450,7 +5473,7 @@ async def handle_task(agent, payload):
         _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("nodes/+/heartbeat")
                     await client.subscribe("nodes/+/migrate_result")
                     logger.info("[main] Subscribed to node heartbeats.")
@@ -5694,7 +5717,7 @@ async def handle_task(agent, payload):
         _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe("main/llm_request")
                     logger.info("[main] LLM bridge listening on main/llm_request")
                     _last_exc_str = None
@@ -5815,7 +5838,7 @@ async def handle_task(agent, payload):
 
         while self.state.value not in ("stopped", "failed"):
             try:
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     for pattern in ("agents/+/data/#", "custom/#", "sensors/#"):
                         await client.subscribe(pattern)
                     async for msg in client.messages:
@@ -5935,7 +5958,7 @@ async def handle_task(agent, payload):
         async def _wait_reply():
             try:
                 import aiomqtt
-                async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe(reply_topic)
                     async for msg in client.messages:
                         try:

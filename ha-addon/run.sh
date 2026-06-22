@@ -53,6 +53,10 @@ esac
 export MQTT_HOST=$(get_config_safe 'mqtt_host' 'core-mosquitto')
 export MQTT_PORT=$(get_config_safe 'mqtt_port' '1883')
 export MQTT_WS_PORT=$(get_config_safe 'mqtt_ws_port' '8083')
+# Optional broker credentials (blank = anonymous). Needed for the official
+# Mosquitto addon and any broker with allow_anonymous false.
+export MQTT_USERNAME=$(get_config_safe 'mqtt_username' '')
+export MQTT_PASSWORD=$(get_config_safe 'mqtt_password' '')
 
 # Home Assistant Config
 HA_URL=$(get_config_safe 'ha_url' '')
@@ -75,10 +79,6 @@ export HOME_ASSISTANT_TOKEN="$HA_TOKEN"
 
 # Other Integrations
 export API_KEY=$(get_config_safe 'api_key' '')
-export FUSEKI_URL=$(get_config_safe 'fuseki_url' 'http://localhost:3030')
-export FUSEKI_DATASET=$(get_config_safe 'fuseki_dataset' 'wactorz')
-export FUSEKI_USER=$(get_config_safe 'fuseki_user' 'admin')
-export FUSEKI_PASSWORD=$(get_config_safe 'fuseki_password' 'admin')
 
 export DISCORD_BOT_TOKEN=$(get_config_safe 'discord_bot_token' '')
 export TELEGRAM_BOT_TOKEN=$(get_config_safe 'telegram_bot_token' '')
@@ -100,11 +100,16 @@ fi
 
 # Embedded services
 MOSQUITTO_EMBEDDED=$(get_config_safe 'mosquitto_embedded' 'false')
-FUSEKI_EMBEDDED=$(get_config_safe 'fuseki_embedded' 'false')
 
 # Application Settings
 export INTERFACE=rest
 export PORT=8000
+
+# Durable state directory. /data is addon-private and survives addon updates,
+# so chat history / pickle / SQLite state is not lost on rebuild. Pinned here
+# as an absolute path instead of relying on CWD.
+export WACTORZ_STATE_DIR=/data/state
+mkdir -p "$WACTORZ_STATE_DIR"
 
 # Logging
 if [ -n "$HA_TOKEN" ]; then ha_token_state="set"; else ha_token_state="empty"; fi
@@ -119,7 +124,17 @@ fi
 if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
     bashio::log.info "Starting embedded Mosquitto MQTT broker..."
 
+    # Persist retained messages under /data so the live overview (agents grid,
+    # cost, state) survives addon restarts AND updates. /data is addon-private
+    # and preserved across image rebuilds.
+    mkdir -p /data/mosquitto
+
     cat > /tmp/mosquitto.conf << 'MQTTEOF'
+# Stay as root so the broker can write the persistence DB under /data
+# (started as root, mosquitto otherwise drops to the unprivileged
+# "mosquitto" user, which cannot write the root-owned /data/mosquitto).
+user root
+
 # TCP listener
 listener 1883
 allow_anonymous true
@@ -129,15 +144,19 @@ listener 8083
 protocol websockets
 allow_anonymous true
 
-persistence false
+persistence true
+persistence_location /data/mosquitto/
+autosave_interval 30
 MQTTEOF
 
     mosquitto -c /tmp/mosquitto.conf &
 
-    # Override wactorz MQTT config to use the local broker
+    # Override wactorz MQTT config to use the local broker (anonymous)
     export MQTT_HOST="localhost"
     export MQTT_PORT="1883"
     export MQTT_WS_PORT="8083"
+    export MQTT_USERNAME=""
+    export MQTT_PASSWORD=""
 
     # Wait until Mosquitto is accepting connections (up to 15 s)
     i=0
@@ -151,85 +170,31 @@ MQTTEOF
     bashio::log.info "Embedded Mosquitto ready on 1883/8083"
 fi
 
-# ── Embedded Fuseki ───────────────────────────────────────────────────────────
-if [ "$FUSEKI_EMBEDDED" = "true" ]; then
-    bashio::log.info "Starting embedded Apache Jena Fuseki on :3030 (dataset: ${FUSEKI_DATASET})..."
-
-    export FUSEKI_HOME=/opt/fuseki
-    export FUSEKI_BASE=/share/fuseki
-
-    mkdir -p "${FUSEKI_BASE}/databases/${FUSEKI_DATASET}" \
-             "${FUSEKI_BASE}/configuration" \
-             "${FUSEKI_BASE}/logs"
-
-    # Write shiro.ini every boot so credential changes take effect on restart
-    cat > "${FUSEKI_BASE}/shiro.ini" << EOF
-[main]
-ssl.enabled = false
-credentialsMatcher = org.apache.shiro.authc.credential.SimpleCredentialsMatcher
-iniRealm.credentialsMatcher = \$credentialsMatcher
-
-[users]
-${FUSEKI_USER} = ${FUSEKI_PASSWORD}, admin
-
-[roles]
-admin = *
-
-[urls]
-/\$/metrics = anon
-/\$/ping    = anon
-/**        = authcBasic, roles[admin]
-EOF
-
-    # Write TDB2 dataset config on first boot
-    CONF="${FUSEKI_BASE}/configuration/${FUSEKI_DATASET}.ttl"
-    if [ ! -f "$CONF" ]; then
-        cat > "$CONF" << EOF
-@prefix fuseki:  <http://jena.apache.org/fuseki#> .
-@prefix rdf:     <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
-@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix tdb2:    <http://jena.apache.org/2016/tdb#> .
-@prefix ja:      <http://jena.hpl.hp.com/2005/11/Assembler#> .
-
-<#service_${FUSEKI_DATASET}>
-    rdf:type              fuseki:Service ;
-    rdfs:label            "${FUSEKI_DATASET}" ;
-    fuseki:name           "${FUSEKI_DATASET}" ;
-    fuseki:serviceQuery   "query", "sparql" ;
-    fuseki:serviceUpdate  "update" ;
-    fuseki:serviceUpload  "upload" ;
-    fuseki:serviceReadGraphStore  "get" ;
-    fuseki:serviceReadWriteGraphStore "data" ;
-    fuseki:dataset        <#dataset_${FUSEKI_DATASET}> ;
-    .
-
-<#dataset_${FUSEKI_DATASET}>
-    rdf:type      tdb2:DatasetTDB2 ;
-    tdb2:location "${FUSEKI_BASE}/databases/${FUSEKI_DATASET}" ;
-    .
-EOF
+# ── External broker readiness (non-embedded) ─────────────────────────────────
+# The embedded paths above already wait for their local broker. When pointing at
+# an EXTERNAL broker there was no wait, so wactorz could launch into a broker
+# that wasn't reachable yet (or rejected its anonymous connect) and stall agent
+# startup — which left the addon serving a blank page on boot. Probe briefly so
+# agents connect cleanly. Bounded: we proceed regardless (wactorz retries MQTT).
+if [ "$MOSQUITTO_EMBEDDED" != "true" ]; then
+    mqtt_auth=()
+    if [ -n "${MQTT_USERNAME:-}" ]; then
+        mqtt_auth=(-u "$MQTT_USERNAME" -P "$MQTT_PASSWORD")
     fi
-
-    # Let Fuseki find java via PATH (apk puts it at /usr/bin/java)
-    export JVM_ARGS="-Xmx512m"
-    export JAVA_TOOL_OPTIONS="${JVM_ARGS}"
-
-    "${FUSEKI_HOME}/fuseki-server" --port=3030 &
-
-    # Override wactorz to use local Fuseki
-    export FUSEKI_URL="http://localhost:3030"
-
-    # Wait for Fuseki to accept requests (Java startup can take 10-15 s)
-    bashio::log.info "Waiting for Fuseki to be ready..."
+    bashio::log.info "Waiting for MQTT broker at ${MQTT_HOST}:${MQTT_PORT} (up to 15s)..."
     i=0
-    while [ $i -lt 60 ]; do
-        if curl -sf "http://localhost:3030/\$/ping" > /dev/null 2>&1; then
-            bashio::log.info "Fuseki ready (dataset: ${FUSEKI_DATASET}, data: ${FUSEKI_BASE}/databases/${FUSEKI_DATASET})"
+    while [ $i -lt 15 ]; do
+        if mosquitto_pub -h "$MQTT_HOST" -p "$MQTT_PORT" "${mqtt_auth[@]}" \
+               -t "wactorz/probe" -m "" -q 0 2>/dev/null; then
+            bashio::log.info "MQTT broker reachable at ${MQTT_HOST}:${MQTT_PORT}"
             break
         fi
         sleep 1
         i=$((i+1))
     done
+    if [ $i -ge 15 ]; then
+        bashio::log.warning "MQTT broker ${MQTT_HOST}:${MQTT_PORT} not reachable after 15s — starting anyway (wactorz keeps retrying; the UI is up regardless)."
+    fi
 fi
 
 if [ -d /data ]; then

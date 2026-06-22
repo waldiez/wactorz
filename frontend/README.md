@@ -1,13 +1,12 @@
 # Wactorz Frontend
 
 Vite + TypeScript single-page application that visualises a running Wactorz agent system.
-Renders a live dashboard over a Babylon.js canvas with HTML/CSS overlays.
+Renders a live dashboard as HTML/CSS card components driven by real-time MQTT events.
 
 ## Stack
 
 | Layer | Library | Purpose |
 |-------|---------|---------|
-| 3D engine | Babylon.js 8 | Galaxy / graph themes |
 | Transport | MQTT.js 5 | Real-time agent events |
 | Chat bridge | WebSocket (native) | Direct `main` agent replies |
 | IDs | `@waldiez/wid` | Time-ordered collision-resistant IDs |
@@ -22,7 +21,7 @@ frontend/
 │   ├── types/agent.ts     # Shared types (AgentInfo, ChatMessage, …)
 │   ├── mqtt/              # MQTT WebSocket client + typed event emitter
 │   ├── io/                # IOManager, WSChatClient, TTS, VoiceInput, HAClient
-│   ├── scene/             # Babylon.js engine, themes, agent nodes, effects
+│   ├── scene/             # SceneManager — agent-state store + dashboard coordinator
 │   └── ui/                # HTML overlay components (no framework)
 ├── index.html
 ├── vite.config.ts         # Dev proxy → :8000 (REST) + :8081 (WS) + :9001 (MQTT)
@@ -58,7 +57,6 @@ Components communicate exclusively through **DOM `CustomEvent`s** — no shared 
 
 | Event | Direction | Payload |
 |-------|-----------|---------|
-| `theme-change` | any → SceneManager | `{ theme: "cards"\|"social"\|"graph"\|"galaxy" }` |
 | `agent-selected` | UI → SceneManager | `{ agent: { id } }` |
 | `af-agent-command` | UI → WSChatClient | `{ command, agentId }` |
 | `af-send-message` | IOBar/CardDash → IOManager | `{ content, target }` |

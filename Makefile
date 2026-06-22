@@ -1,16 +1,12 @@
-.PHONY: help dev dev-full dev-backend dev-backend-rust precommit-install precommit-run build build-rust build-frontend check fmt lint clean \
-        up down logs shell release release-full release-native release-source \
-        run run-py test test-py test-rust parity coverage coverage-py coverage-rust ci \
-        install install-py install-docs install-dev install-frontend docs-serve docs-build publish \
-        dev-rust dev-rust-full dev-rust-down dev-rust-check \
-        dev-desktop build-desktop
+.PHONY: help dev dev-full dev-ui dev-down dev-backend precommit-install precommit-run build build-frontend build-py check fmt lint format clean \
+        up down logs shell \
+        run run-py test test-py coverage coverage-py ci \
+        install install-py install-docs install-dev install-frontend docs-serve docs-build publish
 
 COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
-RUST_API     := http://localhost:8080
 FRONTEND_DIR := frontend
-RUST_DIR     := rust
-PKG_MGR      := $(shell command -v bun /dev/null 2>/dev/null || (command -v pnpm 2>/dev/null && echo pnpm) || echo npm)
+PKG_MGR      := $(shell command -v bun >/dev/null 2>&1 && echo bun || (command -v pnpm >/dev/null 2>&1 && echo pnpm || echo npm))
 PYTHON       := python3
 
 help: ## Show this help
@@ -20,45 +16,14 @@ help: ## Show this help
 
 # ── Runtime ─────────────────────────────────────────────────────────────────
 
-run: ## Start the backend via run.sh (respects WACTORZ_BACKEND)
+run: ## Start the Python backend via run.sh
 	./run.sh
 
 run-py: ## Explicitly start the Python backend
 	WACTORZ_BACKEND=python ./run.sh
 
-dev-backend: ## Start the backend in dev mode (defaults to Python REST on :8080)
+dev-backend: ## Start the backend in dev mode (Python REST on :8080)
 	WACTORZ_DEV_MODE=1 ./run.sh
-
-dev-backend-rust: ## Start the Rust backend while keeping dev-mode defaults elsewhere
-	WACTORZ_DEV_MODE=1 WACTORZ_BACKEND=rust ./run.sh
-
-# ── Rust isolated dev ────────────────────────────────────────────────────────
-
-dev-rust: ## Start mosquitto + run Rust server natively (REST :8080, WS :8081)
-	$(COMPOSE_DEV) up -d --wait mosquitto
-	cargo run -p wactorz-server -- --no-cli
-
-dev-rust-full: ## Start mosquitto + fuseki + run Rust server natively
-	$(COMPOSE_DEV) up -d --wait mosquitto fuseki
-	cargo run -p wactorz-server -- --no-cli \
-	  --fuseki-url http://localhost:3030 \
-	  --fuseki-dataset wactorz
-
-dev-rust-down: ## Stop the Rust dev infrastructure (mosquitto + fuseki)
-	$(COMPOSE_DEV) stop mosquitto fuseki
-
-dev-rust-check: ## Smoke-test a running Rust server (health, actors, config)
-	@echo "── /health ──────────────────────────────"
-	@curl -sf $(RUST_API)/health | $(PYTHON) -m json.tool
-	@echo "── /api/actors ──────────────────────────"
-	@curl -sf $(RUST_API)/api/actors | $(PYTHON) -m json.tool
-	@echo "── /api/config ──────────────────────────"
-	@curl -sf $(RUST_API)/api/config | $(PYTHON) -m json.tool
-	@echo "── diff vs Python (:8000) ───────────────"
-	@diff \
-	  <(curl -sf $(RUST_API)/api/config | $(PYTHON) -m json.tool 2>/dev/null) \
-	  <(curl -sf http://localhost:8000/api/config | $(PYTHON) -m json.tool 2>/dev/null) \
-	  && echo "configs match ✓" || echo "(diff shown above)"
 
 # ── Development ─────────────────────────────────────────────────────────────
 
@@ -75,23 +40,14 @@ dev-full: ## Start full stack in dev mode (Python + mock agents + Vite)
 dev-ui: ## Start Vite dev server only (needs mosquitto running)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run dev
 
-dev-desktop: ## Start Tauri desktop app in dev mode (hot-reload)
-	cd $(FRONTEND_DIR) && cargo tauri dev
-
-build-desktop: ## Build Tauri desktop app (release bundle)
-	cd $(FRONTEND_DIR) && cargo tauri build
-
 # ── Build ───────────────────────────────────────────────────────────────────
 
-build: build-rust build-frontend build-py ## Build everything
+build: build-frontend build-py ## Build everything
 
 build-py: ## Build Python wheel and check with twine
 	$(PYTHON) -m pip wheel . --no-deps -w dist/ -q
 	$(PYTHON) -m pip install --quiet twine
 	$(PYTHON) -m twine check dist/*.whl
-
-build-rust: ## Build Rust workspace (release)
-	cargo build --release
 
 build-frontend: ## Build Vite frontend and sync to installed package
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run build
@@ -102,18 +58,16 @@ build-frontend: ## Build Vite frontend and sync to installed package
 	  cp -r static/app/ "$$INST/"; \
 	fi
 
-check: ## Cargo check (fast, no codegen)
-	cargo check
+check: ## Typecheck the frontend (fast)
+	cd $(FRONTEND_DIR) && $(PKG_MGR) run typecheck
 
-fmt: ## Format Rust + TypeScript
-	cargo fmt
+fmt: ## Format TypeScript
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run fmt 2>/dev/null || $(PKG_MGR) x prettier --write "src/**/*.ts"
 
-format: fmt ## Format Rust + TypeScript
+format: fmt ## Format TypeScript
 
-lint: ## Clippy + TS typecheck
-	cargo clippy -- -D warnings
-	cd $(FRONTEND_DIR) && $(PKG_MGR) run typecheck
+lint: ## Full frontend lint (typecheck + prettier + eslint)
+	cd $(FRONTEND_DIR) && $(PKG_MGR) run lint
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 
@@ -135,24 +89,9 @@ shell: ## Open a shell in the wactorz container
 shell-%: ## Open a shell in a running container, e.g. make shell-wactorz
 	$(COMPOSE) exec $* sh
 
-# ── Release packaging ───────────────────────────────────────────────────────
-
-release: ## Package pre-built Docker image release (.tar.gz)
-	bash scripts/package-release.sh
-
-release-full: ## Package full release zip (source + image)
-	bash scripts/package-full-release.sh
-
-release-native: ## Package native binary release (.tar.gz)
-	bash scripts/package-native.sh
-
-release-source: ## Package source-only tarball
-	bash scripts/package-source.sh
-
 # ── Misc ────────────────────────────────────────────────────────────────────
 
-clean: ## Remove Rust build artifacts and frontend dist
-	cargo clean
+clean: ## Remove frontend dist
 	rm -rf $(FRONTEND_DIR)/dist
 
 install: install-py install-frontend ## Install everything (Python + frontend)
@@ -175,18 +114,12 @@ precommit-install: ## Install the git pre-commit hook
 precommit-run: ## Run all configured pre-commit hooks across the repo
 	pre-commit run --all-files
 
-test: test-py test-rust parity ## Run Python, Rust, and cross-backend parity tests
+test: test-py ## Run Python tests
 
 test-py: ## Run Python tests
 	$(PYTHON) -m unittest discover -s tests -p 'test_*.py'
 
-test-rust: ## Run Rust tests (excludes desktop Tauri crate — needs GTK/WebKit on Linux)
-	cargo test --workspace --exclude wactorz-desktop
-
-parity: ## Prove Python and Rust core supervisor semantics match
-	$(PYTHON) scripts/check_backend_parity.py
-
-coverage: coverage-py coverage-rust ## Generate Python and Rust coverage reports
+coverage: coverage-py ## Generate Python coverage report
 
 coverage-py: ## Generate Python coverage XML + terminal report
 	mkdir -p coverage
@@ -194,16 +127,10 @@ coverage-py: ## Generate Python coverage XML + terminal report
 	$(PYTHON) -m coverage xml -o coverage/python-coverage.xml
 	$(PYTHON) -m coverage report
 
-coverage-rust: ## Generate Rust coverage with cargo-llvm-cov
-	mkdir -p coverage
-	cargo llvm-cov --workspace --exclude wactorz-desktop \
-	  --ignore-filename-regex 'wactorz-agents|wactorz-server|src-tauri|backend_parity' \
-	  --lcov --output-path coverage/rust.lcov
-
 docs-serve: ## Build docs + serve locally on :8001
 	$(PYTHON) -W ignore::UserWarning:pdoc scripts/build_docs.py --serve
 
-docs-build: ## Build full docs site (markdown→HTML + rustdoc + typedoc) into static/docs/
+docs-build: ## Build full docs site (markdown→HTML + typedoc) into static/docs/
 	$(PYTHON) -W ignore::UserWarning:pdoc scripts/build_docs.py --full
 
 publish: ## Build wheel + sdist and upload to PyPI (requires twine + API token)

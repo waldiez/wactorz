@@ -35,15 +35,24 @@ from ..core.integrations.home_assistant.ha_helper import (
     delete_automation,
     get_areas,
     get_automations,
+    get_camera_entities,
+    get_camera_snapshot,
+    get_camera_snapshot_url,
+    get_camera_stream_url,
+    get_camera_stream_urls,
     get_devices,
     get_entities,
     get_states,
     get_simplified_ha_data,
+    normalize_ha_base_url,
     update_automation,
 )
 from .prompts.home_assistant_prompts import (
     AUTOMATION_CREATION_PROMPT,
     HA_ACTION_CLASSIFICATION_PROMPT,
+    HA_CAMERA_LIST_TOOL,
+    HA_CAMERA_SNAPSHOT_TOOL,
+    HA_CAMERA_STREAM_TOOL,
     HA_OTHER_PROMPT,
     HA_OTHER_TOOL,
     HARDWARE_RECOMMENDATION_PROMPT,
@@ -135,7 +144,21 @@ class HomeAssistantAgent(LLMAgent):
 
         text, entities, hardware = self._extract_payload(msg.payload)
 
-        if entities or hardware:
+        operation = msg.payload.get("operation") if isinstance(msg.payload, dict) else None
+        camera_entity_id = str(msg.payload.get("camera_entity_id", "")).strip() if isinstance(msg.payload, dict) else ""
+
+        if operation:
+            logger.debug(f"[{self.name}] operation={operation} camera_entity_id={camera_entity_id!r} from={msg.sender_id}")
+
+        if operation == "list_cameras":
+            result = await self._list_cameras()
+        elif operation == "get_camera_snapshot":
+            result = await self._camera_snapshot(camera_entity_id)
+        elif operation == "get_camera_stream_url":
+            result = await self._camera_stream_url(camera_entity_id)
+        elif operation == "get_camera_snapshot_url":
+            result = await self._camera_snapshot_url(camera_entity_id)
+        elif entities or hardware:
             # Pre-selected entities/hardware provided (e.g. direct API call) — skip
             # classification and go straight to automation creation.
             result = await self._create_automation(text, entities, hardware)
@@ -282,6 +305,7 @@ class HomeAssistantAgent(LLMAgent):
             "sensor", "sensors", "light", "lights", "switch", "thermostat",
             "thermometer", "thermometers", "temperature", "humidity", "garage", "kitchen", "bedroom",
             "living room", "hallway", "bathroom", "room", "rooms",
+            "camera", "cameras", "snapshot", "stream",
         )
         if re.search(r"\bha\b", lower) or any(term in lower for term in ha_context_terms):
             return "other"
@@ -351,6 +375,69 @@ class HomeAssistantAgent(LLMAgent):
         }
 
 
+    # ── Camera direct handlers (A2A) ─────────────────────────────────────────
+
+    async def _list_cameras(self) -> dict[str, Any]:
+        if not self.ha_url or not self.ha_token:
+            return {"result": "HA_URL or HA_TOKEN not configured.", "cameras": []}
+        try:
+            cameras = await get_camera_entities(self.ha_url, self.ha_token)
+            if not cameras:
+                return {"result": "No camera entities found in Home Assistant.", "cameras": []}
+            lines = [f"Found {len(cameras)} camera(s):"]
+            for c in cameras:
+                name = c.get("friendly_name") or c["entity_id"]
+                lines.append(f"- {name} ({c['entity_id']}) — {c.get('state', 'unknown')}")
+            return {"result": "\n".join(lines), "cameras": cameras}
+        except Exception as exc:
+            return {"result": f"Camera list failed: {exc}", "error": str(exc), "cameras": []}
+
+    async def _camera_snapshot(self, camera_entity_id: str) -> dict[str, Any]:
+        if not self.ha_url or not self.ha_token:
+            return {"result": "HA_URL or HA_TOKEN not configured.", "error": "not_configured"}
+        if not camera_entity_id:
+            return {"result": "camera_entity_id is required.", "error": "missing_entity_id"}
+        rest_base = normalize_ha_base_url(self.ha_url)
+        snapshot = await get_camera_snapshot(rest_base, self.ha_token, camera_entity_id)
+        if "error" in snapshot:
+            logger.warning(f"[{self.name}] get_camera_snapshot({camera_entity_id}) failed: {snapshot['error']}")
+            return {"result": f"Snapshot failed: {snapshot['error']}", "error": snapshot["error"]}
+        logger.debug(f"[{self.name}] get_camera_snapshot({camera_entity_id}) -> {len(snapshot.get('image_base64', ''))} b64 chars")
+        return {
+            "result": f"Snapshot captured for {camera_entity_id}.",
+            "data": snapshot,
+        }
+
+    async def _camera_stream_url(self, camera_entity_id: str) -> dict[str, Any]:
+        if not self.ha_url or not self.ha_token:
+            return {"result": "HA_URL or HA_TOKEN not configured.", "error": "not_configured"}
+        if not camera_entity_id:
+            return {"result": "camera_entity_id is required.", "error": "missing_entity_id"}
+        data = await get_camera_stream_urls(self.ha_url, self.ha_token, camera_entity_id)
+        streams = data.get("streams", {})
+        logger.debug(f"[{self.name}] get_camera_stream_url({camera_entity_id}) -> {streams}")
+        lines = [f"Stream URLs for {camera_entity_id}:"]
+        for kind, url in streams.items():
+            lines.append(f"  {kind}: {url}")
+        return {"result": "\n".join(lines), "data": data}
+
+    async def _camera_snapshot_url(self, camera_entity_id: str) -> dict[str, Any]:
+        if not self.ha_url or not self.ha_token:
+            return {"result": "HA_URL or HA_TOKEN not configured.", "error": "not_configured"}
+        if not camera_entity_id:
+            return {"result": "camera_entity_id is required.", "error": "missing_entity_id"}
+        rest_base = normalize_ha_base_url(self.ha_url)
+        url = get_camera_snapshot_url(rest_base, camera_entity_id)
+        logger.debug(f"[{self.name}] get_camera_snapshot_url({camera_entity_id}) -> {url}")
+        return {
+            "result": (
+                f"Snapshot URL for {camera_entity_id}: {url}\n"
+                "Requires header Authorization: Bearer <HA_TOKEN> to fetch."
+            ),
+            "data": {"entity_id": camera_entity_id, "snapshot_url": url},
+        }
+
+
     async def _handle_other_request(self, text: str) -> dict[str, Any]:
         if not self.ha_url or not self.ha_token:
             return {
@@ -367,7 +454,8 @@ class HomeAssistantAgent(LLMAgent):
 
         messages: list[dict[str, Any]] = [{"role": "user", "content": text}]
         tool_cache: dict[str, str] = {}
-        tools = [HA_OTHER_TOOL]
+        snapshots_taken: list[dict[str, Any]] = []
+        tools = [HA_OTHER_TOOL, HA_CAMERA_LIST_TOOL, HA_CAMERA_SNAPSHOT_TOOL, HA_CAMERA_STREAM_TOOL]
 
         for _round in range(self._other_tool_max_rounds):
             try:
@@ -389,7 +477,14 @@ class HomeAssistantAgent(LLMAgent):
             tool_calls = list(getattr(completion, "tool_calls", []) or [])
             if not tool_calls:
                 content = str(getattr(completion, "content", "") or "").strip()
-                return {"task": text, "result": content or "I could not answer that Home Assistant request."}
+                result_text = content or "I could not answer that Home Assistant request."
+                for snap in snapshots_taken:
+                    b64 = snap.get("image_base64", "")
+                    ct = snap.get("content_type", "image/jpeg")
+                    eid = snap.get("entity_id", "snapshot")
+                    if b64:
+                        result_text += f"\n\n![{eid}](data:{ct};base64,{b64})"
+                return {"task": text, "result": result_text}
 
             assistant_message = getattr(completion, "assistant_message", None)
             if assistant_message:
@@ -398,11 +493,8 @@ class HomeAssistantAgent(LLMAgent):
             for call in tool_calls:
                 tool_name = getattr(call, "name", "")
                 tool_call_id = getattr(call, "id", "") or tool_name
-                if tool_name != "get_simplified_ha_data":
-                    result_text = f"Unsupported tool: {tool_name}"
-                    is_error = True
-                else:
-                    is_error = False
+                is_error = False
+                if tool_name == "get_simplified_ha_data":
                     if tool_name not in tool_cache:
                         try:
                             data = await get_simplified_ha_data(self.ha_url, self.ha_token)
@@ -411,6 +503,42 @@ class HomeAssistantAgent(LLMAgent):
                             tool_cache[tool_name] = f"Home Assistant data fetch failed: {exc}"
                             is_error = True
                     result_text = tool_cache[tool_name]
+                elif tool_name == "list_camera_entities":
+                    if tool_name not in tool_cache:
+                        try:
+                            cameras = await get_camera_entities(self.ha_url, self.ha_token)
+                            tool_cache[tool_name] = json.dumps(cameras, default=str)
+                        except Exception as exc:
+                            tool_cache[tool_name] = f"Camera list failed: {exc}"
+                            is_error = True
+                    result_text = tool_cache[tool_name]
+                elif tool_name == "get_camera_snapshot":
+                    args = getattr(call, "arguments", {}) or {}
+                    entity_id = str(args.get("camera_entity_id", "")).strip()
+                    try:
+                        rest_base = normalize_ha_base_url(self.ha_url)
+                        snapshot = await get_camera_snapshot(rest_base, self.ha_token, entity_id)
+                        if "error" in snapshot:
+                            is_error = True
+                            result_text = json.dumps({k: v for k, v in snapshot.items() if k != "image_base64"}, default=str)
+                        else:
+                            snapshots_taken.append(snapshot)
+                            result_text = json.dumps({"entity_id": entity_id, "content_type": snapshot.get("content_type")}, default=str)
+                    except Exception as exc:
+                        result_text = f"Snapshot failed: {exc}"
+                        is_error = True
+                elif tool_name == "get_camera_stream_url":
+                    args = getattr(call, "arguments", {}) or {}
+                    entity_id = str(args.get("camera_entity_id", "")).strip()
+                    try:
+                        stream_data = await get_camera_stream_urls(self.ha_url, self.ha_token, entity_id)
+                        result_text = json.dumps(stream_data, default=str)
+                    except Exception as exc:
+                        result_text = f"Stream URL fetch failed: {exc}"
+                        is_error = True
+                else:
+                    result_text = f"Unsupported tool: {tool_name}"
+                    is_error = True
                 messages.append(
                     {
                         "role": "tool",
@@ -542,7 +670,7 @@ class HomeAssistantAgent(LLMAgent):
                 "platform": str(e.get("platform") or ""),
             }
             for e in entities
-            if isinstance(e, dict)
+            if isinstance(e, dict) and e.get("disabled_by") == None
         ]
         lines = [f"Found {len(entity_rows)} entities in Home Assistant:"]
         for idx, row in enumerate(entity_rows, 1):

@@ -1,0 +1,197 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/* ── Responsive: tablet (640-1023px) ─────────────────────────────────── */
+@media (max-width: 1023px) {
+  #chat-panel {
+    width: 320px;
+  }
+  .cd-grid {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+    padding: 14px 16px;
+  }
+}
+
+/* ── Responsive: mobile (< 640px) ────────────────────────────────────── */
+@media (max-width: 639px) {
+  /* Canvas is hidden behind the social overlay on mobile — just dark bg */
+  #renderCanvas {
+    display: none;
+  }
+
+  /* HUD: compact top-left pill */
+  #hud {
+    top: max(8px, env(safe-area-inset-top, 0px));
+    left: max(8px, env(safe-area-inset-left, 0px));
+    padding: 8px 12px;
+    min-width: 0;
+  }
+  #hud .hud-count {
+    font-size: 20px;
+  }
+  #hud .hud-label {
+    display: none;
+  }
+  #hud .hud-links {
+    display: none;
+  }
+  #hud .hud-badge {
+    padding: 2px 8px;
+    font-size: 10px;
+    margin-top: 6px;
+  }
+
+  /* Feed toggle: below theme switcher */
+  #feed-toggle {
+    top: 50px;
+    right: 8px;
+    padding: 4px 8px;
+    font-size: 10px;
+  }
+
+  /* Activity feed: full width */
+  #activity-feed {
+    width: 100%;
+    border-left: none;
+    border-bottom-left-radius: 0;
+  }
+
+  /* ── CardDashboard header: logo + conn + 🔊 only ── */
+  .af-header {
+    padding: 6px 10px;
+    gap: 6px;
+  }
+  .af-header-center {
+    display: none;
+  }
+  /* Hide all nav view buttons from header on mobile — bottom nav takes over */
+  .af-header-right .af-view-btn[data-view] {
+    display: none;
+  }
+  /* Keep 🔊 audio button visible */
+  .af-header-right .af-view-btn:not([data-view]) {
+    display: inline-flex;
+  }
+
+  /* ── Bottom nav ─────────────────────────────────────────────────────── */
+  .af-bottom-nav {
+    display: flex;
+  }
+  .af-bottom-sheet {
+    display: none;
+  }
+  .af-bottom-sheet.open {
+    display: flex;
+  }
+
+  /* ── Chat view (CardDashboard) — sidebar/pane toggle ── */
+  .af-chat {
+    flex-direction: column;
+  }
+  .af-chat-sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    /* show sidebar by default; pane hidden */
+  }
+  .af-chat-pane {
+    display: none;
+    flex: 1;
+    min-height: 0;
+  }
+  /* when agent is selected on mobile, flip visibility */
+  .af-chat.agent-selected .af-chat-sidebar {
+    display: none;
+  }
+  .af-chat.agent-selected .af-chat-pane {
+    display: flex;
+    flex-direction: column;
+  }
+  /* back button: visible only on mobile */
+  .af-chat-back-btn {
+    display: inline-flex !important;
+  }
+
+  /* ── Chat panel (sliding panel) — same sidebar/pane toggle ── */
+  #chat-panel {
+    width: 100%;
+    left: 0;
+    border-left: none;
+    border-radius: 0;
+    flex-direction: column !important;
+  }
+  #chat-panel .af-chat-sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    flex-shrink: 0;
+    max-height: 45vh;
+  }
+  #chat-panel .af-chat-pane {
+    display: none;
+    flex: 1;
+    min-height: 0;
+  }
+  #chat-panel.agent-selected .af-chat-sidebar {
+    display: none;
+  }
+  #chat-panel.agent-selected .af-chat-pane {
+    display: flex;
+  }
+  #chat-panel .af-chat-back-btn {
+    display: inline-flex !important;
+  }
+
+  /* Card dashboard: clear of IO bar + safe area */
+  .cd-root {
+    bottom: max(64px, calc(58px + env(safe-area-inset-bottom, 6px)));
+  }
+  .cd-topbar {
+    padding: 8px 12px;
+  }
+  .cd-subtitle {
+    display: none;
+  }
+  .cd-3d-btn {
+    display: none;
+  }
+  .cd-grid {
+    grid-template-columns: 1fr;
+    padding: 10px;
+    gap: 10px;
+  }
+  .cd-body {
+    padding: 12px 12px 10px;
+    gap: 8px;
+  }
+  .cd-avatar {
+    width: 30px;
+    height: 30px;
+  }
+  .cd-name {
+    font-size: 13px;
+  }
+  .cd-mono {
+    font-size: 10px;
+  }
+
+  /* IO bar: compact + iOS safe-area */
+  #io-bar {
+    padding: 8px 12px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+    gap: 8px;
+    min-height: 58px;
+  }
+  /* 44px touch targets — minimum recommended by Apple HIG */
+  #wake-btn,
+  #mic-btn,
+  #send-btn {
+    width: 44px;
+    height: 44px;
+  }
+  #text-input {
+    font-size: 16px;
+  } /* 16px prevents iOS auto-zoom on focus */
+}

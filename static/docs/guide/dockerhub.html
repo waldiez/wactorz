@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Quickstart: Docker Hub — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
+    .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">
+    <div class="logo-mark"></div>Wactorz
+  </a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-label">Guide</div>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="active">Docker Hub</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/prometheus.html" class="">Prometheus</a>
+    </div>
+  </aside>
+  <main class="content">
+<h1 id="quickstart-docker-hub">Quickstart: Docker Hub</h1>
+<p>The fastest way to run Wactorz — no repo clone needed. Everything runs in containers pulled straight from Docker Hub.</p>
+<blockquote>
+<p><strong>Prerequisite:</strong> <a href="https://www.docker.com/products/docker-desktop/">Docker Desktop</a> installed and running.</p>
+</blockquote>
+<hr />
+<ul>
+<li><a href="#option-a--terminal--compose-recommended">Option A — Terminal + Compose (recommended)</a></li>
+<li><a href="#option-b--docker-desktop--terminal">Option B — Docker Desktop + Terminal</a></li>
+</ul>
+<hr />
+<h2 id="option-a-terminal-compose-recommended">Option A — Terminal + Compose (recommended)</h2>
+<p>Works in any terminal, including the built-in terminal inside Docker Desktop.</p>
+<h3 id="1-create-a-project-folder">1. Create a project folder</h3>
+<div class="highlight"><pre><span></span><code>mkdir<span class="w"> </span>wactorz
+<span class="nb">cd</span><span class="w"> </span>wactorz
+</code></pre></div>
+
+<h3 id="2-create-three-files-inside-that-folder">2. Create three files inside that folder</h3>
+<blockquote>
+<p><strong>Windows tip:</strong> open Notepad, paste the content, then <em>Save As</em> — set <em>Save as type</em> to <strong>All Files</strong> and type the filename exactly as shown. This prevents Windows from secretly adding <code>.txt</code> to the end.</p>
+</blockquote>
+<p><strong><code>mosquitto.conf</code></strong></p>
+<div class="highlight"><pre><span></span><code>listener 1883
+listener 9001
+protocol websockets
+allow_anonymous true
+persistence true
+persistence_location /mosquitto/data/
+log_dest stdout
+</code></pre></div>
+
+<p><strong><code>compose.yaml</code></strong></p>
+<div class="highlight"><pre><span></span><code><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz</span>
+
+<span class="nt">services</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">mosquitto</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eclipse-mosquitto:2.0</span>
+<span class="w">    </span><span class="nt">container_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-mosquitto</span>
+<span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;1883:1883&quot;</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;9001:9001&quot;</span>
+<span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mosquitto-data:/mosquitto/data</span>
+<span class="w">    </span><span class="nt">networks</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-net</span>
+<span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">test</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;CMD&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;mosquitto_sub&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;-t&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;$$SYS/#&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;-C&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;1&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;-i&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;hc&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;-W&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;3&quot;</span><span class="p p-Indicator">]</span>
+<span class="w">      </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10s</span>
+<span class="w">      </span><span class="nt">timeout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5s</span>
+<span class="w">      </span><span class="nt">retries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+
+<span class="w">  </span><span class="nt">wactorz</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">waldiez/wactorz:latest</span>
+<span class="w">    </span><span class="nt">container_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz</span>
+<span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
+<span class="w">    </span><span class="nt">env_file</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.env</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">MQTT_HOST</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mosquitto</span>
+<span class="w">      </span><span class="nt">MQTT_PORT</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1883&quot;</span>
+<span class="w">      </span><span class="nt">INTERFACE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rest</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8000:8000&quot;</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8888:8888&quot;</span>
+<span class="w">    </span><span class="nt">networks</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-net</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">mosquitto</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">condition</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">service_healthy</span>
+
+<span class="nt">networks</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">wactorz-net</span><span class="p">:</span>
+
+<span class="nt">volumes</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">mosquitto-data</span><span class="p">:</span>
+</code></pre></div>
+
+<p><strong><code>.env</code></strong> — uncomment the provider you want to use:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># ── Anthropic (Claude) — default ─────────────────────────────────────────────</span>
+<span class="nv">LLM_API_KEY</span><span class="o">=</span>sk-ant-...
+<span class="nv">LLM_PROVIDER</span><span class="o">=</span>anthropic
+<span class="nv">LLM_MODEL</span><span class="o">=</span>claude-sonnet-4-6
+
+<span class="c1"># ── OpenAI ────────────────────────────────────────────────────────────────────</span>
+<span class="c1"># LLM_API_KEY=sk-...</span>
+<span class="c1"># LLM_PROVIDER=openai</span>
+<span class="c1"># LLM_MODEL=gpt-4o</span>
+<span class="c1"># OPENAI_URL=  # optional: set to redirect to a compatible endpoint (Groq, Together, vLLM…)</span>
+
+<span class="c1"># ── Ollama (local) ───────────────────────────────────────────────────────────</span>
+<span class="c1"># LLM_PROVIDER=ollama</span>
+<span class="c1"># LLM_MODEL=llama3</span>
+</code></pre></div>
+
+<h3 id="3-start">3. Start</h3>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<p>Images are pulled automatically on first run.</p>
+<h3 id="4-open">4. Open</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>URL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Monitor UI</td>
+<td><code>http://localhost:8888</code></td>
+</tr>
+<tr>
+<td>REST API</td>
+<td><code>http://localhost:8000</code></td>
+</tr>
+</tbody>
+</table>
+<p>To stop: <code>docker compose down</code></p>
+<hr />
+<h2 id="option-b-docker-desktop-terminal">Option B — Docker Desktop + Terminal</h2>
+<h3 id="step-1-create-a-project-folder">Step 1 — Create a project folder</h3>
+<p>Use a new folder so the <code>.env</code> and <code>mosquitto.conf</code> paths are easy to copy into Docker commands:</p>
+<div class="highlight"><pre><span></span><code><span class="n">mkdir</span> <span class="n">wactorz</span>
+<span class="nb">cd </span><span class="n">wactorz</span>
+<span class="nb">Invoke-WebRequest</span> <span class="p">`</span>
+  <span class="n">-Uri</span> <span class="s2">&quot;https://raw.githubusercontent.com/waldiez/wactorz/main/.env.template&quot;</span> <span class="p">`</span>
+  <span class="n">-OutFile</span> <span class="s2">&quot;.env.template&quot;</span>
+<span class="nb">Copy-Item</span> <span class="p">.</span><span class="n">env</span><span class="p">.</span><span class="n">template</span> <span class="p">.</span><span class="n">env</span>
+</code></pre></div>
+
+<h3 id="step-2-edit-env">Step 2 — Edit <code>.env</code></h3>
+<div class="highlight"><pre><span></span><code><span class="n">notepad</span> <span class="p">.</span><span class="n">env</span>
+</code></pre></div>
+
+<p>Fill in at minimum your LLM key and provider. Make sure these Docker-specific values are set:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">MQTT_HOST</span><span class="o">=</span>wactorz-mosquitto
+<span class="nv">PORT</span><span class="o">=</span><span class="m">8000</span>
+<span class="nv">WS_PORT</span><span class="o">=</span><span class="m">8888</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong>Port conflict?</strong> On some Windows machines port <code>8888</code> is reserved by a system service. If the monitor UI is unreachable, change <code>WS_PORT</code> to any free port (e.g. <code>8887</code>) and use that port in Step 4.</p>
+</blockquote>
+<h3 id="step-3-start-mosquitto">Step 3 — Start Mosquitto</h3>
+<div class="highlight"><pre><span></span><code><span class="no">[System.IO.File]</span><span class="p">::</span><span class="n">WriteAllText</span><span class="p">(</span>
+  <span class="p">(</span><span class="nb">Join-Path</span> <span class="p">(</span><span class="nb">Get-Location</span><span class="p">)</span> <span class="s2">&quot;mosquitto.conf&quot;</span><span class="p">),</span>
+  <span class="s2">&quot;listener 1883</span><span class="se">`n</span><span class="s2">listener 9001</span><span class="se">`n</span><span class="s2">protocol websockets</span><span class="se">`n</span><span class="s2">allow_anonymous true</span><span class="se">`n</span><span class="s2">persistence true</span><span class="se">`n</span><span class="s2">persistence_location /mosquitto/data/</span><span class="se">`n</span><span class="s2">log_dest stdout</span><span class="se">`n</span><span class="s2">&quot;</span><span class="p">,</span>
+  <span class="no">[System.Text.UTF8Encoding]</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="nv">$false</span><span class="p">)</span>
+<span class="p">)</span>
+
+<span class="n">docker</span> <span class="n">network</span> <span class="n">create</span> <span class="n">wactorz-net</span>
+<span class="n">docker</span> <span class="n">run</span> <span class="n">-d</span> <span class="p">-</span><span class="n">-name</span> <span class="n">wactorz-mosquitto</span> <span class="p">`</span>
+  <span class="p">-</span><span class="n">-network</span> <span class="n">wactorz-net</span> <span class="p">`</span>
+  <span class="n">-p</span> <span class="s2">&quot;1883:1883&quot;</span> <span class="p">`</span>
+  <span class="n">-p</span> <span class="s2">&quot;9001:9001&quot;</span> <span class="p">`</span>
+  <span class="n">-v</span> <span class="s2">&quot;${PWD}\mosquitto.conf:/mosquitto/config/mosquitto.conf&quot;</span> <span class="p">`</span>
+  <span class="n">eclipse-mosquitto</span><span class="p">:</span><span class="n">2</span><span class="p">.</span><span class="n">0</span>
+</code></pre></div>
+
+<p>If <code>wactorz-net</code> already exists, the <code>network create</code> line will error — that is OK.</p>
+<h3 id="step-4-start-wactorz">Step 4 — Start Wactorz</h3>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">run</span> <span class="n">-d</span> <span class="p">-</span><span class="n">-name</span> <span class="n">wactorz</span> <span class="p">`</span>
+  <span class="p">-</span><span class="n">-network</span> <span class="n">wactorz-net</span> <span class="p">`</span>
+  <span class="n">-p</span> <span class="s2">&quot;8000:8000&quot;</span> <span class="p">`</span>
+  <span class="n">-p</span> <span class="s2">&quot;8888:8888&quot;</span> <span class="p">`</span>
+  <span class="p">-</span><span class="n">-env</span><span class="o">-file</span> <span class="s2">&quot;${PWD}\.env&quot;</span> <span class="p">`</span>
+  <span class="n">-e</span> <span class="n">MQTT_HOST</span><span class="p">=</span><span class="n">wactorz-mosquitto</span> <span class="p">`</span>
+  <span class="n">waldiez</span><span class="p">/</span><span class="n">wactorz</span><span class="p">:</span><span class="n">latest</span>
+</code></pre></div>
+
+<p>Open <code>http://localhost:8888</code>.</p>
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

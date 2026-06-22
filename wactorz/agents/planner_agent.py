@@ -24,13 +24,8 @@ import time
 from typing import Optional
 
 from ..core.actor import Actor, Message, MessageType
-from .llm_agent import LLMProvider
-
-try:
-    from .sparql_context import build_sparql_context as _build_sparql_context
-    _SPARQL_AVAILABLE = True
-except ImportError:
-    _SPARQL_AVAILABLE = False
+from ..core.mqtt import mqtt_client
+from .llm_agent import LLMProvider, _accumulate_global_cost
 
 logger = logging.getLogger(__name__)
 
@@ -79,21 +74,7 @@ class PlannerAgent(Actor):
         self.total_input_tokens:  int   = 0
         self.total_output_tokens: int   = 0
         self.total_cost_usd:      float = 0.0
-
-        # Fuseki endpoint for SPARQL world-model enrichment (optional).
-        # SPARQL queries enrich the planner's prompt with durable channel schemas
-        # and relevant Home Assistant state from the knowledge graph. If the
-        # config import or the endpoint is unreachable, planning continues
-        # without it — _build_sparql_context handles failures gracefully.
-        try:
-            from ..config import CONFIG
-            self._fuseki_url: str = (
-                getattr(CONFIG, "fuseki_url", None)
-                or getattr(CONFIG, "fuseki_endpoint", None)
-                or "http://localhost:3030/wactorz/sparql"
-            )
-        except Exception:
-            self._fuseki_url = "http://localhost:3030/wactorz/sparql"
+        self._last_period_cost_usd: float = 0.0
 
     def _current_task_description(self) -> str:
         return self._task[:60] if self._task else "waiting for task"
@@ -135,6 +116,27 @@ class PlannerAgent(Actor):
         self.total_input_tokens  += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)
         self.total_cost_usd      += usage.get("cost_usd", 0.0)
+        delta = self.total_cost_usd - self._last_period_cost_usd
+        if delta > 0:
+            _accumulate_global_cost(delta)
+            self._last_period_cost_usd = self.total_cost_usd
+
+    def _now_context(self) -> str:
+        """
+        Live date/time block for planning prompts. Resolves the user's timezone
+        from main's facts (same source the scheduler uses) so a "tomorrow at 3pm"
+        request is decomposed against the correct calendar date and zone.
+        """
+        user_tz = None
+        if self._registry:
+            main = self._registry.find_by_name("main")
+            if main and hasattr(main, "get_user_facts"):
+                try:
+                    user_tz = main.get_user_facts().get("pref_timezone")
+                except Exception:
+                    pass
+        from .llm_agent import current_time_context
+        return current_time_context(user_tz)
 
     # ── Message handling ───────────────────────────────────────────────────
 
@@ -811,7 +813,7 @@ class PlannerAgent(Actor):
 
         async def _collect():
             try:
-                async with aiomqtt.Client(broker, port) as client:
+                async with mqtt_client(broker, port) as client:
                     for topic, _ in topics_to_sample:
                         await client.subscribe(topic)
                     async for msg in client.messages:
@@ -945,6 +947,98 @@ class PlannerAgent(Actor):
 
         ha_section = ha_entities_text if ha_entities_text else \
             "  (HA not reachable — use entity IDs provided by the user)"
+
+        # ── Resolve real camera stream URLs via home-assistant-agent ───────
+        # Mirrors the entity-list delegation above: ground PATTERN 3 (camera
+        # detection pipelines) in real stream URLs instead of letting the LLM
+        # invent /dev/video0 or guess proxy paths.
+        camera_stream_urls: dict[str, str] = {}
+        camera_snapshot_urls: dict[str, str] = {}
+        try:
+            import re as _re_cam
+            camera_entity_ids = []
+            camera_lines = []
+            for line in ha_entities_text.splitlines():
+                token = line.strip().split(" ", 1)[0]
+                if token.startswith("camera."):
+                    camera_lines.append(line.strip())
+                    if token not in camera_entity_ids:
+                        camera_entity_ids.append(token)
+
+            if camera_entity_ids:
+                task_words = {w for w in _re_cam.findall(r"[a-z0-9]+", task.lower()) if len(w) >= 3}
+                candidates = [
+                    eid for eid in camera_entity_ids
+                    if any(w in eid.lower() for w in task_words)
+                ]
+                if not candidates and any(kw in task.lower() for kw in ("camera", "webcam", "stream")):
+                    candidates = camera_entity_ids[:5]
+
+                logger.debug(f"[{self.name}] Camera candidates for '{task[:60]}': {candidates}")
+
+                for eid in candidates:
+                    result = await self._delegate_with_payload(
+                        "home-assistant-agent",
+                        {"operation": "get_camera_stream_url", "camera_entity_id": eid},
+                        timeout=20.0,
+                    )
+                    logger.debug(f"[{self.name}] get_camera_stream_url({eid}) -> {result}")
+                    if not result or result.get("error"):
+                        continue
+                    streams = (result.get("data") or {}).get("streams", {})
+                    url = streams.get("camera_source") or streams.get("mjpeg_proxy") or streams.get("hls")
+                    if url:
+                        camera_stream_urls[eid] = url
+
+                    snap_result = await self._delegate_with_payload(
+                        "home-assistant-agent",
+                        {"operation": "get_camera_snapshot_url", "camera_entity_id": eid},
+                        timeout=20.0,
+                    )
+                    logger.debug(f"[{self.name}] get_camera_snapshot_url({eid}) -> {snap_result}")
+                    if snap_result and not snap_result.get("error"):
+                        snap_url = (snap_result.get("data") or {}).get("snapshot_url")
+                        if snap_url:
+                            camera_snapshot_urls[eid] = snap_url
+
+                if camera_stream_urls:
+                    logger.debug(f"[{self.name}] Resolved {len(camera_stream_urls)} camera stream URL(s)")
+                if camera_snapshot_urls:
+                    logger.debug(f"[{self.name}] Resolved {len(camera_snapshot_urls)} camera snapshot URL(s)")
+        except Exception as e:
+            logger.warning(f"[{self.name}] Could not resolve camera stream/snapshot URLs: {e}")
+
+        if camera_stream_urls:
+            cam_lines = ["CAMERA STREAM URLS (use these directly in code — do not invent /dev/video0 or proxy paths):"]
+            for eid, url in camera_stream_urls.items():
+                cam_lines.append(f"  {eid}: {url}")
+            camera_section = "\n".join(cam_lines)
+        else:
+            camera_section = (
+                "CAMERA STREAM URLS: none resolved.\n"
+                "If the user references a camera, use the matching camera.* entity_id from "
+                "HOME ASSISTANT ENTITIES above and note in the description that the stream URL "
+                "could not be resolved (Home Assistant may be unreachable or the camera unsupported)."
+            )
+
+        if camera_snapshot_urls:
+            snap_lines = [
+                "CAMERA SNAPSHOT URLS (for one-shot still-image capture — see PATTERN 7):",
+            ]
+            for eid, url in camera_snapshot_urls.items():
+                snap_lines.append(f"  {eid}: {url}")
+            snap_lines.append(
+                "  Fetching requires header Authorization: Bearer {os.environ['HA_TOKEN']} — "
+                "NEVER hardcode the token value, read it from the environment at runtime."
+            )
+            camera_snapshot_section = "\n".join(snap_lines)
+        else:
+            camera_snapshot_section = (
+                "CAMERA SNAPSHOT URLS: none resolved.\n"
+                "If the user wants a one-shot snapshot, use the matching camera.* entity_id from "
+                "HOME ASSISTANT ENTITIES above and note in the description that the snapshot URL "
+                "could not be resolved (Home Assistant may be unreachable or the camera unsupported)."
+            )
 
         # ── Fetch TopicBus context (live data flows + wiring opportunities) ─
         topic_bus_section = ""
@@ -1084,7 +1178,7 @@ class PlannerAgent(Actor):
             try:
                 feas_resp, _usage = await self.llm.complete(
                     messages=[{"role": "user", "content": feas_prompt}],
-                    system="Output only valid JSON. No markdown.",
+                    system=self._now_context() + "\nOutput only valid JSON. No markdown.",
                     max_tokens=400,
                 )
                 self._accrue_usage(_usage)
@@ -1105,20 +1199,6 @@ class PlannerAgent(Actor):
                 logger.warning(f"[{self.name}] Feasibility check error (continuing): {e}")
 
         # ── 3. Decompose into spawn configs ────────────────────────────────
-        # SPARQL enrichment: fetch durable channel schemas + relevant HA state
-        # from the Fuseki knowledge graph. Optional — degrades gracefully if
-        # the endpoint is unreachable, the import isn't available, or the
-        # query times out (3s ceiling).
-        _sparql_pipeline_ctx = ""
-        if _SPARQL_AVAILABLE:
-            try:
-                _sparql_pipeline_ctx = await _build_sparql_context(
-                    task=task,
-                    fuseki_url=self._fuseki_url,
-                    timeout=3.0,
-                )
-            except Exception as _e:
-                logger.debug(f"[{self.name}] SPARQL pipeline context skipped: {_e}")
 
         # Build the prompt as a list of parts to avoid f-string escape issues
         prompt_parts = [
@@ -1255,7 +1335,13 @@ class PlannerAgent(Actor):
             "",
             "PATTERN 3 — Webcam/camera object detection triggers HA action:",
             "  Agent 1 (dynamic, name: '<slug>-camera-detect'):",
-            "    setup(agent): load YOLO model and open camera",
+            "    setup(agent): the CAMERA STREAM URLS below are mjpeg_proxy URLs (/api/camera_proxy_stream/...)",
+            "      and REQUIRE the HA token as a Bearer header. Before calling cv2.VideoCapture, set:",
+            "        import os",
+            "        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = f\"headers;Authorization: Bearer {os.environ['HA_TOKEN']}\\r\\n\"",
+            "      Then load YOLO model and open the stream with cv2.VideoCapture(<url>)",
+            "      using the EXACT URL from CAMERA STREAM URLS below — never /dev/video0 or a guessed proxy path",
+            "      IMPORTANT: read the token from os.environ['HA_TOKEN'] — NEVER hardcode the token value.",
             "    process(agent): capture frame, run inference, determine if target object is detected,",
             "      publish {'detected': bool, 'target': '<object-name>', 'objects': [list-of-all-detected]}",
             "      to custom/detections/<slug>",
@@ -1266,6 +1352,7 @@ class PlannerAgent(Actor):
             "    detection_filter: {'detected': True}",
             "    actions: [HA service call]",
             "  IMPORTANT: publish {'detected': bool} not {'person_detected': bool} — generic for any object.",
+            "  IMPORTANT: use the exact camera stream URL from CAMERA STREAM URLS section below.",
             "  In code: target = '<object-name-from-user-request>'; detected = target in set(detected_labels)",
             "",
             "PATTERN 4 — Webcam detection triggers notification:",
@@ -1322,6 +1409,24 @@ class PlannerAgent(Actor):
             "                await agent.log('Condition met! Trigger published.')",
             "        agent.subscribe('custom/sensors/temp_humidity', on_temp)",
             "        agent.subscribe('lamp/status', on_lamp)",
+            "",
+            "PATTERN 7 — One-shot camera snapshot (e.g. 'take a snapshot of the office camera'):",
+            "  Use this instead of PATTERN 3 when the task needs a SINGLE still image,",
+            "  not a continuous detection loop.",
+            "  Agent (dynamic, name: '<slug>-snapshot'):",
+            "    setup(agent) or process(agent): fetch the EXACT URL from CAMERA SNAPSHOT URLS below.",
+            "    Install: httpx",
+            "  PATTERN 7 CODE TEMPLATE:",
+            "    async def setup(agent):",
+            "        import httpx, os",
+            "        headers = {'Authorization': f\"Bearer {os.environ['HA_TOKEN']}\"}",
+            "        async with httpx.AsyncClient() as client:",
+            "            resp = await client.get('<snapshot-url-from-CAMERA-SNAPSHOT-URLS>', headers=headers)",
+            "            image_bytes = resp.content",
+            "        # ... process image_bytes (e.g. run YOLO on it once, save to disk, etc.)",
+            "  IMPORTANT: read the token from os.environ['HA_TOKEN'] — NEVER hardcode the token value.",
+            "  If the result feeds an HA action (e.g. 'if there is a desk, turn on the light'),",
+            "  publish the detection result to a topic and pair with an ha_actuator (see PATTERN 3 agent 2).",
             "",
             "═══ GENERAL RULES ═══",
             "",
@@ -1383,18 +1488,17 @@ class PlannerAgent(Actor):
                 ]
                 if topic_samples_section else []
             ),
-            *(  # SPARQL: durable channel schemas + relevant HA states from Fuseki
-                (lambda ctx: [
-                    "═══ FUSEKI KNOWLEDGE GRAPH (durable schemas + HA state) ═══",
-                    ctx,
-                    "",
-                ] if ctx else [])(_sparql_pipeline_ctx)
-            ),
             "═══ HOME ASSISTANT ENTITIES ═══",
             ha_section,
             "",
             "═══ NOTIFICATION URLS ═══",
             notif_section,
+            "",
+            "═══ CAMERA STREAM URLS ═══",
+            camera_section,
+            "",
+            "═══ CAMERA SNAPSHOT URLS ═══",
+            camera_snapshot_section,
             "",
             "═══ OUTPUT FORMAT ═══",
             "JSON array. Each element:",
@@ -1408,7 +1512,7 @@ class PlannerAgent(Actor):
         try:
             response, _usage = await self.llm.complete(
                 messages=[{"role": "user", "content": prompt}],
-                system="You are a JSON-only pipeline architect. Output only a valid JSON array. No markdown, no explanation.",
+                system=self._now_context() + "\nYou are a JSON-only pipeline architect. Output only a valid JSON array. No markdown, no explanation.",
                 max_tokens=4000,
             )
             self._accrue_usage(_usage)
@@ -1739,24 +1843,12 @@ class PlannerAgent(Actor):
         except Exception:
             pass
 
-        # ── SPARQL world-model enrichment (durable channel schemas + HA state) ──
-        sparql_ctx = ""
-        if _SPARQL_AVAILABLE:
-            try:
-                sparql_ctx = await _build_sparql_context(
-                    task=task,
-                    fuseki_url=self._fuseki_url,
-                    timeout=3.0,
-                )
-            except Exception as _e:
-                logger.debug(f"[{self.name}] SPARQL context skipped: {_e}")
-
         prompt = f"""You are a task planner for a multi-agent system.
 Break the task into steps. Each step is handled by one agent.
 
 AVAILABLE AGENTS (with input/output contracts):
 {workers_desc}
-{topic_schema_ctx}{sparql_ctx}
+{topic_schema_ctx}
 TASK: {task}
 
 OUTPUT RULES:
@@ -1848,7 +1940,7 @@ Example:
         try:
             response, _usage = await self.llm.complete(
                 messages=[{"role": "user", "content": prompt}],
-                system="You are a JSON-only task planner. Output only valid JSON arrays, nothing else.",
+                system=self._now_context() + "\nYou are a JSON-only task planner. Output only valid JSON arrays, nothing else.",
                 max_tokens=1500,
             )
             self._accrue_usage(_usage)

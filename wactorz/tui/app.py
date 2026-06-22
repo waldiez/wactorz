@@ -5,17 +5,23 @@ or standalone via ``python -m wactorz.tui``.
 """
 
 from textual.app import App, ComposeResult
-from textual.widgets import Footer, Header
+from textual.binding import Binding
+from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 
 
 class WactorzTUI(App):
     """Top-level app."""
 
-    BINDINGS = []  # TODO: add keyboard bindings
+    BINDINGS = [
+        Binding("q", "quit", "Quit"),
+    ]
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
         yield Header()
+        with TabbedContent(initial="home"):
+            with TabPane("home", id="home"):
+                yield Static("WACTORZ — home tab (coming soon)", id="home-body")
         yield Footer()
 
 

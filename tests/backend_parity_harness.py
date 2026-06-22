@@ -11,29 +11,26 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIXTURE_PATH = ROOT / "tests" / "parity_fixtures" / "backend_supervisor_parity.json"
 
 
-def _stub(name: str) -> None:
-    sys.modules.setdefault(name, types.ModuleType(name))
+def _ensure_importable(name: str) -> None:
+    """Guarantee ``name`` can be imported by the hand-loaded core modules.
+
+    ``actor.py`` and ``registry.py`` import ``aiomqtt`` / ``psutil`` at load
+    time. Both are core dependencies so they are normally installed; only when
+    one is genuinely missing do we insert an empty placeholder so ``_load``
+    below can still exec the module. We never replace a real, importable module:
+    leaving a bare stub in ``sys.modules`` would shadow it for every other test
+    in this shared process.
+    """
+    if name in sys.modules:
+        return
+    try:
+        importlib.import_module(name)
+    except Exception:
+        sys.modules[name] = types.ModuleType(name)
 
 
-for _module in [
-    "aiomqtt",
-    "psutil",
-]:
-    _stub(_module)
-
-
-_psutil = sys.modules["psutil"]
-
-
-class _FakeProc:
-    def cpu_percent(self, interval=None):
-        return 0.0
-
-    def memory_info(self):
-        return type("m", (), {"rss": 0})()
-
-
-_psutil.Process = lambda: _FakeProc()
+for _module in ("aiomqtt", "psutil"):
+    _ensure_importable(_module)
 
 
 def _load(name: str, path: pathlib.Path):

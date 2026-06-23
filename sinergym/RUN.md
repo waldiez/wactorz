@@ -22,7 +22,7 @@ cp -a maddpg_office/. ../state/maddpg_office/   # model.pt, aif_model.pkl, detec
 # docker build -f docker/Dockerfile.bridge -t wactorz-sinergym-bridge:3.12.0-ep25.1.0 .
 #   on arm64 (Apple Silicon) add  --platform linux/amd64   (the base is amd64-only)
 # Fuseki dataset (only needed once / after a `docker prune` — it is persistent TDB2):
-# curl -s -u admin:admin -X POST "http://localhost:3030/\$/datasets" --data "dbType=tdb2&dbName=sinergym"
+# curl -s -u "${FUSEKI_USER:-admin}":"${FUSEKI_PASSWORD:-admin}" -X POST "http://localhost:3030/\$/datasets" --data "dbType=tdb2&dbName=sinergym"
 ```
 
 ## 1. wactorz chat — spawn agents, then launch the fleet

@@ -198,11 +198,13 @@ alternatives to `maddpg-fleet` / `sinergym-anomaly` — see §11.
 From the directory containing `register_env.py`, inside the Sinergym container:
 
 ```bash
+FUSEKI_USER="${FUSEKI_USER:-admin}"
+FUSEKI_PASSWORD="${FUSEKI_PASSWORD:-admin}"
 python sinergym_bridge_anomalies.py \
   --env officeMedium-multiagent --mode deploy --episodes 1 \
   --zones Core_bottom,Core_mid,Core_top,Perimeter_bot_ZN_1,Perimeter_bot_ZN_2,Perimeter_bot_ZN_3,Perimeter_bot_ZN_4,Perimeter_mid_ZN_1,Perimeter_mid_ZN_2,Perimeter_mid_ZN_3,Perimeter_mid_ZN_4,Perimeter_top_ZN_1,Perimeter_top_ZN_2,Perimeter_top_ZN_3,Perimeter_top_ZN_4 \
   --fuseki-url http://host.docker.internal:3030 --fuseki-dataset sinergym \
-  --fuseki-user admin --fuseki-password admin \
+  --fuseki-user "${FUSEKI_USER}" --fuseki-password "${FUSEKI_PASSWORD}" \
   --inject-anomalies --anomaly-seed 5
 ```
 

@@ -25,6 +25,9 @@ SGY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # wactorz/sinergym
 IMAGE="wactorz-sinergym-bridge:3.12.0-ep25.1.0"
 FUSEKI_HOST_URL="${FUSEKI_HOST_URL:-http://localhost:3030}"
 
+FUSEKI_USER="${FUSEKI_USER:-admin}"
+FUSEKI_PASSWORD="${FUSEKI_PASSWORD:-admin}"
+
 # Strip --clean (the bridge doesn't understand it); wipe the dataset host-side first.
 CLEAN=0; ARGS=()
 for a in "$@"; do
@@ -32,7 +35,7 @@ for a in "$@"; do
 done
 if [ "$CLEAN" = 1 ]; then
   echo "[clean] clearing Fuseki dataset 'sinergym' ($FUSEKI_HOST_URL)…"
-  curl -fsS -u admin:admin -X POST "$FUSEKI_HOST_URL/sinergym/update" \
+  curl -fsS -u "${FUSEKI_USER}":"${FUSEKI_PASSWORD}" -X POST "$FUSEKI_HOST_URL/sinergym/update" \
     --data-urlencode 'update=CLEAR ALL' >/dev/null && echo "[clean] dataset wiped."
 fi
 
@@ -51,7 +54,7 @@ CMD=(python sinergym_bridge_anomalies.py
      --env officeMedium-multiagent --mode deploy --episodes 1
      --zones "$ZONES"
      --fuseki-url http://host.docker.internal:3030 --fuseki-dataset sinergym
-     --fuseki-user admin --fuseki-password admin
+     --fuseki-user "${FUSEKI_USER}" --fuseki-password "${FUSEKI_PASSWORD}"
      --broker host.docker.internal --port 1883
      "${ARGS[@]+"${ARGS[@]}"}")   # guard empty array under `set -u` (macOS bash 3.2)
 

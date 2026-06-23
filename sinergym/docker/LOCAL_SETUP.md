@@ -32,7 +32,9 @@ Files added by this path (everything else is the original branch):
 # 0. (services already up via compose.yaml: wactorz-mosquitto :1883, wactorz-fuseki :3030)
 
 # 1. Create the persistent Fuseki dataset the bridge writes to
-curl -s -u admin:admin -X POST "http://localhost:3030/\$/datasets" \
+FUSEKI_USER="${FUSEKI_USER:-admin}"
+FUSEKI_PASSWORD="${FUSEKI_PASSWORD:-admin}"
+curl -s -u "${FUSEKI_USER}":"${FUSEKI_PASSWORD}" -X POST "http://localhost:3030/\$/datasets" \
   --data "dbType=tdb2&dbName=sinergym"
 
 # 2. Host-side ML deps for the wactorz agents (CPU-only torch — inference, no GPU needed)
@@ -127,7 +129,9 @@ docker exec wactorz-mosquitto \
 
 **Fuseki is filling** (host side → `localhost`):
 ```bash
-curl -s -u admin:admin -H 'Content-Type: application/sparql-query' \
+FUSEKI_USER="${FUSEKI_USER:-admin}"
+FUSEKI_PASSWORD="${FUSEKI_PASSWORD:-admin}"
+curl -s -u "${FUSEKI_USER}":"${FUSEKI_PASSWORD}" -H 'Content-Type: application/sparql-query' \
   --data 'SELECT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g' \
   http://localhost:3030/sinergym/sparql
 ```
@@ -140,7 +144,9 @@ urn:sinergym:catalog           689
 
 **All 15 agents writing decisions** (SETUP §9 sanity):
 ```bash
-curl -s -u admin:admin -H 'Content-Type: application/sparql-query' \
+FUSEKI_USER="${FUSEKI_USER:-admin}"
+FUSEKI_PASSWORD="${FUSEKI_PASSWORD:-admin}"
+curl -s -u "${FUSEKI_USER}":"${FUSEKI_PASSWORD}" -H 'Content-Type: application/sparql-query' \
   --data 'PREFIX sgy: <https://waldiez.github.io/wactorz/sinergym#>
           PREFIX prov: <http://www.w3.org/ns/prov#>
           SELECT (COUNT(DISTINCT ?agent) AS ?agents) WHERE {
@@ -175,7 +181,7 @@ curl -s -u admin:admin -H 'Content-Type: application/sparql-query' \
   (TDB2) and every run numbers episodes from 1, so back-to-back runs pile up and collide
   on `(step, zone)`; the replay/SPARQL then averages a *mix* of runs. Use
   `./run-bridge.sh --clean` to wipe the dataset before a run (or
-  `curl -u admin:admin -X POST http://localhost:3030/sinergym/update --data-urlencode 'update=CLEAR ALL'`).
+  `curl -u "${FUSEKI_USER:-admin}":"${FUSEKI_PASSWORD:-admin}" -X POST http://localhost:3030/sinergym/update --data-urlencode 'update=CLEAR ALL'`).
   The **proper** long-term fix (for the delivered addon) is to stamp every record with a
   unique **run id** (e.g. `sgy:run "<ts-uuid>"`) and have the viz/queries default to the
   latest run — then multiple runs coexist cleanly instead of needing a wipe.

@@ -3,6 +3,42 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — pending
+
+### Fixed
+
+- **Planner-spawned agents silently missing setup** — `PlannerAgent` carried its
+  own drifted copy of the spawn logic, so dynamic agents it spawned skipped
+  migrated-state injection, TopicContract auto-wiring, and the `trusted` flag
+  (catalog agents were needlessly re-run through the safety validator). Spawn and
+  install logic for `MainActor` and `PlannerAgent` is now a single shared
+  `SpawnMixin`, so an agent behaves identically regardless of which one spawns it.
+  ~550 lines of duplication removed.
+
+### Changed
+
+- **`main_actor.py` decomposed** (6113 → ~4400 lines) with no behaviour change:
+  prompts → `agents/prompts/main_actor_prompts.py`, constants + pure helpers →
+  `agents/helpers/main_actor_helpers.py`, and two behaviour mixins →
+  `agents/mixins/{spawning,memory}.py`. `planner_agent.py` lost ~200 lines of
+  duplicated spawn code. New `agents/mixins/` and `agents/helpers/` subpackages
+  keep `agents/` to actual agents only.
+- **ha_actuator name collisions** now keyed on agent name (was `automation_id`);
+  a colliding actuator may get a different suffixed name.
+- **`type: "manual"` spawn configs** now route correctly through `MainActor`
+  (previously fell through to a no-op).
+
+### Added
+
+- **Tests** — `test_spawning.py` (23) covering spawn routing, idempotency/replace,
+  both install models, the `trusted` flag and TopicContract wiring; `test_memory.py`
+  (12) covering fact extraction/namespacing and system-prompt assembly.
+
+### Notes
+
+- Dead code spotted, not yet removed: `_looks_like_home_automation_request` has no
+  callers.
+
 ---
 
 ## [0.5.0] - 2026-06-22

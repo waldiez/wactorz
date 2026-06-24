@@ -20,7 +20,7 @@ run: ## Start the Python backend via run.sh
 	./run.sh
 
 run-py: ## Explicitly start the Python backend
-	WACTORZ_BACKEND=python ./run.sh
+	./run.sh
 
 dev-backend: ## Start the backend in dev mode (Python REST on :8080)
 	WACTORZ_DEV_MODE=1 ./run.sh

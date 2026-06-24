@@ -4,11 +4,6 @@ test_supervisor.py — Logical tests for the Wactorz supervision tree.
 Tests run fully in-process. No MQTT broker required, no real LLM calls,
 no network. Each test creates a minimal ActorSystem, registers actors under
 the Supervisor, and verifies behaviour by inspecting actor state.
-
-Run with:
-    python test_supervisor.py
-    python test_supervisor.py -v          # verbose
-    python test_supervisor.py TestName    # single test
 """
 
 import asyncio
@@ -19,46 +14,25 @@ import argparse
 from dataclasses import dataclass, field
 from typing import Optional
 
-# ── Import core modules directly — no full wactorz install needed ───────────
-# We stub every third-party dep and bypass wactorz's __init__.py so this test
-# runs standalone: no MQTT broker, no LLM keys, no HA server.
 
-import types, importlib.util, pathlib
+import types, importlib
 
 def _stub(name):
-    sys.modules.setdefault(name, types.ModuleType(name))
+    """Provide an empty stand-in ONLY for optional deps that aren't installed,
+    so the core import chain succeeds without the heavy ML/PDF extras. Never
+    shadow a real, importable module — doing so would poison it for every other
+    test sharing this process.
+    """
+    try:
+        importlib.import_module(name)
+    except Exception:
+        sys.modules.setdefault(name, types.ModuleType(name))
 
 for _m in ["aiomqtt", "psutil", "anthropic", "openai", "aiohttp",
            "discord", "twilio", "pdfplumber", "fitz", "ultralytics",
-           "torch", "numpy", "asyncssh",
-           "wactorz.core.integrations",
-           "wactorz.core.integrations.home_assistant",
-           "wactorz.core.integrations.home_assistant.ha_helper"]:
+           "torch", "numpy", "asyncssh"]:
     _stub(_m)
 
-# psutil.Process stub
-_psutil = sys.modules["psutil"]
-class _FakeProc:
-    def cpu_percent(self, interval=None): return 0.0
-    def memory_info(self): return type("m", (), {"rss": 0})()
-_psutil.Process = lambda: _FakeProc()
-
-# Stub the wactorz package so its __init__.py is never executed
-_af      = types.ModuleType("wactorz");      sys.modules["wactorz"]      = _af
-_af_core = types.ModuleType("wactorz.core"); sys.modules["wactorz.core"] = _af_core
-
-# Load the real core files from the package directory.
-_BASE = pathlib.Path(__file__).parent / "wactorz" / "core"
-
-def _load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod  = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-_actor_mod    = _load("wactorz.core.actor",    _BASE / "actor.py")
-_registry_mod = _load("wactorz.core.registry", _BASE / "registry.py")
 
 from wactorz.core.actor    import Actor, Message, MessageType, ActorState, SupervisorStrategy
 from wactorz.core.registry import ActorRegistry, ActorSystem, Supervisor, SupervisedSpec
@@ -76,6 +50,7 @@ def assert_eq(label, got, expected):
     _results.append((label, ok, f"got={got!r}, expected={expected!r}"))
     marker = PASS if ok else FAIL
     print(f"  {marker}  {label}")
+    assert ok, f"{label}: got={got!r}, expected={expected!r}"
     return ok
 
 def assert_true(label, value, detail=""):
@@ -83,6 +58,7 @@ def assert_true(label, value, detail=""):
     _results.append((label, ok, detail or str(value)))
     marker = PASS if ok else FAIL
     print(f"  {marker}  {label}")
+    assert ok, f"{label}: {detail or value}"
     return ok
 
 def section(title):

@@ -71,6 +71,8 @@ dev       = [
     "coverage>=7.13.5",
     "twine>=6.2.0",
     "watchdog>=6.0.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
 ]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
@@ -129,6 +131,7 @@ exclude = [
 # ── pytest ─────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 # ── sdist (source distribution for PyPI) ──────────────────────────────────────
 [tool.hatch.build.targets.sdist]

@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] - 2026-06-22
+
+### Fixed
+
+- **Headless `cli` interface self-shutdown** — `wactorz --interface cli` with no TTY (piped, Docker without `-it`, systemd) booted fully then tore the whole system down ~1s later: `input()` raised `EOFError` immediately, finishing the interactive loop, and with `run_forever()` already a no-op there was nothing left keeping the process alive. The `cli` interface now detects a non-interactive stdin and stays up via `run_forever()` instead of starting the interactive loop.
+
+---
+
 ## [0.5.0] - 2026-06-22
 
 ### Added

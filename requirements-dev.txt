@@ -1,4 +1,0 @@
--r requirements.txt
-coverage>=7.6,<8
-pre-commit>=4,<5
-watchdog>=5.0.0

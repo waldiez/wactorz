@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from wactorz.agents.memory import MemoryMixin
+from wactorz.agents.mixins.memory import MemoryMixin
 
 
 class FakeActor:

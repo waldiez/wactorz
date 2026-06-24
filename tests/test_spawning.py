@@ -16,7 +16,7 @@ from pathlib import Path
 # Make `wactorz` importable from this test package root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from wactorz.agents.spawning import SpawnMixin, _SpawnPlaceholder
+from wactorz.agents.mixins.spawning import SpawnMixin, _SpawnPlaceholder
 from wactorz.agents import dynamic_agent, llm_agent, scheduled_agent, manual_agent
 from wactorz.agents import home_assistant_actuator_agent as ha_mod
 from wactorz.core import topic_bus as bus_mod

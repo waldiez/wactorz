@@ -107,8 +107,6 @@ class SpawnMixin:
             actor = await self._spawn_ha_actuator(config, name)
         elif agent_type == "scheduled":
             actor = await self._spawn_scheduled_agent(config, name)
-        elif agent_type == "manual":
-            actor = await self._spawn_manual_agent(config, name)
         elif agent_type == "llm" or (not code and system_prompt):
             # Implicit-llm route: a config with a system prompt but no code is
             # an LLM agent even if 'type' was left at the "dynamic" default.
@@ -219,17 +217,6 @@ class SpawnMixin:
             name            = name,
             llm_provider    = self.llm,
             system_prompt   = config.get("system_prompt", "You are a helpful assistant."),
-            persistence_dir = str(self._persistence_dir.parent),
-        )
-
-    async def _spawn_manual_agent(self, config: dict, name: str) -> Optional[Actor]:
-        """Spawn a ManualAgent (finds device manuals, answers questions)."""
-        from ..manual_agent import ManualAgent
-        logger.info(f"[{self.name}] Spawning manual agent '{name}'")
-        return await self.spawn(
-            ManualAgent,
-            name            = name,
-            llm_provider    = self.llm,
             persistence_dir = str(self._persistence_dir.parent),
         )
 

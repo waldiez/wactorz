@@ -56,8 +56,42 @@ def _load_recipe(filename: str) -> Optional[str]:
 # CATALOG
 # ──────────────────────────────────────────────────────────────────────────────
 
+
+def _build_native_catalog() -> dict:
+    """Native Actor subclasses spawned directly by the catalog."""
+    native = {}
+
+    try:
+        from ..catalogue_agents.weather_agent import WeatherAgent
+        native["weather-agent"] = {
+            "name": "weather-agent",
+            "type": "native",
+            "factory": WeatherAgent,
+            "description": "Natural-language weather: current conditions, forecast, and history via Open-Meteo. No API key required.",
+            "capabilities": ["weather.current", "weather.forecast", "weather.history"],
+            "input_schema": {
+                "action": "current | forecast | history | set-default",
+                "location": "str - city name or lat,lon (optional, falls back to default)",
+                "days": "int - forecast horizon 1-16 (forecast only, default 3)",
+                "date": "str - ISO date or 'yesterday' (history only)",
+            },
+            "output_schema": {
+                "location": "str",
+                "temp_c": "float",
+                "feels_like_c": "float",
+                "condition": "str",
+                "humidity": "int",
+                "wind_kph": "float",
+            },
+        }
+        logger.info("[catalog] Loaded weather-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] weather-agent unavailable: {e}")
+
+    return native
+
 def _build_catalog() -> dict:
-    catalog = {}
+    catalog = _build_native_catalog()
 
     # ── image-gen-agent ───────────────────────────────────────────────────────
     code = _load_recipe("image_gen_agent.py")
@@ -358,6 +392,7 @@ class CatalogAgent(Actor):
             else:
                 logger.warning(f"[{self.name}] main not ready — could not inject manifest for '{name}'")
 
+
     def _current_task_description(self) -> str:
         return f"catalog ({len(self._catalog)} recipes)"
 
@@ -480,7 +515,7 @@ class CatalogAgent(Actor):
         if not recipe:
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
-        safe = {k: v for k, v in recipe.items() if k != "code"}
+        safe = {k: v for k, v in recipe.items() if k not in {"code", "factory"}}
         return {"ok": True, "message": f"Recipe for '{resolved}'", "recipe": safe}
 
     async def _action_spawn(self, name: str, payload: dict) -> dict:
@@ -507,6 +542,28 @@ class CatalogAgent(Actor):
         )
 
         try:
+            main = self._registry.find_by_name("main")
+            llm_provider = getattr(main, "llm", None) if main else None
+            persistence_dir = str(getattr(main, "_persistence_dir", "./state/main").parent) if main else "./state"
+
+            if recipe.get("type") == "native":
+                factory = recipe.get("factory")
+                if not factory:
+                    return {"ok": False, "message": f"Native recipe '{resolved}' has no factory"}
+                native_kwargs = {"name": resolved, "persistence_dir": persistence_dir}
+                if llm_provider:
+                    native_kwargs["llm_provider"] = llm_provider
+                actor = await self.spawn(factory, **native_kwargs)
+                if actor:
+                    msg = f"'{resolved}' spawned and running"
+                    logger.info(f"[{self.name}] {msg}")
+                    await self._mqtt_publish(
+                        f"agents/{self.actor_id}/logs",
+                        {"type": "log", "message": msg, "timestamp": time.time()},
+                    )
+                    return {"ok": True, "message": msg, "agent": resolved}
+                return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
+
             from .dynamic_agent import DynamicAgent
 
             install = recipe.get("install", [])
@@ -570,10 +627,6 @@ class CatalogAgent(Actor):
                 else:
                     logger.info(f"[{self.name}] All deps for '{resolved}' already installed — skipping installer")
 
-            main = self._registry.find_by_name("main")
-            llm_provider    = getattr(main, "llm", None) if main else None
-            persistence_dir = str(getattr(main, "_persistence_dir", "./state/main").parent) if main else "./state"
-
             actor = await self.spawn(
                 DynamicAgent,
                 name            = resolved,
@@ -609,7 +662,7 @@ class CatalogAgent(Actor):
             logger.error(f"[{self.name}] {msg}")
             return {"ok": False, "message": msg}
 
-    # ── Public API ─────────────────────────────────────────────────────────────
+    # Public API ─────────────────────────────────────────────────────────────
 
     def list_recipes(self) -> list[str]:
         return list(self._catalog.keys())

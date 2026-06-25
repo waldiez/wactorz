@@ -3466,6 +3466,7 @@ async def handle_task(agent, payload):
         if target:
             await self.send(target.actor_id, command)
 
+
     async def delete_spawned_agent(self, name: str):
         """
         Permanently delete an agent.

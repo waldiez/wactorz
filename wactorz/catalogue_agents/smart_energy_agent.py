@@ -1125,10 +1125,13 @@ def _remove_plug(agent, name) -> dict:
 def _add_rule(agent, rule) -> dict:
     if not isinstance(rule, dict) or not rule.get("type"):
         return {"result": "error", "error": "rule must be a dict with a 'type'"}
-    plug_name = rule.get("plug")
-    plug = agent.state["plugs"].get(plug_name)
+    requested_plug = rule.get("plug")
+    plug_name = _resolve_plug_name(agent, requested_plug)
+    plug = agent.state["plugs"].get(plug_name) if plug_name else None
     if not plug:
-        return {"result": "error", "error": f"rule references unknown plug '{plug_name}'"}
+        return {"result": "error", "error": f"rule references unknown plug '{requested_plug}'"}
+
+    rule["plug"] = plug_name
 
     # Safety: an auto_off rule on a protected plug is rejected up front so the
     # user gets a clear error instead of silent no-ops at runtime.

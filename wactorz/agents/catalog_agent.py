@@ -62,7 +62,7 @@ def _build_native_catalog() -> dict:
     native = {}
 
     try:
-        from .weather_agent import WeatherAgent
+        from ..catalogue_agents.weather_agent import WeatherAgent
         native["weather-agent"] = {
             "name": "weather-agent",
             "type": "native",

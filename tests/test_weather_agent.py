@@ -11,7 +11,7 @@ previously mangled queries like "weather tomorrow".
 import unittest
 from datetime import date, timedelta
 
-from wactorz.agents.weather_agent import (
+from wactorz.catalogue_agents.weather_agent import (
     WeatherAgent,
     parse_query,
     _clean_location,

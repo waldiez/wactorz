@@ -142,10 +142,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         except Exception as e:
             logger.warning(f"[{self.name}] Failed to record deletion note: {e}")
 
-    # ── Pipeline rules registry ────────────────────────────────────────────
-    # Stores grouped rules: one entry per user request, listing all agents spawned for it.
-    # Schema: { rule_id: { "rule_id", "task", "agents": [str], "created_at": float } }
-
     def get_notification_urls(self) -> dict:
         """Return persisted notification webhook URLs (discord, telegram, slack, etc.)"""
         return self.recall("_notification_urls") or {}

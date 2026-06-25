@@ -322,7 +322,15 @@ export class DashboardChat {
             },
             populateSelect: select => this._populateSelect(select),
             send: (input, select) => this._sendMessage(input, select),
+            stop: () => this._stopGeneration(),
         });
+    }
+
+    /** Ask the backend to cancel the in-flight generation. Fire-and-forget: the
+     *  server emits the "⏹ Stopped." confirmation on the usual chat reply path. */
+    private _stopGeneration(): void {
+        const base = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+        void fetch(`${base}/api/chat/stop`, { method: "POST" }).catch(() => {});
     }
 
     private _populateSelect(select: HTMLSelectElement): void {

@@ -25,6 +25,8 @@ export interface IobarDeps {
     populateSelect(select: HTMLSelectElement): void;
     /** Send the current message. */
     send(input: HTMLTextAreaElement, select: HTMLSelectElement): void;
+    /** Stop the in-flight generation (POST /chat/stop). */
+    stop(): void;
 }
 
 function buildTextarea(
@@ -75,6 +77,39 @@ function buildSendBtn(
         deps.send(input, select); // recordSent() clears the ghost
     });
     return sendBtn;
+}
+
+/** Stop button: shown only while a turn is streaming; cancels generation. */
+function buildStopBtn(deps: IobarDeps): HTMLButtonElement {
+    const stopBtn = document.createElement("button");
+    stopBtn.className = "af-stop-btn";
+    stopBtn.title = "Stop generating";
+    stopBtn.style.display = "none";
+    stopBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>`;
+    stopBtn.addEventListener("click", () => deps.stop());
+    return stopBtn;
+}
+
+/**
+ * Toggle the send/stop buttons across a turn: reveal stop (and disable send) the
+ * moment the user sends, restore it once the turn completes. Showing on send —
+ * rather than on the first stream chunk — gives a usable stop window even when
+ * the model "thinks" for a while before any tokens arrive. A turn ends with
+ * `af-stream-end` (streamed reply) or `af-chat-message` (non-streamed reply,
+ * e.g. slash commands), both dispatched in direct_ws and mqtt modes.
+ */
+function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButtonElement): void {
+    const busy = () => {
+        sendBtn.disabled = true;
+        stopBtn.style.display = "flex";
+    };
+    const idle = () => {
+        sendBtn.disabled = false;
+        stopBtn.style.display = "none";
+    };
+    document.addEventListener("af-send-message", busy);
+    document.addEventListener("af-stream-end", idle);
+    document.addEventListener("af-chat-message", idle);
 }
 
 async function startMic(stt: SpeechToText, btn: HTMLButtonElement): Promise<void> {
@@ -197,6 +232,9 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
     if (micAvailable()) {
         bar.appendChild(buildMicBtn(deps.stt, input));
     }
-    bar.appendChild(buildSendBtn(deps, input, select, mentionPanel));
+    const sendBtn = buildSendBtn(deps, input, select, mentionPanel);
+    const stopBtn = buildStopBtn(deps);
+    wireGenerationLifecycle(sendBtn, stopBtn);
+    bar.append(sendBtn, stopBtn);
     return bar;
 }

@@ -748,6 +748,26 @@
   background: rgba(37, 99, 235, 0.3);
   cursor: not-allowed;
 }
+.af-stop-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #dc2626;
+  border: none;
+  color: white;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    transform 0.1s;
+}
+.af-stop-btn:hover {
+  background: #ef4444;
+  transform: scale(1.05);
+}
 .af-voice-btn {
   width: 32px;
   height: 32px;

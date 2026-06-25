@@ -523,7 +523,7 @@ class CatalogAgent(Actor):
         if not recipe:
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
-        safe = {k: v for k, v in recipe.items() if k != "code"}
+        safe = {k: v for k, v in recipe.items() if k not in {"code", "factory"}}
         return {"ok": True, "message": f"Recipe for '{resolved}'", "recipe": safe}
 
     async def _action_spawn(self, name: str, payload: dict) -> dict:
@@ -676,9 +676,21 @@ class CatalogAgent(Actor):
             active = self.recall("_active_native") or []
             if name not in active:
                 active.append(name)
-                await self.persist("_active_native", active)
+                self.persist("_active_native", active)
         except Exception:
             pass
+
+    async def forget_native(self, name: str) -> bool:
+        """Stop restoring a native catalog agent after the user deletes it."""
+        try:
+            active = self.recall("_active_native") or []
+            if name not in active:
+                return False
+            active = [n for n in active if n != name]
+            self.persist("_active_native", active)
+            return True
+        except Exception:
+            return False
     # Public API ─────────────────────────────────────────────────────────────
 
     def list_recipes(self) -> list[str]:

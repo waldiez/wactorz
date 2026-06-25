@@ -348,5 +348,39 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("say 'weather in <city>'", at_home)
 
 
+class CatalogNativeWeatherTest(unittest.IsolatedAsyncioTestCase):
+    async def test_native_recipe_info_hides_factory_and_native_restore_is_mutable(self):
+        from wactorz.agents.catalog_agent import CatalogAgent
+
+        class MemoryCatalog(CatalogAgent):
+            def __init__(self):
+                self.memory = {}
+                super().__init__(name="catalog-test")
+
+            def persist(self, key, value):
+                self.memory[key] = value
+
+            def recall(self, key, default=None):
+                return self.memory.get(key, default)
+
+        catalog = MemoryCatalog()
+
+        info = catalog._action_info("weather-agent")
+        self.assertTrue(info["ok"])
+        self.assertIn("weather-agent", info["message"])
+        self.assertNotIn("factory", info["recipe"])
+        self.assertNotIn("code", info["recipe"])
+
+        await catalog._remember_native("weather-agent")
+        self.assertEqual(catalog.memory["_active_native"], ["weather-agent"])
+
+        forgotten = await catalog.forget_native("weather-agent")
+        self.assertTrue(forgotten)
+        self.assertEqual(catalog.memory["_active_native"], [])
+
+        forgotten_again = await catalog.forget_native("weather-agent")
+        self.assertFalse(forgotten_again)
+
+
 if __name__ == "__main__":
     unittest.main()

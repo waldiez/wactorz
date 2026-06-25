@@ -392,14 +392,6 @@ class CatalogAgent(Actor):
             else:
                 logger.warning(f"[{self.name}] main not ready — could not inject manifest for '{name}'")
 
-        # Re-spawn native agents that were active before the last restart.
-        active_native = self.recall("_active_native") or []
-        for name in active_native:
-            if self._registry and not self._registry.find_by_name(name):
-                recipe = self._catalog.get(name)
-                if recipe and recipe.get("type") == "native":
-                    logger.info(f"[{self.name}] Restoring native agent '{name}'")
-                    await self._action_spawn(name, {})
 
     def _current_task_description(self) -> str:
         return f"catalog ({len(self._catalog)} recipes)"
@@ -563,7 +555,6 @@ class CatalogAgent(Actor):
                     native_kwargs["llm_provider"] = llm_provider
                 actor = await self.spawn(factory, **native_kwargs)
                 if actor:
-                    await self._remember_native(resolved)
                     msg = f"'{resolved}' spawned and running"
                     logger.info(f"[{self.name}] {msg}")
                     await self._mqtt_publish(
@@ -671,26 +662,6 @@ class CatalogAgent(Actor):
             logger.error(f"[{self.name}] {msg}")
             return {"ok": False, "message": msg}
 
-    async def _remember_native(self, name: str) -> None:
-        try:
-            active = self.recall("_active_native") or []
-            if name not in active:
-                active.append(name)
-                self.persist("_active_native", active)
-        except Exception:
-            pass
-
-    async def forget_native(self, name: str) -> bool:
-        """Stop restoring a native catalog agent after the user deletes it."""
-        try:
-            active = self.recall("_active_native") or []
-            if name not in active:
-                return False
-            active = [n for n in active if n != name]
-            self.persist("_active_native", active)
-            return True
-        except Exception:
-            return False
     # Public API ─────────────────────────────────────────────────────────────
 
     def list_recipes(self) -> list[str]:

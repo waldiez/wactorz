@@ -5,7 +5,6 @@ from .home_assistant_agent import HomeAssistantAgent
 from .home_assistant_map_agent import HomeAssistantMapAgent
 from .home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
 from .io_agent import IOAgent
-from .weather_agent import WeatherAgent
 
 
 __all__ = [
@@ -20,5 +19,4 @@ __all__ = [
     "MonitorActor",
     "HomeAssistantAgent",
     "HomeAssistantStateBridgeAgent",
-    "WeatherAgent",
 ]

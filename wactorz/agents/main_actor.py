@@ -3466,20 +3466,6 @@ async def handle_task(agent, payload):
         if target:
             await self.send(target.actor_id, command)
 
-    async def _forget_catalog_native(self, name: str) -> None:
-        """Tell catalog not to auto-restore a native agent after deletion."""
-        if not self._registry:
-            return
-        catalog = self._registry.find_by_name("catalog")
-        forget = getattr(catalog, "forget_native", None) if catalog else None
-        if forget is None:
-            return
-        try:
-            result = forget(name)
-            if hasattr(result, "__await__"):
-                await result
-        except Exception as e:
-            logger.debug(f"[{self.name}] Could not forget native catalog agent '{name}': {e}")
 
     async def delete_spawned_agent(self, name: str):
         """
@@ -3518,7 +3504,6 @@ async def handle_task(agent, payload):
             actor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
 
         self._remove_from_spawn_registry(name)
-        await self._forget_catalog_native(name)
 
         # Remote path — let the runner do the heavy work on the edge node.
         if node:

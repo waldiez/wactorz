@@ -20,7 +20,7 @@ run: ## Start the Python backend via run.sh
 	./run.sh
 
 run-py: ## Explicitly start the Python backend
-	WACTORZ_BACKEND=python ./run.sh
+	./run.sh
 
 dev-backend: ## Start the backend in dev mode (Python REST on :8080)
 	WACTORZ_DEV_MODE=1 ./run.sh
@@ -117,13 +117,13 @@ precommit-run: ## Run all configured pre-commit hooks across the repo
 test: test-py ## Run Python tests
 
 test-py: ## Run Python tests
-	$(PYTHON) -m unittest discover -s tests -p 'test_*.py'
+	$(PYTHON) -m pytest tests
 
 coverage: coverage-py ## Generate Python coverage report
 
 coverage-py: ## Generate Python coverage XML + terminal report
 	mkdir -p coverage
-	$(PYTHON) -m coverage run -m unittest discover -s tests -p 'test_*.py'
+	$(PYTHON) -m coverage run -m pytest tests
 	$(PYTHON) -m coverage xml -o coverage/python-coverage.xml
 	$(PYTHON) -m coverage report
 

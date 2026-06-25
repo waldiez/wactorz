@@ -363,8 +363,17 @@ async def app():
     
     try:
         if interface == "cli":
-            iface = CLIInterface(main_actor)
-            await asyncio.gather(iface.run(), system.run_forever())
+            if sys.stdin.isatty():
+                iface = CLIInterface(main_actor)
+                await asyncio.gather(iface.run(), system.run_forever())
+            else:
+                # No TTY (piped/Docker/systemd): input() would raise EOFError on
+                # the first read, finishing iface.run() instantly and — paired
+                # with run_forever() — tearing the whole system down a second
+                # after boot. Skip the interactive loop and just stay up.
+                logger.info("stdin is not a TTY — running headless (no interactive CLI)")
+                system._running = True
+                await system.run_forever()
         elif interface == "rest":
             port = args.port or CONFIG.port
             iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)

@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Removed
+
+- **Flutter companion app** — the `mobile/` Flutter project (iOS/Android companion
+  app) and its `test-mobile` CI job were removed. The web dashboard and REST/WS
+  API remain the supported clients.
+
 ### Fixed
 
 - **Planner-spawned agents silently missing setup** — `PlannerAgent` carried its

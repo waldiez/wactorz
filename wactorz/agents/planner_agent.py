@@ -49,6 +49,7 @@ class PlannerAgent(Actor, SpawnMixin):
         auto_terminate: bool = True,
         plan_only:      bool = False,
         approved_plan:  Optional[dict] = None,
+        max_lifetime_s: float = 90.0,
         **kwargs,
     ):
         kwargs.setdefault("name", "planner")
@@ -61,8 +62,10 @@ class PlannerAgent(Actor, SpawnMixin):
         # Dry-run support:
         #   plan_only=True       → produce a plan, return it as JSON, do NOT spawn.
         #   approved_plan=<dict> → skip planning, execute the supplied plan directly.
-        # These are mutually exclusive in practice but we don't enforce it — if both
-        # are set, plan_only wins (returning the supplied plan unchanged).
+        # These are mutually exclusive in practice. If both are somehow set,
+        # approved_plan takes precedence (it is checked first in _run_plan) and
+        # the plan is executed; plan_only is ignored. on_start() enforces this
+        # and logs it so the behaviour is never silent.
         self._plan_only       = plan_only
         self._approved_plan   = approved_plan
         self._result_futures: dict[str, asyncio.Future] = {}
@@ -70,6 +73,15 @@ class PlannerAgent(Actor, SpawnMixin):
         # Per-agent spawn outcome: name → {"ok": bool, "error": str|None}
         # Sent back to main in the RESULT payload so it knows what actually happened.
         self._spawn_results: dict[str, dict] = {}
+
+        # Lifecycle: a planner must never outlive its task. _max_lifetime_s is a
+        # hard cap after which the planner self-removes regardless of state, so
+        # proposal/pipeline/approved planners don't accumulate until an app
+        # restart. _terminated guards against double-teardown; _lifetime_task
+        # holds the watchdog so normal completion can cancel it.
+        self._max_lifetime_s: float = max_lifetime_s
+        self._terminated: bool = False
+        self._lifetime_task: Optional[asyncio.Task] = None
 
         # Cost tracking — accumulated across all llm.complete() calls this session
         self.total_input_tokens:  int   = 0
@@ -84,6 +96,18 @@ class PlannerAgent(Actor, SpawnMixin):
 
     async def on_start(self):
         await self._log(f"Planner ready. Task: {self._task[:80]}")
+
+        # Enforce documented precedence: approved_plan wins over plan_only.
+        if self._approved_plan and self._plan_only:
+            await self._log(
+                "Both approved_plan and plan_only set — approved_plan takes "
+                "precedence; ignoring plan_only."
+            )
+            self._plan_only = False
+
+        # Hard lifetime cap so planners never pile up until a restart.
+        self._lifetime_task = asyncio.create_task(self._lifetime_watchdog())
+
         if self._task:
             asyncio.create_task(self._report_plan(self._task))
 
@@ -210,6 +234,7 @@ class PlannerAgent(Actor, SpawnMixin):
 
     # ── Pipeline detection & dispatch ──────────────────────────────────────
 
+    @staticmethod
     def _is_pipeline_request(task: str) -> bool:
         """
         Detect reactive/persistent pipeline requests vs one-shot tasks.
@@ -1517,16 +1542,7 @@ class PlannerAgent(Actor, SpawnMixin):
                 max_tokens=4000,
             )
             self._accrue_usage(_usage)
-            clean = response.strip()
-            if clean.startswith("```"):
-                clean = "\n".join(clean.split("\n")[1:])
-            if "```" in clean:
-                clean = clean[:clean.rfind("```")]
-            start = clean.find("[")
-            end = clean.rfind("]")
-            if start != -1 and end != -1:
-                clean = clean[start:end + 1]
-            plan = json.loads(clean.strip())
+            plan = json.loads(self._extract_json_array(response))
             if isinstance(plan, list):
                 # Validate generated code — catch common LLM mistakes
                 plan = self._validate_pipeline_code(plan)
@@ -1792,6 +1808,29 @@ class PlannerAgent(Actor, SpawnMixin):
 
     # ── Decomposition ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def _extract_json_array(response: str) -> str:
+        """Pull a JSON array out of an LLM response that may be fenced or padded
+        with prose. Strips a leading ``` / ```json fence and any trailing fence,
+        then slices the outermost [...] so stray commentary on either side does
+        not break json.loads(). Returns '' if no array delimiters are found.
+
+        Shared by both decompose paths so they parse identically.
+        """
+        clean = (response or "").strip()
+        # Drop an opening fence line (``` or ```json) if present.
+        if clean.startswith("```"):
+            clean = clean.split("\n", 1)[1] if "\n" in clean else ""
+        # Drop everything from a trailing fence onward.
+        if "```" in clean:
+            clean = clean[:clean.rfind("```")]
+        # Slice to the outermost array.
+        start = clean.find("[")
+        end = clean.rfind("]")
+        if start != -1 and end != -1 and end > start:
+            clean = clean[start:end + 1]
+        return clean.strip()
+
     async def _decompose(self, task: str, workers: list[dict]) -> list[dict]:
         """LLM breaks task into steps. Can declare missing agents with spawn configs."""
         if not self.llm:
@@ -1945,13 +1984,7 @@ Example:
                 max_tokens=1500,
             )
             self._accrue_usage(_usage)
-            clean = response.strip()
-            # Strip markdown fences
-            if clean.startswith("```"):
-                clean = "\n".join(clean.split("\n")[1:])
-            if clean.endswith("```"):
-                clean = "\n".join(clean.split("\n")[:-1])
-            plan = json.loads(clean.strip())
+            plan = json.loads(self._extract_json_array(response))
             if isinstance(plan, list) and plan:
                 return plan
         except Exception as e:
@@ -1995,18 +2028,27 @@ Example:
                     # Detect if this is a continuous/persistent agent.
                     # If the code has a process() loop or uses agent.subscribe(),
                     # delegation via TASK would just timeout — spawning IS the action.
+                    #
+                    # An explicit spawn_config["continuous"] (bool) always wins over
+                    # the string heuristic, so a planner that knows the agent's mode
+                    # can declare it instead of relying on substring matching (which
+                    # misclassifies agents that both subscribe and answer tasks).
                     code = spawn_config.get("code", "")
-                    is_continuous = bool(
-                        spawn_config.get("type") == "dynamic"
-                        and code
-                        and (
-                            "def process(" in code
-                            or "agent.subscribe(" in code
-                            or "agent.window(" in code
+                    explicit = spawn_config.get("continuous")
+                    if explicit is not None:
+                        is_continuous = bool(explicit)
+                    else:
+                        is_continuous = bool(
+                            spawn_config.get("type") == "dynamic"
+                            and code
+                            and (
+                                "def process(" in code
+                                or "agent.subscribe(" in code
+                                or "agent.window(" in code
+                            )
+                            # Only if there's no meaningful handle_task that does work
+                            and "def handle_task(" not in code
                         )
-                        # Only if there's no meaningful handle_task that does work
-                        and "def handle_task(" not in code
-                    )
                     if is_continuous:
                         step["_spawn_only"] = True
                         await self._log(
@@ -2043,13 +2085,44 @@ Example:
         completed: set[int]   = set()
         remaining: list[dict] = list(plan)
 
+        # ── Validate dependency references up front ────────────────────────
+        # A step whose depends_on points at a step number not in the plan can
+        # never become ready and would stall the whole batch. Surface it as a
+        # failed step (and mark it 'completed' so its dependents can resolve)
+        # rather than silently deadlocking.
+        valid_ids = {s.get("step") for s in plan}
+        for s in list(remaining):
+            bad = [d for d in (s.get("depends_on") or []) if d not in valid_ids]
+            if bad:
+                logger.error(
+                    f"[{self.name}] Step {s.get('step')} depends on missing "
+                    f"step(s) {bad} — marking failed"
+                )
+                results[s.get("step")] = {
+                    "error": f"unsatisfiable dependency on step(s) {bad}"
+                }
+                completed.add(s.get("step"))
+                remaining.remove(s)
+
         while remaining:
             ready = [
                 s for s in remaining
                 if all(d in completed for d in (s.get("depends_on") or []))
             ]
             if not ready:
-                logger.error(f"[{self.name}] Plan deadlock — aborting remaining steps")
+                # Cyclic or otherwise unschedulable. Don't silently drop work —
+                # record an error for every stuck step so synthesis (and the
+                # user) sees that the plan was only partially executed.
+                stuck = [s.get("step") for s in remaining]
+                logger.error(
+                    f"[{self.name}] Plan deadlock — unschedulable steps {stuck} "
+                    f"(circular depends_on?)"
+                )
+                for s in remaining:
+                    results[s.get("step")] = {
+                        "error": f"skipped — circular/unschedulable dependency "
+                                 f"(step {s.get('step')})"
+                    }
                 break
 
             parallel   = [s for s in ready if s.get("parallel", False)]
@@ -2319,12 +2392,76 @@ Example:
         finally:
             self._result_futures.pop(task_id, None)
 
-    async def _deferred_stop(self):
-        await asyncio.sleep(2.0)
+    async def _lifetime_watchdog(self):
+        """Hard lifetime cap.
+
+        A planner must never outlive its task. Whether it finishes normally,
+        gets stuck waiting on an approval round-trip that never returns, or sets
+        up a persistent pipeline, it self-removes after _max_lifetime_s so
+        planners don't accumulate until an app restart.
+
+        Spawned pipeline agents are independent actors (registered in main's
+        spawn registry), so terminating the planner does NOT stop them.
+        """
+        try:
+            await asyncio.sleep(self._max_lifetime_s)
+        except asyncio.CancelledError:
+            return
+        if not self._terminated:
+            mins = self._max_lifetime_s / 60
+            await self._log(f"Max lifetime ({mins:.0f} min) reached — self-terminating.")
+            await self._terminate()
+
+    async def _terminate(self):
+        """Idempotent teardown: cancel watchdog + pending futures, unregister, stop."""
+        if self._terminated:
+            return
+        self._terminated = True
+
+        # Cancel the watchdog unless we are being invoked *from* it.
+        if (self._lifetime_task
+                and not self._lifetime_task.done()
+                and self._lifetime_task is not asyncio.current_task()):
+            self._lifetime_task.cancel()
+
+        # Fail any in-flight delegations so nothing awaits a dead planner.
+        for fut in list(self._result_futures.values()):
+            if not fut.done():
+                fut.cancel()
+        self._result_futures.clear()
+
         await self._log("Self-terminating.")
+
+        # ── Release from the Supervisor FIRST ──────────────────────────────
+        # spawn() auto-registers every child under the Supervisor, which pins a
+        # strong reference (spec.actor) and keeps the name in _order. Without
+        # releasing, unregister()+stop() only removes us from the message
+        # registry — the Supervisor still holds the object, so it is never
+        # garbage-collected and _specs grows one entry per planner until the app
+        # restarts. release() drops the actor reference and marks the spec
+        # retired (which also prevents any restart race). This mirrors main's
+        # own delete path: release() → unregister() → stop().
         if self._registry:
-            await self._registry.unregister(self.actor_id)
-        await self.stop()
+            sup = getattr(self._registry, "_supervisor_ref", None)
+            if sup is not None:
+                try:
+                    sup.release(self.name)
+                except Exception:
+                    pass
+
+        if self._registry:
+            try:
+                await self._registry.unregister(self.actor_id)
+            except Exception:
+                pass
+        try:
+            await self.stop()
+        except Exception:
+            pass
+
+    async def _deferred_stop(self, delay: float = 2.0):
+        await asyncio.sleep(delay)
+        await self._terminate()
 
     async def _log(self, msg: str):
         logger.info(f"[{self.name}] {msg}")
@@ -2339,4 +2476,5 @@ Example:
 def _task_hash(task: str) -> str:
     """Stable short hash of a normalized task string for cache keying."""
     normalized = " ".join(task.lower().split())
+    return hashlib.md5(normalized.encode()).hexdigest()[:12]
     return hashlib.md5(normalized.encode()).hexdigest()[:12]

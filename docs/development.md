@@ -402,7 +402,7 @@ touch wactorz/catalogue_agents/my_agent.py
 
 ```bash
 pip install -e ".[dev]"
-python -m unittest discover -s tests -p 'test_*.py'
+make test-py          # or: python -m pytest tests
 ```
 
 ---

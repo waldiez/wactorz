@@ -623,6 +623,7 @@ class OpenAIProvider(LLMProvider):
         import openai
         self.client = openai.AsyncOpenAI(api_key=api_key, **({"base_url": base_url} if base_url else {}))
         self.model = model
+        self.base_url = base_url if base_url else None
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
@@ -632,6 +633,8 @@ class OpenAIProvider(LLMProvider):
             "max_completion_tokens": kwargs.get("max_tokens", 16384),
         }
         reasoning_effort = kwargs.get("reasoning_effort")
+        if (reasoning_effort == "none" or reasoning_effort is None) and self.base_url is not None:
+            params["extra_body"] = { "chat_template_kwargs": {"enable_thinking": False}}
         if reasoning_effort:
             params["reasoning_effort"] = reasoning_effort
         try:

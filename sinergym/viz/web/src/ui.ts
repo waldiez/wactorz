@@ -6,6 +6,18 @@ import type { Twin } from "./twin";
 
 const MONTHS = ["—", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Seasonal thermal-comfort bands (matches the env's get_seasonal_comfort).
+// Summer = Jun 1 .. Sep 30 inclusive; winter otherwise.
+const COMFORT_WINTER: [number, number] = [20.0, 23.5];
+const COMFORT_SUMMER: [number, number] = [23.0, 26.0];
+
+function seasonalComfort(month: number, day: number): [number, number] {
+  const isSummer =
+    (month > 6 || (month === 6 && day >= 1)) &&
+    (month < 10 || (month === 9 && day <= 30));
+  return isSummer ? COMFORT_SUMMER : COMFORT_WINTER;
+}
 const DOM = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const FLOOR_LABEL: Record<string, string> = { bottom: "Ground", mid: "Mid", top: "Top" };
 const $ = (id: string) => document.getElementById(id)!;
@@ -129,7 +141,8 @@ export class UI {
     const temps = Object.values(f.zoneTemp).filter(Number.isFinite);
     const mean = temps.length ? temps.reduce((a, b) => a + b, 0) / temps.length : NaN;
     $("meanzone").textContent = `${fmt(mean)} °C`;
-    const inBand = temps.filter((t) => t >= 20 && t <= 26).length;
+    const [lo, hi] = seasonalComfort(f.month, f.day);
+    const inBand = temps.filter((t) => t >= lo && t <= hi).length;
     const cpct = temps.length ? Math.round((inBand / temps.length) * 100) : 0;
     $("comfort").textContent = temps.length ? `${cpct}%` : "—";
     ($("comfort-bar") as HTMLElement).style.width = `${cpct}%`;

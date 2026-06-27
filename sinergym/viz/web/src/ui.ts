@@ -57,6 +57,12 @@ export class UI {
   private colorMode: "temp" | "occ" = "temp";
   private lastFrame?: Frame;
 
+  // Custom hover tooltip for zone cells. We update this element's text in place
+  // (rather than the native `title` attribute) so live value changes don't make
+  // the tooltip blink while it's open.
+  private tip = this.buildTip();
+  private hoveredZone: string | null = null;
+
   constructor(private geo: Geometry, private twin: Twin) {
     this.buildZoneMatrix();
     this.buildFloorToggles();
@@ -164,10 +170,57 @@ export class UI {
     c.root.classList.toggle("occupied", occ >= 0.5);
     const ppl = Math.round(occ);
     if (ppl !== c.lastOcc) { this.renderPips(c, ppl); c.lastOcc = ppl; }
+    // refresh the tooltip text in place, but only while this zone is the hovered
+    // one — mutating the open node avoids the native-title blink on every frame.
+    if (this.hoveredZone === zone) this.tip.textContent = this.tipText(zone, t, occ, f);
+  }
+
+  // Tooltip body for a zone at the current frame. Single source of truth used by
+  // both hover (mouseenter) and the live in-place refresh in updateCell.
+  private tipText(zone: string, t: number, occ: number, f: Frame): string {
     const hum = f.zoneHum[zone], htg = f.zoneHtg[zone], clg = f.zoneClg[zone];
-    c.root.title =
-      `${zone}\n${fmt(t)} °C · ${fmt(hum, 0)} %RH\n` +
+    return `${zone}\n${fmt(t)} °C · ${fmt(hum, 0)} %RH\n` +
       `setpoints  ${fmt(htg)}–${fmt(clg)} °C\noccupancy  ${fmt(occ, occ < 1 ? 2 : 0)} people`;
+  }
+
+  // Floating tooltip element, shared across all cells, positioned on hover.
+  private buildTip(): HTMLElement {
+    const t = document.createElement("div");
+    t.className = "zcell-tip";
+    t.style.cssText =
+      "position:fixed;z-index:60;pointer-events:none;white-space:pre-line;" +
+      "display:none;max-width:240px;padding:8px 10px;border-radius:8px;" +
+      "font:12px/1.45 var(--mono,ui-monospace,monospace);" +
+      "background:rgba(10,14,22,.94);color:#e7eefc;" +
+      "border:1px solid rgba(120,150,210,.28);box-shadow:0 6px 24px rgba(0,0,0,.45)";
+    document.body.appendChild(t);
+    return t;
+  }
+
+  private showTip(zone: string, anchor: HTMLElement) {
+    this.hoveredZone = zone;
+    const f = this.lastFrame;
+    if (f) this.tip.textContent = this.tipText(zone, f.zoneTemp[zone], f.zoneOcc[zone] ?? 0, f);
+    else this.tip.textContent = zone;
+    this.tip.style.display = "block";
+    this.positionTip(anchor);
+  }
+
+  private positionTip(anchor: HTMLElement) {
+    const r = anchor.getBoundingClientRect();
+    const tr = this.tip.getBoundingClientRect();
+    // prefer below-left of the cell; flip up / clamp to viewport if needed
+    let left = r.left;
+    let top = r.bottom + 8;
+    if (left + tr.width > window.innerWidth - 8) left = window.innerWidth - tr.width - 8;
+    if (top + tr.height > window.innerHeight - 8) top = r.top - tr.height - 8;
+    this.tip.style.left = `${Math.max(8, left)}px`;
+    this.tip.style.top = `${Math.max(8, top)}px`;
+  }
+
+  private hideTip() {
+    this.hoveredZone = null;
+    this.tip.style.display = "none";
   }
 
   private renderPips(c: Cell, ppl: number) {
@@ -263,8 +316,8 @@ export class UI {
         const pp = document.createElement("div"); pp.className = "zc-pips";
         cell.append(nm, tp, pp);
         // hover → highlight the zone in 3D; click → glide camera to it (toggle)
-        cell.addEventListener("mouseenter", () => this.twin.highlightZone(name, true));
-        cell.addEventListener("mouseleave", () => this.twin.highlightZone(name, false));
+        cell.addEventListener("mouseenter", () => { this.twin.highlightZone(name, true); this.showTip(name, cell); });
+        cell.addEventListener("mouseleave", () => { this.twin.highlightZone(name, false); this.hideTip(); });
         cell.addEventListener("click", () => {
           const on = this.twin.focusZone(name);
           for (const c of this.cells.values()) c.root.classList.remove("sel");

@@ -130,3 +130,44 @@ export function mapLogFeedItem(
     const ts = item.timestamp ? item.timestamp * 1000 : Date.now();
     return FEED_MAPPERS[item.type]?.(item, { agentName, ts }) ?? null;
 }
+
+/** High-water mark for log_feed replay, advanced in place by {@link selectLogFeedReplay}. */
+export interface LogFeedReplayState {
+    maxTs: number;
+    initialized: boolean;
+}
+
+/**
+ * Decide which `log_feed` items to (re)push, advancing `state` in place.
+ *
+ * The first batch replays the whole backlog (it happened before the browser
+ * connected — MQTT won't re-deliver it). Later batches emit only items newer
+ * than the high-water mark; the mark is still advanced even when nothing is
+ * pushed, so a reconnect doesn't replay the backlog. While direct MQTT is live
+ * it already delivers these events, so we skip (but keep advancing the mark).
+ * Returned items are oldest-first and exclude entries that don't map to a feed.
+ */
+export function selectLogFeedReplay(
+    items: LogFeedItem[],
+    state: LogFeedReplayState,
+    mqttLive: boolean,
+    resolveName?: (agentId: string) => string | undefined,
+): FeedItem[] {
+    const toFeed = (subset: LogFeedItem[]): FeedItem[] =>
+        [...subset]
+            .reverse()
+            .map(item => mapLogFeedItem(item, resolveName))
+            .filter((f): f is FeedItem => f !== null);
+
+    if (!state.initialized) {
+        state.initialized = true;
+        state.maxTs = items.length ? Math.max(...items.map(i => i.timestamp ?? 0)) : 0;
+        return toFeed(items);
+    }
+
+    const newItems = items.filter(item => (item.timestamp ?? 0) > state.maxTs);
+    if (newItems.length) {
+        state.maxTs = Math.max(...newItems.map(i => i.timestamp ?? 0));
+    }
+    return mqttLive ? [] : toFeed(newItems);
+}

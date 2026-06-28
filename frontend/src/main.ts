@@ -28,7 +28,7 @@ import { UPLOADS_ENABLED } from "./ui/dashboard/uploads";
 import type { AgentInfo } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import { resolveAgentName } from "./agents/naming";
-import { toAgentInfo, mapLogFeedItem, buildNameIndex } from "./agents/mapping";
+import { toAgentInfo, buildNameIndex, selectLogFeedReplay, type LogFeedReplayState } from "./agents/mapping";
 import { createDeletionGuard } from "./agents/deletionGuard";
 
 const agentStore = new AgentStore();
@@ -179,8 +179,7 @@ window.setInterval(() => {
 // every state-patch.  We use this as a reliable secondary path so MQTT events
 // appear in the feed even when the direct Mosquitto WebSocket is unavailable.
 
-let _logFeedMaxTs = 0;
-let _logFeedInitialized = false;
+const _logFeedState: LogFeedReplayState = { maxTs: 0, initialized: false };
 let _mqttLive = false;
 
 wsChat.onLogFeed(items => {
@@ -190,39 +189,9 @@ wsChat.onLogFeed(items => {
     const nameIndex = buildNameIndex(items);
     const resolveName = (id: string): string | undefined =>
         nameIndex.get(id) ?? agentStore.getAgents().find(a => a.id === id)?.name;
-
-    if (!_logFeedInitialized) {
-        _logFeedInitialized = true;
-        _logFeedMaxTs = items.length ? Math.max(...items.map(i => i.timestamp ?? 0)) : 0;
-        // Push historical items (happened before browser connected — MQTT won't re-deliver them).
-        [...items].reverse().forEach(item => {
-            const mapped = mapLogFeedItem(item, resolveName);
-            if (mapped) {
-                pushFeed(mapped);
-            }
-        });
-        return;
-    }
-
-    // Always advance the high-water mark so that when MQTT reconnects and later
-    // disconnects again, we don't replay the entire backlog.
-    const newItems = items.filter(item => (item.timestamp ?? 0) > _logFeedMaxTs);
-    if (newItems.length) {
-        _logFeedMaxTs = Math.max(...newItems.map(i => i.timestamp ?? 0));
-    }
-
-    // Direct MQTT is live — it delivers these events already; skip to avoid duplicates.
-    if (_mqttLive) {
-        return;
-    }
-
-    // Push new items oldest-first so the feed stays chronological.
-    [...newItems].reverse().forEach(item => {
-        const mapped = mapLogFeedItem(item, resolveName);
-        if (mapped) {
-            pushFeed(mapped);
-        }
-    });
+    // Replay/dedup bookkeeping (first-batch backlog vs. high-water mark vs.
+    // skip-while-MQTT-live) lives in selectLogFeedReplay so it stays tested.
+    selectLogFeedReplay(items, _logFeedState, _mqttLive, resolveName).forEach(pushFeed);
 });
 
 // Seed the activity feed from SQLite chat_log so the feed view isn't empty
@@ -566,12 +535,12 @@ window.addEventListener("beforeunload", () => {
 // wipe all
 document.addEventListener("af-wipe-all", () => {
     agentStore.clearAll();
-    _logFeedMaxTs = 0;
+    _logFeedState.maxTs = 0;
 });
 
 // A scoped reset (metrics / logs) cleared the server-side activity log — drop
 // the on-screen feed too, since onLogFeed only ever appends and would otherwise
 // keep showing stale lines until the next event.
 document.addEventListener("af-clear-feed", () => {
-    _logFeedMaxTs = 0;
+    _logFeedState.maxTs = 0;
 });

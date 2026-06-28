@@ -114,3 +114,13 @@ During development, Vite proxies:
 
 All three proxy to the backend monitor server on `:8888` (see `vite.config.ts`).
 Set `VITE_MQTT_WS_URL` in `.env` to override the MQTT broker URL in production builds.
+
+## Feature flags (build-time)
+
+Some UI is gated behind backend endpoints that aren't always available. They're
+off by default; enable per-deploy by setting the env var at build time (`.env`):
+
+| Flag | Enables | Needs backend |
+| ---- | ------- | ------------- |
+| `VITE_STT_ENABLED=true` | Voice/mic button (speech-to-text) | `/api/stt` |
+| `VITE_UPLOADS_ENABLED=true` | Attachments (drag-drop + paste) | `/api/upload` |

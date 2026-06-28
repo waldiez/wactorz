@@ -4,6 +4,14 @@
  */
 import { defineConfig } from "vitest/config";
 
+// Single knob for the coverage floor (lines & statements). Ratchet it up as
+// coverage grows — never down. Functions and branches trail and get their own
+// offsets: branches especially cover slower (defensive guards + flag-gated
+// paths), so when you raise TARGET you may need to widen their offset too.
+const TARGET = 95;
+const FUNCTIONS_FLOOR = TARGET - 3; // 92
+const BRANCHES_FLOOR = TARGET - 13; // 82
+
 export default defineConfig({
     test: {
         environment: "happy-dom",
@@ -23,16 +31,12 @@ export default defineConfig({
                 "src/ui/SocialDashboard.ts",
                 "src/ui/AgentHUD.ts",
             ],
-            // Ratchet baseline: set to the current measured floor so CI gates
-            // regressions today. Raise these toward the goal
-            // (lines/functions/statements 95, branches 90) as coverage
-            // improves — never lower them. Branches stay slightly behind by
-            // design: defensive guards/fallbacks make 95 there a poor trade.
+            // Floors derived from TARGET (see top of file). CI fails below these.
             thresholds: {
-                lines: 94,
-                functions: 91,
-                branches: 80,
-                statements: 94,
+                lines: TARGET,
+                statements: TARGET,
+                functions: FUNCTIONS_FLOOR,
+                branches: BRANCHES_FLOOR,
             },
         },
     },

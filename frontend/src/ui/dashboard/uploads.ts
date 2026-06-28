@@ -14,8 +14,12 @@
  */
 import type { Attachment } from "../../types/agent";
 
-/** Whether the attachment UI is shown (needs the `/api/upload` backend). */
-export const UPLOADS_ENABLED = false;
+/**
+ * Whether the attachment UI (drag-drop + paste) is shown. Off by default;
+ * enable per-deploy at build time with `VITE_UPLOADS_ENABLED=true` once the
+ * `/api/upload` backend is live.
+ */
+export const UPLOADS_ENABLED = import.meta.env["VITE_UPLOADS_ENABLED"] === "true";
 
 /** Dev-only: set `true` to keep attachments client-side (object URL) instead of
  *  POSTing them, so the compose/preview UX can be demoed with no backend. Ships

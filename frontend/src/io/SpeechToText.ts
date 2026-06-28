@@ -11,10 +11,11 @@
  */
 
 /**
- * Whether the `/api/stt` backend endpoint exists yet. Flip to `true` once it's
- * live; until then the mic button is not rendered at all.
+ * Whether the `/api/stt` backend endpoint is available. Off by default; enable
+ * per-deploy at build time with `VITE_STT_ENABLED=true` once the endpoint is
+ * live. While off, the mic button is not rendered at all.
  */
-export const STT_ENABLED = false;
+export const STT_ENABLED = import.meta.env["VITE_STT_ENABLED"] === "true";
 
 export class SpeechToText {
     private recorder: MediaRecorder | null = null;

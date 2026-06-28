@@ -263,20 +263,22 @@ export class DashboardChat {
             msgs.forEach(m => this._appendChatMsgEl(m, thread));
         }
         if (streamHere) {
-            this._reattachStreamBubble(thread);
+            this._buildStreamRow(thread, this._streamText);
         }
         this._scrollThread();
     }
 
-    private _reattachStreamBubble(thread: HTMLElement): void {
+    /** Build the streaming agent bubble, append it to `thread`, and latch the
+     *  row/body refs. `initialText` pre-fills the bubble (reattach on re-render). */
+    private _buildStreamRow(thread: HTMLElement, initialText = ""): void {
         const row = document.createElement("div");
         row.className = "af-chat-msg af-chat-msg-agent";
         const fromEl = document.createElement("div");
         fromEl.className = "af-chat-msg-from";
-        fromEl.textContent = this._streamFrom!;
+        fromEl.textContent = this._streamFrom ?? "";
         const bubble = document.createElement("div");
         bubble.className = "af-chat-msg-bubble";
-        bubble.textContent = this._streamText;
+        bubble.textContent = initialText;
         row.append(fromEl, bubble);
         thread.appendChild(row);
         this._streamRow = row;
@@ -562,16 +564,6 @@ export class DashboardChat {
         if (!thread) {
             return;
         }
-        const row = document.createElement("div");
-        row.className = "af-chat-msg af-chat-msg-agent";
-        const fromEl = document.createElement("div");
-        fromEl.className = "af-chat-msg-from";
-        fromEl.textContent = this._streamFrom;
-        const bubble = document.createElement("div");
-        bubble.className = "af-chat-msg-bubble";
-        row.append(fromEl, bubble);
-        thread.appendChild(row);
-        this._streamRow = row;
-        this._streamBody = bubble;
+        this._buildStreamRow(thread);
     }
 }

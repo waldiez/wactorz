@@ -4,13 +4,11 @@
  */
 import { defineConfig } from "vitest/config";
 
-// Single knob for the coverage floor (lines & statements). Ratchet it up as
-// coverage grows — never down. Functions and branches trail and get their own
-// offsets: branches especially cover slower (defensive guards + flag-gated
-// paths), so when you raise TARGET you may need to widen their offset too.
+// Coverage floors — ratchet up as coverage grows, never down. Lines, statements
+// and functions share TARGET; branches trail (defensive guards + flag-gated
+// paths cover slower), so they keep a small offset.
 const TARGET = 95;
-const FUNCTIONS_FLOOR = TARGET - 3; // 92
-const BRANCHES_FLOOR = TARGET - 13; // 82
+const BRANCHES_FLOOR = TARGET - 10; // 85
 
 export default defineConfig({
     test: {
@@ -31,7 +29,7 @@ export default defineConfig({
             thresholds: {
                 lines: TARGET,
                 statements: TARGET,
-                functions: FUNCTIONS_FLOOR,
+                functions: TARGET,
                 branches: BRANCHES_FLOOR,
             },
         },

@@ -37,6 +37,16 @@ describe("buildHeader", () => {
         header.querySelector<HTMLButtonElement>('[data-view="chat"]')!.click();
         expect(onSetView).toHaveBeenCalledWith("chat");
     });
+
+    it("the audio icon button toggles its popover open, then closed on a second click", () => {
+        const header = buildHeader({ view: "overview", connState: "live", onSetView: vi.fn() });
+        document.body.appendChild(header);
+        const audioBtn = header.querySelector<HTMLButtonElement>('[title="Audio settings"]')!;
+        audioBtn.click(); // open: toggles `.open` and positions the popover
+        expect(document.querySelector("div.open")).not.toBeNull();
+        audioBtn.click(); // close: the else branch (onClose is undefined for audio)
+        expect(document.querySelector("div.open")).toBeNull();
+    });
 });
 
 describe("buildBottomNav", () => {

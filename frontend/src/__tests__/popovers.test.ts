@@ -73,6 +73,18 @@ describe("buildAudioPopover", () => {
         expect(tts.setVoice).toHaveBeenCalledWith("Google US");
     });
 
+    it("re-populates the voice list on tts-voices-loaded and applies the saved voice", () => {
+        (tts as { selectedVoice: string }).selectedVoice = "Google US";
+        const pop = buildAudioPopover();
+        const sel = pop.querySelector<HTMLSelectElement>(".af-audio-select")!;
+        // Browser fires this once its async voice list resolves; populateVoices
+        // re-runs, clearing + rebuilding the options and applying the saved voice.
+        document.dispatchEvent(new Event("tts-voices-loaded"));
+        expect([...sel.options].filter(o => o.value).length).toBe(2);
+        expect(sel.value).toBe("Google US");
+        (tts as { selectedVoice: string }).selectedVoice = "";
+    });
+
     it("selecting an ambient track sets it and reveals the volume row", () => {
         const pop = buildAudioPopover();
         const volRow = pop.querySelector<HTMLElement>(".af-audio-vol-row")!;
@@ -143,5 +155,54 @@ describe("buildResetPopover", () => {
         expect(btn.querySelector("span")!.textContent).toContain("Confirm");
         vi.advanceTimersByTime(3000);
         expect(btn.querySelector("span")!.textContent).toBe("Chat history");
+    });
+
+    it("toasts an error with the server message when the reset response is not ok", async () => {
+        globalThis.fetch = vi.fn(async () => ({
+            ok: false,
+            status: 500,
+            json: async () => ({ error: "boom" }),
+        })) as unknown as typeof fetch;
+        const pop = buildResetPopover();
+        const btn = pop.querySelector<HTMLButtonElement>("button")!;
+        btn.click(); // arm
+        btn.click(); // fire
+        await vi.waitFor(() =>
+            expect(toast.show).toHaveBeenCalledWith(
+                expect.objectContaining({ title: "Reset failed", message: "boom" }),
+            ),
+        );
+    });
+
+    it("falls back to the status code when the error body is unparseable", async () => {
+        globalThis.fetch = vi.fn(async () => ({
+            ok: false,
+            status: 503,
+            json: async () => {
+                throw new Error("not json");
+            },
+        })) as unknown as typeof fetch;
+        const pop = buildResetPopover();
+        const btn = pop.querySelector<HTMLButtonElement>("button")!;
+        btn.click(); // arm
+        btn.click(); // fire
+        await vi.waitFor(() =>
+            expect(toast.show).toHaveBeenCalledWith(
+                expect.objectContaining({ title: "Reset failed", message: "503" }),
+            ),
+        );
+    });
+
+    it("toasts an error when the reset request throws", async () => {
+        globalThis.fetch = vi.fn(async () => {
+            throw new Error("network down");
+        }) as unknown as typeof fetch;
+        const pop = buildResetPopover();
+        const btn = pop.querySelector<HTMLButtonElement>("button")!;
+        btn.click(); // arm
+        btn.click(); // fire
+        await vi.waitFor(() =>
+            expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ title: "Reset failed" })),
+        );
     });
 });

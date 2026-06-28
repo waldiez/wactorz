@@ -190,4 +190,71 @@ describe("renderHADevices", () => {
             expect.objectContaining({ entity_id: "media_player.tv", volume_level: 0.8 }),
         );
     });
+
+    it("the detail toggle button and colour picker call HA services", () => {
+        renderHADevices(
+            container,
+            [
+                ent("light.k", "on", {
+                    friendly_name: "Lamp",
+                    supported_color_modes: ["rgb"],
+                    rgb_color: [255, 0, 0],
+                }),
+            ],
+            null,
+            haClient,
+        );
+        clickableRow(container).click();
+
+        [...container.querySelectorAll<HTMLButtonElement>("button")]
+            .find(b => b.textContent === "Turn Off")!
+            .click();
+        expect(haClient.toggleEntity).toHaveBeenCalledWith("light.k");
+
+        const picker = container.querySelector<HTMLInputElement>('input[type="color"]')!;
+        picker.value = "#00ff00";
+        picker.dispatchEvent(new Event("change"));
+        expect(haClient.callService).toHaveBeenCalledWith(
+            "light",
+            "turn_on",
+            expect.objectContaining({ entity_id: "light.k", rgb_color: [0, 255, 0] }),
+        );
+    });
+
+    it("sorts named areas alphabetically with the no-area bucket last", () => {
+        const registries: HARegistries = {
+            areas: [
+                { area_id: "z", name: "Zen Den" },
+                { area_id: "a", name: "Attic" },
+            ],
+            // entity-level area_id (not via a device) exercises the direct lookup
+            entityEntries: [
+                { entity_id: "light.z", area_id: "z" },
+                { entity_id: "light.a", area_id: "a" },
+            ],
+            deviceEntries: [],
+        };
+        renderHADevices(
+            container,
+            [
+                ent("light.z", "on", { friendly_name: "ZLight" }),
+                ent("light.a", "on", { friendly_name: "ALight" }),
+                ent("switch.n", "off", { friendly_name: "NoArea" }), // no registry entry → no-area bucket
+            ],
+            registries,
+            haClient,
+        );
+        const text = container.textContent ?? "";
+        expect(text.indexOf("Attic")).toBeLessThan(text.indexOf("Zen Den")); // alphabetical
+        expect(text).toContain("NoArea"); // no-area bucket still rendered
+    });
+
+    it("a device row highlights on hover", () => {
+        renderHADevices(container, [ent("light.k", "on", { friendly_name: "Lamp" })], null, haClient);
+        const row = clickableRow(container);
+        row.dispatchEvent(new Event("mouseenter"));
+        expect(row.style.background).not.toBe("");
+        row.dispatchEvent(new Event("mouseleave"));
+        expect(row.style.background).toBe("");
+    });
 });

@@ -78,7 +78,7 @@ const defaultConfig = defineConfig({
 
 export default [
     {
-        ignores: ["node_modules", "public", "**/assets/**"],
+        ignores: ["node_modules", "public", "dist", "coverage", "**/assets/**"],
     },
     ...defaultConfig.map(config => ({
         ...config,

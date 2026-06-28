@@ -4,13 +4,13 @@
  */
 /**
  * Chat input behaviour for the iobar textarea: history (↑/↓), ghost-text
- * autosuggestion from history, and the @mention panel. Owns all of that state
+ * autosuggestion from history, and the `@mention` panel. Owns all of that state
  * so CardDashboard doesn't have to; it reaches back to the host only for the
  * agent list, the active target, and the send action.
  */
 
 export interface ChatInputHost {
-    /** All known agent names (for @mention completion). */
+    /** All known agent names (for `@mention` completion). */
     agentNames(): string[];
     /** Set the active chat target (when a mention is accepted). */
     setTarget(name: string): void;
@@ -62,7 +62,7 @@ export class ChatInput {
         }
     }
 
-    /** Handle input changes: open the @mention panel or update the ghost suggestion. */
+    /** Handle input changes: open the `@mention` panel or update the ghost suggestion. */
     onChange(
         input: HTMLTextAreaElement,
         select: HTMLSelectElement,

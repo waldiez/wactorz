@@ -270,7 +270,7 @@ function timeLabel(): string {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-class ToastManager {
+export class ToastManager {
     private container!: HTMLElement;
     private active: HTMLElement[] = [];
     private readonly MAX = 4;

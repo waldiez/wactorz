@@ -22,7 +22,7 @@ export default defineConfig({
             provider: "v8",
             reporter: ["text", "lcov", "html"],
             include: ["src/**/*.ts"],
-            exclude: ["src/main.ts", "src/io/AgentImageGen.ts"],
+            exclude: ["src/main.ts"],
             // Floors derived from TARGET (see top of file). CI fails below these.
             thresholds: {
                 lines: TARGET,

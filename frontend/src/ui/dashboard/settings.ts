@@ -15,6 +15,10 @@ export interface CostLimitInfo {
     limit_usd?: number;
     period?: string;
     spend_usd?: number;
+    /** Server-computed progress fields (present once a limit is configured). */
+    pct_used?: number;
+    warning?: boolean;
+    limit_reached?: boolean;
 }
 
 export interface CostLimitCallbacks {

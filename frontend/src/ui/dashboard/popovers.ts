@@ -179,7 +179,7 @@ const RESET_SCOPES: { scope: string; label: string; danger?: boolean }[] = [
 async function postReset(scope: string, label: string, pop: HTMLElement): Promise<void> {
     pop.classList.remove("open");
     try {
-        const ingress: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+        const ingress: string = window.__WACTORZ_INGRESS_PATH ?? "";
         const res = await fetch(`${ingress}/api/reset`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -188,11 +188,11 @@ async function postReset(scope: string, label: string, pop: HTMLElement): Promis
         if (res.ok) {
             toast.show({ type: "system", title: "Reset", message: `${label} cleared` });
         } else {
-            const err = await res.json().catch(() => ({}));
+            const err: { error?: string } = await res.json().catch(() => ({}));
             toast.show({
                 type: "alert-error",
                 title: "Reset failed",
-                message: (err as any).error ?? String(res.status),
+                message: err.error ?? String(res.status),
             });
         }
     } catch (e) {

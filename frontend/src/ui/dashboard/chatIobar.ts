@@ -217,7 +217,7 @@ async function handlePaste(e: ClipboardEvent): Promise<void> {
         return;
     }
     e.preventDefault();
-    const apiBase: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+    const apiBase: string = window.__WACTORZ_INGRESS_PATH ?? "";
     for (const file of files) {
         try {
             const attachment = await uploadFile(file, apiBase);

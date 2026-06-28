@@ -9,6 +9,7 @@
  */
 import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel, relTime, canDirectMessage } from "./agentState";
+import type { CostLimitInfo } from "./settings";
 
 export function buildHostBar(
     cpu: number | null,
@@ -57,7 +58,7 @@ export interface StatCardData {
     totalMessages: number | null;
     totalCostUsd: number | null;
     feedCount: number;
-    costLimit: any | null;
+    costLimit: CostLimitInfo | null;
 }
 
 interface StatSpec {
@@ -76,9 +77,8 @@ function costExtraBar(pct: number, barColor: string): string {
 }
 
 /** Detail/accent/progress-bar for the Cost stat card from the spend-limit info. */
-function costSummary(lim: any): { detail: string; accent: string; extra: string } {
-    const hasLimit = lim && typeof lim.limit_usd === "number" && lim.limit_usd > 0;
-    if (!hasLimit) {
+function costSummary(lim: CostLimitInfo | null): { detail: string; accent: string; extra: string } {
+    if (!lim || typeof lim.limit_usd !== "number" || lim.limit_usd <= 0) {
         return { detail: "reported by actors", accent: "#f59e0b", extra: "" };
     }
     const barColor = lim.limit_reached ? "#ef4444" : lim.warning ? "#f59e0b" : "#22d3a0";
@@ -86,7 +86,7 @@ function costSummary(lim: any): { detail: string; accent: string; extra: string 
     const periodLabel =
         lim.period === "daily" ? "today" : lim.period === "weekly" ? "this week" : "this month";
     return {
-        detail: `$${lim.spend_usd.toFixed(4)} / $${lim.limit_usd.toFixed(2)} ${periodLabel}`,
+        detail: `$${(lim.spend_usd ?? 0).toFixed(4)} / $${lim.limit_usd.toFixed(2)} ${periodLabel}`,
         accent: lim.limit_reached ? "#ef4444" : "#f59e0b",
         extra: costExtraBar(pct, barColor),
     };

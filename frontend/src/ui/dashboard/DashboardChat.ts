@@ -46,7 +46,7 @@ export class DashboardChat {
     private _historyLoaded = new Set<string>();
     private _selfDispatching = false;
 
-    private _stt = new SpeechToText((window as any).__WACTORZ_INGRESS_PATH ?? "");
+    private _stt = new SpeechToText(window.__WACTORZ_INGRESS_PATH ?? "");
     private _chatInput = new ChatInput({
         agentNames: () => [...this.host.agents.values()].map(a => a.name).filter(Boolean),
         setTarget: (name: string) => {
@@ -331,7 +331,7 @@ export class DashboardChat {
     /** Ask the backend to cancel the in-flight generation. Fire-and-forget: the
      *  server emits the "⏹ Stopped." confirmation on the usual chat reply path. */
     private _stopGeneration(): void {
-        const base = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+        const base = window.__WACTORZ_INGRESS_PATH ?? "";
         void fetch(`${base}/api/chat/stop`, { method: "POST" }).catch(() => {});
     }
 

@@ -20,7 +20,14 @@ export interface HAEntity {
         device_class?: string;
         supported_features?: number;
         entity_picture?: string;
-        [key: string]: any;
+        // Domain-specific attributes read by the device cards (haDevices.ts).
+        brightness?: number;
+        rgb_color?: number[];
+        supported_color_modes?: string[];
+        temperature?: number;
+        target_temp_low?: number;
+        volume_level?: number;
+        [key: string]: unknown;
     };
     last_changed: string;
     last_updated: string;
@@ -58,6 +65,24 @@ export interface HARegistries {
 
 export type HAUpdateHandler = (entities: HAEntity[]) => void;
 
+/** A parsed inbound HA WebSocket frame (auth handshake, command result, or event). */
+interface HAMessage {
+    type: string;
+    id?: number;
+    success?: boolean;
+    result?: unknown;
+    message?: string;
+    error?: { message?: string };
+    event?: { data?: { new_state?: HAEntity } };
+}
+
+/** An outbound HA command; `id` is assigned by the client before sending. */
+interface HACommand {
+    type: string;
+    id?: number;
+    [key: string]: unknown;
+}
+
 export class HAClient {
     private ws: WebSocket | null = null;
     private idCounter = 1;
@@ -72,7 +97,7 @@ export class HAClient {
     private _entitiesReqId: number | null = null;
 
     /** Pending promise resolvers for registry (and other) tracked requests. */
-    private _resolvers = new Map<number, (data: any) => void>();
+    private _resolvers = new Map<number, (data: HAMessage) => void>();
 
     constructor(
         private readonly url: string,
@@ -103,9 +128,9 @@ export class HAClient {
         };
 
         this.ws.onmessage = ev => {
-            let data: any;
+            let data: HAMessage;
             try {
-                data = JSON.parse(ev.data);
+                data = JSON.parse(ev.data) as HAMessage;
             } catch {
                 console.error("[HA] Failed to parse message:", ev.data);
                 return;
@@ -124,7 +149,7 @@ export class HAClient {
     }
 
     /** Route a parsed WebSocket frame to the matching handler. */
-    private _handleMessage(data: any): void {
+    private _handleMessage(data: HAMessage): void {
         if (data.type === "auth_required") {
             this.ws?.send(JSON.stringify({ type: "auth", access_token: this.token }));
         } else if (data.type === "auth_ok") {
@@ -143,8 +168,8 @@ export class HAClient {
     }
 
     /** Resolve a tracked request — entity snapshot callback and/or promise resolver. */
-    private _handleResult(data: any): void {
-        const id = data.id as number;
+    private _handleResult(data: HAMessage): void {
+        const id = data.id!;
 
         // Entities (get_states) — handled synchronously to preserve callback contract
         if (id === this._entitiesReqId && data.success && Array.isArray(data.result)) {
@@ -201,7 +226,7 @@ export class HAClient {
         });
     }
 
-    callService(domain: string, service: string, serviceData: any): void {
+    callService(domain: string, service: string, serviceData: Record<string, unknown>): void {
         if (!this.authenticated) {
             return;
         }
@@ -209,7 +234,7 @@ export class HAClient {
     }
 
     /** Fire-and-forget: assigns an id and sends. Result response is ignored. */
-    private _sendVoid(msg: any): void {
+    private _sendVoid(msg: HACommand): void {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return;
         }
@@ -218,7 +243,7 @@ export class HAClient {
     }
 
     /** Tracked request: returns a Promise that resolves/rejects when the result arrives. */
-    private _request<T = any>(msg: any): Promise<T> {
+    private _request<T = unknown>(msg: HACommand): Promise<T> {
         return new Promise((resolve, reject) => {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
                 reject(new Error("WebSocket not open"));

@@ -12,7 +12,7 @@
 import type { ChatMessage } from "../../types/agent";
 
 function ingressBase(): string {
-    return (window as any).__WACTORZ_INGRESS_PATH ?? "";
+    return window.__WACTORZ_INGRESS_PATH ?? "";
 }
 
 /**

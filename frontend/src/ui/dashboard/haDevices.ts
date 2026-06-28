@@ -241,7 +241,7 @@ function addColorPicker(container: HTMLElement, e: HAEntity, haClient: HAClient 
     picker.style.cssText = "border:none;width:20px;height:20px;background:none;cursor:pointer;";
 
     if (e.attributes.rgb_color) {
-        const [r, g, b] = e.attributes.rgb_color;
+        const [r = 0, g = 0, b = 0] = e.attributes.rgb_color;
         picker.value = `#${hex2(r)}${hex2(g)}${hex2(b)}`;
     }
 

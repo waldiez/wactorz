@@ -25,7 +25,7 @@ export class MetricsController {
     private _hostCpu: number | null = null;
     private _hostMemUsedMb: number | null = null;
     private _hostMemTotalMb: number | null = null;
-    private _costLimitInfo: Record<string, any> | null = null;
+    private _costLimitInfo: CostLimitInfo | null = null;
     private _pollTimer: ReturnType<typeof setInterval> | null = null;
 
     constructor(private host: MetricsHost) {}
@@ -38,12 +38,12 @@ export class MetricsController {
         return this._totalMessages;
     }
 
-    get costLimitInfo(): Record<string, any> | null {
+    get costLimitInfo(): CostLimitInfo | null {
         return this._costLimitInfo;
     }
 
     private get _ingress(): string {
-        return (window as any).__WACTORZ_INGRESS_PATH ?? "";
+        return window.__WACTORZ_INGRESS_PATH ?? "";
     }
 
     setTotalCostUsd(usd: number): void {
@@ -93,7 +93,7 @@ export class MetricsController {
     }
 
     buildSettingsView(): HTMLElement {
-        return buildSettingsView(this._costLimitInfo as CostLimitInfo | null, {
+        return buildSettingsView(this._costLimitInfo, {
             onSaveLimit: async (limit, period) => {
                 await this._saveCostLimit(limit, period);
                 if (this.host.getView() === "settings") {

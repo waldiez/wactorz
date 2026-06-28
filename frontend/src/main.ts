@@ -50,7 +50,7 @@ localStorage.removeItem("wactorz-theme");
 
 initNotifications();
 
-const _ingressPath: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+const _ingressPath: string = window.__WACTORZ_INGRESS_PATH ?? "";
 
 // For fetch: ingress-prefixed under HA, plain-relative everywhere else.
 const _apiBase = _ingressPath;

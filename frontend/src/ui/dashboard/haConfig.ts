@@ -9,7 +9,7 @@
  */
 export async function seedHaConfigFromServer(): Promise<boolean> {
     try {
-        const ingress: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+        const ingress: string = window.__WACTORZ_INGRESS_PATH ?? "";
         const resp = await fetch(`${ingress}/api/config`);
         if (!resp.ok) {
             return false;

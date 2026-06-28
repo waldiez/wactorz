@@ -69,6 +69,13 @@
     display: inline-flex !important;
   }
 
+  /* The recipient picker is redundant on mobile — the agent is already chosen in
+     the sidebar/agent-list screen — so hide it and let the input reclaim the
+     width. The hidden <select> still holds the synced target for send. */
+  .af-target-select {
+    display: none;
+  }
+
   /* Card dashboard: clear of IO bar + safe area */
   .cd-root {
     bottom: max(64px, calc(58px + env(safe-area-inset-bottom, 6px)));

@@ -8,19 +8,17 @@
  * Bootstrap order:
  * 1. Create SceneManager (agent-state store + CardDashboard coordinator)
  * 2. Create MQTTClient and connect to broker
- * 3. Create UI components (HUD, ChatPanel, ActivityFeed)
+ * 3. Create UI components (HUD, ActivityFeed)
  * 4. Wire MQTT events → SceneManager + HUD + ActivityFeed
- * 5. Wire DOM events (agent-selected) → SceneManager + ChatPanel
  *
- * The chat input lives entirely in CardDashboard's in-card bar (the single
- * chat-input surface); it owns its own mention popup and send handling.
+ * The chat lives entirely in CardDashboard's in-card bar (DashboardChat),
+ * which renders from the af-chat-message / af-stream-* events IOManager emits.
  */
 
 import "./app.css";
 import { SceneManager } from "./scene/SceneManager";
 import { MQTTClient } from "./mqtt/MQTTClient";
 import { AgentHUD } from "./ui/AgentHUD";
-import { ChatPanel } from "./ui/ChatPanel";
 import { ActivityFeed } from "./ui/ActivityFeed";
 import { IOManager } from "./io/IOManager";
 import { WSChatClient } from "./io/WSChatClient";
@@ -33,6 +31,7 @@ import { UPLOADS_ENABLED } from "./ui/dashboard/uploads";
 import type { AgentInfo } from "./types/agent";
 import { resolveAgentName } from "./agents/naming";
 import { toAgentInfo, mapLogFeedItem, buildNameIndex } from "./agents/mapping";
+import { createDeletionGuard } from "./agents/deletionGuard";
 
 const scene = new SceneManager();
 
@@ -85,9 +84,7 @@ const MQTT_BROKER = (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) 
 const mqtt = new MQTTClient(MQTT_BROKER);
 
 const hud = new AgentHUD();
-const chatPanel = new ChatPanel();
-chatPanel.setApiBase(_apiBase);
-const ioManager = new IOManager(mqtt, chatPanel);
+const ioManager = new IOManager(mqtt);
 
 const feed = new ActivityFeed();
 
@@ -98,11 +95,12 @@ const _dropZone = UPLOADS_ENABLED ? new DropZone(_apiBase) : null;
 
 const wsChat = new WSChatClient();
 let liveSyncInFlight = false;
-// Track agent IDs that were explicitly deleted so MQTT "stopped" events don't re-add them.
-const deletedAgentIds = new Set<string>();
+// Live-grid deletion guard (mirrors the backend's _deleted_agent_ids): blocks
+// stale stop-window events from blinking a deleted card back, and re-admits a
+// re-spawn via its newer timestamp. See createDeletionGuard for the rationale.
+const { markDeleted, isDeleted } = createDeletionGuard();
 
 function syncAgentViews(): void {
-    chatPanel.updateAgentList(scene.getAgents());
     hud.setAgentCount(scene.getAgents().length);
     refreshStats();
 }
@@ -117,7 +115,7 @@ function refreshLiveActors(): void {
         .then((actors: AgentInfo[]) => {
             scene.reconcileAgents(
                 actors
-                    .filter(a => !deletedAgentIds.has(a.id))
+                    .filter(a => !isDeleted(a.id))
                     .map(a => ({
                         ...a,
                         name: resolveAgentName(a.name, a.id),
@@ -165,7 +163,7 @@ ioManager.setWSClient(wsChat);
 // This is how pause/stop/resume state changes reach the UI without polling.
 wsChat.onStatePatch((agents, deletedId, stats) => {
     if (deletedId) {
-        deletedAgentIds.add(deletedId);
+        markDeleted(deletedId);
         scene.removeAgent(deletedId);
     }
     if (stats?.totalCostUsd !== undefined) {
@@ -175,7 +173,7 @@ wsChat.onStatePatch((agents, deletedId, stats) => {
         scene.setTotalMessages(stats.totalMessages);
     }
     agents.forEach(a => {
-        if (!a.agent_id || deletedAgentIds.has(a.agent_id)) {
+        if (!a.agent_id || isDeleted(a.agent_id)) {
             return;
         }
         scene.addOrUpdateAgent(toAgentInfo(a));
@@ -305,7 +303,7 @@ function pushFeed(item: Parameters<typeof feed.push>[0]): void {
 }
 
 mqtt.on("heartbeat", payload => {
-    if (deletedAgentIds.has(payload.agentId)) {
+    if (isDeleted(payload.agentId, payload.timestampMs)) {
         return;
     }
     scene.onHeartbeat(payload);
@@ -318,7 +316,9 @@ mqtt.on("heartbeat", payload => {
 });
 
 mqtt.on("spawn", payload => {
-    if (deletedAgentIds.has(payload.agentId)) {
+    // Block a stale spawn from the stop-window; a respawn carries a newer
+    // timestamp and is re-admitted by isDeleted().
+    if (isDeleted(payload.agentId, payload.timestampMs)) {
         return;
     }
     scene.onSpawn(payload);
@@ -376,7 +376,7 @@ mqtt.on("chat", msg => {
 });
 
 mqtt.on("status", payload => {
-    if (!deletedAgentIds.has(payload.agentId)) {
+    if (!isDeleted(payload.agentId)) {
         scene.addOrUpdateAgent({
             id: payload.agentId,
             name: payload.agentName,
@@ -385,7 +385,6 @@ mqtt.on("status", payload => {
             messagesProcessed: payload.messagesProcessed,
         });
         syncAgentViews();
-        chatPanel.updateAgentStatus(payload.agentId, String(payload.state));
     }
     if (payload.state === "stopped") {
         window.setTimeout(() => refreshLiveActors(), 200);
@@ -551,12 +550,6 @@ mqtt.on("error", err => {
     hud.setSystemHealth(false);
 });
 
-// Camera fly-to when agent is selected (panel open)
-document.addEventListener("agent-selected", e => {
-    const evt = e as CustomEvent<{ agent: { id: string } }>;
-    scene.onAgentSelected(evt.detail.agent.id);
-});
-
 // Streaming reply finished — notify
 document.addEventListener("af-stream-end", e => {
     const { text, from } = (e as CustomEvent<{ text: string | null; from: string }>).detail;
@@ -573,7 +566,7 @@ document.addEventListener("af-agent-command", e => {
     if (command === "delete") {
         // Mark deleted immediately so MQTT "stopped" events don't re-add the card
         // before the WS state-patch reply arrives.
-        deletedAgentIds.add(agentId);
+        markDeleted(agentId);
         scene.removeAgent(agentId);
     }
     wsChat.sendRaw({ type: "command", command, agent_id: agentId });

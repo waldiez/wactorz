@@ -248,8 +248,14 @@ function buildResetButton(
     return btn;
 }
 
+/** A reset popover that exposes a hook to re-arm its two-step confirm buttons
+ *  (called when the popover is re-opened, so a previously-armed button resets). */
+export interface ResetPopover extends HTMLElement {
+    _resetArmed(): void;
+}
+
 /** Scoped state-reset menu with per-button two-step confirmation. */
-export function buildResetPopover(): HTMLElement {
+export function buildResetPopover(): ResetPopover {
     const pop = document.createElement("div");
     pop.className = "af-audio-popover glass";
     pop.style.cssText = "min-width:210px;padding:12px 14px;";
@@ -269,6 +275,5 @@ export function buildResetPopover(): HTMLElement {
         }
         pop.appendChild(buildResetButton(pop, armResets, spec));
     });
-    (pop as any)._resetArmed = () => armResets.forEach(fn => fn());
-    return pop;
+    return Object.assign(pop, { _resetArmed: () => armResets.forEach(fn => fn()) });
 }

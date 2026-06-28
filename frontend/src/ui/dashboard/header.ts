@@ -8,7 +8,7 @@
  * back via `onSetView`; the active-view highlight is maintained by the caller.
  */
 import type { View, ConnState } from "./types";
-import { buildAudioPopover, buildResetPopover } from "./popovers";
+import { buildAudioPopover, buildResetPopover, type ResetPopover } from "./popovers";
 import { iconMarkup, type IconName } from "./icons";
 
 export interface HeaderOpts {
@@ -95,7 +95,7 @@ function buildHeaderRight(view: View, onSetView: (v: View) => void): HTMLElement
     resetBtn.title = "Clear stored state";
     resetBtn.innerHTML = iconMarkup("reset");
     right.appendChild(resetBtn);
-    wirePopover(resetBtn, buildResetPopover(), pop => (pop as any)._resetArmed?.());
+    wirePopover(resetBtn, buildResetPopover(), pop => (pop as ResetPopover)._resetArmed());
 
     return right;
 }

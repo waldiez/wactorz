@@ -15,14 +15,7 @@ import { displayName } from "../agents/naming";
 import { iconMarkup, type IconName } from "./dashboard/icons";
 
 export type FeedEventType =
-    | "spawn"
-    | "heartbeat"
-    | "chat"
-    | "alert-error"
-    | "alert-warning"
-    | "stopped"
-    | "health"
-    | "qa-flag";
+    "spawn" | "heartbeat" | "chat" | "alert-error" | "alert-warning" | "stopped" | "health" | "qa-flag";
 
 export interface FeedItem {
     type: FeedEventType;

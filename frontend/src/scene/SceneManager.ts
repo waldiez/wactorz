@@ -10,30 +10,17 @@
 import type { AgentInfo, HeartbeatPayload, AlertPayload, SpawnPayload } from "../types/agent";
 import { CardDashboard } from "../ui/CardDashboard";
 
-export type ThemeName = "cards";
-
 export class SceneManager {
     private agents: Map<string, AgentInfo> = new Map();
     private cardDashboard: CardDashboard | null = null;
     private _remoteNodeLastSeen: Map<string, number> = new Map();
 
-    // Unused; accepted so existing call sites that pass a canvas still compile.
-    constructor(_canvas?: HTMLCanvasElement) {}
-
-    setTheme(_name: ThemeName = "cards"): void {
+    constructor() {
         if (this.cardDashboard) {
             return;
         }
         this.cardDashboard = new CardDashboard();
         this.cardDashboard.show([...this.agents.values()]);
-    }
-
-    get currentTheme(): ThemeName {
-        return "cards";
-    }
-
-    requestTheme(name: ThemeName): void {
-        this.setTheme(name);
     }
 
     addOrUpdateAgent(agent: AgentInfo): void {

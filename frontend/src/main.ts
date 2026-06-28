@@ -34,13 +34,10 @@ import type { AgentInfo } from "./types/agent";
 import { resolveAgentName } from "./agents/naming";
 import { toAgentInfo, mapLogFeedItem, buildNameIndex } from "./agents/mapping";
 
-const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
-canvas.style.display = "none";
-const scene = new SceneManager(canvas);
+const scene = new SceneManager();
 
 // Cards is the only view; clear any stale persisted theme from older builds.
-localStorage.setItem("wactorz-theme", "cards");
-scene.setTheme("cards");
+localStorage.removeItem("wactorz-theme");
 
 // Two deployment contexts, both served same-origin:
 //
@@ -534,10 +531,8 @@ mqtt.on("raw", ({ topic, payload }) => {
     const entityId = (p["entity_id"] as string | undefined) ?? topic.split("/").slice(-2).join(".");
     const newState = p["new_state"] as Record<string, unknown> | undefined;
     const state = (newState?.["state"] as string | undefined) ?? "";
-    const friendlyName =
-        ((newState?.["attributes"] as Record<string, unknown> | undefined)?.["friendly_name"] as
-            | string
-            | undefined) ?? entityId;
+    const attrs = newState?.["attributes"] as Record<string, unknown> | undefined;
+    const friendlyName = (attrs?.["friendly_name"] as string | undefined) ?? entityId;
     if (!state) {
         return;
     }

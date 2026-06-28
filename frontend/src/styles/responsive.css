@@ -21,43 +21,6 @@
     display: none;
   }
 
-  /* HUD: compact top-left pill */
-  #hud {
-    top: max(8px, env(safe-area-inset-top, 0px));
-    left: max(8px, env(safe-area-inset-left, 0px));
-    padding: 8px 12px;
-    min-width: 0;
-  }
-  #hud .hud-count {
-    font-size: 20px;
-  }
-  #hud .hud-label {
-    display: none;
-  }
-  #hud .hud-links {
-    display: none;
-  }
-  #hud .hud-badge {
-    padding: 2px 8px;
-    font-size: 10px;
-    margin-top: 6px;
-  }
-
-  /* Feed toggle: below theme switcher */
-  #feed-toggle {
-    top: 50px;
-    right: 8px;
-    padding: 4px 8px;
-    font-size: 10px;
-  }
-
-  /* Activity feed: full width */
-  #activity-feed {
-    width: 100%;
-    border-left: none;
-    border-bottom-left-radius: 0;
-  }
-
   /* ── CardDashboard header: logo + conn + 🔊 only ── */
   .af-header {
     padding: 6px 10px;

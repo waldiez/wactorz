@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHaFeedPusher } from "../ui/haFeed";
-import type { FeedItem } from "../ui/ActivityFeed";
+import type { FeedItem } from "../types/feed";
 
 // A realistic epoch base: the pusher compares `now - (lastSeen ?? 0)`, so a
 // near-zero clock would falsely dedup the very first event. Real Date.now() is

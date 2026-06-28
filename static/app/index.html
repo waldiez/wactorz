@@ -45,35 +45,11 @@
     <link rel="icon" href="./icon.png" type="image/png" sizes="512x512" />
     <!-- crossorigin: send the ingress auth cookie, else HA ingress 401s the manifest -->
     <link rel="manifest"         href="./site.webmanifest" crossorigin="use-credentials" />
-    <script type="module" crossorigin src="./assets/index--xmg7Hvc.js"></script>
+    <script type="module" crossorigin src="./assets/index--v5OWq6M.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/vendor-Dk-kHqB_.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-P80dDOXa.css">
+    <link rel="stylesheet" crossorigin href="./assets/index-C755Tip8.css">
   </head>
   <body>
-    <!-- HUD: agent count + health badge + page links -->
-    <div id="hud" class="glass" style="display:none">
-      <div class="hud-title">Wactorz</div>
-      <div class="hud-count" id="hud-count">0</div>
-      <div class="hud-label">Active Agents</div>
-      <div class="hud-badge healthy" id="hud-health">System Healthy</div>
-      <div id="hud-stats"></div>
-      <nav class="hud-links">
-        <a id="ha-link" href="#" target="_blank" rel="noopener" class="hud-link">⌂ Home Assistant</a>
-      </nav>
-      <button id="btn-settings" title="App settings">⚙ Settings</button>
-    </div>
-
-
-    <!-- Activity feed toggle (below theme switcher) -->
-    <button id="feed-toggle" style="display:none" title="Toggle activity feed">
-      Feed <span id="feed-badge"></span>
-    </button>
-
-    <!-- Activity feed panel -->
-    <div id="activity-feed">
-      <div id="feed-list"></div>
-    </div>
-
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", () => {

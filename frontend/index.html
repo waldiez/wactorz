@@ -47,30 +47,6 @@
     <link rel="manifest"         href="./site.webmanifest" crossorigin="use-credentials" />
   </head>
   <body>
-    <!-- HUD: agent count + health badge + page links -->
-    <div id="hud" class="glass" style="display:none">
-      <div class="hud-title">Wactorz</div>
-      <div class="hud-count" id="hud-count">0</div>
-      <div class="hud-label">Active Agents</div>
-      <div class="hud-badge healthy" id="hud-health">System Healthy</div>
-      <div id="hud-stats"></div>
-      <nav class="hud-links">
-        <a id="ha-link" href="#" target="_blank" rel="noopener" class="hud-link">⌂ Home Assistant</a>
-      </nav>
-      <button id="btn-settings" title="App settings">⚙ Settings</button>
-    </div>
-
-
-    <!-- Activity feed toggle (below theme switcher) -->
-    <button id="feed-toggle" style="display:none" title="Toggle activity feed">
-      Feed <span id="feed-badge"></span>
-    </button>
-
-    <!-- Activity feed panel -->
-    <div id="activity-feed">
-      <div id="feed-list"></div>
-    </div>
-
     <script type="module" src="/src/main.ts"></script>
     <script>
       if ("serviceWorker" in navigator) {

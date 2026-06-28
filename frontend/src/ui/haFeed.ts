@@ -9,7 +9,7 @@
  * MQTT ha-state-bridge), so the pusher de-duplicates identical entity+state
  * pairs seen within a short window and ignores noisy/non-actionable states.
  */
-import type { FeedItem } from "./ActivityFeed";
+import type { FeedItem } from "../types/feed";
 
 /** Domains that produce meaningful on/off-style states worth showing in the feed. */
 const HA_FEED_DOMAINS = new Set([

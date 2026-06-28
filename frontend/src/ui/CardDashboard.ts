@@ -18,7 +18,7 @@
  */
 
 import type { AgentInfo } from "../types/agent";
-import type { FeedItem } from "./ActivityFeed";
+import type { FeedItem } from "../types/feed";
 import { HAClient, type HAEntity } from "../io/HAClient";
 import { buildHeader, buildBottomNav } from "./dashboard/header";
 import { renderHADevices, areaIconText } from "./dashboard/haDevices";
@@ -149,7 +149,6 @@ export class CardDashboard {
     show(agents: AgentInfo[]): void {
         agents.forEach(a => this.agents.set(a.id, a));
         this.root.classList.add("cd-visible");
-        this._hideFloatingUI();
         this._wireEvents();
         this._renderView();
         this.tickTimer = setInterval(() => this._refreshTimestamps(), 5000);
@@ -168,7 +167,6 @@ export class CardDashboard {
 
     hide(): void {
         this.root.classList.remove("cd-visible");
-        this._showFloatingUI();
         this._unwireEvents();
         this.haClient?.disconnect();
         this._chat.cancelMic(); // release the mic if a recording was in progress
@@ -351,8 +349,7 @@ export class CardDashboard {
         document.addEventListener("af-wipe-all", this._wipeAll);
 
         // A metrics/logs reset cleared the server-side activity log — drop this
-        // dashboard's own feed too. (The slide-out ActivityFeed in main.ts is a
-        // SEPARATE component with its own handler; this clears the in-card feed.)
+        // dashboard's own in-card feed too.
         this._clearFeed = (_e: Event) => {
             this.feedItems = [];
             this._feedKeys.clear();
@@ -375,29 +372,6 @@ export class CardDashboard {
             }
         });
         this._evFeed = this._evConn = this._wipeAll = this._clearFeed = null;
-    }
-
-    private _hideFloatingUI(): void {
-        ["hud", "hud-stats"].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) {
-                el.style.display = "none";
-            }
-        });
-    }
-
-    private _showFloatingUI(): void {
-        ["hud", "hud-stats", "feed-toggle"].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) {
-                el.style.display = "";
-            }
-        });
-        // Restore feed panel if it was open before the dashboard was shown
-        const feedPanel = document.getElementById("activity-feed");
-        if (feedPanel) {
-            feedPanel.style.display = "";
-        }
     }
 
     private _renderView(): void {

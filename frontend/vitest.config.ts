@@ -28,8 +28,6 @@ export default defineConfig({
                 "src/io/AgentImageGen.ts",
                 // Deeply Babylon.js-integrated — require full 3D scene mocking
                 "src/ui/CardDashboard.ts",
-                "src/ui/SocialDashboard.ts",
-                "src/ui/AgentHUD.ts",
             ],
             // Floors derived from TARGET (see top of file). CI fails below these.
             thresholds: {

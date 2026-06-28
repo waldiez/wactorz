@@ -7,7 +7,7 @@
  * of feed rows. System-agent chatter and (optionally) heartbeats are filtered
  * out. Heartbeat visibility is owned by the caller via `onToggleHeartbeats`.
  */
-import type { FeedItem } from "../ActivityFeed";
+import type { FeedItem } from "../../types/feed";
 import { SYSTEM_AGENT_NAMES } from "./agentState";
 import { nameFromWid, displayName } from "../../agents/naming";
 import { iconMarkup, type IconName } from "./icons";

@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { CardDashboard } from "../ui/CardDashboard";
 import { buildAudioPopover, buildResetPopover } from "../ui/dashboard/popovers";
 import type { AgentInfo, ChatMessage } from "../types/agent";
-import type { FeedItem } from "../ui/ActivityFeed";
+import type { FeedItem } from "../types/feed";
 
 // Characterization tests: they pin CardDashboard's observable render behaviour
 // (view containers, card structure, builders) so the upcoming module split can

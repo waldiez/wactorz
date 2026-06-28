@@ -10,7 +10,7 @@ import {
     buildFeedView,
     appendFeedItemToView,
 } from "../ui/dashboard/feedView";
-import type { FeedItem } from "../ui/ActivityFeed";
+import type { FeedItem } from "../types/feed";
 
 function item(over: Partial<FeedItem>): FeedItem {
     return { type: "chat", label: "hi", agentName: "worker", timestamp: 1000, ...over };

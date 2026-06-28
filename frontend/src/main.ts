@@ -8,8 +8,7 @@
  * Bootstrap order:
  * 1. Create SceneManager (agent-state store + CardDashboard coordinator)
  * 2. Create MQTTClient and connect to broker
- * 3. Create UI components (HUD, ActivityFeed)
- * 4. Wire MQTT events → SceneManager + HUD + ActivityFeed
+ * 3. Wire MQTT events → SceneManager (which drives the cards dashboard)
  *
  * The chat lives entirely in CardDashboard's in-card bar (DashboardChat),
  * which renders from the af-chat-message / af-stream-* events IOManager emits.
@@ -18,8 +17,6 @@
 import "./app.css";
 import { SceneManager } from "./scene/SceneManager";
 import { MQTTClient } from "./mqtt/MQTTClient";
-import { AgentHUD } from "./ui/AgentHUD";
-import { ActivityFeed } from "./ui/ActivityFeed";
 import { IOManager } from "./io/IOManager";
 import { WSChatClient } from "./io/WSChatClient";
 import { tts } from "./io/TTSManager";
@@ -29,6 +26,7 @@ import { createHaFeedPusher } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
 import { UPLOADS_ENABLED } from "./ui/dashboard/uploads";
 import type { AgentInfo } from "./types/agent";
+import type { FeedItem } from "./types/feed";
 import { resolveAgentName } from "./agents/naming";
 import { toAgentInfo, mapLogFeedItem, buildNameIndex } from "./agents/mapping";
 import { createDeletionGuard } from "./agents/deletionGuard";
@@ -83,10 +81,7 @@ localStorage.removeItem("wactorz-mqtt-url");
 const MQTT_BROKER = (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) || _mqttDefault;
 const mqtt = new MQTTClient(MQTT_BROKER);
 
-const hud = new AgentHUD();
 const ioManager = new IOManager(mqtt);
-
-const feed = new ActivityFeed();
 
 // Global drag-and-drop upload overlay — only wired up when the backend endpoint
 // exists (flip UPLOADS_ENABLED once /api/upload is live), so the overlay never
@@ -99,11 +94,6 @@ let liveSyncInFlight = false;
 // stale stop-window events from blinking a deleted card back, and re-admits a
 // re-spawn via its newer timestamp. See createDeletionGuard for the rationale.
 const { markDeleted, isDeleted } = createDeletionGuard();
-
-function syncAgentViews(): void {
-    hud.setAgentCount(scene.getAgents().length);
-    refreshStats();
-}
 
 function refreshLiveActors(): void {
     if (liveSyncInFlight) {
@@ -121,7 +111,6 @@ function refreshLiveActors(): void {
                         name: resolveAgentName(a.name, a.id),
                     })),
             );
-            syncAgentViews();
             console.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
         })
         .catch(() => {
@@ -151,7 +140,6 @@ wsChat.onChat((content, from, timestampMs) => {
         agentName: from,
         timestamp: timestampMs,
     };
-    feed.push(feedItem);
     document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item: feedItem } }));
     document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
 });
@@ -178,7 +166,6 @@ wsChat.onStatePatch((agents, deletedId, stats) => {
         }
         scene.addOrUpdateAgent(toAgentInfo(a));
     });
-    syncAgentViews();
 });
 
 wsChat.connect(`${_wsBase}/ws`);
@@ -297,8 +284,7 @@ fetch(`${_apiBase}/api/config`)
     })
     .catch(() => {});
 
-function pushFeed(item: Parameters<typeof feed.push>[0]): void {
-    feed.push(item);
+function pushFeed(item: FeedItem): void {
     document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
 }
 
@@ -322,7 +308,6 @@ mqtt.on("spawn", payload => {
         return;
     }
     scene.onSpawn(payload);
-    syncAgentViews();
     pushFeed({
         type: "spawn",
         label: `spawned (${payload.agentType ?? "agent"})`,
@@ -338,10 +323,7 @@ mqtt.on("spawn", payload => {
 });
 
 mqtt.on("alert", payload => {
-    alertCount++;
     scene.onAlert(payload);
-    hud.flashAlert(payload.severity);
-    refreshStats();
     const alertMsg = payload.message ?? "";
     const alertAgent = payload.agentName ?? "system";
     pushFeed({
@@ -384,7 +366,6 @@ mqtt.on("status", payload => {
             protected: payload.protected ?? false,
             messagesProcessed: payload.messagesProcessed,
         });
-        syncAgentViews();
     }
     if (payload.state === "stopped") {
         window.setTimeout(() => refreshLiveActors(), 200);
@@ -397,19 +378,12 @@ mqtt.on("status", payload => {
     }
 });
 
-let alertCount = 0;
-
-function refreshStats(): void {
-    hud.setStats(scene.getAgents(), alertCount);
-}
-
 // Seed only once — MQTT reconnects must not re-add already-known agents.
 let seeded = false;
 
 mqtt.on("connected", () => {
     _mqttLive = true;
     console.info("[Dashboard] MQTT connected");
-    hud.setSystemHealth(true);
     document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "live" } }));
 
     scene.pruneStaleRemoteAgents();
@@ -455,7 +429,6 @@ mqtt.on("metrics", payload => {
         update.uptime = payload.uptime;
     }
     scene.addOrUpdateAgent(update);
-    refreshStats();
 });
 
 mqtt.on("logs", payload => {
@@ -488,10 +461,6 @@ mqtt.on("node-heartbeat", payload => {
         agentName: payload.node,
         timestamp: Date.now(),
     });
-});
-
-mqtt.on("system-health", () => {
-    hud.setSystemHealth(true);
 });
 
 mqtt.on("host-stats", stats => {
@@ -541,13 +510,11 @@ mqtt.on("raw", ({ topic, payload }) => {
 mqtt.on("disconnected", () => {
     _mqttLive = false;
     console.warn("[Dashboard] MQTT disconnected");
-    hud.setSystemHealth(false);
     document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "demo" } }));
 });
 
 mqtt.on("error", err => {
     console.error("[Dashboard] MQTT error:", err);
-    hud.setSystemHealth(false);
 });
 
 // Streaming reply finished — notify
@@ -580,55 +547,6 @@ document.addEventListener("af-send-message", e => {
     void ioManager.send(content, agent);
 });
 
-const haLink = document.getElementById("ha-link") as HTMLAnchorElement | null;
-if (haLink) {
-    haLink.href = `${window.location.protocol}//${window.location.hostname}:8123`;
-}
-
-const btnBeep = document.getElementById("btn-beep");
-const btnTTS = document.getElementById("btn-tts");
-const voiceSelect = document.getElementById("tts-voice-select") as HTMLSelectElement | null;
-
-function syncSoundButtons(): void {
-    btnBeep?.classList.toggle("active", tts.beepEnabled);
-    btnTTS?.classList.toggle("active", tts.ttsEnabled);
-}
-syncSoundButtons();
-
-btnBeep?.addEventListener("click", () => {
-    tts.toggleBeep();
-    syncSoundButtons();
-});
-btnTTS?.addEventListener("click", () => {
-    tts.toggleTTS();
-    syncSoundButtons();
-});
-
-// Populate voice selector when server voices arrive
-document.addEventListener("tts-voices-loaded", e => {
-    const { voices } = (e as CustomEvent).detail;
-    if (!voiceSelect || !voices?.length) {
-        return;
-    }
-    voiceSelect.innerHTML = "";
-    // Blank option = server default
-    const blank = document.createElement("option");
-    blank.value = "";
-    blank.textContent = "— default voice —";
-    voiceSelect.appendChild(blank);
-    for (const v of voices) {
-        const opt = document.createElement("option");
-        opt.value = v.name;
-        opt.textContent = `${v.name} (${v.locale})`;
-        voiceSelect.appendChild(opt);
-    }
-    voiceSelect.value = tts.selectedVoice;
-});
-
-voiceSelect?.addEventListener("change", () => {
-    tts.setVoice(voiceSelect.value);
-});
-
 // Probe server TTS availability + load voice list (base must be set first so
 // the request stays inside the ingress prefix instead of bare "/api").
 tts.setApiBase(_apiBase);
@@ -647,7 +565,6 @@ window.addEventListener("beforeunload", () => {
 // wipe all
 document.addEventListener("af-wipe-all", () => {
     scene.clearAll();
-    feed.clear();
     _logFeedMaxTs = 0;
 });
 
@@ -655,6 +572,5 @@ document.addEventListener("af-wipe-all", () => {
 // the on-screen feed too, since onLogFeed only ever appends and would otherwise
 // keep showing stale lines until the next event.
 document.addEventListener("af-clear-feed", () => {
-    feed.clear();
     _logFeedMaxTs = 0;
 });

@@ -12,7 +12,7 @@
  */
 import type { AgentInfo, AgentState } from "../types/agent";
 import type { StatePatchAgent, LogFeedItem } from "../io/WSChatClient";
-import type { FeedItem } from "../ui/ActivityFeed";
+import type { FeedItem } from "../types/feed";
 import { nameFromWid, resolveAgentName } from "./naming";
 
 /** Coerce the backend's free-form state/status string into an {@link AgentState}. */

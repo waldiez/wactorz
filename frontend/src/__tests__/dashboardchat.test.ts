@@ -281,3 +281,106 @@ describe("DashboardChat — history & misc state", () => {
         expect(dc.chatTarget).toBe("worker");
     });
 });
+
+describe("DashboardChat — stop, attachments, external events", () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+    });
+
+    function att(over: Record<string, unknown> = {}) {
+        return { id: "a1", name: "x.png", mime: "image/png", size: 10, url: "blob:abc", ...over };
+    }
+
+    it("stop generation fire-and-forgets a POST to /api/chat/stop", () => {
+        const dc = mount(makeHost()) as any;
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as unknown as Response);
+        dc._stopGeneration();
+        expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/chat/stop"), {
+            method: "POST",
+        });
+        fetchSpy.mockRestore();
+    });
+
+    it("sends an attachments-only message and clears the pending tray", () => {
+        const host = makeHost();
+        const dc = mount(host) as any;
+        const seen: Array<{ attachments: string[] }> = [];
+        const onSend = (e: Event) => seen.push((e as CustomEvent).detail);
+        document.addEventListener("af-send-message", onSend);
+
+        dc._pendingAttachments = [att()];
+        const input = document.createElement("textarea");
+        input.value = ""; // no text — attachment alone must still send
+        const select = document.createElement("select");
+        const opt = document.createElement("option");
+        opt.value = "worker";
+        select.append(opt);
+        select.value = "worker";
+        dc._sendMessage(input, select);
+
+        document.removeEventListener("af-send-message", onSend);
+        expect(seen).toEqual([{ content: "", target: "worker", attachments: ["a1"] }]);
+        expect(dc._pendingAttachments).toEqual([]);
+    });
+
+    it("removing a blob attachment revokes its object URL; a non-blob one does not", () => {
+        const dc = mount(makeHost()) as any;
+        const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+
+        const blob = att({ url: "blob:abc" });
+        const remote = att({ id: "a2", url: "https://x/y.png" });
+        dc._pendingAttachments = [blob, remote];
+
+        dc._removeAttachment(remote); // non-blob → no revoke
+        expect(revoke).not.toHaveBeenCalled();
+        dc._removeAttachment(blob); // blob → revoke
+        expect(revoke).toHaveBeenCalledWith("blob:abc");
+        expect(dc._pendingAttachments).toEqual([]);
+        revoke.mockRestore();
+    });
+
+    it("an external af-send-message (not self-dispatched) appends to the thread", () => {
+        const host = makeHost();
+        const dc = mount(host) as any;
+        dc.wire();
+        document.dispatchEvent(
+            new CustomEvent("af-send-message", { detail: { content: "ping", target: "worker" } }),
+        );
+        expect(dc.chatTarget).toBe("worker");
+        expect(thread(host).textContent).toContain("ping");
+        dc.unwire();
+    });
+
+    it("af-reset-chat scoped to an agent drops that agent + user turns, keeps others", () => {
+        const host = makeHost();
+        const dc = mount(host) as any;
+        dc.wire();
+        dc.chatMessages = [
+            { id: "1", from: "worker", to: "user", content: "w", timestampMs: 1 },
+            { id: "2", from: "main-actor", to: "user", content: "m", timestampMs: 2 },
+            { id: "3", from: "user", to: "worker", content: "u", timestampMs: 3 },
+        ];
+        document.dispatchEvent(new CustomEvent("af-reset-chat", { detail: { agent: "worker" } }));
+        expect(dc.chatMessages.map((m: ChatMessage) => m.id)).toEqual(["2"]);
+        dc.unwire();
+    });
+
+    it("populateSelect pins priority names then orders the rest alphabetically", () => {
+        const host = makeHost([agent("zeta"), agent("alpha"), agent("main")]);
+        const dc = mount(host) as any;
+        const select = document.createElement("select");
+        dc._populateSelect(select);
+        expect([...select.options].map(o => o.value)).toEqual(["main", "alpha", "zeta"]);
+    });
+
+    it("re-rendering mid-stream reattaches the live bubble with its accumulated text", () => {
+        const host = makeHost();
+        const dc = mount(host) as any;
+        dc._streamFrom = "main-actor";
+        dc._streamTarget = "main-actor";
+        dc._lastSentTarget = "main-actor";
+        dc._streamText = "partial reply";
+        dc.renderChatThread();
+        expect(thread(host).textContent).toContain("partial reply");
+    });
+});

@@ -9,7 +9,7 @@
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import type { View } from "./types";
-import { canDirectMessage, stateColor, stateLabel } from "./agentState";
+import { canDirectMessage, pickChatTarget, stateColor, stateLabel } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar } from "./chatIobar";
@@ -378,15 +378,9 @@ export class DashboardChat {
         }
     }
 
-    /** Ensure chatTarget is a live messageable agent (prefers main, else first). */
+    /** Keep chatTarget on a live messageable agent (prefers main; never an id). */
     syncChatTarget(): void {
-        const messageable = [...this.host.agents.values()].filter(canDirectMessage);
-        if (!messageable.length || messageable.some(a => a.name === this.chatTarget)) {
-            return;
-        }
-        const main = messageable.find(a => a.name === "main" || a.name === "main-actor");
-        const fallback = [...messageable].sort((a, b) => a.name.localeCompare(b.name))[0];
-        this.chatTarget = main?.name ?? fallback?.name ?? this.chatTarget;
+        this.chatTarget = pickChatTarget([...this.host.agents.values()], this.chatTarget);
     }
 
     private _sendMessage(input: HTMLTextAreaElement, select: HTMLSelectElement): void {

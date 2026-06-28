@@ -19,11 +19,18 @@ export function nameFromWid(raw: string | undefined): string {
     return m?.[1] ?? raw;
 }
 
+/** True when a "name" is really an unresolved backend id. The backend uses UUID
+ *  agent ids (not WIDs), so an agent that never got a friendly name keeps the raw
+ *  id as its name — which must never be shown as a label or used as a chat target. */
+export function looksLikeAgentId(name: string | undefined): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i.test(name ?? "");
+}
+
 /** Resolve a WID/name to a name and shorten a bare UUID (no friendly name) to
  *  its first segment so the UI never shows a full 36-char id. */
 export function displayName(raw: string | undefined): string {
     const name = nameFromWid(raw);
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i.test(name) ? name.slice(0, 8) : name;
+    return looksLikeAgentId(name) ? name.slice(0, 8) : name;
 }
 
 /**

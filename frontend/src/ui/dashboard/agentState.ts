@@ -6,7 +6,8 @@
  * Shared agent-state helpers for the dashboard: messageability rules, state
  * colour/label mapping and relative-time formatting.
  */
-import type { AgentState } from "../../types/agent";
+import type { AgentInfo, AgentState } from "../../types/agent";
+import { looksLikeAgentId } from "../../agents/naming";
 
 /** System agents that exist but cannot be chatted with directly. */
 export const SYSTEM_AGENT_NAMES: Set<string> = new Set([
@@ -28,6 +29,25 @@ export function canDirectMessage(agent: { name: string; protected?: boolean }): 
         return false;
     }
     return !agent.protected;
+}
+
+/**
+ * Pick the default chat target for the current agent set: keep `current` if it's
+ * still messageable, else prefer main, else the first human-named agent. Never
+ * auto-selects an id-named agent — the backend uses UUID ids (not WIDs), so an
+ * agent that never resolved keeps the id as its name and must not silently become
+ * the chat target (it leaks into the placeholder). The user can still pick one.
+ */
+export function pickChatTarget(agents: AgentInfo[], current: string): string {
+    const messageable = agents.filter(canDirectMessage);
+    if (!messageable.length || messageable.some(a => a.name === current)) {
+        return current;
+    }
+    const main = messageable.find(a => a.name === "main" || a.name === "main-actor");
+    const named = messageable
+        .filter(a => !looksLikeAgentId(a.name))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    return main?.name ?? named[0]?.name ?? current;
 }
 
 /** Accent colour for an agent state (object state = failed/red). */

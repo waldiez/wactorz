@@ -44,6 +44,37 @@ function mount(host: ChatHost): DashboardChat {
 
 const thread = (host: ChatHost) => host.root.querySelector<HTMLElement>("#af-chat-thread")!;
 
+// A raw UUID agent id — the backend uses these (not WIDs), and one that never
+// resolved to a friendly name keeps the id as its name.
+const UUID = "45511e2b-3a2f-4c1d-9e8a-1b2c3d4e5f60";
+
+describe("DashboardChat — syncChatTarget", () => {
+    it("prefers main even when an id-named agent sorts first", () => {
+        const dc = new DashboardChat(makeHost([agent(UUID), agent("main")]));
+        dc.syncChatTarget();
+        expect(dc.chatTarget).toBe("main");
+    });
+
+    it("never auto-targets a raw id — stays on the default when nothing better exists", () => {
+        const dc = new DashboardChat(makeHost([agent(UUID)]));
+        dc.syncChatTarget();
+        expect(dc.chatTarget).toBe("main-actor"); // the default, NOT the uuid
+    });
+
+    it("falls back to the first human-named agent (ignoring id-named ones) when there is no main", () => {
+        const dc = new DashboardChat(makeHost([agent(UUID), agent("zebra"), agent("alpha")]));
+        dc.syncChatTarget();
+        expect(dc.chatTarget).toBe("alpha");
+    });
+
+    it("keeps a current valid target instead of re-picking", () => {
+        const dc = new DashboardChat(makeHost([agent("main"), agent("worker")]));
+        dc.chatTarget = "worker";
+        dc.syncChatTarget();
+        expect(dc.chatTarget).toBe("worker");
+    });
+});
+
 describe("DashboardChat — view construction", () => {
     let host: ChatHost;
     beforeEach(() => {

@@ -24,13 +24,15 @@ export default defineConfig({
                 "src/ui/AgentHUD.ts",
             ],
             // Ratchet baseline: set to the current measured floor so CI gates
-            // regressions today. Raise these toward the goal (95/95/88/95) as
-            // coverage improves — never lower them.
+            // regressions today. Raise these toward the goal
+            // (lines/functions/statements 95, branches 90) as coverage
+            // improves — never lower them. Branches stay slightly behind by
+            // design: defensive guards/fallbacks make 95 there a poor trade.
             thresholds: {
-                lines: 70,
-                functions: 65,
-                branches: 54,
-                statements: 69,
+                lines: 73,
+                functions: 68,
+                branches: 55,
+                statements: 72,
             },
         },
     },

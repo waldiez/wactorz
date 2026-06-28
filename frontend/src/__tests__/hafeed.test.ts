@@ -1,0 +1,84 @@
+/**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHaFeedPusher } from "../ui/haFeed";
+import type { FeedItem } from "../ui/ActivityFeed";
+
+// A realistic epoch base: the pusher compares `now - (lastSeen ?? 0)`, so a
+// near-zero clock would falsely dedup the very first event. Real Date.now() is
+// always far larger than the 5s window, so use a real-world timestamp here.
+const BASE = 1_700_000_000_000;
+
+describe("createHaFeedPusher", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(BASE);
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("pushes a health item for a feed-worthy domain", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+        createHaFeedPusher(push)("light.kitchen", "on", "Kitchen");
+        expect(push).toHaveBeenCalledTimes(1);
+        expect(push.mock.calls[0]![0]).toMatchObject({
+            type: "health",
+            label: "Kitchen → on",
+            agentName: "ha",
+            timestamp: BASE,
+        });
+    });
+
+    it("ignores domains outside the feed allow-list", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+        createHaFeedPusher(push)("sensor.temp", "on", "Temp");
+        expect(push).not.toHaveBeenCalled();
+    });
+
+    it("ignores entity ids without a domain", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+        createHaFeedPusher(push)("nodomain", "on", "X");
+        expect(push).not.toHaveBeenCalled();
+    });
+
+    it("skips numeric states (sensors leaking through)", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+        createHaFeedPusher(push)("climate.living", "23", "Living");
+        expect(push).not.toHaveBeenCalled();
+    });
+
+    it("skips 'unknown' states", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+        createHaFeedPusher(push)("light.kitchen", "unknown", "Kitchen");
+        expect(push).not.toHaveBeenCalled();
+    });
+
+    it("de-duplicates identical entity+state within the window", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+        const pusher = createHaFeedPusher(push);
+        pusher("light.kitchen", "on", "Kitchen");
+        vi.advanceTimersByTime(4999);
+        pusher("light.kitchen", "on", "Kitchen");
+        expect(push).toHaveBeenCalledTimes(1);
+    });
+
+    it("allows the same entity+state again after the window elapses", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+        const pusher = createHaFeedPusher(push);
+        pusher("light.kitchen", "on", "Kitchen");
+        vi.advanceTimersByTime(5001);
+        pusher("light.kitchen", "on", "Kitchen");
+        expect(push).toHaveBeenCalledTimes(2);
+    });
+
+    it("treats a different state as a distinct event (not deduped)", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+        const pusher = createHaFeedPusher(push);
+        pusher("light.kitchen", "on", "Kitchen");
+        pusher("light.kitchen", "off", "Kitchen");
+        expect(push).toHaveBeenCalledTimes(2);
+    });
+});

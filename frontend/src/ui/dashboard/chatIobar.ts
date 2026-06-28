@@ -41,11 +41,22 @@ function buildTextarea(
     input.rows = 1;
     input.placeholder = `Message @${deps.target()}…`;
 
+    // Auto-expand up to MAX_ROWS lines, then scroll. The cap is derived from
+    // the computed line-height + padding/border so it tracks the CSS.
+    const MAX_ROWS = 10;
     const autoGrow = () => {
         input.style.height = "1px";
-        const h = Math.min(input.scrollHeight, 140);
+        const cs = getComputedStyle(input);
+        const line = parseFloat(cs.lineHeight) || 18;
+        const extra =
+            parseFloat(cs.paddingTop) +
+            parseFloat(cs.paddingBottom) +
+            parseFloat(cs.borderTopWidth) +
+            parseFloat(cs.borderBottomWidth);
+        const max = line * MAX_ROWS + extra;
+        const h = Math.min(input.scrollHeight, max);
         input.style.height = h + "px";
-        input.style.overflowY = h >= 140 ? "auto" : "hidden";
+        input.style.overflowY = input.scrollHeight > max ? "auto" : "hidden";
     };
 
     input.addEventListener("input", () => {

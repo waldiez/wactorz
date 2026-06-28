@@ -620,7 +620,12 @@
   color: #93c5fd;
 }
 .af-iobar-input {
-  flex: 1;
+  /* Inside the column .af-input-wrap, `flex:1` resolves to flex-basis:0%, which
+     overrides the explicit height set by autoGrow and pins the box to
+     min-height. Use a content-based basis so autoGrow's height wins; the
+     textarea still fills the wrap width via the default align-items:stretch. */
+  flex: 0 0 auto;
+  width: 100%;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;

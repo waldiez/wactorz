@@ -1,0 +1,147 @@
+/**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+vi.mock("../io/TTSManager", () => ({
+    tts: {
+        beepEnabled: false,
+        ttsEnabled: false,
+        toggleBeep: vi.fn(() => true),
+        toggleTTS: vi.fn(() => true),
+        voices: [{ name: "Microsoft Aria Online (Natural)" }, { name: "Google US" }],
+        selectedVoice: "",
+        setVoice: vi.fn(),
+    },
+}));
+vi.mock("../io/AmbientManager", () => ({
+    ambient: { track: "none", volume: 0.4, setVolume: vi.fn(), setTrack: vi.fn() },
+    AMBIENT_TRACKS: [
+        { id: "none", label: "Off" },
+        { id: "rain", label: "Rain" },
+    ],
+}));
+vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
+
+import { buildAudioPopover, buildResetPopover } from "../ui/dashboard/popovers";
+import { tts } from "../io/TTSManager";
+import { ambient } from "../io/AmbientManager";
+import { toast } from "../ui/ToastManager";
+
+describe("buildAudioPopover", () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        vi.clearAllMocks();
+    });
+
+    it("renders beep/TTS toggles and the voice list (names cleaned up)", () => {
+        const pop = buildAudioPopover();
+        expect(pop.querySelectorAll(".af-audio-toggle").length).toBe(2);
+        const opts = [...pop.querySelectorAll<HTMLOptionElement>(".af-audio-select option")];
+        // placeholder + 2 voices
+        expect(opts.length).toBe(3);
+        expect(opts.some(o => o.textContent === "Aria")).toBe(true); // "Microsoft …" and " Online…" stripped
+    });
+
+    it("beep toggle calls tts.toggleBeep", () => {
+        const pop = buildAudioPopover();
+        const beep = [...pop.querySelectorAll<HTMLButtonElement>(".af-audio-toggle")].find(b =>
+            b.textContent?.includes("Beep"),
+        )!;
+        beep.click();
+        expect(tts.toggleBeep).toHaveBeenCalled();
+    });
+
+    it("TTS toggle reveals the voice row", () => {
+        const pop = buildAudioPopover();
+        const voiceRow = pop.querySelector<HTMLElement>(".af-audio-select")!.parentElement!;
+        expect(voiceRow.style.display).toBe("none"); // ttsEnabled=false initially
+        const ttsBtn = [...pop.querySelectorAll<HTMLButtonElement>(".af-audio-toggle")].find(b =>
+            b.textContent?.includes("TTS"),
+        )!;
+        ttsBtn.click();
+        expect(tts.toggleTTS).toHaveBeenCalled();
+        expect(voiceRow.style.display).toBe(""); // shown (toggleTTS → true)
+    });
+
+    it("voice select change sets the voice", () => {
+        const pop = buildAudioPopover();
+        const sel = pop.querySelector<HTMLSelectElement>(".af-audio-select")!;
+        sel.value = "Google US";
+        sel.dispatchEvent(new Event("change"));
+        expect(tts.setVoice).toHaveBeenCalledWith("Google US");
+    });
+
+    it("selecting an ambient track sets it and reveals the volume row", () => {
+        const pop = buildAudioPopover();
+        const volRow = pop.querySelector<HTMLElement>(".af-audio-vol-row")!;
+        expect(volRow.style.display).toBe("none"); // track is "none"
+        const rain = [...pop.querySelectorAll<HTMLButtonElement>(".af-audio-track-btn")].find(
+            b => b.textContent === "Rain",
+        )!;
+        rain.click();
+        expect(ambient.setTrack).toHaveBeenCalledWith("rain");
+        expect(volRow.style.display).toBe("");
+    });
+
+    it("volume slider sets ambient volume", () => {
+        const pop = buildAudioPopover();
+        const slider = pop.querySelector<HTMLInputElement>(".af-audio-slider")!;
+        slider.value = "0.8";
+        slider.dispatchEvent(new Event("input"));
+        expect(ambient.setVolume).toHaveBeenCalledWith(0.8);
+    });
+});
+
+describe("buildResetPopover", () => {
+    const origFetch = globalThis.fetch;
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        vi.clearAllMocks();
+        (window as unknown as Record<string, unknown>).__WACTORZ_INGRESS_PATH = "";
+    });
+    afterEach(() => {
+        globalThis.fetch = origFetch;
+        vi.useRealTimers();
+    });
+
+    it("renders a button per reset scope", () => {
+        const pop = buildResetPopover();
+        // 6 scopes
+        expect(pop.querySelectorAll("button").length).toBe(6);
+    });
+
+    it("requires two clicks to fire, then POSTs the reset and toasts", async () => {
+        globalThis.fetch = vi.fn(async () => ({ ok: true })) as unknown as typeof fetch;
+        const pop = buildResetPopover();
+        const btn = pop.querySelector<HTMLButtonElement>("button")!; // first = chat
+        btn.click(); // arm
+        expect(btn.querySelector("span")!.textContent).toBe("Confirm chat history?");
+        expect(fetch).not.toHaveBeenCalled();
+        btn.click(); // fire
+        await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/reset", expect.anything()));
+        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ title: "Reset" }));
+    });
+
+    it("arming one button disarms the others", () => {
+        const pop = buildResetPopover();
+        const [first, second] = [...pop.querySelectorAll<HTMLButtonElement>("button")];
+        first!.click();
+        expect(first!.querySelector("span")!.textContent).toContain("Confirm");
+        second!.click();
+        // first disarmed back to its label, second now armed
+        expect(first!.querySelector("span")!.textContent).toBe("Chat history");
+        expect(second!.querySelector("span")!.textContent).toContain("Confirm");
+    });
+
+    it("auto-disarms after the timeout", () => {
+        vi.useFakeTimers();
+        const pop = buildResetPopover();
+        const btn = pop.querySelector<HTMLButtonElement>("button")!;
+        btn.click();
+        expect(btn.querySelector("span")!.textContent).toContain("Confirm");
+        vi.advanceTimersByTime(3000);
+        expect(btn.querySelector("span")!.textContent).toBe("Chat history");
+    });
+});

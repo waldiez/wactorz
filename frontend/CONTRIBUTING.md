@@ -45,7 +45,7 @@
 
 ### Touching SceneManager
 
-- [ ] Keep the public API stable: agent CRUD, `reconcileAgents`, `onAgentSelected`, `dispose`
+- [ ] Keep the public API stable: agent CRUD, `reconcileAgents`, `dispose`
 - [ ] Agent-state mutations go through `addOrUpdateAgent` / `removeAgent` so the CardDashboard stays in sync
 - [ ] No `console.log` left in coordinator code (use `console.info` for intentional dev output)
 

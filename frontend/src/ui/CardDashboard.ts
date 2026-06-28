@@ -378,7 +378,7 @@ export class CardDashboard {
     }
 
     private _hideFloatingUI(): void {
-        ["hud", "hud-stats", "chat-panel"].forEach(id => {
+        ["hud", "hud-stats"].forEach(id => {
             const el = document.getElementById(id);
             if (el) {
                 el.style.display = "none";

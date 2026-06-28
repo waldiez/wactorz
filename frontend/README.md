@@ -76,7 +76,6 @@ Components communicate exclusively through **DOM `CustomEvent`s** — no shared 
 
 | Event | Direction | Payload |
 | ------ | --------- | ------- |
-| `agent-selected` | ChatPanel → main.ts (SceneManager) | `{ agent: AgentInfo }` |
 | `af-agent-command` | CardDashboard → main.ts (WSChatClient) | `{ command, agentId }` |
 | `af-send-message` | DashboardChat → main.ts (IOManager) | `{ content, target, attachments }` |
 | `af-feed-push` | IOManager / main.ts → CardDashboard | `{ item: FeedItem }` |

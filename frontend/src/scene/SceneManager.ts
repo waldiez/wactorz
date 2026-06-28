@@ -189,9 +189,6 @@ export class SceneManager {
         return [...this.agents.values()];
     }
 
-    /** No-op: the cards view opens the chat panel via the agent-selected event. */
-    onAgentSelected(_agentId: string): void {}
-
     clearAll(): void {
         for (const id of [...this.agents.keys()]) {
             this.removeAgent(id);

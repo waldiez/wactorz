@@ -15,6 +15,39 @@ function ingressBase(): string {
     return (window as any).__WACTORZ_INGRESS_PATH ?? "";
 }
 
+/**
+ * Drop internal bookkeeping turns the backend records into an agent's
+ * conversation history for the LLM's benefit but which are not real chat.
+ *
+ * When an agent is deleted, main_actor records a synthetic pair so the model
+ * stops believing the agent still exists:
+ *   { role: "user",      content: "[SYSTEM] Agent '…' was deleted …" }
+ *   { role: "assistant", content: "Acknowledged — '…' has been removed …" }
+ * These live only in the kv_store conversation_history (LLM memory) — surfacing
+ * them renders the note as a "you" bubble + an orphan agent ack. Filter the
+ * "[SYSTEM]" user turn together with its paired acknowledgement.
+ *
+ * Operates on chronologically-ordered rows (the ack follows its note).
+ */
+function stripInternalTurns<T extends { role: string; content: string }>(rows: T[]): T[] {
+    const out: T[] = [];
+    for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r) {
+            continue;
+        }
+        if (r.role === "user" && r.content.startsWith("[SYSTEM]")) {
+            // Skip the note and, if present, the synthetic ack recorded right after it.
+            if (rows[i + 1]?.role === "assistant" && rows[i + 1]!.content.startsWith("Acknowledged")) {
+                i++;
+            }
+            continue;
+        }
+        out.push(r);
+    }
+    return out;
+}
+
 /** Primary source: chat_log table — carries real persisted timestamps. */
 async function fromChatLog(agentId: string): Promise<ChatMessage[]> {
     const res = await fetch(`${ingressBase()}/api/chats?agent=${encodeURIComponent(agentId)}&limit=200`);
@@ -22,7 +55,7 @@ async function fromChatLog(agentId: string): Promise<ChatMessage[]> {
         return [];
     }
     const rows: { id: number; ts: number; role: string; content: string }[] = await res.json();
-    return rows.reverse().map(r => ({
+    return stripInternalTurns(rows.reverse()).map(r => ({
         id: `hist-${agentId}-${r.id}`,
         from: r.role === "user" ? "user" : agentId,
         to: r.role === "user" ? agentId : "user",
@@ -37,7 +70,8 @@ async function fromKvStore(agentId: string): Promise<ChatMessage[]> {
     if (!res.ok) {
         return [];
     }
-    const raw: { role: string; content: string }[] = await res.json();
+    const rawAll: { role: string; content: string }[] = await res.json();
+    const raw = stripInternalTurns(rawAll);
     const base = Date.now() - raw.length * 2000 - 5000;
     return raw.map((m, i) => ({
         id: `hist-${agentId}-${i}`,

@@ -91,6 +91,65 @@ describe("fetchChatHistory", () => {
         expect(out[0]).toMatchObject({ id: "hist-main-0", from: "main", to: "user", content: "hello" });
     });
 
+    it("strips the [SYSTEM] deletion note and its paired ack from kv_store history", async () => {
+        globalThis.fetch = vi.fn(async (url: string) => {
+            if (url.includes("/api/chats")) {
+                return { ok: true, json: async () => [] };
+            }
+            return {
+                ok: true,
+                json: async () => [
+                    { role: "user", content: "spawn image-gen-agent" },
+                    { role: "assistant", content: "done" },
+                    { role: "user", content: "[SYSTEM] Agent 'image-gen-agent' was deleted (deleted)." },
+                    { role: "assistant", content: "Acknowledged — 'image-gen-agent' has been removed." },
+                    { role: "user", content: "what now?" },
+                ],
+            };
+        }) as unknown as typeof fetch;
+
+        const out = await fetchChatHistory("main");
+        expect(out.map(m => m.content)).toEqual(["spawn image-gen-agent", "done", "what now?"]);
+        expect(out.some(m => m.content.startsWith("[SYSTEM]"))).toBe(false);
+        expect(out.some(m => m.content.startsWith("Acknowledged"))).toBe(false);
+    });
+
+    it("drops a lone [SYSTEM] note but keeps a following real user turn", async () => {
+        globalThis.fetch = vi.fn(async (url: string) => {
+            if (url.includes("/api/chats")) {
+                return { ok: true, json: async () => [] };
+            }
+            return {
+                ok: true,
+                json: async () => [
+                    { role: "user", content: "[SYSTEM] Agent 'x' was deleted (deleted)." },
+                    { role: "user", content: "hello" },
+                ],
+            };
+        }) as unknown as typeof fetch;
+
+        const out = await fetchChatHistory("main");
+        expect(out.map(m => m.content)).toEqual(["hello"]);
+    });
+
+    it("keeps a real assistant reply that is not the paired ack", async () => {
+        globalThis.fetch = vi.fn(async (url: string) => {
+            if (url.includes("/api/chats")) {
+                return { ok: true, json: async () => [] };
+            }
+            return {
+                ok: true,
+                json: async () => [
+                    { role: "user", content: "[SYSTEM] Agent 'x' was deleted (deleted)." },
+                    { role: "assistant", content: "Sure, anything else?" },
+                ],
+            };
+        }) as unknown as typeof fetch;
+
+        const out = await fetchChatHistory("main");
+        expect(out.map(m => m.content)).toEqual(["Sure, anything else?"]);
+    });
+
     it("returns [] when both sources fail", async () => {
         globalThis.fetch = vi.fn(async () => ({ ok: false })) as unknown as typeof fetch;
         expect(await fetchChatHistory("main")).toEqual([]);

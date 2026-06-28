@@ -1,8 +1,10 @@
 # Contributing to the Wactorz frontend
 
+<!-- markdownlint-disable MD036 -->
+
 ## Before you start
 
-- [ ] `bun run typecheck` passes on `main`
+- [ ] `bun run typecheck` passes on `dev`
 - [ ] `bun run fmt` has been run (Prettier, no manual style arguments)
 - [ ] You understand the [event bus](README.md#event-bus) — components talk via `CustomEvent`, not direct calls
 
@@ -10,9 +12,11 @@
 
 ### Every PR
 
-- [ ] `bun run typecheck` — zero type errors
-- [ ] `bun run fmt` — no diff after running
+- [ ] `bun run lint` — typecheck + Prettier + ESLint all clean (what CI runs)
+- [ ] `bun run test` — all unit tests pass
+- [ ] `bun run coverage` — meets the gated thresholds (raise them as you add tests, never lower)
 - [ ] `bun run build` — bundle succeeds, no new chunk-size warnings
+- [ ] `bun run docs` — TypeDoc builds with no warnings
 - [ ] Tested in browser against a live backend (or at minimum the MQTT mock stack)
 
 ### New UI component
@@ -22,6 +26,7 @@
 - [ ] Wires events via `document.addEventListener` / `document.dispatchEvent`
 - [ ] Cleaned up in a `destroy()` method (remove event listeners)
 - [ ] Added to bootstrap order comment in `main.ts`
+- [ ] Unit test added in `src/__tests__/` (coverage is gated in CI)
 - [ ] `bun run docs` — TypeDoc still builds
 
 ### New agent interaction (command / event)
@@ -40,22 +45,25 @@
 
 ### Touching SceneManager
 
-- [ ] Public API (`setTheme`, agent CRUD, `onAgentSelected`, `dispose`) kept stable — it's the only coordinator `main.ts` wires to
+- [ ] Keep the public API stable: agent CRUD, `reconcileAgents`, `onAgentSelected`, `dispose`
 - [ ] Agent-state mutations go through `addOrUpdateAgent` / `removeAgent` so the CardDashboard stays in sync
 - [ ] No `console.log` left in coordinator code (use `console.info` for intentional dev output)
 
 ## Style guide
 
 **TypeScript**
+
 - Strict mode is on — no `any`, no `!` non-null assertions without a comment
 - Prefer `const` and immutable patterns
 - No comments explaining *what* code does — only *why* when it would surprise a reader
 
 **DOM**
+
 - Build elements in code (`document.createElement`) — no `innerHTML` with user-controlled strings (XSS)
 - Use CSS classes for state (`.active`, `.hidden`) rather than inline styles where possible
 
 **Events**
+
 - Always clean up `addEventListener` on component destroy
 - Never store references to other component instances — fire events instead
 

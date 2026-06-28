@@ -6,7 +6,7 @@ Renders a live dashboard as HTML/CSS card components driven by real-time MQTT ev
 ## Stack
 
 | Layer | Library | Purpose |
-|-------|---------|---------|
+| ----- | ------- | ------- |
 | Transport | MQTT.js 5 | Real-time agent events |
 | Chat bridge | WebSocket (native) | Direct `main` agent replies |
 | IDs | `@waldiez/wid` | Time-ordered collision-resistant IDs |
@@ -14,17 +14,18 @@ Renders a live dashboard as HTML/CSS card components driven by real-time MQTT ev
 
 ## Directory layout
 
-```
+```text
 frontend/
 ├── src/
 │   ├── main.ts            # Bootstrap — wires everything together
 │   ├── types/agent.ts     # Shared types (AgentInfo, ChatMessage, …)
 │   ├── mqtt/              # MQTT WebSocket client + typed event emitter
-│   ├── io/                # IOManager, WSChatClient, TTS, VoiceInput, HAClient
+│   ├── io/                # IOManager, WSChatClient, TTSManager, SpeechToText, HAClient
 │   ├── scene/             # SceneManager — agent-state store + dashboard coordinator
-│   └── ui/                # HTML overlay components (no framework)
+│   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard
+│   └── __tests__/         # Vitest unit tests (happy-dom)
 ├── index.html
-├── vite.config.ts         # Dev proxy → :8000 (REST) + :8081 (WS) + :9001 (MQTT)
+├── vite.config.ts         # Dev proxy → :8888 (REST + WS + MQTT)
 └── tsconfig.json          # Strict, noUncheckedIndexedAccess, exactOptionalPropertyTypes
 ```
 
@@ -44,31 +45,49 @@ bun run dev          # http://localhost:3000
 ## Available scripts
 
 | Script | What it does |
-|--------|-------------|
-| `bun run dev` | Vite dev server on :3000 with proxy to :8000/:8081/:9001 |
+| ------ | ------------ |
+| `bun run dev` | Vite dev server on :3000, proxying `/api`, `/ws`, `/mqtt` to :8888 |
 | `bun run build` | TypeScript check + Vite bundle → `../static/app` |
+| `bun run preview` | Serve the production bundle locally |
 | `bun run typecheck` | `tsc --noEmit` only |
-| `bun run fmt` | Prettier over `src/**/*.ts` |
+| `bun run lint` | typecheck + Prettier check + ESLint (what CI runs) |
+| `bun run fmt` | Prettier write over `src/**/*.{ts,tsx,css,json}` |
+| `bun run test` | Vitest unit tests (happy-dom) |
+| `bun run coverage` | Vitest with coverage; **fails below the gated thresholds** |
 | `bun run docs` | TypeDoc → `../site/api/js` |
+
+## Testing
+
+Unit tests run on [Vitest](https://vitest.dev) in a `happy-dom` environment — no browser required:
+
+```bash
+bun run test         # run once
+bun run test:watch   # watch mode
+bun run coverage     # run with a coverage report
+```
+
+Coverage thresholds live in `vitest.config.ts` and **gate CI**: `bun run coverage`
+fails if any metric drops below the floor. The floor is ratcheted up as coverage grows — raise it,
+never lower it. New components and bug fixes should ship with a test in `src/__tests__/`.
 
 ## Event bus
 
 Components communicate exclusively through **DOM `CustomEvent`s** — no shared mutable state, no framework store.
 
 | Event | Direction | Payload |
-|-------|-----------|---------|
-| `agent-selected` | UI → SceneManager | `{ agent: { id } }` |
-| `af-agent-command` | UI → WSChatClient | `{ command, agentId }` |
-| `af-send-message` | IOBar/CardDash → IOManager | `{ content, target }` |
-| `af-feed-push` | any → CardDashboard | `{ item: FeedItem }` |
-| `af-chat-message` | WS/MQTT → ChatPanel | `{ msg: ChatMessage }` |
-| `af-stream-chunk` | IOManager → ChatPanel | `{ chunk, from }` |
-| `af-stream-end` | IOManager → ChatPanel | — |
-| `af-connection-status` | MQTT/WS → HUD | `{ status: "live"\|"demo" }` |
+| ------ | --------- | ------- |
+| `agent-selected` | ChatPanel → main.ts (SceneManager) | `{ agent: AgentInfo }` |
+| `af-agent-command` | CardDashboard → main.ts (WSChatClient) | `{ command, agentId }` |
+| `af-send-message` | DashboardChat → main.ts (IOManager) | `{ content, target, attachments }` |
+| `af-feed-push` | IOManager / main.ts → CardDashboard | `{ item: FeedItem }` |
+| `af-chat-message` | main.ts (WS/MQTT) → DashboardChat | `{ msg: ChatMessage }` |
+| `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from }` |
+| `af-stream-end` | IOManager → DashboardChat | `{ text, from }` |
+| `af-connection-status` | main.ts (MQTT/WS) → CardDashboard | `{ status: "live" \| "demo" }` |
 
 ## MQTT topics consumed
 
-```
+```text
 agents/{id}/heartbeat   agents/{id}/status    agents/{id}/spawn
 agents/{id}/chat        agents/{id}/alert     agents/{id}/metrics
 agents/{id}/logs        agents/{id}/completed
@@ -81,16 +100,18 @@ nodes/{node}/heartbeat  system/health
 2. Instantiate in `main.ts` (follow the existing bootstrap order comment)
 3. Subscribe to relevant DOM events via `document.addEventListener`
 4. Fire DOM events rather than calling methods on other components directly
-5. Run `bun run typecheck` — fix all errors before opening a PR
+5. Add a unit test in `src/__tests__/` (coverage is gated in CI)
+6. Run `bun run lint && bun run test` — both must pass before opening a PR
 
 ## Proxy configuration
 
 During development, Vite proxies:
 
 | Path | Target | Protocol |
-|------|--------|----------|
-| `/api` | `localhost:8000` | HTTP |
-| `/ws` | `localhost:8081` | WebSocket |
-| `/mqtt` | `localhost:9001` | WebSocket |
+| ---- | ------ | -------- |
+| `/api` | `localhost:8888` | HTTP |
+| `/ws` | `localhost:8888` | WebSocket |
+| `/mqtt` | `localhost:8888` | WebSocket |
 
+All three proxy to the backend monitor server on `:8888` (see `vite.config.ts`).
 Set `VITE_MQTT_WS_URL` in `.env` to override the MQTT broker URL in production builds.

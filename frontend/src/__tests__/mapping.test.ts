@@ -3,8 +3,62 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect } from "vitest";
-import { buildNameIndex, mapLogFeedItem } from "../agents/mapping";
-import type { LogFeedItem } from "../io/WSChatClient";
+import { buildNameIndex, mapLogFeedItem, toAgentInfo } from "../agents/mapping";
+import { resolveAgentName } from "../agents/naming";
+import type { LogFeedItem, StatePatchAgent } from "../io/WSChatClient";
+
+describe("toAgentInfo", () => {
+    it("maps required fields with sensible defaults", () => {
+        const out = toAgentInfo({ agent_id: "main-0001", name: "main" } as StatePatchAgent);
+        expect(out).toMatchObject({
+            id: "main-0001",
+            name: resolveAgentName("main", "main-0001"),
+            state: "running", // default when neither state nor status given
+            protected: false,
+        });
+    });
+
+    it("passes through known states and falls back to running for unknown", () => {
+        expect(toAgentInfo({ agent_id: "a", state: "paused" } as StatePatchAgent).state).toBe("paused");
+        expect(toAgentInfo({ agent_id: "a", state: "weird" } as StatePatchAgent).state).toBe("running");
+    });
+
+    it("uses status when state is absent", () => {
+        expect(toAgentInfo({ agent_id: "a", status: "stopped" } as StatePatchAgent).state).toBe("stopped");
+    });
+
+    it("copies optional metrics through to camelCase fields when present", () => {
+        const out = toAgentInfo({
+            agent_id: "a",
+            name: "n",
+            protected: true,
+            messages_processed: 7,
+            cost_usd: 1.5,
+            uptime: 99,
+            cpu: 12,
+            mem: 34,
+            task: "busy",
+            agent_type: "dynamic",
+        } as StatePatchAgent);
+        expect(out).toMatchObject({
+            protected: true,
+            messagesProcessed: 7,
+            costUsd: 1.5,
+            uptime: 99,
+            cpu: 12,
+            mem: 34,
+            task: "busy",
+            agentType: "dynamic",
+        });
+    });
+
+    it("omits optional fields that are not supplied", () => {
+        const out = toAgentInfo({ agent_id: "a" } as StatePatchAgent);
+        expect(out.messagesProcessed).toBeUndefined();
+        expect(out.costUsd).toBeUndefined();
+        expect(out.agentType).toBeUndefined();
+    });
+});
 
 describe("buildNameIndex", () => {
     it("indexes entries that carry a name by agent_id", () => {

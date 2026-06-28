@@ -112,7 +112,7 @@ export class WSChatClient {
         this._onStreamChunk = fn;
     }
 
-    /** Stream finished — render final markdown, clear typing indicator. */
+    /** Stream finished — render the final markdown for the accumulated reply. */
     onStreamEnd(fn: StreamEndHandler): void {
         this._onStreamEnd = fn;
     }

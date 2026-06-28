@@ -24,15 +24,6 @@ body {
   color: #e0e8ff;
 }
 
-/* ── Canvas ──────────────────────────────────────────────────────── */
-#renderCanvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-  touch-action: none;
-  outline: none;
-}
-
 /* ── Glass panel base ───────────────────────────────────────────────── */
 .glass {
   background: rgba(10, 15, 40, 0.72);

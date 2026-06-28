@@ -73,7 +73,7 @@ export class ChatInput {
         // @mention detection: `@` anywhere at the end of the current word.
         const mentionMatch = /@(\w*)$/.exec(val);
         if (mentionMatch) {
-            this._openMentionPanel(mentionMatch[1] ?? "", mentionPanel, select, input);
+            this._openMentionPanel(mentionMatch[1] ?? "", mentionPanel, select, input, ghost);
             this._clearGhost(input, ghost);
             return;
         }
@@ -91,8 +91,10 @@ export class ChatInput {
         this.draft = "";
         this.suggestion = "";
         input.classList.remove("has-suggestion");
-        const ghost = input.previousElementSibling as HTMLElement | null;
-        if (ghost?.classList.contains("af-input-ghost")) {
+        // Locate the ghost by class within the input's wrapper rather than by
+        // sibling order, so a markup reorder can't silently break clearing.
+        const ghost = input.parentElement?.querySelector<HTMLElement>(".af-input-ghost");
+        if (ghost) {
             ghost.textContent = "";
         }
     }
@@ -120,7 +122,7 @@ export class ChatInput {
             e.preventDefault();
             const dir = e.key === "ArrowRight" ? 1 : -1;
             this.mentionIdx = Math.max(-1, Math.min(this.mentionMatches.length - 1, this.mentionIdx + dir));
-            this._renderMentionChips(mentionPanel, select, input);
+            this._renderMentionChips(mentionPanel, select, input, ghost);
             return true;
         }
         if (e.key === "Tab" || e.key === "Enter") {
@@ -237,6 +239,7 @@ export class ChatInput {
         panel: HTMLElement,
         select: HTMLSelectElement,
         input: HTMLTextAreaElement,
+        ghost: HTMLElement,
     ): void {
         const all = this.host.agentNames();
         this.mentionMatches = query ? all.filter(n => n.toLowerCase().startsWith(query.toLowerCase())) : all;
@@ -246,7 +249,7 @@ export class ChatInput {
         }
         this.mentionIdx = 0;
         this.mentionOpen = true;
-        this._renderMentionChips(panel, select, input);
+        this._renderMentionChips(panel, select, input, ghost);
         panel.classList.add("open");
     }
 
@@ -254,6 +257,7 @@ export class ChatInput {
         panel: HTMLElement,
         select: HTMLSelectElement,
         input: HTMLTextAreaElement,
+        ghost: HTMLElement,
     ): void {
         panel.textContent = "";
         this.mentionMatches.forEach((name, i) => {
@@ -262,7 +266,7 @@ export class ChatInput {
             chip.textContent = name;
             chip.addEventListener("mousedown", e => {
                 e.preventDefault();
-                this._acceptMention(name, input, select, panel, panel.previousElementSibling as HTMLElement);
+                this._acceptMention(name, input, select, panel, ghost);
             });
             panel.appendChild(chip);
         });

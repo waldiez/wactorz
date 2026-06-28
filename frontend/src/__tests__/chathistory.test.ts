@@ -17,10 +17,12 @@ describe("mergeChatHistory", () => {
         expect(out).toEqual([]);
     });
 
-    it("strips the @agent routing prefix from restored user messages", () => {
-        const out = mergeChatHistory([], [msg({ id: "hist-main-2", content: "@main hello" })]);
+    it("strips the @agent routing prefix without mutating the incoming message", () => {
+        const incoming = msg({ id: "hist-main-2", content: "@main hello" });
+        const out = mergeChatHistory([], [incoming]);
         expect(out).toHaveLength(1);
         expect(out[0]!.content).toBe("hello");
+        expect(incoming.content).toBe("@main hello"); // caller's object untouched
     });
 
     it("adopts the persisted id onto a matching optimistic echo instead of duplicating", () => {

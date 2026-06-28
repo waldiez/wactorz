@@ -17,12 +17,23 @@ export class DropZone {
     private list: HTMLElement;
     /** dragenter/leave fire per element; count depth so leave only hides at 0. */
     private dragDepth = 0;
+    /** Window listeners we attached, kept so destroy() can detach them. */
+    private windowHandlers: [keyof WindowEventMap, EventListener][] = [];
 
     constructor(private apiBase = "") {
         this.overlay = this._buildOverlay();
         this.list = this.overlay.querySelector(".af-drop-list") as HTMLElement;
         document.body.appendChild(this.overlay);
         this._wireDragEvents();
+    }
+
+    /** Detach all window listeners and remove the overlay. */
+    destroy(): void {
+        for (const [type, handler] of this.windowHandlers) {
+            window.removeEventListener(type, handler);
+        }
+        this.windowHandlers = [];
+        this.overlay.remove();
     }
 
     private _buildOverlay(): HTMLElement {
@@ -39,18 +50,23 @@ export class DropZone {
     }
 
     private _wireDragEvents(): void {
-        // Prevent the browser from navigating to dropped files everywhere.
-        window.addEventListener("dragover", e => e.preventDefault());
-        window.addEventListener("drop", e => e.preventDefault());
+        const on = <K extends keyof WindowEventMap>(type: K, handler: (e: WindowEventMap[K]) => void) => {
+            window.addEventListener(type, handler as EventListener);
+            this.windowHandlers.push([type, handler as EventListener]);
+        };
 
-        window.addEventListener("dragenter", e => {
-            if (!this._hasFiles(e)) {
+        // Prevent the browser from navigating to dropped files everywhere.
+        on("dragover", e => e.preventDefault());
+        on("drop", e => e.preventDefault());
+
+        on("dragenter", e => {
+            if (!this._hasFiles(e as DragEvent)) {
                 return;
             }
             this.dragDepth++;
             this._show();
         });
-        window.addEventListener("dragleave", () => {
+        on("dragleave", () => {
             this.dragDepth = Math.max(0, this.dragDepth - 1);
             if (this.dragDepth === 0) {
                 this._hide();

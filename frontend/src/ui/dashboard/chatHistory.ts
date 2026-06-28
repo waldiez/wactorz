@@ -80,17 +80,19 @@ function optimisticEcho(existing: ChatMessage[], m: ChatMessage): ChatMessage | 
 export function mergeChatHistory(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
     const ids = new Set(existing.map(m => m.id));
     const toAdd: ChatMessage[] = [];
-    for (const m of incoming) {
-        if (ids.has(m.id)) {
+    for (const raw of incoming) {
+        if (ids.has(raw.id)) {
             continue;
         }
         // Strip the `@agent ` routing prefix IOManager adds on send so restored
         // history matches the live thread AND the echo comparison can pair up.
-        if (m.from === "user") {
-            m.content = m.content.replace(/^@[\w-]+\s+/, "");
-        }
+        // Normalise onto a copy — never mutate the caller's incoming messages.
+        const m: ChatMessage =
+            raw.from === "user" ? { ...raw, content: raw.content.replace(/^@[\w-]+\s+/, "") } : raw;
         const echo = m.from === "user" ? optimisticEcho(existing, m) : undefined;
         if (echo) {
+            // Adopt the persisted id onto the live thread's optimistic echo in
+            // place — the caller relies on this to reconcile its rendered message.
             echo.id = m.id;
             continue;
         }

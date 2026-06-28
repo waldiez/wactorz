@@ -42,6 +42,14 @@ describe("DropZone", () => {
         new DropZone("/ingress");
     });
 
+    it("destroy() removes the overlay and detaches window listeners", () => {
+        const dz = new DropZone("/ingress");
+        const countBefore = document.querySelectorAll(".af-drop-overlay").length;
+        dz.destroy();
+        expect(document.querySelectorAll(".af-drop-overlay").length).toBe(countBefore - 1);
+        expect(() => dz.destroy()).not.toThrow(); // idempotent
+    });
+
     it("builds the overlay and attaches it to the body", () => {
         expect(overlay()).not.toBeNull();
         expect(overlay()!.querySelector(".af-drop-list")).not.toBeNull();

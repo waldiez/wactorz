@@ -30,9 +30,9 @@ export default defineConfig({
             // design: defensive guards/fallbacks make 95 there a poor trade.
             thresholds: {
                 lines: 94,
-                functions: 90,
+                functions: 91,
                 branches: 80,
-                statements: 93,
+                statements: 94,
             },
         },
     },

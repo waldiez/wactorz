@@ -82,4 +82,49 @@ describe("MetricsController", () => {
         const m = new MetricsController(makeHost("settings"));
         expect(m.buildSettingsView()).toBeInstanceOf(HTMLElement);
     });
+
+    const byText = (root: HTMLElement, text: string): HTMLButtonElement =>
+        [...root.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === text)!;
+
+    it("saving the spend limit POSTs /api/cost/limit then refetches and re-renders", async () => {
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({}),
+        })) as unknown as typeof fetch;
+        const host = makeHost("settings");
+        const m = new MetricsController(host);
+        const view = m.buildSettingsView();
+        view.querySelector<HTMLInputElement>('input[type="number"]')!.value = "7";
+        view.querySelector<HTMLSelectElement>("select")!.value = "weekly";
+        byText(view, "Save limit").click();
+
+        await vi.waitFor(() => expect(host.renderView).toHaveBeenCalled()); // last step of the chain
+        expect(fetch).toHaveBeenCalledWith(
+            "/api/cost/limit",
+            expect.objectContaining({
+                method: "POST",
+                body: JSON.stringify({ limit_usd: 7, period: "weekly" }),
+            }),
+        );
+        expect(fetch).toHaveBeenCalledWith("/api/cost"); // refetch
+    });
+
+    it("resetting spend POSTs /api/cost/reset (after confirm) then refetches", async () => {
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({}),
+        })) as unknown as typeof fetch;
+        window.confirm = vi.fn(() => true);
+        const m = new MetricsController(makeHost("settings"));
+        const view = m.buildSettingsView();
+        byText(view, "Reset spend").click();
+
+        await vi.waitFor(() =>
+            expect(fetch).toHaveBeenCalledWith(
+                "/api/cost/reset",
+                expect.objectContaining({ method: "POST" }),
+            ),
+        );
+        expect(fetch).toHaveBeenCalledWith("/api/cost"); // refetch
+    });
 });

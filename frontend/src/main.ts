@@ -225,7 +225,7 @@ wsChat.onLogFeed(items => {
     });
 });
 
-// Seed the activity feed from SQLite chat_log so the feed panel isn't empty
+// Seed the activity feed from SQLite chat_log so the feed view isn't empty
 // after a server restart. The server returns real Unix timestamps (seconds);
 // convert to ms for the feed.
 fetch(`${_apiBase}/api/feed`)

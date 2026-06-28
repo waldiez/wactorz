@@ -12,6 +12,7 @@ import { renderMarkdown } from "../markdown";
 import { isImage, humanSize } from "./uploads";
 import { iconMarkup } from "./icons";
 import { openLightbox } from "./lightbox";
+import { escapeHtml } from "../escapeHtml";
 
 /** Image thumbnail (click → lightbox) or file chip for one attachment. */
 function buildAttachmentEl(att: Attachment): HTMLElement {
@@ -26,7 +27,7 @@ function buildAttachmentEl(att: Attachment): HTMLElement {
     }
     const el = att.url ? document.createElement("a") : document.createElement("span");
     el.className = "af-chat-attach-file";
-    el.innerHTML = `${iconMarkup("file", 13)}<span>${att.name} · ${humanSize(att.size)}</span>`;
+    el.innerHTML = `${iconMarkup("file", 13)}<span>${escapeHtml(att.name)} · ${humanSize(att.size)}</span>`;
     if (att.url && el instanceof HTMLAnchorElement) {
         el.href = att.url;
         el.target = "_blank";

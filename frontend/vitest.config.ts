@@ -22,12 +22,7 @@ export default defineConfig({
             provider: "v8",
             reporter: ["text", "lcov", "html"],
             include: ["src/**/*.ts"],
-            exclude: [
-                "src/main.ts",
-                "src/io/AgentImageGen.ts",
-                // Large dashboard coordinator — broad DOM surface, covered partially.
-                "src/ui/CardDashboard.ts",
-            ],
+            exclude: ["src/main.ts", "src/io/AgentImageGen.ts"],
             // Floors derived from TARGET (see top of file). CI fails below these.
             thresholds: {
                 lines: TARGET,

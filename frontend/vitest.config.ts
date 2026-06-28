@@ -29,10 +29,10 @@ export default defineConfig({
             // improves — never lower them. Branches stay slightly behind by
             // design: defensive guards/fallbacks make 95 there a poor trade.
             thresholds: {
-                lines: 85,
-                functions: 80,
-                branches: 68,
-                statements: 84,
+                lines: 86,
+                functions: 81,
+                branches: 70,
+                statements: 86,
             },
         },
     },

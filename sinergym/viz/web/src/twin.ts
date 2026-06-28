@@ -128,7 +128,7 @@ export class Twin {
       const mat = new StandardMaterial(name + "_m", this.scene);
       mat.specularColor = new Color3(0.05, 0.05, 0.08);
       if (z.occupied) {
-        mat.alpha = 0.9;                  // solid, readable volumes (like the old view)
+        mat.alpha = 0.82;                 // fuller, more solid colour (still see-through enough for the occupancy spheres)
         mat.emissiveColor = new Color3(0.10, 0.14, 0.24);
       } else {
         mat.alpha = 0.08;                 // plenums: faint slabs
@@ -158,9 +158,13 @@ export class Twin {
         om.diffuseColor = new Color3(0, 0, 0);
         om.emissiveColor = new Color3(0.0, 0.0, 0.0);
         om.disableLighting = true;
-        om.disableDepthWrite = true;
-        om.alpha = 0.9; om.alphaMode = Constants.ALPHA_ADD;
+        // opaque dot (no additive blend) so the outline renderer draws a real ring
+        om.alpha = 1.0; om.alphaMode = Constants.ALPHA_COMBINE;
         orb.material = om;
+        // dark outline ring so the white dot stays legible against bright zone fills
+        orb.renderOutline = true;
+        orb.outlineColor = new Color3(0.02, 0.03, 0.06);
+        orb.outlineWidth = 0.12;
         orb.scaling.setAll(0.01);
         this.presence.set(name, { mesh: orb, mat: om, cur: 0, tgt: 0 });
       }
@@ -276,7 +280,7 @@ export class Twin {
         c.r += (t[0] - c.r) * 0.08;
         c.g += (t[1] - c.g) * 0.08;
         c.b += (t[2] - c.b) * 0.08;
-        const k = this.highlight.has(name) ? 1.15 : 0.6;   // hovered zone glows brighter
+        const k = this.highlight.has(name) ? 1.2 : 0.9;   // near-full hue; hover lifts it brighter
         mat.emissiveColor.set(c.r * k, c.g * k, c.b * k);
       }
       // ease the backdrop toward the time-of-day target
@@ -291,8 +295,8 @@ export class Twin {
       for (const p of this.presence.values()) {
         p.cur += (p.tgt - p.cur) * 0.06;
         const lit = p.cur * breathe;
-        // warm amber → white-hot as a zone fills up
-        p.mat.emissiveColor.set(0.95 * lit, 0.66 * lit + 0.18 * lit * p.cur, 0.30 * lit);
+        // white presence dots, fading in/out with occupancy
+        p.mat.emissiveColor.set(lit, lit, lit);
         const s = 0.4 + 1.7 * p.cur;
         p.mesh.scaling.setAll(Math.max(0.01, s));
         p.mesh.setEnabled(p.cur > 0.02);

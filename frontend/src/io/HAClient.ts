@@ -95,11 +95,11 @@ export class HAClient {
             wsUrl = wsBase + "/api/websocket";
         }
 
-        console.log("[HA] Connecting to", wsUrl);
+        console.info("[HA] Connecting to", wsUrl);
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {
-            console.log("[HA] WebSocket opened");
+            console.info("[HA] WebSocket opened");
         };
 
         this.ws.onmessage = ev => {

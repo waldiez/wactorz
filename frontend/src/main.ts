@@ -232,7 +232,7 @@ fetch(`${_apiBase}/api/feed`)
     .then(r => (r.ok ? r.json() : []))
     .then(
         (items: { type: string; label: string; agentName: string; timestamp?: number; role?: string }[]) => {
-            console.log("[feed] /api/feed seed:", items.length, "items");
+            console.info("[feed] /api/feed seed:", items.length, "items");
             if (!items.length) {
                 return;
             }

@@ -4,7 +4,7 @@
  */
 /**
  * Canonical agent-name resolution — the single source of truth shared by the
- * scene wiring (main.ts), the dashboard and the MQTT normalisers.
+ * agent-store wiring (main.ts), the dashboard and the MQTT normalisers.
  *
  * Agent ids are WID strings of the form `<timestamp>Z-<name>[-<6 hex>]`; the
  * human-facing name is the `<name>` segment.

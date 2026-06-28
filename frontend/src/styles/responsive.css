@@ -86,9 +86,6 @@
   .cd-subtitle {
     display: none;
   }
-  .cd-3d-btn {
-    display: none;
-  }
   .cd-grid {
     grid-template-columns: 1fr;
     padding: 10px;

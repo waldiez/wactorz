@@ -6,16 +6,16 @@
  * Wactorz Dashboard — entry point.
  *
  * Bootstrap order:
- * 1. Create SceneManager (agent-state store + CardDashboard coordinator)
+ * 1. Create AgentStore (agent-state store + CardDashboard coordinator)
  * 2. Create MQTTClient and connect to broker
- * 3. Wire MQTT events → SceneManager (which drives the cards dashboard)
+ * 3. Wire MQTT events → AgentStore (which drives the cards dashboard)
  *
  * The chat lives entirely in CardDashboard's in-card bar (DashboardChat),
  * which renders from the af-chat-message / af-stream-* events IOManager emits.
  */
 
 import "./app.css";
-import { SceneManager } from "./scene/SceneManager";
+import { AgentStore } from "./agents/AgentStore";
 import { MQTTClient } from "./mqtt/MQTTClient";
 import { IOManager } from "./io/IOManager";
 import { WSChatClient } from "./io/WSChatClient";
@@ -31,7 +31,7 @@ import { resolveAgentName } from "./agents/naming";
 import { toAgentInfo, mapLogFeedItem, buildNameIndex } from "./agents/mapping";
 import { createDeletionGuard } from "./agents/deletionGuard";
 
-const scene = new SceneManager();
+const agentStore = new AgentStore();
 
 // Cards is the only view; clear any stale persisted theme from older builds.
 localStorage.removeItem("wactorz-theme");
@@ -103,7 +103,7 @@ function refreshLiveActors(): void {
     fetch(`${_apiBase}/api/actors`)
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((actors: AgentInfo[]) => {
-            scene.reconcileAgents(
+            agentStore.reconcileAgents(
                 actors
                     .filter(a => !isDeleted(a.id))
                     .map(a => ({
@@ -133,7 +133,7 @@ wsChat.onChat((content, from, timestampMs) => {
         timestampMs,
     };
     ioManager.receiveAgentMessage(msg);
-    scene.onChat(from, "user");
+    agentStore.onChat(from, "user");
     const feedItem = {
         type: "chat" as const,
         label: content,
@@ -152,19 +152,19 @@ ioManager.setWSClient(wsChat);
 wsChat.onStatePatch((agents, deletedId, stats) => {
     if (deletedId) {
         markDeleted(deletedId);
-        scene.removeAgent(deletedId);
+        agentStore.removeAgent(deletedId);
     }
     if (stats?.totalCostUsd !== undefined) {
-        scene.setTotalCostUsd(stats.totalCostUsd);
+        agentStore.setTotalCostUsd(stats.totalCostUsd);
     }
     if (stats?.totalMessages !== undefined) {
-        scene.setTotalMessages(stats.totalMessages);
+        agentStore.setTotalMessages(stats.totalMessages);
     }
     agents.forEach(a => {
         if (!a.agent_id || isDeleted(a.agent_id)) {
             return;
         }
-        scene.addOrUpdateAgent(toAgentInfo(a));
+        agentStore.addOrUpdateAgent(toAgentInfo(a));
     });
 });
 
@@ -172,7 +172,7 @@ wsChat.connect(`${_wsBase}/ws`);
 refreshLiveActors();
 window.setInterval(() => {
     refreshLiveActors();
-    scene.pruneStaleRemoteAgents();
+    agentStore.pruneStaleRemoteAgents();
 }, 15000);
 
 // The server embeds its in-memory log_feed (spawned/status/logs/alerts) in
@@ -185,11 +185,11 @@ let _mqttLive = false;
 
 wsChat.onLogFeed(items => {
     // Nameless entries (e.g. `log`) borrow their friendly name from the
-    // `spawned` entry in the same batch, then from the live scene — so reloads
-    // attribute them by name instead of a raw id.
+    // `spawned` entry in the same batch, then from the live agent store — so
+    // reloads attribute them by name instead of a raw id.
     const nameIndex = buildNameIndex(items);
     const resolveName = (id: string): string | undefined =>
-        nameIndex.get(id) ?? scene.getAgents().find(a => a.id === id)?.name;
+        nameIndex.get(id) ?? agentStore.getAgents().find(a => a.id === id)?.name;
 
     if (!_logFeedInitialized) {
         _logFeedInitialized = true;
@@ -292,7 +292,7 @@ mqtt.on("heartbeat", payload => {
     if (isDeleted(payload.agentId, payload.timestampMs)) {
         return;
     }
-    scene.onHeartbeat(payload);
+    agentStore.onHeartbeat(payload);
     pushFeed({
         type: "heartbeat",
         label: "heartbeat",
@@ -307,7 +307,7 @@ mqtt.on("spawn", payload => {
     if (isDeleted(payload.agentId, payload.timestampMs)) {
         return;
     }
-    scene.onSpawn(payload);
+    agentStore.onSpawn(payload);
     pushFeed({
         type: "spawn",
         label: `spawned (${payload.agentType ?? "agent"})`,
@@ -323,7 +323,7 @@ mqtt.on("spawn", payload => {
 });
 
 mqtt.on("alert", payload => {
-    scene.onAlert(payload);
+    agentStore.onAlert(payload);
     const alertMsg = payload.message ?? "";
     const alertAgent = payload.agentName ?? "system";
     pushFeed({
@@ -347,7 +347,7 @@ mqtt.on("chat", msg => {
         desktopNotifyBackground(msg.from, msg.content.slice(0, 120));
     }
     ioManager.receiveAgentMessage(msg);
-    scene.onChat(msg.from, msg.to);
+    agentStore.onChat(msg.from, msg.to);
     document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
     pushFeed({
         type: "chat",
@@ -359,7 +359,7 @@ mqtt.on("chat", msg => {
 
 mqtt.on("status", payload => {
     if (!isDeleted(payload.agentId)) {
-        scene.addOrUpdateAgent({
+        agentStore.addOrUpdateAgent({
             id: payload.agentId,
             name: payload.agentName,
             state: payload.state,
@@ -386,7 +386,7 @@ mqtt.on("connected", () => {
     console.info("[Dashboard] MQTT connected");
     document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "live" } }));
 
-    scene.pruneStaleRemoteAgents();
+    agentStore.pruneStaleRemoteAgents();
 
     if (seeded) {
         return;
@@ -409,7 +409,7 @@ mqtt.on("qa-flag", payload => {
 
 mqtt.on("metrics", payload => {
     // Merge cost/message metrics into the agent record so dashboards can display them.
-    const existing = scene.getAgents().find(a => a.id === payload.agentId);
+    const existing = agentStore.getAgents().find(a => a.id === payload.agentId);
     if (!existing) {
         return;
     }
@@ -428,7 +428,7 @@ mqtt.on("metrics", payload => {
     if (payload.uptime !== undefined) {
         update.uptime = payload.uptime;
     }
-    scene.addOrUpdateAgent(update);
+    agentStore.addOrUpdateAgent(update);
 });
 
 mqtt.on("logs", payload => {
@@ -454,7 +454,7 @@ mqtt.on("completed", payload => {
 });
 
 mqtt.on("node-heartbeat", payload => {
-    scene.updateRemoteNode(payload.node, payload.agents);
+    agentStore.updateRemoteNode(payload.node, payload.agents);
     pushFeed({
         type: "health",
         label: `node online · ${payload.agents.length} agent${payload.agents.length !== 1 ? "s" : ""}`,
@@ -465,7 +465,7 @@ mqtt.on("node-heartbeat", payload => {
 
 mqtt.on("host-stats", stats => {
     if (stats.cpu !== undefined || stats.memUsedMb !== undefined) {
-        scene.setHostStats(stats.cpu ?? 0, stats.memUsedMb ?? 0, stats.memTotalMb);
+        agentStore.setHostStats(stats.cpu ?? 0, stats.memUsedMb ?? 0, stats.memTotalMb);
     }
 });
 
@@ -534,7 +534,7 @@ document.addEventListener("af-agent-command", e => {
         // Mark deleted immediately so MQTT "stopped" events don't re-add the card
         // before the WS state-patch reply arrives.
         markDeleted(agentId);
-        scene.removeAgent(agentId);
+        agentStore.removeAgent(agentId);
     }
     wsChat.sendRaw({ type: "command", command, agent_id: agentId });
 });
@@ -543,7 +543,8 @@ document.addEventListener("af-agent-command", e => {
 document.addEventListener("af-send-message", e => {
     const { content } = (e as CustomEvent<{ content: string; target: string }>).detail;
     const agent =
-        scene.getAgents().find(a => a.name === (e as CustomEvent<{ target: string }>).detail.target) ?? null;
+        agentStore.getAgents().find(a => a.name === (e as CustomEvent<{ target: string }>).detail.target) ??
+        null;
     void ioManager.send(content, agent);
 });
 
@@ -559,12 +560,12 @@ window.addEventListener("focus", () => clearUnreadBadge());
 window.addEventListener("beforeunload", () => {
     mqtt.disconnect();
     wsChat.disconnect();
-    scene.dispose();
+    agentStore.dispose();
 });
 
 // wipe all
 document.addEventListener("af-wipe-all", () => {
-    scene.clearAll();
+    agentStore.clearAll();
     _logFeedMaxTs = 0;
 });
 

@@ -3,22 +3,20 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * Dashboard coordinator — owns the agent-state map and drives the CardDashboard.
- *
+ * Agent-state store + dashboard coordinator. Owns the canonical Map of live
+ * agents (keyed by WID id) and drives the CardDashboard from MQTT/WS events:
+ * every mutation here forwards the relevant add/update/remove to the dashboard.
  */
 
 import type { AgentInfo, HeartbeatPayload, AlertPayload, SpawnPayload } from "../types/agent";
 import { CardDashboard } from "../ui/CardDashboard";
 
-export class SceneManager {
+export class AgentStore {
     private agents: Map<string, AgentInfo> = new Map();
     private cardDashboard: CardDashboard | null = null;
     private _remoteNodeLastSeen: Map<string, number> = new Map();
 
     constructor() {
-        if (this.cardDashboard) {
-            return;
-        }
         this.cardDashboard = new CardDashboard();
         this.cardDashboard.show([...this.agents.values()]);
     }

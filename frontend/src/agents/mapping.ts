@@ -5,7 +5,7 @@
 /**
  * Pure mappers from server payloads to UI models.
  *
- * - `toAgentInfo`  : a WS state-patch agent → the scene's {@link AgentInfo}.
+ * - `toAgentInfo`  : a WS state-patch agent → the store's {@link AgentInfo}.
  * - `mapLogFeedItem`: a WS `log_feed` entry → an {@link FeedItem} (or null to drop).
  *
  * Kept free of DOM / side effects so they are trivially unit-testable.
@@ -99,7 +99,7 @@ const FEED_MAPPERS: Record<string, (item: LogFeedItem, ctx: FeedCtx) => FeedItem
  * Many entries (notably `log`) carry only the agent's id; the friendly name
  * arrives on the `spawned` entry for the same agent. Scanning the whole batch
  * first lets us attribute those nameless entries on reload, when no live MQTT
- * spawn event is available to populate the scene.
+ * spawn event is available to populate the store.
  */
 export function buildNameIndex(items: LogFeedItem[]): Map<string, string> {
     const index = new Map<string, string>();
@@ -118,7 +118,7 @@ export function buildNameIndex(items: LogFeedItem[]): Map<string, string> {
  *
  * `resolveName` supplies a friendly name for entries that carry only an id
  * (see {@link buildNameIndex}); it typically combines the batch index with the
- * live scene. Falls back to the id-derived name only when nothing else resolves.
+ * live store. Falls back to the id-derived name only when nothing else resolves.
  */
 export function mapLogFeedItem(
     item: LogFeedItem,

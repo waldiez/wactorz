@@ -23,10 +23,9 @@ export default defineConfig({
             reporter: ["text", "lcov", "html"],
             include: ["src/**/*.ts"],
             exclude: [
-                "src/scene/**",
                 "src/main.ts",
                 "src/io/AgentImageGen.ts",
-                // Deeply Babylon.js-integrated — require full 3D scene mocking
+                // Large dashboard coordinator — broad DOM surface, covered partially.
                 "src/ui/CardDashboard.ts",
             ],
             // Floors derived from TARGET (see top of file). CI fails below these.

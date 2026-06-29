@@ -39,6 +39,8 @@ function buildTextarea(
     const input = document.createElement("textarea");
     input.className = "af-iobar-input";
     input.id = "af-iobar-input";
+    input.name = "chat-message";
+    input.setAttribute("aria-label", "Chat message");
     input.rows = 1;
     input.placeholder = `Message @${deps.target()}…`;
 
@@ -96,6 +98,7 @@ function buildStopBtn(deps: IobarDeps): HTMLButtonElement {
     const stopBtn = document.createElement("button");
     stopBtn.className = "af-stop-btn";
     stopBtn.title = "Stop generating";
+    stopBtn.setAttribute("aria-label", "Stop generating");
     stopBtn.style.display = "none";
     stopBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>`;
     stopBtn.addEventListener("click", () => deps.stop());
@@ -129,6 +132,7 @@ async function startMic(stt: SpeechToText, btn: HTMLButtonElement): Promise<void
         await stt.start();
         btn.classList.add("recording");
         btn.title = "Stop & transcribe";
+        btn.setAttribute("aria-label", "Stop & transcribe");
     } catch {
         toast.show({ type: "alert-error", title: "Mic blocked", message: "Microphone permission denied." });
     }
@@ -141,6 +145,7 @@ async function finishMic(
 ): Promise<void> {
     btn.classList.remove("recording");
     btn.title = "Voice input";
+    btn.setAttribute("aria-label", "Voice input");
     try {
         const text = await stt.stopAndTranscribe();
         if (text) {
@@ -176,6 +181,7 @@ function buildMicBtn(stt: SpeechToText, input: HTMLTextAreaElement): HTMLButtonE
     const btn = document.createElement("button");
     btn.className = "af-mic-btn";
     btn.title = "Voice input";
+    btn.setAttribute("aria-label", "Voice input");
     btn.innerHTML = iconMarkup("mic", 16);
     btn.addEventListener("click", () => void toggleMic(stt, input, btn));
     return btn;

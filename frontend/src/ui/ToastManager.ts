@@ -299,6 +299,10 @@ export class ToastManager {
     private createContainer(): void {
         this.container = document.createElement("div");
         this.container.className = "wz-toasts";
+        // Announce new toasts to screen readers as they're added (not the whole
+        // stack), so audible-only cues (TTS replies, alerts) have a text equivalent.
+        this.container.setAttribute("aria-live", "polite");
+        this.container.setAttribute("aria-atomic", "false");
         document.body.appendChild(this.container);
     }
 

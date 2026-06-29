@@ -270,4 +270,17 @@ describe("renderHADevices", () => {
         // that carries it so removing it (and the highlight) is caught.
         expect(clickableRow(container).classList.contains("af-ha-row")).toBe(true);
     });
+
+    it("exposes the expandable row as a keyboard-operable disclosure", () => {
+        renderHADevices(container, [ent("light.k", "on", { friendly_name: "Lamp" })], null, haClient);
+        const row = clickableRow(container);
+        expect(row.getAttribute("role")).toBe("button");
+        expect(row.tabIndex).toBe(0);
+        expect(row.getAttribute("aria-expanded")).toBe("false");
+        // Enter expands, Space collapses — same path as a mouse click.
+        row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        expect(row.getAttribute("aria-expanded")).toBe("true");
+        row.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+        expect(row.getAttribute("aria-expanded")).toBe("false");
+    });
 });

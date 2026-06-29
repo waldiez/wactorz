@@ -104,6 +104,15 @@ describe("DashboardChat — view construction", () => {
         expect(names).toEqual(["worker"]);
     });
 
+    it("the agent filter input has an accessible name and form attributes", () => {
+        mount(host);
+        const search = host.root.querySelector<HTMLInputElement>(".af-chat-sidebar-search input")!;
+        expect(search.getAttribute("aria-label")).toBe("Filter agents");
+        expect(search.name).toBe("agent-filter");
+        expect(search.id).toBe("af-agent-filter");
+        expect(search.type).toBe("text"); // not "search" — avoids browser search chrome
+    });
+
     it("renders the pane header with the current target and its state", () => {
         mount(host);
         const hdr = host.root.querySelector<HTMLElement>("#af-chat-pane-header")!;

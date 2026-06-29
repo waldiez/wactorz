@@ -46,6 +46,9 @@ function labelledField(labelText: string, control: HTMLElement): HTMLLabelElemen
 function buildLimitInput(currentLimit: number): HTMLInputElement {
     const input = document.createElement("input");
     input.type = "number";
+    input.id = "af-cost-limit";
+    input.name = "cost-limit";
+    input.setAttribute("aria-label", "Spend limit (USD)");
     input.min = "0";
     input.step = "0.01";
     input.className = "af-cfg-input";
@@ -179,6 +182,19 @@ function buildRevealToggle(input: HTMLInputElement): HTMLButtonElement {
     return toggle;
 }
 
+/** A "set / not configured" origin dot that repaints as the input changes. */
+function buildOriginBadge(input: HTMLInputElement): HTMLElement {
+    const badge = document.createElement("span");
+    const paint = () => {
+        badge.className = `af-settings-origin${input.value ? " set" : ""}`;
+        badge.title = input.value ? "Value is set" : "Not configured";
+        badge.textContent = input.value ? "●" : "○";
+    };
+    paint();
+    input.addEventListener("input", paint);
+    return badge;
+}
+
 /** Build one labelled config input with an origin badge and (optional) reveal toggle. */
 function buildConfigField(field: SettingsField, inputs: Map<string, HTMLInputElement>): HTMLLabelElement {
     const { key, label, placeholder, type } = field;
@@ -191,18 +207,15 @@ function buildConfigField(field: SettingsField, inputs: Map<string, HTMLInputEle
 
     const input = document.createElement("input");
     input.type = type;
+    // `key` is the storage key (e.g. "wactorz-ha-url"); reuse it as id+name so
+    // the wrapping <label> associates and the field has proper form semantics.
+    input.id = key;
+    input.name = key;
     input.className = "af-cfg-input";
     input.placeholder = placeholder;
     input.value = localStorage.getItem(key) ?? "";
 
-    const badge = document.createElement("span");
-    const paintBadge = () => {
-        badge.className = `af-settings-origin${input.value ? " set" : ""}`;
-        badge.title = input.value ? "Value is set" : "Not configured";
-        badge.textContent = input.value ? "●" : "○";
-    };
-    paintBadge();
-    input.addEventListener("input", paintBadge);
+    const badge = buildOriginBadge(input);
 
     if (type === "password") {
         lbl.append(span, input, buildRevealToggle(input), badge);

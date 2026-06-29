@@ -135,7 +135,12 @@ export class DashboardChat {
         const searchWrap = document.createElement("div");
         searchWrap.className = "af-chat-sidebar-search";
         const searchInput = document.createElement("input");
+        // Keep the default text type — `type="search"` adds browser chrome (a
+        // clear button / WebKit rounding) that would change this field's look.
+        searchInput.id = "af-agent-filter";
+        searchInput.name = "agent-filter";
         searchInput.placeholder = "Filter agents…";
+        searchInput.setAttribute("aria-label", "Filter agents");
         searchInput.value = this.sidebarFilter;
         searchInput.addEventListener("input", () => {
             this.sidebarFilter = searchInput.value.toLowerCase();

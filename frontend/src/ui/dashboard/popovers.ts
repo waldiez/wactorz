@@ -99,6 +99,8 @@ function buildVolumeRow(): HTMLElement {
     const volSlider = document.createElement("input");
     volSlider.type = "range";
     volSlider.className = "af-audio-slider";
+    volSlider.name = "ambient-volume";
+    volSlider.setAttribute("aria-label", "Ambient volume");
     volSlider.min = "0";
     volSlider.max = "1";
     volSlider.step = "0.05";

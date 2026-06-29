@@ -212,6 +212,8 @@ function addSlider(
     slider.max = String(max);
     slider.value = String(current);
     slider.className = "af-ha-slider-input";
+    slider.name = labelText.toLowerCase().replace(/\s+/g, "-");
+    slider.setAttribute("aria-label", labelText);
     slider.addEventListener("change", () => {
         const val = parseInt(slider.value, 10);
         if (format) {
@@ -236,6 +238,8 @@ function addColorPicker(container: HTMLElement, e: HAEntity, haClient: HAClient 
     const picker = document.createElement("input");
     picker.type = "color";
     picker.className = "af-ha-color-picker";
+    picker.name = "color";
+    picker.setAttribute("aria-label", "Color");
 
     if (e.attributes.rgb_color) {
         const [r = 0, g = 0, b = 0] = e.attributes.rgb_color;
@@ -450,6 +454,53 @@ function buildRowEl(
     return row;
 }
 
+/**
+ * Wire the expandable detail panel onto a device row as a keyboard-operable
+ * disclosure: clickable, focusable, Enter/Space-operable, and announced as an
+ * expandable button (aria-expanded) rather than a plain clickable div.
+ */
+function attachDetailDisclosure(
+    wrapper: HTMLElement,
+    row: HTMLElement,
+    e: HAEntity,
+    isActive: boolean,
+    hasControls: boolean,
+    capabilities: HAEntity[],
+    haClient: HAClient | null,
+): void {
+    const chevron = document.createElement("span");
+    chevron.textContent = "›";
+    chevron.className = "af-ha-chevron";
+    row.appendChild(chevron);
+    row.classList.add("is-clickable");
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    row.setAttribute("aria-expanded", "false");
+
+    const detail = document.createElement("div");
+    detail.className = "af-ha-detail";
+    let detailRendered = false;
+
+    const toggleDetail = (): void => {
+        const open = detail.classList.contains("is-open");
+        detail.classList.toggle("is-open", !open);
+        chevron.classList.toggle("is-open", !open);
+        row.setAttribute("aria-expanded", String(!open));
+        if (!open && !detailRendered) {
+            detailRendered = true;
+            renderDetail(detail, e, isActive, hasControls, capabilities, haClient);
+        }
+    };
+    row.addEventListener("click", toggleDetail);
+    row.addEventListener("keydown", ev => {
+        if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault(); // Space would otherwise scroll the page
+            toggleDetail();
+        }
+    });
+    wrapper.appendChild(detail);
+}
+
 function buildHADeviceRow(e: HAEntity, capabilities: HAEntity[], haClient: HAClient | null): HTMLElement {
     const domain = domainOf(e);
     const isActive = ACTIVE_STATES.includes(e.state);
@@ -459,30 +510,8 @@ function buildHADeviceRow(e: HAEntity, capabilities: HAEntity[], haClient: HACli
     const row = buildRowEl(e, isActive, isAlert, haClient);
 
     const hasControls = entityHasControls(domain);
-    const hasDetail = hasControls || capabilities.length > 0;
-
-    if (hasDetail) {
-        const chevron = document.createElement("span");
-        chevron.textContent = "›";
-        chevron.className = "af-ha-chevron";
-        row.appendChild(chevron);
-        row.classList.add("is-clickable");
-
-        const detail = document.createElement("div");
-        detail.className = "af-ha-detail";
-        let detailRendered = false;
-
-        row.addEventListener("click", () => {
-            const open = detail.classList.contains("is-open");
-            detail.classList.toggle("is-open", !open);
-            chevron.classList.toggle("is-open", !open);
-            if (!open && !detailRendered) {
-                detailRendered = true;
-                renderDetail(detail, e, isActive, hasControls, capabilities, haClient);
-            }
-        });
-
-        wrapper.appendChild(detail);
+    if (hasControls || capabilities.length > 0) {
+        attachDetailDisclosure(wrapper, row, e, isActive, hasControls, capabilities, haClient);
     }
 
     wrapper.insertBefore(row, wrapper.firstChild);

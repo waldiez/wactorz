@@ -74,16 +74,16 @@ function buildHAConfigForm(haUrl: string | null, haToken: string | null, cb: HaV
       <p class="af-ha-hint">Enter your Home Assistant host and a long-lived access token.<br>These are stored locally in your browser only.</p>
       <label class="af-ha-field">
         Host / IP
-        <input id="ha-cfg-url" type="text" placeholder="192.168.1.2:8123 or ha.example.com/ha"
+        <input id="ha-cfg-url" name="ha-url" type="text" placeholder="192.168.1.2:8123 or ha.example.com/ha"
           value="${escapeHtml(storedHost)}" class="af-ha-input">
       </label>
       <label class="af-ha-check">
-        <input id="ha-cfg-tls" type="checkbox" ${storedTls ? "checked" : ""} class="af-ha-check-box">
+        <input id="ha-cfg-tls" name="ha-tls" type="checkbox" ${storedTls ? "checked" : ""} class="af-ha-check-box">
         Use HTTPS (TLS)
       </label>
       <label class="af-ha-field">
         Long-lived access token
-        <input id="ha-cfg-token" type="password" placeholder="eyJ..."
+        <input id="ha-cfg-token" name="ha-token" type="password" placeholder="eyJ..."
           value="${escapeHtml(haToken ?? "")}" class="af-ha-input">
       </label>
       <div class="af-ha-actions">

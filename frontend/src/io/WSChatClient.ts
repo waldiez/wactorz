@@ -12,6 +12,7 @@
  * instead of publishing to MQTT io/chat.  The server streams replies back as:
  *   {"type":"chat","from":"io-gateway","content":"...","timestamp":...}
  */
+import { log } from "./logger";
 
 export type ChatHandler = (content: string, from: string, timestampMs: number) => void;
 export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number) => void;
@@ -182,13 +183,13 @@ export class WSChatClient {
         try {
             this.ws = new WebSocket(this._url);
         } catch (err) {
-            console.warn("[WSChat] Cannot open WebSocket:", err);
+            log.warn("[WSChat] Cannot open WebSocket:", err);
             this._scheduleReconnect();
             return;
         }
 
         this.ws.addEventListener("open", () => {
-            console.info("[WSChat] connected →", this._url);
+            log.info("[WSChat] connected →", this._url);
             this._reconnectDelay = 1_000;
         });
 
@@ -240,7 +241,7 @@ export class WSChatClient {
     private _handleConfig(data: Record<string, unknown>): void {
         const mode = (data["chat_mode"] as string) === "direct_ws" ? "direct_ws" : "mqtt";
         this._chatMode = mode;
-        console.info("[WSChat] chat_mode =", mode);
+        log.info("[WSChat] chat_mode =", mode);
         this._onMode?.(mode);
     }
 

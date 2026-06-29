@@ -18,6 +18,7 @@ import "./app.css";
 import { AgentStore } from "./agents/AgentStore";
 import { MQTTClient } from "./mqtt/MQTTClient";
 import { IOManager } from "./io/IOManager";
+import { log } from "./io/logger";
 import { WSChatClient } from "./io/WSChatClient";
 import { tts } from "./io/TTSManager";
 import { toast } from "./ui/ToastManager";
@@ -108,7 +109,7 @@ function refreshLiveActors(): void {
                         name: resolveAgentName(a.name, a.id),
                     })),
             );
-            console.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
+            log.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
         })
         .catch(() => {
             // Dev mode without a running server — ignore silently.
@@ -197,7 +198,7 @@ fetch(`${_apiBase}/api/feed`)
     .then(r => (r.ok ? r.json() : []))
     .then(
         (items: { type: string; label: string; agentName: string; timestamp?: number; role?: string }[]) => {
-            console.info("[feed] /api/feed seed:", items.length, "items");
+            log.info("[feed] /api/feed seed:", items.length, "items");
             if (!items.length) {
                 return;
             }
@@ -346,7 +347,7 @@ let seeded = false;
 
 mqtt.on("connected", () => {
     _mqttLive = true;
-    console.info("[Dashboard] MQTT connected");
+    log.info("[Dashboard] MQTT connected");
     document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "live" } }));
 
     agentStore.pruneStaleRemoteAgents();
@@ -463,12 +464,12 @@ mqtt.on("raw", ({ topic, payload }) => {
 
 mqtt.on("disconnected", () => {
     _mqttLive = false;
-    console.warn("[Dashboard] MQTT disconnected");
+    log.warn("[Dashboard] MQTT disconnected");
     document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "demo" } }));
 });
 
 mqtt.on("error", err => {
-    console.error("[Dashboard] MQTT error:", err);
+    log.error("[Dashboard] MQTT error:", err);
 });
 
 // Streaming reply finished — notify

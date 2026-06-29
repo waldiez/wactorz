@@ -9,6 +9,7 @@
  * subscriptions, and optional registry fetching (areas, entity registry,
  * device registry) for room-based grouping in the UI.
  */
+import { log } from "./logger";
 
 export interface HAEntity {
     entity_id: string;
@@ -122,11 +123,11 @@ export class HAClient {
             wsUrl = wsBase + "/api/websocket";
         }
 
-        console.info("[HA] Connecting to", wsUrl);
+        log.info("[HA] Connecting to", wsUrl);
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {
-            console.info("[HA] WebSocket opened");
+            log.info("[HA] WebSocket opened");
         };
 
         this.ws.onmessage = ev => {
@@ -134,7 +135,7 @@ export class HAClient {
             try {
                 data = JSON.parse(ev.data) as HAMessage;
             } catch {
-                console.error("[HA] Failed to parse message:", ev.data);
+                log.error("[HA] Failed to parse message:", ev.data);
                 return;
             }
             this._handleMessage(data);
@@ -142,11 +143,11 @@ export class HAClient {
 
         this.ws.onclose = () => {
             this.authenticated = false;
-            console.warn("[HA] WebSocket closed");
+            log.warn("[HA] WebSocket closed");
         };
 
         this.ws.onerror = err => {
-            console.error("[HA] WebSocket error:", err);
+            log.error("[HA] WebSocket error:", err);
         };
     }
 
@@ -156,12 +157,12 @@ export class HAClient {
             this.ws?.send(JSON.stringify({ type: "auth", access_token: this.token }));
         } else if (data.type === "auth_ok") {
             this.authenticated = true;
-            console.info("[HA] Authenticated");
+            log.info("[HA] Authenticated");
             this._fetchEntities();
             void this._fetchRegistries();
             this._subscribeEvents();
         } else if (data.type === "auth_invalid") {
-            console.error("[HA] Authentication failed:", data.message);
+            log.error("[HA] Authentication failed:", data.message);
         } else if (data.type === "result" && data.id != null) {
             this._handleResult(data);
         } else if (data.type === "event" && data.event?.data?.new_state) {
@@ -285,7 +286,7 @@ export class HAClient {
             ]);
             this.onRegistriesUpdate?.({ areas, entityEntries, deviceEntries });
         } catch (e) {
-            console.warn("[HA] Registry fetch failed (older HA or no permission):", e);
+            log.warn("[HA] Registry fetch failed (older HA or no permission):", e);
             // Fire with empty registries so the UI still renders without room grouping
             this.onRegistriesUpdate?.({ areas: [], entityEntries: [], deviceEntries: [] });
         }

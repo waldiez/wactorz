@@ -8,7 +8,7 @@
  * through the host and routes card interactions back via `onChat` / `onCommand`.
  */
 import type { AgentInfo } from "../../types/agent";
-import { stateColor, stateLabel, sortAgents } from "./agentState";
+import { stateColor, stateLabel, sortAgents, STALE_MS } from "./agentState";
 import {
     buildHostBar,
     buildStatCards,
@@ -125,10 +125,9 @@ export class OverviewView {
         const items: HTMLElement[] = [
             this._buildNodeItem("local", agentNames.length > 0 ? agentNames.join(", ") : "no agents", true),
         ];
-        const staleMs = 180_000;
         const now = Date.now();
         for (const [name, info] of this.host.remoteNodes) {
-            const online = now - info.lastSeen < staleMs;
+            const online = now - info.lastSeen < STALE_MS;
             const meta = info.agents.length > 0 ? info.agents.join(", ") : "no agents";
             items.push(this._buildNodeItem(name, meta, online));
         }

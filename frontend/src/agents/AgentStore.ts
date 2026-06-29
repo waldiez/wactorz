@@ -10,6 +10,7 @@
 
 import type { AgentInfo, HeartbeatPayload, AlertPayload, SpawnPayload } from "../types/agent";
 import { CardDashboard } from "../ui/CardDashboard";
+import { STALE_MS } from "../ui/dashboard/agentState";
 
 export class AgentStore {
     private agents: Map<string, AgentInfo> = new Map();
@@ -113,7 +114,7 @@ export class AgentStore {
     }
 
     /** Remove agents belonging to nodes whose heartbeat has gone stale (>3 min). */
-    pruneStaleRemoteAgents(staleMs = 180_000): void {
+    pruneStaleRemoteAgents(staleMs = STALE_MS): void {
         const now = Date.now();
         const toEvict: string[] = [];
         for (const [id, agent] of this.agents) {

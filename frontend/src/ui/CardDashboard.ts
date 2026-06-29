@@ -22,7 +22,7 @@ import type { FeedItem } from "../types/feed";
 import { HAClient, type HAEntity } from "../io/HAClient";
 import { buildHeader, buildBottomNav } from "./dashboard/header";
 import { renderHADevices, areaIconText } from "./dashboard/haDevices";
-import { stateLabel, relTime, sortAgents } from "./dashboard/agentState";
+import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
 import { buildFeedView, appendFeedItemToView, feedItemEl, feedKey } from "./dashboard/feedView";
 import { buildHAView } from "./dashboard/haView";
 import { DashboardChat } from "./dashboard/DashboardChat";
@@ -532,7 +532,6 @@ export class CardDashboard {
 
     private _refreshTimestamps(): void {
         const now = Date.now();
-        const STALE_MS = 180_000; // matches nodes panel threshold
         this.lastHb.forEach((ms, id) => {
             const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
             if (!card) {

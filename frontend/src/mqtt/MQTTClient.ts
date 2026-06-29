@@ -16,6 +16,7 @@
  */
 
 import mqtt, { type MqttClient } from "mqtt";
+import { log } from "../io/logger";
 import { nameFromWid, resolveAgentName } from "../agents/naming";
 import type {
     AgentState,
@@ -89,7 +90,7 @@ export class MQTTClient {
         });
 
         this.client.on("connect", () => {
-            console.info("[MQTT] Connected to", this.brokerUrl);
+            log.info("[MQTT] Connected to", this.brokerUrl);
             // Cancel any pending disconnected notification from a brief close/reconnect cycle.
             if (this._disconnectTimer !== null) {
                 clearTimeout(this._disconnectTimer);
@@ -119,7 +120,7 @@ export class MQTTClient {
         });
 
         this.client.on("error", err => {
-            console.error("[MQTT] Error:", err);
+            log.error("[MQTT] Error:", err);
             this.emit("error", err);
         });
 
@@ -174,7 +175,7 @@ export class MQTTClient {
             try {
                 fn(data);
             } catch (err) {
-                console.error(`[MQTT] listener error on "${event}":`, err);
+                log.error(`[MQTT] listener error on "${event}":`, err);
             }
         });
     }

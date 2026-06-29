@@ -371,8 +371,9 @@ export class DashboardChat {
         // Keep chatTarget a live, messageable agent and guarantee a selection.
         this.syncChatTarget();
         const hasTarget = [...select.options].some(o => o.value === this.chatTarget);
-        if (!hasTarget && select.options.length) {
-            this.chatTarget = select.options[0]!.value;
+        const first = select.options[0];
+        if (!hasTarget && first) {
+            this.chatTarget = first.value;
         }
         select.value = this.chatTarget;
     }

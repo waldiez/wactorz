@@ -23,11 +23,11 @@ frontend/
 │   ├── mqtt/              # MQTT WebSocket client + typed event emitter
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
 │   ├── io/                # IO/transport: IOManager, WSChatClient, TTSManager, SpeechToText,
-│   │                      #   HAClient, AgentImageGen, AmbientManager, logger
+│   │                      #   HAClient, AmbientManager, logger
 │   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard
 │   ├── styles/            # Global CSS (base, cards, chat, dashboard, …); app.css is the entry
 │   └── __tests__/         # Vitest unit tests (happy-dom)
-├── public/                # Static assets (avatars, icons, sw.js, webmanifest)
+├── public/                # Static assets (icons, sw.js, webmanifest)
 ├── index.html
 ├── vite.config.ts         # Dev proxy → :8888 (REST + WS + MQTT); build → ../static/app
 ├── vitest.config.ts       # Coverage floors (gated in CI)

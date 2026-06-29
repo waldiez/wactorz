@@ -23,6 +23,7 @@ import { HAClient, type HAEntity } from "../io/HAClient";
 import { buildHeader, buildBottomNav } from "./dashboard/header";
 import { renderHADevices, areaIconText } from "./dashboard/haDevices";
 import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
+import type { View, ConnState } from "./dashboard/types";
 import { buildFeedView, appendFeedItemToView, feedItemEl, feedKey } from "./dashboard/feedView";
 import { buildHAView } from "./dashboard/haView";
 import { DashboardChat } from "./dashboard/DashboardChat";
@@ -33,9 +34,6 @@ import { emit, listen } from "../events";
 
 // Re-exported for tests; implemented in dashboard/haDevices.
 export { areaIconText };
-
-type View = "overview" | "feed" | "chat" | "ha" | "settings";
-type ConnState = "live" | "connecting" | "demo";
 
 export class CardDashboard {
     private root: HTMLElement;

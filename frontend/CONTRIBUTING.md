@@ -10,10 +10,14 @@
 
 ## PR checklist
 
+> **Branch target:** all branches start from `dev` and all PRs target `dev`.
+> Never base on or open a PR against `main` — `main` is for releases only.
+
 ### Every PR
 
-- [ ] `bun run lint` — typecheck + Prettier + ESLint all clean (what CI runs)
+- [ ] `bun run lint` — typecheck + Prettier + ESLint + markdownlint all clean (what CI runs)
 - [ ] `bun run test` — all unit tests pass
+- [ ] New/changed exported functions and public methods have a JSDoc (see [Style guide](#style-guide))
 - [ ] `bun run coverage` — meets the gated thresholds (raise them as you add tests, never lower)
 - [ ] `bun run build` — bundle succeeds, no new chunk-size warnings
 - [ ] `bun run docs` — TypeDoc builds with no warnings
@@ -43,7 +47,7 @@
 - [ ] `nameFromWid()` used when displaying agent names from raw WID strings
 - [ ] `hideHeartbeats` toggle still works correctly
 
-### Touching SceneManager
+### Touching AgentStore
 
 - [ ] Keep the public API stable: agent CRUD, `reconcileAgents`, `dispose`
 - [ ] Agent-state mutations go through `addOrUpdateAgent` / `removeAgent` so the CardDashboard stays in sync
@@ -55,7 +59,10 @@
 
 - Strict mode is on — no `any`, no `!` non-null assertions without a comment
 - Prefer `const` and immutable patterns
-- No comments explaining *what* code does — only *why* when it would surprise a reader
+- Inline comments explain *why*, not *what* — only when it would surprise a reader
+- Every exported function/const, public class method, and member of an exported
+  interface carries a short JSDoc (one or two lines, written for a stranger — what
+  it does, no session history). `bun run docs` surfaces anything missing.
 
 **DOM**
 

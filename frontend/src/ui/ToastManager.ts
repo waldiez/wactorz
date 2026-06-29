@@ -10,6 +10,8 @@
  * stack in the bottom-right corner and auto-dismiss after a configurable delay.
  */
 
+import { escapeHtml } from "./escapeHtml";
+
 export type ToastType = "chat" | "spawn" | "alert-error" | "alert-warning" | "welcome" | "system";
 
 export interface ToastAction {
@@ -317,14 +319,14 @@ export class ToastManager {
         el.innerHTML = `
       <div class="wz-toast__strip" style="background:${theme.strip}"></div>
       <div class="wz-toast__body">
-        <div class="wz-toast__avatar" style="background:${theme.avatar}">${initials(opts.title)}</div>
+        <div class="wz-toast__avatar" style="background:${theme.avatar}">${escapeHtml(initials(opts.title))}</div>
         <div class="wz-toast__content">
           <div class="wz-toast__header">
-            <span class="wz-toast__name">${escHtml(opts.title)}</span>
+            <span class="wz-toast__name">${escapeHtml(opts.title)}</span>
             <span class="wz-toast__badge" style="color:${theme.badge};background:${theme.badgeBg}">${theme.label}</span>
             <span class="wz-toast__time">${timeLabel()}</span>
           </div>
-          <div class="wz-toast__message">${escHtml(opts.message)}</div>
+          <div class="wz-toast__message">${escapeHtml(opts.message)}</div>
         </div>
       </div>
       ${opts.actions?.length ? `<div class="wz-toast__actions"></div>` : ""}
@@ -399,11 +401,6 @@ export class ToastManager {
         // Safety net if transitionend never fires
         window.setTimeout(() => el.isConnected && el.remove(), 600);
     }
-}
-
-/** Escape `& < > "` for safe interpolation into the toast's innerHTML template. */
-export function escHtml(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 /** Shared ToastManager singleton. */

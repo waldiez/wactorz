@@ -122,31 +122,42 @@ export class OverviewView {
             return;
         }
         const agentNames = [...this.host.agents.values()].map(a => a.name);
-        const rows: string[] = [
-            `
-      <div class="af-node-item">
-        <div>
-          <div class="af-node-name">local</div>
-          <div class="af-node-meta">${agentNames.length > 0 ? agentNames.join(", ") : "no agents"}</div>
-        </div>
-        <span class="af-node-pill online">online</span>
-      </div>`,
+        const items: HTMLElement[] = [
+            this._buildNodeItem("local", agentNames.length > 0 ? agentNames.join(", ") : "no agents", true),
         ];
         const staleMs = 180_000;
         const now = Date.now();
         for (const [name, info] of this.host.remoteNodes) {
             const online = now - info.lastSeen < staleMs;
             const meta = info.agents.length > 0 ? info.agents.join(", ") : "no agents";
-            rows.push(`
-        <div class="af-node-item">
-          <div>
-            <div class="af-node-name">${name}</div>
-            <div class="af-node-meta">${meta}</div>
-          </div>
-          <span class="af-node-pill ${online ? "online" : "offline"}">${online ? "online" : "offline"}</span>
-        </div>`);
+            items.push(this._buildNodeItem(name, meta, online));
         }
-        list.innerHTML = rows.join("");
+        list.replaceChildren(...items);
+    }
+
+    /**
+     * Build one node row. Node/agent names arrive from untrusted MQTT topics, so
+     * all dynamic text is set via `textContent` — never interpolated into HTML.
+     */
+    private _buildNodeItem(name: string, meta: string, online: boolean): HTMLElement {
+        const item = document.createElement("div");
+        item.className = "af-node-item";
+
+        const info = document.createElement("div");
+        const nameEl = document.createElement("div");
+        nameEl.className = "af-node-name";
+        nameEl.textContent = name;
+        const metaEl = document.createElement("div");
+        metaEl.className = "af-node-meta";
+        metaEl.textContent = meta;
+        info.append(nameEl, metaEl);
+
+        const pill = document.createElement("span");
+        pill.className = `af-node-pill ${online ? "online" : "offline"}`;
+        pill.textContent = online ? "online" : "offline";
+
+        item.append(info, pill);
+        return item;
     }
 
     private _buildWactorPanel(): HTMLElement {

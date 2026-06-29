@@ -125,4 +125,36 @@ describe("OverviewView.renderNodes", () => {
         expect(pills).toContain("online"); // local + rpi
         expect(pills).toContain("offline"); // stale "old"
     });
+
+    // Node and agent names arrive from untrusted MQTT topics — they must never be
+    // parsed as HTML (XSS). textContent rendering means the payload becomes inert text.
+    it("does not inject HTML from a malicious remote-node name", () => {
+        const host = makeHost([agent("worker")]);
+        const payload = `<img src=x onerror="window.__pwned = 1">`;
+        host.remoteNodes.set(payload, { agents: ["edge"], lastSeen: Date.now() });
+        mount(host);
+        const list = host.root.querySelector<HTMLElement>("#af-node-list")!;
+        expect(list.querySelector("img")).toBeNull(); // not parsed into real DOM
+        const names = [...list.querySelectorAll(".af-node-name")].map(n => n.textContent);
+        expect(names).toContain(payload); // rendered verbatim as text
+    });
+
+    it("does not inject HTML from a malicious agent name in a remote node's list", () => {
+        const host = makeHost([agent("worker")]);
+        const payload = `<script>window.__pwned = 1</script>`;
+        host.remoteNodes.set("rpi", { agents: [payload], lastSeen: Date.now() });
+        mount(host);
+        const list = host.root.querySelector<HTMLElement>("#af-node-list")!;
+        expect(list.querySelector("script")).toBeNull();
+        expect(list.textContent).toContain(payload);
+    });
+
+    it("does not inject HTML from a malicious local agent name", () => {
+        const payload = `<img src=x onerror="window.__pwned = 1">`;
+        const host = makeHost([agent(payload)]);
+        mount(host);
+        const list = host.root.querySelector<HTMLElement>("#af-node-list")!;
+        expect(list.querySelector("img")).toBeNull();
+        expect(list.querySelector(".af-node-meta")!.textContent).toContain(payload);
+    });
 });

@@ -505,10 +505,16 @@ function buildAreaSection(
 
     const header = document.createElement("div");
     header.className = "af-ha-section-head";
-    const roomIcon = areaIconText(area?.icon);
-    header.innerHTML =
-        `<span>${area ? roomIcon : "📦"}</span><span>${area?.name ?? "Other"}</span>` +
-        `<span class="af-ha-section-count">${sectionEntities.length}</span>`;
+    // Area name comes from the HA area registry (untrusted) — build with
+    // textContent, never innerHTML, so a hostile name can't inject markup.
+    const iconSpan = document.createElement("span");
+    iconSpan.textContent = area ? areaIconText(area.icon) : "📦";
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = area?.name ?? "Other";
+    const countSpan = document.createElement("span");
+    countSpan.className = "af-ha-section-count";
+    countSpan.textContent = String(sectionEntities.length);
+    header.append(iconSpan, nameSpan, countSpan);
     section.appendChild(header);
 
     sectionEntities.forEach(e => {

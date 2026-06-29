@@ -71,6 +71,18 @@ describe("renderHADevices", () => {
         expect(container.textContent).toContain("Lamp");
     });
 
+    it("escapes a hostile HA area name (no markup injection)", () => {
+        const payload = `<img src=x onerror="window.__pwned = 1">`;
+        const registries: HARegistries = {
+            areas: [{ area_id: "a1", name: payload }],
+            entityEntries: [{ entity_id: "light.k", device_id: "d1" }],
+            deviceEntries: [{ id: "d1", area_id: "a1" }],
+        };
+        renderHADevices(container, [ent("light.k", "on", { friendly_name: "Lamp" })], registries, haClient);
+        expect(container.querySelector("img")).toBeNull(); // not parsed as markup
+        expect(container.textContent).toContain(payload); // rendered verbatim as text
+    });
+
     it("renders a row per device domain and skips capability domains", () => {
         renderHADevices(
             container,

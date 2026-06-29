@@ -39,7 +39,7 @@ import {
     spawnFeedItem,
     spawnTypeLabel,
     alertFeedItem,
-    alertToastType,
+    alertKind,
     chatFeedItem,
     stoppedFeedItem,
     qaFlagFeedItem,
@@ -299,7 +299,7 @@ mqtt.on("alert", payload => {
     agentStore.onAlert(payload);
     pushFeed(alertFeedItem(payload));
     toast.show({
-        type: alertToastType(payload.severity),
+        type: alertKind(payload.severity),
         title: payload.agentName ?? "system",
         message: (payload.message ?? "").slice(0, 120),
     });

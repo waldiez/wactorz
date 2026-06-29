@@ -11,8 +11,7 @@ import {
     heartbeatFeedItem,
     spawnTypeLabel,
     spawnFeedItem,
-    alertFeedType,
-    alertToastType,
+    alertKind,
     alertFeedItem,
     chatFeedItem,
     stoppedFeedItem,
@@ -139,6 +138,11 @@ describe("mapLogFeedItem", () => {
         expect(mapped?.agentName).toBe("Explicit");
     });
 
+    it("maps a critical alert to an error row (matches the live-MQTT path)", () => {
+        const item: LogFeedItem = { type: "alert", agent_id: "a", message: "meltdown", severity: "critical" };
+        expect(mapLogFeedItem(item)?.type).toBe("alert-error");
+    });
+
     it("drops a log entry with no message", () => {
         expect(mapLogFeedItem({ type: "log", agent_id: "uuid-1" })).toBeNull();
     });
@@ -194,18 +198,12 @@ describe("live MQTT event feed builders", () => {
         });
     });
 
-    it("alert feed kind: only error → error; critical/warning/info → warning", () => {
-        expect(alertFeedType("error")).toBe("alert-error");
-        expect(alertFeedType("critical")).toBe("alert-warning");
-        expect(alertFeedType("warning")).toBe("alert-warning");
-        expect(alertFeedType("info")).toBe("alert-warning");
-    });
-
-    it("alert toast kind: error AND critical → error; warning/info → warning", () => {
-        expect(alertToastType("error")).toBe("alert-error");
-        expect(alertToastType("critical")).toBe("alert-error");
-        expect(alertToastType("warning")).toBe("alert-warning");
-        expect(alertToastType("info")).toBe("alert-warning");
+    it("alertKind: error AND critical → error (feed + toast); warning/info/unknown → warning", () => {
+        expect(alertKind("error")).toBe("alert-error");
+        expect(alertKind("critical")).toBe("alert-error"); // critical is the most severe, never a warning
+        expect(alertKind("warning")).toBe("alert-warning");
+        expect(alertKind("info")).toBe("alert-warning");
+        expect(alertKind(undefined)).toBe("alert-warning");
     });
 
     it("alertFeedItem builds a row, defaulting a missing message/agent", () => {

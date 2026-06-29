@@ -120,15 +120,12 @@ const FEED_MAPPERS: Record<string, (item: LogFeedItem, ctx: FeedCtx) => FeedItem
         const st = (item.status as Record<string, unknown> | undefined)?.["state"] as string | undefined;
         return st === "stopped" ? { type: "stopped", label: "stopped", agentName, timestamp: ts } : null;
     },
-    alert: (item, { agentName, ts }) => {
-        const isError = item.severity === "error" || item.severity === "critical";
-        return {
-            type: isError ? "alert-error" : "alert-warning",
-            label: item.message ?? "",
-            agentName: item.name ?? agentName,
-            timestamp: ts,
-        };
-    },
+    alert: (item, { agentName, ts }) => ({
+        type: alertKind(item.severity),
+        label: item.message ?? "",
+        agentName: item.name ?? agentName,
+        timestamp: ts,
+    }),
 };
 
 /**
@@ -212,8 +209,7 @@ export function selectLogFeedReplay(
 
 // ── Live MQTT event payloads → feed rows ───────────────────────────────────
 // Real-time counterpart of the `log_feed` replay above (which maps the same
-// events from the server's stored shape). NOTE: the `alert` feed kind here
-// differs from FEED_MAPPERS.alert — see alertFeedType.
+// events from the server's stored shape, via FEED_MAPPERS).
 
 /** Feed row for a heartbeat tick. */
 export function heartbeatFeedItem(p: HeartbeatPayload): FeedItem {
@@ -235,20 +231,20 @@ export function spawnFeedItem(p: SpawnPayload): FeedItem {
     };
 }
 
-/** Feed kind for a live alert: only "error" → error row; everything else → warning. */
-export function alertFeedType(severity: AlertPayload["severity"]): "alert-error" | "alert-warning" {
-    return severity === "error" ? "alert-error" : "alert-warning";
-}
-
-/** Toast kind for a live alert: "error" AND "critical" → error; else warning. */
-export function alertToastType(severity: AlertPayload["severity"]): "alert-error" | "alert-warning" {
+/**
+ * Severity → alert kind, used for BOTH feed rows and toasts (and the WS log_feed
+ * alert mapper). "error" and "critical" are both errors — critical is the most
+ * severe level, never a mere warning; everything else is a warning. Single source
+ * so the feed and toast can't disagree on a severity (they once did for "critical").
+ */
+export function alertKind(severity: string | undefined): "alert-error" | "alert-warning" {
     return severity === "error" || severity === "critical" ? "alert-error" : "alert-warning";
 }
 
 /** Feed row for a live alert (message/agent default to ""/"system"). */
 export function alertFeedItem(p: AlertPayload): FeedItem {
     return {
-        type: alertFeedType(p.severity),
+        type: alertKind(p.severity),
         label: p.message ?? "",
         agentName: p.agentName ?? "system",
         timestamp: p.timestampMs,

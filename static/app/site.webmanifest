@@ -32,11 +32,18 @@
   ],
   "screenshots": [
     {
-      "src": "./screenshots/dashboard.png",
-      "sizes": "1280x720",
-      "type": "image/png",
+      "src": "./screenshots/dashboard.webp",
+      "sizes": "1920x1080",
+      "type": "image/webp",
       "form_factor": "wide",
       "label": "Wactorz dashboard"
+    },
+    {
+      "src": "./screenshots/mobile.webp",
+      "sizes": "1080x1920",
+      "type": "image/webp",
+      "form_factor": "narrow",
+      "label": "Wactorz dashboard on mobile"
     }
   ]
 }

@@ -20,10 +20,12 @@ export default defineConfig({
             provider: "v8",
             reporter: ["text", "lcov", "html"],
             include: ["src/**/*.ts"],
-            // Composition root only: main.ts constructs singletons and wires
-            // transports (MQTT/WS/DOM) to the store + feed. Its logic lives in
-            // tested modules (agents/mapping, agents/deletionGuard, ui/haFeed);
-            // the rest is declarative wiring (not for unit-testing).
+            // Composition root only: main.ts constructs singletons, derives
+            // same-origin URLs and wires transports (MQTT/WS/DOM) to the store +
+            // feed. The decisions it used to inline now live in tested modules
+            // (agents/feedEvents, agents/mapping, agents/deletionGuard, ui/haFeed),
+            // so the handlers are thin delegators — what remains is declarative
+            // wiring + import-time bootstrap, not unit-testable in isolation.
             exclude: ["src/main.ts"],
             // Floors derived from TARGET (see top of file). CI fails below these.
             thresholds: {

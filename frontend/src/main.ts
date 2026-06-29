@@ -23,13 +23,30 @@ import { emit, listen } from "./events";
 import { WSChatClient } from "./io/WSChatClient";
 import { tts } from "./io/TTSManager";
 import { toast } from "./ui/ToastManager";
-import { createHaFeedPusher } from "./ui/haFeed";
+import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
 import { UPLOADS_ENABLED } from "./ui/dashboard/uploads";
 import type { AgentInfo } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import { resolveAgentName } from "./agents/naming";
-import { toAgentInfo, buildNameIndex, selectLogFeedReplay, type LogFeedReplayState } from "./agents/mapping";
+import {
+    toAgentInfo,
+    buildNameIndex,
+    selectLogFeedReplay,
+    type LogFeedReplayState,
+    buildMetricsUpdate,
+    heartbeatFeedItem,
+    spawnFeedItem,
+    spawnTypeLabel,
+    alertFeedItem,
+    alertToastType,
+    chatFeedItem,
+    stoppedFeedItem,
+    qaFlagFeedItem,
+    logFeedItem,
+    completedFeedItem,
+    nodeHeartbeatFeedItem,
+} from "./agents/mapping";
 import { createDeletionGuard } from "./agents/deletionGuard";
 
 const agentStore = new AgentStore();
@@ -260,12 +277,7 @@ mqtt.on("heartbeat", payload => {
         return;
     }
     agentStore.onHeartbeat(payload);
-    pushFeed({
-        type: "heartbeat",
-        label: "heartbeat",
-        agentName: payload.agentName,
-        timestamp: payload.timestampMs,
-    });
+    pushFeed(heartbeatFeedItem(payload));
 });
 
 mqtt.on("spawn", payload => {
@@ -275,35 +287,21 @@ mqtt.on("spawn", payload => {
         return;
     }
     agentStore.onSpawn(payload);
-    pushFeed({
-        type: "spawn",
-        // `|| "agent"`: the normaliser now yields "" (not undefined) when agentType is absent.
-        label: `spawned (${payload.agentType || "agent"})`,
-        agentName: payload.agentName,
-        timestamp: payload.timestampMs,
-    });
+    pushFeed(spawnFeedItem(payload));
     toast.show({
         type: "spawn",
         title: payload.agentName,
-        message: `${payload.agentType || "agent"} is online`,
+        message: `${spawnTypeLabel(payload)} is online`,
     });
 });
 
 mqtt.on("alert", payload => {
     agentStore.onAlert(payload);
-    const alertMsg = payload.message ?? "";
-    const alertAgent = payload.agentName ?? "system";
-    pushFeed({
-        type: payload.severity === "error" ? "alert-error" : "alert-warning",
-        label: alertMsg,
-        agentName: alertAgent,
-        timestamp: payload.timestampMs,
-    });
-    const isError = payload.severity === "error" || payload.severity === "critical";
+    pushFeed(alertFeedItem(payload));
     toast.show({
-        type: isError ? "alert-error" : "alert-warning",
-        title: alertAgent,
-        message: alertMsg.slice(0, 120),
+        type: alertToastType(payload.severity),
+        title: payload.agentName ?? "system",
+        message: (payload.message ?? "").slice(0, 120),
     });
 });
 
@@ -314,12 +312,7 @@ mqtt.on("chat", msg => {
     ioManager.receiveAgentMessage(msg);
     agentStore.onChat(msg.from, msg.to);
     emit("af-chat-message", { msg });
-    pushFeed({
-        type: "chat",
-        label: `→ ${msg.to}: ${msg.content}`,
-        agentName: msg.from,
-        timestamp: msg.timestampMs,
-    });
+    pushFeed(chatFeedItem(msg));
 });
 
 mqtt.on("status", payload => {
@@ -334,12 +327,7 @@ mqtt.on("status", payload => {
     }
     if (payload.state === "stopped") {
         window.setTimeout(() => refreshLiveActors(), 200);
-        pushFeed({
-            type: "stopped",
-            label: "stopped",
-            agentName: payload.agentName,
-            timestamp: Date.now(),
-        });
+        pushFeed(stoppedFeedItem(payload));
     }
 });
 
@@ -364,12 +352,7 @@ mqtt.on("connected", () => {
 });
 
 mqtt.on("qa-flag", payload => {
-    pushFeed({
-        type: "qa-flag",
-        label: `[${payload.category}] ${payload.excerpt}`,
-        agentName: `qa-agent ← ${payload.from}`,
-        timestamp: payload.timestampMs,
-    });
+    pushFeed(qaFlagFeedItem(payload));
 });
 
 mqtt.on("metrics", payload => {
@@ -378,54 +361,23 @@ mqtt.on("metrics", payload => {
     if (!existing) {
         return;
     }
-    const update: AgentInfo = {
-        id: payload.agentId,
-        name: existing.name,
-        state: existing.state,
-        protected: existing.protected,
-    };
-    if (payload.messagesProcessed !== undefined) {
-        update.messagesProcessed = payload.messagesProcessed;
-    }
-    if (payload.costUsd !== undefined) {
-        update.costUsd = payload.costUsd;
-    }
-    if (payload.uptime !== undefined) {
-        update.uptime = payload.uptime;
-    }
-    agentStore.addOrUpdateAgent(update);
+    agentStore.addOrUpdateAgent(buildMetricsUpdate(payload, existing));
 });
 
 mqtt.on("logs", payload => {
-    const msg = payload.message ?? payload.text ?? "";
-    if (!msg) {
-        return;
+    const item = logFeedItem(payload);
+    if (item) {
+        pushFeed(item);
     }
-    pushFeed({
-        type: "chat",
-        label: msg,
-        agentName: payload.agentName,
-        timestamp: Date.now(),
-    });
 });
 
 mqtt.on("completed", payload => {
-    pushFeed({
-        type: "spawn",
-        label: "task completed",
-        agentName: payload.agentName,
-        timestamp: Date.now(),
-    });
+    pushFeed(completedFeedItem(payload));
 });
 
 mqtt.on("node-heartbeat", payload => {
     agentStore.updateRemoteNode(payload.node, payload.agents);
-    pushFeed({
-        type: "health",
-        label: `node online · ${payload.agents.length} agent${payload.agents.length !== 1 ? "s" : ""}`,
-        agentName: payload.node,
-        timestamp: Date.now(),
-    });
+    pushFeed(nodeHeartbeatFeedItem(payload));
 });
 
 mqtt.on("host-stats", stats => {
@@ -446,19 +398,10 @@ listen("af-ha-state-change", detail => {
 
 // Path 2: ha-state-bridge-agent → MQTT ha/state/{domain}/{entity_id}
 mqtt.on("raw", ({ topic, payload }) => {
-    if (!topic.startsWith("ha/")) {
-        return;
+    const ev = parseHaRawEvent(topic, payload);
+    if (ev) {
+        pushHaFeed(ev.entityId, ev.state, ev.friendlyName);
     }
-    const p = payload as Record<string, unknown>;
-    const entityId = (p["entity_id"] as string | undefined) ?? topic.split("/").slice(-2).join(".");
-    const newState = p["new_state"] as Record<string, unknown> | undefined;
-    const state = (newState?.["state"] as string | undefined) ?? "";
-    const attrs = newState?.["attributes"] as Record<string, unknown> | undefined;
-    const friendlyName = (attrs?.["friendly_name"] as string | undefined) ?? entityId;
-    if (!state) {
-        return;
-    }
-    pushHaFeed(entityId, state, friendlyName);
 });
 
 mqtt.on("disconnected", () => {

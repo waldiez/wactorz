@@ -3,9 +3,39 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect } from "vitest";
-import { buildNameIndex, mapLogFeedItem, toAgentInfo } from "../agents/mapping";
+import {
+    buildNameIndex,
+    mapLogFeedItem,
+    toAgentInfo,
+    buildMetricsUpdate,
+    heartbeatFeedItem,
+    spawnTypeLabel,
+    spawnFeedItem,
+    alertFeedType,
+    alertToastType,
+    alertFeedItem,
+    chatFeedItem,
+    stoppedFeedItem,
+    qaFlagFeedItem,
+    logMessage,
+    logFeedItem,
+    completedFeedItem,
+    nodeHeartbeatFeedItem,
+} from "../agents/mapping";
 import { resolveAgentName } from "../agents/naming";
 import type { LogFeedItem, StatePatchAgent } from "../io/WSChatClient";
+import type {
+    HeartbeatPayload,
+    SpawnPayload,
+    AlertPayload,
+    StatusPayload,
+    LogPayload,
+    NodeHeartbeatPayload,
+    ChatMessage,
+    MetricsPayload,
+    AgentInfo,
+} from "../types/agent";
+import type { QaFlagPayload } from "../mqtt/MQTTClient";
 
 describe("toAgentInfo", () => {
     it("maps required fields with sensible defaults", () => {
@@ -115,5 +145,149 @@ describe("mapLogFeedItem", () => {
 
     it("returns null for an unknown type", () => {
         expect(mapLogFeedItem({ type: "mystery", agent_id: "x" })).toBeNull();
+    });
+});
+
+describe("buildMetricsUpdate", () => {
+    const existing: AgentInfo = { id: "id1", name: "Agent One", state: "running", protected: true };
+
+    it("preserves identity/state and copies only present fields", () => {
+        const p = { agentId: "id1", costUsd: 1.5, messagesProcessed: 4 } as MetricsPayload;
+        expect(buildMetricsUpdate(p, existing)).toEqual({
+            id: "id1",
+            name: "Agent One",
+            state: "running",
+            protected: true,
+            costUsd: 1.5,
+            messagesProcessed: 4,
+        });
+    });
+
+    it("omits absent optional fields entirely (no undefined keys)", () => {
+        const update = buildMetricsUpdate({ agentId: "id1" } as MetricsPayload, existing);
+        expect("costUsd" in update).toBe(false);
+        expect("uptime" in update).toBe(false);
+        expect("messagesProcessed" in update).toBe(false);
+    });
+});
+
+describe("live MQTT event feed builders", () => {
+    it("heartbeatFeedItem maps to a heartbeat row at the payload timestamp", () => {
+        const p = { agentName: "a1", timestampMs: 100 } as HeartbeatPayload;
+        expect(heartbeatFeedItem(p)).toEqual({
+            type: "heartbeat",
+            label: "heartbeat",
+            agentName: "a1",
+            timestamp: 100,
+        });
+    });
+
+    it("spawn uses the agent type, falling back to 'agent' on empty string", () => {
+        expect(spawnTypeLabel({ agentType: "worker" } as SpawnPayload)).toBe("worker");
+        expect(spawnTypeLabel({ agentType: "" } as SpawnPayload)).toBe("agent");
+        const p = { agentName: "a", agentType: "", timestampMs: 5 } as SpawnPayload;
+        expect(spawnFeedItem(p)).toEqual({
+            type: "spawn",
+            label: "spawned (agent)",
+            agentName: "a",
+            timestamp: 5,
+        });
+    });
+
+    it("alert feed kind: only error → error; critical/warning/info → warning", () => {
+        expect(alertFeedType("error")).toBe("alert-error");
+        expect(alertFeedType("critical")).toBe("alert-warning");
+        expect(alertFeedType("warning")).toBe("alert-warning");
+        expect(alertFeedType("info")).toBe("alert-warning");
+    });
+
+    it("alert toast kind: error AND critical → error; warning/info → warning", () => {
+        expect(alertToastType("error")).toBe("alert-error");
+        expect(alertToastType("critical")).toBe("alert-error");
+        expect(alertToastType("warning")).toBe("alert-warning");
+        expect(alertToastType("info")).toBe("alert-warning");
+    });
+
+    it("alertFeedItem builds a row, defaulting a missing message/agent", () => {
+        const p = { severity: "error", message: "boom", agentName: "mon", timestampMs: 9 } as AlertPayload;
+        expect(alertFeedItem(p)).toEqual({
+            type: "alert-error",
+            label: "boom",
+            agentName: "mon",
+            timestamp: 9,
+        });
+        const bare = { severity: "warning", timestampMs: 3 } as unknown as AlertPayload;
+        expect(alertFeedItem(bare)).toEqual({
+            type: "alert-warning",
+            label: "",
+            agentName: "system",
+            timestamp: 3,
+        });
+    });
+
+    it("chatFeedItem formats the routed-to label", () => {
+        const msg = { from: "a1", to: "user", content: "hi", timestampMs: 7 } as ChatMessage;
+        expect(chatFeedItem(msg)).toEqual({
+            type: "chat",
+            label: "→ user: hi",
+            agentName: "a1",
+            timestamp: 7,
+        });
+    });
+
+    it("stoppedFeedItem stamps the provided time", () => {
+        expect(stoppedFeedItem({ agentName: "a" } as StatusPayload, 42)).toEqual({
+            type: "stopped",
+            label: "stopped",
+            agentName: "a",
+            timestamp: 42,
+        });
+    });
+
+    it("qaFlagFeedItem formats category/excerpt and attributes to the qa-agent", () => {
+        const p = { category: "safety", excerpt: "bad", from: "writer", timestampMs: 11 } as QaFlagPayload;
+        expect(qaFlagFeedItem(p)).toEqual({
+            type: "qa-flag",
+            label: "[safety] bad",
+            agentName: "qa-agent ← writer",
+            timestamp: 11,
+        });
+    });
+
+    it("logMessage prefers message, then text, then empty", () => {
+        expect(logMessage({ message: "m", text: "t" } as LogPayload)).toBe("m");
+        expect(logMessage({ text: "t" } as LogPayload)).toBe("t");
+        expect(logMessage({} as LogPayload)).toBe("");
+    });
+
+    it("logFeedItem returns an item only for non-empty messages", () => {
+        expect(logFeedItem({ agentName: "a", message: "hello" } as LogPayload, 50)).toEqual({
+            type: "chat",
+            label: "hello",
+            agentName: "a",
+            timestamp: 50,
+        });
+        expect(logFeedItem({ agentName: "a" } as LogPayload)).toBeNull();
+    });
+
+    it("completedFeedItem renders a task-completed row", () => {
+        expect(completedFeedItem({ agentName: "a" }, 8)).toEqual({
+            type: "spawn",
+            label: "task completed",
+            agentName: "a",
+            timestamp: 8,
+        });
+    });
+
+    it("nodeHeartbeatFeedItem pluralises the agent count", () => {
+        expect(nodeHeartbeatFeedItem({ node: "n", agents: ["x"] } as NodeHeartbeatPayload, 1).label).toBe(
+            "node online · 1 agent",
+        );
+        expect(
+            nodeHeartbeatFeedItem({ node: "n", agents: ["x", "y"] } as NodeHeartbeatPayload, 1).label,
+        ).toBe("node online · 2 agents");
+        expect(nodeHeartbeatFeedItem({ node: "n", agents: [] } as NodeHeartbeatPayload, 1).label).toBe(
+            "node online · 0 agents",
+        );
     });
 });

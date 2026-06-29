@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createHaFeedPusher } from "../ui/haFeed";
+import { createHaFeedPusher, parseHaRawEvent } from "../ui/haFeed";
 import type { FeedItem } from "../types/feed";
 
 // A realistic epoch base: the pusher compares `now - (lastSeen ?? 0)`, so a
@@ -80,5 +80,33 @@ describe("createHaFeedPusher", () => {
         pusher("light.kitchen", "on", "Kitchen");
         pusher("light.kitchen", "off", "Kitchen");
         expect(push).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe("parseHaRawEvent", () => {
+    it("returns null for non-ha topics", () => {
+        expect(parseHaRawEvent("agents/x/heartbeat", {})).toBeNull();
+    });
+
+    it("returns null when there is no state", () => {
+        expect(parseHaRawEvent("ha/state/light/k", { new_state: {} })).toBeNull();
+        expect(parseHaRawEvent("ha/state/light/k", {})).toBeNull();
+    });
+
+    it("parses entity_id, state and friendly_name", () => {
+        const ev = parseHaRawEvent("ha/state/light/k", {
+            entity_id: "light.kitchen",
+            new_state: { state: "on", attributes: { friendly_name: "Kitchen" } },
+        });
+        expect(ev).toEqual({ entityId: "light.kitchen", state: "on", friendlyName: "Kitchen" });
+    });
+
+    it("falls back: entity id from topic tail, friendly name from entity id", () => {
+        const ev = parseHaRawEvent("ha/state/light/k", { new_state: { state: "off" } });
+        expect(ev).toEqual({ entityId: "light.k", state: "off", friendlyName: "light.k" });
+    });
+
+    it("tolerates a null payload", () => {
+        expect(parseHaRawEvent("ha/state/light/k", null)).toBeNull();
     });
 });

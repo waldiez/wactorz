@@ -19,7 +19,7 @@ frontend/
 ├── src/
 │   ├── main.ts            # Bootstrap — wires transports → store + UI
 │   ├── events.ts          # Typed app event bus over document CustomEvents (emit/listen + AppEventMap)
-│   ├── types/             # Shared types: agent.ts, feed.ts, global.d.ts (Window augmentation)
+│   ├── types/             # Shared types: agent.ts, feed.ts, ha.ts, ws.ts, global.d.ts (Window augmentation)
 │   ├── mqtt/              # MQTT WebSocket client + typed event emitter
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
 │   ├── io/                # IO/transport: IOManager, WSChatClient, TTSManager, SpeechToText,
@@ -145,7 +145,9 @@ The same bundle serves two targets, distinguished at runtime:
 | Home Assistant add-on | The Python add-on injects `window.__WACTORZ_INGRESS_PATH`; all API/WS URLs are rebased onto that ingress prefix |
 
 `__WACTORZ_INGRESS_PATH` is typed in `src/types/global.d.ts` and read wherever a
-URL is built (e.g. `main.ts`, `chatHistory.ts`, `popovers.ts`, `HAClient`). It
+same-origin URL is built (e.g. `main.ts`, `chatHistory.ts`, `popovers.ts`, `haConfig`).
+`HAClient` is the exception — it connects to the user-supplied HA URL directly, not
+via the ingress prefix. It
 defaults to `""`, so standalone builds need no configuration.
 
 ## Feature flags (build-time)

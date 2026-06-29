@@ -20,7 +20,6 @@ import { MQTTClient } from "./mqtt/MQTTClient";
 import { IOManager } from "./io/IOManager";
 import { WSChatClient } from "./io/WSChatClient";
 import { tts } from "./io/TTSManager";
-import { desktopNotifyBackground, clearUnreadBadge, initNotifications } from "./io/DesktopNotify";
 import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
@@ -33,7 +32,7 @@ import { createDeletionGuard } from "./agents/deletionGuard";
 
 const agentStore = new AgentStore();
 
-// Cards is the only view; clear any stale persisted theme from older builds.
+// Clear any stale persisted theme from older builds.
 localStorage.removeItem("wactorz-theme");
 
 // Two deployment contexts, both served same-origin:
@@ -47,8 +46,6 @@ localStorage.removeItem("wactorz-theme");
 //
 // Never use window.location.host to build absolute URLs: inside the HAOS
 // webview that host is the HA instance itself, not the addon backend.
-
-initNotifications();
 
 const _ingressPath: string = window.__WACTORZ_INGRESS_PATH ?? "";
 
@@ -73,7 +70,7 @@ const _wsBase = `${_wsProto}//${_wsHost}${_ingressPath}`;
 // the stale-port failures.
 const _mqttDefault = `${_wsBase}/mqtt`;
 
-// Self-heal browsers that cached a URL under older builds (incl. the bad :8888
+// Self-heal browsers that cached a URL under old builds (incl. the hardcoded :8888
 // value). Removing it on load means existing users recover automatically on the
 // next page load — no manual localStorage clearing required.
 localStorage.removeItem("wactorz-mqtt-url");
@@ -124,7 +121,6 @@ function refreshLiveActors(): void {
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
 wsChat.onChat((content, from, timestampMs) => {
     toast.show({ type: "chat", title: from, message: content.slice(0, 120) });
-    desktopNotifyBackground(from, content.slice(0, 120));
     const msg = {
         id: `ws-${timestampMs}`,
         from,
@@ -288,7 +284,6 @@ mqtt.on("spawn", payload => {
         title: payload.agentName,
         message: `${payload.agentType ?? "agent"} is online`,
     });
-    desktopNotifyBackground("Agent spawned", `${payload.agentName} is online`);
 });
 
 mqtt.on("alert", payload => {
@@ -307,13 +302,11 @@ mqtt.on("alert", payload => {
         title: alertAgent,
         message: alertMsg.slice(0, 120),
     });
-    desktopNotifyBackground(isError ? `⚠ ${alertAgent}` : alertAgent, alertMsg.slice(0, 100));
 });
 
 mqtt.on("chat", msg => {
     if (msg.from !== "user") {
         toast.show({ type: "chat", title: msg.from, message: msg.content.slice(0, 120) });
-        desktopNotifyBackground(msg.from, msg.content.slice(0, 120));
     }
     ioManager.receiveAgentMessage(msg);
     agentStore.onChat(msg.from, msg.to);
@@ -484,7 +477,6 @@ document.addEventListener("af-stream-end", e => {
         return;
     }
     toast.show({ type: "chat", title: from, message: text.slice(0, 120) });
-    desktopNotifyBackground(from, text.slice(0, 120));
 });
 
 // Agent commands from CardDashboard → WebSocket
@@ -514,8 +506,6 @@ tts.setApiBase(_apiBase);
 tts.init();
 
 mqtt.connect();
-
-window.addEventListener("focus", () => clearUnreadBadge());
 
 window.addEventListener("beforeunload", () => {
     mqtt.disconnect();

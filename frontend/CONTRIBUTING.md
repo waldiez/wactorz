@@ -61,8 +61,9 @@
 - Prefer `const` and immutable patterns
 - Inline comments explain *why*, not *what* — only when it would surprise a reader
 - Every exported function/const, public class method, and member of an exported
-  interface carries a short JSDoc (one or two lines, written for a stranger — what
-  it does, no session history). `bun run docs` surfaces anything missing.
+  interface carries a short JSDoc (one or two lines, written for a stranger —
+  what it does now, not how it changed, dates, or who touched it).
+  `bun run docs` surfaces anything missing.
 
 **DOM**
 

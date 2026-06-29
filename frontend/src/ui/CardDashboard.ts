@@ -29,6 +29,7 @@ import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import { MetricsController } from "./dashboard/metrics";
 import { seedHaConfigFromServer } from "./dashboard/haConfig";
+import { emit, listen } from "../events";
 
 // Re-exported for tests; implemented in dashboard/haDevices.
 export { areaIconText };
@@ -321,17 +322,16 @@ export class CardDashboard {
     private _wireEvents(): void {
         this._wireFeedEvents();
         this._chat.wire();
-        this._evConn = e => {
-            this.connState = (e as CustomEvent<{ status: ConnState }>).detail.status;
+        this._evConn = listen("af-connection-status", detail => {
+            this.connState = detail.status;
             this._renderConnBadge();
             this._renderHealth();
-        };
-        document.addEventListener("af-connection-status", this._evConn);
+        });
     }
 
     private _wireFeedEvents(): void {
-        this._evFeed = e => {
-            const item = (e as CustomEvent<{ item: FeedItem }>).detail.item;
+        this._evFeed = listen("af-feed-push", detail => {
+            const item = detail.item;
             // The same event can arrive from several sources (SQLite seed, WS
             // log_feed replay, live MQTT/chat); drop exact duplicates so the feed
             // doesn't double up or render out of order on rebuild.
@@ -350,25 +350,22 @@ export class CardDashboard {
             if (this.view === "feed") {
                 this._appendFeedItemToView(item);
             }
-        };
-        document.addEventListener("af-feed-push", this._evFeed);
+        });
 
-        this._wipeAll = (_e: Event) => {
+        this._wipeAll = listen("af-wipe-all", () => {
             this.feedItems = [];
             this._feedKeys.clear();
             this._chat.clearAll();
             this._renderView();
-        };
-        document.addEventListener("af-wipe-all", this._wipeAll);
+        });
 
         // A metrics/logs reset cleared the server-side activity log — drop this
         // dashboard's own in-card feed too.
-        this._clearFeed = (_e: Event) => {
+        this._clearFeed = listen("af-clear-feed", () => {
             this.feedItems = [];
             this._feedKeys.clear();
             this._renderView();
-        };
-        document.addEventListener("af-clear-feed", this._clearFeed);
+        });
     }
 
     private _unwireEvents(): void {
@@ -506,11 +503,7 @@ export class CardDashboard {
                 btn.classList.remove("sending");
             }, 600);
         }
-        document.dispatchEvent(
-            new CustomEvent("af-agent-command", {
-                detail: { command: action, agentId: id },
-            }),
-        );
+        emit("af-agent-command", { command: action, agentId: id });
     }
 
     private _buildHAView(): HTMLElement {

@@ -19,12 +19,9 @@ import type { MQTTClient } from "../mqtt/MQTTClient";
 import type { WSChatClient } from "./WSChatClient";
 import { tts } from "./TTSManager";
 import { toast } from "../ui/ToastManager";
+import { emit } from "../events";
 
 const _widGen = new HLCWidGen({ node: "browser", W: 4 });
-
-function _feedPush(item: { type: string; label: string; agentName: string; timestamp: number }): void {
-    document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
-}
 
 export class IOManager {
     private _lastStreamFrom = "";
@@ -41,7 +38,7 @@ export class IOManager {
         ws.onStreamChunk((chunk, from) => {
             this._lastStreamFrom = from;
             this._streamText += chunk;
-            document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk, from } }));
+            emit("af-stream-chunk", { chunk, from });
         });
 
         ws.onStreamEnd(() => {
@@ -53,9 +50,11 @@ export class IOManager {
             // that produced a phantom empty bubble attributed to the default name.
             if (text) {
                 tts.notify(text);
-                _feedPush({ type: "chat", label: text, agentName: from, timestamp: Date.now() });
+                emit("af-feed-push", {
+                    item: { type: "chat", label: text, agentName: from, timestamp: Date.now() },
+                });
             }
-            document.dispatchEvent(new CustomEvent("af-stream-end", { detail: { text, from } }));
+            emit("af-stream-end", { text, from });
         });
     }
 
@@ -75,7 +74,9 @@ export class IOManager {
             timestampMs: Date.now(),
         };
 
-        _feedPush({ type: "chat", label: text, agentName: "user", timestamp: msg.timestampMs });
+        emit("af-feed-push", {
+            item: { type: "chat", label: text, agentName: "user", timestamp: msg.timestampMs },
+        });
 
         // direct_ws mode: send over WebSocket only — never fall back to MQTT.
         // Falling back would let IOAgent pick up the message and double-handle it.

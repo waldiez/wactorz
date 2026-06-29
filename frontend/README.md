@@ -18,11 +18,12 @@ Renders a live dashboard as HTML/CSS card components driven by real-time MQTT ev
 frontend/
 ├── src/
 │   ├── main.ts            # Bootstrap — wires transports → store + UI
+│   ├── events.ts          # Typed app event bus over document CustomEvents (emit/listen + AppEventMap)
 │   ├── types/             # Shared types: agent.ts, feed.ts, global.d.ts (Window augmentation)
 │   ├── mqtt/              # MQTT WebSocket client + typed event emitter
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
 │   ├── io/                # IO/transport: IOManager, WSChatClient, TTSManager, SpeechToText,
-│   │                      #   HAClient, AgentImageGen, AmbientManager, DesktopNotify
+│   │                      #   HAClient, AgentImageGen, AmbientManager, logger
 │   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard
 │   ├── styles/            # Global CSS (base, cards, chat, dashboard, …); app.css is the entry
 │   └── __tests__/         # Vitest unit tests (happy-dom)
@@ -78,6 +79,9 @@ never lower it. New components and bug fixes should ship with a test in `src/__t
 ## Event bus
 
 Components communicate exclusively through **DOM `CustomEvent`s** — no shared mutable state, no framework store.
+Use the typed helpers in `src/events.ts`: `emit(type, detail)` to dispatch and `listen(type, handler)` to
+subscribe. `AppEventMap` there is the single source of truth for every event name and its payload (the table
+below mirrors it); add new events to that map so dispatch and handlers stay type-checked.
 
 | Event | Direction | Payload |
 | ------ | --------- | ------- |
@@ -108,10 +112,14 @@ nodes/{node}/heartbeat  system/health
 
 1. Create `src/ui/MyComponent.ts`
 2. Instantiate in `main.ts` (follow the existing bootstrap order comment)
-3. Subscribe to relevant DOM events via `document.addEventListener`
-4. Fire DOM events rather than calling methods on other components directly
+3. Subscribe to relevant events via `listen(type, handler)` from `src/events.ts`
+4. Fire events via `emit(type, detail)` rather than calling methods on other components directly
+   (add the event to `AppEventMap` first)
 5. Add a unit test in `src/__tests__/` (coverage is gated in CI)
 6. Run `bun run lint && bun run test` — both must pass before opening a PR
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide: style/JSDoc rules, the
+PR checklist, and the branch target (`dev`).
 
 ## Proxy configuration
 

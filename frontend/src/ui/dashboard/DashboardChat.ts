@@ -19,6 +19,7 @@ import { SpeechToText } from "../../io/SpeechToText";
 import { renderMarkdown } from "../markdown";
 import { UPLOADS_ENABLED } from "./uploads";
 import { renderAttachTray } from "./attachTray";
+import { emit, listen } from "../../events";
 
 /** What the chat controller needs from its host (CardDashboard). */
 export interface ChatHost {
@@ -421,11 +422,11 @@ export class DashboardChat {
         input.value = "";
         input.style.height = "auto";
         this._selfDispatching = true;
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content, target, attachments: msg.attachments?.map(a => a.id) ?? [] },
-            }),
-        );
+        emit("af-send-message", {
+            content,
+            target,
+            attachments: msg.attachments?.map(a => a.id) ?? [],
+        });
         this._selfDispatching = false;
     }
 
@@ -445,12 +446,10 @@ export class DashboardChat {
         this._wireChatEvents();
         this._wireStreamEvents();
         if (UPLOADS_ENABLED) {
-            this._evAttach = e => {
-                const att = (e as CustomEvent<{ attachment: Attachment }>).detail.attachment;
-                this._pendingAttachments.push(att);
+            this._evAttach = listen("af-attachment-added", detail => {
+                this._pendingAttachments.push(detail.attachment);
                 this._renderAttachTray();
-            };
-            document.addEventListener("af-attachment-added", this._evAttach);
+            });
         }
     }
 
@@ -474,8 +473,8 @@ export class DashboardChat {
     }
 
     private _wireChatEvents(): void {
-        this._evChat = e => {
-            const msg = (e as CustomEvent<{ msg: ChatMessage }>).detail.msg;
+        this._evChat = listen("af-chat-message", detail => {
+            const msg = detail.msg;
             const stored: ChatMessage =
                 msg.from === "io-gateway" || msg.from === "system"
                     ? { ...msg, to: this._lastSentTarget }
@@ -488,11 +487,10 @@ export class DashboardChat {
                 this._appendChatMsgEl(stored);
                 this._scrollThread();
             }
-        };
-        document.addEventListener("af-chat-message", this._evChat);
+        });
 
-        this._evResetChat = (e: Event) => {
-            const agent = (e as CustomEvent).detail?.agent as string | null;
+        this._evResetChat = listen("af-reset-chat", detail => {
+            const agent = detail.agent;
             this.chatMessages = agent
                 ? this.chatMessages.filter(m => m.from !== agent && m.from !== "user")
                 : [];
@@ -500,14 +498,13 @@ export class DashboardChat {
             if (this.host.getView() === "chat") {
                 this.renderChatThread();
             }
-        };
-        document.addEventListener("af-reset-chat", this._evResetChat);
+        });
 
-        this._evSendMessage = (e: Event) => {
+        this._evSendMessage = listen("af-send-message", detail => {
             if (this._selfDispatching) {
                 return;
             }
-            const { content, target } = (e as CustomEvent<{ content: string; target: string }>).detail;
+            const { content, target } = detail;
             this.chatTarget = target;
             this._lastSentTarget = target;
             const msg: ChatMessage = {
@@ -519,13 +516,12 @@ export class DashboardChat {
             };
             this.chatMessages.push(msg);
             this._showSentMessage(msg);
-        };
-        document.addEventListener("af-send-message", this._evSendMessage);
+        });
     }
 
     private _wireStreamEvents(): void {
-        this._evChunk = e => {
-            const { chunk, from } = (e as CustomEvent<{ chunk: string; from: string }>).detail;
+        this._evChunk = listen("af-stream-chunk", detail => {
+            const { chunk, from } = detail;
             if (this._streamFrom === null) {
                 this._streamFrom = from;
                 this._streamTarget = this._lastSentTarget;
@@ -542,10 +538,9 @@ export class DashboardChat {
                 this._streamBody.textContent = this._streamText;
             }
             this._scrollThread();
-        };
-        document.addEventListener("af-stream-chunk", this._evChunk);
+        });
 
-        this._evEnd = () => {
+        this._evEnd = listen("af-stream-end", () => {
             if (this._streamFrom && this._streamText) {
                 this.chatMessages.push({
                     id: `stream-${Date.now()}`,
@@ -564,8 +559,7 @@ export class DashboardChat {
             this._streamFrom = null;
             this._streamTarget = null;
             this._streamText = "";
-        };
-        document.addEventListener("af-stream-end", this._evEnd);
+        });
     }
 
     /** Lazily create the streaming agent bubble in the open chat thread. */

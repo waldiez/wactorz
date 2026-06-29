@@ -11,6 +11,7 @@
  */
 import { toast } from "./ToastManager";
 import { isAccepted, humanSize, MAX_BYTES, uploadFile } from "./dashboard/uploads";
+import { emit } from "../events";
 
 export class DropZone {
     private overlay: HTMLElement;
@@ -128,7 +129,7 @@ export class DropZone {
         for (const file of files) {
             try {
                 const attachment = await uploadFile(file, this.apiBase);
-                document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment } }));
+                emit("af-attachment-added", { attachment });
             } catch (err) {
                 toast.show({ type: "alert-error", title: "Upload failed", message: String(err) });
             }

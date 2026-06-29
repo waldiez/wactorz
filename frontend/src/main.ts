@@ -19,6 +19,7 @@ import { AgentStore } from "./agents/AgentStore";
 import { MQTTClient } from "./mqtt/MQTTClient";
 import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
+import { emit, listen } from "./events";
 import { WSChatClient } from "./io/WSChatClient";
 import { tts } from "./io/TTSManager";
 import { toast } from "./ui/ToastManager";
@@ -137,8 +138,8 @@ wsChat.onChat((content, from, timestampMs) => {
         agentName: from,
         timestamp: timestampMs,
     };
-    document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item: feedItem } }));
-    document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+    emit("af-feed-push", { item: feedItem });
+    emit("af-chat-message", { msg });
 });
 
 // Streaming replies — onStreamChunk / onStreamEnd are wired inside setWSClient
@@ -251,7 +252,7 @@ fetch(`${_apiBase}/api/config`)
     .catch(() => {});
 
 function pushFeed(item: FeedItem): void {
-    document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
+    emit("af-feed-push", { item });
 }
 
 mqtt.on("heartbeat", payload => {
@@ -312,7 +313,7 @@ mqtt.on("chat", msg => {
     }
     ioManager.receiveAgentMessage(msg);
     agentStore.onChat(msg.from, msg.to);
-    document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+    emit("af-chat-message", { msg });
     pushFeed({
         type: "chat",
         label: `→ ${msg.to}: ${msg.content}`,
@@ -348,7 +349,7 @@ let seeded = false;
 mqtt.on("connected", () => {
     _mqttLive = true;
     log.info("[Dashboard] MQTT connected");
-    document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "live" } }));
+    emit("af-connection-status", { status: "live" });
 
     agentStore.pruneStaleRemoteAgents();
 
@@ -438,10 +439,8 @@ mqtt.on("host-stats", stats => {
 const pushHaFeed = createHaFeedPusher(pushFeed);
 
 // Path 1: direct HA WebSocket via HAClient (always works when HA is configured in frontend)
-document.addEventListener("af-ha-state-change", e => {
-    const { entityId, state, friendlyName } = (
-        e as CustomEvent<{ entityId: string; state: string; friendlyName: string }>
-    ).detail;
+listen("af-ha-state-change", detail => {
+    const { entityId, state, friendlyName } = detail;
     pushHaFeed(entityId, state, friendlyName);
 });
 
@@ -465,7 +464,7 @@ mqtt.on("raw", ({ topic, payload }) => {
 mqtt.on("disconnected", () => {
     _mqttLive = false;
     log.warn("[Dashboard] MQTT disconnected");
-    document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "demo" } }));
+    emit("af-connection-status", { status: "demo" });
 });
 
 mqtt.on("error", err => {
@@ -473,8 +472,8 @@ mqtt.on("error", err => {
 });
 
 // Streaming reply finished — notify
-document.addEventListener("af-stream-end", e => {
-    const { text, from } = (e as CustomEvent<{ text: string | null; from: string }>).detail;
+listen("af-stream-end", detail => {
+    const { text, from } = detail;
     if (!text) {
         return;
     }
@@ -482,8 +481,8 @@ document.addEventListener("af-stream-end", e => {
 });
 
 // Agent commands from CardDashboard → WebSocket
-document.addEventListener("af-agent-command", e => {
-    const { command, agentId } = (e as CustomEvent<{ command: string; agentId: string }>).detail;
+listen("af-agent-command", detail => {
+    const { command, agentId } = detail;
     if (command === "delete") {
         // Mark deleted immediately so MQTT "stopped" events don't re-add the card
         // before the WS state-patch reply arrives.
@@ -494,11 +493,9 @@ document.addEventListener("af-agent-command", e => {
 });
 
 // af-iobar sends: route through ioManager (same as regular io-bar)
-document.addEventListener("af-send-message", e => {
-    const { content } = (e as CustomEvent<{ content: string; target: string }>).detail;
-    const agent =
-        agentStore.getAgents().find(a => a.name === (e as CustomEvent<{ target: string }>).detail.target) ??
-        null;
+listen("af-send-message", detail => {
+    const { content } = detail;
+    const agent = agentStore.getAgents().find(a => a.name === detail.target) ?? null;
     void ioManager.send(content, agent);
 });
 
@@ -516,7 +513,7 @@ window.addEventListener("beforeunload", () => {
 });
 
 // wipe all
-document.addEventListener("af-wipe-all", () => {
+listen("af-wipe-all", () => {
     agentStore.clearAll();
     _logFeedState.maxTs = 0;
 });
@@ -524,6 +521,6 @@ document.addEventListener("af-wipe-all", () => {
 // A scoped reset (metrics / logs) cleared the server-side activity log — drop
 // the on-screen feed too, since onLogFeed only ever appends and would otherwise
 // keep showing stale lines until the next event.
-document.addEventListener("af-clear-feed", () => {
+listen("af-clear-feed", () => {
     _logFeedState.maxTs = 0;
 });

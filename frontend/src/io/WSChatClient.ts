@@ -13,6 +13,7 @@
  *   {"type":"chat","from":"io-gateway","content":"...","timestamp":...}
  */
 import { log } from "./logger";
+import { emit } from "../events";
 
 export type ChatHandler = (content: string, from: string, timestampMs: number) => void;
 export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number) => void;
@@ -249,21 +250,18 @@ export class WSChatClient {
     private _handleReset(data: Record<string, unknown>): void {
         const scope = String(data["scope"] ?? "");
         if (scope === "all") {
-            document.dispatchEvent(new CustomEvent("af-wipe-all"));
+            emit("af-wipe-all");
             return;
         }
         this._applyStatePatch(data["state"] as StatePatch | undefined);
         if (scope === "chat") {
-            document.dispatchEvent(
-                new CustomEvent("af-reset-chat", {
-                    detail: { agent: data["agent"] ?? null },
-                }),
-            );
+            const agent = data["agent"];
+            emit("af-reset-chat", { agent: typeof agent === "string" ? agent : null });
         }
         // metrics and logs both clear the server-side activity feed; the
         // on-screen feed is append-only, so tell it to drop its entries.
         if (scope === "metrics" || scope === "logs") {
-            document.dispatchEvent(new CustomEvent("af-clear-feed"));
+            emit("af-clear-feed");
         }
     }
 

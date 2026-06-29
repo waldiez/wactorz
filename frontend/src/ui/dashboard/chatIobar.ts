@@ -13,6 +13,7 @@ import { SpeechToText as Stt, STT_ENABLED } from "../../io/SpeechToText";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { UPLOADS_ENABLED, uploadFile } from "./uploads";
+import { emit, listen } from "../../events";
 
 export interface IobarDeps {
     chatInput: ChatInput;
@@ -118,9 +119,9 @@ function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButton
         sendBtn.disabled = false;
         stopBtn.style.display = "none";
     };
-    document.addEventListener("af-send-message", busy);
-    document.addEventListener("af-stream-end", idle);
-    document.addEventListener("af-chat-message", idle);
+    listen("af-send-message", busy);
+    listen("af-stream-end", idle);
+    listen("af-chat-message", idle);
 }
 
 async function startMic(stt: SpeechToText, btn: HTMLButtonElement): Promise<void> {
@@ -221,7 +222,7 @@ async function handlePaste(e: ClipboardEvent): Promise<void> {
     for (const file of files) {
         try {
             const attachment = await uploadFile(file, apiBase);
-            document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment } }));
+            emit("af-attachment-added", { attachment });
         } catch (err) {
             toast.show({ type: "alert-error", title: "Upload failed", message: String(err) });
         }

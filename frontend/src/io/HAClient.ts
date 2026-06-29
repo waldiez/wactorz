@@ -10,6 +10,7 @@
  * device registry) for room-based grouping in the UI.
  */
 import { log } from "./logger";
+import { emit } from "../events";
 
 export interface HAEntity {
     entity_id: string;
@@ -198,15 +199,11 @@ export class HAClient {
             this.entities.push(newState);
         }
         this.onUpdate?.(this.entities);
-        document.dispatchEvent(
-            new CustomEvent("af-ha-state-change", {
-                detail: {
-                    entityId: newState.entity_id,
-                    state: newState.state,
-                    friendlyName: newState.attributes?.friendly_name ?? newState.entity_id,
-                },
-            }),
-        );
+        emit("af-ha-state-change", {
+            entityId: newState.entity_id,
+            state: newState.state,
+            friendlyName: newState.attributes?.friendly_name ?? newState.entity_id,
+        });
     }
 
     /** Close the connection and reset auth + pending-request state. */

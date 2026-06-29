@@ -17,6 +17,7 @@
  */
 
 import { ambient } from "./AmbientManager";
+import { emit } from "../events";
 
 const LS_BEEP = "wactorz.beep";
 const LS_TTS = "wactorz.tts";
@@ -107,7 +108,7 @@ export class TTSManager {
     }
 
     private _emitVoices(): void {
-        document.dispatchEvent(new CustomEvent("tts-voices-loaded", { detail: { voices: this._voices } }));
+        emit("tts-voices-loaded", { voices: this._voices });
     }
 
     /** Whether the notification beep is on. */

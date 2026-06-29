@@ -11,6 +11,7 @@
 import { ambient, AMBIENT_TRACKS } from "../../io/AmbientManager";
 import { tts } from "../../io/TTSManager";
 import { toast } from "../ToastManager";
+import { listen } from "../../events";
 
 /** Beep + TTS toggle buttons; the TTS toggle shows/hides `voiceRow`. */
 function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
@@ -75,7 +76,7 @@ function buildVoiceRow(): HTMLElement {
     };
 
     populateVoices();
-    document.addEventListener("tts-voices-loaded", () => populateVoices());
+    listen("tts-voices-loaded", () => populateVoices());
     voiceSel.addEventListener("change", () => tts.setVoice(voiceSel.value));
 
     voiceRow.appendChild(voiceSel);

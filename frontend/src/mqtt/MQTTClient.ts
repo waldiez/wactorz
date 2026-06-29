@@ -20,7 +20,6 @@ import { nameFromWid, resolveAgentName } from "../agents/naming";
 import type {
     AlertPayload,
     ChatMessage,
-    CoinPayload,
     HeartbeatPayload,
     HostStats,
     LogPayload,
@@ -64,8 +63,6 @@ export interface MQTTEvents {
     "system-health": unknown;
     /** Host-level CPU + memory stats from the backend. */
     "host-stats": HostStats;
-    /** WizAgent coin economy event. */
-    coin: CoinPayload;
     /** Catch-all for raw messages not matching a known pattern. */
     raw: { topic: string; payload: unknown };
 }
@@ -227,8 +224,6 @@ export class MQTTClient {
             this.emit("system-health", payload);
         } else if (topic === "system/host") {
             this.emit("host-stats", this._toHostStats(payload as Record<string, unknown>));
-        } else if (topic === "system/coin") {
-            this.emit("coin", payload as CoinPayload);
         } else {
             return false;
         }

@@ -438,15 +438,6 @@ mqtt.on("host-stats", stats => {
     }
 });
 
-mqtt.on("coin", payload => {
-    pushFeed({
-        type: "qa-flag",
-        label: `balance ${payload.balance}${payload.reason ? " · " + payload.reason : ""}`,
-        agentName: "wiz-agent",
-        timestamp: Date.now(),
-    });
-});
-
 // HA entity state-changes arrive over two transports; a single pusher filters
 // and de-duplicates them. See ui/haFeed.
 const pushHaFeed = createHaFeedPusher(pushFeed);

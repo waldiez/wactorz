@@ -69,14 +69,6 @@ export interface NodeHeartbeatPayload {
     nodeId?: string;
 }
 
-/** WizAgent coin economy event. */
-export interface CoinPayload {
-    balance: number;
-    event?: string;
-    amount?: number;
-    reason?: string;
-}
-
 /** Status update payload. */
 export interface StatusPayload {
     agentId: string;

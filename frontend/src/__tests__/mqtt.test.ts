@@ -458,14 +458,6 @@ describe("MQTTClient", () => {
         expect(s.memTotalMb).toBeUndefined();
     });
 
-    it("routes system/coin → 'coin'", () => {
-        const spy = vi.fn();
-        client.on("coin", spy);
-        triggerMessage("system/coin", { balance: 42 });
-        expect(spy).toHaveBeenCalledOnce();
-        expect(spy.mock.calls[0]![0].balance).toBe(42);
-    });
-
     it("routes agents/{id}/metrics → 'metrics' with camelCase fields", () => {
         const spy = vi.fn();
         client.on("metrics", spy);
@@ -568,9 +560,9 @@ describe("MQTTClient", () => {
             throw new Error("oops");
         });
         const ok = vi.fn();
-        client.on("coin", failing);
-        client.on("coin", ok);
-        triggerMessage("system/coin", { balance: 1 });
+        client.on("system-health", failing);
+        client.on("system-health", ok);
+        triggerMessage("system/health", { ok: true });
         expect(ok).toHaveBeenCalledOnce();
     });
 });

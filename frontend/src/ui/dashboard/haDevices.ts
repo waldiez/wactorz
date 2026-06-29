@@ -199,13 +199,10 @@ function addSlider(
     format?: (v: number) => string,
 ): void {
     const wrap = document.createElement("div");
-    wrap.style.display = "flex";
-    wrap.style.flexDirection = "column";
-    wrap.style.gap = "2px";
+    wrap.className = "af-ha-slider";
 
     const lbl = document.createElement("div");
-    lbl.style.fontSize = "9px";
-    lbl.style.color = "rgba(255,255,255,0.4)";
+    lbl.className = "af-ha-ctrl-label";
     lbl.textContent = `${labelText}: ${format ? format(current) : current}`;
 
     const slider = document.createElement("input");
@@ -213,8 +210,7 @@ function addSlider(
     slider.min = String(min);
     slider.max = String(max);
     slider.value = String(current);
-    slider.style.width = "100%";
-    slider.style.accentColor = "#34d399";
+    slider.className = "af-ha-slider-input";
     slider.addEventListener("change", () => {
         const val = parseInt(slider.value, 10);
         if (format) {
@@ -231,14 +227,14 @@ const hex2 = (n: number): string => n.toString(16).padStart(2, "0");
 
 function addColorPicker(container: HTMLElement, e: HAEntity, haClient: HAClient | null): void {
     const row = document.createElement("div");
-    row.style.cssText = "display:flex;align-items:center;gap:8px;";
+    row.className = "af-ha-color-row";
     const lbl = document.createElement("div");
-    lbl.style.cssText = "font-size:9px;color:rgba(255,255,255,0.4);";
+    lbl.className = "af-ha-ctrl-label";
     lbl.textContent = "Color:";
 
     const picker = document.createElement("input");
     picker.type = "color";
-    picker.style.cssText = "border:none;width:20px;height:20px;background:none;cursor:pointer;";
+    picker.className = "af-ha-color-picker";
 
     if (e.attributes.rgb_color) {
         const [r = 0, g = 0, b = 0] = e.attributes.rgb_color;
@@ -259,8 +255,7 @@ function addButtonRow(
     specs: { label: string; onClick: () => void; flex?: string }[],
 ): void {
     const row = document.createElement("div");
-    row.style.display = "flex";
-    row.style.gap = "4px";
+    row.className = "af-ha-btn-row";
     specs.forEach(({ label, onClick, flex }) => {
         const btn = document.createElement("button");
         btn.className = "af-mini-btn";
@@ -285,9 +280,8 @@ function appendEntityControls(
 
     if (["light", "switch", "fan", "input_boolean", "humidifier", "vacuum"].includes(domain)) {
         const btn = document.createElement("button");
-        btn.className = "af-mini-btn";
+        btn.className = "af-mini-btn af-ha-ctrl-full";
         btn.textContent = isActive ? "Turn Off" : "Turn On";
-        btn.style.width = "100%";
         btn.addEventListener("click", () => haClient?.toggleEntity(e.entity_id));
         container.appendChild(btn);
     }
@@ -373,13 +367,9 @@ function appendMediaControls(container: HTMLElement, e: HAEntity, haClient: HACl
 function buildToggle(e: HAEntity, isActive: boolean, haClient: HAClient | null): HTMLButtonElement {
     const toggle = document.createElement("button");
     toggle.title = isActive ? "Turn off" : "Turn on";
-    toggle.style.cssText =
-        `width:28px;height:16px;border-radius:8px;border:none;cursor:pointer;flex-shrink:0;position:relative;` +
-        `background:${isActive ? "#34d399" : "rgba(255,255,255,0.15)"};transition:background 0.2s;`;
+    toggle.className = isActive ? "af-ha-toggle is-on" : "af-ha-toggle";
     const thumb = document.createElement("div");
-    thumb.style.cssText =
-        `position:absolute;top:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left 0.2s;` +
-        `left:${isActive ? "14px" : "2px"};`;
+    thumb.className = isActive ? "af-ha-toggle-thumb is-on" : "af-ha-toggle-thumb";
     toggle.appendChild(thumb);
     toggle.addEventListener("click", ev => {
         ev.stopPropagation();
@@ -390,15 +380,13 @@ function buildToggle(e: HAEntity, isActive: boolean, haClient: HAClient | null):
 
 function buildCapabilityBadges(capabilities: HAEntity[]): HTMLElement {
     const capWrap = document.createElement("div");
-    capWrap.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;";
+    capWrap.className = "af-ha-caps";
     capabilities.forEach(cap => {
         const badge = document.createElement("span");
         const capName = cap.attributes.friendly_name || cap.entity_id.split(".").pop() || cap.entity_id;
         const capState =
             cap.state + (cap.attributes.unit_of_measurement ? " " + cap.attributes.unit_of_measurement : "");
-        badge.style.cssText =
-            "font-size:10px;padding:2px 8px;border-radius:4px;" +
-            "background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.45);white-space:nowrap;";
+        badge.className = "af-ha-cap-badge";
         badge.textContent = `${capName}: ${capState}`;
         capWrap.appendChild(badge);
     });
@@ -416,7 +404,7 @@ function renderDetail(
 ): void {
     if (hasControls) {
         const ctrlDiv = document.createElement("div");
-        ctrlDiv.style.cssText = "display:flex;flex-direction:column;gap:8px;margin-bottom:10px;";
+        ctrlDiv.className = "af-ha-controls";
         appendEntityControls(ctrlDiv, e, isActive, haClient);
         if (ctrlDiv.children.length > 0) {
             detail.appendChild(ctrlDiv);
@@ -437,28 +425,19 @@ function buildRowEl(
     const stateColor = isAlert ? "#f87171" : isActive ? "#34d399" : "rgba(255,255,255,0.35)";
 
     const row = document.createElement("div");
-    row.style.cssText =
-        "display:flex;align-items:center;gap:10px;padding:9px 16px;" +
-        "border-bottom:1px solid rgba(255,255,255,0.04);transition:background 0.12s;";
-    row.addEventListener("mouseenter", () => {
-        row.style.background = "rgba(255,255,255,0.04)";
-    });
-    row.addEventListener("mouseleave", () => {
-        row.style.background = "";
-    });
+    row.className = "af-ha-row";
 
     const iconEl = document.createElement("span");
     iconEl.textContent = domainIcon(domain);
-    iconEl.style.cssText = "font-size:16px;width:22px;text-align:center;flex-shrink:0;";
+    iconEl.className = "af-ha-row-icon";
 
     const nameEl = document.createElement("div");
-    nameEl.style.cssText =
-        "flex:1;min-width:0;font-size:13px;font-weight:500;" +
-        "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+    nameEl.className = "af-ha-row-name";
     nameEl.textContent = e.attributes.friendly_name || e.entity_id;
 
     const stateEl = document.createElement("span");
-    stateEl.style.cssText = `font-size:11px;font-weight:600;white-space:nowrap;color:${stateColor};flex-shrink:0;`;
+    stateEl.className = "af-ha-row-state";
+    stateEl.style.color = stateColor;
     stateEl.textContent =
         e.state + (e.attributes.unit_of_measurement ? " " + e.attributes.unit_of_measurement : "");
 
@@ -484,21 +463,18 @@ function buildHADeviceRow(e: HAEntity, capabilities: HAEntity[], haClient: HACli
     if (hasDetail) {
         const chevron = document.createElement("span");
         chevron.textContent = "›";
-        chevron.style.cssText =
-            "color:rgba(255,255,255,0.25);font-size:18px;flex-shrink:0;transition:transform 0.18s;line-height:1;";
+        chevron.className = "af-ha-chevron";
         row.appendChild(chevron);
-        row.style.cursor = "pointer";
+        row.classList.add("is-clickable");
 
         const detail = document.createElement("div");
-        detail.style.cssText =
-            "display:none;padding:10px 16px 14px 48px;" +
-            "background:rgba(255,255,255,0.02);border-bottom:1px solid rgba(255,255,255,0.05);";
+        detail.className = "af-ha-detail";
         let detailRendered = false;
 
         row.addEventListener("click", () => {
-            const open = detail.style.display !== "none";
-            detail.style.display = open ? "none" : "block";
-            chevron.style.transform = open ? "rotate(0deg)" : "rotate(90deg)";
+            const open = detail.classList.contains("is-open");
+            detail.classList.toggle("is-open", !open);
+            chevron.classList.toggle("is-open", !open);
             if (!open && !detailRendered) {
                 detailRendered = true;
                 renderDetail(detail, e, isActive, hasControls, capabilities, haClient);
@@ -524,17 +500,14 @@ function buildAreaSection(
     );
 
     const section = document.createElement("div");
-    section.style.marginBottom = "4px";
+    section.className = "af-ha-section";
 
     const header = document.createElement("div");
-    header.style.cssText =
-        "padding:8px 16px 6px;font-size:10px;font-weight:700;letter-spacing:0.08em;" +
-        "color:rgba(255,255,255,0.35);text-transform:uppercase;display:flex;align-items:center;gap:6px;" +
-        "border-bottom:1px solid rgba(255,255,255,0.06);";
+    header.className = "af-ha-section-head";
     const roomIcon = areaIconText(area?.icon);
     header.innerHTML =
         `<span>${area ? roomIcon : "📦"}</span><span>${area?.name ?? "Other"}</span>` +
-        `<span style="opacity:0.4;font-weight:400">${sectionEntities.length}</span>`;
+        `<span class="af-ha-section-count">${sectionEntities.length}</span>`;
     section.appendChild(header);
 
     sectionEntities.forEach(e => {
@@ -551,15 +524,13 @@ export function renderHADevices(
     haClient: HAClient | null,
 ): void {
     container.innerHTML = "";
-    container.style.display = "flex";
-    container.style.flexDirection = "column";
-    container.style.gap = "0";
+    container.classList.add("af-ha-device-list");
 
     const idx = buildRegistryIndex(registries, entities);
     const deviceEntities = entities.filter(e => DEVICE_DOMAINS.has(domainOf(e)));
 
     if (deviceEntities.length === 0) {
-        container.innerHTML = `<div style="color:rgba(255,255,255,0.4);text-align:center;padding:40px;">No devices found.</div>`;
+        container.innerHTML = `<div class="af-ha-empty-msg">No devices found.</div>`;
         return;
     }
 

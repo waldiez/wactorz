@@ -14,9 +14,11 @@ function fakeClient() {
     return { toggleEntity: vi.fn(), callService: vi.fn() } as unknown as HAClient;
 }
 
-/** The single clickable (cursor:pointer) device row in a container. */
+/** The single clickable (expandable) device row in a container. */
 function clickableRow(container: HTMLElement): HTMLElement {
-    const row = [...container.querySelectorAll<HTMLElement>("div")].find(d => d.style.cursor === "pointer");
+    const row = [...container.querySelectorAll<HTMLElement>("div")].find(d =>
+        d.classList.contains("is-clickable"),
+    );
     if (!row) {
         throw new Error("no clickable row found");
     }
@@ -79,8 +81,8 @@ describe("renderHADevices", () => {
             null,
             haClient,
         );
-        const rows = [...container.querySelectorAll<HTMLElement>("div")].filter(
-            d => d.style.cursor === "pointer",
+        const rows = [...container.querySelectorAll<HTMLElement>("div")].filter(d =>
+            d.classList.contains("is-clickable"),
         );
         // light has controls (clickable); switch has controls too → both clickable rows
         expect(rows.length).toBe(2);
@@ -249,12 +251,10 @@ describe("renderHADevices", () => {
         expect(text).toContain("NoArea"); // no-area bucket still rendered
     });
 
-    it("a device row highlights on hover", () => {
+    it("device rows carry the styled row class (hover highlight is CSS-driven)", () => {
         renderHADevices(container, [ent("light.k", "on", { friendly_name: "Lamp" })], null, haClient);
-        const row = clickableRow(container);
-        row.dispatchEvent(new Event("mouseenter"));
-        expect(row.style.background).not.toBe("");
-        row.dispatchEvent(new Event("mouseleave"));
-        expect(row.style.background).toBe("");
+        // Hover is now a `.af-ha-row:hover` rule rather than JS; guard the class
+        // that carries it so removing it (and the highlight) is caught.
+        expect(clickableRow(container).classList.contains("af-ha-row")).toBe(true);
     });
 });

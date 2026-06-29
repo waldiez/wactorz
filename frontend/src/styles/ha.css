@@ -1,0 +1,320 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+
+/* Home Assistant view — config form + device-panel chrome.
+   Bespoke dark-form styling. */
+
+.af-ha-config {
+  max-width: 420px;
+  margin: 40px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.af-ha-hint {
+  font-size: 12px;
+  opacity: 0.6;
+  margin: 0;
+}
+
+.af-ha-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.af-ha-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.af-ha-input {
+  background: #1a2230;
+  border: 1px solid #2a3a50;
+  border-radius: 4px;
+  padding: 8px 10px;
+  color: #e2e8f0;
+  font-size: 13px;
+  outline: none;
+}
+
+.af-ha-check-box {
+  width: 14px;
+  height: 14px;
+  accent-color: #38bdf8;
+}
+
+.af-ha-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.af-ha-save {
+  flex: 1;
+  padding: 8px;
+}
+
+.af-ha-reset {
+  padding: 8px 12px;
+}
+
+.af-ha-msg {
+  font-size: 12px;
+  min-height: 16px;
+}
+
+.af-ha-msg.is-error {
+  color: #f87171;
+}
+
+.af-ha-msg.is-ok {
+  color: #34d399;
+}
+
+.af-ha-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.af-ha-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.af-ha-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.af-ha-open-link {
+  font-size: 11px;
+  opacity: 0.6;
+  color: inherit;
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.af-ha-reconfigure {
+  font-size: 10px;
+}
+
+.af-ha-devices {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.af-ha-empty {
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  margin-top: 40px;
+  grid-column: 1 / -1;
+}
+
+/* Device list — grouped rows with an expandable detail panel. */
+
+.af-ha-device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.af-ha-empty-msg {
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  padding: 40px;
+}
+
+.af-ha-section {
+  margin-bottom: 4px;
+}
+
+.af-ha-section-head {
+  padding: 8px 16px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.35);
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.af-ha-section-count {
+  opacity: 0.4;
+  font-weight: 400;
+}
+
+.af-ha-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background 0.12s;
+}
+
+.af-ha-row.is-clickable {
+  cursor: pointer;
+}
+
+.af-ha-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.af-ha-row-icon {
+  font-size: 16px;
+  width: 22px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.af-ha-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* color is set inline (state-dependent: alert / active / inactive). */
+.af-ha-row-state {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.af-ha-chevron {
+  color: rgba(255, 255, 255, 0.25);
+  font-size: 18px;
+  flex-shrink: 0;
+  transition: transform 0.18s;
+  line-height: 1;
+}
+
+.af-ha-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.af-ha-detail {
+  display: none;
+  padding: 10px 16px 14px 48px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.af-ha-detail.is-open {
+  display: block;
+}
+
+.af-ha-toggle {
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+  background: rgba(255, 255, 255, 0.15);
+  transition: background 0.2s;
+}
+
+.af-ha-toggle.is-on {
+  background: #34d399;
+}
+
+.af-ha-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.2s;
+  left: 2px;
+}
+
+.af-ha-toggle-thumb.is-on {
+  left: 14px;
+}
+
+.af-ha-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.af-ha-ctrl-full {
+  width: 100%;
+}
+
+.af-ha-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.af-ha-ctrl-label {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.af-ha-slider-input {
+  width: 100%;
+  accent-color: #34d399;
+}
+
+.af-ha-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.af-ha-color-picker {
+  border: none;
+  width: 20px;
+  height: 20px;
+  background: none;
+  cursor: pointer;
+}
+
+.af-ha-btn-row {
+  display: flex;
+  gap: 4px;
+}
+
+.af-ha-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.af-ha-cap-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.45);
+  white-space: nowrap;
+}

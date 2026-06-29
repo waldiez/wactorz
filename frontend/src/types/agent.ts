@@ -98,6 +98,18 @@ export interface SpawnPayload {
     protected?: boolean;
 }
 
+/** QA safety flag raised by the QAAgent. */
+export interface QaFlagPayload {
+    agentId: string;
+    agentName: string;
+    from: string;
+    category: string;
+    severity: string;
+    excerpt: string;
+    message: string;
+    timestampMs: number;
+}
+
 /** Chat message (user → agent or agent → user). */
 /** A file the user attached to a chat turn (image / document / …). */
 export interface Attachment {

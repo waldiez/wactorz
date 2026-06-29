@@ -27,21 +27,10 @@ import type {
     LogPayload,
     MetricsPayload,
     NodeHeartbeatPayload,
+    QaFlagPayload,
     SpawnPayload,
     StatusPayload,
 } from "../types/agent";
-
-/** QA safety flag raised by the QAAgent. */
-export interface QaFlagPayload {
-    agentId: string;
-    agentName: string;
-    from: string;
-    category: string;
-    severity: string;
-    excerpt: string;
-    message: string;
-    timestampMs: number;
-}
 
 export interface MQTTEvents {
     connected: void;

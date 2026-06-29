@@ -14,33 +14,12 @@
  */
 import { log } from "./logger";
 import { emit } from "../events";
+import type { StatePatchAgent, SnapshotStats, LogFeedItem } from "../types/ws";
 
 export type ChatHandler = (content: string, from: string, timestampMs: number) => void;
 export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number) => void;
 export type StreamEndHandler = (from: string) => void;
 export type ModeHandler = (mode: "direct_ws" | "mqtt") => void;
-
-/** One agent entry as the server includes it in state-patch messages. */
-export type StatePatchAgent = {
-    agent_id: string;
-    name?: string;
-    state?: string;
-    status?: string;
-    protected?: boolean;
-    messages_processed?: number;
-    cost_usd?: number;
-    uptime?: number;
-    cpu?: number;
-    mem?: number;
-    task?: string;
-    agent_type?: string;
-};
-
-/** Snapshot-level totals computed by the backend (includes historical/deleted agents). */
-export type SnapshotStats = {
-    totalCostUsd?: number;
-    totalMessages?: number;
-};
 
 /**
  * Called whenever the server broadcasts a state patch over the WebSocket.
@@ -52,22 +31,6 @@ export type StatePatchHandler = (
     deletedId?: string,
     stats?: SnapshotStats,
 ) => void;
-
-/** One MQTT-derived event entry from the server's in-memory log_feed. */
-export interface LogFeedItem {
-    type: string;
-    agent_id?: string;
-    name?: string;
-    agentName?: string;
-    message?: string;
-    text?: string;
-    timestamp?: number;
-    status?: Record<string, unknown>;
-    severity?: string;
-    agentType?: string;
-    agent_type?: string;
-    command?: string;
-}
 
 export type LogFeedHandler = (items: LogFeedItem[]) => void;
 

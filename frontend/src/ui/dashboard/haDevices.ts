@@ -9,7 +9,8 @@
  * lazily-built detail panel (controls + capability badges). All HA mutations
  * go through the passed-in HAClient, so this module owns no state.
  */
-import type { HAClient, HAEntity, HAArea, HARegistries } from "../../io/HAClient";
+import type { HAClient } from "../../io/HAClient";
+import type { HAEntity, HAArea, HARegistries } from "../../types/ha";
 
 /** Domains rendered as controllable device rows. */
 const DEVICE_DOMAINS = new Set([

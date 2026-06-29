@@ -19,7 +19,8 @@
 
 import type { AgentInfo } from "../types/agent";
 import type { FeedItem } from "../types/feed";
-import { HAClient, type HAEntity } from "../io/HAClient";
+import { HAClient } from "../io/HAClient";
+import type { HAEntity } from "../types/ha";
 import { buildHeader, buildBottomNav } from "./dashboard/header";
 import { renderHADevices, areaIconText } from "./dashboard/haDevices";
 import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
@@ -52,8 +53,8 @@ export class CardDashboard {
     private hideHeartbeats: boolean = true;
 
     private haClient: HAClient | null = null;
-    private _haEntities: import("../io/HAClient").HAEntity[] = [];
-    private _haRegistries: import("../io/HAClient").HARegistries | null = null;
+    private _haEntities: import("../types/ha").HAEntity[] = [];
+    private _haRegistries: import("../types/ha").HARegistries | null = null;
 
     private _remoteNodes = new Map<string, { agents: string[]; lastSeen: number }>();
     private _removingIds = new Set<string>();

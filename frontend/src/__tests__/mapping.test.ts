@@ -23,7 +23,7 @@ import {
     nodeHeartbeatFeedItem,
 } from "../agents/mapping";
 import { resolveAgentName } from "../agents/naming";
-import type { LogFeedItem, StatePatchAgent } from "../io/WSChatClient";
+import type { LogFeedItem, StatePatchAgent } from "../types/ws";
 import type {
     HeartbeatPayload,
     SpawnPayload,
@@ -34,8 +34,8 @@ import type {
     ChatMessage,
     MetricsPayload,
     AgentInfo,
+    QaFlagPayload,
 } from "../types/agent";
-import type { QaFlagPayload } from "../mqtt/MQTTClient";
 
 describe("toAgentInfo", () => {
     it("maps required fields with sensible defaults", () => {

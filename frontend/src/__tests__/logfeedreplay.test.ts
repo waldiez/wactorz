@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { selectLogFeedReplay, type LogFeedReplayState } from "../agents/mapping";
-import type { LogFeedItem } from "../io/WSChatClient";
+import type { LogFeedItem } from "../types/ws";
 
 // `spawned` always maps to a feed item, so labels/order are easy to assert.
 function spawn(name: string, ts: number): LogFeedItem {

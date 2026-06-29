@@ -4,7 +4,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { areaIconText, renderHADevices } from "../ui/dashboard/haDevices";
-import type { HAClient, HAEntity, HARegistries } from "../io/HAClient";
+import type { HAClient } from "../io/HAClient";
+import type { HAEntity, HARegistries } from "../types/ha";
 
 function ent(entity_id: string, state: string, attributes: Record<string, unknown> = {}): HAEntity {
     return { entity_id, state, attributes, last_changed: "", last_updated: "" } as HAEntity;

@@ -23,9 +23,9 @@ import type {
     NodeHeartbeatPayload,
     ChatMessage,
     MetricsPayload,
+    QaFlagPayload,
 } from "../types/agent";
-import type { StatePatchAgent, LogFeedItem } from "../io/WSChatClient";
-import type { QaFlagPayload } from "../mqtt/MQTTClient";
+import type { StatePatchAgent, LogFeedItem } from "../types/ws";
 import type { FeedItem } from "../types/feed";
 import { nameFromWid, resolveAgentName } from "./naming";
 

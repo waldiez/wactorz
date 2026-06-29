@@ -11,6 +11,17 @@
  * re-renders via the single `onApply` callback.
  */
 
+import { escapeHtml } from "../escapeHtml";
+
+/**
+ * Allow only http(s) links. Escaping alone does not neutralise a `javascript:`
+ * or `data:` scheme (it contains no HTML metacharacters), so a hostile url could
+ * otherwise execute on click — collapse anything non-http(s) to "#".
+ */
+function safeHref(url: string): string {
+    return /^https?:\/\//i.test(url.trim()) ? url : "#";
+}
+
 export interface HaViewCallbacks {
     /** Re-init the HA client and re-render the HA view (after save/clear). */
     onApply: () => void;
@@ -65,7 +76,7 @@ function buildHAConfigForm(haUrl: string | null, haToken: string | null, cb: HaV
       <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
         Host / IP
         <input id="ha-cfg-url" type="text" placeholder="192.168.1.2:8123 or ha.example.com/ha"
-          value="${storedHost}"
+          value="${escapeHtml(storedHost)}"
           style="background:#1a2230;border:1px solid #2a3a50;border-radius:4px;padding:8px 10px;color:#e2e8f0;font-size:13px;outline:none;">
       </label>
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">
@@ -76,7 +87,7 @@ function buildHAConfigForm(haUrl: string | null, haToken: string | null, cb: HaV
       <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
         Long-lived access token
         <input id="ha-cfg-token" type="password" placeholder="eyJ..."
-          value="${haToken ?? ""}"
+          value="${escapeHtml(haToken ?? "")}"
           style="background:#1a2230;border:1px solid #2a3a50;border-radius:4px;padding:8px 10px;color:#e2e8f0;font-size:13px;outline:none;">
       </label>
       <div style="display:flex;gap:8px;">
@@ -110,9 +121,9 @@ export function buildHAView(haUrl: string | null, haToken: string | null, cb: Ha
         <div class="af-panel-head" style="display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
           <h3>Home Assistant Devices</h3>
           <div style="display:flex;align-items:center;gap:8px;">
-            <a id="ha-open-link" href="${haUrl}" target="_blank" rel="noopener"
+            <a id="ha-open-link" href="${escapeHtml(safeHref(haUrl))}" target="_blank" rel="noopener"
                style="font-size:11px;opacity:0.6;color:inherit;text-decoration:none;display:flex;align-items:center;gap:4px;">
-              ${haUrl} ↗
+              ${escapeHtml(haUrl)} ↗
             </a>
             <button id="ha-reconfigure-btn" class="af-mini-btn" style="font-size:10px;">⚙ Configure</button>
           </div>

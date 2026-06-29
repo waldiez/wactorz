@@ -88,4 +88,33 @@ describe("buildHAView", () => {
         expect(localStorage.getItem("wactorz-ha-token")).toBeNull();
         expect(onApply).toHaveBeenCalled();
     });
+
+    // The HA url/host/token come from localStorage and server config; they must be
+    // escaped before interpolation into innerHTML so a hostile value can't inject HTML,
+    // and the open-link href must reject non-http(s) schemes (escaping alone can't).
+    it("escapes a hostile HA url and neutralises the open-link href", () => {
+        const payload = `"><img src=x onerror="window.__pwned = 1">`;
+        const el = buildHAView(payload, "tok", { onApply: vi.fn() });
+        expect(el.querySelector("img")).toBeNull(); // no markup injected
+        expect(el.querySelector<HTMLAnchorElement>("#ha-open-link")!.getAttribute("href")).toBe("#");
+    });
+
+    it("blocks a javascript: scheme in the open-link href", () => {
+        const el = buildHAView("javascript:alert(1)", "tok", { onApply: vi.fn() });
+        expect(el.querySelector<HTMLAnchorElement>("#ha-open-link")!.getAttribute("href")).toBe("#");
+    });
+
+    it("keeps a normal http(s) url as the open-link href", () => {
+        const el = buildHAView("https://ha.example.com", "tok", { onApply: vi.fn() });
+        expect(el.querySelector<HTMLAnchorElement>("#ha-open-link")!.getAttribute("href")).toBe(
+            "https://ha.example.com",
+        );
+    });
+
+    it("escapes a hostile stored host in the config form", () => {
+        const payload = `"><img src=x onerror="window.__pwned = 1">`;
+        const el = buildHAView(payload, null, { onApply: vi.fn() }); // missing token → config form
+        expect(el.querySelector("img")).toBeNull();
+        expect(el.querySelector<HTMLInputElement>("#ha-cfg-url")!.value).toContain("<img");
+    });
 });

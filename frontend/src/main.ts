@@ -275,14 +275,15 @@ mqtt.on("spawn", payload => {
     agentStore.onSpawn(payload);
     pushFeed({
         type: "spawn",
-        label: `spawned (${payload.agentType ?? "agent"})`,
+        // `|| "agent"`: the normaliser now yields "" (not undefined) when agentType is absent.
+        label: `spawned (${payload.agentType || "agent"})`,
         agentName: payload.agentName,
         timestamp: payload.timestampMs,
     });
     toast.show({
         type: "spawn",
         title: payload.agentName,
-        message: `${payload.agentType ?? "agent"} is online`,
+        message: `${payload.agentType || "agent"} is online`,
     });
 });
 

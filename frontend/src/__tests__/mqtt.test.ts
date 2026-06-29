@@ -12,6 +12,7 @@ import {
     normaliseStatus,
     normaliseSpawn,
     normaliseAlert,
+    normaliseQaFlag,
     MQTTClient,
 } from "../mqtt/MQTTClient";
 
@@ -266,10 +267,38 @@ describe("normaliser field validation (hardening)", () => {
         expect(normaliseSpawn({ agentId: "x" }).agentType).toBe("");
     });
 
+    it("normalises a qa-flag: resolves snake_case id, coerces fields, defaults missing to ''", () => {
+        const qf = normaliseQaFlag({
+            agent_id: "qa-1",
+            from: "writer",
+            category: "safety",
+            severity: "high",
+            excerpt: "bad output",
+            message: "flagged",
+            timestamp: 1_700_000_000,
+        });
+        expect(qf).toEqual({
+            agentId: "qa-1",
+            agentName: resolveAgentName("", "qa-1"),
+            from: "writer",
+            category: "safety",
+            severity: "high",
+            excerpt: "bad output",
+            message: "flagged",
+            timestampMs: 1_700_000_000_000, // seconds → ms
+        });
+        // Non-string / absent fields don't leak through.
+        const bare = normaliseQaFlag({ category: 42 });
+        expect(bare.category).toBe("");
+        expect(bare.excerpt).toBe("");
+        expect(bare.from).toBe("");
+    });
+
     it("does not throw on a null payload", () => {
         expect(() => normaliseHeartbeat(null)).not.toThrow();
         expect(() => normaliseStatus(null)).not.toThrow();
         expect(() => normaliseAlert(null)).not.toThrow();
+        expect(() => normaliseQaFlag(null)).not.toThrow();
     });
 });
 

@@ -217,7 +217,7 @@ export class MQTTClient {
     /** Exact system/* topics. */
     private _routeSystemEvent(topic: string, payload: unknown): boolean {
         if (topic === "system/qa-flag") {
-            this.emit("qa-flag", payload as QaFlagPayload);
+            this.emit("qa-flag", normaliseQaFlag(payload));
         } else if (topic === "system/spawn") {
             // legacy / alternate spawn topic
             this.emit("spawn", normaliseSpawn(payload));
@@ -469,6 +469,22 @@ export function normaliseAlert(p: unknown): AlertPayload {
         agentId,
         agentName: resolveAgentName(str(o["agentName"] ?? o["name"]), agentId),
         severity: coerceSeverity(o["severity"]),
+        message: str(o["message"]),
+        timestampMs: toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]),
+    };
+}
+
+/** Normalise a raw QA-flag payload, resolving id + name and coercing each field to its type. */
+export function normaliseQaFlag(p: unknown): QaFlagPayload {
+    const o = asObj(p);
+    const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
+    return {
+        agentId,
+        agentName: resolveAgentName(str(o["agentName"] ?? o["name"]), agentId),
+        from: str(o["from"]),
+        category: str(o["category"]),
+        severity: str(o["severity"]),
+        excerpt: str(o["excerpt"]),
         message: str(o["message"]),
         timestampMs: toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]),
     };

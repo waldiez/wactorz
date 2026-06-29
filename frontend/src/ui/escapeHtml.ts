@@ -16,6 +16,7 @@ const ENTITIES: Record<string, string> = {
     "'": "&#39;",
 };
 
+/** Escape `& < > " '` in `value` (coerced to string) for safe `innerHTML` interpolation. */
 export function escapeHtml(value: unknown): string {
     return String(value ?? "").replace(/[&<>"']/g, c => ENTITIES[c] ?? c);
 }

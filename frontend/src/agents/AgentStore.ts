@@ -16,11 +16,17 @@ export class AgentStore {
     private cardDashboard: CardDashboard | null = null;
     private _remoteNodeLastSeen: Map<string, number> = new Map();
 
+    /** Create the store and mount an (initially empty) CardDashboard. */
     constructor() {
         this.cardDashboard = new CardDashboard();
         this.cardDashboard.show([...this.agents.values()]);
     }
 
+    /**
+     * Insert or merge an agent by id, forwarding the change to the dashboard.
+     * A same-name agent under a different id is treated as a restart and evicted
+     * first; `protected` and `node` are sticky across partial MQTT updates.
+     */
     addOrUpdateAgent(agent: AgentInfo): void {
         // If another agent with the same NAME but a different ID exists, drop it
         // first — a re-spawn produces a new WID id, treated as a restart.
@@ -48,19 +54,26 @@ export class AgentStore {
         }
     }
 
+    /** Drop an agent by id and remove its card. */
     removeAgent(id: string): void {
         this.agents.delete(id);
         this.cardDashboard?.removeAgent(id);
     }
 
+    /** Update the dashboard's aggregate cost figure. */
     setTotalCostUsd(usd: number): void {
         this.cardDashboard?.setTotalCostUsd(usd);
     }
 
+    /** Update the dashboard's aggregate message count. */
     setTotalMessages(count: number): void {
         this.cardDashboard?.setTotalMessages(count);
     }
 
+    /**
+     * Refresh a remote node's agent list, tracking its last-seen time and
+     * evicting remote agents this node no longer reports.
+     */
     updateRemoteNode(name: string, agents: string[]): void {
         this.cardDashboard?.updateRemoteNode(name, agents);
         if (agents.length > 0) {
@@ -79,10 +92,15 @@ export class AgentStore {
         toEvict.forEach(id => this.removeAgent(id));
     }
 
+    /** Push host CPU/memory stats to the dashboard. */
     setHostStats(cpu: number, memUsedMb: number, memTotalMb?: number): void {
         this.cardDashboard?.setHostStats(cpu, memUsedMb, memTotalMb);
     }
 
+    /**
+     * Replace local (non-remote) agents with the authoritative REST list:
+     * evict any not present, then add or update the rest.
+     */
     reconcileAgents(liveAgents: AgentInfo[]): void {
         const liveIds = new Set(liveAgents.map(agent => agent.id));
         for (const [id, agent] of this.agents) {
@@ -110,6 +128,10 @@ export class AgentStore {
         toEvict.forEach(id => this.removeAgent(id));
     }
 
+    /**
+     * Apply a heartbeat: update an existing agent's state/metrics, or create it
+     * if unknown, then pulse its card.
+     */
     onHeartbeat(payload: HeartbeatPayload): void {
         const agent = this.agents.get(payload.agentId);
         if (agent) {
@@ -151,10 +173,12 @@ export class AgentStore {
         }
     }
 
+    /** Flash an alert badge on an agent's card. */
     onAlert(payload: AlertPayload): void {
         this.cardDashboard?.showAlert(payload.agentId, payload.severity);
     }
 
+    /** Animate a chat edge between two agents resolved by name (sender required). */
     onChat(fromName: string, toName: string): void {
         let fromId: string | undefined;
         let toId: string | undefined;
@@ -172,6 +196,7 @@ export class AgentStore {
         this.cardDashboard?.onChat(fromId, toId ?? "");
     }
 
+    /** Register a newly spawned agent in the `initializing` state. */
     onSpawn(payload: SpawnPayload): void {
         this.addOrUpdateAgent({
             id: payload.agentId,
@@ -187,6 +212,7 @@ export class AgentStore {
         return [...this.agents.values()];
     }
 
+    /** Remove every agent and reset the aggregate cost/message counters. */
     clearAll(): void {
         for (const id of [...this.agents.keys()]) {
             this.removeAgent(id);
@@ -195,6 +221,7 @@ export class AgentStore {
         this.setTotalMessages(0);
     }
 
+    /** Tear down the dashboard (used on page unload). */
     dispose(): void {
         this.cardDashboard?.destroy();
     }

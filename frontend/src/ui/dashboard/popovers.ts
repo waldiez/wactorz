@@ -251,6 +251,7 @@ function buildResetButton(
 /** A reset popover that exposes a hook to re-arm its two-step confirm buttons
  *  (called when the popover is re-opened, so a previously-armed button resets). */
 export interface ResetPopover extends HTMLElement {
+    /** Re-arm (reset) the two-step confirm buttons; call when the popover re-opens. */
     _resetArmed(): void;
 }
 

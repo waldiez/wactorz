@@ -25,6 +25,11 @@ export interface DeletionGuard {
     isDeleted(id: string, msgTs?: number): boolean;
 }
 
+/**
+ * Create a {@link DeletionGuard}. `graceMs` absorbs an in-flight heartbeat from
+ * the stop-window before an event counts as a re-spawn; `failsafeMs` caps how
+ * long a timestamp-less suppression can last; `now` is injectable for tests.
+ */
 export function createDeletionGuard(
     graceMs = 3_000, // absorb an in-flight heartbeat from the stop-window
     failsafeMs = 30_000, // hard ceiling for timestamp-less paths

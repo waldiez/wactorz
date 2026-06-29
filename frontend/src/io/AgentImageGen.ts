@@ -70,6 +70,10 @@ function dicebearUrl(name: string): string {
 export class AgentImageGen {
     private cache = new Map<string, string>();
 
+    /**
+     * Resolve (and cache, per agent id) the avatar URL: a static WebP when a
+     * rule matches the name/type, otherwise a deterministic DiceBear SVG.
+     */
     get(agent: Pick<AgentInfo, "id" | "name"> & { agentType?: string }): string {
         if (!this.cache.has(agent.id)) {
             const url = staticAvatar(agent.name, agent.agentType) ?? dicebearUrl(agent.name);

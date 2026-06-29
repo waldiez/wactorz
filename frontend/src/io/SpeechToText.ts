@@ -33,6 +33,7 @@ export class SpeechToText {
         );
     }
 
+    /** True while a recording is in progress. */
     get recording(): boolean {
         return this.recorder?.state === "recording";
     }

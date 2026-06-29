@@ -26,6 +26,7 @@ export interface ChatHost {
     readonly agents: Map<string, AgentInfo>;
     /** The currently active view (read live — it changes over time). */
     getView(): View;
+    /** Switch the active dashboard view. */
     setView(v: View): void;
     /** Agents sorted with main-actor pinned first (shared with the overview). */
     sortedAgents(): AgentInfo[];
@@ -92,6 +93,7 @@ export class DashboardChat {
         this._historyLoaded.delete(name);
     }
 
+    /** Build the chat view element (sidebar + pane); renders run again in afterMount once attached. */
     buildChatView(): HTMLElement {
         const chat = document.createElement("div");
         chat.className = "af-chat";
@@ -164,6 +166,7 @@ export class DashboardChat {
         return pane;
     }
 
+    /** Render the agent list in the chat sidebar (honouring the current search filter). */
     renderSidebar(): void {
         const list = this.root.querySelector<HTMLElement>("#af-chat-agent-list");
         if (!list) {
@@ -190,6 +193,7 @@ export class DashboardChat {
         this.root.querySelector(".af-chat")?.classList.add("agent-selected");
     }
 
+    /** Render the chat pane header (target agent name, state dot, back button). */
     renderChatPaneHeader(): void {
         const hdr = this.root.querySelector<HTMLElement>("#af-chat-pane-header");
         if (!hdr) {
@@ -235,6 +239,7 @@ export class DashboardChat {
         return msg.from === this.chatTarget;
     }
 
+    /** Render the message thread for the active target (empty state when no messages). */
     renderChatThread(): void {
         const thread = this.root.querySelector<HTMLElement>("#af-chat-thread");
         if (!thread) {
@@ -301,6 +306,7 @@ export class DashboardChat {
         }
     }
 
+    /** Fetch and merge persisted chat history for an agent once (subsequent calls no-op). */
     async loadHistory(agentId: string): Promise<void> {
         if (this._historyLoaded.has(agentId)) {
             return;
@@ -314,6 +320,7 @@ export class DashboardChat {
         this.renderChatThread();
     }
 
+    /** Build the chat input bar (textarea, target select, mic/attach/send controls). */
     buildIobar(): HTMLElement {
         return buildChatIobar({
             chatInput: this._chatInput,
@@ -369,6 +376,7 @@ export class DashboardChat {
         select.value = this.chatTarget;
     }
 
+    /** Rebuild the target-agent `<select>` options from the current agent list. */
     updateTargetSelect(): void {
         const select = this.root.querySelector<HTMLSelectElement>("#af-target-select");
         if (select) {
@@ -432,6 +440,7 @@ export class DashboardChat {
         }
     }
 
+    /** Subscribe to chat/stream/attachment DOM events (call when the dashboard is shown). */
     wire(): void {
         this._wireChatEvents();
         this._wireStreamEvents();
@@ -445,6 +454,7 @@ export class DashboardChat {
         }
     }
 
+    /** Remove all event listeners added by wire() (call when the dashboard is hidden). */
     unwire(): void {
         const pairs: [string, EventListener | null][] = [
             ["af-chat-message", this._evChat],

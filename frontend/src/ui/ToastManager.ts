@@ -255,6 +255,7 @@ const CSS = `
 }
 `;
 
+/** Two-letter avatar initials: first letters of the first two words, else the first two chars. */
 export function initials(name: string): string {
     const parts = name.trim().split(/[\s\-_]+/);
     if (parts.length >= 2) {
@@ -299,6 +300,7 @@ export class ToastManager {
         document.body.appendChild(this.container);
     }
 
+    /** Display a toast (evicting the oldest at capacity); auto-dismisses after `durationMs`. */
     show(opts: ToastOptions): void {
         const type: ToastType = opts.type ?? "system";
         const theme = THEME[type];
@@ -399,8 +401,10 @@ export class ToastManager {
     }
 }
 
+/** Escape `& < > "` for safe interpolation into the toast's innerHTML template. */
 export function escHtml(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+/** Shared ToastManager singleton. */
 export const toast = new ToastManager();

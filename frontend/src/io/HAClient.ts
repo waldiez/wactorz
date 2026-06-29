@@ -104,10 +104,12 @@ export class HAClient {
         private readonly token: string,
     ) {}
 
+    /** True while the WebSocket is open (or connecting). */
     get connected(): boolean {
         return this.ws !== null && this.ws.readyState !== WebSocket.CLOSED;
     }
 
+    /** Open the WebSocket, authenticate, and subscribe to state changes; `onUpdate` fires on every entity update. */
     connect(onUpdate: HAUpdateHandler): void {
         this.onUpdate = onUpdate;
         const baseUrl = this.url.endsWith("/") ? this.url.slice(0, -1) : this.url;
@@ -206,6 +208,7 @@ export class HAClient {
         );
     }
 
+    /** Close the connection and reset auth + pending-request state. */
     disconnect(): void {
         this.ws?.close();
         this.ws = null;
@@ -213,6 +216,7 @@ export class HAClient {
         this._resolvers.clear();
     }
 
+    /** Toggle an entity by id (no-op until authenticated). */
     toggleEntity(entityId: string): void {
         if (!this.authenticated) {
             return;
@@ -226,6 +230,7 @@ export class HAClient {
         });
     }
 
+    /** Call an arbitrary HA service with data (no-op until authenticated). */
     callService(domain: string, service: string, serviceData: Record<string, unknown>): void {
         if (!this.authenticated) {
             return;

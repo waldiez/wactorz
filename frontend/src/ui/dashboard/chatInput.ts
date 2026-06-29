@@ -99,6 +99,7 @@ export class ChatInput {
         }
     }
 
+    /** Close the `@mention` panel and reset its selection state. */
     closePanel(panel: HTMLElement): void {
         this.mentionOpen = false;
         this.mentionIdx = -1;

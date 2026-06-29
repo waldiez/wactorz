@@ -100,6 +100,7 @@ function buildHeaderRight(view: View, onSetView: (v: View) => void): HTMLElement
     return right;
 }
 
+/** Build the top header (logo, connection badge, health, view tabs, audio + reset popovers). */
 export function buildHeader(opts: HeaderOpts): HTMLElement {
     const header = document.createElement("div");
     header.className = "af-header";

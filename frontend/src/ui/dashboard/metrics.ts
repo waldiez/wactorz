@@ -12,6 +12,7 @@ import type { View } from "./types";
 
 export interface MetricsHost {
     readonly root: HTMLElement;
+    /** The currently active view. */
     getView(): View;
     /** Re-render the overview stat cards (caller decides if visible). */
     renderStats(): void;
@@ -30,14 +31,17 @@ export class MetricsController {
 
     constructor(private host: MetricsHost) {}
 
+    /** Aggregate spend in USD, or null until known. */
     get totalCostUsd(): number | null {
         return this._totalCostUsd;
     }
 
+    /** Aggregate message count, or null until known. */
     get totalMessages(): number | null {
         return this._totalMessages;
     }
 
+    /** Latest spend-limit info from `/api/cost`, or null until fetched. */
     get costLimitInfo(): CostLimitInfo | null {
         return this._costLimitInfo;
     }
@@ -46,6 +50,7 @@ export class MetricsController {
         return window.__WACTORZ_INGRESS_PATH ?? "";
     }
 
+    /** Set the aggregate cost and re-render the stat cards if on the overview. */
     setTotalCostUsd(usd: number): void {
         this._totalCostUsd = usd;
         if (this.host.getView() === "overview") {
@@ -53,6 +58,7 @@ export class MetricsController {
         }
     }
 
+    /** Set the aggregate message count and re-render the stat cards if on the overview. */
     setTotalMessages(count: number): void {
         this._totalMessages = count;
         if (this.host.getView() === "overview") {
@@ -60,6 +66,7 @@ export class MetricsController {
         }
     }
 
+    /** Store host CPU/memory stats and paint them into the host bar if mounted. */
     setHostStats(cpu: number, memUsedMb: number, memTotalMb?: number): void {
         this._hostCpu = cpu;
         this._hostMemUsedMb = memUsedMb;
@@ -85,6 +92,7 @@ export class MetricsController {
         this._pollTimer = setInterval(() => void this._fetchCostInfo(), 30_000);
     }
 
+    /** Stop the cost-info poll loop. */
     stopPolling(): void {
         if (this._pollTimer) {
             clearInterval(this._pollTimer);
@@ -92,6 +100,7 @@ export class MetricsController {
         }
     }
 
+    /** Build the settings view, wiring its save-limit / reset-spend actions. */
     buildSettingsView(): HTMLElement {
         return buildSettingsView(this._costLimitInfo, {
             onSaveLimit: async (limit, period) => {

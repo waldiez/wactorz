@@ -146,6 +146,7 @@ export class CardDashboard {
         }
     }
 
+    /** Reveal the dashboard, seed it with `agents`, wire events, and start the refresh timers + HA connection. */
     show(agents: AgentInfo[]): void {
         agents.forEach(a => this.agents.set(a.id, a));
         this.root.classList.add("cd-visible");
@@ -165,6 +166,7 @@ export class CardDashboard {
         }
     }
 
+    /** Hide the dashboard, unwire events, disconnect HA, release the mic, and stop timers. */
     hide(): void {
         this.root.classList.remove("cd-visible");
         this._unwireEvents();
@@ -178,23 +180,28 @@ export class CardDashboard {
         this._metrics.stopPolling();
     }
 
+    /** Hide and remove the dashboard from the DOM. */
     destroy(): void {
         this.hide();
         this.root.remove();
     }
 
+    /** Set the aggregate cost figure. */
     setTotalCostUsd(usd: number): void {
         this._metrics.setTotalCostUsd(usd);
     }
 
+    /** Set the aggregate message count. */
     setTotalMessages(count: number): void {
         this._metrics.setTotalMessages(count);
     }
 
+    /** Set host CPU/memory telemetry. */
     setHostStats(cpu: number, memUsedMb: number, memTotalMb?: number): void {
         this._metrics.setHostStats(cpu, memUsedMb, memTotalMb);
     }
 
+    /** Add an agent and refresh the affected views. */
     addAgent(agent: AgentInfo): void {
         this.agents.set(agent.id, agent);
         if (!this.root.classList.contains("cd-visible")) {
@@ -211,6 +218,7 @@ export class CardDashboard {
         this._chat.updateTargetSelect();
     }
 
+    /** Update an agent in place and refresh the affected views. */
     updateAgent(agent: AgentInfo): void {
         this.agents.set(agent.id, agent);
         if (!this.root.classList.contains("cd-visible")) {
@@ -225,6 +233,7 @@ export class CardDashboard {
         }
     }
 
+    /** Remove an agent (with exit animation) and forget its chat history. */
     removeAgent(id: string): void {
         const removed = this.agents.get(id);
         this.agents.delete(id);
@@ -254,6 +263,7 @@ export class CardDashboard {
         this._chat.updateTargetSelect();
     }
 
+    /** Record a remote node's agent list and refresh the nodes panel. */
     updateRemoteNode(name: string, agents: string[]): void {
         this._remoteNodes.set(name, { agents, lastSeen: Date.now() });
         if (this.view === "overview") {
@@ -261,6 +271,7 @@ export class CardDashboard {
         }
     }
 
+    /** Record a heartbeat timestamp and pulse the agent's card. */
     onHeartbeat(agentId: string, timestampMs: number, _cpu?: number, _mem?: number): void {
         this.lastHb.set(agentId, timestampMs);
         if (!this.root.classList.contains("cd-visible")) {
@@ -285,6 +296,7 @@ export class CardDashboard {
         }
     }
 
+    /** Briefly flash an alert class (error/warning) on the agent's card. */
     showAlert(agentId: string, severity: string): void {
         const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
         if (!card) {
@@ -296,6 +308,7 @@ export class CardDashboard {
         setTimeout(() => card.classList.remove(cls, "af-card-alert-error", "af-card-alert-warn"), 900);
     }
 
+    /** Briefly flash the sender's card to signal chat activity. */
     onChat(fromId: string, _toId: string): void {
         const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(fromId)}"]`);
         if (!card) {

@@ -94,10 +94,12 @@ export class WSChatClient {
      *  which the server stamps with the generic transport id "io-gateway". */
     private _lastAgentName = "main-actor";
 
+    /** Active chat mode announced by the server (`direct_ws` or `mqtt`). */
     get chatMode(): "direct_ws" | "mqtt" {
         return this._chatMode;
     }
 
+    /** True while the WebSocket is open. */
     get connected(): boolean {
         return this.ws?.readyState === WebSocket.OPEN;
     }
@@ -132,6 +134,7 @@ export class WSChatClient {
         this._onLogFeed = fn;
     }
 
+    /** Open the WebSocket to `url` and auto-reconnect on drops until disconnected. */
     connect(url: string): void {
         this._url = url;
         this._closed = false;
@@ -139,6 +142,7 @@ export class WSChatClient {
         this._open();
     }
 
+    /** Close the socket and stop reconnecting. */
     disconnect(): void {
         this._closed = true;
         if (this._reconnectTimer !== null) {

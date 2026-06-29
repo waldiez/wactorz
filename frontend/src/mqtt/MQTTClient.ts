@@ -146,6 +146,7 @@ export class MQTTClient {
         return true;
     }
 
+    /** Register a listener for a typed event. Chainable. */
     on<K extends keyof MQTTEvents>(event: K, listener: Listener<MQTTEvents[K]>): this {
         if (!this.listeners[event]) {
             (this.listeners as Listeners)[event] = [];
@@ -154,6 +155,7 @@ export class MQTTClient {
         return this;
     }
 
+    /** Remove a previously registered listener. Chainable. */
     off<K extends keyof MQTTEvents>(event: K, listener: Listener<MQTTEvents[K]>): this {
         const arr = this.listeners[event] as Array<Listener<MQTTEvents[K]>> | undefined;
         if (arr) {
@@ -335,6 +337,7 @@ function str(v: unknown, fallback = ""): string {
 // (with the historical `nameFromId` alias) so existing importers/tests keep working.
 export { nameFromWid as nameFromId, resolveAgentName };
 
+/** Normalise a raw heartbeat payload, tolerating snake_case/camelCase keys and resolving id + name. */
 export function normaliseHeartbeat(p: unknown): HeartbeatPayload {
     const o = (p ?? {}) as RawObj;
     const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
@@ -349,6 +352,7 @@ export function normaliseHeartbeat(p: unknown): HeartbeatPayload {
     };
 }
 
+/** Normalise a raw chat payload; defaults `to` to "user" and synthesises an id when absent. */
 export function normaliseChat(p: unknown): ChatMessage {
     const o = (p ?? {}) as RawObj;
     const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
@@ -362,6 +366,7 @@ export function normaliseChat(p: unknown): ChatMessage {
     };
 }
 
+/** Normalise a raw status payload, resolving agent id + display name. */
 export function normaliseStatus(p: unknown): StatusPayload {
     const o = (p ?? {}) as RawObj;
     const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
@@ -373,6 +378,7 @@ export function normaliseStatus(p: unknown): StatusPayload {
     };
 }
 
+/** Normalise a raw spawn payload, resolving id + name and coercing the timestamp to ms. */
 export function normaliseSpawn(p: unknown): SpawnPayload {
     const o = (p ?? {}) as RawObj;
     const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
@@ -385,6 +391,7 @@ export function normaliseSpawn(p: unknown): SpawnPayload {
     };
 }
 
+/** Normalise a raw alert payload, resolving id + name and coercing the timestamp to ms. */
 export function normaliseAlert(p: unknown): AlertPayload {
     const o = (p ?? {}) as RawObj;
     const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);

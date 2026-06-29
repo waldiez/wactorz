@@ -11,6 +11,7 @@ import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel, relTime, canDirectMessage } from "./agentState";
 import type { CostLimitInfo } from "./settings";
 
+/** Build the host CPU/memory resource bar (gracefully blank when a stat is null). */
 export function buildHostBar(
     cpu: number | null,
     memUsed: number | null,
@@ -129,6 +130,7 @@ function computeStatSpecs(data: StatCardData): StatSpec[] {
     ];
 }
 
+/** Render the summary stat cards (agents, messages, cost, feed count) into `container`. */
 export function buildStatCards(container: HTMLElement, data: StatCardData): void {
     container.innerHTML = "";
     computeStatSpecs(data).forEach(({ label, value, detail, accent, extra }) => {
@@ -236,6 +238,7 @@ function appendCardHeader(card: HTMLElement, agent: AgentInfo, hbMs: number): vo
     card.append(dot, name, stateLbl, meta);
 }
 
+/** Build a single agent ("wactor") card, wiring its control buttons to `cb`. */
 export function buildWactorCard(agent: AgentInfo, hbMs: number, cb: WactorCardCallbacks): HTMLElement {
     const card = document.createElement("div");
     card.className = "af-card";

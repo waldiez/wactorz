@@ -28,13 +28,16 @@ export interface OverviewHost {
     hostStats(): [number | null, number | null, number | null];
     /** Inputs for the summary stat cards. */
     statData(): StatCardData;
+    /** Open chat targeting the named agent. */
     onChat(name: string): void;
+    /** Run a control command (pause/resume/stop/delete) on an agent. */
     onCommand(id: string, action: AgentAction, btn: HTMLButtonElement): void;
 }
 
 export class OverviewView {
     constructor(private host: OverviewHost) {}
 
+    /** Build the full overview element: host bar, stat cards, wactor grid and nodes panel. */
     build(): HTMLElement {
         const el = document.createElement("div");
         el.className = "af-overview";
@@ -55,6 +58,7 @@ export class OverviewView {
         return el;
     }
 
+    /** Re-render the summary stat cards in place (no-op if not mounted). */
     renderStats(): void {
         const grid = this.host.root.querySelector<HTMLElement>("#af-stats-grid");
         if (grid) {
@@ -62,6 +66,7 @@ export class OverviewView {
         }
     }
 
+    /** Reconcile the wactor card grid: remove dead cards and add new ones (sorted). */
     renderCards(): void {
         const grid = this.host.root.querySelector<HTMLElement>("#af-wactor-cards");
         if (!grid) {
@@ -82,6 +87,7 @@ export class OverviewView {
         });
     }
 
+    /** Update one card's state dot/label/name/controls in place, rebuilding the grid if it's missing. */
     patchCard(agent: AgentInfo): void {
         if (this.host.removingIds.has(agent.id)) {
             return;
@@ -109,6 +115,7 @@ export class OverviewView {
         this._rebuildControls(card, agent);
     }
 
+    /** Render the nodes panel (local + remote nodes with online/offline pills) into `container` or the mounted list. */
     renderNodes(container?: HTMLElement): void {
         const list = container ?? this.host.root.querySelector<HTMLElement>("#af-node-list");
         if (!list) {

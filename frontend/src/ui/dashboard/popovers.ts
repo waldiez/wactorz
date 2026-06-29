@@ -48,7 +48,10 @@ function buildVoiceRow(): HTMLElement {
 
     const voiceSel = document.createElement("select");
     voiceSel.className = "af-audio-select";
+    voiceSel.id = "af-tts-voice";
+    voiceSel.name = "tts-voice";
     voiceSel.title = "TTS voice";
+    voiceSel.setAttribute("aria-label", "TTS voice");
 
     const placeholderOpt = document.createElement("option");
     placeholderOpt.value = "";

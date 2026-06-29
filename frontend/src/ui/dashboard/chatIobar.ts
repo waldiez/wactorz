@@ -237,6 +237,8 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
     const select = document.createElement("select");
     select.className = "af-target-select";
     select.id = "af-target-select";
+    select.name = "chat-target";
+    select.setAttribute("aria-label", "Chat target agent");
     deps.populateSelect(select);
 
     const { inputWrap, input, mentionPanel } = buildInputArea(deps, select);

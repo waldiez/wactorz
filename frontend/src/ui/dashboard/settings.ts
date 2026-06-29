@@ -57,6 +57,9 @@ function buildLimitInput(currentLimit: number): HTMLInputElement {
 function buildPeriodSelect(currentPeriod: string): HTMLSelectElement {
     const select = document.createElement("select");
     select.className = "af-cfg-input";
+    select.id = "af-cost-period";
+    select.name = "cost-period";
+    select.setAttribute("aria-label", "Cost limit period");
     ["daily", "weekly", "monthly"].forEach(p => {
         const opt = document.createElement("option");
         opt.value = p;

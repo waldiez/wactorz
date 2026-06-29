@@ -167,6 +167,11 @@ input[type="range"]::-webkit-slider-thumb {
   border-radius: 50%;
   cursor: pointer;
 }
+/* Restore a focus indicator for keyboard users (the rule above clears outline). */
+input[type="range"]:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
 input[type="color"]::-webkit-color-swatch-wrapper {
   padding: 0;
 }

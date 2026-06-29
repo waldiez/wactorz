@@ -66,6 +66,13 @@ describe("buildFeedView", () => {
         expect(wrap.querySelector(".af-feed-empty")!.textContent).toBe("No events yet.");
     });
 
+    it("marks the feed as a polite live-region log for screen readers", () => {
+        const wrap = buildFeedView([], { hideHeartbeats: false, onToggleHeartbeats: vi.fn() });
+        const feed = wrap.querySelector("#af-feed-view")!;
+        expect(feed.getAttribute("role")).toBe("log");
+        expect(feed.getAttribute("aria-live")).toBe("polite");
+    });
+
     it("filters out system-agent rows", () => {
         const wrap = buildFeedView([item({ agentName: "io-agent" }), item({ agentName: "worker" })], {
             hideHeartbeats: false,

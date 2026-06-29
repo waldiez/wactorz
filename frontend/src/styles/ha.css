@@ -45,6 +45,11 @@
   outline: none;
 }
 
+/* Focus indicator for keyboard users (the rule above clears the default outline). */
+.af-ha-input:focus-visible {
+  border-color: #38bdf8;
+}
+
 .af-ha-check-box {
   width: 14px;
   height: 14px;

@@ -372,6 +372,9 @@ function appendMediaControls(container: HTMLElement, e: HAEntity, haClient: HACl
 function buildToggle(e: HAEntity, isActive: boolean, haClient: HAClient | null): HTMLButtonElement {
     const toggle = document.createElement("button");
     toggle.title = isActive ? "Turn off" : "Turn on";
+    // State is otherwise conveyed only by colour — expose it to assistive tech.
+    toggle.setAttribute("aria-pressed", String(isActive));
+    toggle.setAttribute("aria-label", isActive ? "Turn off" : "Turn on");
     toggle.className = isActive ? "af-ha-toggle is-on" : "af-ha-toggle";
     const thumb = document.createElement("div");
     thumb.className = isActive ? "af-ha-toggle-thumb is-on" : "af-ha-toggle-thumb";

@@ -271,6 +271,23 @@ describe("renderHADevices", () => {
         expect(clickableRow(container).classList.contains("af-ha-row")).toBe(true);
     });
 
+    it("the row toggle exposes its on/off state via aria-pressed (not colour alone)", () => {
+        renderHADevices(
+            container,
+            [
+                ent("light.on", "on", { friendly_name: "On" }),
+                ent("switch.off", "off", { friendly_name: "Off" }),
+            ],
+            null,
+            haClient,
+        );
+        const states = [...container.querySelectorAll<HTMLButtonElement>(".af-ha-toggle")].map(t =>
+            t.getAttribute("aria-pressed"),
+        );
+        expect(states).toContain("true");
+        expect(states).toContain("false");
+    });
+
     it("exposes the expandable row as a keyboard-operable disclosure", () => {
         renderHADevices(container, [ent("light.k", "on", { friendly_name: "Lamp" })], null, haClient);
         const row = clickableRow(container);

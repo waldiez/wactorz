@@ -32,3 +32,17 @@ body {
   border: 1px solid rgba(100, 160, 255, 0.18);
   border-radius: 12px;
 }
+
+/* ── Reduced motion ─────────────────────────────────────────────────── */
+/* Honour the OS "reduce motion" setting: near-instant transitions/animations
+   (covers CSS rules and JS-set inline transitions via !important). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

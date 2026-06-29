@@ -168,6 +168,9 @@ export function buildFeedView(items: FeedItem[], opts: FeedViewOptions): HTMLEle
     const feed = document.createElement("div");
     feed.className = "af-feed";
     feed.id = "af-feed-view";
+    // Append-only activity log — announce new rows to screen readers as they arrive.
+    feed.setAttribute("role", "log");
+    feed.setAttribute("aria-live", "polite");
 
     const toolbar = document.createElement("div");
     toolbar.className = "af-feed-toolbar";

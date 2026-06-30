@@ -14,7 +14,7 @@
 import type { Attachment, ChatMessage } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import type { ConnState } from "./ui/dashboard/types";
-import type { TTSVoice } from "./io/TTSManager";
+import type { TTSVoice } from "./types/tts";
 
 /** Detail payload for each application event, keyed by event name. `void` = no detail. */
 export interface AppEventMap {

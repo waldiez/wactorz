@@ -18,16 +18,11 @@
 
 import { ambient } from "./AmbientManager";
 import { emit } from "../events";
+import type { TTSVoice } from "../types/tts";
 
 const LS_BEEP = "wactorz.beep";
 const LS_TTS = "wactorz.tts";
 const LS_VOICE = "wactorz.ttsVoice";
-
-export interface TTSVoice {
-    name: string;
-    locale: string;
-    gender: string;
-}
 
 export class TTSManager {
     private _beepEnabled: boolean;

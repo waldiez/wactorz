@@ -73,14 +73,20 @@ self.addEventListener("fetch", (e) => {
   ) {
     e.respondWith(
       caches.match(e.request).then((cached) => {
-        const fresh = fetch(e.request).then((res) => {
-          if (res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(e.request, copy));
-          }
-          return res;
-        });
-        return cached ?? fresh.catch(() => Response.error());
+        // Stale-while-revalidate: serve cache immediately, refresh in the background.
+        // The .catch is on the fetch chain itself (not gated behind `??`) so that on
+        // a cache hit the in-flight background fetch can't become an unhandled
+        // rejection when offline.
+        const fresh = fetch(e.request)
+          .then((res) => {
+            if (res.ok) {
+              const copy = res.clone();
+              caches.open(CACHE).then((c) => c.put(e.request, copy));
+            }
+            return res;
+          })
+          .catch(() => Response.error());
+        return cached ?? fresh;
       }),
     );
     return;

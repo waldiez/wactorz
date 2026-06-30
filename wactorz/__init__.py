@@ -31,7 +31,6 @@ try:
     from .agents.dynamic_agent import DynamicAgent
     from .agents.installer_agent import InstallerAgent
     from .agents.main_actor import MainActor
-    from .agents.manual_agent import ManualAgent
     from .agents.monitor_agent import MonitorActor
     from .agents.planner_agent import PlannerAgent
 
@@ -39,7 +38,6 @@ try:
         "MainActor",
         "MonitorActor",
         "CodeAgent",
-        "ManualAgent",
         "PlannerAgent",
         "DynamicAgent",
         "InstallerAgent",
@@ -47,8 +45,3 @@ try:
     ]
 except ImportError:
     pass
-# try:
-#    from .agents.ml_agent import MLAgent, YOLOAgent, AnomalyDetectorAgent
-#    __all__ += ["MLAgent", "YOLOAgent", "AnomalyDetectorAgent"]
-# except ImportError:
-#    pass

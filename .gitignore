@@ -151,7 +151,7 @@ pyrightconfig.json
 .vscode/
 .claude/
 .codex/
-CLAUDE.md
+CLAUDE.local.md
 .codex
 .gemini/
 __pycache__/

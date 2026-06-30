@@ -350,14 +350,19 @@ Robot commands:
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
   {"cmd":"say","text":"<what to say>"}
   {"cmd":"say","text":"<what to say>","voice":"<edge-tts voice name>"}
+  {"cmd":"volume","preset":"whisper|normal|louder|presenter"}  ← human speaking modes (whisper=35, normal=60, louder=80, presenter=100)
   {"cmd":"volume","level":<0-100>}    ← absolute robot speaker volume; 100=loudest, 50=mid, 0=quietest
   {"cmd":"volume","delta":<+/-pts>}   ← relative change in level points (add to the CURRENT level shown below)
   {"cmd":"volume","mute":true|false}  ← mute (true) or restore the pre-mute volume (false)
 
 Speech & volume rules:
 - "say X", "tell them X", "speak X", "announce X" -> {"cmd":"say","text":"X"}.
-- ABSOLUTE: "max/full/loudest volume" -> level 100; "normal/default volume" -> level 50;
-  "minimum/quietest" -> level 0; "half volume" -> level 50; "set volume to N" / "N percent" -> level N.
+- PRESETS (prefer these for how-to-speak phrasing, NOT raw numbers):
+  "whisper" / "speak softly/quietly" -> preset whisper; "speak normally" / "normal/conversational" -> preset normal;
+  "speak up" / "speak loudly" -> preset louder; "presenter/presentation mode" / "for the audience" / "fill the room" -> preset presenter.
+- ABSOLUTE: "max/full/loudest volume" -> level 100; "minimum/quietest" -> level 0;
+  "half volume" -> level 50; "set volume to N" / "N percent" -> level N.
+  (Avoid very low levels like under 30 — they are near-inaudible on the robot speaker; use preset whisper instead.)
 - RELATIVE (use delta, NOT level — the current level is given below):
   "a bit/slightly/a little louder" -> delta +15; "louder" / "turn it up" -> delta +25; "much louder" -> level 100;
   "a bit quieter" -> delta -15; "quieter" / "turn it down" / "too loud" -> delta -25.
@@ -444,7 +449,44 @@ User: "wiggle your antennas"
      {"cmd":"antennas","left":0,"right":0,"duration":0.4},
      {"cmd":"sleep"}]
 
+User: "whisper hello"   (and "say X softly/quietly", "whisper that you love me")
+  → [{"cmd":"volume","preset":"whisper"},
+     {"cmd":"say","text":"hello"}]
+  NOTE: "whisper X" means SET the whisper volume then SAY X out loud on the robot —
+  NEVER answer it as chat/roleplay. Speak exactly what the user asked, do not invent
+  extra words. Same shape for "say X loudly"/"announce X to the audience"
+  → [{"cmd":"volume","preset":"presenter"},{"cmd":"say","text":"X"}].
+
 Reply with ONLY the JSON array, no markdown, no prose."""
+
+
+def _parse_speak_compound(text):
+    """Deterministically handle 'whisper X' / 'say X softly|loudly' so they NEVER
+    get answered as chat. Returns a [volume-preset, say] command list, or None.
+
+    'whisper hello' means: set the whisper speaker level, then SPEAK 'hello' aloud
+    on the robot — not roleplay a whisper in text. Bare 'whisper'/'whisper mode'
+    are already caught by the exact-match shortcuts before we get here."""
+    import re
+    t = (text or "").strip()
+    # Skip preset-keyword-only tails like "whisper softly" → would say "softly".
+    _STOP = {"mode", "softly", "quietly", "loudly", "back", "again", "now"}
+    patterns = (
+        (r"^whisper(?:\s+that)?\s+(.+)$",                                          "whisper"),
+        (r"^(?:say|announce|tell\s+them)\s+(.+?)\s+(?:softly|quietly|in\s+a\s+whisper)$", "whisper"),
+        (r"^(?:say|announce|tell\s+them)\s+(.+?)\s+(?:loudly|to\s+the\s+audience|for\s+everyone|for\s+the\s+room)$", "presenter"),
+    )
+    for rx, preset in patterns:
+        m = re.match(rx, t, re.IGNORECASE)
+        if not m:
+            continue
+        said = m.group(1).strip()
+        # Strip a single pair of surrounding quotes (straight or curly).
+        if len(said) >= 2 and said[0] in "\"'“”‘’" and said[-1] in "\"'“”‘’":
+            said = said[1:-1].strip()
+        if said and said.lower() not in _STOP:
+            return [{"cmd": "volume", "preset": preset}, {"cmd": "say", "text": said}]
+    return None
 
 
 async def _nl_to_commands(agent, text):
@@ -563,11 +605,21 @@ async def handle_task(agent, payload):
                     payload = {"cmd": "volume", "delta": -25}
                 elif low in ("max volume", "full volume", "loudest", "maximum volume"):
                     payload = {"cmd": "volume", "level": 100}
+                # Human-friendly speaking modes (whisper/normal/louder/presenter).
+                elif low in ("whisper", "whisper mode", "speak softly", "speak quietly", "softly"):
+                    payload = {"cmd": "volume", "preset": "whisper"}
+                elif low in ("normal volume", "speak normally", "normal", "conversational"):
+                    payload = {"cmd": "volume", "preset": "normal"}
+                elif low in ("presenter mode", "presentation mode", "presentation",
+                             "audience", "audience mode", "fill the room"):
+                    payload = {"cmd": "volume", "preset": "presenter"}
                 else:
-                    # Natural language — ask the LLM to plan a command sequence,
-                    # then execute it synchronously. handle_task has 60s budget;
-                    # an LLM call + a few short motions fits comfortably.
-                    cmds = await _nl_to_commands(agent, stripped)
+                    # Deterministic 'whisper X' / 'say X softly|loudly' first so
+                    # they actually drive the robot (volume + speak) instead of the
+                    # LLM occasionally answering them as chat/roleplay. Falls back to
+                    # the NL planner for everything else (60s budget — an LLM call +
+                    # a few short motions fits comfortably).
+                    cmds = _parse_speak_compound(stripped) or await _nl_to_commands(agent, stripped)
                     if not cmds:
                         return {"ok": False, "error": "could not parse instruction", "text": stripped,
                                 "_task_id": _tid, "task": _tid}
@@ -1091,6 +1143,16 @@ async def _boost_audio(agent, src_path, attenuation_db=0.0):
 _ROBOT_GAIN_MIN_DB = -20.0
 _ROBOT_GAIN_MAX_DB = 24.0
 
+# Human-friendly speaking modes -> 0-100 speaker level. The raw 0-100 scale is
+# perceptually weak at the bottom (10 ≈ inaudible on the Mini's speaker), so these
+# presets target known-usable loudness instead of leaving users to guess numbers.
+_VOLUME_PRESETS = {
+    "whisper":   35,   # close/intimate — quiet but still audible
+    "normal":    60,   # conversational, one-on-one
+    "louder":    80,   # small group / noisy room
+    "presenter": 100,  # presentation / audience / fill the room
+}
+
 
 def _level_to_db(level):
     """Map a 0-100 volume level to the daemon gain range (-20..+24 dB)."""
@@ -1180,12 +1242,14 @@ async def _volume(agent, payload):
     One of (checked in this order):
       {"cmd":"volume","mute": true}       silence (remembers current level)
       {"cmd":"volume","mute": false}      restore the level from before muting
+      {"cmd":"volume","preset": "whisper|normal|louder|presenter"}  human modes
       {"cmd":"volume","level": <0-100>}   absolute: 0=quietest, 100=loudest
       {"cmd":"volume","delta": <+/-pts>}  relative change (e.g. +15, -25)
       {"cmd":"volume","db": <-20..24>}    legacy: dB mapped onto 0-100
     """
     cur = int(agent.state.get("volume_level", 100) or 0)
     mute = payload.get("mute")
+    preset = payload.get("preset")
 
     if mute is True:
         if not agent.state.get("muted"):
@@ -1198,6 +1262,12 @@ async def _volume(agent, payload):
         level = int(agent.state.get("premute_level", 100) or 0)
         agent.state["muted"] = False
         agent.persist("muted", False)
+    elif preset is not None:
+        key = str(preset).strip().lower()
+        if key not in _VOLUME_PRESETS:
+            raise ValueError(f"unknown volume preset {preset!r}; "
+                             f"use one of {', '.join(_VOLUME_PRESETS)}")
+        level = _VOLUME_PRESETS[key]
     elif "level" in payload:
         level = float(payload["level"])
     elif "delta" in payload:
@@ -1205,7 +1275,7 @@ async def _volume(agent, payload):
     elif "db" in payload:
         level = _db_to_level(float(payload["db"]))
     else:
-        raise ValueError("volume requires mute, level (0-100), delta, or db")
+        raise ValueError("volume requires mute, preset, level (0-100), delta, or db")
 
     level = int(max(0, min(100, round(level))))
     if mute is None:                                    # any explicit set clears mute
@@ -1218,6 +1288,7 @@ async def _volume(agent, payload):
     muted = bool(agent.state.get("muted"))
     # Always print volume changes to the CLI for debug/visibility.
     src = ("mute" if mute is True else "unmute" if mute is False
+           else f"preset:{str(preset).lower()}" if preset is not None
            else "delta" if "delta" in payload else "level" if "level" in payload else "db")
     if ok:
         await agent.log(f"🔊 volume -> {level}/100 (muted={muted}) via {src} [{detail}]")

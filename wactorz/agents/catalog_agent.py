@@ -305,6 +305,7 @@ def _build_catalog() -> dict:
                 "voice":       "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
                 "gain_db":     "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
                 "loud":        "bool  — cmd=say; default true (compress+limit file to max); false plays raw quiet TTS",
+                "preset":      "str   — speaking mode (cmd=volume): whisper(35)|normal(60)|louder(80)|presenter(100)",
                 "level":       "float — 0-100 robot speaker volume (cmd=volume); 100=loudest, 0=quietest (daemon /api/volume/set)",
                 "delta":       "float — relative volume change in level points (cmd=volume), e.g. +15 / -25",
                 "mute":        "bool  — cmd=volume; true silences (remembers level), false restores it",

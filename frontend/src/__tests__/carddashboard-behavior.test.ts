@@ -307,5 +307,17 @@ describe("CardDashboard behaviour", () => {
             expect(withHa._haEntities).toEqual(entities);
             withHa.destroy();
         });
+
+        it("disconnects the previous HAClient on re-init (no orphaned reconnect loop)", () => {
+            localStorage.setItem("wactorz-ha-url", "http://ha.local:8123");
+            localStorage.setItem("wactorz-ha-token", "tok");
+            const withHa = new CardDashboard() as any;
+            const first = withHa.haClient;
+            first.disconnect = vi.fn();
+            withHa._initHAClient(); // e.g. user re-applies HA settings
+            expect(first.disconnect).toHaveBeenCalled();
+            expect(withHa.haClient).not.toBe(first);
+            withHa.destroy();
+        });
     });
 });

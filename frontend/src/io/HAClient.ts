@@ -49,33 +49,65 @@ export class HAClient {
     /** Pending promise resolvers for registry (and other) tracked requests. */
     private _resolvers = new Map<number, (data: HAMessage) => void>();
 
+    /** Auto-reconnect state (mirrors WSChatClient): backoff + pending timer + the
+     *  derived ws URL, plus a flag that disconnect() sets to stop reconnecting. */
+    private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    private _reconnectDelay = 1_000;
+    private _closed = false;
+    private _wsUrl = "";
+
     constructor(
         private readonly url: string,
         private readonly token: string,
     ) {}
 
-    /** True while the WebSocket is open (or connecting). */
+    /** True only while the socket is OPEN — false while connecting, closing, or
+     *  closed, so callers can't mistake a tearing-down socket for a live one. */
     get connected(): boolean {
-        return this.ws !== null && this.ws.readyState !== WebSocket.CLOSED;
+        return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
     }
 
-    /** Open the WebSocket, authenticate, and subscribe to state changes; `onUpdate` fires on every entity update. */
+    /**
+     * Open the WebSocket, authenticate, and subscribe to state changes; `onUpdate`
+     * fires on every entity update. Auto-reconnects on drops until disconnect().
+     * Idempotent: calling it again while a connection is live or reconnecting just
+     * re-arms `onUpdate` instead of opening a second socket.
+     */
     connect(onUpdate: HAUpdateHandler): void {
         this.onUpdate = onUpdate;
+        if (!this._closed && (this.ws !== null || this._reconnectTimer !== null)) {
+            return;
+        }
+        this._closed = false;
+        this._reconnectDelay = 1_000;
+        this._wsUrl = this._deriveWsUrl();
+        this._open();
+    }
+
+    /** Derive the HA WebSocket URL: http→ws, append /api/websocket unless a path is already set. */
+    private _deriveWsUrl(): string {
         const baseUrl = this.url.endsWith("/") ? this.url.slice(0, -1) : this.url;
         const wsBase = baseUrl.replace(/^http(s?):/, "ws$1:");
-        let wsUrl: string;
         try {
-            const hasPath = new URL(baseUrl).pathname !== "/";
-            wsUrl = hasPath ? wsBase : wsBase + "/api/websocket";
+            return new URL(baseUrl).pathname !== "/" ? wsBase : wsBase + "/api/websocket";
         } catch {
-            wsUrl = wsBase + "/api/websocket";
+            return wsBase + "/api/websocket";
+        }
+    }
+
+    /** (Re)open the socket and wire its handlers. */
+    private _open(): void {
+        log.info("[HA] Connecting to", this._wsUrl);
+        try {
+            this.ws = new WebSocket(this._wsUrl);
+        } catch (err) {
+            log.warn("[HA] Cannot open WebSocket:", err);
+            this._scheduleReconnect();
+            return;
         }
 
-        log.info("[HA] Connecting to", wsUrl);
-        this.ws = new WebSocket(wsUrl);
-
         this.ws.onopen = () => {
+            this._reconnectDelay = 1_000;
             log.info("[HA] WebSocket opened");
         };
 
@@ -92,12 +124,40 @@ export class HAClient {
 
         this.ws.onclose = () => {
             this.authenticated = false;
+            // Fail any in-flight tracked requests so their promises don't hang.
+            this._failPending("HA connection closed");
             log.warn("[HA] WebSocket closed");
+            if (!this._closed) {
+                this._scheduleReconnect();
+            }
         };
 
         this.ws.onerror = err => {
             log.error("[HA] WebSocket error:", err);
+            // "close" follows "error" — the reconnect is scheduled there.
         };
+    }
+
+    /** Schedule a reconnect with exponential backoff (1s → 30s), once at a time. */
+    private _scheduleReconnect(): void {
+        if (this._closed || this._reconnectTimer !== null) {
+            return;
+        }
+        const delay = this._reconnectDelay;
+        this._reconnectDelay = Math.min(this._reconnectDelay * 2, 30_000);
+        log.info(`[HA] reconnecting in ${delay}ms`);
+        this._reconnectTimer = setTimeout(() => {
+            this._reconnectTimer = null;
+            this._open();
+        }, delay);
+    }
+
+    /** Reject + clear every pending tracked request so callers don't hang on a dropped socket. */
+    private _failPending(reason: string): void {
+        for (const resolver of this._resolvers.values()) {
+            resolver({ type: "result", success: false, error: { message: reason } });
+        }
+        this._resolvers.clear();
     }
 
     /** Route a parsed WebSocket frame to the matching handler. */
@@ -112,6 +172,10 @@ export class HAClient {
             this._subscribeEvents();
         } else if (data.type === "auth_invalid") {
             log.error("[HA] Authentication failed:", data.message);
+            // Token is wrong — don't auto-reconnect, or we'd hammer HA on every
+            // backoff with the same bad credentials. A later connect() (e.g. after
+            // the token is fixed in Settings) clears this and reopens.
+            this._closed = true;
         } else if (data.type === "result" && data.id != null) {
             this._handleResult(data);
         } else if (data.type === "event" && data.event?.data?.new_state) {
@@ -154,12 +218,17 @@ export class HAClient {
         });
     }
 
-    /** Close the connection and reset auth + pending-request state. */
+    /** Close the connection, stop reconnecting, and reset auth + pending-request state. */
     disconnect(): void {
+        this._closed = true;
+        if (this._reconnectTimer !== null) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
         this.ws?.close();
         this.ws = null;
         this.authenticated = false;
-        this._resolvers.clear();
+        this._failPending("HA disconnected");
     }
 
     /** Toggle an entity by id (no-op until authenticated). */

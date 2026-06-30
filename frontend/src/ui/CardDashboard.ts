@@ -130,6 +130,10 @@ export class CardDashboard {
     }
 
     private _initHAClient(): void {
+        // Tear down any existing client first — it now auto-reconnects, so an
+        // orphaned one (e.g. on re-Apply with new credentials) would keep
+        // reconnecting in the background.
+        this.haClient?.disconnect();
         const url = this.haUrl;
         const token = this.haToken;
         if (url && token) {

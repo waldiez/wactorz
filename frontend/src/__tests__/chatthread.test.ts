@@ -22,6 +22,12 @@ describe("buildChatEmptyState", () => {
     it("names the target agent otherwise", () => {
         expect(buildChatEmptyState("io").innerHTML).toContain("@io");
     });
+
+    it("escapes a hostile agent name (no markup injection)", () => {
+        const el = buildChatEmptyState(`<img src=x onerror="window.__pwned=1">`);
+        expect(el.querySelector("img")).toBeNull(); // not parsed as markup
+        expect(el.textContent).toContain("No messages with"); // rendered as text
+    });
 });
 
 describe("buildChatMessageEl", () => {

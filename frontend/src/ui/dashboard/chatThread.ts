@@ -121,7 +121,7 @@ export function buildChatEmptyState(chatTarget: string): HTMLElement {
     empty.innerHTML =
         chatTarget === "main-actor"
             ? `<p>Say hello to <strong>@main-actor</strong> — the system orchestrator.</p>`
-            : `<p>No messages with <strong>@${chatTarget}</strong> yet.</p>
+            : `<p>No messages with <strong>@${escapeHtml(chatTarget)}</strong> yet.</p>
            <p style="font-size:11px;opacity:0.5">New messages will be sent directly to this agent.</p>`;
     return empty;
 }

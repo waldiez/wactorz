@@ -24,6 +24,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime
 from typing import Any, ClassVar
 
 from wactorz.config import CONFIG
@@ -40,8 +41,12 @@ from ..core.integrations.home_assistant.ha_helper import (
     get_camera_stream_urls,
     get_devices,
     get_entities,
-    get_simplified_ha_data,
+    _to_utc,
+    get_entity_history,
     get_states,
+    get_simplified_ha_data,
+    history_to_csv,
+    localise_history_timestamps,
     normalize_ha_base_url,
     update_automation,
 )
@@ -52,6 +57,7 @@ from .prompts.home_assistant_prompts import (
     HA_CAMERA_LIST_TOOL,
     HA_CAMERA_SNAPSHOT_TOOL,
     HA_CAMERA_STREAM_TOOL,
+    HA_HISTORY_TOOL,
     HA_DELETE_CONFIRM_PROMPT,
     HA_EDIT_AUTOMATION_PROMPT,
     HA_IDENTIFY_AUTOMATION_PROMPT,
@@ -166,6 +172,8 @@ class HomeAssistantAgent(LLMAgent):
             result = await self._camera_stream_url(camera_entity_id)
         elif operation == "get_camera_snapshot_url":
             result = await self._camera_snapshot_url(camera_entity_id)
+        elif operation == "get_history":
+            result = await self._get_history(msg.payload if isinstance(msg.payload, dict) else {})
         elif entities or hardware:
             # Pre-selected entities/hardware provided (e.g. direct API call) — skip
             # classification and go straight to automation creation.
@@ -512,6 +520,44 @@ class HomeAssistantAgent(LLMAgent):
             "data": {"entity_id": camera_entity_id, "snapshot_url": url},
         }
 
+    async def _get_history(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Deterministic agent-to-agent path: fetch entity history and return it as CSV.
+
+        No LLM is involved — used when another agent sends a structured
+        ``operation: "get_history"`` task instead of a natural-language request.
+        """
+        if not self.ha_url or not self.ha_token:
+            return {"result": "HA_URL or HA_TOKEN not configured.", "error": "not_configured"}
+
+        entity_ids = payload.get("entity_ids") or payload.get("entity_id") or []
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        if not entity_ids:
+            return {"result": "entity_ids is required.", "error": "missing_entity_ids"}
+
+        start_time = payload.get("start_time") or payload.get("start")
+        end_time = payload.get("end_time") or payload.get("end")
+
+        try:
+            history = await get_entity_history(
+                self.ha_url, self.ha_token, entity_ids,
+                start_time=start_time, end_time=end_time,
+            )
+        except Exception as exc:
+            return {"result": f"Entity history fetch failed: {exc}", "error": str(exc)}
+
+        if "error" in history:
+            return {"result": f"Entity history fetch failed: {history['error']}", "error": history["error"]}
+
+        csv_str = history_to_csv(history)
+        return {
+            "result": f"Fetched history for {len(entity_ids)} entit{'y' if len(entity_ids) == 1 else 'ies'}.",
+            "data": history,
+            "csv": csv_str,
+            "format": "csv",
+        }
+
+
     async def _handle_other_request(self, text: str) -> dict[str, Any]:
         if not self.ha_url or not self.ha_token:
             return {
@@ -526,10 +572,12 @@ class HomeAssistantAgent(LLMAgent):
                 "error": "No LLM provider configured.",
             }
 
-        messages: list[dict[str, Any]] = [{"role": "user", "content": text}]
+        now_iso = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
+        user_content = f"[Current datetime: {now_iso}]\n{text}"
+        messages: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
         tool_cache: dict[str, str] = {}
         snapshots_taken: list[dict[str, Any]] = []
-        tools = [HA_OTHER_TOOL, HA_CAMERA_LIST_TOOL, HA_CAMERA_SNAPSHOT_TOOL, HA_CAMERA_STREAM_TOOL]
+        tools = [HA_OTHER_TOOL, HA_CAMERA_LIST_TOOL, HA_CAMERA_SNAPSHOT_TOOL, HA_CAMERA_STREAM_TOOL, HA_HISTORY_TOOL]
 
         for _round in range(self._other_tool_max_rounds):
             try:
@@ -548,6 +596,7 @@ class HomeAssistantAgent(LLMAgent):
                 }
 
             self._accumulate_usage(getattr(completion, "usage", {}))
+            print(completion)
             tool_calls = list(getattr(completion, "tool_calls", []) or [])
             if not tool_calls:
                 content = str(getattr(completion, "content", "") or "").strip()
@@ -620,6 +669,24 @@ class HomeAssistantAgent(LLMAgent):
                         result_text = json.dumps(stream_data, default=str)
                     except Exception as exc:
                         result_text = f"Stream URL fetch failed: {exc}"
+                        is_error = True
+                elif tool_name == "get_entity_history":
+                    args = getattr(call, "arguments", {}) or {}
+                    eids = args.get("entity_ids") or []
+                    start = _to_utc(args["start_time"]) if args.get("start_time") else None
+                    end = _to_utc(args["end_time"]) if args.get("end_time") else None
+                    try:
+                        history = await get_entity_history(
+                            self.ha_url, self.ha_token, eids,
+                            start_time=start, end_time=end,
+                        )
+                        if "error" in history:
+                            is_error = True
+                        else:
+                            history = localise_history_timestamps(history)
+                        result_text = json.dumps(history, default=str)
+                    except Exception as exc:
+                        result_text = f"Entity history fetch failed: {exc}"
                         is_error = True
                 else:
                     result_text = f"Unsupported tool: {tool_name}"

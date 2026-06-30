@@ -19,7 +19,7 @@ frontend/
 ├── src/
 │   ├── main.ts            # Bootstrap — wires transports → store + UI
 │   ├── events.ts          # Typed app event bus over document CustomEvents (emit/listen + AppEventMap)
-│   ├── types/             # Shared types: agent.ts, feed.ts, ha.ts, ws.ts, global.d.ts (Window augmentation)
+│   ├── types/             # Shared types: agent.ts, feed.ts, ha.ts, tts.ts, ws.ts, global.d.ts (Window augmentation)
 │   ├── mqtt/              # MQTT WebSocket client + typed event emitter
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
 │   ├── io/                # IO/transport: IOManager, WSChatClient, TTSManager, SpeechToText,

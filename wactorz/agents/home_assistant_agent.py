@@ -80,22 +80,38 @@ class AutomationEditError(Exception):
 
 
 class HomeAssistantAgent(LLMAgent):
-    """Unified Home Assistant agent: hardware recommendations and automation CRUD."""
-
-    DESCRIPTION = "Controls Home Assistant: automations, devices, areas, entities"
-    CAPABILITIES: ClassVar[list[str]] = [
+    """Unified Home Assistant agent: hardware recommendations, automation CRUD, and entity history."""
+    DESCRIPTION   = (
+        "Controls Home Assistant: automations, devices, areas, entities, and entity history. "
+        "Supports natural language queries (current state, camera snapshots, historical data) "
+        "and structured agent-to-agent operations via the 'operation' payload field."
+    )
+    CAPABILITIES  = [
         "home_automation",
         "ha_automations",
         "ha_devices",
         "ha_entities",
+        "ha_history",
     ]
-    INPUT_SCHEMA: ClassVar[dict[str, str]] = {
+    INPUT_SCHEMA  = {
         "text": "str — natural language command or query, e.g. 'turn on living room lights', "
-        "'list all automations', 'create automation that turns off lights at 11pm'"
+                "'list all automations', 'what was the office temperature yesterday at 17:00?'",
+        "operation": (
+            "str (optional) — structured agent-to-agent operation, bypasses LLM. "
+            "Supported values: "
+            "'list_cameras' — list all camera entities; "
+            "'get_camera_snapshot' (+ camera_entity_id: str) — capture JPEG snapshot; "
+            "'get_camera_stream_url' (+ camera_entity_id: str) — get all stream URLs; "
+            "'get_camera_snapshot_url' (+ camera_entity_id: str) — get snapshot URL; "
+            "'get_history' (+ entity_ids: list[str], start_time?: str, end_time?: str) — "
+            "fetch entity state history; times are ISO-8601, agent stores/returns UTC."
+        ),
     }
-    OUTPUT_SCHEMA: ClassVar[dict[str, str]] = {
-        "result": "str — human-readable confirmation or list of results",
-        "data": "list|dict|null — structured HA API response when applicable",
+    OUTPUT_SCHEMA = {
+        "result": "str — human-readable confirmation or summary",
+        "data":   "list|dict|null — structured HA API response when applicable",
+        "csv":    "str — CSV of entity history rows (only present for get_history operation)",
+        "format": "str — 'csv' when csv field is present",
     }
 
     def __init__(self, llm_provider: LLMProvider | None = None, **kwargs) -> None:

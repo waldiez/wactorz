@@ -2382,8 +2382,9 @@ async def config_handler(request):
 
     return web.json_response({
         "ha": {
+            # URL only — the dashboard links out to the HA UI and never talks to
+            # HA directly, so the long-lived token must NOT reach the browser.
             "url":   CONFIG.ha_url,
-            "token": CONFIG.ha_token,
         },
         "mqtt": {
             "host": MQTT_BROKER,

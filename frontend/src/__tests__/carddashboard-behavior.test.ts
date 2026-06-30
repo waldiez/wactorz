@@ -267,11 +267,6 @@ describe("CardDashboard behaviour", () => {
             expect(() => cd.onHeartbeat("catalog", Date.now())).not.toThrow();
         });
 
-        it("_renderHADevices is a no-op without a device container", () => {
-            cd.show([agent("main")]);
-            expect(() => cd._renderHADevices([])).not.toThrow();
-        });
-
         it("_refreshTimestamps skips ids with no rendered card", () => {
             cd.show([agent("main")]);
             cd.lastHb.set("ghost", Date.now());
@@ -279,44 +274,22 @@ describe("CardDashboard behaviour", () => {
         });
     });
 
-    describe("Home Assistant wiring", () => {
-        it("constructs an HAClient when url + token are stored", () => {
+    describe("Home Assistant nav link (external link, no embedded client)", () => {
+        it("points the Devices nav link at the stored HA URL (new tab)", () => {
             localStorage.setItem("wactorz-ha-url", "http://ha.local:8123");
-            localStorage.setItem("wactorz-ha-token", "tok");
             const withHa = new CardDashboard() as any;
-            expect(withHa.haClient).toBeTruthy();
-            // registries callback re-renders devices without throwing (no container yet)
-            expect(() =>
-                withHa.haClient.onRegistriesUpdate({ areas: {}, devices: {}, entities: {} }),
-            ).not.toThrow();
+            const link = withHa.root.querySelector(".af-ha-nav-link");
+            expect(link.getAttribute("href")).toBe("http://ha.local:8123");
+            expect(link.target).toBe("_blank");
+            expect(link.rel).toBe("noopener");
             withHa.destroy();
         });
 
-        it("renders the HA device list on the ha view via the connect callback", () => {
-            localStorage.setItem("wactorz-ha-url", "http://ha.local:8123");
-            localStorage.setItem("wactorz-ha-token", "tok");
+        it("hides the Devices link when no HA URL is configured", () => {
             const withHa = new CardDashboard() as any;
-            const entities = [
-                { entity_id: "light.kitchen", state: "on", attributes: { friendly_name: "Kitchen" } },
-            ];
-            withHa.haClient.connect = vi.fn((cb: (e: any[]) => void) => cb(entities));
-            withHa.haClient.disconnect = vi.fn();
-            withHa.show([agent("main")]);
-            withHa._setView("ha");
-            expect(withHa.root.querySelector("#ha-devices-container")).toBeTruthy();
-            expect(withHa._haEntities).toEqual(entities);
-            withHa.destroy();
-        });
-
-        it("disconnects the previous HAClient on re-init (no orphaned reconnect loop)", () => {
-            localStorage.setItem("wactorz-ha-url", "http://ha.local:8123");
-            localStorage.setItem("wactorz-ha-token", "tok");
-            const withHa = new CardDashboard() as any;
-            const first = withHa.haClient;
-            first.disconnect = vi.fn();
-            withHa._initHAClient(); // e.g. user re-applies HA settings
-            expect(first.disconnect).toHaveBeenCalled();
-            expect(withHa.haClient).not.toBe(first);
+            const link = withHa.root.querySelector(".af-ha-nav-link");
+            expect(link.hasAttribute("href")).toBe(false);
+            expect(link.style.display).toBe("none");
             withHa.destroy();
         });
     });

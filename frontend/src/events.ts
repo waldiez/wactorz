@@ -26,7 +26,6 @@ export interface AppEventMap {
     "af-send-message": { content: string; target: string; attachments: string[] };
     "af-stream-chunk": { chunk: string; from: string };
     "af-stream-end": { text: string | null; from: string };
-    "af-ha-state-change": { entityId: string; state: string; friendlyName: string };
     "af-reset-chat": { agent: string | null };
     "af-wipe-all": void;
     "af-clear-feed": void;

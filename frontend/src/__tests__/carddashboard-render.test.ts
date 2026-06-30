@@ -57,7 +57,6 @@ describe("CardDashboard render", () => {
         ["chat", ".af-chat-thread"],
         ["feed", ".af-feed"],
         ["settings", ".af-settings"],
-        ["ha", ".af-overview"],
     ])("renders the %s view", (view, selector) => {
         cd.show([agent("main")]);
         cd._setView(view);
@@ -100,11 +99,11 @@ describe("CardDashboard render", () => {
         expect(() => buildResetPopover()).not.toThrow();
     });
 
-    it("builds settings + cost-limit sections without throwing", () => {
+    it("builds the settings view with the cost-limit section", () => {
         const settings = cd._buildSettingsView();
         expect(settings.classList.contains("af-settings")).toBe(true);
-        // spend-limit section + Home Assistant section
-        expect(settings.querySelectorAll(".af-settings-section").length).toBe(2);
+        // Only the spend-limit section remains (HA config was removed).
+        expect(settings.querySelectorAll(".af-settings-section").length).toBe(1);
     });
 
     it("addAgent / updateAgent / removeAgent keep the agents map in sync", () => {

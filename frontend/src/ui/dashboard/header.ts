@@ -15,6 +15,45 @@ export interface HeaderOpts {
     view: View;
     connState: ConnState;
     onSetView: (v: View) => void;
+    /** HA base URL (from /api/config) for the external "Devices" link; null hides it. */
+    haUrl: string | null;
+}
+
+/** Only http(s) links are safe in an href — `javascript:`/`data:` carry no HTML
+ *  metacharacters so escaping won't neutralise them; collapse anything else. */
+function safeHref(url: string): string {
+    return /^https?:\/\//i.test(url.trim()) ? url : "#";
+}
+
+/** Point a Devices link at the HA UI, or hide it when no URL is configured. */
+function applyHaNavUrl(a: HTMLAnchorElement, haUrl: string | null): void {
+    if (haUrl) {
+        a.href = safeHref(haUrl);
+        a.title = `Open Home Assistant — ${haUrl}`;
+        a.style.display = "";
+    } else {
+        a.removeAttribute("href");
+        a.style.display = "none";
+    }
+}
+
+/** The "Devices" entry is an external link to the HA UI (new tab), not a view. */
+function buildHaNavLink(haUrl: string | null, mobile: boolean): HTMLAnchorElement {
+    const a = document.createElement("a");
+    a.className = mobile ? "af-view-btn af-bottom-tab af-ha-nav-link" : "af-view-btn af-ha-nav-link";
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.setAttribute("aria-label", "Open Home Assistant in a new tab");
+    a.innerHTML = mobile
+        ? `<span class="af-bottom-tab-icon">${iconMarkup("home", 20)}</span><span class="af-bottom-tab-label">Devices</span><span class="af-ha-ext" aria-hidden="true">↗</span>`
+        : `${iconMarkup("home")}<span class="af-view-label">Devices</span><span class="af-ha-ext" aria-hidden="true">↗</span>`;
+    applyHaNavUrl(a, haUrl);
+    return a;
+}
+
+/** Update every Devices link under `root` after the HA URL is seeded from /api/config. */
+export function setHaNavUrl(root: HTMLElement, haUrl: string | null): void {
+    root.querySelectorAll<HTMLAnchorElement>(".af-ha-nav-link").forEach(a => applyHaNavUrl(a, haUrl));
 }
 
 /** Toggle `popover` from `btn`, positioning it under the button, closing on
@@ -63,7 +102,7 @@ function buildHeaderLeft(connState: ConnState): HTMLElement {
     return left;
 }
 
-function buildHeaderRight(view: View, onSetView: (v: View) => void): HTMLElement {
+function buildHeaderRight(view: View, onSetView: (v: View) => void, haUrl: string | null): HTMLElement {
     const right = document.createElement("div");
     right.className = "af-header-right";
 
@@ -71,7 +110,6 @@ function buildHeaderRight(view: View, onSetView: (v: View) => void): HTMLElement
         { key: "overview", label: "Overview", icon: "grid" },
         { key: "feed", label: "Feed", icon: "list" },
         { key: "chat", label: "Chat", icon: "chat" },
-        { key: "ha", label: "Devices", icon: "home" },
         { key: "settings", label: "Settings", icon: "settings" },
     ];
     views.forEach(({ key, label, icon }) => {
@@ -82,6 +120,8 @@ function buildHeaderRight(view: View, onSetView: (v: View) => void): HTMLElement
         btn.addEventListener("click", () => onSetView(key));
         right.appendChild(btn);
     });
+    // Devices links out to the HA UI rather than embedding a controllable view.
+    right.appendChild(buildHaNavLink(haUrl, false));
 
     const audioBtn = document.createElement("button");
     audioBtn.className = "af-view-btn af-view-btn-icon";
@@ -114,7 +154,11 @@ export function buildHeader(opts: HeaderOpts): HTMLElement {
     health.textContent = "0/0 wa healthy";
     center.appendChild(health);
 
-    header.append(buildHeaderLeft(opts.connState), center, buildHeaderRight(opts.view, opts.onSetView));
+    header.append(
+        buildHeaderLeft(opts.connState),
+        center,
+        buildHeaderRight(opts.view, opts.onSetView, opts.haUrl),
+    );
     return header;
 }
 
@@ -127,8 +171,12 @@ function bottomTab(key: View, icon: IconName, label: string, view: View, extra: 
 }
 
 /** Mobile bottom nav with a slide-up "More" sheet for secondary views. */
-export function buildBottomNav(opts: { view: View; onSetView: (v: View) => void }): HTMLElement {
-    const { view, onSetView } = opts;
+export function buildBottomNav(opts: {
+    view: View;
+    onSetView: (v: View) => void;
+    haUrl: string | null;
+}): HTMLElement {
+    const { view, onSetView, haUrl } = opts;
     const nav = document.createElement("nav");
     nav.className = "af-bottom-nav";
 
@@ -142,7 +190,6 @@ export function buildBottomNav(opts: { view: View; onSetView: (v: View) => void 
         { key: "overview", icon: "grid", label: "Overview" },
         { key: "feed", icon: "list", label: "Feed" },
         { key: "chat", icon: "chat", label: "Chat" },
-        { key: "ha", icon: "home", label: "Devices" },
     ];
     primary.forEach(({ key, icon, label }) => {
         const btn = bottomTab(key, icon, label, view, "");
@@ -152,6 +199,8 @@ export function buildBottomNav(opts: { view: View; onSetView: (v: View) => void 
         });
         nav.appendChild(btn);
     });
+    // Devices links out to the HA UI (new tab) rather than switching views.
+    nav.appendChild(buildHaNavLink(haUrl, true));
 
     const secondary: { key: View; icon: IconName; label: string }[] = [
         { key: "settings", icon: "settings", label: "Settings" },

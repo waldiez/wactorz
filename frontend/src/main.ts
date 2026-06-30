@@ -341,16 +341,11 @@ mqtt.on("error", err => {
 });
 
 // ═══ 5 · Wiring — Home Assistant feed ════════════════════════════════════════
-// HA entity state arrives over two transports; one pusher de-duplicates. See ui/haFeed.
+// HA entity state reaches the activity feed via the ha-state-bridge-agent over
+// MQTT (ha/state/{domain}/{entity_id}). The browser no longer talks to HA
+// directly — the Devices nav button just links out to the HA UI.
 const pushHaFeed = createHaFeedPusher(pushFeed);
 
-// Path 1: direct HA WebSocket via HAClient (always works when HA is configured in frontend)
-listen("af-ha-state-change", detail => {
-    const { entityId, state, friendlyName } = detail;
-    pushHaFeed(entityId, state, friendlyName);
-});
-
-// Path 2: ha-state-bridge-agent → MQTT ha/state/{domain}/{entity_id}
 mqtt.on("raw", ({ topic, payload }) => {
     const ev = parseHaRawEvent(topic, payload);
     if (ev) {
@@ -422,10 +417,10 @@ fetch(`${_apiBase}/api/feed`)
     )
     .catch(err => log.debug("[feed] /api/feed seed failed:", err));
 
-// HA credentials are seeded from /api/config by CardDashboard (see
-// ui/dashboard/haConfig) — the single source of truth. The MQTT URL is
-// deliberately never seeded: the frontend always uses the same-origin /mqtt
-// proxy (see _mqttDefault), so the broker address never belongs in the browser.
+// The HA URL is seeded from /api/config by CardDashboard (see ui/dashboard/haConfig)
+// for the Devices link; no token ever reaches the browser. The MQTT URL is
+// likewise never seeded: the frontend always uses the same-origin /mqtt proxy
+// (see _mqttDefault), so the broker address never belongs in the browser.
 
 // Probe server TTS availability + load voice list (base must be set first so
 // the request stays inside the ingress prefix instead of bare "/api").

@@ -19,6 +19,7 @@ The `agent` parameter gives access to:
 """
 
 import asyncio
+import inspect
 import logging
 import time
 import traceback
@@ -1279,7 +1280,7 @@ class DynamicAgent(Actor):
                         mp=_mqtt_port,
                     ):
                         # Call the original factory to get a correctly configured instance
-                        actor = await old_f() if asyncio.iscoroutinefunction(old_f) else old_f()
+                        actor = await old_f() if inspect.iscoroutinefunction(old_f) else old_f()
                         # Patch in the fixed code before the actor starts
                         actor._code = code
                         return actor

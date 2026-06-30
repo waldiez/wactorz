@@ -5,6 +5,7 @@ Supervisor implements Erlang/OTP-style supervision trees.
 """
 
 import asyncio
+import inspect
 import logging
 import time
 from collections.abc import Callable
@@ -394,7 +395,7 @@ class Supervisor:
     async def _spawn_actor(self, name: str, spec: SupervisedSpec) -> "Actor":
         """Create actor via factory, inject MQTT, register, and start."""
         actor = (
-            await spec.factory() if asyncio.iscoroutinefunction(spec.factory) else spec.factory()
+            await spec.factory() if inspect.iscoroutinefunction(spec.factory) else spec.factory()
         )
         self._inject(actor)
         actor.supervisor_id = id(self)

@@ -1,6 +1,10 @@
 /**
  * Wactorz Service Worker
  *
+ * Registered only in the standalone / desktop deployment (see index.html): behind
+ * Home Assistant's ingress proxy the app lives under a rotating /api/… path where
+ * caching is useless, so the SW is never installed there in the first place.
+ *
  * Strategy:
  *   - index.html / entry points → network-first, cache fallback (ensures fresh JS hashes)
  *   - Hashed assets (/assets/*, *.js, *.css) → cache-first (content-hash busts automatically)

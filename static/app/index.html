@@ -51,7 +51,12 @@
   </head>
   <body>
     <script>
-      if ("serviceWorker" in navigator) {
+      // Register the service worker only for the standalone / desktop deployment.
+      // Behind Home Assistant's ingress proxy the app is served under a rotating
+      // /api/hassio_ingress/<slug>/… path; a cache there is useless (and would risk
+      // caching assets under a dead token), so we deliberately skip it. The backend
+      // injects a non-empty __WACTORZ_INGRESS_PATH only when serving behind ingress.
+      if ("serviceWorker" in navigator && !window.__WACTORZ_INGRESS_PATH) {
         window.addEventListener("load", () => {
           navigator.serviceWorker.register("./sw.js").then(
             r  => console.debug("[sw] registered, scope:", r.scope),

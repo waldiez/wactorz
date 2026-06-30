@@ -402,9 +402,12 @@ const INLINE_RULES: InlineRule[] = [
 /** Parse inline markdown in `text` and append the resulting nodes to `el`. */
 function appendInline(el: HTMLElement, text: string): void {
     let rest = text;
-    // Guard against pathological inputs causing an unbounded loop.
+    // Every inline rule consumes ≥1 char, so this terminates within text.length
+    // iterations (no formatting lost on long messages). The guard is a backstop
+    // against a future rule that could match zero-width and stall the loop.
     let guard = 0;
-    while (rest && guard++ < 10000) {
+    const maxIterations = text.length + 1;
+    while (rest && guard++ < maxIterations) {
         let best: { idx: number; rule: InlineRule; m: RegExpExecArray } | null = null;
         for (const rule of INLINE_RULES) {
             const m = rule.re.exec(rest);

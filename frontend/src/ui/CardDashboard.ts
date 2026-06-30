@@ -18,23 +18,23 @@
  */
 
 import type { AgentInfo } from "../types/agent";
-import type { FeedItem } from "./ActivityFeed";
-import { HAClient, type HAEntity } from "../io/HAClient";
+import type { FeedItem } from "../types/feed";
+import { HAClient } from "../io/HAClient";
+import type { HAEntity } from "../types/ha";
 import { buildHeader, buildBottomNav } from "./dashboard/header";
 import { renderHADevices, areaIconText } from "./dashboard/haDevices";
-import { stateLabel, relTime, sortAgents } from "./dashboard/agentState";
-import { buildFeedView, appendFeedItemToView, feedItemEl, feedKey } from "./dashboard/feedView";
+import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
+import type { View, ConnState } from "./dashboard/types";
+import { buildFeedView, appendFeedItemToView, feedKey } from "./dashboard/feedView";
 import { buildHAView } from "./dashboard/haView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import { MetricsController } from "./dashboard/metrics";
 import { seedHaConfigFromServer } from "./dashboard/haConfig";
+import { emit, listen } from "../events";
 
 // Re-exported for tests; implemented in dashboard/haDevices.
 export { areaIconText };
-
-type View = "overview" | "feed" | "chat" | "ha" | "settings";
-type ConnState = "live" | "connecting" | "demo";
 
 export class CardDashboard {
     private root: HTMLElement;
@@ -53,8 +53,8 @@ export class CardDashboard {
     private hideHeartbeats: boolean = true;
 
     private haClient: HAClient | null = null;
-    private _haEntities: import("../io/HAClient").HAEntity[] = [];
-    private _haRegistries: import("../io/HAClient").HARegistries | null = null;
+    private _haEntities: import("../types/ha").HAEntity[] = [];
+    private _haRegistries: import("../types/ha").HARegistries | null = null;
 
     private _remoteNodes = new Map<string, { agents: string[]; lastSeen: number }>();
     private _removingIds = new Set<string>();
@@ -146,10 +146,10 @@ export class CardDashboard {
         }
     }
 
+    /** Reveal the dashboard, seed it with `agents`, wire events, and start the refresh timers + HA connection. */
     show(agents: AgentInfo[]): void {
         agents.forEach(a => this.agents.set(a.id, a));
         this.root.classList.add("cd-visible");
-        this._hideFloatingUI();
         this._wireEvents();
         this._renderView();
         this.tickTimer = setInterval(() => this._refreshTimestamps(), 5000);
@@ -166,9 +166,9 @@ export class CardDashboard {
         }
     }
 
+    /** Hide the dashboard, unwire events, disconnect HA, release the mic, and stop timers. */
     hide(): void {
         this.root.classList.remove("cd-visible");
-        this._showFloatingUI();
         this._unwireEvents();
         this.haClient?.disconnect();
         this._chat.cancelMic(); // release the mic if a recording was in progress
@@ -180,23 +180,28 @@ export class CardDashboard {
         this._metrics.stopPolling();
     }
 
+    /** Hide and remove the dashboard from the DOM. */
     destroy(): void {
         this.hide();
         this.root.remove();
     }
 
+    /** Set the aggregate cost figure. */
     setTotalCostUsd(usd: number): void {
         this._metrics.setTotalCostUsd(usd);
     }
 
+    /** Set the aggregate message count. */
     setTotalMessages(count: number): void {
         this._metrics.setTotalMessages(count);
     }
 
+    /** Set host CPU/memory telemetry. */
     setHostStats(cpu: number, memUsedMb: number, memTotalMb?: number): void {
         this._metrics.setHostStats(cpu, memUsedMb, memTotalMb);
     }
 
+    /** Add an agent and refresh the affected views. */
     addAgent(agent: AgentInfo): void {
         this.agents.set(agent.id, agent);
         if (!this.root.classList.contains("cd-visible")) {
@@ -213,6 +218,7 @@ export class CardDashboard {
         this._chat.updateTargetSelect();
     }
 
+    /** Update an agent in place and refresh the affected views. */
     updateAgent(agent: AgentInfo): void {
         this.agents.set(agent.id, agent);
         if (!this.root.classList.contains("cd-visible")) {
@@ -227,6 +233,7 @@ export class CardDashboard {
         }
     }
 
+    /** Remove an agent (with exit animation) and forget its chat history. */
     removeAgent(id: string): void {
         const removed = this.agents.get(id);
         this.agents.delete(id);
@@ -256,6 +263,7 @@ export class CardDashboard {
         this._chat.updateTargetSelect();
     }
 
+    /** Record a remote node's agent list and refresh the nodes panel. */
     updateRemoteNode(name: string, agents: string[]): void {
         this._remoteNodes.set(name, { agents, lastSeen: Date.now() });
         if (this.view === "overview") {
@@ -263,6 +271,7 @@ export class CardDashboard {
         }
     }
 
+    /** Record a heartbeat timestamp and pulse the agent's card. */
     onHeartbeat(agentId: string, timestampMs: number, _cpu?: number, _mem?: number): void {
         this.lastHb.set(agentId, timestampMs);
         if (!this.root.classList.contains("cd-visible")) {
@@ -287,6 +296,7 @@ export class CardDashboard {
         }
     }
 
+    /** Briefly flash an alert class (error/warning) on the agent's card. */
     showAlert(agentId: string, severity: string): void {
         const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
         if (!card) {
@@ -298,6 +308,7 @@ export class CardDashboard {
         setTimeout(() => card.classList.remove(cls, "af-card-alert-error", "af-card-alert-warn"), 900);
     }
 
+    /** Briefly flash the sender's card to signal chat activity. */
     onChat(fromId: string, _toId: string): void {
         const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(fromId)}"]`);
         if (!card) {
@@ -310,17 +321,16 @@ export class CardDashboard {
     private _wireEvents(): void {
         this._wireFeedEvents();
         this._chat.wire();
-        this._evConn = e => {
-            this.connState = (e as CustomEvent<{ status: ConnState }>).detail.status;
+        this._evConn = listen("af-connection-status", detail => {
+            this.connState = detail.status;
             this._renderConnBadge();
             this._renderHealth();
-        };
-        document.addEventListener("af-connection-status", this._evConn);
+        });
     }
 
     private _wireFeedEvents(): void {
-        this._evFeed = e => {
-            const item = (e as CustomEvent<{ item: FeedItem }>).detail.item;
+        this._evFeed = listen("af-feed-push", detail => {
+            const item = detail.item;
             // The same event can arrive from several sources (SQLite seed, WS
             // log_feed replay, live MQTT/chat); drop exact duplicates so the feed
             // doesn't double up or render out of order on rebuild.
@@ -339,26 +349,22 @@ export class CardDashboard {
             if (this.view === "feed") {
                 this._appendFeedItemToView(item);
             }
-        };
-        document.addEventListener("af-feed-push", this._evFeed);
+        });
 
-        this._wipeAll = (_e: Event) => {
+        this._wipeAll = listen("af-wipe-all", () => {
             this.feedItems = [];
             this._feedKeys.clear();
             this._chat.clearAll();
             this._renderView();
-        };
-        document.addEventListener("af-wipe-all", this._wipeAll);
+        });
 
         // A metrics/logs reset cleared the server-side activity log — drop this
-        // dashboard's own feed too. (The slide-out ActivityFeed in main.ts is a
-        // SEPARATE component with its own handler; this clears the in-card feed.)
-        this._clearFeed = (_e: Event) => {
+        // dashboard's own in-card feed too.
+        this._clearFeed = listen("af-clear-feed", () => {
             this.feedItems = [];
             this._feedKeys.clear();
             this._renderView();
-        };
-        document.addEventListener("af-clear-feed", this._clearFeed);
+        });
     }
 
     private _unwireEvents(): void {
@@ -375,29 +381,6 @@ export class CardDashboard {
             }
         });
         this._evFeed = this._evConn = this._wipeAll = this._clearFeed = null;
-    }
-
-    private _hideFloatingUI(): void {
-        ["hud", "hud-stats", "chat-panel"].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) {
-                el.style.display = "none";
-            }
-        });
-    }
-
-    private _showFloatingUI(): void {
-        ["hud", "hud-stats", "feed-toggle"].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) {
-                el.style.display = "";
-            }
-        });
-        // Restore feed panel if it was open before the dashboard was shown
-        const feedPanel = document.getElementById("activity-feed");
-        if (feedPanel) {
-            feedPanel.style.display = "";
-        }
     }
 
     private _renderView(): void {
@@ -478,10 +461,6 @@ export class CardDashboard {
         appendFeedItemToView(this.root, item, this.hideHeartbeats);
     }
 
-    private _feedItemEl(container: HTMLElement, item: FeedItem): void {
-        feedItemEl(container, item);
-    }
-
     private _renderConnBadge(): void {
         const badge = this.root.querySelector<HTMLElement>(".af-conn-badge");
         if (!badge) {
@@ -519,11 +498,7 @@ export class CardDashboard {
                 btn.classList.remove("sending");
             }, 600);
         }
-        document.dispatchEvent(
-            new CustomEvent("af-agent-command", {
-                detail: { command: action, agentId: id },
-            }),
-        );
+        emit("af-agent-command", { command: action, agentId: id });
     }
 
     private _buildHAView(): HTMLElement {
@@ -545,7 +520,6 @@ export class CardDashboard {
 
     private _refreshTimestamps(): void {
         const now = Date.now();
-        const STALE_MS = 180_000; // matches nodes panel threshold
         this.lastHb.forEach((ms, id) => {
             const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
             if (!card) {

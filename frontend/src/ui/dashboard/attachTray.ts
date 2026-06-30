@@ -10,6 +10,7 @@
 import type { Attachment } from "../../types/agent";
 import { isImage } from "./uploads";
 
+/** Render the pending-attachment chips into the iobar tray; `×` routes back through `onRemove`. */
 export function renderAttachTray(
     root: HTMLElement,
     attachments: Attachment[],

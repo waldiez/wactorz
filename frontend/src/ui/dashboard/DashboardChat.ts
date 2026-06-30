@@ -9,7 +9,7 @@
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import type { View } from "./types";
-import { canDirectMessage, stateColor, stateLabel } from "./agentState";
+import { canDirectMessage, pickChatTarget, stateColor, stateLabel } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar } from "./chatIobar";
@@ -19,6 +19,7 @@ import { SpeechToText } from "../../io/SpeechToText";
 import { renderMarkdown } from "../markdown";
 import { UPLOADS_ENABLED } from "./uploads";
 import { renderAttachTray } from "./attachTray";
+import { emit, listen } from "../../events";
 
 /** What the chat controller needs from its host (CardDashboard). */
 export interface ChatHost {
@@ -26,6 +27,7 @@ export interface ChatHost {
     readonly agents: Map<string, AgentInfo>;
     /** The currently active view (read live — it changes over time). */
     getView(): View;
+    /** Switch the active dashboard view. */
     setView(v: View): void;
     /** Agents sorted with main-actor pinned first (shared with the overview). */
     sortedAgents(): AgentInfo[];
@@ -46,7 +48,7 @@ export class DashboardChat {
     private _historyLoaded = new Set<string>();
     private _selfDispatching = false;
 
-    private _stt = new SpeechToText((window as any).__WACTORZ_INGRESS_PATH ?? "");
+    private _stt = new SpeechToText(window.__WACTORZ_INGRESS_PATH ?? "");
     private _chatInput = new ChatInput({
         agentNames: () => [...this.host.agents.values()].map(a => a.name).filter(Boolean),
         setTarget: (name: string) => {
@@ -92,6 +94,7 @@ export class DashboardChat {
         this._historyLoaded.delete(name);
     }
 
+    /** Build the chat view element (sidebar + pane); renders run again in afterMount once attached. */
     buildChatView(): HTMLElement {
         const chat = document.createElement("div");
         chat.className = "af-chat";
@@ -132,7 +135,12 @@ export class DashboardChat {
         const searchWrap = document.createElement("div");
         searchWrap.className = "af-chat-sidebar-search";
         const searchInput = document.createElement("input");
+        // Keep the default text type — `type="search"` adds browser chrome (a
+        // clear button / WebKit rounding) that would change this field's look.
+        searchInput.id = "af-agent-filter";
+        searchInput.name = "agent-filter";
         searchInput.placeholder = "Filter agents…";
+        searchInput.setAttribute("aria-label", "Filter agents");
         searchInput.value = this.sidebarFilter;
         searchInput.addEventListener("input", () => {
             this.sidebarFilter = searchInput.value.toLowerCase();
@@ -164,6 +172,7 @@ export class DashboardChat {
         return pane;
     }
 
+    /** Render the agent list in the chat sidebar (honouring the current search filter). */
     renderSidebar(): void {
         const list = this.root.querySelector<HTMLElement>("#af-chat-agent-list");
         if (!list) {
@@ -190,6 +199,7 @@ export class DashboardChat {
         this.root.querySelector(".af-chat")?.classList.add("agent-selected");
     }
 
+    /** Render the chat pane header (target agent name, state dot, back button). */
     renderChatPaneHeader(): void {
         const hdr = this.root.querySelector<HTMLElement>("#af-chat-pane-header");
         if (!hdr) {
@@ -235,6 +245,7 @@ export class DashboardChat {
         return msg.from === this.chatTarget;
     }
 
+    /** Render the message thread for the active target (empty state when no messages). */
     renderChatThread(): void {
         const thread = this.root.querySelector<HTMLElement>("#af-chat-thread");
         if (!thread) {
@@ -263,20 +274,22 @@ export class DashboardChat {
             msgs.forEach(m => this._appendChatMsgEl(m, thread));
         }
         if (streamHere) {
-            this._reattachStreamBubble(thread);
+            this._buildStreamRow(thread, this._streamText);
         }
         this._scrollThread();
     }
 
-    private _reattachStreamBubble(thread: HTMLElement): void {
+    /** Build the streaming agent bubble, append it to `thread`, and latch the
+     *  row/body refs. `initialText` pre-fills the bubble (reattach on re-render). */
+    private _buildStreamRow(thread: HTMLElement, initialText = ""): void {
         const row = document.createElement("div");
         row.className = "af-chat-msg af-chat-msg-agent";
         const fromEl = document.createElement("div");
         fromEl.className = "af-chat-msg-from";
-        fromEl.textContent = this._streamFrom!;
+        fromEl.textContent = this._streamFrom ?? "";
         const bubble = document.createElement("div");
         bubble.className = "af-chat-msg-bubble";
-        bubble.textContent = this._streamText;
+        bubble.textContent = initialText;
         row.append(fromEl, bubble);
         thread.appendChild(row);
         this._streamRow = row;
@@ -299,6 +312,7 @@ export class DashboardChat {
         }
     }
 
+    /** Fetch and merge persisted chat history for an agent once (subsequent calls no-op). */
     async loadHistory(agentId: string): Promise<void> {
         if (this._historyLoaded.has(agentId)) {
             return;
@@ -312,6 +326,7 @@ export class DashboardChat {
         this.renderChatThread();
     }
 
+    /** Build the chat input bar (textarea, target select, mic/attach/send controls). */
     buildIobar(): HTMLElement {
         return buildChatIobar({
             chatInput: this._chatInput,
@@ -322,7 +337,15 @@ export class DashboardChat {
             },
             populateSelect: select => this._populateSelect(select),
             send: (input, select) => this._sendMessage(input, select),
+            stop: () => this._stopGeneration(),
         });
+    }
+
+    /** Ask the backend to cancel the in-flight generation. Fire-and-forget: the
+     *  server emits the "⏹ Stopped." confirmation on the usual chat reply path. */
+    private _stopGeneration(): void {
+        const base = window.__WACTORZ_INGRESS_PATH ?? "";
+        void fetch(`${base}/api/chat/stop`, { method: "POST" }).catch(() => {});
     }
 
     private _populateSelect(select: HTMLSelectElement): void {
@@ -353,12 +376,14 @@ export class DashboardChat {
         // Keep chatTarget a live, messageable agent and guarantee a selection.
         this.syncChatTarget();
         const hasTarget = [...select.options].some(o => o.value === this.chatTarget);
-        if (!hasTarget && select.options.length) {
-            this.chatTarget = select.options[0]!.value;
+        const first = select.options[0];
+        if (!hasTarget && first) {
+            this.chatTarget = first.value;
         }
         select.value = this.chatTarget;
     }
 
+    /** Rebuild the target-agent `<select>` options from the current agent list. */
     updateTargetSelect(): void {
         const select = this.root.querySelector<HTMLSelectElement>("#af-target-select");
         if (select) {
@@ -370,15 +395,9 @@ export class DashboardChat {
         }
     }
 
-    /** Ensure chatTarget is a live messageable agent (prefers main, else first). */
+    /** Keep chatTarget on a live messageable agent (prefers main; never an id). */
     syncChatTarget(): void {
-        const messageable = [...this.host.agents.values()].filter(canDirectMessage);
-        if (!messageable.length || messageable.some(a => a.name === this.chatTarget)) {
-            return;
-        }
-        const main = messageable.find(a => a.name === "main" || a.name === "main-actor");
-        const fallback = [...messageable].sort((a, b) => a.name.localeCompare(b.name))[0];
-        this.chatTarget = main?.name ?? fallback?.name ?? this.chatTarget;
+        this.chatTarget = pickChatTarget([...this.host.agents.values()], this.chatTarget);
     }
 
     private _sendMessage(input: HTMLTextAreaElement, select: HTMLSelectElement): void {
@@ -409,11 +428,11 @@ export class DashboardChat {
         input.value = "";
         input.style.height = "auto";
         this._selfDispatching = true;
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content, target, attachments: msg.attachments?.map(a => a.id) ?? [] },
-            }),
-        );
+        emit("af-send-message", {
+            content,
+            target,
+            attachments: msg.attachments?.map(a => a.id) ?? [],
+        });
         this._selfDispatching = false;
     }
 
@@ -428,19 +447,19 @@ export class DashboardChat {
         }
     }
 
+    /** Subscribe to chat/stream/attachment DOM events (call when the dashboard is shown). */
     wire(): void {
         this._wireChatEvents();
         this._wireStreamEvents();
         if (UPLOADS_ENABLED) {
-            this._evAttach = e => {
-                const att = (e as CustomEvent<{ attachment: Attachment }>).detail.attachment;
-                this._pendingAttachments.push(att);
+            this._evAttach = listen("af-attachment-added", detail => {
+                this._pendingAttachments.push(detail.attachment);
                 this._renderAttachTray();
-            };
-            document.addEventListener("af-attachment-added", this._evAttach);
+            });
         }
     }
 
+    /** Remove all event listeners added by wire() (call when the dashboard is hidden). */
     unwire(): void {
         const pairs: [string, EventListener | null][] = [
             ["af-chat-message", this._evChat],
@@ -460,8 +479,8 @@ export class DashboardChat {
     }
 
     private _wireChatEvents(): void {
-        this._evChat = e => {
-            const msg = (e as CustomEvent<{ msg: ChatMessage }>).detail.msg;
+        this._evChat = listen("af-chat-message", detail => {
+            const msg = detail.msg;
             const stored: ChatMessage =
                 msg.from === "io-gateway" || msg.from === "system"
                     ? { ...msg, to: this._lastSentTarget }
@@ -474,11 +493,10 @@ export class DashboardChat {
                 this._appendChatMsgEl(stored);
                 this._scrollThread();
             }
-        };
-        document.addEventListener("af-chat-message", this._evChat);
+        });
 
-        this._evResetChat = (e: Event) => {
-            const agent = (e as CustomEvent).detail?.agent as string | null;
+        this._evResetChat = listen("af-reset-chat", detail => {
+            const agent = detail.agent;
             this.chatMessages = agent
                 ? this.chatMessages.filter(m => m.from !== agent && m.from !== "user")
                 : [];
@@ -486,14 +504,13 @@ export class DashboardChat {
             if (this.host.getView() === "chat") {
                 this.renderChatThread();
             }
-        };
-        document.addEventListener("af-reset-chat", this._evResetChat);
+        });
 
-        this._evSendMessage = (e: Event) => {
+        this._evSendMessage = listen("af-send-message", detail => {
             if (this._selfDispatching) {
                 return;
             }
-            const { content, target } = (e as CustomEvent<{ content: string; target: string }>).detail;
+            const { content, target } = detail;
             this.chatTarget = target;
             this._lastSentTarget = target;
             const msg: ChatMessage = {
@@ -505,13 +522,12 @@ export class DashboardChat {
             };
             this.chatMessages.push(msg);
             this._showSentMessage(msg);
-        };
-        document.addEventListener("af-send-message", this._evSendMessage);
+        });
     }
 
     private _wireStreamEvents(): void {
-        this._evChunk = e => {
-            const { chunk, from } = (e as CustomEvent<{ chunk: string; from: string }>).detail;
+        this._evChunk = listen("af-stream-chunk", detail => {
+            const { chunk, from } = detail;
             if (this._streamFrom === null) {
                 this._streamFrom = from;
                 this._streamTarget = this._lastSentTarget;
@@ -528,10 +544,9 @@ export class DashboardChat {
                 this._streamBody.textContent = this._streamText;
             }
             this._scrollThread();
-        };
-        document.addEventListener("af-stream-chunk", this._evChunk);
+        });
 
-        this._evEnd = () => {
+        this._evEnd = listen("af-stream-end", () => {
             if (this._streamFrom && this._streamText) {
                 this.chatMessages.push({
                     id: `stream-${Date.now()}`,
@@ -550,8 +565,7 @@ export class DashboardChat {
             this._streamFrom = null;
             this._streamTarget = null;
             this._streamText = "";
-        };
-        document.addEventListener("af-stream-end", this._evEnd);
+        });
     }
 
     /** Lazily create the streaming agent bubble in the open chat thread. */
@@ -560,16 +574,6 @@ export class DashboardChat {
         if (!thread) {
             return;
         }
-        const row = document.createElement("div");
-        row.className = "af-chat-msg af-chat-msg-agent";
-        const fromEl = document.createElement("div");
-        fromEl.className = "af-chat-msg-from";
-        fromEl.textContent = this._streamFrom;
-        const bubble = document.createElement("div");
-        bubble.className = "af-chat-msg-bubble";
-        row.append(fromEl, bubble);
-        thread.appendChild(row);
-        this._streamRow = row;
-        this._streamBody = bubble;
+        this._buildStreamRow(thread);
     }
 }

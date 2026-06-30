@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { initials, escHtml } from "../ui/ToastManager";
+import { initials } from "../ui/ToastManager";
 
 describe("initials", () => {
     it("takes first letter of each word for two-word name", () => {
@@ -45,36 +45,6 @@ describe("initials", () => {
     it("parts[1] empty when name ends with separator (covers falsy-parts[1] branch)", () => {
         // "a-".split(/[\s\-_]+/) = ["a", ""] → parts[1]="" → falsy → b=""
         expect(initials("a-")).toBe("A");
-    });
-});
-
-describe("escHtml", () => {
-    it("escapes ampersands", () => {
-        expect(escHtml("a & b")).toBe("a &amp; b");
-    });
-
-    it("escapes less-than", () => {
-        expect(escHtml("<script>")).toBe("&lt;script&gt;");
-    });
-
-    it("escapes greater-than", () => {
-        expect(escHtml("a > b")).toBe("a &gt; b");
-    });
-
-    it("escapes double quotes", () => {
-        expect(escHtml('"quoted"')).toBe("&quot;quoted&quot;");
-    });
-
-    it("escapes all special chars in one string", () => {
-        expect(escHtml('<a href="x">&</a>')).toBe("&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;");
-    });
-
-    it("returns plain string unchanged", () => {
-        expect(escHtml("hello world")).toBe("hello world");
-    });
-
-    it("handles empty string", () => {
-        expect(escHtml("")).toBe("");
     });
 });
 

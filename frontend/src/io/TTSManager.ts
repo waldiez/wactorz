@@ -17,16 +17,12 @@
  */
 
 import { ambient } from "./AmbientManager";
+import { emit } from "../events";
+import type { TTSVoice } from "../types/tts";
 
 const LS_BEEP = "wactorz.beep";
 const LS_TTS = "wactorz.tts";
 const LS_VOICE = "wactorz.ttsVoice";
-
-export interface TTSVoice {
-    name: string;
-    locale: string;
-    gender: string;
-}
 
 export class TTSManager {
     private _beepEnabled: boolean;
@@ -107,36 +103,44 @@ export class TTSManager {
     }
 
     private _emitVoices(): void {
-        document.dispatchEvent(new CustomEvent("tts-voices-loaded", { detail: { voices: this._voices } }));
+        emit("tts-voices-loaded", { voices: this._voices });
     }
 
+    /** Whether the notification beep is on. */
     get beepEnabled(): boolean {
         return this._beepEnabled;
     }
+    /** Whether spoken TTS is on. */
     get ttsEnabled(): boolean {
         return this._ttsEnabled;
     }
+    /** True once the server edge-tts endpoint has been confirmed available. */
     get serverAvailable(): boolean {
         return this._serverAvailable === true;
     }
+    /** Available voices (server edge-tts list, or browser voices as a fallback). */
     get voices(): TTSVoice[] {
         return this._voices;
     }
 
+    /** The persisted selected voice name, or "" for the default. */
     get selectedVoice(): string {
         return localStorage.getItem(LS_VOICE) ?? "";
     }
 
+    /** Persist the selected voice name. */
     setVoice(name: string): void {
         localStorage.setItem(LS_VOICE, name);
     }
 
+    /** Toggle the notification beep (persisted); returns the new state. */
     toggleBeep(): boolean {
         this._beepEnabled = !this._beepEnabled;
         localStorage.setItem(LS_BEEP, this._beepEnabled ? "1" : "0");
         return this._beepEnabled;
     }
 
+    /** Toggle spoken TTS (persisted), cancelling any in-progress speech when turning off; returns the new state. */
     toggleTTS(): boolean {
         this._ttsEnabled = !this._ttsEnabled;
         localStorage.setItem(LS_TTS, this._ttsEnabled ? "1" : "0");
@@ -276,4 +280,5 @@ export class TTSManager {
     }
 }
 
+/** Shared TTSManager singleton. */
 export const tts = new TTSManager();

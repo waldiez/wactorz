@@ -425,6 +425,13 @@ class PlannerAgent(Actor, SpawnMixin):
             await self._log(f"Pipeline not feasible: {error}")
             return f"Cannot set up this pipeline:\n\n{error}"
 
+        # ── Advisory: check for duplicate / contradicting active rules ─────
+        # Surfaced as extra info at approval time (or prepended to the summary
+        # on the immediate-execute path). Never blocks — it's a heads-up.
+        conflict_note = await self._check_rule_conflicts(task, plan)
+        if conflict_note:
+            await self._log(f"Rule-conflict advisory: {conflict_note}")
+
         # ── Mode B: plan_only — return the plan, don't spawn ───────────────
         if self._plan_only:
             await self._log(f"plan_only=True — returning plan ({len(plan)} agent(s)) for approval")
@@ -436,12 +443,16 @@ class PlannerAgent(Actor, SpawnMixin):
                 "task":           task,
                 "resolution_note": resolution_note or "",
                 "plan":           plan,
+                "warnings":       conflict_note,   # "" when nothing notable
             }
             return json.dumps(envelope)
 
         # ── Mode C: original behavior — plan AND execute ───────────────────
         await self._log(f"Pipeline plan: {len(plan)} agent(s)")
-        return await self._execute_pipeline_plan(plan, task, resolution_note=resolution_note)
+        summary = await self._execute_pipeline_plan(plan, task, resolution_note=resolution_note)
+        if conflict_note:
+            summary = f"⚠️ Heads up — {conflict_note}\n\n{summary}"
+        return summary
 
     async def _execute_pipeline_plan(self, plan: list[dict], task: str, resolution_note: str = "") -> str:
         """
@@ -556,6 +567,100 @@ class PlannerAgent(Actor, SpawnMixin):
         if spawned:
             out.append(f"\nSpawned: {', '.join(spawned)} — will auto-restore on restart.")
         return "\n".join(out)
+
+    async def _check_rule_conflicts(self, task: str, plan: list[dict]) -> str:
+        """Compare the proposed pipeline against already-active rules and flag
+        duplicates or contradictions.
+
+        Returns a short human-readable advisory (shown at approval time, or
+        prepended to the immediate-execute summary), or "" when there's nothing
+        notable, no LLM, or no existing rules. This is ADVISORY ONLY — it never
+        blocks the plan.
+
+        Two things are flagged:
+          - DUPLICATE      — same trigger AND same action as an existing rule.
+          - CONTRADICTION  — same/overlapping trigger, OPPOSING action
+                             (e.g. "over 25° turn AC off" vs "over 25° turn AC on").
+        """
+        if not self.llm:
+            return ""
+
+        # Existing rules live on main (the authoritative store).
+        existing: list[dict] = []
+        if self._registry:
+            main = self._registry.find_by_name("main")
+            if main and hasattr(main, "get_pipeline_rules"):
+                try:
+                    existing = list(main.get_pipeline_rules().values())
+                except Exception:
+                    existing = []
+        if not existing:
+            return ""
+
+        existing_lines = []
+        by_id: dict[str, dict] = {}
+        for r in existing[:30]:   # cap prompt size
+            rid = r.get("rule_id", "?")
+            rtask = (r.get("task") or "").strip().replace("\n", " ")[:160]
+            if rtask:
+                by_id[rid] = r
+                existing_lines.append(f"- [{rid}] {rtask}")
+        if not existing_lines:
+            return ""
+
+        prompt = (
+            "You are reviewing a NEW home-automation rule against rules that "
+            "are ALREADY ACTIVE. Flag only two things:\n"
+            "  1. DUPLICATE — the new rule does essentially the same thing as "
+            "an existing one (same trigger AND same action).\n"
+            "  2. CONTRADICTION — the new rule fires on the same or overlapping "
+            "condition but takes an OPPOSING action (e.g. one turns a device "
+            "ON, the other turns it OFF under the same condition).\n\n"
+            f"NEW RULE:\n{task}\n\n"
+            "ALREADY-ACTIVE RULES:\n" + "\n".join(existing_lines) + "\n\n"
+            "Respond with ONLY a JSON object:\n"
+            '{"conflict": <true|false>, "items": [{"rule_id": "<id>", '
+            '"kind": "duplicate|contradiction", "reason": "<one short sentence>"}]}\n'
+            "Be conservative — if there is no CLEAR duplicate or contradiction, "
+            'return {"conflict": false, "items": []}. Do not invent conflicts.'
+        )
+        try:
+            response, _usage = await self.llm.complete(
+                messages=[{"role": "user", "content": prompt}],
+                system="You are a precise rule-conflict checker. Output only JSON.",
+                max_tokens=400,
+            )
+            self._accrue_usage(_usage)
+            data = json.loads(self._extract_json_object(response))
+        except Exception as e:
+            logger.debug(f"[{self.name}] Rule-conflict check failed: {e}")
+            return ""
+
+        if not isinstance(data, dict) or not data.get("conflict"):
+            return ""
+        items = data.get("items") or []
+        if not items:
+            return ""
+
+        lines = []
+        for it in items[:5]:
+            if not isinstance(it, dict):
+                continue
+            kind   = (it.get("kind") or "overlap").lower()
+            rid    = it.get("rule_id", "?")
+            reason = (it.get("reason") or "").strip()
+            rtask  = (by_id.get(rid, {}).get("task") or "").strip().replace("\n", " ")[:120]
+            label  = "Duplicate of" if kind.startswith("dup") else "May contradict"
+            bit = f"{label} rule [{rid}]"
+            if rtask:
+                bit += f' ("{rtask}")'
+            if reason:
+                bit += f" — {reason}"
+            lines.append(bit)
+        if not lines:
+            return ""
+        return ("This pipeline may overlap with existing rules:\n"
+                + "\n".join(f"  • {l}" for l in lines))
 
     async def _resolve_data_references(self, task: str) -> tuple[str, str]:
         """
@@ -1831,6 +1936,20 @@ class PlannerAgent(Actor, SpawnMixin):
             clean = clean[start:end + 1]
         return clean.strip()
 
+    @staticmethod
+    def _extract_json_object(response: str) -> str:
+        """Like _extract_json_array but slices the outermost {...} object."""
+        clean = (response or "").strip()
+        if clean.startswith("```"):
+            clean = clean.split("\n", 1)[1] if "\n" in clean else ""
+        if "```" in clean:
+            clean = clean[:clean.rfind("```")]
+        start = clean.find("{")
+        end = clean.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            clean = clean[start:end + 1]
+        return clean.strip()
+
     async def _decompose(self, task: str, workers: list[dict]) -> list[dict]:
         """LLM breaks task into steps. Can declare missing agents with spawn configs."""
         if not self.llm:
@@ -2476,5 +2595,4 @@ Example:
 def _task_hash(task: str) -> str:
     """Stable short hash of a normalized task string for cache keying."""
     normalized = " ".join(task.lower().split())
-    return hashlib.md5(normalized.encode()).hexdigest()[:12]
     return hashlib.md5(normalized.encode()).hexdigest()[:12]

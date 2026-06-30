@@ -542,6 +542,88 @@
   margin-top: 40px;
   font-size: 13px;
 }
+.af-feed-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.af-feed-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.af-feed-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border-left: 2px solid transparent;
+  font-size: 12px;
+  cursor: default;
+  transition: background 0.1s;
+}
+.af-feed-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.af-feed-heartbeat {
+  border-left-color: #22d3a0;
+}
+.af-feed-spawn {
+  border-left-color: #60a5fa;
+}
+.af-feed-alert {
+  border-left-color: #f87171;
+}
+.af-feed-chat {
+  border-left-color: #a78bfa;
+}
+.af-feed-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  color: rgba(255, 255, 255, 0.4);
+}
+/* Tint the line-icon to match each event type's accent. */
+.af-feed-spawn .af-feed-icon {
+  color: #60a5fa;
+}
+.af-feed-heartbeat .af-feed-icon {
+  color: #22d3a0;
+}
+.af-feed-alert .af-feed-icon {
+  color: #f87171;
+}
+.af-feed-chat .af-feed-icon {
+  color: #a78bfa;
+}
+.af-feed-time {
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 11px;
+  font-family: monospace;
+}
+.af-feed-agent {
+  flex-shrink: 0;
+  color: #93c5fd;
+  font-weight: 600;
+  min-width: 80px;
+}
+.af-feed-agent-user {
+  color: #6ee7b7;
+}
+.af-feed-text {
+  color: rgba(255, 255, 255, 0.65);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
 
 /* ── Chat view (inside body) ── */
 .af-chat {
@@ -620,7 +702,12 @@
   color: #93c5fd;
 }
 .af-iobar-input {
-  flex: 1;
+  /* Inside the column .af-input-wrap, `flex:1` resolves to flex-basis:0%, which
+     overrides the explicit height set by autoGrow and pins the box to
+     min-height. Use a content-based basis so autoGrow's height wins; the
+     textarea still fills the wrap width via the default align-items:stretch. */
+  flex: 0 0 auto;
+  width: 100%;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
@@ -747,6 +834,26 @@
 .af-send-btn:disabled {
   background: rgba(37, 99, 235, 0.3);
   cursor: not-allowed;
+}
+.af-stop-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #dc2626;
+  border: none;
+  color: white;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    transform 0.1s;
+}
+.af-stop-btn:hover {
+  background: #ef4444;
+  transform: scale(1.05);
 }
 .af-voice-btn {
   width: 32px;

@@ -8,7 +8,7 @@
  * back via `onSetView`; the active-view highlight is maintained by the caller.
  */
 import type { View, ConnState } from "./types";
-import { buildAudioPopover, buildResetPopover } from "./popovers";
+import { buildAudioPopover, buildResetPopover, type ResetPopover } from "./popovers";
 import { iconMarkup, type IconName } from "./icons";
 
 export interface HeaderOpts {
@@ -86,6 +86,7 @@ function buildHeaderRight(view: View, onSetView: (v: View) => void): HTMLElement
     const audioBtn = document.createElement("button");
     audioBtn.className = "af-view-btn af-view-btn-icon";
     audioBtn.title = "Audio settings";
+    audioBtn.setAttribute("aria-label", "Audio settings");
     audioBtn.innerHTML = iconMarkup("volume");
     right.appendChild(audioBtn);
     wirePopover(audioBtn, buildAudioPopover());
@@ -93,13 +94,15 @@ function buildHeaderRight(view: View, onSetView: (v: View) => void): HTMLElement
     const resetBtn = document.createElement("button");
     resetBtn.className = "af-view-btn af-view-btn-icon";
     resetBtn.title = "Clear stored state";
+    resetBtn.setAttribute("aria-label", "Clear stored state");
     resetBtn.innerHTML = iconMarkup("reset");
     right.appendChild(resetBtn);
-    wirePopover(resetBtn, buildResetPopover(), pop => (pop as any)._resetArmed?.());
+    wirePopover(resetBtn, buildResetPopover(), pop => (pop as ResetPopover)._resetArmed());
 
     return right;
 }
 
+/** Build the top header (logo, connection badge, health, view tabs, audio + reset popovers). */
 export function buildHeader(opts: HeaderOpts): HTMLElement {
     const header = document.createElement("div");
     header.className = "af-header";

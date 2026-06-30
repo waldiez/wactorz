@@ -6,41 +6,53 @@
  * Wactorz Dashboard — entry point.
  *
  * Bootstrap order:
- * 1. Create SceneManager (agent-state store + CardDashboard coordinator)
+ * 1. Create AgentStore (agent-state store + CardDashboard coordinator)
  * 2. Create MQTTClient and connect to broker
- * 3. Create UI components (HUD, ChatPanel, ActivityFeed)
- * 4. Wire MQTT events → SceneManager + HUD + ActivityFeed
- * 5. Wire DOM events (agent-selected) → SceneManager + ChatPanel
+ * 3. Wire MQTT events → AgentStore (which drives the cards dashboard)
  *
- * The chat input lives entirely in CardDashboard's in-card bar (the single
- * chat-input surface); it owns its own mention popup and send handling.
+ * The chat lives entirely in CardDashboard's in-card bar (DashboardChat),
+ * which renders from the af-chat-message / af-stream-* events IOManager emits.
  */
 
 import "./app.css";
-import { SceneManager } from "./scene/SceneManager";
+import { AgentStore } from "./agents/AgentStore";
 import { MQTTClient } from "./mqtt/MQTTClient";
-import { AgentHUD } from "./ui/AgentHUD";
-import { ChatPanel } from "./ui/ChatPanel";
-import { ActivityFeed } from "./ui/ActivityFeed";
 import { IOManager } from "./io/IOManager";
+import { log } from "./io/logger";
+import { emit, listen } from "./events";
 import { WSChatClient } from "./io/WSChatClient";
 import { tts } from "./io/TTSManager";
-import { desktopNotifyBackground, clearUnreadBadge, initNotifications } from "./io/DesktopNotify";
 import { toast } from "./ui/ToastManager";
-import { createHaFeedPusher } from "./ui/haFeed";
+import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
 import { UPLOADS_ENABLED } from "./ui/dashboard/uploads";
 import type { AgentInfo } from "./types/agent";
+import type { FeedItem } from "./types/feed";
 import { resolveAgentName } from "./agents/naming";
-import { toAgentInfo, mapLogFeedItem, buildNameIndex } from "./agents/mapping";
+import {
+    toAgentInfo,
+    buildNameIndex,
+    selectLogFeedReplay,
+    type LogFeedReplayState,
+    buildMetricsUpdate,
+    heartbeatFeedItem,
+    spawnFeedItem,
+    spawnTypeLabel,
+    alertFeedItem,
+    alertKind,
+    chatFeedItem,
+    stoppedFeedItem,
+    qaFlagFeedItem,
+    logFeedItem,
+    completedFeedItem,
+    nodeHeartbeatFeedItem,
+} from "./agents/mapping";
+import { createDeletionGuard } from "./agents/deletionGuard";
 
-const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
-canvas.style.display = "none";
-const scene = new SceneManager(canvas);
+const agentStore = new AgentStore();
 
-// Cards is the only view; clear any stale persisted theme from older builds.
-localStorage.setItem("wactorz-theme", "cards");
-scene.setTheme("cards");
+// Clear any stale persisted theme from older builds.
+localStorage.removeItem("wactorz-theme");
 
 // Two deployment contexts, both served same-origin:
 //
@@ -54,9 +66,7 @@ scene.setTheme("cards");
 // Never use window.location.host to build absolute URLs: inside the HAOS
 // webview that host is the HA instance itself, not the addon backend.
 
-initNotifications();
-
-const _ingressPath: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+const _ingressPath: string = window.__WACTORZ_INGRESS_PATH ?? "";
 
 // For fetch: ingress-prefixed under HA, plain-relative everywhere else.
 const _apiBase = _ingressPath;
@@ -79,7 +89,7 @@ const _wsBase = `${_wsProto}//${_wsHost}${_ingressPath}`;
 // the stale-port failures.
 const _mqttDefault = `${_wsBase}/mqtt`;
 
-// Self-heal browsers that cached a URL under older builds (incl. the bad :8888
+// Self-heal browsers that cached a URL under old builds (incl. the hardcoded :8888
 // value). Removing it on load means existing users recover automatically on the
 // next page load — no manual localStorage clearing required.
 localStorage.removeItem("wactorz-mqtt-url");
@@ -87,12 +97,7 @@ localStorage.removeItem("wactorz-mqtt-url");
 const MQTT_BROKER = (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) || _mqttDefault;
 const mqtt = new MQTTClient(MQTT_BROKER);
 
-const hud = new AgentHUD();
-const chatPanel = new ChatPanel();
-chatPanel.setApiBase(_apiBase);
-const ioManager = new IOManager(mqtt, chatPanel);
-
-const feed = new ActivityFeed();
+const ioManager = new IOManager(mqtt);
 
 // Global drag-and-drop upload overlay — only wired up when the backend endpoint
 // exists (flip UPLOADS_ENABLED once /api/upload is live), so the overlay never
@@ -101,14 +106,10 @@ const _dropZone = UPLOADS_ENABLED ? new DropZone(_apiBase) : null;
 
 const wsChat = new WSChatClient();
 let liveSyncInFlight = false;
-// Track agent IDs that were explicitly deleted so MQTT "stopped" events don't re-add them.
-const deletedAgentIds = new Set<string>();
-
-function syncAgentViews(): void {
-    chatPanel.updateAgentList(scene.getAgents());
-    hud.setAgentCount(scene.getAgents().length);
-    refreshStats();
-}
+// Live-grid deletion guard (mirrors the backend's _deleted_agent_ids): blocks
+// stale stop-window events from blinking a deleted card back, and re-admits a
+// re-spawn via its newer timestamp. See createDeletionGuard for the rationale.
+const { markDeleted, isDeleted } = createDeletionGuard();
 
 function refreshLiveActors(): void {
     if (liveSyncInFlight) {
@@ -118,19 +119,20 @@ function refreshLiveActors(): void {
     fetch(`${_apiBase}/api/actors`)
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((actors: AgentInfo[]) => {
-            scene.reconcileAgents(
+            agentStore.reconcileAgents(
                 actors
-                    .filter(a => !deletedAgentIds.has(a.id))
+                    .filter(a => !isDeleted(a.id))
                     .map(a => ({
                         ...a,
                         name: resolveAgentName(a.name, a.id),
                     })),
             );
-            syncAgentViews();
-            console.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
+            log.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
         })
-        .catch(() => {
-            // Dev mode without a running server — ignore silently.
+        .catch(err => {
+            // Dev mode without a running server is expected; log at debug so a
+            // genuine backend failure still leaves a trace.
+            log.debug("[Dashboard] live actor refresh failed:", err);
         })
         .finally(() => {
             liveSyncInFlight = false;
@@ -140,7 +142,6 @@ function refreshLiveActors(): void {
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
 wsChat.onChat((content, from, timestampMs) => {
     toast.show({ type: "chat", title: from, message: content.slice(0, 120) });
-    desktopNotifyBackground(from, content.slice(0, 120));
     const msg = {
         id: `ws-${timestampMs}`,
         from,
@@ -149,16 +150,15 @@ wsChat.onChat((content, from, timestampMs) => {
         timestampMs,
     };
     ioManager.receiveAgentMessage(msg);
-    scene.onChat(from, "user");
+    agentStore.onChat(from, "user");
     const feedItem = {
         type: "chat" as const,
         label: content,
         agentName: from,
         timestamp: timestampMs,
     };
-    feed.push(feedItem);
-    document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item: feedItem } }));
-    document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+    emit("af-feed-push", { item: feedItem });
+    emit("af-chat-message", { msg });
 });
 
 // Streaming replies — onStreamChunk / onStreamEnd are wired inside setWSClient
@@ -168,89 +168,57 @@ ioManager.setWSClient(wsChat);
 // This is how pause/stop/resume state changes reach the UI without polling.
 wsChat.onStatePatch((agents, deletedId, stats) => {
     if (deletedId) {
-        deletedAgentIds.add(deletedId);
-        scene.removeAgent(deletedId);
+        markDeleted(deletedId);
+        agentStore.removeAgent(deletedId);
     }
     if (stats?.totalCostUsd !== undefined) {
-        scene.setTotalCostUsd(stats.totalCostUsd);
+        agentStore.setTotalCostUsd(stats.totalCostUsd);
     }
     if (stats?.totalMessages !== undefined) {
-        scene.setTotalMessages(stats.totalMessages);
+        agentStore.setTotalMessages(stats.totalMessages);
     }
     agents.forEach(a => {
-        if (!a.agent_id || deletedAgentIds.has(a.agent_id)) {
+        if (!a.agent_id || isDeleted(a.agent_id)) {
             return;
         }
-        scene.addOrUpdateAgent(toAgentInfo(a));
+        agentStore.addOrUpdateAgent(toAgentInfo(a));
     });
-    syncAgentViews();
 });
 
 wsChat.connect(`${_wsBase}/ws`);
 refreshLiveActors();
 window.setInterval(() => {
     refreshLiveActors();
-    scene.pruneStaleRemoteAgents();
+    agentStore.pruneStaleRemoteAgents();
 }, 15000);
 
 // The server embeds its in-memory log_feed (spawned/status/logs/alerts) in
 // every state-patch.  We use this as a reliable secondary path so MQTT events
 // appear in the feed even when the direct Mosquitto WebSocket is unavailable.
 
-let _logFeedMaxTs = 0;
-let _logFeedInitialized = false;
+const _logFeedState: LogFeedReplayState = { maxTs: 0, initialized: false };
 let _mqttLive = false;
 
 wsChat.onLogFeed(items => {
     // Nameless entries (e.g. `log`) borrow their friendly name from the
-    // `spawned` entry in the same batch, then from the live scene — so reloads
-    // attribute them by name instead of a raw id.
+    // `spawned` entry in the same batch, then from the live agent store — so
+    // reloads attribute them by name instead of a raw id.
     const nameIndex = buildNameIndex(items);
     const resolveName = (id: string): string | undefined =>
-        nameIndex.get(id) ?? scene.getAgents().find(a => a.id === id)?.name;
-
-    if (!_logFeedInitialized) {
-        _logFeedInitialized = true;
-        _logFeedMaxTs = items.length ? Math.max(...items.map(i => i.timestamp ?? 0)) : 0;
-        // Push historical items (happened before browser connected — MQTT won't re-deliver them).
-        [...items].reverse().forEach(item => {
-            const mapped = mapLogFeedItem(item, resolveName);
-            if (mapped) {
-                pushFeed(mapped);
-            }
-        });
-        return;
-    }
-
-    // Always advance the high-water mark so that when MQTT reconnects and later
-    // disconnects again, we don't replay the entire backlog.
-    const newItems = items.filter(item => (item.timestamp ?? 0) > _logFeedMaxTs);
-    if (newItems.length) {
-        _logFeedMaxTs = Math.max(...newItems.map(i => i.timestamp ?? 0));
-    }
-
-    // Direct MQTT is live — it delivers these events already; skip to avoid duplicates.
-    if (_mqttLive) {
-        return;
-    }
-
-    // Push new items oldest-first so the feed stays chronological.
-    [...newItems].reverse().forEach(item => {
-        const mapped = mapLogFeedItem(item, resolveName);
-        if (mapped) {
-            pushFeed(mapped);
-        }
-    });
+        nameIndex.get(id) ?? agentStore.getAgents().find(a => a.id === id)?.name;
+    // Replay/dedup bookkeeping (first-batch backlog vs. high-water mark vs.
+    // skip-while-MQTT-live) lives in selectLogFeedReplay so it stays tested.
+    selectLogFeedReplay(items, _logFeedState, _mqttLive, resolveName).forEach(pushFeed);
 });
 
-// Seed the activity feed from SQLite chat_log so the feed panel isn't empty
+// Seed the activity feed from SQLite chat_log so the feed view isn't empty
 // after a server restart. The server returns real Unix timestamps (seconds);
 // convert to ms for the feed.
 fetch(`${_apiBase}/api/feed`)
     .then(r => (r.ok ? r.json() : []))
     .then(
         (items: { type: string; label: string; agentName: string; timestamp?: number; role?: string }[]) => {
-            console.log("[feed] /api/feed seed:", items.length, "items");
+            log.info("[feed] /api/feed seed:", items.length, "items");
             if (!items.length) {
                 return;
             }
@@ -265,7 +233,7 @@ fetch(`${_apiBase}/api/feed`)
             });
         },
     )
-    .catch(() => {});
+    .catch(err => log.debug("[feed] /api/feed seed failed:", err));
 
 // Backend config (.env) is the source of truth. We track the last server value
 // we seeded (key + "__server") so we can tell "the user edited this locally"
@@ -300,123 +268,80 @@ fetch(`${_apiBase}/api/config`)
         seedFromServer("wactorz-ha-url", cfg.ha?.url ?? "");
         seedFromServer("wactorz-ha-token", cfg.ha?.token ?? "");
     })
-    .catch(() => {});
+    .catch(err => log.debug("[config] /api/config seed failed:", err));
 
-function pushFeed(item: Parameters<typeof feed.push>[0]): void {
-    feed.push(item);
-    document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
+function pushFeed(item: FeedItem): void {
+    emit("af-feed-push", { item });
 }
 
 mqtt.on("heartbeat", payload => {
-    if (deletedAgentIds.has(payload.agentId)) {
+    if (isDeleted(payload.agentId, payload.timestampMs)) {
         return;
     }
-    scene.onHeartbeat(payload);
-    pushFeed({
-        type: "heartbeat",
-        label: "heartbeat",
-        agentName: payload.agentName,
-        timestamp: payload.timestampMs,
-    });
+    agentStore.onHeartbeat(payload);
+    pushFeed(heartbeatFeedItem(payload));
 });
 
 mqtt.on("spawn", payload => {
-    if (deletedAgentIds.has(payload.agentId)) {
+    // Block a stale spawn from the stop-window; a respawn carries a newer
+    // timestamp and is re-admitted by isDeleted().
+    if (isDeleted(payload.agentId, payload.timestampMs)) {
         return;
     }
-    scene.onSpawn(payload);
-    syncAgentViews();
-    pushFeed({
-        type: "spawn",
-        label: `spawned (${payload.agentType ?? "agent"})`,
-        agentName: payload.agentName,
-        timestamp: payload.timestampMs,
-    });
+    agentStore.onSpawn(payload);
+    pushFeed(spawnFeedItem(payload));
     toast.show({
         type: "spawn",
         title: payload.agentName,
-        message: `${payload.agentType ?? "agent"} is online`,
+        message: `${spawnTypeLabel(payload)} is online`,
     });
-    desktopNotifyBackground("Agent spawned", `${payload.agentName} is online`);
 });
 
 mqtt.on("alert", payload => {
-    alertCount++;
-    scene.onAlert(payload);
-    hud.flashAlert(payload.severity);
-    refreshStats();
-    const alertMsg = payload.message ?? "";
-    const alertAgent = payload.agentName ?? "system";
-    pushFeed({
-        type: payload.severity === "error" ? "alert-error" : "alert-warning",
-        label: alertMsg,
-        agentName: alertAgent,
-        timestamp: payload.timestampMs,
-    });
-    const isError = payload.severity === "error" || payload.severity === "critical";
+    agentStore.onAlert(payload);
+    pushFeed(alertFeedItem(payload));
     toast.show({
-        type: isError ? "alert-error" : "alert-warning",
-        title: alertAgent,
-        message: alertMsg.slice(0, 120),
+        type: alertKind(payload.severity),
+        title: payload.agentName ?? "system",
+        message: (payload.message ?? "").slice(0, 120),
     });
-    desktopNotifyBackground(isError ? `⚠ ${alertAgent}` : alertAgent, alertMsg.slice(0, 100));
 });
 
 mqtt.on("chat", msg => {
     if (msg.from !== "user") {
         toast.show({ type: "chat", title: msg.from, message: msg.content.slice(0, 120) });
-        desktopNotifyBackground(msg.from, msg.content.slice(0, 120));
     }
     ioManager.receiveAgentMessage(msg);
-    scene.onChat(msg.from, msg.to);
-    document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
-    pushFeed({
-        type: "chat",
-        label: `→ ${msg.to}: ${msg.content}`,
-        agentName: msg.from,
-        timestamp: msg.timestampMs,
-    });
+    agentStore.onChat(msg.from, msg.to);
+    emit("af-chat-message", { msg });
+    pushFeed(chatFeedItem(msg));
 });
 
 mqtt.on("status", payload => {
-    if (!deletedAgentIds.has(payload.agentId)) {
-        scene.addOrUpdateAgent({
+    if (!isDeleted(payload.agentId)) {
+        agentStore.addOrUpdateAgent({
             id: payload.agentId,
             name: payload.agentName,
             state: payload.state,
             protected: payload.protected ?? false,
             messagesProcessed: payload.messagesProcessed,
         });
-        syncAgentViews();
-        chatPanel.updateAgentStatus(payload.agentId, String(payload.state));
     }
     if (payload.state === "stopped") {
         window.setTimeout(() => refreshLiveActors(), 200);
-        pushFeed({
-            type: "stopped",
-            label: "stopped",
-            agentName: payload.agentName,
-            timestamp: Date.now(),
-        });
+        pushFeed(stoppedFeedItem(payload));
     }
 });
-
-let alertCount = 0;
-
-function refreshStats(): void {
-    hud.setStats(scene.getAgents(), alertCount);
-}
 
 // Seed only once — MQTT reconnects must not re-add already-known agents.
 let seeded = false;
 
 mqtt.on("connected", () => {
     _mqttLive = true;
-    console.info("[Dashboard] MQTT connected");
-    hud.setSystemHealth(true);
-    document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "live" } }));
+    log.info("[Dashboard] MQTT connected");
+    emit("af-connection-status", { status: "live" });
 
-    scene.pruneStaleRemoteAgents();
+    agentStore.pruneStaleRemoteAgents();
 
     if (seeded) {
         return;
@@ -429,88 +354,38 @@ mqtt.on("connected", () => {
 });
 
 mqtt.on("qa-flag", payload => {
-    pushFeed({
-        type: "qa-flag",
-        label: `[${payload.category}] ${payload.excerpt}`,
-        agentName: `qa-agent ← ${payload.from}`,
-        timestamp: payload.timestampMs,
-    });
+    pushFeed(qaFlagFeedItem(payload));
 });
 
 mqtt.on("metrics", payload => {
     // Merge cost/message metrics into the agent record so dashboards can display them.
-    const existing = scene.getAgents().find(a => a.id === payload.agentId);
+    const existing = agentStore.getAgents().find(a => a.id === payload.agentId);
     if (!existing) {
         return;
     }
-    const update: AgentInfo = {
-        id: payload.agentId,
-        name: existing.name,
-        state: existing.state,
-        protected: existing.protected,
-    };
-    if (payload.messagesProcessed !== undefined) {
-        update.messagesProcessed = payload.messagesProcessed;
-    }
-    if (payload.costUsd !== undefined) {
-        update.costUsd = payload.costUsd;
-    }
-    if (payload.uptime !== undefined) {
-        update.uptime = payload.uptime;
-    }
-    scene.addOrUpdateAgent(update);
-    refreshStats();
+    agentStore.addOrUpdateAgent(buildMetricsUpdate(payload, existing));
 });
 
 mqtt.on("logs", payload => {
-    const msg = payload.message ?? payload.text ?? "";
-    if (!msg) {
-        return;
+    const item = logFeedItem(payload);
+    if (item) {
+        pushFeed(item);
     }
-    pushFeed({
-        type: "chat",
-        label: msg,
-        agentName: payload.agentName,
-        timestamp: Date.now(),
-    });
 });
 
 mqtt.on("completed", payload => {
-    pushFeed({
-        type: "spawn",
-        label: "task completed",
-        agentName: payload.agentName,
-        timestamp: Date.now(),
-    });
+    pushFeed(completedFeedItem(payload));
 });
 
 mqtt.on("node-heartbeat", payload => {
-    scene.updateRemoteNode(payload.node, payload.agents);
-    pushFeed({
-        type: "health",
-        label: `node online · ${payload.agents.length} agent${payload.agents.length !== 1 ? "s" : ""}`,
-        agentName: payload.node,
-        timestamp: Date.now(),
-    });
-});
-
-mqtt.on("system-health", () => {
-    hud.setSystemHealth(true);
+    agentStore.updateRemoteNode(payload.node, payload.agents);
+    pushFeed(nodeHeartbeatFeedItem(payload));
 });
 
 mqtt.on("host-stats", stats => {
     if (stats.cpu !== undefined || stats.memUsedMb !== undefined) {
-        scene.setHostStats(stats.cpu ?? 0, stats.memUsedMb ?? 0, stats.memTotalMb);
+        agentStore.setHostStats(stats.cpu ?? 0, stats.memUsedMb ?? 0, stats.memTotalMb);
     }
-});
-
-mqtt.on("coin", payload => {
-    pushFeed({
-        type: "qa-flag",
-        label: `balance ${payload.balance}${payload.reason ? " · " + payload.reason : ""}`,
-        agentName: "wiz-agent",
-        timestamp: Date.now(),
-    });
 });
 
 // HA entity state-changes arrive over two transports; a single pusher filters
@@ -518,127 +393,55 @@ mqtt.on("coin", payload => {
 const pushHaFeed = createHaFeedPusher(pushFeed);
 
 // Path 1: direct HA WebSocket via HAClient (always works when HA is configured in frontend)
-document.addEventListener("af-ha-state-change", e => {
-    const { entityId, state, friendlyName } = (
-        e as CustomEvent<{ entityId: string; state: string; friendlyName: string }>
-    ).detail;
+listen("af-ha-state-change", detail => {
+    const { entityId, state, friendlyName } = detail;
     pushHaFeed(entityId, state, friendlyName);
 });
 
 // Path 2: ha-state-bridge-agent → MQTT ha/state/{domain}/{entity_id}
 mqtt.on("raw", ({ topic, payload }) => {
-    if (!topic.startsWith("ha/")) {
-        return;
+    const ev = parseHaRawEvent(topic, payload);
+    if (ev) {
+        pushHaFeed(ev.entityId, ev.state, ev.friendlyName);
     }
-    const p = payload as Record<string, unknown>;
-    const entityId = (p["entity_id"] as string | undefined) ?? topic.split("/").slice(-2).join(".");
-    const newState = p["new_state"] as Record<string, unknown> | undefined;
-    const state = (newState?.["state"] as string | undefined) ?? "";
-    const friendlyName =
-        ((newState?.["attributes"] as Record<string, unknown> | undefined)?.["friendly_name"] as
-            | string
-            | undefined) ?? entityId;
-    if (!state) {
-        return;
-    }
-    pushHaFeed(entityId, state, friendlyName);
 });
 
 mqtt.on("disconnected", () => {
     _mqttLive = false;
-    console.warn("[Dashboard] MQTT disconnected");
-    hud.setSystemHealth(false);
-    document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: "demo" } }));
+    log.warn("[Dashboard] MQTT disconnected");
+    emit("af-connection-status", { status: "demo" });
 });
 
 mqtt.on("error", err => {
-    console.error("[Dashboard] MQTT error:", err);
-    hud.setSystemHealth(false);
-});
-
-// Camera fly-to when agent is selected (panel open)
-document.addEventListener("agent-selected", e => {
-    const evt = e as CustomEvent<{ agent: { id: string } }>;
-    scene.onAgentSelected(evt.detail.agent.id);
+    log.error("[Dashboard] MQTT error:", err);
 });
 
 // Streaming reply finished — notify
-document.addEventListener("af-stream-end", e => {
-    const { text, from } = (e as CustomEvent<{ text: string | null; from: string }>).detail;
+listen("af-stream-end", detail => {
+    const { text, from } = detail;
     if (!text) {
         return;
     }
     toast.show({ type: "chat", title: from, message: text.slice(0, 120) });
-    desktopNotifyBackground(from, text.slice(0, 120));
 });
 
 // Agent commands from CardDashboard → WebSocket
-document.addEventListener("af-agent-command", e => {
-    const { command, agentId } = (e as CustomEvent<{ command: string; agentId: string }>).detail;
+listen("af-agent-command", detail => {
+    const { command, agentId } = detail;
     if (command === "delete") {
         // Mark deleted immediately so MQTT "stopped" events don't re-add the card
         // before the WS state-patch reply arrives.
-        deletedAgentIds.add(agentId);
-        scene.removeAgent(agentId);
+        markDeleted(agentId);
+        agentStore.removeAgent(agentId);
     }
     wsChat.sendRaw({ type: "command", command, agent_id: agentId });
 });
 
 // af-iobar sends: route through ioManager (same as regular io-bar)
-document.addEventListener("af-send-message", e => {
-    const { content } = (e as CustomEvent<{ content: string; target: string }>).detail;
-    const agent =
-        scene.getAgents().find(a => a.name === (e as CustomEvent<{ target: string }>).detail.target) ?? null;
+listen("af-send-message", detail => {
+    const { content } = detail;
+    const agent = agentStore.getAgents().find(a => a.name === detail.target) ?? null;
     void ioManager.send(content, agent);
-});
-
-const haLink = document.getElementById("ha-link") as HTMLAnchorElement | null;
-if (haLink) {
-    haLink.href = `${window.location.protocol}//${window.location.hostname}:8123`;
-}
-
-const btnBeep = document.getElementById("btn-beep");
-const btnTTS = document.getElementById("btn-tts");
-const voiceSelect = document.getElementById("tts-voice-select") as HTMLSelectElement | null;
-
-function syncSoundButtons(): void {
-    btnBeep?.classList.toggle("active", tts.beepEnabled);
-    btnTTS?.classList.toggle("active", tts.ttsEnabled);
-}
-syncSoundButtons();
-
-btnBeep?.addEventListener("click", () => {
-    tts.toggleBeep();
-    syncSoundButtons();
-});
-btnTTS?.addEventListener("click", () => {
-    tts.toggleTTS();
-    syncSoundButtons();
-});
-
-// Populate voice selector when server voices arrive
-document.addEventListener("tts-voices-loaded", e => {
-    const { voices } = (e as CustomEvent).detail;
-    if (!voiceSelect || !voices?.length) {
-        return;
-    }
-    voiceSelect.innerHTML = "";
-    // Blank option = server default
-    const blank = document.createElement("option");
-    blank.value = "";
-    blank.textContent = "— default voice —";
-    voiceSelect.appendChild(blank);
-    for (const v of voices) {
-        const opt = document.createElement("option");
-        opt.value = v.name;
-        opt.textContent = `${v.name} (${v.locale})`;
-        voiceSelect.appendChild(opt);
-    }
-    voiceSelect.value = tts.selectedVoice;
-});
-
-voiceSelect?.addEventListener("change", () => {
-    tts.setVoice(voiceSelect.value);
 });
 
 // Probe server TTS availability + load voice list (base must be set first so
@@ -648,25 +451,21 @@ tts.init();
 
 mqtt.connect();
 
-window.addEventListener("focus", () => clearUnreadBadge());
-
 window.addEventListener("beforeunload", () => {
     mqtt.disconnect();
     wsChat.disconnect();
-    scene.dispose();
+    agentStore.dispose();
 });
 
 // wipe all
-document.addEventListener("af-wipe-all", () => {
-    scene.clearAll();
-    feed.clear();
-    _logFeedMaxTs = 0;
+listen("af-wipe-all", () => {
+    agentStore.clearAll();
+    _logFeedState.maxTs = 0;
 });
 
 // A scoped reset (metrics / logs) cleared the server-side activity log — drop
 // the on-screen feed too, since onLogFeed only ever appends and would otherwise
 // keep showing stale lines until the next event.
-document.addEventListener("af-clear-feed", () => {
-    feed.clear();
-    _logFeedMaxTs = 0;
+listen("af-clear-feed", () => {
+    _logFeedState.maxTs = 0;
 });

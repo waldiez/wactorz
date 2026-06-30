@@ -8,7 +8,7 @@
  *   - Everything else → network-first, fall back to cache
  */
 
-const CACHE = "wactorz-v3";
+const CACHE = "wactorz-v4";
 
 const NEVER_CACHE = ["/api/", "/ws", "/mqtt"];
 
@@ -46,11 +46,14 @@ self.addEventListener("fetch", (e) => {
       fetch(e.request)
         .then((res) => {
           if (res.ok) {
-            caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
+            // Clone synchronously, before `res` is returned and its body read —
+            // cloning later (inside the async cache write) throws "body already used".
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(e.request, copy));
           }
           return res;
         })
-        .catch(() => caches.match(e.request)),
+        .catch(() => caches.match(e.request).then((c) => c ?? Response.error())),
     );
     return;
   }
@@ -68,11 +71,12 @@ self.addEventListener("fetch", (e) => {
       caches.match(e.request).then((cached) => {
         const fresh = fetch(e.request).then((res) => {
           if (res.ok) {
-            caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(e.request, copy));
           }
           return res;
         });
-        return cached ?? fresh;
+        return cached ?? fresh.catch(() => Response.error());
       }),
     );
     return;
@@ -83,10 +87,11 @@ self.addEventListener("fetch", (e) => {
     fetch(e.request)
       .then((res) => {
         if (res.ok) {
-          caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy));
         }
         return res;
       })
-      .catch(() => caches.match(e.request)),
+      .catch(() => caches.match(e.request).then((c) => c ?? Response.error())),
   );
 });

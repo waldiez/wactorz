@@ -172,6 +172,16 @@ class PlanningMixin:
                 lines.append(f"     installs: {pkgs}")
 
         lines.append("")
+
+        # Advisory: duplicate / contradicting active rules (from the planner's
+        # semantic check). Shown prominently just above the approval actions so
+        # the user sees it before deciding. Advisory only — never blocks.
+        warnings = envelope.get("warnings") or ""
+        if warnings.strip():
+            lines.append("⚠️ **Heads up — possible overlap with existing rules**")
+            lines.append(warnings)
+            lines.append("")
+
         lines.append("**To proceed:**")
         lines.append("  Reply **yes** (or **approve**) to spawn the agents above.")
         lines.append("  Reply **no** (or **reject**) to discard this plan.")
@@ -695,4 +705,3 @@ class PlanningMixin:
             return {"error": f"Pipeline timed out after {timeout}s"}
         finally:
             self._result_futures.pop(task_id, None)
-

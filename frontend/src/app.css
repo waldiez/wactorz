@@ -4,12 +4,11 @@
  */
 
 @import "./styles/base.css";
-@import "./styles/hud.css";
-@import "./styles/chat-panel.css";
-@import "./styles/activity-feed.css";
+@import "./styles/chat.css";
 @import "./styles/iobar.css";
 @import "./styles/dashboard.css";
 @import "./styles/cards.css";
 @import "./styles/responsive.css";
 @import "./styles/settings.css";
 @import "./styles/features.css";
+@import "./styles/ha.css";

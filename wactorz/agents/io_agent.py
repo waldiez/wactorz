@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 IO_CHAT_TOPIC = "io/chat"
 IO_CHAT_REPLY_TOPIC = "io/chat/response"  # stable topic the UI always subscribes to
+IO_CHAT_CONTROL_TOPIC = "io/chat/control"  # UI publishes {"action": "stop"} here
 
 
 class IOAgent(Actor):
@@ -39,6 +40,8 @@ class IOAgent(Actor):
         # survive a "Wipe everything" reset like the other system actors.
         self.protected = True
         self._pending_replies: dict[str, tuple[str, float]] = {}
+        # In-flight chat turns, so a stop command can cancel them mid-generation.
+        self._active_generations: set[asyncio.Task] = set()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -71,6 +74,7 @@ class IOAgent(Actor):
             try:
                 async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe(IO_CHAT_TOPIC, qos=1)
+                    await client.subscribe(IO_CHAT_CONTROL_TOPIC, qos=1)
                     _last_chat_exc = None
                     async for mqtt_msg in client.messages:
                         if self.state in (ActorState.STOPPED, ActorState.FAILED):
@@ -80,7 +84,18 @@ class IOAgent(Actor):
                             if isinstance(raw, (bytes, bytearray)):
                                 raw = raw.decode()
                             data = json.loads(raw)
-                            await self._route_chat(data)
+
+                            # Control channel (stop/cancel) is handled inline so it
+                            # stays responsive even while a generation is streaming.
+                            if str(mqtt_msg.topic) == IO_CHAT_CONTROL_TOPIC:
+                                await self._handle_control(data)
+                                continue
+
+                            # Run each chat turn as a tracked task so the listener
+                            # stays free to receive a stop command mid-generation.
+                            task = asyncio.create_task(self._route_chat(data))
+                            self._active_generations.add(task)
+                            task.add_done_callback(self._active_generations.discard)
                         except Exception as exc:
                             logger.error(f"[{self.name}] io/chat parse error: {exc}")
             except asyncio.CancelledError:
@@ -130,29 +145,35 @@ class IOAgent(Actor):
         # chunk-by-chunk responses instead of waiting for the full reply.
         if target_name in ("main-actor", "main") and hasattr(target, "process_user_input_stream"):
             buf = []
-            async for chunk in target.process_user_input_stream(text):
-                if isinstance(chunk, dict):
-                    continue  # system metadata, skip
-                buf.append(str(chunk))
-                # flush every ~80 chars so the UI feels live
-                if sum(len(c) for c in buf) >= 80:
+            try:
+                async for chunk in target.process_user_input_stream(text):
+                    if isinstance(chunk, dict):
+                        continue  # system metadata, skip
+                    buf.append(str(chunk))
+                    # flush every ~80 chars so the UI feels live
+                    if sum(len(c) for c in buf) >= 80:
+                        await self._reply("".join(buf))
+                        buf.clear()
+            finally:
+                # Flush whatever is left even if the stream was cancelled
+                # (stop button) so the last sub-80-char fragment isn't lost.
+                if buf:
                     await self._reply("".join(buf))
-                    buf.clear()
-            if buf:
-                await self._reply("".join(buf))
             return
 
         if hasattr(target, "chat_stream"):
             buf = []
-            async for chunk in target.chat_stream(text):
-                if isinstance(chunk, dict):
-                    continue
-                buf.append(str(chunk))
-                if sum(len(c) for c in buf) >= 80:
+            try:
+                async for chunk in target.chat_stream(text):
+                    if isinstance(chunk, dict):
+                        continue
+                    buf.append(str(chunk))
+                    if sum(len(c) for c in buf) >= 80:
+                        await self._reply("".join(buf))
+                        buf.clear()
+            finally:
+                if buf:
                     await self._reply("".join(buf))
-                    buf.clear()
-            if buf:
-                await self._reply("".join(buf))
             return
 
         # Fallback: actor message passing (no streaming)
@@ -163,6 +184,38 @@ class IOAgent(Actor):
         )
         self._pending_replies[msg.message_id] = (from_id, time.time())
         await target.receive(msg)
+
+    # ── Generation control (stop button) ───────────────────────────────────
+
+    async def _handle_control(self, data: dict):
+        """Handle control-channel messages from the UI (e.g. the stop button)."""
+        action = (data.get("action") or "").strip().lower()
+        if action in ("stop", "cancel", "abort", "interrupt"):
+            await self._stop_generations()
+        else:
+            logger.debug(f"[{self.name}] ignoring unknown control action: {action!r}")
+
+    async def _stop_generations(self):
+        """
+        Cancel any in-flight chat generation(s).
+
+        Cancellation propagates down through process_user_input_stream →
+        chat_stream → the provider's streaming context manager, which closes
+        the LLM HTTP connection. LLMAgent.chat_stream catches the cancellation,
+        persists whatever partial text already arrived, and re-raises — so no
+        output is lost and the connection is released cleanly.
+        """
+        tasks = [t for t in self._active_generations if not t.done()]
+        if not tasks:
+            await self._reply("[Nothing is generating right now.]")
+            return
+
+        for t in tasks:
+            t.cancel()
+        # Wait for them to unwind so partial state is persisted before we reply.
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await self._reply("⏹ Stopped.")
+        logger.info(f"[{self.name}] stopped {len(tasks)} active generation(s)")
 
     @staticmethod
     def _parse_mention(content: str) -> tuple[str, str]:

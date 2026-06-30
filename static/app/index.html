@@ -45,56 +45,11 @@
     <link rel="icon" href="./icon.png" type="image/png" sizes="512x512" />
     <!-- crossorigin: send the ingress auth cookie, else HA ingress 401s the manifest -->
     <link rel="manifest"         href="./site.webmanifest" crossorigin="use-credentials" />
-    <script type="module" crossorigin src="./assets/index-B-8nWZfN.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/vendor-Cqb5uiT0.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-CryiMNBb.css">
+    <script type="module" crossorigin src="./assets/index-DHrokgl1.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/vendor-Cxb5M35d.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-DMkQ6d67.css">
   </head>
   <body>
-    <!-- 3D canvas -->
-    <canvas id="renderCanvas"></canvas>
-
-    <!-- HUD: agent count + health badge + page links -->
-    <div id="hud" class="glass" style="display:none">
-      <div class="hud-title">Wactorz</div>
-      <div class="hud-count" id="hud-count">0</div>
-      <div class="hud-label">Active Agents</div>
-      <div class="hud-badge healthy" id="hud-health">System Healthy</div>
-      <div id="hud-stats"></div>
-      <nav class="hud-links">
-        <a id="ha-link" href="#" target="_blank" rel="noopener" class="hud-link">⌂ Home Assistant</a>
-      </nav>
-      <button id="btn-settings" title="App settings">⚙ Settings</button>
-    </div>
-
-
-    <!-- Activity feed toggle (below theme switcher) -->
-    <button id="feed-toggle" style="display:none" title="Toggle activity feed">
-      Feed <span id="feed-badge"></span>
-    </button>
-
-    <!-- Activity feed panel -->
-    <div id="activity-feed">
-      <div id="feed-list"></div>
-    </div>
-
-    <!-- Chat panel (slides in from right on agent click) -->
-    <div id="chat-panel">
-      <div class="af-chat-sidebar">
-        <div class="af-chat-sidebar-search">
-          <input id="chat-sidebar-search" placeholder="Filter agents…" autocomplete="off">
-        </div>
-        <div class="af-chat-agent-list" id="chat-agent-list"></div>
-      </div>
-      <div class="af-chat-pane">
-        <div class="af-chat-pane-header">
-          <button class="af-chat-back-btn" id="panel-back" title="Back to agents">‹ Back</button>
-          <div class="af-chat-pane-title" id="panel-agent-name">— select an agent —</div>
-          <span class="af-chat-pane-state" id="panel-agent-status"></span>
-          <button class="close-btn" id="panel-close" title="Close">✕</button>
-        </div>
-        <div id="chat-messages"></div>
-      </div>
-    </div>
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", () => {

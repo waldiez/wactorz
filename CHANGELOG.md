@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Added
+
+- **Pipeline-rule conflict advisory** — planner now semantically checks a new rule
+  against active ones and flags duplicates and contradictions (e.g. "over 25° AC off"
+  vs "AC on") as a non-blocking "⚠️ Heads up" note at approval.
+
+### Fixed
+
+- **Planners leaked until restart** — proposal/pipeline planners never stopped and
+  stayed pinned by both the registry and the Supervisor. Added a lifetime watchdog
+  (`max_lifetime_s`, 10 min) + idempotent `_terminate()` doing `release()` →
+  `unregister()` → `stop()`.
+- **Plan steps silently dropped** — bad/cyclic `depends_on` aborted the plan with no
+  trace; references are now validated and failures surfaced per-step.
+- **`plan_only` could spawn agents** — `approved_plan` was checked first despite the
+  docs; precedence is now enforced in `on_start`.
+
+### Changed
+
+- **Unified planner JSON parsing** — both decomposition paths share
+  `_extract_json_array` instead of fragile fence-stripping.
+- **Continuous agents declarable** — `_ensure_agents` honours
+  `spawn_config["continuous"]` before falling back to code substring-matching.
+- **`_is_pipeline_request`** is now a proper `@staticmethod`.
+
 ### Removed
 
 - **Flutter companion app** — the `mobile/` Flutter project (iOS/Android companion

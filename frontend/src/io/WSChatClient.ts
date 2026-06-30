@@ -12,33 +12,14 @@
  * instead of publishing to MQTT io/chat.  The server streams replies back as:
  *   {"type":"chat","from":"io-gateway","content":"...","timestamp":...}
  */
+import { log } from "./logger";
+import { emit } from "../events";
+import type { StatePatchAgent, SnapshotStats, LogFeedItem } from "../types/ws";
 
 export type ChatHandler = (content: string, from: string, timestampMs: number) => void;
 export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number) => void;
 export type StreamEndHandler = (from: string) => void;
 export type ModeHandler = (mode: "direct_ws" | "mqtt") => void;
-
-/** One agent entry as the server includes it in state-patch messages. */
-export type StatePatchAgent = {
-    agent_id: string;
-    name?: string;
-    state?: string;
-    status?: string;
-    protected?: boolean;
-    messages_processed?: number;
-    cost_usd?: number;
-    uptime?: number;
-    cpu?: number;
-    mem?: number;
-    task?: string;
-    agent_type?: string;
-};
-
-/** Snapshot-level totals computed by the backend (includes historical/deleted agents). */
-export type SnapshotStats = {
-    totalCostUsd?: number;
-    totalMessages?: number;
-};
 
 /**
  * Called whenever the server broadcasts a state patch over the WebSocket.
@@ -50,22 +31,6 @@ export type StatePatchHandler = (
     deletedId?: string,
     stats?: SnapshotStats,
 ) => void;
-
-/** One MQTT-derived event entry from the server's in-memory log_feed. */
-export interface LogFeedItem {
-    type: string;
-    agent_id?: string;
-    name?: string;
-    agentName?: string;
-    message?: string;
-    text?: string;
-    timestamp?: number;
-    status?: Record<string, unknown>;
-    severity?: string;
-    agentType?: string;
-    agent_type?: string;
-    command?: string;
-}
 
 export type LogFeedHandler = (items: LogFeedItem[]) => void;
 
@@ -94,10 +59,12 @@ export class WSChatClient {
      *  which the server stamps with the generic transport id "io-gateway". */
     private _lastAgentName = "main-actor";
 
+    /** Active chat mode announced by the server (`direct_ws` or `mqtt`). */
     get chatMode(): "direct_ws" | "mqtt" {
         return this._chatMode;
     }
 
+    /** True while the WebSocket is open. */
     get connected(): boolean {
         return this.ws?.readyState === WebSocket.OPEN;
     }
@@ -112,7 +79,7 @@ export class WSChatClient {
         this._onStreamChunk = fn;
     }
 
-    /** Stream finished — render final markdown, clear typing indicator. */
+    /** Stream finished — render the final markdown for the accumulated reply. */
     onStreamEnd(fn: StreamEndHandler): void {
         this._onStreamEnd = fn;
     }
@@ -132,6 +99,7 @@ export class WSChatClient {
         this._onLogFeed = fn;
     }
 
+    /** Open the WebSocket to `url` and auto-reconnect on drops until disconnected. */
     connect(url: string): void {
         this._url = url;
         this._closed = false;
@@ -139,6 +107,7 @@ export class WSChatClient {
         this._open();
     }
 
+    /** Close the socket and stop reconnecting. */
     disconnect(): void {
         this._closed = true;
         if (this._reconnectTimer !== null) {
@@ -178,13 +147,13 @@ export class WSChatClient {
         try {
             this.ws = new WebSocket(this._url);
         } catch (err) {
-            console.warn("[WSChat] Cannot open WebSocket:", err);
+            log.warn("[WSChat] Cannot open WebSocket:", err);
             this._scheduleReconnect();
             return;
         }
 
         this.ws.addEventListener("open", () => {
-            console.info("[WSChat] connected →", this._url);
+            log.info("[WSChat] connected →", this._url);
             this._reconnectDelay = 1_000;
         });
 
@@ -236,7 +205,7 @@ export class WSChatClient {
     private _handleConfig(data: Record<string, unknown>): void {
         const mode = (data["chat_mode"] as string) === "direct_ws" ? "direct_ws" : "mqtt";
         this._chatMode = mode;
-        console.info("[WSChat] chat_mode =", mode);
+        log.info("[WSChat] chat_mode =", mode);
         this._onMode?.(mode);
     }
 
@@ -244,21 +213,18 @@ export class WSChatClient {
     private _handleReset(data: Record<string, unknown>): void {
         const scope = String(data["scope"] ?? "");
         if (scope === "all") {
-            document.dispatchEvent(new CustomEvent("af-wipe-all"));
+            emit("af-wipe-all");
             return;
         }
         this._applyStatePatch(data["state"] as StatePatch | undefined);
         if (scope === "chat") {
-            document.dispatchEvent(
-                new CustomEvent("af-reset-chat", {
-                    detail: { agent: data["agent"] ?? null },
-                }),
-            );
+            const agent = data["agent"];
+            emit("af-reset-chat", { agent: typeof agent === "string" ? agent : null });
         }
         // metrics and logs both clear the server-side activity feed; the
         // on-screen feed is append-only, so tell it to drop its entries.
         if (scope === "metrics" || scope === "logs") {
-            document.dispatchEvent(new CustomEvent("af-clear-feed"));
+            emit("af-clear-feed");
         }
     }
 

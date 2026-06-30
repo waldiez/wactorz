@@ -9,54 +9,29 @@
  * subscriptions, and optional registry fetching (areas, entity registry,
  * device registry) for room-based grouping in the UI.
  */
-
-export interface HAEntity {
-    entity_id: string;
-    state: string;
-    attributes: {
-        friendly_name?: string;
-        icon?: string;
-        unit_of_measurement?: string;
-        device_class?: string;
-        supported_features?: number;
-        entity_picture?: string;
-        [key: string]: any;
-    };
-    last_changed: string;
-    last_updated: string;
-}
-
-export interface HAArea {
-    area_id: string;
-    name: string;
-    icon?: string | null;
-    floor_id?: string | null;
-}
-
-export interface HAEntityEntry {
-    entity_id: string;
-    device_id?: string | null;
-    area_id?: string | null;
-    disabled_by?: string | null;
-    hidden_by?: string | null;
-}
-
-export interface HADeviceEntry {
-    id: string;
-    area_id?: string | null;
-    name?: string | null;
-    name_by_user?: string | null;
-    manufacturer?: string | null;
-    model?: string | null;
-}
-
-export interface HARegistries {
-    areas: HAArea[];
-    entityEntries: HAEntityEntry[];
-    deviceEntries: HADeviceEntry[];
-}
+import { log } from "./logger";
+import { emit } from "../events";
+import type { HAEntity, HAArea, HAEntityEntry, HADeviceEntry, HARegistries } from "../types/ha";
 
 export type HAUpdateHandler = (entities: HAEntity[]) => void;
+
+/** A parsed inbound HA WebSocket frame (auth handshake, command result, or event). */
+interface HAMessage {
+    type: string;
+    id?: number;
+    success?: boolean;
+    result?: unknown;
+    message?: string;
+    error?: { message?: string };
+    event?: { data?: { new_state?: HAEntity } };
+}
+
+/** An outbound HA command; `id` is assigned by the client before sending. */
+interface HACommand {
+    type: string;
+    id?: number;
+    [key: string]: unknown;
+}
 
 export class HAClient {
     private ws: WebSocket | null = null;
@@ -72,17 +47,19 @@ export class HAClient {
     private _entitiesReqId: number | null = null;
 
     /** Pending promise resolvers for registry (and other) tracked requests. */
-    private _resolvers = new Map<number, (data: any) => void>();
+    private _resolvers = new Map<number, (data: HAMessage) => void>();
 
     constructor(
         private readonly url: string,
         private readonly token: string,
     ) {}
 
+    /** True while the WebSocket is open (or connecting). */
     get connected(): boolean {
         return this.ws !== null && this.ws.readyState !== WebSocket.CLOSED;
     }
 
+    /** Open the WebSocket, authenticate, and subscribe to state changes; `onUpdate` fires on every entity update. */
     connect(onUpdate: HAUpdateHandler): void {
         this.onUpdate = onUpdate;
         const baseUrl = this.url.endsWith("/") ? this.url.slice(0, -1) : this.url;
@@ -95,19 +72,19 @@ export class HAClient {
             wsUrl = wsBase + "/api/websocket";
         }
 
-        console.log("[HA] Connecting to", wsUrl);
+        log.info("[HA] Connecting to", wsUrl);
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {
-            console.log("[HA] WebSocket opened");
+            log.info("[HA] WebSocket opened");
         };
 
         this.ws.onmessage = ev => {
-            let data: any;
+            let data: HAMessage;
             try {
-                data = JSON.parse(ev.data);
+                data = JSON.parse(ev.data) as HAMessage;
             } catch {
-                console.error("[HA] Failed to parse message:", ev.data);
+                log.error("[HA] Failed to parse message:", ev.data);
                 return;
             }
             this._handleMessage(data);
@@ -115,26 +92,26 @@ export class HAClient {
 
         this.ws.onclose = () => {
             this.authenticated = false;
-            console.warn("[HA] WebSocket closed");
+            log.warn("[HA] WebSocket closed");
         };
 
         this.ws.onerror = err => {
-            console.error("[HA] WebSocket error:", err);
+            log.error("[HA] WebSocket error:", err);
         };
     }
 
     /** Route a parsed WebSocket frame to the matching handler. */
-    private _handleMessage(data: any): void {
+    private _handleMessage(data: HAMessage): void {
         if (data.type === "auth_required") {
             this.ws?.send(JSON.stringify({ type: "auth", access_token: this.token }));
         } else if (data.type === "auth_ok") {
             this.authenticated = true;
-            console.info("[HA] Authenticated");
+            log.info("[HA] Authenticated");
             this._fetchEntities();
             void this._fetchRegistries();
             this._subscribeEvents();
         } else if (data.type === "auth_invalid") {
-            console.error("[HA] Authentication failed:", data.message);
+            log.error("[HA] Authentication failed:", data.message);
         } else if (data.type === "result" && data.id != null) {
             this._handleResult(data);
         } else if (data.type === "event" && data.event?.data?.new_state) {
@@ -143,8 +120,8 @@ export class HAClient {
     }
 
     /** Resolve a tracked request — entity snapshot callback and/or promise resolver. */
-    private _handleResult(data: any): void {
-        const id = data.id as number;
+    private _handleResult(data: HAMessage): void {
+        const id = data.id!;
 
         // Entities (get_states) — handled synchronously to preserve callback contract
         if (id === this._entitiesReqId && data.success && Array.isArray(data.result)) {
@@ -170,17 +147,14 @@ export class HAClient {
             this.entities.push(newState);
         }
         this.onUpdate?.(this.entities);
-        document.dispatchEvent(
-            new CustomEvent("af-ha-state-change", {
-                detail: {
-                    entityId: newState.entity_id,
-                    state: newState.state,
-                    friendlyName: newState.attributes?.friendly_name ?? newState.entity_id,
-                },
-            }),
-        );
+        emit("af-ha-state-change", {
+            entityId: newState.entity_id,
+            state: newState.state,
+            friendlyName: newState.attributes?.friendly_name ?? newState.entity_id,
+        });
     }
 
+    /** Close the connection and reset auth + pending-request state. */
     disconnect(): void {
         this.ws?.close();
         this.ws = null;
@@ -188,6 +162,7 @@ export class HAClient {
         this._resolvers.clear();
     }
 
+    /** Toggle an entity by id (no-op until authenticated). */
     toggleEntity(entityId: string): void {
         if (!this.authenticated) {
             return;
@@ -201,7 +176,8 @@ export class HAClient {
         });
     }
 
-    callService(domain: string, service: string, serviceData: any): void {
+    /** Call an arbitrary HA service with data (no-op until authenticated). */
+    callService(domain: string, service: string, serviceData: Record<string, unknown>): void {
         if (!this.authenticated) {
             return;
         }
@@ -209,7 +185,7 @@ export class HAClient {
     }
 
     /** Fire-and-forget: assigns an id and sends. Result response is ignored. */
-    private _sendVoid(msg: any): void {
+    private _sendVoid(msg: HACommand): void {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return;
         }
@@ -218,7 +194,7 @@ export class HAClient {
     }
 
     /** Tracked request: returns a Promise that resolves/rejects when the result arrives. */
-    private _request<T = any>(msg: any): Promise<T> {
+    private _request<T = unknown>(msg: HACommand): Promise<T> {
         return new Promise((resolve, reject) => {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
                 reject(new Error("WebSocket not open"));
@@ -255,7 +231,7 @@ export class HAClient {
             ]);
             this.onRegistriesUpdate?.({ areas, entityEntries, deviceEntries });
         } catch (e) {
-            console.warn("[HA] Registry fetch failed (older HA or no permission):", e);
+            log.warn("[HA] Registry fetch failed (older HA or no permission):", e);
             // Fire with empty registries so the UI still renders without room grouping
             this.onRegistriesUpdate?.({ areas: [], entityEntries: [], deviceEntries: [] });
         }

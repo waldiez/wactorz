@@ -129,8 +129,10 @@ function refreshLiveActors(): void {
             );
             log.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
         })
-        .catch(() => {
-            // Dev mode without a running server — ignore silently.
+        .catch(err => {
+            // Dev mode without a running server is expected; log at debug so a
+            // genuine backend failure still leaves a trace.
+            log.debug("[Dashboard] live actor refresh failed:", err);
         })
         .finally(() => {
             liveSyncInFlight = false;
@@ -231,7 +233,7 @@ fetch(`${_apiBase}/api/feed`)
             });
         },
     )
-    .catch(() => {});
+    .catch(err => log.debug("[feed] /api/feed seed failed:", err));
 
 // Backend config (.env) is the source of truth. We track the last server value
 // we seeded (key + "__server") so we can tell "the user edited this locally"
@@ -266,7 +268,7 @@ fetch(`${_apiBase}/api/config`)
         seedFromServer("wactorz-ha-url", cfg.ha?.url ?? "");
         seedFromServer("wactorz-ha-token", cfg.ha?.token ?? "");
     })
-    .catch(() => {});
+    .catch(err => log.debug("[config] /api/config seed failed:", err));
 
 function pushFeed(item: FeedItem): void {
     emit("af-feed-push", { item });

@@ -25,7 +25,7 @@ import { buildHeader, buildBottomNav } from "./dashboard/header";
 import { renderHADevices, areaIconText } from "./dashboard/haDevices";
 import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
 import type { View, ConnState } from "./dashboard/types";
-import { buildFeedView, appendFeedItemToView, feedItemEl, feedKey } from "./dashboard/feedView";
+import { buildFeedView, appendFeedItemToView, feedKey } from "./dashboard/feedView";
 import { buildHAView } from "./dashboard/haView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
@@ -459,10 +459,6 @@ export class CardDashboard {
 
     private _appendFeedItemToView(item: FeedItem): void {
         appendFeedItemToView(this.root, item, this.hideHeartbeats);
-    }
-
-    private _feedItemEl(container: HTMLElement, item: FeedItem): void {
-        feedItemEl(container, item);
     }
 
     private _renderConnBadge(): void {

@@ -6,7 +6,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { CardDashboard } from "../ui/CardDashboard";
 import { buildAudioPopover, buildResetPopover } from "../ui/dashboard/popovers";
 import type { AgentInfo, ChatMessage } from "../types/agent";
-import type { FeedItem } from "../types/feed";
 
 // Characterization tests: they pin CardDashboard's observable render behaviour
 // (view containers, card structure, builders) so the upcoming module split can
@@ -19,10 +18,6 @@ function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
 
 function chatMsg(over: Partial<ChatMessage> = {}): ChatMessage {
     return { id: "m1", from: "main", to: "user", content: "**hi**", timestampMs: 1_700_000_000_000, ...over };
-}
-
-function feedItem(over: Partial<FeedItem> = {}): FeedItem {
-    return { type: "chat", label: "hello", agentName: "main", timestamp: 1_700_000_000_000, ...over };
 }
 
 describe("CardDashboard render", () => {
@@ -96,12 +91,6 @@ describe("CardDashboard render", () => {
         const bubble = container.querySelector(".af-chat-msg-bubble");
         expect(bubble).toBeTruthy();
         expect(bubble!.innerHTML).toContain("<strong>");
-    });
-
-    it("_feedItemEl renders a feed row", () => {
-        const container = document.createElement("div");
-        cd._feedItemEl(container, feedItem());
-        expect(container.querySelector(".af-feed-text")?.textContent).toContain("hello");
     });
 
     it("builds the audio and reset popovers without throwing", () => {

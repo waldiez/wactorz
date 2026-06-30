@@ -9,8 +9,9 @@ Chat routing modes (set via registry wiring in cli.py):
 The mode is advertised to the browser on connect via a {"type":"config"} frame
 so the frontend knows whether to send chat over /ws or publish to io/chat.
 """
-import sys
+
 import asyncio
+import sys
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -24,6 +25,7 @@ if sys.platform == "win32":
     )
     if _need_wrap:
         import io
+
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
@@ -45,11 +47,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-MQTT_BROKER  = "localhost"
-MQTT_PORT    = 1883
+MQTT_BROKER = "localhost"
+MQTT_PORT = 1883
 MQTT_WS_PORT = 9001
-WS_PORT      = 8888
-MQTT_TOPICS  = ["agents/#", "system/#", "nodes/#", "io/chat"]
+WS_PORT = 8888
+MQTT_TOPICS = ["agents/#", "system/#", "nodes/#", "io/chat"]
 
 # Injected by cli.py after the actor system is built.
 # None  → legacy MQTT/IOAgent mode
@@ -62,11 +64,11 @@ db = None
 IO_GATEWAY_ID = "io-gateway"
 
 state = {
-    "agents":        {},
-    "nodes":         {},
-    "alerts":        [],
+    "agents": {},
+    "nodes": {},
+    "alerts": [],
     "system_health": {},
-    "log_feed":      [],
+    "log_feed": [],
 }
 
 ws_clients: set = set()
@@ -83,24 +85,25 @@ def _track_chat_task(task):
     task.add_done_callback(_inflight_chat_tasks.discard)
     return task
 
+
 # IDs that have been explicitly deleted — block re-admission from stale heartbeats.
 # Bounded so a long-running monitor doesn't leak memory across many deletions.
 # Stored as a list of (agent_id, deleted_at_ts) tuples so we can re-admit on
 # a NEWER status event (which is what a deliberate respawn produces) while
 # still ignoring stale retained messages from the deleted instance.
 _deleted_agent_ids: list = []
-_DELETED_IDS_MAX   = 1024
-_hard_resetting    = False
+_DELETED_IDS_MAX = 1024
+_hard_resetting = False
 
 
 def _mark_deleted(agent_id: str) -> None:
     """Add an agent_id to the deleted list with FIFO eviction. If already
     present, refresh its deleted-at timestamp so any in-flight retained
     messages from the previous incarnation stay blocked."""
-    _undelete(agent_id)   # remove any prior entry so the new timestamp wins
+    _undelete(agent_id)  # remove any prior entry so the new timestamp wins
     _deleted_agent_ids.append((agent_id, time.time()))
     if len(_deleted_agent_ids) > _DELETED_IDS_MAX:
-        del _deleted_agent_ids[0:len(_deleted_agent_ids) - _DELETED_IDS_MAX]
+        del _deleted_agent_ids[0 : len(_deleted_agent_ids) - _DELETED_IDS_MAX]
 
 
 def _is_deleted(agent_id: str, newer_than: float = 0.0) -> bool:
@@ -135,8 +138,18 @@ async def _purge_agent_retained(agent_id: str) -> None:
     """
     if not mqtt_client_ref:
         return
-    for metric in ("status", "heartbeat", "metrics", "logs", "spawned",
-                   "manifest", "errors", "detections", "results", "completed"):
+    for metric in (
+        "status",
+        "heartbeat",
+        "metrics",
+        "logs",
+        "spawned",
+        "manifest",
+        "errors",
+        "detections",
+        "results",
+        "completed",
+    ):
         topic = f"agents/{agent_id}/{metric}"
         try:
             await mqtt_client_ref.publish(topic, b"", retain=True)
@@ -192,8 +205,11 @@ async def _purge_spawn_reconcile(agent: str | None = None) -> None:
             node_names.add(n)
 
     # Clear the live registry through the actor's own persistence.
-    if (main_ref is not None and hasattr(main_ref, "recall")
-            and main_ref.recall("_spawned_agents", None) is not None):
+    if (
+        main_ref is not None
+        and hasattr(main_ref, "recall")
+        and main_ref.recall("_spawned_agents", None) is not None
+    ):
         kept = {k: v for k, v in reg.items() if k != agent} if agent else {}
         main_ref.persist("_spawned_agents", kept)
 
@@ -228,8 +244,8 @@ async def _delete_agent(agent_id: str) -> str:
       4. Clear retained messages so old heartbeats don't come back on reconnect.
     """
     record = state["agents"].get(agent_id) or {}
-    name   = record.get("name") or agent_id
-    node   = (record.get("node") or "").strip()
+    name = record.get("name") or agent_id
+    node = (record.get("node") or "").strip()
 
     _mark_deleted(agent_id)
     state["agents"].pop(agent_id, None)
@@ -277,8 +293,9 @@ async def _delete_agent(agent_id: str) -> str:
                 try:
                     await mqtt_client_ref.publish(
                         f"agents/{agent_id}/commands",
-                        json.dumps({"command": "stop", "sender": "monitor",
-                                    "timestamp": time.time()}),
+                        json.dumps(
+                            {"command": "stop", "sender": "monitor", "timestamp": time.time()}
+                        ),
                     )
                     routed = f"via agents/{agent_id}/commands"
                 except Exception as e:
@@ -288,13 +305,12 @@ async def _delete_agent(agent_id: str) -> str:
     # dashboard's view to clear immediately rather than wait for tombstones.
     asyncio.create_task(_purge_agent_retained(agent_id))
 
-    logger.info(
-        f"[delete] '{name}' (id={agent_id[:8]}, node={node or 'local'}) {routed}"
-    )
+    logger.info(f"[delete] '{name}' (id={agent_id[:8]}, node={node or 'local'}) {routed}")
     return routed
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
+
 
 def _chat_mode() -> str:
     return "direct_ws" if registry is not None else "mqtt"
@@ -316,8 +332,8 @@ def update_agent(agent_id: str, key: str, data):
         return
     if agent_id not in state["agents"]:
         state["agents"][agent_id] = {
-            "agent_id":   agent_id,
-            "name":       agent_id[:8],
+            "agent_id": agent_id,
+            "name": agent_id[:8],
             "first_seen": time.time(),
         }
     state["agents"][agent_id][key] = data
@@ -348,13 +364,12 @@ async def broadcast(msg: dict):
 # Every handler receives a `reply_fn` coroutine — callers supply either an
 # MQTT publisher or a WebSocket sender.  No global state, no monkey-patching.
 
-async def _slash_deploy(node: str, host: str, user: str, pw: str, broker: str,
-                        reply_fn):
+
+async def _slash_deploy(node: str, host: str, user: str, pw: str, broker: str, reply_fn):
     if not host:
         await reply_fn(f"[discover] Searching for '{node}' on the network...")
         discovered = None
-        for candidate in [f"{node}.local", "raspberrypi.local",
-                          f"{node.replace('-', '')}.local"]:
+        for candidate in [f"{node}.local", "raspberrypi.local", f"{node.replace('-', '')}.local"]:
             try:
                 ip = await asyncio.get_event_loop().run_in_executor(
                     None, socket.gethostbyname, candidate
@@ -396,8 +411,7 @@ async def _slash_deploy(node: str, host: str, user: str, pw: str, broker: str,
 
     if not user or not pw:
         await reply_fn(
-            f"[deploy] Need SSH credentials:\n"
-            f"  /deploy {node} {host} <user> <password> [broker]"
+            f"[deploy] Need SSH credentials:\n  /deploy {node} {host} <user> <password> [broker]"
         )
         return
 
@@ -408,23 +422,27 @@ async def _slash_deploy(node: str, host: str, user: str, pw: str, broker: str,
 
     broker = broker or "localhost"
     await reply_fn(f"[deploy] Deploying to {user}@{host} as '{node}'... (20-60s)")
-    result = await main.delegate_to_installer({
-        "action": "node_deploy", "host": host, "user": user,
-        "password": pw, "node_name": node, "broker": broker,
-    }, timeout=120.0)
+    result = await main.delegate_to_installer(
+        {
+            "action": "node_deploy",
+            "host": host,
+            "user": user,
+            "password": pw,
+            "node_name": node,
+            "broker": broker,
+        },
+        timeout=120.0,
+    )
 
     if result.get("success"):
-        await reply_fn(
-            f"[OK] Node '{node}' is live!\n"
-            f"  \"spawn a CPU monitor agent on {node}\""
-        )
+        await reply_fn(f"[OK] Node '{node}' is live!\n  \"spawn a CPU monitor agent on {node}\"")
     else:
         await reply_fn(f"[FAIL] {result.get('error', result)}")
 
 
 async def _scan_subnet_ssh(subnet: str) -> list:
     found = []
-    sem   = asyncio.Semaphore(60)
+    sem = asyncio.Semaphore(60)
 
     async def probe(ip):
         async with sem:
@@ -449,7 +467,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
     `reply_fn` is an async callable that sends a string back to the user.
     """
     parts = text.split()
-    cmd   = parts[0].lower()
+    cmd = parts[0].lower()
 
     if cmd == "/clear-plans":
         main = _find_main()
@@ -464,21 +482,21 @@ async def handle_slash(text: str, reply_fn) -> bool:
             return True
         lines = []
         for actor in registry.all_actors():
-            status    = actor.get_status() if hasattr(actor, "get_status") else {}
-            st        = status.get("state", "?")
+            status = actor.get_status() if hasattr(actor, "get_status") else {}
+            st = status.get("state", "?")
             protected = " [protected]" if getattr(actor, "protected", False) else ""
-            node      = f" [{status['node']}]" if status.get("node") else ""
+            node = f" [{status['node']}]" if status.get("node") else ""
             lines.append(f"  [{st:8s}] @{actor.name:<22s} {actor.actor_id[:8]}{protected}{node}")
         await reply_fn("Agents:\n" + "\n".join(lines) if lines else "No agents running.")
         return True
 
     if cmd == "/nodes":
-        main         = _find_main()
+        main = _find_main()
         remote_nodes = main.list_nodes() if (main and hasattr(main, "list_nodes")) else []
-        local        = [a.name for a in registry.all_actors()] if registry else []
-        lines = [f"  {'local':20s} online   {', '.join('@'+n for n in local) or '(none)'}"]
+        local = [a.name for a in registry.all_actors()] if registry else []
+        lines = [f"  {'local':20s} online   {', '.join('@' + n for n in local) or '(none)'}"]
         for nd in sorted(remote_nodes, key=lambda x: x["node"]):
-            st    = "online" if nd["online"] else "OFFLINE"
+            st = "online" if nd["online"] else "OFFLINE"
             names = ", ".join("@" + n for n in nd["agents"]) or "(no agents)"
             lines.append(f"  {nd['node']:20s} {st:6s}   {names}")
         if not remote_nodes:
@@ -505,12 +523,12 @@ async def handle_slash(text: str, reply_fn) -> bool:
             await reply_fn("[usage] /deploy <node-name> [host [user [password [broker]]]]")
             return True
         await _slash_deploy(
-            node   = parts[1],
-            host   = parts[2] if len(parts) > 2 else "",
-            user   = parts[3] if len(parts) > 3 else "",
-            pw     = parts[4] if len(parts) > 4 else "",
-            broker = parts[5] if len(parts) > 5 else "",
-            reply_fn = reply_fn,
+            node=parts[1],
+            host=parts[2] if len(parts) > 2 else "",
+            user=parts[3] if len(parts) > 3 else "",
+            pw=parts[4] if len(parts) > 4 else "",
+            broker=parts[5] if len(parts) > 5 else "",
+            reply_fn=reply_fn,
         )
         return True
 
@@ -525,7 +543,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
     stream_end_fn()       — signal that streaming is done (optional)
     """
     _chunk_fn = stream_fn or reply_fn
-    _end_fn   = stream_end_fn or (lambda: None)
+    _end_fn = stream_end_fn or (lambda: None)
 
     if content.startswith("/"):
         handled = await handle_slash(content, reply_fn)
@@ -562,6 +580,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
         main = registry.find_by_name("main") if registry else None
         if main and hasattr(main, "_known_nodes"):
             import time as _rt
+
             remote_node = None
             for node_name, nd in main._known_nodes.items():
                 if _rt.time() - nd.get("last_seen", 0) < 30:
@@ -570,18 +589,20 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                         break
 
             if remote_node:
-                import uuid as _uuid, json as _json
+                import json as _json
+                import uuid as _uuid
+
                 reply_topic = f"main/reply/io-gateway/{_uuid.uuid4().hex[:8]}"
                 payload = {
-                    "text":          text,
-                    "payload":       text,
-                    "_reply_topic":  reply_topic,
-                    "_remote_task":  True,
+                    "text": text,
+                    "payload": text,
+                    "_reply_topic": reply_topic,
+                    "_remote_task": True,
                 }
                 try:
                     async with mqtt_client(
                         getattr(main, "_mqtt_broker", "localhost"),
-                        getattr(main, "_mqtt_port",   1883),
+                        getattr(main, "_mqtt_port", 1883),
                     ) as client:
                         # Subscribe first, then publish — avoids race condition
                         await client.subscribe(reply_topic)
@@ -591,29 +612,40 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                         )
                         logger.info(f"[io-gateway] Routed @{target_name} → {remote_node} via MQTT")
                         try:
+
                             async def _get_reply():
                                 async for msg in client.messages:
                                     try:
                                         data = _json.loads(msg.payload.decode())
                                         text_out = (
-                                            data.get("result") or data.get("reply")
-                                            or data.get("text") or data.get("message")
-                                            or data.get("content") or str(data)
+                                            data.get("result")
+                                            or data.get("reply")
+                                            or data.get("text")
+                                            or data.get("message")
+                                            or data.get("content")
+                                            or str(data)
                                         )
                                     except Exception:
                                         text_out = msg.payload.decode()
                                     return str(text_out)
+
                             text_out = await asyncio.wait_for(_get_reply(), timeout=150.0)
                             await reply_fn(text_out)
                             await _end_fn()
                             return
                         except asyncio.TimeoutError:
-                            await reply_fn(f"[error] @{target_name} on {remote_node} did not reply within 150s.")
+                            await reply_fn(
+                                f"[error] @{target_name} on {remote_node} did not reply within 150s."
+                            )
                             await _end_fn()
                             return
                 except Exception as exc:
-                    logger.error(f"[io-gateway] Remote @{target_name} routing failed: {exc}", exc_info=True)
-                    await reply_fn(f"[error] Could not reach @{target_name} on {remote_node}: {exc}")
+                    logger.error(
+                        f"[io-gateway] Remote @{target_name} routing failed: {exc}", exc_info=True
+                    )
+                    await reply_fn(
+                        f"[error] Could not reach @{target_name} on {remote_node}: {exc}"
+                    )
                     await _end_fn()
                     return
 
@@ -622,9 +654,8 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
 
     logger.info(f"[io-gateway] → {target.name}: {text[:60]!r}")
 
-    gen_fn = (
-        getattr(target, "process_user_input_stream", None)
-        or getattr(target, "chat_stream", None)
+    gen_fn = getattr(target, "process_user_input_stream", None) or getattr(
+        target, "chat_stream", None
     )
     if gen_fn:
         try:
@@ -661,7 +692,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
             return
 
         # All other message-passing agents: intercept send() to capture RESULT
-        reply_queue  = asyncio.Queue()
+        reply_queue = asyncio.Queue()
         original_send = target.send  # save so we can restore
 
         async def _capture_send(recipient_id, msg_type, payload=None, **kw):
@@ -684,9 +715,12 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
 
             if isinstance(payload, dict):
                 text_out = (
-                    payload.get("reply") or payload.get("message")
-                    or payload.get("text") or payload.get("content")
-                    or payload.get("result") or str(payload)
+                    payload.get("reply")
+                    or payload.get("message")
+                    or payload.get("text")
+                    or payload.get("content")
+                    or payload.get("result")
+                    or str(payload)
                 )
                 if "agents" in payload and isinstance(payload["agents"], list):
                     lines = [payload.get("message", "Available agents:")]
@@ -701,14 +735,17 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
         except asyncio.TimeoutError:
             await reply_fn(f"[error] @{target_name} did not reply within 150s.")
         except Exception as exc:
-            logger.error(f"[io-gateway] task dispatch to {target.name} failed: {exc}", exc_info=True)
+            logger.error(
+                f"[io-gateway] task dispatch to {target.name} failed: {exc}", exc_info=True
+            )
             await reply_fn(f"[error] {target.name}: {exc}")
         finally:
-            target.send = original_send   # always restore
+            target.send = original_send  # always restore
             await _end_fn()
 
 
 # ── MQTT chat handler (legacy / IOAgent-less fallback) ─────────────────────
+
 
 async def handle_chat_mqtt(data: dict):
     """Called when io/chat arrives via MQTT and registry is wired in."""
@@ -723,12 +760,14 @@ async def handle_chat_mqtt(data: dict):
         if mqtt_client_ref:
             await mqtt_client_ref.publish(
                 f"agents/{IO_GATEWAY_ID}/chat",
-                json.dumps({
-                    "from":      IO_GATEWAY_ID,
-                    "to":        "user",
-                    "content":   text,
-                    "timestamp": time.time(),
-                }),
+                json.dumps(
+                    {
+                        "from": IO_GATEWAY_ID,
+                        "to": "user",
+                        "content": text,
+                        "timestamp": time.time(),
+                    }
+                ),
             )
 
     await _route_chat(content, mqtt_reply)  # MQTT path: no streaming, reply_fn used for all output
@@ -736,8 +775,10 @@ async def handle_chat_mqtt(data: dict):
 
 # ── WebSocket handler ──────────────────────────────────────────────────────
 
+
 async def ws_handler(request):
-    from aiohttp import web, WSMsgType
+    from aiohttp import WSMsgType, web
+
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     ws_clients.add(ws)
@@ -777,12 +818,16 @@ async def ws_handler(request):
 
     async def ws_reply(text: str):
         try:
-            await ws.send_str(json.dumps({
-                "type":      "chat",
-                "from":      _reply_from["name"],
-                "content":   text,
-                "timestamp": time.time(),
-            }))
+            await ws.send_str(
+                json.dumps(
+                    {
+                        "type": "chat",
+                        "from": _reply_from["name"],
+                        "content": text,
+                        "timestamp": time.time(),
+                    }
+                )
+            )
             # Non-streamed replies (slash command output, errors, system
             # messages) — persist immediately.
             _persist_chat("assistant", text, _reply_from["name"])
@@ -791,12 +836,16 @@ async def ws_handler(request):
 
     async def ws_stream_chunk(chunk: str):
         try:
-            await ws.send_str(json.dumps({
-                "type":      "stream_chunk",
-                "from":      _reply_from["name"],
-                "content":   chunk,
-                "timestamp": time.time(),
-            }))
+            await ws.send_str(
+                json.dumps(
+                    {
+                        "type": "stream_chunk",
+                        "from": _reply_from["name"],
+                        "content": chunk,
+                        "timestamp": time.time(),
+                    }
+                )
+            )
             # Buffer for end-of-stream persistence; do NOT write per chunk.
             if chunk:
                 _stream_buffer.append(chunk)
@@ -805,11 +854,15 @@ async def ws_handler(request):
 
     async def ws_stream_end():
         try:
-            await ws.send_str(json.dumps({
-                "type":      "stream_end",
-                "from":      _reply_from["name"],
-                "timestamp": time.time(),
-            }))
+            await ws.send_str(
+                json.dumps(
+                    {
+                        "type": "stream_end",
+                        "from": _reply_from["name"],
+                        "timestamp": time.time(),
+                    }
+                )
+            )
             # Now persist the full assembled assistant turn — once.
             if _stream_buffer:
                 full = "".join(_stream_buffer)
@@ -827,7 +880,7 @@ async def ws_handler(request):
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
                 try:
-                    data     = json.loads(msg.data)
+                    data = json.loads(msg.data)
                     msg_type = data.get("type")
 
                     if msg_type == "command":
@@ -842,17 +895,20 @@ async def ws_handler(request):
                             # reply frames and chat_log group under that agent
                             # instead of the io-gateway transport id.
                             _reply_from["name"] = (
-                                "main" if content.startswith("/")
-                                else _parse_mention(content)[0]
+                                "main" if content.startswith("/") else _parse_mention(content)[0]
                             )
                             # Persist the user's turn first so chat_log has the
                             # request even if the assistant reply errors out.
                             _persist_chat("user", content, _reply_from["name"])
+
                             async def _safe_route(c=content):
                                 try:
-                                    await _route_chat(c, ws_reply,
-                                                      stream_fn=ws_stream_chunk,
-                                                      stream_end_fn=ws_stream_end)
+                                    await _route_chat(
+                                        c,
+                                        ws_reply,
+                                        stream_fn=ws_stream_chunk,
+                                        stream_end_fn=ws_stream_end,
+                                    )
                                 except asyncio.CancelledError:
                                     # Stop button: finalize the partial stream so
                                     # the UI re-enables, then post a confirmation
@@ -870,10 +926,13 @@ async def ws_handler(request):
                                         await ws_stream_end()
                                     except Exception:
                                         pass
+
                             _track_chat_task(asyncio.create_task(_safe_route()))
                         elif content:
                             # No registry — tell the browser to use MQTT
-                            await ws_reply("[system] Chat not available over WebSocket in this mode.")
+                            await ws_reply(
+                                "[system] Chat not available over WebSocket in this mode."
+                            )
 
                 except Exception as e:
                     logger.warning(f"[ws] Bad message: {e}")
@@ -887,9 +946,10 @@ async def ws_handler(request):
 
 # ── MQTT infrastructure ────────────────────────────────────────────────────
 
+
 async def handle_command(cmd: dict):
     global mqtt_client_ref
-    command  = cmd.get("command")
+    command = cmd.get("command")
     agent_id = cmd.get("agent_id")
     if not command or not agent_id:
         return
@@ -901,14 +961,17 @@ async def handle_command(cmd: dict):
         logger.warning("[cmd] No MQTT client available")
         return
 
-    payload = json.dumps({"command": command, "sender": "monitor-dashboard", "timestamp": time.time()})
+    payload = json.dumps(
+        {"command": command, "sender": "monitor-dashboard", "timestamp": time.time()}
+    )
     try:
         await mqtt_client_ref.publish(f"agents/{agent_id}/commands", payload)
-        add_log({"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()})
+        add_log(
+            {"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()}
+        )
         if command in ("stop", "pause", "resume"):
             state["agents"].get(agent_id, {})["state"] = (
-                "stopped" if command == "stop" else
-                "paused"  if command == "pause" else "running"
+                "stopped" if command == "stop" else "paused" if command == "pause" else "running"
             )
             await broadcast({"type": "patch", "state": _snapshot()})
         elif command == "delete":
@@ -937,7 +1000,7 @@ def parse_topic(topic: str, payload_str: str):
 
     if parts[0] == "agents" and len(parts) >= 3:
         agent_id = parts[1]
-        metric   = parts[2]
+        metric = parts[2]
 
         # Re-admit a deleted agent on a FRESH status event. Every actor
         # publishes its first status from on_start(), with uptime ≈ 0; that's
@@ -973,37 +1036,49 @@ def parse_topic(topic: str, payload_str: str):
         if metric == "status":
             update_agent(agent_id, "status", data)
             if isinstance(data, dict) and agent_id in state["agents"]:
-                if "name"      in data: state["agents"][agent_id]["name"]      = data["name"]
-                if "state"     in data: state["agents"][agent_id]["state"]     = data["state"]
-                if "protected" in data: state["agents"][agent_id]["protected"] = data["protected"]
+                if "name" in data:
+                    state["agents"][agent_id]["name"] = data["name"]
+                if "state" in data:
+                    state["agents"][agent_id]["state"] = data["state"]
+                if "protected" in data:
+                    state["agents"][agent_id]["protected"] = data["protected"]
             name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log({"type": "status", "agent_id": agent_id, "name": name,
-                     "status": data, "timestamp": time.time()})
+            add_log(
+                {
+                    "type": "status",
+                    "agent_id": agent_id,
+                    "name": name,
+                    "status": data,
+                    "timestamp": time.time(),
+                }
+            )
 
         elif metric == "heartbeat":
             update_agent(agent_id, "heartbeat", data)
             if isinstance(data, dict) and agent_id in state["agents"]:
                 ag = state["agents"][agent_id]
-                ag["name"]  = data.get("name",      agent_id[:8])
-                ag["cpu"]   = data.get("cpu",        0)
-                ag["mem"]   = data.get("memory_mb",  0)
-                ag["task"]  = data.get("task",       "idle")
-                ag["state"] = data.get("state",      "unknown")
+                ag["name"] = data.get("name", agent_id[:8])
+                ag["cpu"] = data.get("cpu", 0)
+                ag["mem"] = data.get("memory_mb", 0)
+                ag["task"] = data.get("task", "idle")
+                ag["state"] = data.get("state", "unknown")
                 # Remote agents' heartbeats include "node" — capture it so the
                 # dashboard delete path can route the stop to the right runner.
                 # Local agents don't set this field; absence means "local".
                 if data.get("node"):
                     ag["node"] = data["node"]
             if agent_id in state["agents"]:
-                logger.info(f"[MQTT] Heartbeat: {state['agents'][agent_id].get('name', agent_id[:8])}")
+                logger.info(
+                    f"[MQTT] Heartbeat: {state['agents'][agent_id].get('name', agent_id[:8])}"
+                )
 
         elif metric == "metrics":
             update_agent(agent_id, "metrics", data)
             if isinstance(data, dict) and agent_id in state["agents"]:
                 state["agents"][agent_id]["messages_processed"] = data.get("messages_processed", 0)
                 if "cost_usd" in data:
-                    state["agents"][agent_id]["cost_usd"]      = data.get("cost_usd", 0.0)
-                    state["agents"][agent_id]["input_tokens"]  = data.get("input_tokens", 0)
+                    state["agents"][agent_id]["cost_usd"] = data.get("cost_usd", 0.0)
+                    state["agents"][agent_id]["input_tokens"] = data.get("input_tokens", 0)
                     state["agents"][agent_id]["output_tokens"] = data.get("output_tokens", 0)
                     # Bank the spend durably so it survives the agent being
                     # deleted or hard-killed before its on_stop() can persist.
@@ -1014,35 +1089,59 @@ def parse_topic(topic: str, payload_str: str):
             # same way alert/completed do so the feed never shows a bare id.
             # `**data` last lets a payload that already includes a name win.
             name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log({"type": "log", "agent_id": agent_id, "name": name, "timestamp": time.time(),
-                     **(data if isinstance(data, dict) else {})})
+            add_log(
+                {
+                    "type": "log",
+                    "agent_id": agent_id,
+                    "name": name,
+                    "timestamp": time.time(),
+                    **(data if isinstance(data, dict) else {}),
+                }
+            )
         elif metric == "spawned":
             # Payload carries child_name/child_id, not name — resolve the (parent)
             # agent's name from state so the feed row isn't attributed to a bare id.
             name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log({"type": "spawned", "agent_id": agent_id, "name": name, "timestamp": time.time(),
-                     **(data if isinstance(data, dict) else {})})
+            add_log(
+                {
+                    "type": "spawned",
+                    "agent_id": agent_id,
+                    "name": name,
+                    "timestamp": time.time(),
+                    **(data if isinstance(data, dict) else {}),
+                }
+            )
         elif metric == "chat":
             # User-facing message pushed by an agent via Actor.notify_user().
             # Forward it to the chat panel as a live chat frame (in addition to
             # the dashboard feed). The frame is carried under "_push_chat";
             # mqtt_listener does the broadcast since parse_topic is synchronous.
-            sender  = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            sender = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
             content = ""
             if isinstance(data, dict):
                 content = (data.get("content") or data.get("text") or "").strip()
-                sender  = data.get("from") or sender
+                sender = data.get("from") or sender
             elif isinstance(data, str):
                 content = data.strip()
             if content:
-                add_log({"type": "chat", "agent_id": agent_id, "from": sender,
-                         "content": content, "timestamp": time.time()})
+                add_log(
+                    {
+                        "type": "chat",
+                        "agent_id": agent_id,
+                        "from": sender,
+                        "content": content,
+                        "timestamp": time.time(),
+                    }
+                )
                 return {
-                    "type": "agent", "agent_id": agent_id, "metric": "chat", "data": data,
+                    "type": "agent",
+                    "agent_id": agent_id,
+                    "metric": "chat",
+                    "data": data,
                     "_push_chat": {
-                        "type":      "chat",
-                        "from":      sender,
-                        "content":   content,
+                        "type": "chat",
+                        "from": sender,
+                        "content": content,
                         "timestamp": time.time(),
                     },
                 }
@@ -1050,7 +1149,9 @@ def parse_topic(topic: str, payload_str: str):
         elif metric == "completed":
             update_agent(agent_id, "last_completed", data)
             name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log({"type": "completed", "agent_id": agent_id, "name": name, "timestamp": time.time()})
+            add_log(
+                {"type": "completed", "agent_id": agent_id, "name": name, "timestamp": time.time()}
+            )
         elif metric == "alert":
             if isinstance(data, dict):
                 data["agent_id"] = agent_id
@@ -1058,10 +1159,17 @@ def parse_topic(topic: str, payload_str: str):
             state["alerts"].insert(0, data if isinstance(data, dict) else {"agent_id": agent_id})
             if len(state["alerts"]) > 50:
                 state["alerts"].pop()
-            name     = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
             severity = data.get("severity", "warning") if isinstance(data, dict) else "warning"
-            add_log({"type": "alert", "agent_id": agent_id, "name": name,
-                     "message": f"{name} unresponsive ({severity})", "timestamp": time.time()})
+            add_log(
+                {
+                    "type": "alert",
+                    "agent_id": agent_id,
+                    "name": name,
+                    "message": f"{name} unresponsive ({severity})",
+                    "timestamp": time.time(),
+                }
+            )
 
         return {"type": "agent", "agent_id": agent_id, "metric": metric, "data": data}
 
@@ -1069,11 +1177,11 @@ def parse_topic(topic: str, payload_str: str):
         node_name = parts[1]
         if isinstance(data, dict):
             state["nodes"][node_name] = {
-                "node":      node_name,
-                "agents":    data.get("agents", []),
+                "node": node_name,
+                "agents": data.get("agents", []),
                 "last_seen": time.time(),
-                "online":    True,
-                "node_id":   data.get("node_id", ""),
+                "online": True,
+                "node_id": data.get("node_id", ""),
             }
             logger.info(f"[MQTT] Node heartbeat: {node_name} | agents: {data.get('agents', [])}")
             return {"type": "node", "node_name": node_name, "data": data}
@@ -1171,8 +1279,8 @@ def _reset_actor_cost(actor) -> None:
     """
     if not hasattr(actor, "total_cost_usd"):
         return
-    actor.total_cost_usd      = 0.0
-    actor.total_input_tokens  = 0
+    actor.total_cost_usd = 0.0
+    actor.total_input_tokens = 0
     actor.total_output_tokens = 0
     if hasattr(actor, "_last_persisted_usd"):
         actor._last_persisted_usd = 0.0
@@ -1186,9 +1294,8 @@ def _historical_cost_usd(live_names: set) -> float:
         return 0.0
     try:
         import json as _json
-        rows = db.conn.execute(
-            "SELECT value FROM kv_store WHERE key = '_final_cost'"
-        ).fetchall()
+
+        rows = db.conn.execute("SELECT value FROM kv_store WHERE key = '_final_cost'").fetchall()
         total = 0.0
         for row in rows:
             try:
@@ -1208,6 +1315,7 @@ def _historical_messages(live_names: set) -> int:
         return 0
     try:
         import json as _json
+
         rows = db.conn.execute(
             "SELECT agent, value FROM kv_store WHERE key = '_messages_processed'"
         ).fetchall()
@@ -1226,8 +1334,14 @@ def _historical_messages(live_names: set) -> int:
 
 def _snapshot() -> dict:
     if _hard_resetting:
-        return {"agents": [], "nodes": [], "alerts": [], "log_feed": [],
-                "total_cost_usd": 0, "total_messages": 0}
+        return {
+            "agents": [],
+            "nodes": [],
+            "alerts": [],
+            "log_feed": [],
+            "total_cost_usd": 0,
+            "total_messages": 0,
+        }
     for nd in state["nodes"].values():
         nd["online"] = _node_online(nd.get("last_seen", 0))
 
@@ -1278,6 +1392,7 @@ def _snapshot() -> dict:
     # lower than the "this period" spend shown beside it.
     try:
         from .agents.llm_agent import get_global_alltime_cost
+
         alltime_cost = get_global_alltime_cost()
     except Exception:
         alltime_cost = 0.0
@@ -1288,13 +1403,13 @@ def _snapshot() -> dict:
     )
     total_msgs = live_msgs + _historical_messages(live_names)
     return {
-        "agents":           list(state["agents"].values()),
-        "nodes":            list(state["nodes"].values()),
-        "alerts":           state["alerts"][:10],
-        "log_feed":         state["log_feed"][:20],
-        "system_health":    state["system_health"],
-        "total_cost_usd":   round(total_cost, 6),
-        "total_messages":   total_msgs,
+        "agents": list(state["agents"].values()),
+        "nodes": list(state["nodes"].values()),
+        "alerts": state["alerts"][:10],
+        "log_feed": state["log_feed"][:20],
+        "system_health": state["system_health"],
+        "total_cost_usd": round(total_cost, 6),
+        "total_messages": total_msgs,
     }
 
 
@@ -1311,19 +1426,21 @@ async def mqtt_listener():
                     if registry is not None:
                         await client.publish(
                             f"agents/{IO_GATEWAY_ID}/spawn",
-                            json.dumps({
-                                "agentId":   IO_GATEWAY_ID,
-                                "agentName": IO_GATEWAY_ID,
-                                "agentType": "gateway",
-                                "timestamp": time.time(),
-                            }),
+                            json.dumps(
+                                {
+                                    "agentId": IO_GATEWAY_ID,
+                                    "agentName": IO_GATEWAY_ID,
+                                    "agentType": "gateway",
+                                    "timestamp": time.time(),
+                                }
+                            ),
                         )
 
                     for topic in MQTT_TOPICS:
                         await client.subscribe(topic)
 
                     async for message in client.messages:
-                        topic   = str(message.topic)
+                        topic = str(message.topic)
                         payload = message.payload.decode(errors="replace")
 
                         if topic == "io/chat":
@@ -1336,9 +1453,11 @@ async def mqtt_listener():
 
                         event = parse_topic(topic, payload)
                         if event and not _hard_resetting:
-                            metric    = event.get("metric", "")
+                            metric = event.get("metric", "")
                             log_event = None if metric == "heartbeat" else event
-                            await broadcast({"type": "patch", "event": log_event, "state": _snapshot()})
+                            await broadcast(
+                                {"type": "patch", "event": log_event, "state": _snapshot()}
+                            )
                             # Agent-originated user-facing message → push to the
                             # chat panel as a live chat frame, and persist it so
                             # it survives a browser reload like any other turn.
@@ -1364,11 +1483,13 @@ async def mqtt_listener():
         # Drop ref and force GC while loop is still open so paho's __del__
         # doesn't fire after the event loop closes (avoids RuntimeError noise).
         import gc
+
         mqtt_client_ref = None
         gc.collect()
 
 
 # ── Startup checks ─────────────────────────────────────────────────────────
+
 
 async def _check_mqtt() -> bool:
     """Return True if MQTT broker is reachable."""
@@ -1401,8 +1522,9 @@ async def _check_ws_port() -> bool:
 
 # ── Static file serving ────────────────────────────────────────────────────
 
-_pkg  = Path(__file__).parent
+_pkg = Path(__file__).parent
 _root = _pkg.parent
+
 
 def _find_dir(*rel: str) -> Path:
     for base in (_pkg, _root):
@@ -1411,9 +1533,10 @@ def _find_dir(*rel: str) -> Path:
             return p
     return _pkg.joinpath(*rel)
 
-FRONTEND_DIST   = _find_dir("static", "app")
+
+FRONTEND_DIST = _find_dir("static", "app")
 FRONTEND_PUBLIC = _find_dir("frontend", "public")
-DOCS_SITE       = _find_dir("static", "docs")
+DOCS_SITE = _find_dir("static", "docs")
 
 
 def _with_no_cache(response):
@@ -1425,7 +1548,6 @@ def _with_no_cache(response):
 
 async def index_handler(request):
     from aiohttp import web
-    from .config import CONFIG
 
     if request.path.endswith("favicon.svg"):
         for candidate in [FRONTEND_PUBLIC / "favicon.svg", FRONTEND_DIST / "favicon.svg"]:
@@ -1452,8 +1574,9 @@ async def index_handler(request):
 
 async def static_handler(request):
     from aiohttp import web
+
     rel = request.match_info["path"]
-    
+
     # Special case for favicon if it's requested at root
     if rel == "favicon.svg":
         for candidate in [FRONTEND_PUBLIC / "favicon.svg", FRONTEND_DIST / "favicon.svg"]:
@@ -1478,12 +1601,21 @@ async def static_handler(request):
                     # Point the WebSocket at the monitor's actual port (WS_PORT),
                     # not HA's 8123. WS_PORT is where the /ws and /mqtt proxies live.
                     host = request.host.split(":")[0]
-                    content = content.replace('"ws://localhost:9001"', f'"ws://{host}:{WS_PORT}/mqtt"')
-                    content = content.replace('`ws://${location.host}/ws`', f'`ws://${{location.hostname}}:{WS_PORT}/ws`')
-                    content = content.replace('`ws://${location.host}/mqtt`', f'`ws://${{location.hostname}}:{WS_PORT}/mqtt`')
-                    
-                    return _with_no_cache(web.Response(text=content, content_type="application/javascript"))
-                
+                    content = content.replace(
+                        '"ws://localhost:9001"', f'"ws://{host}:{WS_PORT}/mqtt"'
+                    )
+                    content = content.replace(
+                        "`ws://${location.host}/ws`", f"`ws://${{location.hostname}}:{WS_PORT}/ws`"
+                    )
+                    content = content.replace(
+                        "`ws://${location.host}/mqtt`",
+                        f"`ws://${{location.hostname}}:{WS_PORT}/mqtt`",
+                    )
+
+                    return _with_no_cache(
+                        web.Response(text=content, content_type="application/javascript")
+                    )
+
                 return _with_no_cache(web.FileResponse(candidate))
         except Exception:
             pass
@@ -1492,12 +1624,15 @@ async def static_handler(request):
 
 async def docs_handler(request):
     from aiohttp import web
+
     if not DOCS_SITE.is_dir():
-        raise web.HTTPNotFound(reason="Docs not built — run: python3 scripts/build_docs.py  (or: make docs-build)")
+        raise web.HTTPNotFound(
+            reason="Docs not built — run: python3 scripts/build_docs.py  (or: make docs-build)"
+        )
     rel = request.match_info.get("path", "") or "index.html"
     if not rel or rel.endswith("/"):
         rel += "index.html"
-    root      = DOCS_SITE.resolve()
+    root = DOCS_SITE.resolve()
     candidate = (DOCS_SITE / rel).resolve()
     try:
         if candidate.is_file() and str(candidate).startswith(str(root)):
@@ -1547,9 +1682,9 @@ def _inject_connect_credentials(pkt: bytes, username: str, password: str) -> byt
         if not (b & 0x80):
             break
         mult *= 128
-        if mult > 128 ** 3:
+        if mult > 128**3:
             return pkt
-    body = pkt[idx:idx + rem_len]
+    body = pkt[idx : idx + rem_len]
     if len(body) < rem_len or len(body) < 4:
         return pkt  # split across frames — don't risk corrupting it
     pn_len = (body[0] << 8) | body[1]
@@ -1577,6 +1712,7 @@ def _inject_connect_credentials(pkt: bytes, username: str, password: str) -> byt
 def _proxy_mqtt_creds():
     """Broker creds for the dashboard's MQTT proxy, or None when anonymous."""
     from .config import CONFIG
+
     if CONFIG.mqtt_username:
         return (CONFIG.mqtt_username, CONFIG.mqtt_password)
     return None
@@ -1584,6 +1720,7 @@ def _proxy_mqtt_creds():
 
 async def _bridge_mqtt_tcp(client_ws, broker: str, port: int) -> None:
     from aiohttp import WSMsgType
+
     try:
         reader, writer = await asyncio.wait_for(asyncio.open_connection(broker, port), timeout=3)
     except Exception as exc:
@@ -1623,7 +1760,7 @@ async def _bridge_mqtt_tcp(client_ws, broker: str, port: int) -> None:
 
 async def mqtt_proxy_handler(request):
     import aiohttp
-    from aiohttp import web, WSMsgType
+    from aiohttp import WSMsgType, web
 
     raw_proto = request.headers.get("Sec-WebSocket-Protocol", "")
     protocols = [p.strip() for p in raw_proto.split(",") if p.strip()]
@@ -1631,8 +1768,9 @@ async def mqtt_proxy_handler(request):
     try:
         await client_ws.prepare(request)
     except Exception as exc:
-        logger.error("[MQTT proxy] WebSocket handshake failed — %s | headers: %s",
-                     exc, dict(request.headers))
+        logger.error(
+            "[MQTT proxy] WebSocket handshake failed — %s | headers: %s", exc, dict(request.headers)
+        )
         raise
 
     logger.debug("[MQTT proxy] WS accepted from %s proto=%s", request.remote, protocols)
@@ -1648,6 +1786,7 @@ async def mqtt_proxy_handler(request):
             ) as upstream_ws:
                 logger.debug("[MQTT proxy] upstream WS connected → %s", upstream_url)
                 creds = _proxy_mqtt_creds()
+
                 async def forward(src, dst, inject=False):
                     first = inject  # inject creds into the browser's CONNECT
                     async for msg in src:
@@ -1661,14 +1800,19 @@ async def mqtt_proxy_handler(request):
                             await dst.send_str(msg.data)
                         elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
                             break
+
                 await asyncio.gather(
                     forward(client_ws, upstream_ws, inject=creds is not None),
                     forward(upstream_ws, client_ws),
                 )
         return client_ws
     except Exception as exc:
-        logger.info("[MQTT proxy] upstream WS unavailable (%s), falling back to TCP bridge %s:%s",
-                    exc, MQTT_BROKER, MQTT_PORT)
+        logger.info(
+            "[MQTT proxy] upstream WS unavailable (%s), falling back to TCP bridge %s:%s",
+            exc,
+            MQTT_BROKER,
+            MQTT_PORT,
+        )
 
     await _bridge_mqtt_tcp(client_ws, MQTT_BROKER, MQTT_PORT)
     return client_ws
@@ -1676,15 +1820,15 @@ async def mqtt_proxy_handler(request):
 
 def _actor_payload(ag: dict) -> dict:
     return {
-        "id":                ag.get("agent_id", ""),
-        "name":              ag.get("name", ""),
-        "state":             ag.get("state", "unknown"),
-        "protected":         ag.get("protected", False),
-        "cpu":               ag.get("cpu"),
-        "mem":               ag.get("mem"),
-        "task":              ag.get("task"),
+        "id": ag.get("agent_id", ""),
+        "name": ag.get("name", ""),
+        "state": ag.get("state", "unknown"),
+        "protected": ag.get("protected", False),
+        "cpu": ag.get("cpu"),
+        "mem": ag.get("mem"),
+        "task": ag.get("task"),
         "messagesProcessed": ag.get("messages_processed"),
-        "costUsd":           ag.get("cost_usd"),
+        "costUsd": ag.get("cost_usd"),
     }
 
 
@@ -1694,6 +1838,7 @@ def _final_cost_from_db(name: str):
         return None
     try:
         import json as _json
+
         row = db.conn.execute(
             "SELECT value FROM kv_store WHERE agent=? AND key='_final_cost'",
             (name,),
@@ -1761,24 +1906,31 @@ def _best_msgs(ag, actor) -> int:
 
 async def health_handler(request):
     from aiohttp import web
+
     return web.json_response({"status": "ok"})
 
 
 async def cost_handler(request):
     from aiohttp import web
+
     from .agents.llm_agent import get_global_cost_info
+
     return web.json_response(get_global_cost_info())
 
 
 async def cost_limit_handler(request):
     from aiohttp import web
+
     from .agents.llm_agent import set_cost_limit
+
     try:
         body = await request.json()
         limit_usd = float(body.get("limit_usd", 0))
         period = body.get("period", "monthly")
         if period not in ("daily", "weekly", "monthly"):
-            return web.json_response({"error": "period must be daily, weekly, or monthly"}, status=400)
+            return web.json_response(
+                {"error": "period must be daily, weekly, or monthly"}, status=400
+            )
         set_cost_limit(limit_usd, period)
         return web.json_response({"ok": True, "limit_usd": limit_usd, "period": period})
     except Exception as e:
@@ -1787,7 +1939,9 @@ async def cost_limit_handler(request):
 
 async def cost_reset_handler(request):
     from aiohttp import web
+
     from .agents.llm_agent import reset_global_cost
+
     try:
         info = reset_global_cost()
         # Clear the in-memory lifetime ledger so max() doesn't pin the display
@@ -1805,6 +1959,7 @@ async def cost_reset_handler(request):
 
 async def send_message_handler(request):
     from aiohttp import web
+
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -1829,6 +1984,7 @@ async def send_message_handler(request):
 
 async def delete_actor_handler(request):
     from aiohttp import web
+
     actor_id = request.match_info["actor_id"]
     # Resolve the dashboard's record first so remote agents (which aren't in
     # the local registry) can still be deleted via this endpoint. The earlier
@@ -1860,6 +2016,7 @@ async def reset_handler(request):
       agent   : str  (optional — limit to one agent by name)
     """
     from aiohttp import web
+
     try:
         body = await request.json()
     except Exception:
@@ -1870,9 +2027,7 @@ async def reset_handler(request):
 
     valid = {"chat", "state", "metrics", "spawns", "logs", "all"}
     if scope not in valid:
-        return web.json_response(
-            {"error": f"scope must be one of {sorted(valid)}"}, status=400
-        )
+        return web.json_response({"error": f"scope must be one of {sorted(valid)}"}, status=400)
 
     import wactorz.reset as _reset
 
@@ -1884,21 +2039,24 @@ async def reset_handler(request):
         # mid-wipe exception leaves it True forever and every incoming heartbeat
         # stays blocked, freezing the dashboard until the process restarts.
         try:
-            supervisor = getattr(registry, "_supervisor_ref", None) if registry is not None else None
-            all_actors  = list(registry.all_actors()) if registry is not None else []
+            supervisor = (
+                getattr(registry, "_supervisor_ref", None) if registry is not None else None
+            )
+            all_actors = list(registry.all_actors()) if registry is not None else []
             # Only stop user-spawned (non-protected) actors — system actors keep running
-            stoppable   = [a for a in all_actors if not getattr(a, "protected", False)]
+            stoppable = [a for a in all_actors if not getattr(a, "protected", False)]
             # The registry is the AUTHORITATIVE source of the protected flag — the
             # dashboard entry's "protected" is only set when a heartbeat happened to
             # carry it, so trusting it alone wrongly tears down system agents (main /
             # monitor / installer / catalog) and they flicker back on the next beat.
-            protected_ids   = {a.actor_id for a in all_actors if getattr(a, "protected", False)}
-            protected_names = {a.name      for a in all_actors if getattr(a, "protected", False)}
+            protected_ids = {a.actor_id for a in all_actors if getattr(a, "protected", False)}
+            protected_names = {a.name for a in all_actors if getattr(a, "protected", False)}
             # Tear down every NON-protected agent the dashboard knows about (covers an
             # agent present only via MQTT, or a remote agent absent from this registry),
             # but never one that maps to a protected registry actor.
-            dash_ids  = [
-                aid for aid, ag in state["agents"].items()
+            dash_ids = [
+                aid
+                for aid, ag in state["agents"].items()
                 if not ag.get("protected", False)
                 and aid not in protected_ids
                 and ag.get("name") not in protected_names
@@ -1927,15 +2085,22 @@ async def reset_handler(request):
                     if n:
                         node_names.add(n)
             if mqtt_client_ref and node_names:
-                await asyncio.gather(*[
-                    mqtt_client_ref.publish(f"nodes/{n}/stop_all",
-                                            json.dumps({"reason": "wipe everything"}), qos=1)
-                    for n in node_names
-                ], return_exceptions=True)
-                await asyncio.gather(*[
-                    mqtt_client_ref.publish(f"nodes/{n}/spawn", b"", retain=True)
-                    for n in node_names
-                ], return_exceptions=True)
+                await asyncio.gather(
+                    *[
+                        mqtt_client_ref.publish(
+                            f"nodes/{n}/stop_all", json.dumps({"reason": "wipe everything"}), qos=1
+                        )
+                        for n in node_names
+                    ],
+                    return_exceptions=True,
+                )
+                await asyncio.gather(
+                    *[
+                        mqtt_client_ref.publish(f"nodes/{n}/spawn", b"", retain=True)
+                        for n in node_names
+                    ],
+                    return_exceptions=True,
+                )
 
             # Purge retained MQTT for EVERY non-protected agent, tombstone each so a
             # late/in-flight frame can't re-admit it once _hard_resetting clears, and
@@ -1978,6 +2143,7 @@ async def reset_handler(request):
             _lifetime_cost.clear()
             try:
                 from .agents.llm_agent import reset_global_cost
+
                 reset_global_cost()
             except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
@@ -1985,10 +2151,21 @@ async def reset_handler(request):
             state["nodes"].clear()
             state["alerts"].clear()
             state["log_feed"].clear()
-            await broadcast({"type": "reset", "scope": "all", "agent": None, "state": {
-                "agents": [], "nodes": [], "alerts": [], "log_feed": [],
-                "total_cost_usd": 0, "total_messages": 0,
-            }})
+            await broadcast(
+                {
+                    "type": "reset",
+                    "scope": "all",
+                    "agent": None,
+                    "state": {
+                        "agents": [],
+                        "nodes": [],
+                        "alerts": [],
+                        "log_feed": [],
+                        "total_cost_usd": 0,
+                        "total_messages": 0,
+                    },
+                }
+            )
         finally:
             _hard_resetting = False
         return web.json_response({"status": "ok", "scope": "all", "agent": None})
@@ -2029,14 +2206,14 @@ async def reset_handler(request):
         # value — so the total only "drops" by the live component and never
         # zeroes. Clear it here, mirroring /api/cost/reset.
         if agent:
-            aid = next((getattr(a, "actor_id", None)
-                        for a in live_actors if a.name == agent), None)
+            aid = next((getattr(a, "actor_id", None) for a in live_actors if a.name == agent), None)
             if aid:
                 _lifetime_cost.pop(aid, None)
         else:
             _lifetime_cost.clear()
             try:
                 from .agents.llm_agent import reset_global_cost
+
                 reset_global_cost()
             except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
@@ -2058,9 +2235,7 @@ async def reset_handler(request):
     # message counters or wipe the alerts/activity feed.
     if scope == "metrics":
         if agent:
-            aid = next(
-                (k for k, v in state["agents"].items() if v.get("name") == agent), None
-            )
+            aid = next((k for k, v in state["agents"].items() if v.get("name") == agent), None)
             if aid:
                 state["agents"][aid].pop("cost_usd", None)
                 state["agents"][aid].pop("messages_processed", None)
@@ -2077,6 +2252,7 @@ async def reset_handler(request):
 
 async def pause_actor_handler(request):
     from aiohttp import web
+
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -2095,6 +2271,7 @@ async def pause_actor_handler(request):
 
 async def resume_actor_handler(request):
     from aiohttp import web
+
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -2113,6 +2290,7 @@ async def resume_actor_handler(request):
 
 async def actor_metrics_handler(request):
     from aiohttp import web
+
     actor_id = request.match_info["actor_id"]
     ag = state["agents"].get(actor_id)
     actor = None
@@ -2121,32 +2299,34 @@ async def actor_metrics_handler(request):
     if actor is None and ag is None:
         return web.json_response({"error": "actor not found"}, status=404)
     metrics_obj = getattr(actor, "metrics", None) if actor else None
-    return web.json_response({
-        "messages_processed": (
-            getattr(metrics_obj, "messages_processed", None)
-            or (ag.get("messages_processed") if ag else None)
-            or 0
-        ),
-        "cpu":      ag.get("cpu")       if ag else None,
-        "mem":      ag.get("mem")       if ag else None,
-        "task":     ag.get("task")      if ag else None,
-        "cost_usd": (
-            getattr(actor, "total_cost_usd", None)
-            or (ag.get("cost_usd") if ag else None)
-        ),
-    })
+    return web.json_response(
+        {
+            "messages_processed": (
+                getattr(metrics_obj, "messages_processed", None)
+                or (ag.get("messages_processed") if ag else None)
+                or 0
+            ),
+            "cpu": ag.get("cpu") if ag else None,
+            "mem": ag.get("mem") if ag else None,
+            "task": ag.get("task") if ag else None,
+            "cost_usd": (
+                getattr(actor, "total_cost_usd", None) or (ag.get("cost_usd") if ag else None)
+            ),
+        }
+    )
 
 
 async def rest_chat_handler(request):
     """POST /chat — fire-and-forget a message to a named agent."""
     from aiohttp import web
+
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
     try:
         data = await request.json()
     except Exception:
         return web.json_response({"error": "invalid JSON"}, status=400)
-    message    = data.get("message", "").strip()
+    message = data.get("message", "").strip()
     agent_name = data.get("agent_name", "main-actor")
     if not message:
         return web.json_response({"error": "message required"}, status=400)
@@ -2191,15 +2371,18 @@ async def rest_chat_stop_handler(request):
         except Exception as exc:
             logger.warning(f"[chat/stop] io/chat/control publish failed: {exc}")
 
-    return web.json_response({
-        "status":    "stopped",
-        "cancelled": len(tasks),
-        "published": published,
-    })
+    return web.json_response(
+        {
+            "status": "stopped",
+            "cancelled": len(tasks),
+            "published": published,
+        }
+    )
 
 
 async def actors_handler(request):
     from aiohttp import web
+
     # Prefer the live registry (injected by cli.py) — actor objects carry the
     # authoritative protected flag.  Fall back to MQTT-derived state dict when
     # the registry is unavailable (standalone monitor_server mode).
@@ -2215,24 +2398,28 @@ async def actors_handler(request):
             if _is_deleted(actor.actor_id):
                 continue
             ag = state["agents"].get(actor.actor_id, {})
-            result.append({
-                "id":                actor.actor_id,
-                "name":              actor.name,
-                "state":             ag.get("state", "unknown"),
-                "protected":         bool(getattr(actor, "protected", False)),
-                "cpu":               ag.get("cpu"),
-                "mem":               ag.get("mem"),
-                "task":              ag.get("task"),
-                "messagesProcessed": ag.get("messages_processed") if ag.get("messages_processed") is not None
-                                     else getattr(getattr(actor, "metrics", None), "messages_processed", None),
-                "costUsd":           _actor_cost(actor, ag),
-            })
+            result.append(
+                {
+                    "id": actor.actor_id,
+                    "name": actor.name,
+                    "state": ag.get("state", "unknown"),
+                    "protected": bool(getattr(actor, "protected", False)),
+                    "cpu": ag.get("cpu"),
+                    "mem": ag.get("mem"),
+                    "task": ag.get("task"),
+                    "messagesProcessed": ag.get("messages_processed")
+                    if ag.get("messages_processed") is not None
+                    else getattr(getattr(actor, "metrics", None), "messages_processed", None),
+                    "costUsd": _actor_cost(actor, ag),
+                }
+            )
         return web.json_response(result)
     return web.json_response([_actor_payload(ag) for ag in state["agents"].values()])
 
 
 async def actor_handler(request):
     from aiohttp import web
+
     actor_id = request.match_info["actor_id"]
     ag = state["agents"].get(actor_id)
     if ag is None:
@@ -2242,6 +2429,7 @@ async def actor_handler(request):
 
 async def actor_history_handler(request):
     from aiohttp import web
+
     actor_id = request.match_info["actor_id"]
 
     # Resolve actor: the frontend sends the agent NAME (not UUID), so try
@@ -2257,6 +2445,7 @@ async def actor_history_handler(request):
         # actor_id might be a display name (e.g. "main") — try it directly.
         try:
             import json as _json
+
             row = db.conn.execute(
                 "SELECT value FROM kv_store WHERE agent=? AND key='conversation_history'",
                 (actor_id,),
@@ -2281,14 +2470,15 @@ async def chat_log_handler(request):
       limit   — max rows to return (default 200, max 1000)
     """
     from aiohttp import web
+
     if db is None:
         return web.json_response([], status=200)
     try:
-        agent  = request.rel_url.query.get("agent")
-        role   = request.rel_url.query.get("role")
-        since  = float(request.rel_url.query["since"]) if "since" in request.rel_url.query else None
-        limit  = min(int(request.rel_url.query.get("limit", 200)), 1000)
-        rows   = db.query_chat_log(agent_name=agent, role=role, since=since, limit=limit)
+        agent = request.rel_url.query.get("agent")
+        role = request.rel_url.query.get("role")
+        since = float(request.rel_url.query["since"]) if "since" in request.rel_url.query else None
+        limit = min(int(request.rel_url.query.get("limit", 200)), 1000)
+        rows = db.query_chat_log(agent_name=agent, role=role, since=since, limit=limit)
         return web.json_response(rows)
     except Exception as exc:
         return web.json_response({"error": str(exc)}, status=500)
@@ -2302,6 +2492,7 @@ async def _warm_tts_voices(_app=None) -> None:
     global _tts_voices_cache
     try:
         import edge_tts
+
         voices = await edge_tts.list_voices()
         _tts_voices_cache = [
             {"name": v["ShortName"], "locale": v["Locale"], "gender": v["Gender"]}
@@ -2314,6 +2505,7 @@ async def _warm_tts_voices(_app=None) -> None:
 async def tts_voices_handler(request):
     """GET /api/tts/voices — list available edge-tts voices."""
     from aiohttp import web
+
     try:
         import edge_tts as _  # noqa: F401 — check installed
     except ImportError:
@@ -2329,8 +2521,10 @@ async def tts_handler(request):
     Returns audio/mpeg. Falls back 503 if edge-tts is not installed so the
     frontend can transparently fall back to the Web Speech API.
     """
-    from aiohttp import web
     import os
+
+    from aiohttp import web
+
     try:
         import edge_tts
     except ImportError:
@@ -2342,6 +2536,7 @@ async def tts_handler(request):
 
     # Mirror TTSManager: strip code blocks, cap at 300 chars
     import re
+
     text = re.sub(r"```[\s\S]*?```", "code block", text)[:300]
 
     default_voice = os.environ.get("TTS_VOICE", "en-US-JennyNeural")
@@ -2366,10 +2561,8 @@ async def tts_handler(request):
 async def config_handler(request):
     """Expose non-secret runtime config so the frontend can seed its defaults."""
     from aiohttp import web
-    from .config import CONFIG
 
-    # Ingress support: HA sets X-Ingress-Path
-    ingress_path = request.headers.get("X-Ingress-Path", "")
+    from .config import CONFIG
 
     # The /mqtt and /ws proxies are served by *this* server, so point the
     # frontend at the monitor's actual port (WS_PORT), not a hardcoded one.
@@ -2378,27 +2571,29 @@ async def config_handler(request):
     protocol = "wss" if request.secure else "ws"
 
     mqtt_url = f"{protocol}://{ws_host}/mqtt"
-    ws_url   = f"{protocol}://{ws_host}/ws"
+    ws_url = f"{protocol}://{ws_host}/ws"
 
-    return web.json_response({
-        "ha": {
-            "url":   CONFIG.ha_url,
-            "token": CONFIG.ha_token,
-        },
-        "mqtt": {
-            "host": MQTT_BROKER,
-            "port": MQTT_PORT,
-            "url":  mqtt_url,
-        },
-        "llm": {
-            "provider": CONFIG.llm_provider,
-            "model":    CONFIG.llm_model,
-        },
-        "weather": {
-            "defaultLocation": CONFIG.weather_default_location,
-        },
-        "ws_url": ws_url,
-    })
+    return web.json_response(
+        {
+            "ha": {
+                "url": CONFIG.ha_url,
+                "token": CONFIG.ha_token,
+            },
+            "mqtt": {
+                "host": MQTT_BROKER,
+                "port": MQTT_PORT,
+                "url": mqtt_url,
+            },
+            "llm": {
+                "provider": CONFIG.llm_provider,
+                "model": CONFIG.llm_model,
+            },
+            "weather": {
+                "defaultLocation": CONFIG.weather_default_location,
+            },
+            "ws_url": ws_url,
+        }
+    )
 
 
 async def feed_handler(request):
@@ -2417,6 +2612,7 @@ async def feed_handler(request):
     pre-upgrade history on first launch.
     """
     from aiohttp import web
+
     if db is None:
         return web.json_response([])
     try:
@@ -2432,15 +2628,18 @@ async def feed_handler(request):
             # chronological (oldest-first) so the latest message ends up
             # at the bottom of the feed.
             rows = list(reversed(rows))
-            items = [{
-                "type":      "chat",
-                "label":     str(r.get("content", "")),
-                "agentName": r.get("agent_name", ""),
-                "role":      r.get("role", ""),
-                "timestamp": float(r.get("ts", 0.0)),  # REAL Unix time, not an index
-                "_seq":      i,
-                "_agent":    r.get("agent_name", ""),
-            } for i, r in enumerate(rows)]
+            items = [
+                {
+                    "type": "chat",
+                    "label": str(r.get("content", "")),
+                    "agentName": r.get("agent_name", ""),
+                    "role": r.get("role", ""),
+                    "timestamp": float(r.get("ts", 0.0)),  # REAL Unix time, not an index
+                    "_seq": i,
+                    "_agent": r.get("agent_name", ""),
+                }
+                for i, r in enumerate(rows)
+            ]
             return web.json_response(items)
 
         # Fallback — legacy kv_store path. Keeps old DBs displaying *something*
@@ -2448,6 +2647,7 @@ async def feed_handler(request):
         # timestamp by anchoring the last entry to "now" and walking backwards
         # in 1-second steps, so at least entries are ordered consistently.
         import json as _json
+
         kv_rows = db.conn.execute(
             "SELECT agent, value FROM kv_store WHERE key='conversation_history'"
         ).fetchall()
@@ -2456,22 +2656,26 @@ async def feed_handler(request):
         for agent_name, value in kv_rows:
             try:
                 history = _json.loads(value)
-                visible = [m for m in history
-                           if isinstance(m, dict)
-                           and m.get("role") in ("user", "assistant")]
+                visible = [
+                    m
+                    for m in history
+                    if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+                ]
                 n = len(visible)
                 for i, msg in enumerate(visible):
-                    items.append({
-                        "type":      "chat",
-                        "label":     str(msg.get("content", "")),
-                        "agentName": agent_name,
-                        "role":      msg.get("role", ""),
-                        # Synthesised but at least monotonic and anchored
-                        # to a real wall-clock value, not a bare index.
-                        "timestamp": now - (n - 1 - i),
-                        "_seq":      i,
-                        "_agent":    agent_name,
-                    })
+                    items.append(
+                        {
+                            "type": "chat",
+                            "label": str(msg.get("content", "")),
+                            "agentName": agent_name,
+                            "role": msg.get("role", ""),
+                            # Synthesised but at least monotonic and anchored
+                            # to a real wall-clock value, not a bare index.
+                            "timestamp": now - (n - 1 - i),
+                            "_seq": i,
+                            "_agent": agent_name,
+                        }
+                    )
             except Exception:
                 pass
         return web.json_response(items[-50:])
@@ -2482,6 +2686,7 @@ async def feed_handler(request):
 
 # ── Entry point ────────────────────────────────────────────────────────────
 
+
 async def main(exit_on_failure: bool = False):
     from aiohttp import web
 
@@ -2491,8 +2696,10 @@ async def main(exit_on_failure: bool = False):
 
     if not mqtt_ok or not port_ok:
         msg = []
-        if not mqtt_ok: msg.append(f"MQTT broker unreachable ({MQTT_BROKER}:{MQTT_PORT})")
-        if not port_ok: msg.append(f"Port {WS_PORT} already in use")
+        if not mqtt_ok:
+            msg.append(f"MQTT broker unreachable ({MQTT_BROKER}:{MQTT_PORT})")
+        if not port_ok:
+            msg.append(f"Port {WS_PORT} already in use")
         logger.error(f"[startup] Cannot start: {'; '.join(msg)}")
         if exit_on_failure:
             raise SystemExit(1)
@@ -2501,14 +2708,16 @@ async def main(exit_on_failure: bool = False):
     @web.middleware
     async def _cors_middleware(request, handler):
         if request.method == "OPTIONS":
-            return web.Response(headers={
-                "Access-Control-Allow-Origin":  "*",
-                "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            })
+            return web.Response(
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                }
+            )
         response = await handler(request)
         try:
-            response.headers["Access-Control-Allow-Origin"]  = "*"
+            response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
             response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         except Exception:
@@ -2516,61 +2725,61 @@ async def main(exit_on_failure: bool = False):
         return response
 
     app = web.Application(middlewares=[_cors_middleware])
-    app.router.add_get("/",                      index_handler)
-    app.router.add_get("/health",                health_handler)
-    app.router.add_get("/api/cost",              cost_handler)
-    app.router.add_get("/cost",                  cost_handler)
-    app.router.add_post("/api/cost/limit",       cost_limit_handler)
-    app.router.add_post("/cost/limit",           cost_limit_handler)
-    app.router.add_post("/api/cost/reset",       cost_reset_handler)
-    app.router.add_post("/cost/reset",           cost_reset_handler)
-    app.router.add_get("/ws",                    ws_handler)
-    app.router.add_get("/mqtt",                  mqtt_proxy_handler)
+    app.router.add_get("/", index_handler)
+    app.router.add_get("/health", health_handler)
+    app.router.add_get("/api/cost", cost_handler)
+    app.router.add_get("/cost", cost_handler)
+    app.router.add_post("/api/cost/limit", cost_limit_handler)
+    app.router.add_post("/cost/limit", cost_limit_handler)
+    app.router.add_post("/api/cost/reset", cost_reset_handler)
+    app.router.add_post("/cost/reset", cost_reset_handler)
+    app.router.add_get("/ws", ws_handler)
+    app.router.add_get("/mqtt", mqtt_proxy_handler)
 
     # Actor collection
-    app.router.add_get("/api/actors",            actors_handler)
-    app.router.add_get("/actors",                actors_handler)
+    app.router.add_get("/api/actors", actors_handler)
+    app.router.add_get("/actors", actors_handler)
 
     # Actor control — sub-routes must be registered before /{actor_id} catch-all
     app.router.add_post("/api/actors/{actor_id}/message", send_message_handler)
-    app.router.add_post("/actors/{actor_id}/message",     send_message_handler)
-    app.router.add_post("/api/actors/{actor_id}/pause",   pause_actor_handler)
-    app.router.add_post("/actors/{actor_id}/pause",       pause_actor_handler)
-    app.router.add_post("/api/actors/{actor_id}/resume",  resume_actor_handler)
-    app.router.add_post("/actors/{actor_id}/resume",      resume_actor_handler)
-    app.router.add_get("/api/actors/{actor_id}/metrics",  actor_metrics_handler)
-    app.router.add_get("/actors/{actor_id}/metrics",      actor_metrics_handler)
-    app.router.add_get("/api/actors/{actor_id}/history",  actor_history_handler)
-    app.router.add_get("/actors/{actor_id}/history",      actor_history_handler)
+    app.router.add_post("/actors/{actor_id}/message", send_message_handler)
+    app.router.add_post("/api/actors/{actor_id}/pause", pause_actor_handler)
+    app.router.add_post("/actors/{actor_id}/pause", pause_actor_handler)
+    app.router.add_post("/api/actors/{actor_id}/resume", resume_actor_handler)
+    app.router.add_post("/actors/{actor_id}/resume", resume_actor_handler)
+    app.router.add_get("/api/actors/{actor_id}/metrics", actor_metrics_handler)
+    app.router.add_get("/actors/{actor_id}/metrics", actor_metrics_handler)
+    app.router.add_get("/api/actors/{actor_id}/history", actor_history_handler)
+    app.router.add_get("/actors/{actor_id}/history", actor_history_handler)
 
     # Actor CRUD
-    app.router.add_get("/api/actors/{actor_id}",          actor_handler)
-    app.router.add_get("/actors/{actor_id}",              actor_handler)
-    app.router.add_delete("/api/actors/{actor_id}",       delete_actor_handler)
-    app.router.add_delete("/actors/{actor_id}",           delete_actor_handler)
+    app.router.add_get("/api/actors/{actor_id}", actor_handler)
+    app.router.add_get("/actors/{actor_id}", actor_handler)
+    app.router.add_delete("/api/actors/{actor_id}", delete_actor_handler)
+    app.router.add_delete("/actors/{actor_id}", delete_actor_handler)
 
     # Chat (REST fire-and-forget)
-    app.router.add_post("/api/chat",             rest_chat_handler)
-    app.router.add_post("/chat",                 rest_chat_handler)
-    app.router.add_post("/api/chat/stop",        rest_chat_stop_handler)
-    app.router.add_post("/chat/stop",            rest_chat_stop_handler)
+    app.router.add_post("/api/chat", rest_chat_handler)
+    app.router.add_post("/chat", rest_chat_handler)
+    app.router.add_post("/api/chat/stop", rest_chat_stop_handler)
+    app.router.add_post("/chat/stop", rest_chat_stop_handler)
 
-    app.router.add_get("/api/chats",             chat_log_handler)
-    app.router.add_get("/chats",                 chat_log_handler)
-    app.router.add_get("/api/tts/voices",        tts_voices_handler)
-    app.router.add_get("/api/tts",               tts_handler)
+    app.router.add_get("/api/chats", chat_log_handler)
+    app.router.add_get("/chats", chat_log_handler)
+    app.router.add_get("/api/tts/voices", tts_voices_handler)
+    app.router.add_get("/api/tts", tts_handler)
     app.on_startup.append(_warm_tts_voices)
 
-    app.router.add_get("/api/config",            config_handler)
-    app.router.add_get("/config",                config_handler)
-    app.router.add_get("/api/feed",              feed_handler)
-    app.router.add_get("/feed",                  feed_handler)
-    app.router.add_post("/api/reset",             reset_handler)
-    app.router.add_get("/favicon.svg",           index_handler)
-    app.router.add_get("/docs",  lambda r: web.HTTPFound("/docs/"))
-    app.router.add_get("/docs/",             docs_handler)
-    app.router.add_get("/docs/{path:.+}",    docs_handler)
-    app.router.add_get("/{path:.+}",         static_handler)
+    app.router.add_get("/api/config", config_handler)
+    app.router.add_get("/config", config_handler)
+    app.router.add_get("/api/feed", feed_handler)
+    app.router.add_get("/feed", feed_handler)
+    app.router.add_post("/api/reset", reset_handler)
+    app.router.add_get("/favicon.svg", index_handler)
+    app.router.add_get("/docs", lambda r: web.HTTPFound("/docs/"))
+    app.router.add_get("/docs/", docs_handler)
+    app.router.add_get("/docs/{path:.+}", docs_handler)
+    app.router.add_get("/{path:.+}", static_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -2601,9 +2810,7 @@ def cli_main() -> None:
             try:
                 pending = asyncio.all_tasks(loop)
                 if pending:
-                    loop.run_until_complete(
-                        asyncio.gather(*pending, return_exceptions=True)
-                    )
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             except Exception:
                 pass
             # Brief sleep lets paho's internal socket-close callback fire
@@ -2618,18 +2825,20 @@ def cli_main() -> None:
 
 
 if __name__ == "__main__":
-    import argparse, os
+    import argparse
+    import os
+
     parser = argparse.ArgumentParser(description="Wactorz Monitor Server")
-    parser.add_argument("--broker",       default=os.getenv("WACTORZ_BROKER", "localhost"))
-    parser.add_argument("--mqtt-port",    type=int, default=1883)
+    parser.add_argument("--broker", default=os.getenv("WACTORZ_BROKER", "localhost"))
+    parser.add_argument("--mqtt-port", type=int, default=1883)
     parser.add_argument("--mqtt-ws-port", type=int, default=int(os.getenv("MQTT_WS_PORT", "9001")))
-    parser.add_argument("--ws-port",      type=int, default=int(os.getenv("MONITOR_PORT", "8888")))
+    parser.add_argument("--ws-port", type=int, default=int(os.getenv("MONITOR_PORT", "8888")))
     args = parser.parse_args()
 
     thismodule = sys.modules[__name__]
-    thismodule.MQTT_BROKER  = args.broker
-    thismodule.MQTT_PORT    = args.mqtt_port
+    thismodule.MQTT_BROKER = args.broker
+    thismodule.MQTT_PORT = args.mqtt_port
     thismodule.MQTT_WS_PORT = args.mqtt_ws_port
-    thismodule.WS_PORT      = args.ws_port
+    thismodule.WS_PORT = args.ws_port
 
     cli_main()

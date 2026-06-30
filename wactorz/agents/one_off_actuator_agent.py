@@ -5,7 +5,7 @@ import json
 import logging
 import shutil
 import time
-from typing import Any, Optional
+from typing import Any
 
 from wactorz.config import CONFIG
 
@@ -56,6 +56,7 @@ Rules:
 
 class OneOffActuatorAgent(Actor):
     """Ephemeral actor that resolves and executes one-shot HA service calls."""
+
     DESCRIPTION = "Ephemeral Home Assistant actuator for one-shot natural-language device control"
     CAPABILITIES = [
         "home_automation",
@@ -67,7 +68,7 @@ class OneOffActuatorAgent(Actor):
     def __init__(
         self,
         request: str,
-        llm_provider: Optional[LLMProvider],
+        llm_provider: LLMProvider | None,
         task_id: str,
         reply_to_id: str,
         **kwargs: Any,
@@ -128,7 +129,9 @@ class OneOffActuatorAgent(Actor):
 
     async def _execute_request(self) -> str:
         if not CONFIG.ha_url or not CONFIG.ha_token:
-            return "Home Assistant is not configured. Set `HA_URL` and `HA_TOKEN` in your .env file."
+            return (
+                "Home Assistant is not configured. Set `HA_URL` and `HA_TOKEN` in your .env file."
+            )
         if self.llm is None:
             return "Actuation failed: no LLM provider is available."
 

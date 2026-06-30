@@ -33,10 +33,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _OPERATORS: dict[str, Any] = {
-    "eq":  _op.eq,
-    "ne":  _op.ne,
-    "gt":  _op.gt,
-    "lt":  _op.lt,
+    "eq": _op.eq,
+    "ne": _op.ne,
+    "gt": _op.gt,
+    "lt": _op.lt,
     "gte": _op.ge,
     "lte": _op.le,
 }
@@ -45,16 +45,17 @@ _OPERATORS: dict[str, Any] = {
 @dataclass
 class ActuatorAction:
     """A single HA service call to execute when a detection triggers the actuator."""
-    domain: str        # e.g. "light", "climate", "cover"
-    service: str       # e.g. "turn_on", "set_temperature", "open_cover"
-    entity_id: str     # e.g. "light.living_room_lamp"
+
+    domain: str  # e.g. "light", "climate", "cover"
+    service: str  # e.g. "turn_on", "set_temperature", "open_cover"
+    entity_id: str  # e.g. "light.living_room_lamp"
     service_data: dict = field(default_factory=dict)  # e.g. {"color_name": "red"}
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ActuatorAction":
+    def from_dict(cls, d: dict) -> ActuatorAction:
         return cls(
             domain=d["domain"],
             service=d["service"],
@@ -66,16 +67,17 @@ class ActuatorAction:
 @dataclass
 class ActuatorCondition:
     """A condition checked against a live HA entity state before actuating."""
-    entity_id: str   # e.g. "sun.sun"
-    attribute: str   # "state" or dotted path like "attributes.elevation"
-    operator: str    # one of: eq, ne, gt, lt, gte, lte
-    value: Any       # e.g. "above_horizon" or 0
+
+    entity_id: str  # e.g. "sun.sun"
+    attribute: str  # "state" or dotted path like "attributes.elevation"
+    operator: str  # one of: eq, ne, gt, lt, gte, lte
+    value: Any  # e.g. "above_horizon" or 0
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ActuatorCondition":
+    def from_dict(cls, d: dict) -> ActuatorCondition:
         return cls(
             entity_id=d["entity_id"],
             attribute=d["attribute"],
@@ -111,12 +113,13 @@ class ActuatorCondition:
 @dataclass
 class ActuatorConfig:
     """Full configuration for one HomeAssistantActuatorAgent."""
+
     automation_id: str
     description: str
     mqtt_topics: list[str]
     actions: list[ActuatorAction]
     conditions: list[ActuatorCondition] = field(default_factory=list)
-    detection_filter: dict | None = None   # key-value match on incoming payload
+    detection_filter: dict | None = None  # key-value match on incoming payload
     cooldown_seconds: float = 10.0
 
     def to_dict(self) -> dict:
@@ -131,7 +134,7 @@ class ActuatorConfig:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ActuatorConfig":
+    def from_dict(cls, d: dict) -> ActuatorConfig:
         return cls(
             automation_id=d["automation_id"],
             description=d.get("description", ""),
@@ -207,7 +210,9 @@ class HomeAssistantActuatorAgent(Actor):
     async def _ws_keepalive(self) -> None:
         """Maintain a persistent HA WebSocket connection for service calls and state checks."""
         if not self.ha_ws_url or not self.ha_token:
-            logger.warning("[%s] HA URL/token not configured — conditions will be skipped", self.name)
+            logger.warning(
+                "[%s] HA URL/token not configured — conditions will be skipped", self.name
+            )
             return
 
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
@@ -234,7 +239,7 @@ class HomeAssistantActuatorAgent(Actor):
     async def _mqtt_listener(self) -> None:
         """Subscribe to configured MQTT topics and dispatch each message."""
         try:
-            import aiomqtt
+            import aiomqtt  # noqa: F401
         except ImportError:
             logger.error("[%s] aiomqtt not installed — MQTT listener disabled", self.name)
             return
@@ -253,6 +258,7 @@ class HomeAssistantActuatorAgent(Actor):
                             continue
                         try:
                             import json
+
                             payload = json.loads(message.payload.decode())
                             await self._on_detection(payload)
                         except Exception as exc:
@@ -262,7 +268,9 @@ class HomeAssistantActuatorAgent(Actor):
                 break
             except Exception as exc:
                 if self.state not in (ActorState.STOPPED, ActorState.FAILED):
-                    logger.warning("[%s] MQTT listener error: %s — reconnecting in 5s", self.name, exc)
+                    logger.warning(
+                        "[%s] MQTT listener error: %s — reconnecting in 5s", self.name, exc
+                    )
                     await asyncio.sleep(5)
 
     # ── Detection processing ───────────────────────────────────────────────────
@@ -328,19 +336,25 @@ class HomeAssistantActuatorAgent(Actor):
         if not self.config.conditions:
             return True
         if self._ha is None:
-            logger.warning("[%s] No HA connection — skipping condition checks (fail-open)", self.name)
+            logger.warning(
+                "[%s] No HA connection — skipping condition checks (fail-open)", self.name
+            )
             return True
 
         for condition in self.config.conditions:
             try:
                 entity_state = await self._ha.get_entity_state(condition.entity_id)
                 if entity_state is None:
-                    logger.warning("[%s] Entity %r not found — condition fails", self.name, condition.entity_id)
+                    logger.warning(
+                        "[%s] Entity %r not found — condition fails", self.name, condition.entity_id
+                    )
                     return False
                 if not condition.evaluate(entity_state):
                     return False
             except Exception as exc:
-                logger.error("[%s] Condition check error for %r: %s", self.name, condition.entity_id, exc)
+                logger.error(
+                    "[%s] Condition check error for %r: %s", self.name, condition.entity_id, exc
+                )
                 return False
 
         return True
@@ -355,7 +369,9 @@ class HomeAssistantActuatorAgent(Actor):
             except asyncio.TimeoutError:
                 logger.error(
                     "[%s] No HA connection after 10s — cannot call service %s.%s",
-                    self.name, action.domain, action.service,
+                    self.name,
+                    action.domain,
+                    action.service,
                 )
                 return
         try:

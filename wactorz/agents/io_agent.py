@@ -49,22 +49,24 @@ class IOAgent(Actor):
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
             {
-                "agentId":        self.actor_id,
-                "agentName":      self.name,
-                "agentType":      "gateway",
-                "replyTopic":     IO_CHAT_REPLY_TOPIC,   # tell UI which topic to subscribe to
-                "timestamp":      time.time(),
+                "agentId": self.actor_id,
+                "agentName": self.name,
+                "agentType": "gateway",
+                "replyTopic": IO_CHAT_REPLY_TOPIC,  # tell UI which topic to subscribe to
+                "timestamp": time.time(),
             },
         )
         self._tasks.append(asyncio.create_task(self._io_chat_listener()))
-        logger.info(f"[{self.name}] started — listening on '{IO_CHAT_TOPIC}', replying on '{IO_CHAT_REPLY_TOPIC}'")
+        logger.info(
+            f"[{self.name}] started — listening on '{IO_CHAT_TOPIC}', replying on '{IO_CHAT_REPLY_TOPIC}'"
+        )
 
     # ── MQTT subscriber ────────────────────────────────────────────────────
 
     async def _io_chat_listener(self):
         """Subscribe to `io/chat` and route every incoming message."""
         try:
-            import aiomqtt
+            import aiomqtt  # noqa: F401
         except ImportError:
             logger.error(f"[{self.name}] aiomqtt not installed — io/chat listener disabled")
             return
@@ -307,8 +309,11 @@ class IOAgent(Actor):
             payload = msg.payload or {}
             if isinstance(payload, dict):
                 reply_text = (
-                    payload.get("reply") or payload.get("result")
-                    or payload.get("text") or payload.get("content") or str(payload)
+                    payload.get("reply")
+                    or payload.get("result")
+                    or payload.get("text")
+                    or payload.get("content")
+                    or str(payload)
                 )
             else:
                 reply_text = str(payload)

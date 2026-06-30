@@ -22,17 +22,15 @@ Configuration via environment variables:
 
 import asyncio
 import logging
-import os
 import time
 
 from ..config import CONFIG
-
-from ..core.actor import Actor, Message, MessageType
+from ..core.actor import Actor, Message
 
 logger = logging.getLogger(__name__)
 
 _CONNECT_TIMEOUT = 10
-_EXEC_TIMEOUT    = 120
+_EXEC_TIMEOUT = 120
 _MAX_RSYNC_LINES = 20
 
 _HELP_TEXT = """\
@@ -61,8 +59,8 @@ class NautilusAgent(Actor):
         kwargs.setdefault("name", "nautilus-agent")
         super().__init__(**kwargs)
         self.protected = False
-        self._ssh_key    = CONFIG.nautilus_ssh_key
-        self._strict     = CONFIG.nautilus_strict_host_keys
+        self._ssh_key = CONFIG.nautilus_ssh_key
+        self._strict = CONFIG.nautilus_strict_host_keys
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -70,7 +68,7 @@ class NautilusAgent(Actor):
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
             {
-                "agentId":   self.actor_id,
+                "agentId": self.actor_id,
                 "agentName": self.name,
                 "agentType": "transfer",
                 "timestamp": time.time(),
@@ -78,7 +76,9 @@ class NautilusAgent(Actor):
         )
         logger.info(
             "[%s] NautilusAgent started — ssh_key=%s, strict=%s",
-            self.name, self._ssh_key, self._strict,
+            self.name,
+            self._ssh_key,
+            self._strict,
         )
 
     # ── handle_message ─────────────────────────────────────────────────────
@@ -119,7 +119,11 @@ class NautilusAgent(Actor):
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            return (proc.returncode or 0, stdout.decode(errors="replace"), stderr.decode(errors="replace"))
+            return (
+                proc.returncode or 0,
+                stdout.decode(errors="replace"),
+                stderr.decode(errors="replace"),
+            )
         except asyncio.TimeoutError:
             return (-1, "", f"Timed out after {timeout}s")
         except FileNotFoundError as exc:
@@ -133,7 +137,9 @@ class NautilusAgent(Actor):
             return
         await self._reply(f"Pinging `{host}`...")
         code, _, stderr = await self._run_proc(
-            *self._build_ssh_args(), host, "exit",
+            *self._build_ssh_args(),
+            host,
+            "exit",
             timeout=_CONNECT_TIMEOUT + 2,
         )
         if code == 0:
@@ -152,7 +158,9 @@ class NautilusAgent(Actor):
         display = " ".join(remote_args)
         await self._reply(f"Running `{display}` on `{host}`...")
         code, stdout, stderr = await self._run_proc(
-            *self._build_ssh_args(), host, *remote_args,
+            *self._build_ssh_args(),
+            host,
+            *remote_args,
         )
         icon = "✓" if code == 0 else "✗"
         parts = [f"{icon} `{display}` on `{host}` (exit {code})"]
@@ -170,7 +178,13 @@ class NautilusAgent(Actor):
         ssh_e = " ".join(ssh_parts)
 
         code, stdout, stderr = await self._run_proc(
-            "rsync", "-avz", "--progress", "-e", ssh_e, src, dst,
+            "rsync",
+            "-avz",
+            "--progress",
+            "-e",
+            ssh_e,
+            src,
+            dst,
         )
         icon = "✓" if code == 0 else "✗"
         parts = [f"{icon} rsync {direction} `{src}` → `{dst}` (exit {code})"]
@@ -192,7 +206,7 @@ class NautilusAgent(Actor):
         # Strip prefix
         for prefix in ("@nautilus-agent", "@nautilus_agent"):
             if text.lower().startswith(prefix):
-                text = text[len(prefix):].lstrip()
+                text = text[len(prefix) :].lstrip()
                 break
 
         tokens = text.split()

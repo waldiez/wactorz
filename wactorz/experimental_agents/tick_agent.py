@@ -23,7 +23,6 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional
 
 from ..core.actor import Actor, ActorState, Message, MessageType
 
@@ -51,7 +50,7 @@ every 1 h system check
 ```"""
 
 
-def _parse_seconds(n_str: str, unit: str) -> Optional[float]:
+def _parse_seconds(n_str: str, unit: str) -> float | None:
     """Parse a number + unit into seconds. Returns None on failure."""
     try:
         n = float(n_str)
@@ -59,10 +58,17 @@ def _parse_seconds(n_str: str, unit: str) -> Optional[float]:
         return None
     u = unit.lower().rstrip("s")  # normalize plural
     mapping = {
-        "s": 1, "sec": 1, "second": 1,
-        "m": 60, "min": 60, "minute": 60,
-        "h": 3600, "hr": 3600, "hour": 3600,
-        "d": 86400, "day": 86400,
+        "s": 1,
+        "sec": 1,
+        "second": 1,
+        "m": 60,
+        "min": 60,
+        "minute": 60,
+        "h": 3600,
+        "hr": 3600,
+        "hour": 3600,
+        "d": 86400,
+        "day": 86400,
     }
     factor = mapping.get(u)
     if factor is None:
@@ -70,7 +76,7 @@ def _parse_seconds(n_str: str, unit: str) -> Optional[float]:
     return n * factor
 
 
-def _parse_hhmm(s: str) -> Optional[float]:
+def _parse_hhmm(s: str) -> float | None:
     """Return Unix timestamp for the next occurrence of HH:MM today or tomorrow."""
     m = re.fullmatch(r"(\d{1,2}):(\d{2})", s.strip())
     if not m:
@@ -79,6 +85,7 @@ def _parse_hhmm(s: str) -> Optional[float]:
     if not (0 <= h < 24 and 0 <= mn < 60):
         return None
     import datetime
+
     now = datetime.datetime.now()
     target = now.replace(hour=h, minute=mn, second=0, microsecond=0)
     if target <= now:
@@ -90,7 +97,7 @@ def _parse_hhmm(s: str) -> Optional[float]:
 class Timer:
     id: str
     message: str
-    fire_at: float        # Unix timestamp of next fire
+    fire_at: float  # Unix timestamp of next fire
     interval: float = 0.0  # 0 → one-shot; >0 → recurring every `interval` seconds
     created_at: float = field(default_factory=time.time)
 
@@ -141,7 +148,7 @@ class TickAgent(Actor):
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
             {
-                "agentId":   self.actor_id,
+                "agentId": self.actor_id,
                 "agentName": self.name,
                 "agentType": "scheduler",
                 "timestamp": time.time(),
@@ -200,19 +207,20 @@ class TickAgent(Actor):
         payload = msg.payload or {}
         text = str(
             payload.get("text") or payload.get("content") or payload.get("task") or ""
-            if isinstance(payload, dict) else payload
+            if isinstance(payload, dict)
+            else payload
         ).strip()
         if not text:
             return
         for pfx in ("@chron-agent", "@chron_agent", "@tick-agent", "@tick_agent"):
             if text.lower().startswith(pfx):
-                text = text[len(pfx):].lstrip()
+                text = text[len(pfx) :].lstrip()
                 break
         reply = await self._dispatch(text.strip())
         if reply:
             await self._reply(reply)
 
-    async def _dispatch(self, text: str) -> Optional[str]:
+    async def _dispatch(self, text: str) -> str | None:
         if not text or text.lower() == "help":
             return _HELP
         parts = text.split()
@@ -251,10 +259,7 @@ class TickAgent(Actor):
         h, rem = divmod(int(remaining), 3600)
         m, s = divmod(rem, 60)
         label = f"{h}h {m}m" if h else f"{m}m {s}s" if m else f"{s}s"
-        return (
-            f"✓ Timer `{tid[:8]}…` set for **{time_str}** (in {label}).\n\n"
-            f"Message: _{message}_"
-        )
+        return f"✓ Timer `{tid[:8]}…` set for **{time_str}** (in {label}).\n\nMessage: _{message}_"
 
     async def _cmd_in(self, n_str: str, unit: str, message: str) -> str:
         secs = _parse_seconds(n_str, unit)
@@ -266,10 +271,7 @@ class TickAgent(Actor):
         async with self._lock:
             self._timers[tid] = timer
         self._save()
-        return (
-            f"✓ Timer `{tid[:8]}…` — fires in **{n_str} {unit}**.\n\n"
-            f"Message: _{message}_"
-        )
+        return f"✓ Timer `{tid[:8]}…` — fires in **{n_str} {unit}**.\n\nMessage: _{message}_"
 
     async def _cmd_every(self, n_str: str, unit: str, message: str) -> str:
         secs = _parse_seconds(n_str, unit)
@@ -281,10 +283,7 @@ class TickAgent(Actor):
         async with self._lock:
             self._timers[tid] = timer
         self._save()
-        return (
-            f"✓ Recurring timer `{tid[:8]}…` — every **{n_str} {unit}**.\n\n"
-            f"Message: _{message}_"
-        )
+        return f"✓ Recurring timer `{tid[:8]}…` — every **{n_str} {unit}**.\n\nMessage: _{message}_"
 
     async def _cmd_list(self) -> str:
         async with self._lock:
@@ -294,9 +293,7 @@ class TickAgent(Actor):
         timers.sort(key=lambda t: t.fire_at)
         lines = [f"**Active Timers ({len(timers)}):**\n"]
         for t in timers:
-            lines.append(
-                f"- `{t.id[:8]}…` [{t.kind()}] {t.label()} — _{t.message[:60]}_"
-            )
+            lines.append(f"- `{t.id[:8]}…` [{t.kind()}] {t.label()} — _{t.message[:60]}_")
         return "\n".join(lines)
 
     async def _cmd_cancel(self, prefix: str) -> str:
@@ -307,7 +304,9 @@ class TickAgent(Actor):
             if not matches:
                 return f"No timer found matching `{prefix}`."
             if len(matches) > 1:
-                return f"Ambiguous prefix `{prefix}` matches {len(matches)} timers. Be more specific."
+                return (
+                    f"Ambiguous prefix `{prefix}` matches {len(matches)} timers. Be more specific."
+                )
             del self._timers[matches[0]]
         self._save()
         return f"✓ Timer `{prefix}…` cancelled."

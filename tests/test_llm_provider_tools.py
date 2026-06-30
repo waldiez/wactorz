@@ -15,7 +15,6 @@ from wactorz.agents.llm_agent import (
     OpenAIProvider,
 )
 
-
 TOOL = {
     "name": "get_simplified_ha_data",
     "description": "Fetch HA data",
@@ -176,11 +175,14 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
             tools=[TOOL],
         )
 
-        self.assertEqual(posted_payloads[0]["tools"][0]["function"]["name"], "get_simplified_ha_data")
+        self.assertEqual(
+            posted_payloads[0]["tools"][0]["function"]["name"], "get_simplified_ha_data"
+        )
         self.assertEqual(result.tool_calls[0].name, "get_simplified_ha_data")
 
     async def test_gemini_function_declaration_and_function_response_flow(self):
         """Gemini uses function declarations and function response parts."""
+
         class _Types:
             @staticmethod
             def GenerateContentConfig(**kwargs):
@@ -237,7 +239,9 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
         )
 
         config = models.calls[0]["config"]
-        self.assertEqual(config["tools"][0]["function_declarations"][0]["name"], "get_simplified_ha_data")
+        self.assertEqual(
+            config["tools"][0]["function_declarations"][0]["name"], "get_simplified_ha_data"
+        )
         self.assertEqual(result.tool_calls[0].name, "get_simplified_ha_data")
         self.assertEqual(
             tool_contents[0]["parts"][0]["function_response"]["name"],

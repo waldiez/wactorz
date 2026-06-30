@@ -38,30 +38,29 @@ from ..core.integrations.home_assistant.ha_helper import (
     get_camera_entities,
     get_camera_snapshot,
     get_camera_snapshot_url,
-    get_camera_stream_url,
     get_camera_stream_urls,
     get_devices,
     get_entities,
-    get_states,
     get_simplified_ha_data,
+    get_states,
     normalize_ha_base_url,
     update_automation,
 )
+from .llm_agent import LLMAgent, LLMProvider
 from .prompts.home_assistant_prompts import (
     AUTOMATION_CREATION_PROMPT,
     HA_ACTION_CLASSIFICATION_PROMPT,
     HA_CAMERA_LIST_TOOL,
     HA_CAMERA_SNAPSHOT_TOOL,
     HA_CAMERA_STREAM_TOOL,
+    HA_DELETE_CONFIRM_PROMPT,
+    HA_EDIT_AUTOMATION_PROMPT,
+    HA_IDENTIFY_AUTOMATION_PROMPT,
     HA_OTHER_PROMPT,
     HA_OTHER_TOOL,
     HARDWARE_RECOMMENDATION_PROMPT,
     HARDWARE_SELECTION_PROMPT,
-    HA_DELETE_CONFIRM_PROMPT,
-    HA_IDENTIFY_AUTOMATION_PROMPT,
-    HA_EDIT_AUTOMATION_PROMPT
 )
-from .llm_agent import LLMAgent, LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -77,15 +76,16 @@ class AutomationEditError(Exception):
 
 class HomeAssistantAgent(LLMAgent):
     """Unified Home Assistant agent: hardware recommendations and automation CRUD."""
-    DESCRIPTION   = "Controls Home Assistant: automations, devices, areas, entities"
-    CAPABILITIES  = ["home_automation", "ha_automations", "ha_devices", "ha_entities"]
-    INPUT_SCHEMA  = {
+
+    DESCRIPTION = "Controls Home Assistant: automations, devices, areas, entities"
+    CAPABILITIES = ["home_automation", "ha_automations", "ha_devices", "ha_entities"]
+    INPUT_SCHEMA = {
         "text": "str — natural language command or query, e.g. 'turn on living room lights', "
-                "'list all automations', 'create automation that turns off lights at 11pm'"
+        "'list all automations', 'create automation that turns off lights at 11pm'"
     }
     OUTPUT_SCHEMA = {
         "result": "str — human-readable confirmation or list of results",
-        "data":   "list|dict|null — structured HA API response when applicable"
+        "data": "list|dict|null — structured HA API response when applicable",
     }
 
     def __init__(self, llm_provider: LLMProvider | None = None, **kwargs) -> None:
@@ -106,11 +106,10 @@ class HomeAssistantAgent(LLMAgent):
         """Add token counts and cost from one llm.complete() call to running totals."""
         if not isinstance(usage, dict):
             return
-        self.total_input_tokens  += usage.get("input_tokens", 0)
+        self.total_input_tokens += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)
-        self.total_cost_usd      += usage.get("cost_usd", 0.0)
+        self.total_cost_usd += usage.get("cost_usd", 0.0)
         self._persist_cost()
-
 
     # ── Public entry points ──────────────────────────────────────────────────
 
@@ -121,12 +120,13 @@ class HomeAssistantAgent(LLMAgent):
         result = await self._process(user_message)
         response = str(result.get("result", ""))
         ts_reply = time.time()
-        self._conversation_history.append({"role": "assistant", "content": response, "ts": ts_reply})
+        self._conversation_history.append(
+            {"role": "assistant", "content": response, "ts": ts_reply}
+        )
         await self._maybe_summarize()
         self.persist("conversation_history", self._conversation_history)
         self._log_chat_turn(user_message, response, ts_user=ts_user, ts_reply=ts_reply)
         return response
-
 
     async def chat_stream(self, user_message: str):
         """
@@ -137,7 +137,6 @@ class HomeAssistantAgent(LLMAgent):
         yield response
         yield {}
 
-
     async def handle_message(self, msg: Message) -> None:
         if msg.type != MessageType.TASK:
             return
@@ -145,10 +144,16 @@ class HomeAssistantAgent(LLMAgent):
         text, entities, hardware = self._extract_payload(msg.payload)
 
         operation = msg.payload.get("operation") if isinstance(msg.payload, dict) else None
-        camera_entity_id = str(msg.payload.get("camera_entity_id", "")).strip() if isinstance(msg.payload, dict) else ""
+        camera_entity_id = (
+            str(msg.payload.get("camera_entity_id", "")).strip()
+            if isinstance(msg.payload, dict)
+            else ""
+        )
 
         if operation:
-            logger.debug(f"[{self.name}] operation={operation} camera_entity_id={camera_entity_id!r} from={msg.sender_id}")
+            logger.debug(
+                f"[{self.name}] operation={operation} camera_entity_id={camera_entity_id!r} from={msg.sender_id}"
+            )
 
         if operation == "list_cameras":
             result = await self._list_cameras()
@@ -174,7 +179,6 @@ class HomeAssistantAgent(LLMAgent):
         self.metrics.tasks_completed += 1
         if msg.sender_id:
             await self.send(msg.sender_id, MessageType.RESULT, result)
-
 
     # ── Dispatch ─────────────────────────────────────────────────────────────
 
@@ -233,7 +237,6 @@ class HomeAssistantAgent(LLMAgent):
 
         return self._unsupported_action_response(text)
 
-
     # ── Intent classification ────────────────────────────────────────────────
 
     async def _classify_action(self, text: str) -> str:
@@ -256,7 +259,10 @@ class HomeAssistantAgent(LLMAgent):
             return heuristic
 
         if self.llm is None:
-            logger.warning("[%s] No LLM provider configured; skipping action classification LLM call.", self.name)
+            logger.warning(
+                "[%s] No LLM provider configured; skipping action classification LLM call.",
+                self.name,
+            )
             return heuristic
 
         try:
@@ -279,38 +285,96 @@ class HomeAssistantAgent(LLMAgent):
         lower = text.lower()
         if any(w in lower for w in ("list areas", "show areas", "show me areas", "what areas")):
             return "list_areas"
-        if any(w in lower for w in ("list devices", "show devices", "show me devices", "what devices")):
+        if any(
+            w in lower for w in ("list devices", "show devices", "show me devices", "what devices")
+        ):
             return "list_devices"
-        if any(w in lower for w in ("list entities", "show entities", "show me entities", "what entities")):
+        if any(
+            w in lower
+            for w in ("list entities", "show entities", "show me entities", "what entities")
+        ):
             return "list_entities"
         if "get_entities_state" in lower:
             return "get_entities_state"
-        if any(w in lower for w in ("list automations", "show automations", "show all automations", "what automations", "what are my automations")):
+        if any(
+            w in lower
+            for w in (
+                "list automations",
+                "show automations",
+                "show all automations",
+                "what automations",
+                "what are my automations",
+            )
+        ):
             return "list_automations"
-        if any(w in lower for w in ("delete automation", "remove automation", "disable automation")):
+        if any(
+            w in lower for w in ("delete automation", "remove automation", "disable automation")
+        ):
             return "delete_automation"
-        if any(w in lower for w in ("edit automation", "update automation", "change automation", "modify automation", "rename automation")):
+        if any(
+            w in lower
+            for w in (
+                "edit automation",
+                "update automation",
+                "change automation",
+                "modify automation",
+                "rename automation",
+            )
+        ):
             return "edit_automation"
-        if (
-            "automation" in lower
-            and any(w in lower for w in ("create", "add", "new", "build", "make", "set up"))
+        if "automation" in lower and any(
+            w in lower for w in ("create", "add", "new", "build", "make", "set up")
         ):
             return "create_automation"
-        if any(w in lower for w in ("hardware", "what device", "what sensor", "what do i need", "compatible with")):
+        if any(
+            w in lower
+            for w in ("hardware", "what device", "what sensor", "what do i need", "compatible with")
+        ):
             return "recommend_hardware"
-        if any(w in lower for w in ("create", "add automation", "new automation", "build automation", "make automation")):
+        if any(
+            w in lower
+            for w in (
+                "create",
+                "add automation",
+                "new automation",
+                "build automation",
+                "make automation",
+            )
+        ):
             return "create_automation"
         ha_context_terms = (
-            "home assistant", "hass", "entity", "entities", "device", "devices",
-            "sensor", "sensors", "light", "lights", "switch", "thermostat",
-            "thermometer", "thermometers", "temperature", "humidity", "garage", "kitchen", "bedroom",
-            "living room", "hallway", "bathroom", "room", "rooms",
-            "camera", "cameras", "snapshot", "stream",
+            "home assistant",
+            "hass",
+            "entity",
+            "entities",
+            "device",
+            "devices",
+            "sensor",
+            "sensors",
+            "light",
+            "lights",
+            "switch",
+            "thermostat",
+            "thermometer",
+            "thermometers",
+            "temperature",
+            "humidity",
+            "garage",
+            "kitchen",
+            "bedroom",
+            "living room",
+            "hallway",
+            "bathroom",
+            "room",
+            "rooms",
+            "camera",
+            "cameras",
+            "snapshot",
+            "stream",
         )
         if re.search(r"\bha\b", lower) or any(term in lower for term in ha_context_terms):
             return "other"
         return "unknown"
-
 
     @staticmethod
     def _unsupported_action_response(text: str) -> dict[str, Any]:
@@ -321,7 +385,6 @@ class HomeAssistantAgent(LLMAgent):
                 "create, edit, delete, list automations, list areas, list devices, and list entities."
             ),
         }
-
 
     async def _handle_entities_state_request(self, text: str) -> dict[str, Any]:
         entity_ids = self._extract_entity_ids(text)
@@ -341,7 +404,11 @@ class HomeAssistantAgent(LLMAgent):
         try:
             states = await get_states(self.ha_url, self.ha_token)
         except Exception as exc:
-            return {"task": text, "result": f"Home Assistant state query failed: {exc}", "error": str(exc)}
+            return {
+                "task": text,
+                "result": f"Home Assistant state query failed: {exc}",
+                "error": str(exc),
+            }
 
         states_by_id = {s.get("entity_id"): s for s in states or [] if isinstance(s, dict)}
         found = {eid: states_by_id[eid] for eid in entity_ids if eid in states_by_id}
@@ -364,7 +431,9 @@ class HomeAssistantAgent(LLMAgent):
                 },
             )
 
-        parts = [f"{entity_id}: {state.get('state', 'unknown')}" for entity_id, state in found.items()]
+        parts = [
+            f"{entity_id}: {state.get('state', 'unknown')}" for entity_id, state in found.items()
+        ]
         if missing:
             parts.append("Missing: " + ", ".join(missing))
 
@@ -373,7 +442,6 @@ class HomeAssistantAgent(LLMAgent):
             "result": "; ".join(parts) if parts else "No requested entity states were found.",
             "data": {"states": found, "missing": missing},
         }
-
 
     # ── Camera direct handlers (A2A) ─────────────────────────────────────────
 
@@ -400,9 +468,13 @@ class HomeAssistantAgent(LLMAgent):
         rest_base = normalize_ha_base_url(self.ha_url)
         snapshot = await get_camera_snapshot(rest_base, self.ha_token, camera_entity_id)
         if "error" in snapshot:
-            logger.warning(f"[{self.name}] get_camera_snapshot({camera_entity_id}) failed: {snapshot['error']}")
+            logger.warning(
+                f"[{self.name}] get_camera_snapshot({camera_entity_id}) failed: {snapshot['error']}"
+            )
             return {"result": f"Snapshot failed: {snapshot['error']}", "error": snapshot["error"]}
-        logger.debug(f"[{self.name}] get_camera_snapshot({camera_entity_id}) -> {len(snapshot.get('image_base64', ''))} b64 chars")
+        logger.debug(
+            f"[{self.name}] get_camera_snapshot({camera_entity_id}) -> {len(snapshot.get('image_base64', ''))} b64 chars"
+        )
         return {
             "result": f"Snapshot captured for {camera_entity_id}.",
             "data": snapshot,
@@ -436,7 +508,6 @@ class HomeAssistantAgent(LLMAgent):
             ),
             "data": {"entity_id": camera_entity_id, "snapshot_url": url},
         }
-
 
     async def _handle_other_request(self, text: str) -> dict[str, Any]:
         if not self.ha_url or not self.ha_token:
@@ -520,10 +591,19 @@ class HomeAssistantAgent(LLMAgent):
                         snapshot = await get_camera_snapshot(rest_base, self.ha_token, entity_id)
                         if "error" in snapshot:
                             is_error = True
-                            result_text = json.dumps({k: v for k, v in snapshot.items() if k != "image_base64"}, default=str)
+                            result_text = json.dumps(
+                                {k: v for k, v in snapshot.items() if k != "image_base64"},
+                                default=str,
+                            )
                         else:
                             snapshots_taken.append(snapshot)
-                            result_text = json.dumps({"entity_id": entity_id, "content_type": snapshot.get("content_type")}, default=str)
+                            result_text = json.dumps(
+                                {
+                                    "entity_id": entity_id,
+                                    "content_type": snapshot.get("content_type"),
+                                },
+                                default=str,
+                            )
                     except Exception as exc:
                         result_text = f"Snapshot failed: {exc}"
                         is_error = True
@@ -531,7 +611,9 @@ class HomeAssistantAgent(LLMAgent):
                     args = getattr(call, "arguments", {}) or {}
                     entity_id = str(args.get("camera_entity_id", "")).strip()
                     try:
-                        stream_data = await get_camera_stream_urls(self.ha_url, self.ha_token, entity_id)
+                        stream_data = await get_camera_stream_urls(
+                            self.ha_url, self.ha_token, entity_id
+                        )
                         result_text = json.dumps(stream_data, default=str)
                     except Exception as exc:
                         result_text = f"Stream URL fetch failed: {exc}"
@@ -558,13 +640,15 @@ class HomeAssistantAgent(LLMAgent):
             "error": "tool_round_limit",
         }
 
-
     # ── Device discovery ─────────────────────────────────────────────────────
 
     async def _get_devices(self) -> dict[str, Any]:
         now = time.time()
         cached = self._device_cache.get("data")
-        if cached is not None and now - float(self._device_cache.get("timestamp", 0.0)) < self._device_cache_ttl:
+        if (
+            cached is not None
+            and now - float(self._device_cache.get("timestamp", 0.0)) < self._device_cache_ttl
+        ):
             return cached
 
         if not self.ha_url or not self.ha_token:
@@ -579,7 +663,11 @@ class HomeAssistantAgent(LLMAgent):
         try:
             ha_data = await get_simplified_ha_data(self.ha_url, self.ha_token)
             if not isinstance(ha_data, dict):
-                logger.warning("[%s] get_simplified_ha_data returned unexpected type %s", self.name, type(ha_data))
+                logger.warning(
+                    "[%s] get_simplified_ha_data returned unexpected type %s",
+                    self.name,
+                    type(ha_data),
+                )
                 ha_data = {}
             data = {"connected": True, "data": ha_data, "reason": ""}
             self._device_cache = {"timestamp": now, "data": data}
@@ -593,7 +681,6 @@ class HomeAssistantAgent(LLMAgent):
             self._device_cache = {"timestamp": now, "data": data}
             return data
 
-
     async def _fetch_registry_items(self, fetcher: Any) -> tuple[list[dict[str, Any]], str | None]:
         """Fetch HA registry data with common config and error handling."""
         if not self.ha_url or not self.ha_token:
@@ -606,7 +693,6 @@ class HomeAssistantAgent(LLMAgent):
         except Exception as exc:
             logger.warning("[%s] Could not fetch Home Assistant registry data: %s", self.name, exc)
             return [], f"Could not fetch data from Home Assistant: {exc}"
-
 
     async def _list_areas(self) -> dict[str, Any]:
         areas, error = await self._fetch_registry_items(get_areas)
@@ -627,7 +713,6 @@ class HomeAssistantAgent(LLMAgent):
         for idx, row in enumerate(area_rows, 1):
             lines.append(f"{idx}. {row['name']} ({row['area_id']})")
         return {"result": "\n".join(lines), "areas": area_rows}
-
 
     async def _list_devices(self) -> dict[str, Any]:
         devices, error = await self._fetch_registry_items(get_devices)
@@ -655,7 +740,6 @@ class HomeAssistantAgent(LLMAgent):
                 lines.append(f"{idx}. {row['name']}")
         return {"result": "\n".join(lines), "devices": device_rows}
 
-
     async def _list_entities(self) -> dict[str, Any]:
         entities, error = await self._fetch_registry_items(get_entities)
         if error:
@@ -670,7 +754,7 @@ class HomeAssistantAgent(LLMAgent):
                 "platform": str(e.get("platform") or ""),
             }
             for e in entities
-            if isinstance(e, dict) and e.get("disabled_by") == None
+            if isinstance(e, dict) and e.get("disabled_by") is None
         ]
         lines = [f"Found {len(entity_rows)} entities in Home Assistant:"]
         for idx, row in enumerate(entity_rows, 1):
@@ -680,7 +764,6 @@ class HomeAssistantAgent(LLMAgent):
                 lines.append(f"{idx}. {row['entity_id']}")
         return {"result": "\n".join(lines), "entities": entity_rows}
 
-
     # ── Hardware selection ────────────────────────────────────────────────────
     # NOTE: _select_hardware, _format_hardware_result, and _extract_entity_ids_from_hardware
     # are currently unused — the create_automation flow is temporarily disabled in _process.
@@ -688,7 +771,9 @@ class HomeAssistantAgent(LLMAgent):
     async def _select_hardware(self, text: str, devices: dict[str, Any]) -> dict[str, Any]:
         """LLM-backed hardware selection. Returns a formatted hardware result dict."""
         if self.llm is None:
-            return self._format_hardware_result(text, devices, [], False, "No LLM provider configured.")
+            return self._format_hardware_result(
+                text, devices, [], False, "No LLM provider configured."
+            )
 
         dev_list = devices.get("data", {}).get("devices", []) or []
         payload = {
@@ -696,14 +781,16 @@ class HomeAssistantAgent(LLMAgent):
             "device_discovery": {
                 "connected": bool(devices.get("connected")),
                 "reason": devices.get("reason", ""),
-                "domains": sorted(list(devices.get("domains", set()) or set())),
+                "domains": sorted(devices.get("domains", set()) or set()),
                 "devices": dev_list,
             },
         }
 
         user_msg = {"role": "user", "content": json.dumps(payload)}
         try:
-            response, usage = await self.llm.complete(messages=[user_msg], system=HARDWARE_SELECTION_PROMPT)
+            response, usage = await self.llm.complete(
+                messages=[user_msg], system=HARDWARE_SELECTION_PROMPT
+            )
             self._accumulate_usage(usage)
             data = json.loads(self._strip_fences(response))
             if not isinstance(data, dict):
@@ -746,8 +833,9 @@ class HomeAssistantAgent(LLMAgent):
 
         except Exception as exc:
             logger.error("[%s] Hardware selection failed: %s", self.name, exc, exc_info=True)
-            return self._format_hardware_result(text, devices, [], False, f"Hardware selection error: {exc}")
-
+            return self._format_hardware_result(
+                text, devices, [], False, f"Hardware selection error: {exc}"
+            )
 
     async def _recommend_hardware(self, text: str, devices: dict[str, Any]) -> dict[str, Any]:
         """Entry point for pure hardware-recommendation requests."""
@@ -865,7 +953,6 @@ class HomeAssistantAgent(LLMAgent):
                 f"Hardware recommendation error: {exc}",
             )
 
-
     def _format_available_hardware_result(
         self,
         text: str,
@@ -878,7 +965,9 @@ class HomeAssistantAgent(LLMAgent):
         connected = bool(devices.get("connected"))
         has_primary = bool(primary_hardware)
 
-        lines = [f"Can be done with existing hardware: {'yes' if can_fulfill and has_primary else 'no'}." ]
+        lines = [
+            f"Can be done with existing hardware: {'yes' if can_fulfill and has_primary else 'no'}."
+        ]
         if has_primary:
             lines.append("Primary hardware:")
             lines.extend(self._hardware_summary_lines(primary_hardware))
@@ -886,11 +975,15 @@ class HomeAssistantAgent(LLMAgent):
                 lines.append("Alternatives:")
                 lines.extend(self._hardware_summary_lines(alternatives))
             if can_fulfill:
-                lines.append("Recommendations are grounded only in currently discovered Home Assistant entities.")
+                lines.append(
+                    "Recommendations are grounded only in currently discovered Home Assistant entities."
+                )
             elif fallback_text:
                 lines.append(fallback_text)
             else:
-                lines.append("The selected hardware covers only part of the request based on currently discovered Home Assistant entities.")
+                lines.append(
+                    "The selected hardware covers only part of the request based on currently discovered Home Assistant entities."
+                )
         else:
             lines.append(
                 fallback_text
@@ -915,7 +1008,6 @@ class HomeAssistantAgent(LLMAgent):
             "result": "\n".join(lines),
             "device_discovery": {"connected": connected, "reason": devices.get("reason", "")},
         }
-
 
     def _format_hardware_result(
         self,
@@ -965,7 +1057,6 @@ class HomeAssistantAgent(LLMAgent):
             "device_discovery": {"connected": connected, "reason": devices.get("reason", "")},
         }
 
-
     # ── Automation creation ───────────────────────────────────────────────────
 
     async def _create_automation(
@@ -1013,7 +1104,6 @@ class HomeAssistantAgent(LLMAgent):
                 "result": f"Failed to create automation: {exc}",
                 "automation": {},
             }
-
 
     async def _generate_automation(
         self,
@@ -1069,7 +1159,6 @@ class HomeAssistantAgent(LLMAgent):
             },
         }
 
-
     async def _insert_automation(self, automation: dict[str, Any]) -> dict[str, Any]:
         if not self.ha_url or not self.ha_token:
             return {"inserted": False, "error": "HA_URL or HA_TOKEN not configured"}
@@ -1079,14 +1168,17 @@ class HomeAssistantAgent(LLMAgent):
         except Exception as exc:
             return {"inserted": False, "error": str(exc)}
 
-
     # ── Automation listing ────────────────────────────────────────────────────
 
     async def _get_automations_brief(self) -> list[dict[str, Any]]:
         """Return a brief list (id, name, description) with caching."""
         now = time.time()
         cached = self._automation_cache.get("data")
-        if cached is not None and now - float(self._automation_cache.get("timestamp", 0.0)) < self._automation_cache_ttl:
+        if (
+            cached is not None
+            and now - float(self._automation_cache.get("timestamp", 0.0))
+            < self._automation_cache_ttl
+        ):
             return cached
 
         if not self.ha_url or not self.ha_token:
@@ -1110,7 +1202,6 @@ class HomeAssistantAgent(LLMAgent):
             logger.warning("[%s] Could not fetch automations: %s", self.name, exc)
             self._automation_cache = {"timestamp": now, "data": []}
             return []
-        
 
     def _list_automations(self, automations: list[dict[str, Any]]) -> dict[str, Any]:
         if not automations:
@@ -1127,7 +1218,6 @@ class HomeAssistantAgent(LLMAgent):
             lines.append(line)
 
         return {"result": "\n".join(lines), "automations": automations}
-
 
     # ── Automation deletion ───────────────────────────────────────────────────
 
@@ -1185,7 +1275,6 @@ class HomeAssistantAgent(LLMAgent):
         except Exception as exc:
             return {"result": f"Error deleting automation: {exc}", "deleted": False}
 
-
     # ── Automation editing ────────────────────────────────────────────────────
 
     async def _identify_automation(
@@ -1208,7 +1297,9 @@ class HomeAssistantAgent(LLMAgent):
         if not isinstance(ident_data, dict):
             raise AutomationEditError("Could not identify which automation to edit.")
         if not ident_data.get("found"):
-            raise AutomationEditError(str(ident_data.get("result", "Could not identify which automation to edit.")))
+            raise AutomationEditError(
+                str(ident_data.get("result", "Could not identify which automation to edit."))
+            )
 
         automation_id = str(ident_data.get("automation_id", "")).strip()
         automation_name = str(ident_data.get("automation_name", "")).strip()
@@ -1218,14 +1309,16 @@ class HomeAssistantAgent(LLMAgent):
 
         return automation_id, automation_name
 
-
-    async def _get_automation_config(self, automation_id: str, automation_name: str) -> dict[str, Any]:
+    async def _get_automation_config(
+        self, automation_id: str, automation_name: str
+    ) -> dict[str, Any]:
         """Fetch the full automation config for a given automation ID."""
         try:
             full_list = await get_automations(self.ha_url, self.ha_token)
             match = next(
                 (
-                    a for a in (full_list or [])
+                    a
+                    for a in (full_list or [])
                     if isinstance(a, dict)
                     and (a.get("id") == automation_id or a.get("alias") == automation_name)
                 ),
@@ -1237,7 +1330,6 @@ class HomeAssistantAgent(LLMAgent):
         except Exception as exc:
             logger.warning("[%s] Could not fetch full automation config: %s", self.name, exc)
             return {}
-
 
     async def _generate_modified_automation_config(
         self,
@@ -1269,7 +1361,6 @@ class HomeAssistantAgent(LLMAgent):
         if not isinstance(updated_automation, dict):
             raise AutomationEditError("Generated automation config must be an object.")
         return updated_automation
-
 
     async def _edit_automation(
         self,
@@ -1308,7 +1399,9 @@ class HomeAssistantAgent(LLMAgent):
 
         # Step 2 — LLM generates the updated automation
         try:
-            updated_automation = await self._generate_modified_automation_config(text, existing_config, entity_ids)
+            updated_automation = await self._generate_modified_automation_config(
+                text, existing_config, entity_ids
+            )
         except AutomationEditError as exc:
             logger.warning("[%s] Could not generate updated automation: %s", self.name, exc)
             return {"result": str(exc), "edited": False}
@@ -1330,7 +1423,6 @@ class HomeAssistantAgent(LLMAgent):
         except Exception as exc:
             return {"result": f"Error updating automation: {exc}", "edited": False}
 
-
     # ── Static helpers ────────────────────────────────────────────────────────
 
     @staticmethod
@@ -1340,7 +1432,6 @@ class HomeAssistantAgent(LLMAgent):
             for e in devices.get("data", {}).get("entities", []) or []
             if e.get("entity_id")
         ]
-
 
     @staticmethod
     def _extract_payload(payload: Any) -> tuple[str, list[str], list[dict[str, Any]]]:
@@ -1356,13 +1447,11 @@ class HomeAssistantAgent(LLMAgent):
             return text, entities, hardware
         return str(payload), [], []
 
-
     @staticmethod
     def _extract_task_id(payload: Any, fallback: str) -> str:
         if isinstance(payload, dict) and isinstance(payload.get("task"), str):
             return payload["task"]
         return fallback
-
 
     @staticmethod
     def _strip_fences(text: str) -> str:
@@ -1379,7 +1468,6 @@ class HomeAssistantAgent(LLMAgent):
             cleaned = re.sub(r"```$", "", cleaned).strip()
         return cleaned
 
-
     @staticmethod
     def _validate_automation(automation: dict[str, Any]) -> str | None:
         if not isinstance(automation.get("name"), str) or not automation["name"].strip():
@@ -1390,10 +1478,12 @@ class HomeAssistantAgent(LLMAgent):
             return "automation.action must be a non-empty list"
         if not isinstance(automation.get("condition", []), list):
             return "automation.condition must be a list"
-        if not isinstance(automation.get("mode", "single"), str) or not automation.get("mode", "single").strip():
+        if (
+            not isinstance(automation.get("mode", "single"), str)
+            or not automation.get("mode", "single").strip()
+        ):
             return "automation.mode must be a non-empty string"
         return None
-
 
     @staticmethod
     def _available_entity_ids(devices: dict[str, Any]) -> set[str]:
@@ -1412,7 +1502,6 @@ class HomeAssistantAgent(LLMAgent):
             if entity_id:
                 available.add(entity_id)
         return available
-
 
     @staticmethod
     def _normalize_available_hardware_items(
@@ -1462,7 +1551,9 @@ class HomeAssistantAgent(LLMAgent):
                 if str(domain).strip()
             ]
             if not required_domains:
-                required_domains = sorted({entity_id.split(".", 1)[0] for entity_id in entity_ids if "." in entity_id})
+                required_domains = sorted(
+                    {entity_id.split(".", 1)[0] for entity_id in entity_ids if "." in entity_id}
+                )
 
             if not hardware_name or not required_domains:
                 continue
@@ -1487,7 +1578,6 @@ class HomeAssistantAgent(LLMAgent):
             )
 
         return normalized
-
 
     @staticmethod
     def _filter_hardware_alternatives(
@@ -1542,14 +1632,17 @@ class HomeAssistantAgent(LLMAgent):
 
         return filtered
 
-
     @staticmethod
     def _hardware_summary_lines(items: list[dict[str, Any]]) -> list[str]:
         lines: list[str] = []
         for item in items:
             if not isinstance(item, dict):
                 continue
-            entities = [str(entity_id) for entity_id in item.get("required_entities", []) or [] if str(entity_id)]
+            entities = [
+                str(entity_id)
+                for entity_id in item.get("required_entities", []) or []
+                if str(entity_id)
+            ]
             line = f"- {item.get('hardware', '?')} ({item.get('protocol', 'N/A')})"
             alternative_to = str(item.get("alternative_to", "")).strip()
             if alternative_to:
@@ -1561,7 +1654,6 @@ class HomeAssistantAgent(LLMAgent):
                 line += f" Available: {', '.join(entities[:3])}"
             lines.append(line)
         return lines
-
 
     @staticmethod
     def _extract_entity_ids_from_hardware(hardware_result: dict[str, Any]) -> list[str]:
@@ -1576,7 +1668,6 @@ class HomeAssistantAgent(LLMAgent):
                     seen.add(normalized)
                     entities.append(normalized)
         return entities
-
 
     @staticmethod
     def _extract_entity_ids(text: str) -> list[str]:

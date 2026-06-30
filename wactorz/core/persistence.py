@@ -18,7 +18,7 @@ import pickle
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +191,7 @@ CREATE INDEX IF NOT EXISTS idx_chatlog_agent_ts    ON chat_log (agent_name, ts);
 
 # ── SQLite Connection Manager ──────────────────────────────────────────────
 
+
 class WactorzDB:
     """
     Thread-safe SQLite connection manager.
@@ -200,20 +201,20 @@ class WactorzDB:
     def __init__(self, db_path: str = "./state/wactorz.db"):
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
         self._connect()
         self._init_schema()
 
     def _connect(self):
         self._conn = sqlite3.connect(
             str(self._path),
-            check_same_thread=False,    # safe with WAL mode
+            check_same_thread=False,  # safe with WAL mode
             timeout=10.0,
         )
-        self._conn.execute("PRAGMA journal_mode=WAL")       # concurrent reads
-        self._conn.execute("PRAGMA synchronous=NORMAL")      # fast + safe enough
+        self._conn.execute("PRAGMA journal_mode=WAL")  # concurrent reads
+        self._conn.execute("PRAGMA synchronous=NORMAL")  # fast + safe enough
         self._conn.execute("PRAGMA busy_timeout=5000")
-        self._conn.execute("PRAGMA cache_size=-8000")        # 8MB cache
+        self._conn.execute("PRAGMA cache_size=-8000")  # 8MB cache
         self._conn.row_factory = sqlite3.Row
         logger.info(f"[Persistence] SQLite opened: {self._path}")
 
@@ -222,7 +223,9 @@ class WactorzDB:
         # Check/set version
         row = self._conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
         if not row:
-            self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
+            self._conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,)
+            )
         self._conn.commit()
         logger.info(f"[Persistence] Schema v{_SCHEMA_VERSION} ready")
 
@@ -240,8 +243,7 @@ class WactorzDB:
     def kv_set(self, agent: str, key: str, value: Any):
         """Store a JSON-serializable value."""
         self._conn.execute(
-            "INSERT OR REPLACE INTO kv_store (agent, key, value, updated) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO kv_store (agent, key, value, updated) VALUES (?, ?, ?, ?)",
             (agent, key, json.dumps(value, default=str), time.time()),
         )
         self._conn.commit()
@@ -260,9 +262,7 @@ class WactorzDB:
         return default
 
     def kv_delete(self, agent: str, key: str):
-        self._conn.execute(
-            "DELETE FROM kv_store WHERE agent=? AND key=?", (agent, key)
-        )
+        self._conn.execute("DELETE FROM kv_store WHERE agent=? AND key=?", (agent, key))
         self._conn.commit()
 
     def kv_purge_agent(self, agent: str) -> int:
@@ -273,9 +273,7 @@ class WactorzDB:
 
         Returns the number of rows removed.
         """
-        cur = self._conn.execute(
-            "DELETE FROM kv_store WHERE agent=?", (agent,)
-        )
+        cur = self._conn.execute("DELETE FROM kv_store WHERE agent=?", (agent,))
         self._conn.commit()
         return cur.rowcount or 0
 
@@ -294,9 +292,18 @@ class WactorzDB:
 
     # ── Time-series writes ─────────────────────────────────────────────────
 
-    def write_sensor(self, ts: float, topic: str, entity_id: str,
-                     field: str, value: Optional[float], value_str: str = "",
-                     unit: str = "", agent: str = "", node: str = ""):
+    def write_sensor(
+        self,
+        ts: float,
+        topic: str,
+        entity_id: str,
+        field: str,
+        value: float | None,
+        value_str: str = "",
+        unit: str = "",
+        agent: str = "",
+        node: str = "",
+    ):
         self._conn.execute(
             "INSERT INTO sensor_readings "
             "(ts, topic, entity_id, field, value, value_str, unit, agent, node) "
@@ -314,9 +321,17 @@ class WactorzDB:
         )
         self._conn.commit()
 
-    def write_detection(self, ts: float, agent: str, class_name: str,
-                        confidence: float, bbox: str = "", frame_id: int = 0,
-                        metadata: str = "{}", node: str = ""):
+    def write_detection(
+        self,
+        ts: float,
+        agent: str,
+        class_name: str,
+        confidence: float,
+        bbox: str = "",
+        frame_id: int = 0,
+        metadata: str = "{}",
+        node: str = "",
+    ):
         self._conn.execute(
             "INSERT INTO detections "
             "(ts, agent, class_name, confidence, bbox, frame_id, metadata, node) "
@@ -325,9 +340,16 @@ class WactorzDB:
         )
         self._conn.commit()
 
-    def write_ha_state(self, ts: float, entity_id: str, old_state: str,
-                       new_state: str, domain: str = "", attributes: str = "{}",
-                       context: str = ""):
+    def write_ha_state(
+        self,
+        ts: float,
+        entity_id: str,
+        old_state: str,
+        new_state: str,
+        domain: str = "",
+        attributes: str = "{}",
+        context: str = "",
+    ):
         self._conn.execute(
             "INSERT INTO ha_state_changes "
             "(ts, entity_id, old_state, new_state, domain, attributes, context) "
@@ -336,9 +358,17 @@ class WactorzDB:
         )
         self._conn.commit()
 
-    def write_actuation(self, ts: float, agent: str, domain: str, service: str,
-                        entity_id: str, payload: str = "{}",
-                        trigger: str = "{}", rule_id: str = ""):
+    def write_actuation(
+        self,
+        ts: float,
+        agent: str,
+        domain: str,
+        service: str,
+        entity_id: str,
+        payload: str = "{}",
+        trigger: str = "{}",
+        rule_id: str = "",
+    ):
         self._conn.execute(
             "INSERT INTO actuations "
             "(ts, agent, domain, service, entity_id, payload, trigger, rule_id) "
@@ -349,8 +379,9 @@ class WactorzDB:
 
     # ── Chat log (persistent feed for the UI) ──────────────────────────────
 
-    def write_chat_log(self, ts: float, agent_name: str, role: str,
-                       content: str, session_id: str = ""):
+    def write_chat_log(
+        self, ts: float, agent_name: str, role: str, content: str, session_id: str = ""
+    ):
         """
         Persist a single chat turn so the UI feed can be rebuilt with real
         timestamps after a restart. The schema is created in init_state.sql.
@@ -362,45 +393,47 @@ class WactorzDB:
         )
         self._conn.commit()
 
-    def clear_chat_log(self, agent_name: Optional[str] = None) -> int:
+    def clear_chat_log(self, agent_name: str | None = None) -> int:
         """Delete chat_log rows. Pass agent_name to limit to one agent."""
         if agent_name:
-            cur = self._conn.execute(
-                "DELETE FROM chat_log WHERE agent_name=?", (agent_name,)
-            )
+            cur = self._conn.execute("DELETE FROM chat_log WHERE agent_name=?", (agent_name,))
         else:
             cur = self._conn.execute("DELETE FROM chat_log")
         self._conn.commit()
         return cur.rowcount
 
-    def clear_spawn_registry(self, agent_name: Optional[str] = None) -> int:
+    def clear_spawn_registry(self, agent_name: str | None = None) -> int:
         """Delete spawn_registry rows. Pass agent_name to limit to one agent."""
         if agent_name:
-            cur = self._conn.execute(
-                "DELETE FROM spawn_registry WHERE name=?", (agent_name,)
-            )
+            cur = self._conn.execute("DELETE FROM spawn_registry WHERE name=?", (agent_name,))
         else:
             cur = self._conn.execute("DELETE FROM spawn_registry")
         self._conn.commit()
         return cur.rowcount
 
-    def query_chat_log(self, agent_name: Optional[str] = None,
-                       role: Optional[str] = None,
-                       since: Optional[float] = None,
-                       limit: int = 200) -> list[dict]:
+    def query_chat_log(
+        self,
+        agent_name: str | None = None,
+        role: str | None = None,
+        since: float | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
         """
         Return chat_log rows newest-first as plain dicts. Used by the
         /api/chats endpoint and by feed_handler to seed the UI feed.
         """
-        sql    = "SELECT id, ts, agent_name, role, content, session_id FROM chat_log"
+        sql = "SELECT id, ts, agent_name, role, content, session_id FROM chat_log"
         clauses: list[str] = []
-        params:  list      = []
+        params: list = []
         if agent_name:
-            clauses.append("agent_name = ?"); params.append(agent_name)
+            clauses.append("agent_name = ?")
+            params.append(agent_name)
         if role:
-            clauses.append("role = ?");       params.append(role)
+            clauses.append("role = ?")
+            params.append(role)
         if since is not None:
-            clauses.append("ts > ?");         params.append(float(since))
+            clauses.append("ts > ?")
+            params.append(float(since))
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY ts DESC LIMIT ?"
@@ -409,15 +442,14 @@ class WactorzDB:
         # rows are sqlite3.Row because connect() set row_factory; coerce to dict
         return [dict(r) for r in rows]
 
-
     # ── Time-series queries (for ML agents) ────────────────────────────────
 
     def query_sensor(
         self,
         hours: float = 24,
-        topic: Optional[str] = None,
-        entity_id: Optional[str] = None,
-        field: Optional[str] = None,
+        topic: str | None = None,
+        entity_id: str | None = None,
+        field: str | None = None,
         limit: int = 100_000,
     ) -> list[dict]:
         """
@@ -450,8 +482,8 @@ class WactorzDB:
     def query_detections(
         self,
         hours: float = 24,
-        agent: Optional[str] = None,
-        class_name: Optional[str] = None,
+        agent: str | None = None,
+        class_name: str | None = None,
         min_confidence: float = 0.0,
         limit: int = 50_000,
     ) -> list[dict]:
@@ -478,8 +510,8 @@ class WactorzDB:
     def query_ha_states(
         self,
         hours: float = 24,
-        entity_id: Optional[str] = None,
-        domain: Optional[str] = None,
+        entity_id: str | None = None,
+        domain: str | None = None,
         limit: int = 50_000,
     ) -> list[dict]:
         since = time.time() - (hours * 3600)
@@ -505,7 +537,7 @@ class WactorzDB:
     def query_actuations(
         self,
         hours: float = 24,
-        entity_id: Optional[str] = None,
+        entity_id: str | None = None,
         limit: int = 10_000,
     ) -> list[dict]:
         since = time.time() - (hours * 3600)
@@ -552,6 +584,7 @@ class WactorzDB:
 
 # ── Redis Wrapper (optional) ───────────────────────────────────────────────
 
+
 class RedisStore:
     """
     Optional Redis wrapper for ephemeral fast-access data.
@@ -566,6 +599,7 @@ class RedisStore:
 
         try:
             import redis
+
             self._redis = redis.Redis.from_url(url, decode_responses=True)
             self._redis.ping()
             logger.info(f"[Persistence] Redis connected: {url}")
@@ -577,7 +611,7 @@ class RedisStore:
     def _key(self, key: str) -> str:
         return f"{self._prefix}{key}"
 
-    def set(self, key: str, value: Any, ttl: Optional[int] = None):
+    def set(self, key: str, value: Any, ttl: int | None = None):
         """Store a JSON-serializable value with optional TTL (seconds)."""
         serialized = json.dumps(value, default=str)
         if self._redis:
@@ -624,15 +658,17 @@ class RedisStore:
             return [k[prefix_len:] for k in self._redis.keys(self._key(pattern))]
         else:
             import fnmatch
+
             now = time.time()
             return [
-                k for k, v in self._fallback.items()
-                if fnmatch.fnmatch(k, pattern)
-                and (not v.get("expires") or v["expires"] > now)
+                k
+                for k, v in self._fallback.items()
+                if fnmatch.fnmatch(k, pattern) and (not v.get("expires") or v["expires"] > now)
             ]
 
 
 # ── Pickle Store (for agent.state only) ───────────────────────────────────
+
 
 class PickleStore:
     """
@@ -705,10 +741,10 @@ _SQLITE_KEYS = {
     "_notification_urls",
     "_topic_contracts",
     "_agent_manifests",
-    "conversation_history",    # must survive restarts — durable
-    "history_summary",         # must survive restarts — durable
-    "_final_cost",             # lifetime LLM cost — durable, queryable for deleted agents
-    "_messages_processed",     # lifetime message count — durable, survives restarts
+    "conversation_history",  # must survive restarts — durable
+    "history_summary",  # must survive restarts — durable
+    "_final_cost",  # lifetime LLM cost — durable, queryable for deleted agents
+    "_messages_processed",  # lifetime message count — durable, survives restarts
 }
 
 # Keys that go to Redis ONLY when Redis is actually running.
@@ -716,9 +752,9 @@ _SQLITE_KEYS = {
 # they fall back to in-memory dict (lost on restart, which is fine
 # for these specific keys).
 _REDIS_KEYS = {
-    "_observed_samples",       # rebuilt on first publish anyway
-    "_agent_metrics",          # rebuilt from heartbeats
-    "_heartbeat_state",        # rebuilt on agent start
+    "_observed_samples",  # rebuilt on first publish anyway
+    "_agent_metrics",  # rebuilt from heartbeats
+    "_heartbeat_state",  # rebuilt on agent start
 }
 
 
@@ -742,8 +778,9 @@ class PersistenceAPI:
             return self._persistence.get(key, default)
     """
 
-    def __init__(self, db: WactorzDB, redis: RedisStore,
-                 pickle_store: PickleStore, agent_name: str):
+    def __init__(
+        self, db: WactorzDB, redis: RedisStore, pickle_store: PickleStore, agent_name: str
+    ):
         self.db = db
         self.redis = redis
         self.pickle = pickle_store
@@ -828,8 +865,7 @@ class PersistenceAPI:
                     pickle_blob[key] = value
             except Exception as e:
                 logger.warning(
-                    f"[Persistence] Could not load snapshot key '{key}' for "
-                    f"'{self.agent}': {e}"
+                    f"[Persistence] Could not load snapshot key '{key}' for '{self.agent}': {e}"
                 )
 
         if pickle_blob:
@@ -837,9 +873,7 @@ class PersistenceAPI:
                 self.pickle.save(self.agent, pickle_blob)
                 applied["pickle"] = len(pickle_blob)
             except Exception as e:
-                logger.warning(
-                    f"[Persistence] Pickle bulk-load failed for '{self.agent}': {e}"
-                )
+                logger.warning(f"[Persistence] Pickle bulk-load failed for '{self.agent}': {e}")
 
         logger.info(
             f"[Persistence] Loaded snapshot for '{self.agent}': "
@@ -892,6 +926,7 @@ class PersistenceAPI:
 
 # ── Migration helper ───────────────────────────────────────────────────────
 
+
 def migrate_from_pickle(state_dir: str, db: WactorzDB, redis: RedisStore):
     """
     One-time migration: read existing .pkl files and write to SQLite/Redis.
@@ -941,14 +976,14 @@ def migrate_from_pickle(state_dir: str, db: WactorzDB, redis: RedisStore):
 
 # ── Singleton access ──────────────────────────────────────────────────────
 
-_db: Optional[WactorzDB] = None
-_redis: Optional[RedisStore] = None
-_pickle: Optional[PickleStore] = None
+_db: WactorzDB | None = None
+_redis: RedisStore | None = None
+_pickle: PickleStore | None = None
 
 
 def init_persistence(
     db_path: str = "./state/wactorz.db",
-    redis_url: Optional[str] = None,
+    redis_url: str | None = None,
     state_dir: str = "./state",
     run_migration: bool = True,
 ) -> tuple[WactorzDB, RedisStore, PickleStore]:
@@ -965,6 +1000,7 @@ def init_persistence(
     Returns (db, redis, pickle_store) for passing to ActorSystem.
     """
     import os
+
     global _db, _redis, _pickle
 
     if redis_url is None:
@@ -981,14 +1017,14 @@ def init_persistence(
         # 2. Run framework migrations (schema upgrades, state upgrades, spawn validation)
         try:
             from .migrations import run_migrations
+
             migration_result = run_migrations(_db, _redis, _pickle)
 
             # Log spawn issues as startup warnings
             for issue in migration_result.get("spawn_issues", []):
                 if issue["severity"] == "error":
                     logger.warning(
-                        f"[Persistence] Spawn registry issue: {issue['agent']} — "
-                        f"{issue['message']}"
+                        f"[Persistence] Spawn registry issue: {issue['agent']} — {issue['message']}"
                     )
         except ImportError:
             logger.debug("[Persistence] migrations module not available — skipping")
@@ -998,13 +1034,13 @@ def init_persistence(
     return _db, _redis, _pickle
 
 
-def get_db() -> Optional[WactorzDB]:
+def get_db() -> WactorzDB | None:
     return _db
 
 
-def get_redis() -> Optional[RedisStore]:
+def get_redis() -> RedisStore | None:
     return _redis
 
 
-def get_pickle_store() -> Optional[PickleStore]:
+def get_pickle_store() -> PickleStore | None:
     return _pickle

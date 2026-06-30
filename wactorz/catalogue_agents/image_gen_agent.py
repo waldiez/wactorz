@@ -65,7 +65,7 @@ Full:
 # AGENT_CODE — copy this string into the "code" field of the spawn config
 # ──────────────────────────────────────────────────────────────────────────────
 
-AGENT_CODE = r'''
+AGENT_CODE = r"""
 import asyncio
 import base64
 import json
@@ -184,4 +184,4 @@ async def handle_task(agent, payload):
 async def process(agent):
     # Task-driven only — no polling loop needed
     await asyncio.sleep(3600)
-'''
+"""

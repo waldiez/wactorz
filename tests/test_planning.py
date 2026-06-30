@@ -63,6 +63,7 @@ def host(**kw):
 
 # ── Pipeline-rule + pending-plan persistence ─────────────────────────────────
 
+
 def test_pipeline_rule_roundtrip():
     h = host()
     h.save_pipeline_rule({"rule_id": "r1", "agents": ["a", "b"]})
@@ -82,14 +83,18 @@ def test_pending_plan_crud():
 def test_most_recent_pending_picks_latest():
     h = host()
     now = time.time()
-    h.save_pending_plan({"plan_id": "old", "task": "a", "status": "pending", "created_at": now - 50})
+    h.save_pending_plan(
+        {"plan_id": "old", "task": "a", "status": "pending", "created_at": now - 50}
+    )
     h.save_pending_plan({"plan_id": "new", "task": "b", "status": "pending", "created_at": now})
     assert h._most_recent_pending_plan()["plan_id"] == "new"
 
 
 def test_most_recent_ignores_non_pending():
     h = host()
-    h.save_pending_plan({"plan_id": "p", "task": "a", "status": "approved", "created_at": time.time()})
+    h.save_pending_plan(
+        {"plan_id": "p", "task": "a", "status": "approved", "created_at": time.time()}
+    )
     assert h._most_recent_pending_plan() is None
 
 
@@ -103,6 +108,7 @@ def test_pending_plan_expires_after_ttl():
 
 
 # ── Approval / rejection / correction predicates ─────────────────────────────
+
 
 @pytest.mark.parametrize("text", ["yes", "ok", "approve", "do it", "go ahead"])
 def test_looks_like_approval_true(text):
@@ -133,6 +139,7 @@ def test_looks_like_correction_false():
 
 # ── Dry-run gating ───────────────────────────────────────────────────────────
 
+
 def test_dryrun_bypass_marker():
     assert host()._dryrun_enabled("pipeline! build the thing") is False
 
@@ -146,6 +153,7 @@ def test_dryrun_off_by_policy():
 
 
 # ── Planning heuristic (exercises _PLANNING_KEYWORDS) ────────────────────────
+
 
 def test_needs_planning_explicit():
     assert run(host()._needs_planning("coordinate: weather then news")) is True
@@ -171,33 +179,44 @@ def test_needs_planning_two_agent_mentions():
 
 # ── Collision warning (exercises _SPAWN_INTENT_WORDS) ────────────────────────
 
+
 def test_collision_none_when_no_pending():
     assert host()._warn_if_pending_plan_collision("create a sensor") is None
 
 
 def test_collision_warns_on_spawn_intent():
     h = host()
-    h.save_pending_plan({"plan_id": "p1", "task": "old task", "status": "pending", "created_at": time.time()})
+    h.save_pending_plan(
+        {"plan_id": "p1", "task": "old task", "status": "pending", "created_at": time.time()}
+    )
     msg = h._warn_if_pending_plan_collision("create a new cpu sensor")
     assert msg is not None and "pending plan" in msg.lower()
 
 
 def test_collision_bypassed_by_marker():
     h = host()
-    h.save_pending_plan({"plan_id": "p1", "task": "old", "status": "pending", "created_at": time.time()})
+    h.save_pending_plan(
+        {"plan_id": "p1", "task": "old", "status": "pending", "created_at": time.time()}
+    )
     assert h._warn_if_pending_plan_collision("pipeline! create a sensor") is None
 
 
 # ── Proposal formatting ──────────────────────────────────────────────────────
 
+
 def test_format_plan_proposal():
     plan = {
         "plan_id": "p1",
         "task": "monitor cpu and alert",
-        "envelope": {"plan": [
-            {"name": "cpu-mon", "description": "watch cpu",
-             "spawn_config": {"type": "dynamic"}},
-        ]},
+        "envelope": {
+            "plan": [
+                {
+                    "name": "cpu-mon",
+                    "description": "watch cpu",
+                    "spawn_config": {"type": "dynamic"},
+                },
+            ]
+        },
     }
     out = host()._format_plan_proposal(plan)
     assert "p1" in out

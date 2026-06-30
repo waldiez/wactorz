@@ -25,11 +25,10 @@ Single restart authority:
 import asyncio
 import logging
 import time
-from typing import Optional
 
 import psutil
 
-from ..core.actor import Actor, Message, MessageType, ActorState
+from ..core.actor import Actor, ActorState, Message, MessageType
 
 logger = logging.getLogger(__name__)
 
@@ -38,27 +37,26 @@ _NOTIFY_COOLDOWN = 120.0
 
 
 class MonitorActor(Actor):
-
     def __init__(
         self,
-        check_interval:    float = 15.0,
+        check_interval: float = 15.0,
         heartbeat_timeout: float = 60.0,
-        auto_restart:      bool  = False,   # kept for API compat, ignored
+        auto_restart: bool = False,  # kept for API compat, ignored
         **kwargs,
     ):
         kwargs.setdefault("name", "monitor")
         super().__init__(**kwargs)
-        self.check_interval    = check_interval
+        self.check_interval = check_interval
         self.heartbeat_timeout = heartbeat_timeout
-        self.protected         = True
+        self.protected = True
 
-        self._last_seen:      dict[str, float] = {}
-        self._alert_state:    dict[str, bool]  = {}
+        self._last_seen: dict[str, float] = {}
+        self._alert_state: dict[str, bool] = {}
 
         # Error event registry: actor_id -> latest error event dict
-        self._error_registry: dict[str, dict]  = {}
+        self._error_registry: dict[str, dict] = {}
         # Cooldown: actor_id -> last time we notified main
-        self._last_notified:  dict[str, float] = {}
+        self._last_notified: dict[str, float] = {}
 
         # Cached Process object — cpu_percent(interval=None) tracks a delta
         # between consecutive calls on the SAME instance; creating a new one
@@ -165,13 +163,13 @@ class MonitorActor(Actor):
         actor.stop() / actor.start() here.
         """
         actor_id = event.get("actor_id", "")
-        name     = event.get("name", actor_id[:8])
-        phase    = event.get("phase", "unknown")
-        error    = event.get("error", "")
+        name = event.get("name", actor_id[:8])
+        phase = event.get("phase", "unknown")
+        error = event.get("error", "")
         severity = event.get("severity", "warning")
-        fatal    = event.get("fatal", False)
+        fatal = event.get("fatal", False)
         degraded = event.get("degraded", False)
-        consec   = event.get("consecutive", 1)
+        consec = event.get("consecutive", 1)
 
         self._error_registry[actor_id] = event
 
@@ -205,11 +203,12 @@ class MonitorActor(Actor):
         """Notify user when a previously degraded agent has recovered."""
         for actor_id, event in list(self._error_registry.items()):
             actor = self._find_actor(actor_id)
-            name  = event.get("name", actor_id[:8])
+            name = event.get("name", actor_id[:8])
             if actor and hasattr(actor, "_consecutive_errors") and actor._consecutive_errors == 0:
                 del self._error_registry[actor_id]
                 await self._notify_main(
-                    actor_id, name,
+                    actor_id,
+                    name,
                     f"**{name}** has recovered and is running normally again. ✅",
                     severity="info",
                 )
@@ -237,13 +236,17 @@ class MonitorActor(Actor):
             return
 
         try:
-            await self.send(main.actor_id, MessageType.TASK, {
-                "_monitor_notification": True,
-                "agent_name":  agent_name,
-                "message":     message,
-                "severity":    severity,
-                "timestamp":   now,
-            })
+            await self.send(
+                main.actor_id,
+                MessageType.TASK,
+                {
+                    "_monitor_notification": True,
+                    "agent_name": agent_name,
+                    "message": message,
+                    "severity": severity,
+                    "timestamp": now,
+                },
+            )
             logger.info(f"[{self.name}] Notified main about '{agent_name}': {message[:80]}")
         except Exception as e:
             logger.error(f"[{self.name}] Failed to notify main: {e}")
@@ -252,18 +255,24 @@ class MonitorActor(Actor):
 
     async def _fire_heartbeat_alert(self, actor: Actor, gap: float):
         alert = {
-            "actor_id":      actor.actor_id,
-            "name":          actor.name,
+            "actor_id": actor.actor_id,
+            "name": actor.name,
             "last_seen_ago": gap,
-            "state":         actor.state.value,
-            "timestamp":     time.time(),
-            "severity":      "warning" if gap < 120 else "critical",
+            "state": actor.state.value,
+            "timestamp": time.time(),
+            "severity": "warning" if gap < 120 else "critical",
         }
         logger.warning(f"[{self.name}] ALERT: {actor.name} unresponsive for {gap:.0f}s")
         await self._mqtt_publish(f"agents/{actor.actor_id}/alert", alert)
 
-        _infra = {"monitor", "installer", "main", "code-agent",
-                  "anomaly-detector", "home-assistant-agent"}
+        _infra = {
+            "monitor",
+            "installer",
+            "main",
+            "code-agent",
+            "anomaly-detector",
+            "home-assistant-agent",
+        }
         if actor.name not in _infra:
             await self._notify_main(
                 actor.actor_id,
@@ -277,17 +286,17 @@ class MonitorActor(Actor):
         await self._mqtt_publish(
             f"agents/{event.get('actor_id', 'unknown')}/alert",
             {
-                "actor_id":  event.get("actor_id"),
-                "name":      event.get("name"),
-                "message":   f"[{event.get('phase')}] {event.get('error')}",
-                "severity":  event.get("severity", "warning"),
+                "actor_id": event.get("actor_id"),
+                "name": event.get("name"),
+                "message": f"[{event.get('phase')}] {event.get('error')}",
+                "severity": event.get("severity", "warning"),
                 "timestamp": time.time(),
             },
         )
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
-    def _find_actor(self, actor_id: str) -> Optional[Actor]:
+    def _find_actor(self, actor_id: str) -> Actor | None:
         if not self._registry:
             return None
         for a in self._registry.all_actors():
@@ -298,23 +307,23 @@ class MonitorActor(Actor):
     async def _publish_system_health(self):
         if not self._registry:
             return
-        now    = time.time()
+        now = time.time()
         actors = self._registry.all_actors()
         health = {
-            "timestamp":    now,
+            "timestamp": now,
             "total_actors": len(actors),
-            "running":  sum(1 for a in actors if a.state == ActorState.RUNNING),
-            "stopped":  sum(1 for a in actors if a.state == ActorState.STOPPED),
-            "failed":   sum(1 for a in actors if a.state == ActorState.FAILED),
+            "running": sum(1 for a in actors if a.state == ActorState.RUNNING),
+            "stopped": sum(1 for a in actors if a.state == ActorState.STOPPED),
+            "failed": sum(1 for a in actors if a.state == ActorState.FAILED),
             "degraded": len(self._error_registry),
             "actors": [
                 {
-                    "id":            a.actor_id,
-                    "name":          a.name,
-                    "state":         a.state.value,
+                    "id": a.actor_id,
+                    "name": a.name,
+                    "state": a.state.value,
                     "last_seen_ago": now - self._last_seen.get(a.actor_id, now),
                     "consecutive_errors": getattr(a, "_consecutive_errors", 0),
-                    "error_phase":        getattr(a, "_error_phase", ""),
+                    "error_phase": getattr(a, "_error_phase", ""),
                 }
                 for a in actors
             ],
@@ -328,10 +337,10 @@ class MonitorActor(Actor):
             mem_used_mb = mem_info.rss / 1024 / 1024
             mem_total_mb = psutil.virtual_memory().total / 1024 / 1024
             stats = {
-                "cpu":          cpu_pct,
-                "mem_used_mb":  mem_used_mb,
+                "cpu": cpu_pct,
+                "mem_used_mb": mem_used_mb,
                 "mem_total_mb": mem_total_mb,
-                "timestamp":    time.time(),
+                "timestamp": time.time(),
             }
             await self._mqtt_publish("system/host", stats)
         except Exception as e:

@@ -8,9 +8,9 @@ import asyncio
 import logging
 import time
 from abc import abstractmethod
-from typing import Any, Optional
+from typing import Any
 
-from ..core.actor import Actor, Message, MessageType, ActorState
+from ..core.actor import Actor, ActorState, Message, MessageType
 
 logger = logging.getLogger(__name__)
 
@@ -85,16 +85,19 @@ class MLAgent(Actor):
                 logger.error(f"[{self.name}] Continuous loop error: {e}")
             await asyncio.sleep(self.poll_interval)
 
-    async def fetch_data(self) -> Optional[Any]:
+    async def fetch_data(self) -> Any | None:
         """Override to provide data for continuous mode."""
         return None
 
     async def _on_continuous_result(self, result: Any):
         """Override to handle continuous results (e.g. publish alert)."""
-        await self._mqtt_publish(f"agents/{self.actor_id}/result", {"result": str(result), "timestamp": time.time()})
+        await self._mqtt_publish(
+            f"agents/{self.actor_id}/result", {"result": str(result), "timestamp": time.time()}
+        )
 
 
 # ─── Example: YOLO Object Detection Agent ────────────────────────────────────
+
 
 class YOLOAgent(MLAgent):
     """
@@ -111,6 +114,7 @@ class YOLOAgent(MLAgent):
     def load_model(self):
         try:
             from ultralytics import YOLO
+
             return YOLO(self.model_path)
         except ImportError:
             logger.warning("[YOLOAgent] ultralytics not installed. pip install ultralytics")
@@ -123,21 +127,23 @@ class YOLOAgent(MLAgent):
 
         loop = asyncio.get_event_loop()
         results = await loop.run_in_executor(
-            None,
-            lambda: self._model(input_data, conf=self.confidence)
+            None, lambda: self._model(input_data, conf=self.confidence)
         )
         detections = []
         for r in results:
             for box in r.boxes:
-                detections.append({
-                    "class": r.names[int(box.cls)],
-                    "confidence": float(box.conf),
-                    "bbox": box.xyxy[0].tolist(),
-                })
+                detections.append(
+                    {
+                        "class": r.names[int(box.cls)],
+                        "confidence": float(box.conf),
+                        "bbox": box.xyxy[0].tolist(),
+                    }
+                )
         return {"detections": detections, "count": len(detections)}
 
 
 # ─── Example: Anomaly Detection Agent ────────────────────────────────────────
+
 
 class AnomalyDetectorAgent(MLAgent):
     """
@@ -157,7 +163,9 @@ class AnomalyDetectorAgent(MLAgent):
         return {"type": "zscore", "threshold": self.threshold}
 
     async def predict(self, input_data: Any) -> dict:
-        value = float(input_data) if not isinstance(input_data, dict) else input_data.get("value", 0.0)
+        value = (
+            float(input_data) if not isinstance(input_data, dict) else input_data.get("value", 0.0)
+        )
         self._values.append(value)
         if len(self._values) > self.window_size:
             self._values.pop(0)
@@ -166,6 +174,7 @@ class AnomalyDetectorAgent(MLAgent):
             return {"anomaly": False, "value": value, "reason": "warming up"}
 
         import statistics
+
         mean = statistics.mean(self._values)
         stdev = statistics.stdev(self._values) or 1e-9
         zscore = abs(value - mean) / stdev

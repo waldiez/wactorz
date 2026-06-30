@@ -25,6 +25,7 @@ def run(coro):
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
 
+
 class FakeActor:
     def __init__(self, name):
         self.name = name
@@ -62,9 +63,9 @@ class _BaseHost(SpawnMixin):
         self._registry = registry
         self._result_futures = {}
         self._persistence_dir = Path(tempfile.mkdtemp()) / name  # .parent is the base
-        self.spawn_calls = []   # (cls, kwargs)
-        self.sent = []          # installer payloads
-        self.published = []     # mqtt dashboard echoes
+        self.spawn_calls = []  # (cls, kwargs)
+        self.sent = []  # installer payloads
+        self.published = []  # mqtt dashboard echoes
 
     async def spawn(self, actor_class, **kwargs):
         self.spawn_calls.append((actor_class, kwargs))
@@ -132,9 +133,13 @@ def peer_setup():
 
 # ── Routing (checked by spawned class name) ──────────────────────────────────
 
+
 def test_route_dynamic(main_host):
-    actor = run(main_host._spawn_local_from_config(
-        {"name": "cpu", "type": "dynamic", "code": "async def setup(a): pass"}))
+    actor = run(
+        main_host._spawn_local_from_config(
+            {"name": "cpu", "type": "dynamic", "code": "async def setup(a): pass"}
+        )
+    )
     assert actor is not None
     cls, kw = main_host.spawn_calls[-1]
     assert cls.__name__ == "DynamicAgent"
@@ -153,8 +158,11 @@ def test_route_llm_implicit(main_host):
 
 
 def test_route_scheduled_injects_timezone(main_host):
-    run(main_host._spawn_local_from_config(
-        {"name": "morning", "type": "scheduled", "schedule": {"type": "daily", "at": "07:00"}}))
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "morning", "type": "scheduled", "schedule": {"type": "daily", "at": "07:00"}}
+        )
+    )
     cls, kw = main_host.spawn_calls[-1]
     assert cls.__name__ == "ScheduledAgent"
     assert kw["timezone"] == "Europe/Athens"
@@ -167,8 +175,11 @@ def test_route_scheduled_invalid_returns_none(main_host):
 
 
 def test_route_ha_actuator(main_host):
-    run(main_host._spawn_local_from_config(
-        {"name": "lights-on", "type": "ha_actuator", "automation_id": "lights-on"}))
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "lights-on", "type": "ha_actuator", "automation_id": "lights-on"}
+        )
+    )
     cls, kw = main_host.spawn_calls[-1]
     assert cls.__name__ == "HomeAssistantActuatorAgent"
     assert kw["name"] == "lights-on"
@@ -178,7 +189,11 @@ def test_ha_actuator_internal_rename(main_host):
     # The handler's defensive rename, exercised directly (the dispatcher is the
     # primary collision guard, so we bypass it here).
     main_host._registry.add(FakeActor("lights-on"))
-    run(main_host._spawn_ha_actuator({"name": "lights-on", "automation_id": "lights-on"}, "lights-on"))
+    run(
+        main_host._spawn_ha_actuator(
+            {"name": "lights-on", "automation_id": "lights-on"}, "lights-on"
+        )
+    )
     name = main_host.spawn_calls[-1][1]["name"]
     assert name != "lights-on" and name.startswith("lights-on-")
 
@@ -193,6 +208,7 @@ def test_no_code_no_prompt_returns_none(main_host):
 
 # ── Idempotency / replace ────────────────────────────────────────────────────
 
+
 def test_existing_no_replace_returns_existing(main_host):
     pre = FakeActor("dup")
     main_host._registry.add(pre)
@@ -204,26 +220,36 @@ def test_existing_no_replace_returns_existing(main_host):
 def test_existing_with_replace(main_host):
     pre = FakeActor("dup")
     main_host._registry.add(pre)
-    actor = run(main_host._spawn_local_from_config(
-        {"name": "dup", "type": "dynamic", "code": "x", "replace": True}))
+    actor = run(
+        main_host._spawn_local_from_config(
+            {"name": "dup", "type": "dynamic", "code": "x", "replace": True}
+        )
+    )
     assert pre.stopped
     assert main_host.spawn_calls and actor is not pre
 
 
 # ── Install models ───────────────────────────────────────────────────────────
 
+
 def test_present_packages_spawn_directly(main_host):
-    actor = run(main_host._spawn_local_from_config(
-        {"name": "d", "type": "dynamic", "code": "x", "install": ["os", "json"]}))
+    actor = run(
+        main_host._spawn_local_from_config(
+            {"name": "d", "type": "dynamic", "code": "x", "install": ["os", "json"]}
+        )
+    )
     assert not isinstance(actor, _SpawnPlaceholder)
     assert not main_host.sent  # installer never contacted
 
 
 def test_blocking_install(main_host):
     main_host._registry.add(FakeActor("installer"))
-    actor = run(main_host._spawn_local_from_config(
-        {"name": "d2", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
-        blocking_install=True))
+    actor = run(
+        main_host._spawn_local_from_config(
+            {"name": "d2", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
+            blocking_install=True,
+        )
+    )
     assert not isinstance(actor, _SpawnPlaceholder)
     assert main_host.sent and main_host.sent[0]["action"] == "install"
     assert main_host.spawn_calls
@@ -235,7 +261,8 @@ def test_background_install_returns_placeholder(main_host):
     async def scenario():
         actor = await main_host._spawn_local_from_config(
             {"name": "d3", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
-            blocking_install=False)
+            blocking_install=False,
+        )
         assert isinstance(actor, _SpawnPlaceholder)
         await asyncio.sleep(0.1)  # let the background task finish
 
@@ -254,8 +281,13 @@ def test_install_fast_path_no_send(main_host):
 
 # ── Flags / wiring ───────────────────────────────────────────────────────────
 
+
 def test_trusted_flag_passthrough(main_host):
-    run(main_host._spawn_local_from_config({"name": "cat", "type": "dynamic", "code": "x", "trusted": True}))
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "cat", "type": "dynamic", "code": "x", "trusted": True}
+        )
+    )
     assert main_host.spawn_calls[-1][1]["trusted"] is True
 
 
@@ -267,9 +299,17 @@ def test_topiccontract_registered(monkeypatch, main_host):
             recorded.append(contract)
 
     monkeypatch.setattr("wactorz.core.topic_bus.get_topic_bus", lambda: _RecorderBus())
-    run(main_host._spawn_local_from_config(
-        {"name": "pub", "type": "dynamic", "code": "x",
-         "publishes": ["sensors/cpu"], "subscribes": []}))
+    run(
+        main_host._spawn_local_from_config(
+            {
+                "name": "pub",
+                "type": "dynamic",
+                "code": "x",
+                "publishes": ["sensors/cpu"],
+                "subscribes": [],
+            }
+        )
+    )
     assert len(recorded) == 1
 
 
@@ -285,6 +325,7 @@ def test_topiccontract_skipped_without_pubsub(monkeypatch, main_host):
 
 # ── Registry & timezone hooks (main vs peer) ─────────────────────────────────
 
+
 def test_register_main_direct(main_host):
     run(main_host._spawn_local_from_config({"name": "r", "type": "dynamic", "code": "x"}))
     assert [c["name"] for c in main_host.registered] == ["r"]
@@ -298,13 +339,19 @@ def test_register_peer_routes_to_main(peer_setup):
 
 
 def test_register_skipped_when_disabled(main_host):
-    run(main_host._spawn_local_from_config(
-        {"name": "noreg", "type": "dynamic", "code": "x"}, register=False))
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "noreg", "type": "dynamic", "code": "x"}, register=False
+        )
+    )
     assert not main_host.registered
 
 
 def test_peer_resolves_timezone_from_main(peer_setup):
     host, _reg, _main = peer_setup
-    run(host._spawn_local_from_config(
-        {"name": "sched", "type": "scheduled", "schedule": {"type": "daily", "at": "07:00"}}))
+    run(
+        host._spawn_local_from_config(
+            {"name": "sched", "type": "scheduled", "schedule": {"type": "daily", "at": "07:00"}}
+        )
+    )
     assert host.spawn_calls[-1][1]["timezone"] == "Europe/Athens"

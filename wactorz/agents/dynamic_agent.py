@@ -23,9 +23,9 @@ import logging
 import time
 import traceback
 import types
-from typing import Any, Optional
+from typing import Any
 
-from ..core.actor import Actor, Message, MessageType, ActorState
+from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from .llm_agent import _accumulate_global_cost
 
@@ -43,7 +43,7 @@ class _AwaitableNone:
     """
 
     def __await__(self):
-        return iter([])        # completes immediately, yields None
+        return iter([])  # completes immediately, yields None
 
     def __bool__(self):
         return False
@@ -63,82 +63,82 @@ class DynamicAgent(Actor):
 
     def __init__(
         self,
-        code: str,                          # LLM-generated Python source
-        poll_interval: float = 1.0,         # seconds between process() calls
-        description: str = "",              # what this agent does
-        input_schema: dict = None,          # expected task payload fields
-        output_schema: dict = None,         # returned result fields
-        llm_provider=None,                  # optional LLM for agent.llm.chat()
-        trusted: bool = False,              # True = catalog agent, skip safety validator
+        code: str,  # LLM-generated Python source
+        poll_interval: float = 1.0,  # seconds between process() calls
+        description: str = "",  # what this agent does
+        input_schema: dict = None,  # expected task payload fields
+        output_schema: dict = None,  # returned result fields
+        llm_provider=None,  # optional LLM for agent.llm.chat()
+        trusted: bool = False,  # True = catalog agent, skip safety validator
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self._code           = code
-        self.poll_interval   = poll_interval
-        self.description     = description
-        self.input_schema    = input_schema  or {}
-        self.output_schema   = output_schema or {}
-        self._llm_provider   = llm_provider
-        self._trusted        = trusted       # catalog agents bypass safety checks
+        self._code = code
+        self.poll_interval = poll_interval
+        self.description = description
+        self.input_schema = input_schema or {}
+        self.output_schema = output_schema or {}
+        self._llm_provider = llm_provider
+        self._trusted = trusted  # catalog agents bypass safety checks
 
         # Compiled functions — populated in on_start
-        self._fn_setup       = None
-        self._fn_process     = None
+        self._fn_setup = None
+        self._fn_process = None
         self._fn_handle_task = None
 
         # Namespace shared across all calls (agent can store state here)
-        self._ns: dict       = {}
+        self._ns: dict = {}
 
         # Cost tracking (populated by _LLMInterface if LLM is used)
-        self.total_input_tokens  = 0
+        self.total_input_tokens = 0
         self.total_output_tokens = 0
-        self.total_cost_usd      = 0.0
+        self.total_cost_usd = 0.0
         self._last_period_cost_usd = 0.0
 
         # Error tracking for health classification
-        self._consecutive_errors: int   = 0
-        self._error_threshold:    int   = 3      # DEGRADED after this many
-        self._last_error_time:    float = 0.0
-        self._error_phase:        str   = ""     # compile|setup|process|handle_task
+        self._consecutive_errors: int = 0
+        self._error_threshold: int = 3  # DEGRADED after this many
+        self._last_error_time: float = 0.0
+        self._error_phase: str = ""  # compile|setup|process|handle_task
 
         # Public API exposed to generated code via `agent` parameter
-        self._api            = _AgentAPI(self)
+        self._api = _AgentAPI(self)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def on_start(self):
         # ── Compile with LLM self-correction on syntax errors ─────────────
         current_code = self._code
-        error_msg    = self._compile_code(current_code)
+        error_msg = self._compile_code(current_code)
 
         if error_msg:
             for attempt in range(1, self._MAX_COMPILE_RETRIES + 1):
-                logger.warning(
-                    f"[{self.name}] Compile error (attempt {attempt}): {error_msg}"
-                )
+                logger.warning(f"[{self.name}] Compile error (attempt {attempt}): {error_msg}")
                 fixed = await self._fix_syntax_with_llm(current_code, error_msg)
                 if fixed is None:
                     # LLM unavailable — no point retrying
                     break
-                self._ns = {}                      # fresh namespace for retry
+                self._ns = {}  # fresh namespace for retry
                 new_err = self._compile_code(fixed)
                 if new_err is None:
                     # Fix worked — update stored code so restarts use the good version
                     self._code = fixed
-                    error_msg  = None
+                    error_msg = None
                     logger.info(f"[{self.name}] Code fixed by LLM after {attempt} attempt(s).")
                     # ── Write fixed code back to spawn registry so restart uses it ──
                     self._persist_fixed_code(fixed)
                     await self._mqtt_publish(
                         f"agents/{self.actor_id}/logs",
-                        {"type": "log",
-                         "message": f"Syntax error fixed by LLM after {attempt} attempt(s).",
-                         "timestamp": time.time()},
+                        {
+                            "type": "log",
+                            "message": f"Syntax error fixed by LLM after {attempt} attempt(s).",
+                            "timestamp": time.time(),
+                        },
                     )
                     break
                 # Fix compiled but still broken — feed it back for the next attempt
                 current_code = fixed
-                error_msg    = new_err
+                error_msg = new_err
 
         if error_msg:
             # All attempts exhausted — publish fatal and stop
@@ -146,8 +146,9 @@ class DynamicAgent(Actor):
             logger.error(f"[{self.name}] Code compilation failed permanently: {error_msg}")
             # ── Erlang/OTP: mark FAILED so Supervisor's watch_loop detects us ──
             self.state = ActorState.FAILED
-            await self._publish_error(phase="compile", error=err_exc,
-                                      traceback_str=error_msg, fatal=True)
+            await self._publish_error(
+                phase="compile", error=err_exc, traceback_str=error_msg, fatal=True
+            )
             return
 
         # ── setup() ───────────────────────────────────────────────────────
@@ -168,27 +169,32 @@ class DynamicAgent(Actor):
         # Without this, cost data dies with the agent object and the UI
         # can't show lifetime costs for deleted agents.
         if hasattr(self, "total_cost_usd") and self.total_cost_usd > 0:
-            self.persist("_final_cost", {
-                "input_tokens":  self.total_input_tokens,
-                "output_tokens": self.total_output_tokens,
-                "cost_usd":      round(self.total_cost_usd, 6),
-                "name":          self.name,
-                "stopped_at":    time.time(),
-            })
+            self.persist(
+                "_final_cost",
+                {
+                    "input_tokens": self.total_input_tokens,
+                    "output_tokens": self.total_output_tokens,
+                    "cost_usd": round(self.total_cost_usd, 6),
+                    "name": self.name,
+                    "stopped_at": time.time(),
+                },
+            )
 
         # ── Publish final metrics before heartbeat loop is cancelled ───────
         try:
             await self._mqtt_publish(
                 f"agents/{self.actor_id}/metrics",
-                self._build_metrics() if hasattr(self, '_build_metrics') else {
-                    "actor_id":           self.actor_id,
-                    "input_tokens":       getattr(self, "total_input_tokens", 0),
-                    "output_tokens":      getattr(self, "total_output_tokens", 0),
-                    "cost_usd":           round(getattr(self, "total_cost_usd", 0.0), 6),
+                self._build_metrics()
+                if hasattr(self, "_build_metrics")
+                else {
+                    "actor_id": self.actor_id,
+                    "input_tokens": getattr(self, "total_input_tokens", 0),
+                    "output_tokens": getattr(self, "total_output_tokens", 0),
+                    "cost_usd": round(getattr(self, "total_cost_usd", 0.0), 6),
                     "messages_processed": self.metrics.messages_processed,
-                    "errors":             self.metrics.errors,
-                    "uptime":             self.metrics.uptime,
-                    "final":              True,   # signals UI this is the last metrics msg
+                    "errors": self.metrics.errors,
+                    "uptime": self.metrics.uptime,
+                    "final": True,  # signals UI this is the last metrics msg
                 },
             )
         except Exception:
@@ -197,6 +203,7 @@ class DynamicAgent(Actor):
         # ── Unregister from TopicBus so stale contracts don't accumulate ───
         try:
             from ..core.topic_bus import get_topic_bus
+
             bus = get_topic_bus()
             if bus:
                 bus.unregister(self.name)
@@ -219,18 +226,28 @@ class DynamicAgent(Actor):
         # known resource types stored in agent.state OR in module-level globals
         # inside the compiled namespace (_ns). LLM-generated code frequently uses
         # globals like `_cap = None` instead of agent.state, so we must check both.
-        state = getattr(self._api, 'state', {}) if self._api else {}
+        state = getattr(self._api, "state", {}) if self._api else {}
 
         # Skip builtins/modules/functions — only look at plain objects
-        _SKIP_TYPES = (type(None), bool, int, float, str, bytes, type, types.ModuleType,
-                       types.FunctionType, types.CoroutineType)
+        _SKIP_TYPES = (
+            type(None),
+            bool,
+            int,
+            float,
+            str,
+            bytes,
+            type,
+            types.ModuleType,
+            types.FunctionType,
+            types.CoroutineType,
+        )
 
         def _release_obj(key, obj):
             """Release a single resource object, logging the result."""
             if obj is None or isinstance(obj, _SKIP_TYPES):
                 return
             # cv2.VideoCapture (and anything with release/isOpened)
-            if hasattr(obj, 'release') and hasattr(obj, 'isOpened'):
+            if hasattr(obj, "release") and hasattr(obj, "isOpened"):
                 try:
                     if obj.isOpened():
                         obj.release()
@@ -238,7 +255,7 @@ class DynamicAgent(Actor):
                 except Exception:
                     pass
             # Open file handles
-            elif hasattr(obj, 'close') and hasattr(obj, 'closed'):
+            elif hasattr(obj, "close") and hasattr(obj, "closed"):
                 try:
                     if not obj.closed:
                         obj.close()
@@ -253,7 +270,7 @@ class DynamicAgent(Actor):
         # Scan module-level globals in the compiled namespace (common LLM pattern)
         # e.g. `_cap = None` / `_model = None` at module level
         for key, obj in list(self._ns.items()):
-            if key.startswith('__') or key in ('setup', 'process', 'cleanup', 'handle_task'):
+            if key.startswith("__") or key in ("setup", "process", "cleanup", "handle_task"):
                 continue
             _release_obj(key, obj)
 
@@ -297,7 +314,7 @@ class DynamicAgent(Actor):
         def line_is_bad(line):
             return any(re.search(p, line) for p in LLM_PATTERNS)
 
-        def collect_block(lines, start, base_indent, conts=("except","else","finally","elif")):
+        def collect_block(lines, start, base_indent, conts=("except", "else", "finally", "elif")):
             j, block = start, []
             pat = r"\s*(" + "|".join(conts) + r")\b" if conts else r"(?!x)x"
             while j < len(lines):
@@ -309,16 +326,16 @@ class DynamicAgent(Actor):
                 j += 1
             return block, j
 
-        lines  = code.split("\n")
+        lines = code.split("\n")
         result = []
-        i      = 0
+        i = 0
         last_sanitized = False
 
         while i < len(lines):
-            line     = lines[i]
+            line = lines[i]
             stripped = line.strip()
-            indent   = len(line) - len(line.lstrip()) if stripped else 0
-            prefix   = " " * indent
+            indent = len(line) - len(line.lstrip()) if stripped else 0
+            prefix = " " * indent
 
             if not stripped:
                 result.append(line)
@@ -330,7 +347,7 @@ class DynamicAgent(Actor):
             if stripped == "try:":
                 block, j = collect_block(lines, i + 1, indent)
                 full = [line] + block
-                if any(line_is_bad(l) for l in full):
+                if any(line_is_bad(ln) for ln in full):
                     result.append(prefix + "pass  # sanitized: LLM setup block")
                     last_sanitized = True
                 else:
@@ -366,7 +383,8 @@ class DynamicAgent(Actor):
                 result += [
                     p + "async def " + fname + "(agent, messages, system='', **kw):",
                     p + "    # sanitized: rewired to agent.llm",
-                    p + "    sys_p = system or next((m.get('content','') for m in messages if m.get('role')=='system'), '')",
+                    p
+                    + "    sys_p = system or next((m.get('content','') for m in messages if m.get('role')=='system'), '')",
                     p + "    msgs  = [m for m in messages if m.get('role') != 'system']",
                     p + "    return await agent.llm.complete(messages=msgs, system=sys_p)",
                 ]
@@ -392,17 +410,22 @@ class DynamicAgent(Actor):
         # These methods already return _AwaitableNone so the code won't crash,
         # but stripping `await` keeps the code clean and avoids confusion.
         _SYNC_METHODS = (
-            "subscribe", "window", "persist", "recall",
-            "declare_contract", "agents", "nodes", "topics",
-            "capabilities", "increment_processed", "increment_errors",
+            "subscribe",
+            "window",
+            "persist",
+            "recall",
+            "declare_contract",
+            "agents",
+            "nodes",
+            "topics",
+            "capabilities",
+            "increment_processed",
+            "increment_errors",
         )
         _sync_pat = r"\bawait\s+(agent\.(?:" + "|".join(_SYNC_METHODS) + r")\s*\()"
         sanitized = re.sub(_sync_pat, r"\1", sanitized)
 
         return sanitized
-
-
-
 
     # Max times on_start will ask the LLM to fix a syntax error before giving up
     _MAX_COMPILE_RETRIES = 2
@@ -414,53 +437,66 @@ class DynamicAgent(Actor):
 
     _BLOCKED_PATTERNS = [
         # System-level access
-        (r'\bos\.system\s*\(',              "os.system() — use subprocess instead or avoid shell commands"),
-        (r'\bos\.popen\s*\(',               "os.popen() — use subprocess instead"),
-        (r'\bos\.exec[a-z]*\s*\(',          "os.exec*() — direct process replacement not allowed"),
-        (r'\bos\.remove\s*\(',              "os.remove() — file deletion not allowed in agent code"),
-        (r'\bos\.rmdir\s*\(',               "os.rmdir() — directory deletion not allowed"),
-        (r'\bshutil\.rmtree\s*\(',          "shutil.rmtree() — recursive deletion not allowed"),
-        (r'\bsubprocess\.(?:call|run|Popen)\s*\(.{0,20}rm\s',
-                                            "subprocess with rm — destructive shell command"),
+        (r"\bos\.system\s*\(", "os.system() — use subprocess instead or avoid shell commands"),
+        (r"\bos\.popen\s*\(", "os.popen() — use subprocess instead"),
+        (r"\bos\.exec[a-z]*\s*\(", "os.exec*() — direct process replacement not allowed"),
+        (r"\bos\.remove\s*\(", "os.remove() — file deletion not allowed in agent code"),
+        (r"\bos\.rmdir\s*\(", "os.rmdir() — directory deletion not allowed"),
+        (r"\bshutil\.rmtree\s*\(", "shutil.rmtree() — recursive deletion not allowed"),
+        (
+            r"\bsubprocess\.(?:call|run|Popen)\s*\(.{0,20}rm\s",
+            "subprocess with rm — destructive shell command",
+        ),
         # Network abuse
-        (r'\bsocket\.socket\s*\(',          "raw socket creation — use httpx or agent.publish instead"),
+        (r"\bsocket\.socket\s*\(", "raw socket creation — use httpx or agent.publish instead"),
         # Code execution / eval
-        (r'\beval\s*\(',                    "eval() — arbitrary code execution not allowed"),
-        (r'\b__import__\s*\(',              "__import__() — use regular import statements"),
+        (r"\beval\s*\(", "eval() — arbitrary code execution not allowed"),
+        (r"\b__import__\s*\(", "__import__() — use regular import statements"),
         # File system writes outside agent scope
         (r'\bopen\s*\([^)]*["\'][wab]["\']', "open() in write mode — use agent.persist() instead"),
     ]
 
     # Patterns that are suspicious but allowed — just logged as warnings
     _WARN_PATTERNS = [
-        (r'\bsubprocess\b',                 "subprocess usage — ensure this is necessary"),
-        (r'\bctypes\b',                     "ctypes — low-level C interface, use with caution"),
-        (r'\bpickle\.loads?\b',             "pickle — deserialization risk if data is untrusted"),
-        (r'\bwhile\s+True\s*:(?!.*await)',  "tight while-True loop without await — may block event loop"),
+        (r"\bsubprocess\b", "subprocess usage — ensure this is necessary"),
+        (r"\bctypes\b", "ctypes — low-level C interface, use with caution"),
+        (r"\bpickle\.loads?\b", "pickle — deserialization risk if data is untrusted"),
+        (
+            r"\bwhile\s+True\s*:(?!.*await)",
+            "tight while-True loop without await — may block event loop",
+        ),
     ]
 
     # Patterns checked specifically inside process() body — cause 120s timeout crashes
     _PROCESS_ANTIPATTERNS = [
-        (r'asyncio\.sleep\s*\(',
-         "asyncio.sleep() inside process() — NEVER sleep in process(). "
-         "The framework loops process() every poll_interval seconds. "
-         "Move MQTT-reactive logic to setup() + agent.subscribe() instead."),
-        (r'await\s+agent\.mqtt_get\s*\(',
-         "await agent.mqtt_get() inside process() — this blocks until a message arrives. "
-         "Use agent.subscribe() in setup() for reactive MQTT logic instead."),
-        (r'while\s+True\s*:',
-         "while True loop inside process() — process() must return after each iteration. "
-         "The framework already loops it. Remove the while loop."),
-        (r'\.release\s*\(\s*\)[\s\S]{0,200}?cv2\.VideoCapture\s*\(',
-         "cap.release() followed by cv2.VideoCapture() inside process() — "
-         "do NOT reopen the camera on a single failed read. The framework's "
-         "cv2 shim already retries opens with backoff and a settle delay. "
-         "On a failed cap.read(), just `return` from process() — the next "
-         "poll_interval tick will retry. Releasing+reopening from process() "
-         "produces a flap loop on Windows MSMF/DSHOW."),
+        (
+            r"asyncio\.sleep\s*\(",
+            "asyncio.sleep() inside process() — NEVER sleep in process(). "
+            "The framework loops process() every poll_interval seconds. "
+            "Move MQTT-reactive logic to setup() + agent.subscribe() instead.",
+        ),
+        (
+            r"await\s+agent\.mqtt_get\s*\(",
+            "await agent.mqtt_get() inside process() — this blocks until a message arrives. "
+            "Use agent.subscribe() in setup() for reactive MQTT logic instead.",
+        ),
+        (
+            r"while\s+True\s*:",
+            "while True loop inside process() — process() must return after each iteration. "
+            "The framework already loops it. Remove the while loop.",
+        ),
+        (
+            r"\.release\s*\(\s*\)[\s\S]{0,200}?cv2\.VideoCapture\s*\(",
+            "cap.release() followed by cv2.VideoCapture() inside process() — "
+            "do NOT reopen the camera on a single failed read. The framework's "
+            "cv2 shim already retries opens with backoff and a settle delay. "
+            "On a failed cap.read(), just `return` from process() — the next "
+            "poll_interval tick will retry. Releasing+reopening from process() "
+            "produces a flap loop on Windows MSMF/DSHOW.",
+        ),
     ]
 
-    def _validate_code_safety(self, code: str) -> Optional[str]:
+    def _validate_code_safety(self, code: str) -> str | None:
         """
         Scan sanitized code for dangerous patterns before exec().
 
@@ -491,12 +527,13 @@ class DynamicAgent(Actor):
         return None  # OK — warnings never block execution
 
     @staticmethod
-    def _extract_function_body(code: str, fn_name: str) -> Optional[str]:
+    def _extract_function_body(code: str, fn_name: str) -> str | None:
         """
         Extract the body of a top-level function by name from source code.
         Simple indentation-based parser — good enough for LLM-generated code.
         """
         import re
+
         lines = code.splitlines()
         in_fn = False
         body_lines = []
@@ -519,7 +556,7 @@ class DynamicAgent(Actor):
 
         return "\n".join(body_lines) if body_lines else None
 
-    def _compile_code(self, code: Optional[str] = None) -> Optional[str]:
+    def _compile_code(self, code: str | None = None) -> str | None:
         """
         Sanitize, validate safety, then compile LLM-generated code into self._ns.
 
@@ -532,7 +569,7 @@ class DynamicAgent(Actor):
         etc. that the safety validator would block.
         """
         source = code if code is not None else self._code
-        clean  = self._sanitize_code(source) if not self._trusted else source
+        clean = self._sanitize_code(source) if not self._trusted else source
 
         # ── Safety check before exec (skipped for trusted/catalog agents) ──
         if not self._trusted:
@@ -545,8 +582,9 @@ class DynamicAgent(Actor):
         # Pre-inject the LLM shim so generated code can call agent.llm directly
         def _get_llm_shim(*args, **kwargs):
             return self._api.llm
-        self._ns["get_llm"]    = _get_llm_shim
-        self._ns["setup_llm"]  = _get_llm_shim
+
+        self._ns["get_llm"] = _get_llm_shim
+        self._ns["setup_llm"] = _get_llm_shim
         self._ns["create_llm"] = _get_llm_shim
 
         # ── cv2 shim: wrap VideoCapture with retry + release-before-reopen ──
@@ -558,10 +596,12 @@ class DynamicAgent(Actor):
         # fails with -1072873821. The shim retries with increasing delays so the
         # agent recovers without manual intervention.
         import re as _re
-        if _re.search(r'\bcv2\b', clean):
+
+        if _re.search(r"\bcv2\b", clean):
             try:
-                import cv2 as _real_cv2
                 import types as _types
+
+                import cv2 as _real_cv2
 
                 _agent_name_for_shim = self.name  # capture for closure
 
@@ -573,15 +613,17 @@ class DynamicAgent(Actor):
 
                     Transparent to LLM code — same API, same isinstance() checks.
                     """
-                    _RETRY_DELAYS = [1.0, 2.0, 4.0, 8.0]   # seconds between retries
+
+                    _RETRY_DELAYS = [1.0, 2.0, 4.0, 8.0]  # seconds between retries
                     # Time to wait after a successful open() before probing read().
                     # MSMF/DSHOW source readers need ~200-300ms to start streaming
                     # even after isOpened() returns True. Probing too soon yields
                     # the cyclic "opened but read failed" log we used to see.
-                    _POST_OPEN_SETTLE = 0.3                 # seconds
+                    _POST_OPEN_SETTLE = 0.3  # seconds
 
                     def __init__(self, index_or_path, *args, **kwargs):
                         import sys as _sys
+
                         super().__init__()
                         # ── Windows: force DSHOW for integer indices ──────────
                         # MSMF (the OpenCV default on Windows) is flaky on
@@ -590,10 +632,12 @@ class DynamicAgent(Actor):
                         # in a flap loop. DSHOW (DirectShow) is older but far
                         # more reliable for this hardware class. Only override
                         # when the LLM didn't pass an explicit backend.
-                        if (_sys.platform == "win32"
-                                and isinstance(index_or_path, int)
-                                and not args
-                                and "apiPreference" not in kwargs):
+                        if (
+                            _sys.platform == "win32"
+                            and isinstance(index_or_path, int)
+                            and not args
+                            and "apiPreference" not in kwargs
+                        ):
                             try:
                                 args = (_real_cv2.CAP_DSHOW,)
                                 logger.info(
@@ -603,25 +647,24 @@ class DynamicAgent(Actor):
                                 )
                             except Exception:
                                 pass
-                        self._index  = index_or_path
-                        self._args   = args
+                        self._index = index_or_path
+                        self._args = args
                         self._kwargs = kwargs
                         self._do_open()
 
                     def read(self):
                         # Return the probe frame captured during open verification
                         # so the first cap.read() in process() is not lost.
-                        if hasattr(self, '_probe_frame') and self._probe_frame is not None:
+                        if hasattr(self, "_probe_frame") and self._probe_frame is not None:
                             frame, self._probe_frame = self._probe_frame, None
                             return True, frame
                         return super().read()
 
                     def _do_open(self):
-                        for attempt, delay in enumerate(
-                            [0.0] + self._RETRY_DELAYS, start=1
-                        ):
+                        for attempt, delay in enumerate([0.0] + self._RETRY_DELAYS, start=1):
                             if delay:
                                 import time as _t
+
                                 # Release before retrying so MSMF frees the device
                                 try:
                                     super().release()
@@ -629,7 +672,7 @@ class DynamicAgent(Actor):
                                     pass
                                 logger.info(
                                     f"[{_agent_name_for_shim}] Camera open retry "
-                                    f"{attempt}/{len(self._RETRY_DELAYS)+1} "
+                                    f"{attempt}/{len(self._RETRY_DELAYS) + 1} "
                                     f"— waiting {delay:.0f}s for OS to release device"
                                 )
                                 _t.sleep(delay)
@@ -643,6 +686,7 @@ class DynamicAgent(Actor):
                             # after isOpened() returns True; probing immediately
                             # produces -1072873821 even when the device is fine.
                             import time as _t
+
                             _t.sleep(self._POST_OPEN_SETTLE)
 
                             # Verify we can actually grab a frame — MSMF sometimes
@@ -657,7 +701,7 @@ class DynamicAgent(Actor):
                                     f"[{_agent_name_for_shim}] Camera opened successfully "
                                     f"on attempt {attempt}"
                                 )
-                                return   # success
+                                return  # success
 
                             logger.warning(
                                 f"[{_agent_name_for_shim}] Camera opened but read() failed "
@@ -666,7 +710,7 @@ class DynamicAgent(Actor):
 
                         logger.error(
                             f"[{_agent_name_for_shim}] Camera could not be opened after "
-                            f"{len(self._RETRY_DELAYS)+1} attempts"
+                            f"{len(self._RETRY_DELAYS) + 1} attempts"
                         )
 
                 # Wrap in a module proxy so `import cv2` inside agent code still works,
@@ -681,18 +725,18 @@ class DynamicAgent(Actor):
 
         try:
             exec(compile(clean, f"<{self.name}>", "exec"), self._ns)
-            self._fn_setup       = self._ns.get("setup")
-            self._fn_process     = self._ns.get("process")
+            self._fn_setup = self._ns.get("setup")
+            self._fn_process = self._ns.get("process")
             self._fn_handle_task = self._ns.get("handle_task")
             fns = [f for f in ["setup", "process", "handle_task", "cleanup"] if f in self._ns]
             logger.info(f"[{self.name}] Code compiled OK. Functions: {fns}")
             if not fns:
                 logger.warning(f"[{self.name}] No functions found in compiled code.")
-            return None   # success
+            return None  # success
         except Exception as e:
             return f"{type(e).__name__}: {e}"
 
-    async def _fix_syntax_with_llm(self, bad_code: str, error_msg: str) -> Optional[str]:
+    async def _fix_syntax_with_llm(self, bad_code: str, error_msg: str) -> str | None:
         """
         Ask the configured LLM to fix a syntax error in agent code.
 
@@ -714,9 +758,11 @@ class DynamicAgent(Actor):
         logger.info(f"[{self.name}] Asking LLM to fix syntax error: {error_msg[:120]}")
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
-            {"type": "log",
-             "message": f"Syntax error — asking LLM to fix: {error_msg[:120]}",
-             "timestamp": time.time()},
+            {
+                "type": "log",
+                "message": f"Syntax error — asking LLM to fix: {error_msg[:120]}",
+                "timestamp": time.time(),
+            },
         )
         try:
             response, usage = await self._llm_provider.complete(
@@ -732,15 +778,14 @@ class DynamicAgent(Actor):
             fixed = response.strip()
             if fixed.startswith("```"):
                 fixed = "\n".join(
-                    l for l in fixed.split("\n")
-                    if not l.strip().startswith("```")
+                    ln for ln in fixed.split("\n") if not ln.strip().startswith("```")
                 ).strip()
 
-            return fixed   # caller validates with _compile_code()
+            return fixed  # caller validates with _compile_code()
 
         except Exception as e:
             logger.warning(f"[{self.name}] LLM fix call failed: {e}")
-            return None    # only None when LLM is truly unreachable
+            return None  # only None when LLM is truly unreachable
 
     # ── Setup wrapper ───────────────────────────────────────────────────────
 
@@ -760,7 +805,7 @@ class DynamicAgent(Actor):
           process() is simply not started — the subscription loop IS the process.
         """
         current_code = self._code
-        last_error   = None
+        last_error = None
 
         for attempt in range(1 + self._MAX_SETUP_RETRIES):
             try:
@@ -771,9 +816,11 @@ class DynamicAgent(Actor):
                     self._persist_fixed_code(self._code)
                     await self._mqtt_publish(
                         f"agents/{self.actor_id}/logs",
-                        {"type": "log",
-                         "message": f"setup() runtime error fixed by LLM after {attempt} attempt(s).",
-                         "timestamp": time.time()},
+                        {
+                            "type": "log",
+                            "message": f"setup() runtime error fixed by LLM after {attempt} attempt(s).",
+                            "timestamp": time.time(),
+                        },
                     )
                 else:
                     logger.info(f"[{self.name}] setup() completed.")
@@ -814,9 +861,11 @@ class DynamicAgent(Actor):
                     # compile_err is None — code is good
                     pass
 
-                self._code   = fixed
+                self._code = fixed
                 current_code = fixed
-                logger.info(f"[{self.name}] Retrying setup() with LLM-fixed code (attempt {attempt + 1})...")
+                logger.info(
+                    f"[{self.name}] Retrying setup() with LLM-fixed code (attempt {attempt + 1})..."
+                )
 
         if last_error is not None:
             err = traceback.format_exc()
@@ -834,7 +883,7 @@ class DynamicAgent(Actor):
 
     async def _fix_runtime_with_llm(
         self, code: str, error_msg: str, traceback_str: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Ask the LLM to fix a runtime error in agent code (setup/process).
 
@@ -878,9 +927,11 @@ class DynamicAgent(Actor):
         logger.info(f"[{self.name}] Asking LLM to fix runtime error: {error_msg[:120]}")
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
-            {"type": "log",
-             "message": f"Runtime error — asking LLM to fix: {error_msg[:120]}",
-             "timestamp": time.time()},
+            {
+                "type": "log",
+                "message": f"Runtime error — asking LLM to fix: {error_msg[:120]}",
+                "timestamp": time.time(),
+            },
         )
         try:
             response, usage = await self._llm_provider.complete(
@@ -897,8 +948,7 @@ class DynamicAgent(Actor):
             fixed = response.strip()
             if fixed.startswith("```"):
                 fixed = "\n".join(
-                    l for l in fixed.split("\n")
-                    if not l.strip().startswith("```")
+                    ln for ln in fixed.split("\n") if not ln.strip().startswith("```")
                 ).strip()
             return fixed
 
@@ -910,13 +960,13 @@ class DynamicAgent(Actor):
 
     # Max time a single process() or handle_task() call can take before
     # we assume it's stuck in a blocking call and cancel it.
-    _PROCESS_TIMEOUT = 120.0    # seconds
+    _PROCESS_TIMEOUT = 120.0  # seconds
     _HANDLE_TASK_TIMEOUT = 60.0
 
     # ── How many consecutive process() errors before we attempt LLM self-fix ──
-    _PROCESS_LLM_FIX_THRESHOLD = 3    # try to fix after this many errors in a row
+    _PROCESS_LLM_FIX_THRESHOLD = 3  # try to fix after this many errors in a row
     # How many consecutive process() errors trigger state=FAILED (Supervisor sees this)
-    _PROCESS_FAIL_THRESHOLD    = 5
+    _PROCESS_FAIL_THRESHOLD = 5
 
     async def _process_loop(self):
         """
@@ -930,7 +980,7 @@ class DynamicAgent(Actor):
           set state=FAILED — the Supervisor's _watch_loop will detect this and restart us.
           This is the "let it crash" principle: don't spin in degraded mode forever.
         """
-        _llm_fix_attempted = False   # only try the LLM fix once per process_loop lifetime
+        _llm_fix_attempted = False  # only try the LLM fix once per process_loop lifetime
 
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             if self.state == ActorState.PAUSED:
@@ -942,7 +992,7 @@ class DynamicAgent(Actor):
                     timeout=self._PROCESS_TIMEOUT,
                 )
                 self._reset_error_count()
-                _llm_fix_attempted = False   # reset after a clean run
+                _llm_fix_attempted = False  # reset after a clean run
             except asyncio.TimeoutError:
                 self.metrics.errors += 1
                 logger.error(
@@ -953,8 +1003,8 @@ class DynamicAgent(Actor):
                     phase="process",
                     error=TimeoutError(f"process() exceeded {self._PROCESS_TIMEOUT}s"),
                     traceback_str=f"process() did not return within {self._PROCESS_TIMEOUT}s. "
-                                  f"Wrap blocking calls (cv2, torch) in: "
-                                  f"await asyncio.get_event_loop().run_in_executor(None, fn)",
+                    f"Wrap blocking calls (cv2, torch) in: "
+                    f"await asyncio.get_event_loop().run_in_executor(None, fn)",
                 )
                 # Erlang: escalate to FAILED after too many timeouts — Supervisor takes over
                 if self._consecutive_errors >= self._PROCESS_FAIL_THRESHOLD:
@@ -964,7 +1014,7 @@ class DynamicAgent(Actor):
                     )
                     self.state = ActorState.FAILED
                     return
-                backoff = min(2 ** self._consecutive_errors, 30)
+                backoff = min(2**self._consecutive_errors, 30)
                 await asyncio.sleep(backoff)
             except asyncio.CancelledError:
                 break
@@ -991,7 +1041,7 @@ class DynamicAgent(Actor):
                         compile_err = self._compile_code(fixed)
                         if compile_err is None:
                             self._code = fixed
-                            self._consecutive_errors = 0   # give the fixed code a clean slate
+                            self._consecutive_errors = 0  # give the fixed code a clean slate
                             # ── Write fixed code back to spawn registry so restart uses it ──
                             self._persist_fixed_code(fixed)
                             logger.info(
@@ -1000,9 +1050,11 @@ class DynamicAgent(Actor):
                             )
                             await self._mqtt_publish(
                                 f"agents/{self.actor_id}/logs",
-                                {"type": "log",
-                                 "message": "process() runtime error fixed by LLM in-place.",
-                                 "timestamp": time.time()},
+                                {
+                                    "type": "log",
+                                    "message": "process() runtime error fixed by LLM in-place.",
+                                    "timestamp": time.time(),
+                                },
                             )
                             await asyncio.sleep(self.poll_interval)
                             continue
@@ -1023,7 +1075,7 @@ class DynamicAgent(Actor):
                     )
                     return
 
-                backoff = min(2 ** self._consecutive_errors, 30)
+                backoff = min(2**self._consecutive_errors, 30)
                 await asyncio.sleep(backoff)
             await asyncio.sleep(self.poll_interval)
 
@@ -1041,7 +1093,7 @@ class DynamicAgent(Actor):
             # is un-correlatable, so the user sees no response. LLMAgent already
             # echoes it — this brings DynamicAgent to parity.
             _incoming = msg.payload if isinstance(msg.payload, dict) else {}
-            _corr     = _incoming.get("_task_id")
+            _corr = _incoming.get("_task_id")
 
             def _with_corr(r):
                 if _corr is None:
@@ -1061,8 +1113,7 @@ class DynamicAgent(Actor):
                         await self.send(msg.sender_id, MessageType.RESULT, _with_corr(result))
                 except asyncio.TimeoutError:
                     logger.error(
-                        f"[{self.name}] handle_task() timed out after "
-                        f"{self._HANDLE_TASK_TIMEOUT}s"
+                        f"[{self.name}] handle_task() timed out after {self._HANDLE_TASK_TIMEOUT}s"
                     )
                     await self._publish_error(
                         phase="handle_task",
@@ -1070,25 +1121,40 @@ class DynamicAgent(Actor):
                         traceback_str="",
                     )
                     if msg.sender_id:
-                        await self.send(msg.sender_id, MessageType.RESULT, _with_corr({
-                            "error": f"handle_task() timed out after {self._HANDLE_TASK_TIMEOUT}s",
-                            "error_phase": "handle_task",
-                            "agent": self.name,
-                        }))
+                        await self.send(
+                            msg.sender_id,
+                            MessageType.RESULT,
+                            _with_corr(
+                                {
+                                    "error": f"handle_task() timed out after {self._HANDLE_TASK_TIMEOUT}s",
+                                    "error_phase": "handle_task",
+                                    "agent": self.name,
+                                }
+                            ),
+                        )
                 except Exception as e:
                     tb = traceback.format_exc()
                     logger.error(f"[{self.name}] handle_task() error: {e}\n{tb}")
                     await self._publish_error(phase="handle_task", error=e, traceback_str=tb)
                     if msg.sender_id:
-                        await self.send(msg.sender_id, MessageType.RESULT, _with_corr({
-                            "error":       str(e),
-                            "error_phase": "handle_task",
-                            "agent":       self.name,
-                        }))
+                        await self.send(
+                            msg.sender_id,
+                            MessageType.RESULT,
+                            _with_corr(
+                                {
+                                    "error": str(e),
+                                    "error_phase": "handle_task",
+                                    "agent": self.name,
+                                }
+                            ),
+                        )
             else:
                 if msg.sender_id:
-                    await self.send(msg.sender_id, MessageType.RESULT,
-                                    _with_corr({"info": f"{self.name} has no handle_task defined"}))
+                    await self.send(
+                        msg.sender_id,
+                        MessageType.RESULT,
+                        _with_corr({"info": f"{self.name} has no handle_task defined"}),
+                    )
 
     async def _publish_error(
         self,
@@ -1102,24 +1168,22 @@ class DynamicAgent(Actor):
         a direct actor message to MonitorAgent so it works without MQTT.
         """
         self._consecutive_errors += 1
-        self._last_error_time     = time.time()
-        self._error_phase         = phase
+        self._last_error_time = time.time()
+        self._error_phase = phase
         severity = (
-            "critical"
-            if fatal or self._consecutive_errors >= self._error_threshold
-            else "warning"
+            "critical" if fatal or self._consecutive_errors >= self._error_threshold else "warning"
         )
         event = {
-            "actor_id":    self.actor_id,
-            "name":        self.name,
-            "phase":       phase,
-            "error":       str(error),
-            "traceback":   traceback_str[-1200:] if traceback_str else "",
+            "actor_id": self.actor_id,
+            "name": self.name,
+            "phase": phase,
+            "error": str(error),
+            "traceback": traceback_str[-1200:] if traceback_str else "",
             "consecutive": self._consecutive_errors,
-            "fatal":       fatal,
-            "severity":    severity,
-            "degraded":    self._consecutive_errors >= self._error_threshold,
-            "timestamp":   time.time(),
+            "fatal": fatal,
+            "severity": severity,
+            "degraded": self._consecutive_errors >= self._error_threshold,
+            "timestamp": time.time(),
         }
         await self._mqtt_publish(f"agents/{self.actor_id}/errors", event)
         # Direct actor message to monitor (works without MQTT broker)
@@ -1127,20 +1191,27 @@ class DynamicAgent(Actor):
             monitor = self._registry.find_by_name("monitor")
             if monitor and monitor.actor_id != self.actor_id:
                 try:
-                    await self.send(monitor.actor_id, MessageType.TASK, {
-                        **event,
-                        "_monitor_error_event": True,
-                    })
+                    await self.send(
+                        monitor.actor_id,
+                        MessageType.TASK,
+                        {
+                            **event,
+                            "_monitor_error_event": True,
+                        },
+                    )
                 except Exception:
                     pass
         # Mirror to /alert so the dashboard picks it up immediately
-        await self._mqtt_publish(f"agents/{self.actor_id}/alert", {
-            "actor_id":  self.actor_id,
-            "name":      self.name,
-            "message":   f"[{phase}] {error}",
-            "severity":  severity,
-            "timestamp": time.time(),
-        })
+        await self._mqtt_publish(
+            f"agents/{self.actor_id}/alert",
+            {
+                "actor_id": self.actor_id,
+                "name": self.name,
+                "message": f"[{phase}] {error}",
+                "severity": severity,
+                "timestamp": time.time(),
+            },
+        )
 
     def _reset_error_count(self):
         """
@@ -1153,7 +1224,7 @@ class DynamicAgent(Actor):
         if self._consecutive_errors > 0:
             logger.info(f"[{self.name}] Recovered — resetting error counter.")
             self._consecutive_errors = 0
-            self._error_phase        = ""
+            self._error_phase = ""
 
     def _persist_fixed_code(self, fixed_code: str):
         """
@@ -1197,12 +1268,15 @@ class DynamicAgent(Actor):
                     _name = self.name
                     _mqtt_client = self._mqtt_client
                     _mqtt_broker = self._mqtt_broker
-                    _mqtt_port   = self._mqtt_port
-                    _registry    = self._registry
+                    _mqtt_port = self._mqtt_port
+                    _registry = self._registry
 
                     async def _fixed_factory(
-                        old_f=_old_factory, code=_fixed,
-                        mc=_mqtt_client, mb=_mqtt_broker, mp=_mqtt_port,
+                        old_f=_old_factory,
+                        code=_fixed,
+                        mc=_mqtt_client,
+                        mb=_mqtt_broker,
+                        mp=_mqtt_port,
                     ):
                         # Call the original factory to get a correctly configured instance
                         actor = await old_f() if asyncio.iscoroutinefunction(old_f) else old_f()
@@ -1211,26 +1285,23 @@ class DynamicAgent(Actor):
                         return actor
 
                     spec.factory = _fixed_factory
-                    logger.info(
-                        f"[{self.name}] Supervisor factory updated with fixed code."
-                    )
+                    logger.info(f"[{self.name}] Supervisor factory updated with fixed code.")
 
         except Exception as exc:
             logger.warning(f"[{self.name}] Could not persist fixed code: {exc}")
 
-
     def get_status(self) -> dict:
         s = super().get_status()
         s["description"] = self.description
-        s["code"]        = self._code
-        s["agent_type"]  = "dynamic"
+        s["code"] = self._code
+        s["agent_type"] = "dynamic"
         return s
 
     def _build_heartbeat(self) -> dict:
         hb = super()._build_heartbeat()
-        hb["code"]        = self._code      # include code in every heartbeat
+        hb["code"] = self._code  # include code in every heartbeat
         hb["description"] = self.description
-        hb["agent_type"]  = "dynamic"
+        hb["agent_type"] = "dynamic"
         return hb
 
     def _current_task_description(self) -> str:
@@ -1239,9 +1310,9 @@ class DynamicAgent(Actor):
     def _accrue_usage(self, usage: dict) -> None:
         if not isinstance(usage, dict):
             return
-        self.total_input_tokens  += usage.get("input_tokens", 0)
+        self.total_input_tokens += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)
-        self.total_cost_usd      += usage.get("cost_usd", 0.0)
+        self.total_cost_usd += usage.get("cost_usd", 0.0)
         delta = self.total_cost_usd - self._last_period_cost_usd
         if delta > 0:
             _accumulate_global_cost(delta)
@@ -1253,6 +1324,7 @@ class _LLMInterface:
     Thin LLM wrapper exposed to generated code via agent.llm
     Tracks token usage and cost just like LLMAgent does.
     """
+
     def __init__(self, actor: "DynamicAgent", agent_state: dict):
         self._actor = actor
         self._agent_state = agent_state  # reference to _AgentAPI.state
@@ -1263,7 +1335,6 @@ class _LLMInterface:
         if provider is None:
             return "[No LLM configured for this agent]"
         try:
-            from .llm_agent import LLMAgent
             # Build a minimal single-turn message
             messages = [{"role": "user", "content": prompt}]
             response, usage = await provider.complete(messages=messages, system=system)
@@ -1322,6 +1393,7 @@ def _ensure_result_handler(actor):
     original = actor.handle_message.__func__ if hasattr(actor.handle_message, "__func__") else None
 
     import types
+
     async def _patched_handle_message(self, msg: Message):
         if msg.type == MessageType.RESULT:
             payload = msg.payload if isinstance(msg.payload, dict) else {}
@@ -1339,7 +1411,6 @@ def _ensure_result_handler(actor):
     actor.handle_message = types.MethodType(_patched_handle_message, actor)
 
 
-
 class _AgentAPI:
     """
     Clean API surface exposed to LLM-generated code via the `agent` parameter.
@@ -1348,7 +1419,7 @@ class _AgentAPI:
 
     def __init__(self, actor: DynamicAgent):
         self._actor = actor
-        self.name     = actor.name
+        self.name = actor.name
         self.actor_id = actor.actor_id
         # Shared mutable namespace — generated code can store anything here
         self.state: dict = {}
@@ -1358,7 +1429,7 @@ class _AgentAPI:
         self._published_topics: set = set()
         # MQTT broker info — exposed so generated code can create aiomqtt clients
         self._mqtt_broker = actor._mqtt_broker
-        self._mqtt_port   = actor._mqtt_port
+        self._mqtt_port = actor._mqtt_port
 
     # ── Identity properties (parity with _RemoteAgentAPI) ──────────────────
     # The remote API exposes `agent.node` as the node_name of the runner the
@@ -1432,6 +1503,7 @@ class _AgentAPI:
         # not monkey-patched attributes.
         try:
             from ..core.topic_bus import TopicContract, get_topic_bus
+
             bus = get_topic_bus()
             if bus:
                 existing = bus.registry.get(self.name)
@@ -1444,16 +1516,18 @@ class _AgentAPI:
                     if isinstance(data, dict):
                         existing.update_observed(topic, data)
                         # Also keep produces_schema in sync
-                        for k, v in existing.observed_samples.get(topic, {}).get("fields", {}).items():
+                        for k, v in (
+                            existing.observed_samples.get(topic, {}).get("fields", {}).items()
+                        ):
                             existing.produces_schema[k] = v
                     bus.registry.register(existing)
                 elif is_new_topic:
                     # Create minimal contract from published topics
                     contract = TopicContract(
-                        name            = self.name,
-                        publishes       = list(self._published_topics | {topic}),
-                        actor_id        = self.actor_id,
-                        node            = getattr(self._actor, "_node", None),
+                        name=self.name,
+                        publishes=list(self._published_topics | {topic}),
+                        actor_id=self.actor_id,
+                        node=getattr(self._actor, "_node", None),
                     )
                     if isinstance(data, dict):
                         contract.update_observed(topic, data)
@@ -1493,10 +1567,10 @@ class _AgentAPI:
 
         # Validate callback accepts exactly one argument (the payload)
         import inspect
+
         try:
             sig = inspect.signature(callback)
-            params = [p for p in sig.parameters.values()
-                      if p.default is inspect.Parameter.empty]
+            params = [p for p in sig.parameters.values() if p.default is inspect.Parameter.empty]
             if len(params) == 0:
                 raise TypeError(
                     f"Subscribe callback must accept one argument (the payload dict). "
@@ -1505,7 +1579,9 @@ class _AgentAPI:
                 )
         except (TypeError, ValueError):
             pass  # Can't inspect — proceed and let runtime catch it
-        import asyncio, json
+        import asyncio
+        import json
+
         actor = self._actor
 
         # Wrap the callback so `await None` errors from LLM-generated code
@@ -1535,19 +1611,19 @@ class _AgentAPI:
         #   2. process() success doesn't clear subscribe errors (_consecutive_errors
         #      is shared — a clean process() run was resetting callback error counts)
         #   3. Multiple subscriptions on the same actor share one error budget
-        _cb_attr = f"_cb_err_{topic.replace('/','_').replace('#','x').replace('+','y')}"
+        _cb_attr = f"_cb_err_{topic.replace('/', '_').replace('#', 'x').replace('+', 'y')}"
         if not hasattr(actor, "_cb_error_last"):
-            actor._cb_error_last:  dict[str, float] = {}
+            actor._cb_error_last: dict[str, float] = {}
         if not hasattr(actor, "_cb_error_count"):
-            actor._cb_error_count: dict[str, int]   = {}
+            actor._cb_error_count: dict[str, int] = {}
         # After this many escalations without recovery, stop the listener entirely
         # and mark the actor FAILED so the Supervisor can restart with fresh code.
-        _CB_MAX_ESCALATIONS      = 5
-        _CB_ERROR_REPORT_INTERVAL = 30.0   # seconds between escalations per error key
+        _CB_MAX_ESCALATIONS = 5
+        _CB_ERROR_REPORT_INTERVAL = 30.0  # seconds between escalations per error key
 
         async def _listener():
             try:
-                import aiomqtt
+                import aiomqtt  # noqa: F401
             except ImportError:
                 logger.error(f"[{actor.name}] aiomqtt not installed")
                 return
@@ -1567,9 +1643,11 @@ class _AgentAPI:
                                 actor._cb_error_count.pop(topic, None)
                                 actor._cb_error_last.pop(topic, None)
                             except Exception as e:
-                                import time as _t, traceback as _tb
-                                now        = _t.time()
-                                last       = actor._cb_error_last.get(topic, 0)
+                                import time as _t
+                                import traceback as _tb
+
+                                now = _t.time()
+                                last = actor._cb_error_last.get(topic, 0)
                                 escalations = actor._cb_error_count.get(topic, 0)
 
                                 logger.error(
@@ -1581,8 +1659,8 @@ class _AgentAPI:
                                 # Rate-limit escalation to supervision
                                 if (now - last) >= _CB_ERROR_REPORT_INTERVAL:
                                     escalations += 1
-                                    actor._cb_error_count[topic]  = escalations
-                                    actor._cb_error_last[topic]   = now
+                                    actor._cb_error_count[topic] = escalations
+                                    actor._cb_error_last[topic] = now
 
                                     fatal = escalations >= _CB_MAX_ESCALATIONS
                                     await actor._publish_error(
@@ -1599,8 +1677,9 @@ class _AgentAPI:
                                             f"failed {escalations}x — marking FAILED for Supervisor."
                                         )
                                         from ..core.actor import ActorState
+
                                         actor.state = ActorState.FAILED
-                                        return   # exits _listener task
+                                        return  # exits _listener task
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
@@ -1609,7 +1688,7 @@ class _AgentAPI:
 
         # Deduplication guard — prevent double-subscription if setup() is called
         # more than once (e.g. on reconnect). Same topic+callback combo gets one listener.
-        if not hasattr(actor, '_subscribed_topics'):
+        if not hasattr(actor, "_subscribed_topics"):
             actor._subscribed_topics: set = set()
         sub_key = (topic, id(callback))
         if sub_key in actor._subscribed_topics:
@@ -1623,6 +1702,7 @@ class _AgentAPI:
         # Auto-register subscription in TopicBus
         try:
             from ..core.topic_bus import TopicContract, get_topic_bus
+
             bus = get_topic_bus()
             if bus:
                 existing = bus.registry.get(self.name)
@@ -1632,10 +1712,10 @@ class _AgentAPI:
                         bus.registry.register(existing)
                 else:
                     contract = TopicContract(
-                        name       = self.name,
-                        subscribes = [topic],
-                        actor_id   = self.actor_id,
-                        node       = getattr(actor, "_node", None),
+                        name=self.name,
+                        subscribes=[topic],
+                        actor_id=self.actor_id,
+                        node=getattr(actor, "_node", None),
                     )
                     bus.register_contract(contract)
         except Exception:
@@ -1660,30 +1740,29 @@ class _AgentAPI:
         so the planner can wire agents by data compatibility, not just by name.
         """
         import time as _t
+
         actor = self._actor
         # Include TopicContract fields if declared
         contract = getattr(actor, "_topic_contract", None)
         manifest = {
-            "name":            self.name,
-            "actor_id":        self.actor_id,
-            "node":            getattr(actor, "_node", None),
-            "description":     getattr(actor, "description", ""),
-            "capabilities":    [],
-            "input_schema":    getattr(actor, "input_schema",  {}),
-            "output_schema":   getattr(actor, "output_schema", {}),
-            "publishes":       sorted(self._published_topics),
+            "name": self.name,
+            "actor_id": self.actor_id,
+            "node": getattr(actor, "_node", None),
+            "description": getattr(actor, "description", ""),
+            "capabilities": [],
+            "input_schema": getattr(actor, "input_schema", {}),
+            "output_schema": getattr(actor, "output_schema", {}),
+            "publishes": sorted(self._published_topics),
             # TopicContract fields — populated via declare_contract()
-            "subscribes":      contract.subscribes      if contract else [],
-            "triggers_when":   contract.triggers_when   if contract else {},
+            "subscribes": contract.subscribes if contract else [],
+            "triggers_when": contract.triggers_when if contract else {},
             "produces_schema": contract.produces_schema if contract else {},
             "consumes_schema": contract.consumes_schema if contract else {},
             # Observed payload schemas — auto-captured from real publishes
             "observed_samples": contract.observed_samples if contract else {},
-            "timestamp":       _t.time(),
+            "timestamp": _t.time(),
         }
-        await actor._mqtt_publish(
-            f"agents/{self.actor_id}/manifest", manifest, retain=True
-        )
+        await actor._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 
     # ── Logging / alerting ─────────────────────────────────────────────────
 
@@ -1694,18 +1773,27 @@ class _AgentAPI:
         getattr(logger, level, logger.info)(f"[{self.name}] {safe_msg}")
         await self._actor._mqtt_publish(
             f"agents/{self._actor.actor_id}/logs",
-            {"type": "log", "message": message, "timestamp": time.time()}
+            {"type": "log", "message": message, "timestamp": time.time()},
         )
 
     @property
     def logger(self):
         """Compatibility shim — allows agent.logger.info/warning/error in generated code."""
         api = self
+
         class _LoggerShim:
-            def info(self, msg):    asyncio.ensure_future(api.log(msg, "info"))
-            def warning(self, msg): asyncio.ensure_future(api.log(msg, "warning"))
-            def error(self, msg):   asyncio.ensure_future(api.log(msg, "error"))
-            def debug(self, msg):   asyncio.ensure_future(api.log(msg, "debug"))
+            def info(self, msg):
+                asyncio.ensure_future(api.log(msg, "info"))
+
+            def warning(self, msg):
+                asyncio.ensure_future(api.log(msg, "warning"))
+
+            def error(self, msg):
+                asyncio.ensure_future(api.log(msg, "error"))
+
+            def debug(self, msg):
+                asyncio.ensure_future(api.log(msg, "debug"))
+
         return _LoggerShim()
 
     async def alert(self, message: str, severity: str = "warning"):
@@ -1713,12 +1801,12 @@ class _AgentAPI:
         await self._actor._mqtt_publish(
             f"agents/{self._actor.actor_id}/alert",
             {
-                "actor_id":  self._actor.actor_id,
-                "name":      self.name,
-                "message":   message,
-                "severity":  severity,
+                "actor_id": self._actor.actor_id,
+                "name": self.name,
+                "message": message,
+                "severity": severity,
                 "timestamp": time.time(),
-            }
+            },
         )
 
     async def notify_user(self, text: str):
@@ -1750,7 +1838,7 @@ class _AgentAPI:
 
     def persist(self, key: str, value: Any):
         self._actor.persist(key, value)
-        return _AWAITABLE_NONE           # safe to await
+        return _AWAITABLE_NONE  # safe to await
 
     def recall(self, key: str, default: Any = None) -> Any:
         """
@@ -1774,7 +1862,7 @@ class _AgentAPI:
 
     # ── Inter-agent messaging ──────────────────────────────────────────────
 
-    async def send_to(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Optional[Any]:
+    async def send_to(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Any | None:
         """Send a TASK to another agent by name and wait for its result.
 
         Routing priority:
@@ -1794,6 +1882,7 @@ class _AgentAPI:
         if target:
             # ── Local path ────────────────────────────────────────────────────
             import uuid as _uuid
+
             task_id = str(_uuid.uuid4())[:8]
             if not hasattr(self._actor, "_result_futures"):
                 self._actor._result_futures = {}
@@ -1803,7 +1892,7 @@ class _AgentAPI:
             if not isinstance(payload, dict):
                 payload = {"message": payload, "text": str(payload)}
             payload = dict(payload)
-            payload["_task_id"]  = task_id
+            payload["_task_id"] = task_id
             payload["_reply_to"] = self._actor.actor_id
             await self._actor.send(target.actor_id, MessageType.TASK, payload)
             try:
@@ -1824,10 +1913,13 @@ class _AgentAPI:
                     break
 
         if not remote_node:
-            logger.warning(f"[{self.name}] send_to: agent '{agent_name}' not found locally or remotely")
+            logger.warning(
+                f"[{self.name}] send_to: agent '{agent_name}' not found locally or remotely"
+            )
             return {"error": f"Agent '{agent_name}' not found"}
 
         import uuid as _uuid
+
         reply_topic = f"agents/by-name/{self.name}/reply/{_uuid.uuid4().hex[:8]}"
 
         if not isinstance(payload, dict):
@@ -1845,14 +1937,14 @@ class _AgentAPI:
 
         async def _wait_reply():
             try:
-                import aiomqtt
                 broker = getattr(self._actor, "_mqtt_broker", "localhost")
-                port   = getattr(self._actor, "_mqtt_port", 1883)
+                port = getattr(self._actor, "_mqtt_port", 1883)
                 async with mqtt_client(broker, port) as client:
                     await client.subscribe(reply_topic)
                     async for msg in client.messages:
                         try:
                             import json as _json
+
                             data = _json.loads(msg.payload.decode())
                             if not future.done():
                                 future.set_result(data)
@@ -1868,7 +1960,9 @@ class _AgentAPI:
             result = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
             return result
         except asyncio.TimeoutError:
-            logger.warning(f"[{self.name}] send_to '{agent_name}' on '{remote_node}' timed out after {timeout}s")
+            logger.warning(
+                f"[{self.name}] send_to '{agent_name}' on '{remote_node}' timed out after {timeout}s"
+            )
             return {"error": f"Timeout waiting for remote '{agent_name}'"}
         finally:
             reply_task.cancel()
@@ -1903,50 +1997,57 @@ class _AgentAPI:
             remote_workers = [a for a in available if a.get("remote")]
         """
         registry = self._actor._registry
-        result   = []
-        seen     = set()
+        result = []
+        seen = set()
 
         # ── Local agents from registry ────────────────────────────────────────
         if registry:
             for actor in registry.all_actors():
                 seen.add(actor.name)
-                result.append({
-                    "name":        actor.name,
-                    "type":        type(actor).__name__,
-                    "description": (
-                        getattr(actor, "description", "")
-                        or getattr(actor, "system_prompt", "")[:100]
-                        or ""
-                    ),
-                    "state":  actor.state.name if hasattr(actor.state, "name") else str(actor.state),
-                    "remote": False,
-                    "node":   None,
-                })
+                result.append(
+                    {
+                        "name": actor.name,
+                        "type": type(actor).__name__,
+                        "description": (
+                            getattr(actor, "description", "")
+                            or getattr(actor, "system_prompt", "")[:100]
+                            or ""
+                        ),
+                        "state": actor.state.name
+                        if hasattr(actor.state, "name")
+                        else str(actor.state),
+                        "remote": False,
+                        "node": None,
+                    }
+                )
 
         # ── Remote agents from live node heartbeats ───────────────────────────
         main = registry.find_by_name("main") if registry else None
         if main and hasattr(main, "_known_nodes"):
             import time as _t
+
             for node_name, nd in main._known_nodes.items():
                 if _t.time() - nd.get("last_seen", 0) > 30:
-                    continue   # node is offline — skip
+                    continue  # node is offline — skip
                 for aname in nd.get("agents", []):
                     if aname in seen:
-                        continue   # already in local registry (shouldn't happen but guard it)
+                        continue  # already in local registry (shouldn't happen but guard it)
                     seen.add(aname)
                     # Try to get description from _agent_manifests
                     desc = ""
                     if hasattr(main, "_agent_manifests"):
-                        m    = main._agent_manifests.get(aname, {})
+                        m = main._agent_manifests.get(aname, {})
                         desc = m.get("description", "")
-                    result.append({
-                        "name":        aname,
-                        "type":        "RemoteAgent",
-                        "description": desc,
-                        "state":       "running",
-                        "remote":      True,
-                        "node":        node_name,
-                    })
+                    result.append(
+                        {
+                            "name": aname,
+                            "type": "RemoteAgent",
+                            "description": desc,
+                            "state": "running",
+                            "remote": True,
+                            "node": node_name,
+                        }
+                    )
 
         return result
 
@@ -1997,11 +2098,11 @@ class _AgentAPI:
             return main.list_capabilities(keyword)
         return []
 
-    async def delegate(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Optional[Any]:
+    async def delegate(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Any | None:
         """Alias for send_to() — cleaner name for planner/coordinator agents."""
         return await self.send_to(agent_name, payload, timeout=timeout)
 
-    async def mqtt_get(self, topic: str, timeout: float = 10.0) -> Optional[Any]:
+    async def mqtt_get(self, topic: str, timeout: float = 10.0) -> Any | None:
         """
         Wait for one MQTT message on topic and return its parsed payload.
         Useful for reading live data published by remote agents.
@@ -2010,13 +2111,16 @@ class _AgentAPI:
             stats = await agent.mqtt_get('rpi-room/cpu')
             cpu = stats.get('cpu_percent') if stats else None
         """
-        import asyncio, json
+        import asyncio
+        import json
+
         try:
-            import aiomqtt
+            import aiomqtt  # noqa: F401
         except ImportError:
             return None
         actor = self._actor
         result = []
+
         async def _fetch():
             try:
                 async with mqtt_client(actor._mqtt_broker, actor._mqtt_port) as client:
@@ -2029,6 +2133,7 @@ class _AgentAPI:
                         return
             except Exception:
                 pass
+
         try:
             await asyncio.wait_for(_fetch(), timeout=timeout)
         except asyncio.TimeoutError:
@@ -2037,8 +2142,7 @@ class _AgentAPI:
 
     # ── Topic Bus API ───────────────────────────────────────────────────────
 
-    def window(self, topic: str, seconds: float = 300,
-               max_size: int = 1000):
+    def window(self, topic: str, seconds: float = 300, max_size: int = 1000):
         """
         Create a sliding time window over an MQTT topic stream.
 
@@ -2063,7 +2167,7 @@ class _AgentAPI:
                 if w.absent_for(60):
                     await agent.alert('Sensor stopped publishing!')
         """
-        from ..core.topic_bus import get_topic_bus, StreamWindow
+        from ..core.topic_bus import StreamWindow, get_topic_bus
 
         class _UnawaatableWindow:
             """
@@ -2078,12 +2182,16 @@ class _AgentAPI:
               - Layer 4 (_safe_invoke): catches TypeError in subscribe callbacks
             This wrapper exists solely for a clear error message if those layers miss it.
             """
+
             def __init__(self, inner):
                 self._inner = inner
+
             def __getattr__(self, name):
                 return getattr(self._inner, name)
+
             def __repr__(self):
                 return f"StreamWindow(topic={getattr(self._inner, 'topic', '?')}, seconds={getattr(self._inner, 'seconds', '?')})"
+
             def __await__(self):
                 raise TypeError(
                     "agent.window() is not a coroutine — do not use 'await'. "
@@ -2113,9 +2221,15 @@ class _AgentAPI:
                 pass
             return _UnawaatableWindow(w)
 
-    def declare_contract(self, publishes=None, subscribes=None,
-                         triggers_when: dict = None, produces_schema: dict = None,
-                         consumes_schema: dict = None, **kwargs):
+    def declare_contract(
+        self,
+        publishes=None,
+        subscribes=None,
+        triggers_when: dict = None,
+        produces_schema: dict = None,
+        consumes_schema: dict = None,
+        **kwargs,
+    ):
         """
         Declare this agent's topic contract — what it produces and consumes.
 
@@ -2146,11 +2260,7 @@ class _AgentAPI:
                 or {}
             )
         if consumes_schema is None:
-            consumes_schema = (
-                kwargs.get("input_schema")
-                or kwargs.get("consume_schema")
-                or {}
-            )
+            consumes_schema = kwargs.get("input_schema") or kwargs.get("consume_schema") or {}
         if publishes is None:
             publishes = kwargs.get("topics") or kwargs.get("publish")
         if subscribes is None:
@@ -2164,15 +2274,16 @@ class _AgentAPI:
             subscribes = [subscribes]
 
         from ..core.topic_bus import TopicContract, get_topic_bus
+
         contract = TopicContract(
-            name            = self.name,
-            publishes       = publishes or list(self._published_topics),
-            subscribes      = subscribes or [],
-            triggers_when   = triggers_when or {},
-            produces_schema = produces_schema or {},
-            consumes_schema = consumes_schema or {},
-            actor_id        = self.actor_id,
-            node            = getattr(self._actor, "_node", None),
+            name=self.name,
+            publishes=publishes or list(self._published_topics),
+            subscribes=subscribes or [],
+            triggers_when=triggers_when or {},
+            produces_schema=produces_schema or {},
+            consumes_schema=consumes_schema or {},
+            actor_id=self.actor_id,
+            node=getattr(self._actor, "_node", None),
         )
         bus = get_topic_bus()
         if bus:
@@ -2180,7 +2291,7 @@ class _AgentAPI:
         # Also include in manifest so remote agents and planner can see it
         self._actor._topic_contract = contract
         asyncio.ensure_future(self._publish_manifest())
-        return _AWAITABLE_NONE           # safe to await
+        return _AWAITABLE_NONE  # safe to await
 
     async def publish_world_state(self, key: str, data: Any, retain: bool = True):
         """
@@ -2194,6 +2305,7 @@ class _AgentAPI:
             await agent.publish_world_state('energy', {'kwh': 2.3, 'cost': 0.45})
         """
         from ..core.topic_bus import get_topic_bus
+
         bus = get_topic_bus()
         if bus:
             await bus.state_hub.publish_agent_data(self.name, key, data)
@@ -2201,7 +2313,7 @@ class _AgentAPI:
             topic = f"agents/{self.name}/data/{key}"
             await self.publish(topic, data)
 
-    async def read_world_state(self, topic: str, timeout: float = 2.0) -> Optional[Any]:
+    async def read_world_state(self, topic: str, timeout: float = 2.0) -> Any | None:
         """
         Read a retained world state topic — returns immediately if cached,
         otherwise waits up to timeout seconds for the retained message.
@@ -2224,6 +2336,7 @@ class _AgentAPI:
                 print(f"Can receive data from {o['producer']} via {o['topic']}")
         """
         from ..core.topic_bus import get_topic_bus
+
         bus = get_topic_bus()
         if not bus:
             return []
@@ -2239,9 +2352,9 @@ class _AgentAPI:
     def query_ts(
         self,
         hours: float = 24,
-        topic: Optional[str] = None,
-        entity_id: Optional[str] = None,
-        field: Optional[str] = None,
+        topic: str | None = None,
+        entity_id: str | None = None,
+        field: str | None = None,
         limit: int = 100_000,
         as_dataframe: bool = False,
     ) -> Any:
@@ -2266,19 +2379,24 @@ class _AgentAPI:
             agent.persist('anomaly_model', model)
         """
         from ..core.persistence import get_db
+
         db = get_db()
         if not db:
             logger.warning(f"[{self.name}] query_ts: persistence not initialised")
             return [] if not as_dataframe else None
 
         rows = db.query_sensor(
-            hours=hours, topic=topic, entity_id=entity_id,
-            field=field, limit=limit,
+            hours=hours,
+            topic=topic,
+            entity_id=entity_id,
+            field=field,
+            limit=limit,
         )
 
         if as_dataframe:
             try:
                 import pandas as pd
+
                 return pd.DataFrame(rows)
             except ImportError:
                 logger.warning(f"[{self.name}] pandas not installed — returning list of dicts")
@@ -2288,8 +2406,8 @@ class _AgentAPI:
     def query_detections(
         self,
         hours: float = 24,
-        agent_name: Optional[str] = None,
-        class_name: Optional[str] = None,
+        agent_name: str | None = None,
+        class_name: str | None = None,
         min_confidence: float = 0.0,
         limit: int = 50_000,
         as_dataframe: bool = False,
@@ -2305,18 +2423,23 @@ class _AgentAPI:
             df = agent.query_detections(hours=48, min_confidence=0.8, as_dataframe=True)
         """
         from ..core.persistence import get_db
+
         db = get_db()
         if not db:
             return [] if not as_dataframe else None
 
         rows = db.query_detections(
-            hours=hours, agent=agent_name, class_name=class_name,
-            min_confidence=min_confidence, limit=limit,
+            hours=hours,
+            agent=agent_name,
+            class_name=class_name,
+            min_confidence=min_confidence,
+            limit=limit,
         )
 
         if as_dataframe:
             try:
                 import pandas as pd
+
                 return pd.DataFrame(rows)
             except ImportError:
                 return rows
@@ -2325,8 +2448,8 @@ class _AgentAPI:
     def query_ha_states(
         self,
         hours: float = 24,
-        entity_id: Optional[str] = None,
-        domain: Optional[str] = None,
+        entity_id: str | None = None,
+        domain: str | None = None,
         limit: int = 50_000,
         as_dataframe: bool = False,
     ) -> Any:
@@ -2341,17 +2464,22 @@ class _AgentAPI:
             rows = agent.query_ha_states(hours=24, entity_id='sensor.kitchen_temp')
         """
         from ..core.persistence import get_db
+
         db = get_db()
         if not db:
             return [] if not as_dataframe else None
 
         rows = db.query_ha_states(
-            hours=hours, entity_id=entity_id, domain=domain, limit=limit,
+            hours=hours,
+            entity_id=entity_id,
+            domain=domain,
+            limit=limit,
         )
 
         if as_dataframe:
             try:
                 import pandas as pd
+
                 return pd.DataFrame(rows)
             except ImportError:
                 return rows
@@ -2367,6 +2495,7 @@ class _AgentAPI:
             # {'sensor_readings': 145230, 'detections': 8920, ...}
         """
         from ..core.persistence import get_db
+
         db = get_db()
         if not db:
             return {}

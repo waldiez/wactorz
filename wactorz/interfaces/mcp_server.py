@@ -95,9 +95,7 @@ async def _wactorz_get(path: str) -> Any:
 async def _wactorz_delete(path: str) -> dict:
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.delete(
-                f"{WACTORZ_URL}{path}", headers=_wactorz_headers()
-            ) as resp:
+            async with session.delete(f"{WACTORZ_URL}{path}", headers=_wactorz_headers()) as resp:
                 return {"status": resp.status, "text": await resp.text()}
     except aiohttp.ClientConnectorError:
         return {"status": 0, "text": f"Cannot connect to wactorz at {WACTORZ_URL}. Is it running?"}

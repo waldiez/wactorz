@@ -157,20 +157,44 @@ _KB: dict[str, str] = {
 }
 
 _ALIASES: dict[str, str] = {
-    "actors": "actor-model", "actor": "actor-model", "message": "chat", "messages": "chat",
-    "web": "dashboard", "ui": "dashboard", "frontend": "dashboard",
-    "rest": "api", "websocket": "api", "ws": "api",
-    "id": "hlc-wid", "ids": "hlc-wid", "identifier": "hlc-wid", "wids": "wid",
-    "ssh": "nautilus", "rsync": "nautilus", "transfer": "nautilus",
-    "io-agent": "io", "ioagent": "io", "gateway": "io",
-    "safety": "qa", "guardian": "qa",
-    "health": "monitor", "monitoring": "monitor",
-    "orchestrator": "main", "llm": "main",
-    "coin": "wiz", "economy": "wiz",
-    "finance": "wif", "financier": "wif",
-    "coding": "dynamic", "exec": "dynamic", "script": "dynamic",
-    "3d": "babylon", "graph": "babylon", "galaxy": "babylon",
-    "docker": "deploy", "deployment": "deploy",
+    "actors": "actor-model",
+    "actor": "actor-model",
+    "message": "chat",
+    "messages": "chat",
+    "web": "dashboard",
+    "ui": "dashboard",
+    "frontend": "dashboard",
+    "rest": "api",
+    "websocket": "api",
+    "ws": "api",
+    "id": "hlc-wid",
+    "ids": "hlc-wid",
+    "identifier": "hlc-wid",
+    "wids": "wid",
+    "ssh": "nautilus",
+    "rsync": "nautilus",
+    "transfer": "nautilus",
+    "io-agent": "io",
+    "ioagent": "io",
+    "gateway": "io",
+    "safety": "qa",
+    "guardian": "qa",
+    "health": "monitor",
+    "monitoring": "monitor",
+    "orchestrator": "main",
+    "llm": "main",
+    "coin": "wiz",
+    "economy": "wiz",
+    "finance": "wif",
+    "financier": "wif",
+    "coding": "dynamic",
+    "exec": "dynamic",
+    "script": "dynamic",
+    "3d": "babylon",
+    "graph": "babylon",
+    "galaxy": "babylon",
+    "docker": "deploy",
+    "deployment": "deploy",
 }
 
 _TOPICS = ", ".join(sorted(_KB.keys()))
@@ -210,7 +234,12 @@ class UdxAgent(Actor):
     async def on_start(self):
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
-            {"agentId": self.actor_id, "agentName": self.name, "agentType": "assistant", "timestamp": time.time()},
+            {
+                "agentId": self.actor_id,
+                "agentName": self.name,
+                "agentType": "assistant",
+                "timestamp": time.time(),
+            },
         )
         logger.info(f"[{self.name}] started — {len(_KB)} topics in KB")
 
@@ -220,11 +249,12 @@ class UdxAgent(Actor):
         payload = msg.payload or {}
         text = str(
             payload.get("text") or payload.get("content") or ""
-            if isinstance(payload, dict) else payload
+            if isinstance(payload, dict)
+            else payload
         )
         for pfx in ("@udx-agent", "@udx_agent"):
             if text.lower().startswith(pfx):
-                text = text[len(pfx):].lstrip()
+                text = text[len(pfx) :].lstrip()
                 break
         await self._reply(self._dispatch(text.strip()))
         self.metrics.tasks_completed += 1
@@ -238,8 +268,12 @@ class UdxAgent(Actor):
         if lower.startswith(("help ", "docs ", "explain ")):
             topic = text.split(None, 1)[1] if " " in text else ""
             result = _lookup(topic)
-            return result if result else (
-                f"No docs on **{topic}** yet. Try `@main-actor`.\n\n**Available topics:** {_TOPICS}"
+            return (
+                result
+                if result
+                else (
+                    f"No docs on **{topic}** yet. Try `@main-actor`.\n\n**Available topics:** {_TOPICS}"
+                )
             )
         if lower == "agents":
             return self._list_agents()
@@ -271,11 +305,15 @@ class UdxAgent(Actor):
     def _system_status(self) -> str:
         if not self._registry:
             return "Registry not available."
-        actors  = self._registry.all_actors()
+        actors = self._registry.all_actors()
         running = sum(1 for a in actors if a.state == ActorState.RUNNING)
         stopped = sum(1 for a in actors if a.state == ActorState.STOPPED)
-        failed  = sum(1 for a in actors if a.state == ActorState.FAILED)
-        verdict = "HEALTHY" if failed == 0 and running > 0 else ("UNHEALTHY" if failed > 0 else "DEGRADED")
+        failed = sum(1 for a in actors if a.state == ActorState.FAILED)
+        verdict = (
+            "HEALTHY"
+            if failed == 0 and running > 0
+            else ("UNHEALTHY" if failed > 0 else "DEGRADED")
+        )
         return (
             f"**System: {verdict}**\n\n"
             f"Total: {len(actors)} | Running: {running} | Stopped: {stopped} | Failed: {failed}\n\n"

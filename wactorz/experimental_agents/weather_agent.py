@@ -12,19 +12,17 @@ Environment:
 from __future__ import annotations
 
 import logging
-import os
 import time
 import urllib.parse
 
 from ..config import CONFIG
-
 from ..core.actor import Actor, Message, MessageType
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_LOCATION = CONFIG.weather_default_location
-_USER_AGENT       = "Wactorz-WeatherAgent/1.0"
-_TIMEOUT_SEC      = 10
+_USER_AGENT = "Wactorz-WeatherAgent/1.0"
+_TIMEOUT_SEC = 10
 
 
 def _url_encode(location: str) -> str:
@@ -53,7 +51,7 @@ class WeatherAgent(Actor):
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
             {
-                "agentId":   self.actor_id,
+                "agentId": self.actor_id,
                 "agentName": self.name,
                 "agentType": "data",
                 "timestamp": time.time(),
@@ -73,7 +71,7 @@ class WeatherAgent(Actor):
 
         for prefix in ("@weather-agent", "@weather_agent"):
             if text.lower().startswith(prefix):
-                text = text[len(prefix):].lstrip()
+                text = text[len(prefix) :].lstrip()
                 break
 
         if text.lower() == "help":
@@ -103,7 +101,7 @@ class WeatherAgent(Actor):
             return "Error: `aiohttp` is not installed. Cannot fetch weather."
 
         encoded = _url_encode(location)
-        url     = f"https://wttr.in/{encoded}?format=j1"
+        url = f"https://wttr.in/{encoded}?format=j1"
         timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SEC)
         headers = {"User-Agent": _USER_AGENT}
 
@@ -124,13 +122,9 @@ class WeatherAgent(Actor):
     @staticmethod
     def _format(data: dict, location: str, encoded: str) -> str:
         try:
-            cc   = data["current_condition"][0]
+            cc = data["current_condition"][0]
             desc = cc.get("weatherDesc", [{}])[0].get("value", "N/A")
-            area = (
-                data.get("nearest_area", [{}])[0]
-                    .get("areaName", [{}])[0]
-                    .get("value", location)
-            )
+            area = data.get("nearest_area", [{}])[0].get("areaName", [{}])[0].get("value", location)
             return (
                 f"**Weather in {area}**\n\n"
                 f"🌡 **{cc.get('temp_C', '?')}°C / {cc.get('temp_F', '?')}°F**"

@@ -1538,6 +1538,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             )
         system_msg = " | ".join(system_msg_parts)
 
+        # Also surface the concrete spawn/delete outcome for stream consumers
+        # that ignore the final done dict.
+        if system_msg:
+            yield f"\n\n_ℹ️ {system_msg}_"
+
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {"type": "user_interaction", "input": text[:100], "response": full_response[:200]},
@@ -1830,6 +1835,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 req_name = config.get("name", "")
                 if not config.get("replace"):
                     recipe_name = self._match_catalog_recipe(req_name)
+                    # Log catalog recipe resolution for spawn-routing diagnostics.
+                    logger.info(
+                        f"[{self.name}] spawn '{req_name}': catalog-dedup match = {recipe_name!r}"
+                    )
                     if recipe_name:
                         existing = (
                             self._registry.find_by_name(recipe_name) if self._registry else None

@@ -205,7 +205,6 @@ describe("main.ts bootstrap", () => {
     });
 
     it("handles the app-event listeners", () => {
-        emit("af-ha-state-change", { entityId: "e", state: "on", friendlyName: "E" });
         emit("af-stream-end", { text: "done", from: "A" });
         emit("af-stream-end", { text: "", from: "A" }); // !text → return
         emit("af-agent-command", { command: "pause", agentId: "a" }); // non-delete

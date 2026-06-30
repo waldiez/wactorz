@@ -113,6 +113,16 @@
   gap: 0;
   padding: 4px 8px;
 }
+/* The Devices entry is an external link to the HA UI, not a view button. */
+.af-ha-nav-link {
+  text-decoration: none;
+}
+.af-ha-ext {
+  font-size: 0.7em;
+  opacity: 0.6;
+  margin-left: 1px;
+  align-self: flex-start;
+}
 .af-view-btn:hover {
   background: rgba(255, 255, 255, 0.06);
   color: rgba(255, 255, 255, 0.85);

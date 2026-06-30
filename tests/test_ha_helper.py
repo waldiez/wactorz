@@ -283,6 +283,91 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(ha_helper.normalize_ha_base_url(value), expected)
 
+    def test_history_to_csv_normal(self):
+        history = {
+            "sensor.temp": [
+                {"entity_id": "sensor.temp", "state": "21.5", "last_changed": "2026-06-28T17:00:00", "attributes": {"unit_of_measurement": "°C"}},
+                {"entity_id": "sensor.temp", "state": "21.8", "last_changed": "2026-06-28T17:05:00", "attributes": {"unit_of_measurement": "°C"}},
+            ],
+            "sensor.humidity": [
+                {"entity_id": "sensor.humidity", "state": "55", "last_changed": "2026-06-28T17:00:00", "attributes": {}},
+            ],
+        }
+        csv_str = ha_helper.history_to_csv(history)
+        lines = csv_str.strip().splitlines()
+        self.assertEqual(lines[0], "entity_id,last_changed,state,unit_of_measurement")
+        self.assertEqual(len(lines), 4)
+        self.assertIn("sensor.temp,2026-06-28T17:00:00,21.5,°C", csv_str)
+        self.assertIn("sensor.humidity,2026-06-28T17:00:00,55,", csv_str)
+
+    def test_history_to_csv_empty_series_skipped(self):
+        history = {"sensor.temp": [], "sensor.humidity": []}
+        csv_str = ha_helper.history_to_csv(history)
+        lines = csv_str.strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0], "entity_id,last_changed,state,unit_of_measurement")
+
+    def test_history_to_csv_error_dict_skipped(self):
+        history = {"error": "HTTP 401", "status": 401, "detail": "unauthorized"}
+        csv_str = ha_helper.history_to_csv(history)
+        lines = csv_str.strip().splitlines()
+        self.assertEqual(len(lines), 1)
+
+    def test_history_to_csv_missing_unit(self):
+        history = {
+            "sensor.temp": [
+                {"entity_id": "sensor.temp", "state": "21.5", "last_changed": "2026-06-28T17:00:00", "attributes": {}},
+            ],
+        }
+        csv_str = ha_helper.history_to_csv(history)
+        self.assertIn("sensor.temp,2026-06-28T17:00:00,21.5,", csv_str)
+
+    def test_to_utc_offset_aware_string_converted(self):
+        result = ha_helper._to_utc("2026-06-27T17:00:00+02:00")
+        self.assertEqual(result, "2026-06-27T15:00:00+00:00")
+
+    def test_to_utc_naive_treated_as_local(self):
+        from datetime import datetime, timezone
+        naive = "2026-06-27T17:00:00"
+        result = ha_helper._to_utc(naive)
+        dt = datetime.fromisoformat(naive).astimezone().astimezone(timezone.utc)
+        self.assertEqual(result, dt.isoformat())
+
+    def test_to_utc_unparseable_passes_through(self):
+        self.assertEqual(ha_helper._to_utc("not-a-date"), "not-a-date")
+        self.assertEqual(ha_helper._to_utc(""), "")
+
+    def test_localise_history_timestamps_converts_utc(self):
+        history = {
+            "sensor.temp": [
+                {"entity_id": "sensor.temp", "state": "21.5", "last_changed": "2026-06-27T15:00:00+00:00", "attributes": {}},
+            ]
+        }
+        result = ha_helper.localise_history_timestamps(history)
+        ts = result["sensor.temp"][0]["last_changed"]
+        # Converted to local tz — must no longer be UTC (+00:00) if local offset is non-zero,
+        # but always a valid ISO string parseable by fromisoformat.
+        from datetime import datetime
+        dt = datetime.fromisoformat(ts)
+        self.assertIsNotNone(dt.tzinfo)
+
+    def test_localise_history_timestamps_handles_z_suffix(self):
+        history = {
+            "sensor.temp": [
+                {"entity_id": "sensor.temp", "state": "21.5", "last_changed": "2026-06-27T15:00:00Z", "attributes": {}},
+            ]
+        }
+        result = ha_helper.localise_history_timestamps(history)
+        ts = result["sensor.temp"][0]["last_changed"]
+        from datetime import datetime
+        dt = datetime.fromisoformat(ts)
+        self.assertIsNotNone(dt.tzinfo)
+
+    def test_localise_history_timestamps_skips_error_dicts(self):
+        history = {"error": "HTTP 401", "status": 401, "detail": ""}
+        result = ha_helper.localise_history_timestamps(history)
+        self.assertEqual(result["error"], "HTTP 401")
+
 
 class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+import csv
+import io
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 import hashlib
@@ -963,6 +965,80 @@ async def get_entity_history(
         if eid:
             result[eid] = entity_states
 
+    return result
+
+
+def history_to_csv(history: dict[str, Any]) -> str:
+    """Convert a get_entity_history result to a CSV string.
+
+    Args:
+        history: The dict returned by ``get_entity_history``.  Entries that are
+            error dicts or empty lists are silently skipped.
+
+    Returns:
+        A CSV string with header ``entity_id,last_changed,state,unit_of_measurement``.
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["entity_id", "last_changed", "state", "unit_of_measurement"])
+    for eid, states in history.items():
+        if not isinstance(states, list):
+            continue
+        for s in states:
+            if not isinstance(s, dict):
+                continue
+            unit = s.get("attributes", {}).get("unit_of_measurement", "")
+            writer.writerow([eid, s.get("last_changed", ""), s.get("state", ""), unit or ""])
+    return buf.getvalue()
+
+
+def _to_utc(s: str) -> str:
+    """Parse an ISO-8601 string and return its UTC equivalent.
+
+    Naive strings (no UTC offset) are treated as local time before conversion.
+    Returns the original string unchanged if it cannot be parsed.
+    """
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return s
+    if dt.tzinfo is None:
+        dt = dt.astimezone()  # attach local tz
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+_TS_KEYS = ("last_changed", "last_updated", "last_reported")
+
+
+def localise_history_timestamps(history: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of the history dict with timestamp fields converted to local tz.
+
+    HA returns ``last_changed`` / ``last_updated`` / ``last_reported`` in UTC.
+    This converts them to the server's local timezone so the LLM can correlate
+    them with user-provided local times (e.g. "Saturday at 17:00").
+    Error-dict values and non-list entries are passed through unchanged.
+    """
+    local_tz = datetime.now().astimezone().tzinfo
+    result: dict[str, Any] = {}
+    for eid, states in history.items():
+        if not isinstance(states, list):
+            result[eid] = states
+            continue
+        localised = []
+        for s in states:
+            if not isinstance(s, dict):
+                localised.append(s)
+                continue
+            s = dict(s)
+            for key in _TS_KEYS:
+                if isinstance(s.get(key), str):
+                    try:
+                        dt = datetime.fromisoformat(s[key].replace("Z", "+00:00"))
+                        s[key] = dt.astimezone(local_tz).isoformat()
+                    except ValueError:
+                        pass
+            localised.append(s)
+        result[eid] = localised
     return result
 
 

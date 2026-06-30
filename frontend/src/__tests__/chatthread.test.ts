@@ -56,6 +56,18 @@ describe("buildChatMessageEl", () => {
         expect(document.querySelector(".af-lightbox")).not.toBeNull();
     });
 
+    it("exposes the image thumbnail as a keyboard-operable button", () => {
+        const el = buildChatMessageEl(
+            msg({ attachments: [att({ mime: "image/png", url: "http://x/p.png", name: "p" })] }),
+        );
+        const thumb = el.querySelector<HTMLImageElement>(".af-chat-attach-thumb")!;
+        expect(thumb.getAttribute("role")).toBe("button");
+        expect(thumb.tabIndex).toBe(0);
+        expect(thumb.getAttribute("aria-label")).toContain("p");
+        thumb.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        expect(document.querySelector(".af-lightbox")).not.toBeNull();
+    });
+
     it("renders a non-image attachment with a url as a download link", () => {
         const el = buildChatMessageEl(msg({ attachments: [att({ url: "http://x/f.pdf", name: "f.pdf" })] }));
         const link = el.querySelector<HTMLAnchorElement>("a.af-chat-attach-file")!;

@@ -47,6 +47,12 @@ describe("buildIobar", () => {
         expect(deps.populateSelect).toHaveBeenCalled();
     });
 
+    it("the icon-only send and stop buttons expose an accessible name", () => {
+        const bar = mount(makeDeps());
+        expect(bar.querySelector(".af-send-btn")!.getAttribute("aria-label")).toBe("Send message");
+        expect(bar.querySelector(".af-stop-btn")!.getAttribute("aria-label")).toBe("Stop generating");
+    });
+
     it("send button closes the mention panel and calls send()", () => {
         const deps = makeDeps();
         const bar = mount(deps);

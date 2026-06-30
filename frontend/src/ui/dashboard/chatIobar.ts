@@ -85,7 +85,9 @@ function buildSendBtn(
 ): HTMLButtonElement {
     const sendBtn = document.createElement("button");
     sendBtn.className = "af-send-btn";
-    sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`;
+    sendBtn.title = "Send message";
+    sendBtn.setAttribute("aria-label", "Send message");
+    sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`;
     sendBtn.addEventListener("click", () => {
         deps.chatInput.closePanel(mentionPanel);
         deps.send(input, select); // recordSent() clears the ghost

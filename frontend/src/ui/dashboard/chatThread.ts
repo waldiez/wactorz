@@ -14,22 +14,35 @@ import { iconMarkup } from "./icons";
 import { openLightbox } from "./lightbox";
 import { escapeHtml } from "../escapeHtml";
 
+/** Attachments are internally sourced (uploads → same-origin / blob: / data:),
+ *  but guard the scheme anyway so a hostile url can't smuggle javascript: into
+ *  a src or href. Returns "" for anything outside the allow-list. */
+function safeAttachmentUrl(url: string): string {
+    try {
+        const proto = new URL(url, window.location.origin).protocol;
+        return ["http:", "https:", "blob:", "data:"].includes(proto) ? url : "";
+    } catch {
+        return "";
+    }
+}
+
 /** Image thumbnail (click → lightbox) or file chip for one attachment. */
 function buildAttachmentEl(att: Attachment): HTMLElement {
-    if (isImage(att) && att.url) {
+    const url = att.url ? safeAttachmentUrl(att.url) : "";
+    if (isImage(att) && url) {
         const img = document.createElement("img");
         img.className = "af-chat-attach-thumb";
-        img.src = att.url;
+        img.src = url;
         img.alt = att.name;
         img.loading = "lazy";
-        img.addEventListener("click", () => openLightbox(att.url!, att.name));
+        img.addEventListener("click", () => openLightbox(url, att.name));
         return img;
     }
-    const el = att.url ? document.createElement("a") : document.createElement("span");
+    const el = url ? document.createElement("a") : document.createElement("span");
     el.className = "af-chat-attach-file";
     el.innerHTML = `${iconMarkup("file", 13)}<span>${escapeHtml(att.name)} · ${humanSize(att.size)}</span>`;
-    if (att.url && el instanceof HTMLAnchorElement) {
-        el.href = att.url;
+    if (url && el instanceof HTMLAnchorElement) {
+        el.href = url;
         el.target = "_blank";
         el.rel = "noopener";
     }

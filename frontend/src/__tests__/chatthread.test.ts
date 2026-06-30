@@ -68,4 +68,16 @@ describe("buildChatMessageEl", () => {
         expect(el.querySelector("span.af-chat-attach-file")).not.toBeNull();
         expect(el.querySelector("a.af-chat-attach-file")).toBeNull();
     });
+
+    it("drops a hostile-scheme attachment url (no javascript: href)", () => {
+        const el = buildChatMessageEl(msg({ attachments: [att({ url: "javascript:alert(1)", name: "x" })] }));
+        expect(el.querySelector("a.af-chat-attach-file")).toBeNull(); // not linkable
+        expect(el.querySelector("span.af-chat-attach-file")).not.toBeNull();
+    });
+
+    it("keeps a same-origin (relative) attachment url", () => {
+        const el = buildChatMessageEl(msg({ attachments: [att({ url: "/api/upload/f.pdf", name: "f" })] }));
+        const link = el.querySelector<HTMLAnchorElement>("a.af-chat-attach-file")!;
+        expect(link.getAttribute("href")).toBe("/api/upload/f.pdf");
+    });
 });

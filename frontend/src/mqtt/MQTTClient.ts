@@ -378,8 +378,9 @@ function strArray(v: unknown): string[] {
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
-// Agent-name resolution is single-sourced in agents/naming. Re-exported here
-// (with the historical `nameFromId` alias) so existing importers/tests keep working.
+// Agent-name resolution is single-sourced in agents/naming; re-exported here,
+// with `nameFromId` as an alias of nameFromWid, for callers that import it from
+// the MQTT module.
 export { nameFromWid as nameFromId, resolveAgentName };
 
 /** Normalise a raw heartbeat payload, tolerating snake_case/camelCase keys and resolving id + name. */

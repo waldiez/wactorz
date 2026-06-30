@@ -12,13 +12,13 @@ This means:
   - The spawned agent is saved in main's spawn registry (persists across restarts)
 
 USAGE (from CLI or any agent):
-  @catalog spawn image-gen-agent
-  @catalog spawn sinergym-collector
+  @catalog spawn anomaly-detector
+  @catalog spawn timeseries-collector
   @catalog list
-  @catalog info sinergym-optimizer
+  @catalog info manual-agent
 
 Or via main (natural language):
-  "spawn the image generation agent"   → main finds catalog → catalog spawns it
+  "spawn the anomaly detector agent"   → main finds catalog → catalog spawns it
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -93,34 +93,6 @@ def _build_native_catalog() -> dict:
 def _build_catalog() -> dict:
     catalog = _build_native_catalog()
 
-    # ── image-gen-agent ───────────────────────────────────────────────────────
-    code = _load_recipe("image_gen_agent.py")
-    if code:
-        catalog["image-gen-agent"] = {
-            "name":         "image-gen-agent",
-            "type":         "dynamic",
-            "description":  "Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns absolute PNG path.",
-            "capabilities": ["image_generation", "text_to_image", "nvidia_nim", "flux"],
-            "install":      ["requests"],
-            "input_schema": {
-                "prompt":      "str  — what to generate",
-                "output_path": "str  — absolute path to save PNG",
-                "width":       "int  — pixels wide, default 1024",
-                "height":      "int  — pixels tall, default 576 (16:9)",
-                "steps":       "int  — inference steps, default 20",
-                "api_key":     "str  — optional, overrides persisted nim_api_key",
-            },
-            "output_schema": {
-                "image_path": "str       — saved PNG path, or null",
-                "width":      "int",
-                "height":     "int",
-                "size_kb":    "int",
-                "error":      "str|null",
-            },
-            "poll_interval": 3600,
-            "code":          code,
-        }
-
     # ── doc-to-pptx-agent ─────────────────────────────────────────────────────
     code = _load_recipe("doc_to_pptx_agent.py")
     if code:
@@ -150,83 +122,6 @@ def _build_catalog() -> dict:
             "poll_interval": 3600,
             "code":          code,
         }
-
-   
-    # # ── discord-notify-agent ──────────────────────────────────────────────────
-    # code = _load_recipe("discord_notify_agent.py")
-    # if code:
-    #     catalog["discord-notify-agent"] = {
-    #         "name":         "discord-notify-agent",
-    #         "type":         "dynamic",
-    #         "description":  "Subscribes to MQTT events and posts notifications to a Discord webhook.",
-    #         "capabilities": ["discord", "notifications", "mqtt_subscriber", "webhook", "alerting"],
-    #         "install":      ["aiohttp", "aiomqtt"],
-    #         "input_schema": {
-    #             "mqtt_topic":    "str — MQTT topic to subscribe to",
-    #             "message_tpl":   "str — message template, use {data} for payload",
-    #             "trigger_key":   "str — optional: only trigger when this key exists",
-    #             "trigger_value": "str — optional: only trigger when trigger_key equals this",
-    #             "cooldown_s":    "int — seconds between notifications, default 10",
-    #             "webhook_url":   "str — Discord webhook URL (overrides persisted value)",
-    #         },
-    #         "output_schema": {"sent": "int — number of notifications sent"},
-    #         "poll_interval": 3600,
-    #         "code":          code,
-    #     }
-
-    # ── sinergym-collector ────────────────────────────────────────────────────
-    code = _load_recipe("sinergym_collector_agent.py")
-    if code:
-        catalog["sinergym-collector"] = {
-            "name":         "sinergym-collector",
-            "type":         "dynamic",
-            "description":  "Collects Sinergym episode data via MQTT for RL/Bayesian training. Listens on sinergym/env/{env_id}/observation and persists (obs, action, reward) tuples.",
-            "capabilities": ["sinergym", "data_collection", "rl_training", "energy_optimization", "building_simulation"],
-            "install":      ["aiomqtt", "numpy"],
-            "input_schema": {
-                "env_id":          "str  — Sinergym env ID, e.g. Eplus-5zone-hot-continuous-v1",
-                "obs_topic":       "str  — MQTT topic for observations",
-                "target_episodes": "int  — episodes to collect before triggering optimizer, default 10",
-                "chunk_size":      "int  — persist every N episodes, default 5",
-                "optimizer_name":  "str  — optimizer agent to notify on completion, default sinergym-optimizer",
-            },
-            "output_schema": {
-                "episodes_collected": "int",
-                "total_steps":        "int",
-                "data_key":           "str — episode_{N} recall keys",
-            },
-            "poll_interval": 3600,
-            "code":          code,
-        }
-        logger.info("[catalog] Loaded sinergym-collector recipe")
-
-    # ── sinergym-optimizer ────────────────────────────────────────────────────
-    code = _load_recipe("sinergym_optimizer_agent.py")
-    if code:
-        catalog["sinergym-optimizer"] = {
-            "name":         "sinergym-optimizer",
-            "type":         "dynamic",
-            "description":  "Energy optimization agent for Sinergym: trains RL (PPO) or Bayesian (GP) policy from collected episodes, then publishes actions to sinergym/env/{env_id}/action.",
-            "capabilities": ["sinergym", "rl", "bayesian_optimization", "energy_optimization", "policy_training", "building_control"],
-            "install":      ["stable-baselines3", "scikit-learn", "numpy", "torch", "aiomqtt", "gymnasium"],
-            "input_schema": {
-                "env_id":          "str  — Sinergym env ID, e.g. Eplus-5zone-hot-continuous-v1",
-                "strategy":        "str  — rl | bayesian | rulebased | combined, default rl",
-                "collector_name":  "str  — collector agent name, default sinergym-collector",
-                "obs_dim":         "int  — observation vector length, default 35",
-                "action_dim":      "int  — action vector length, default 2",
-                "training_steps":  "int  — RL training timesteps, default 50000",
-                "deploy_on_train": "bool — start publishing actions after training, default true",
-            },
-            "output_schema": {
-                "mean_reward": "float",
-                "strategy":    "str",
-                "phase":       "str — idle | training | deploying",
-            },
-            "poll_interval": 3600,
-            "code":          code,
-        }
-        logger.info("[catalog] Loaded sinergym-optimizer recipe")
 
     # ── ADD NEW RECIPES HERE ──────────────────────────────────────────────────
     # code = _load_recipe("my_new_agent.py")

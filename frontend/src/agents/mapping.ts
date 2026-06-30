@@ -5,14 +5,28 @@
 /**
  * Pure mappers from server payloads to UI models.
  *
- * - `toAgentInfo`  : a WS state-patch agent → the scene's {@link AgentInfo}.
+ * - `toAgentInfo` / `buildMetricsUpdate`: WS state-patch / MQTT metrics → {@link AgentInfo}.
  * - `mapLogFeedItem`: a WS `log_feed` entry → an {@link FeedItem} (or null to drop).
+ * - the `*FeedItem` builders near the end: live MQTT event payloads → {@link FeedItem}
+ *   (the real-time counterpart of the WS `log_feed` replay above).
  *
  * Kept free of DOM / side effects so they are trivially unit-testable.
  */
-import type { AgentInfo, AgentState } from "../types/agent";
-import type { StatePatchAgent, LogFeedItem } from "../io/WSChatClient";
-import type { FeedItem } from "../ui/ActivityFeed";
+import type {
+    AgentInfo,
+    AgentState,
+    HeartbeatPayload,
+    SpawnPayload,
+    AlertPayload,
+    StatusPayload,
+    LogPayload,
+    NodeHeartbeatPayload,
+    ChatMessage,
+    MetricsPayload,
+    QaFlagPayload,
+} from "../types/agent";
+import type { StatePatchAgent, LogFeedItem } from "../types/ws";
+import type { FeedItem } from "../types/feed";
 import { nameFromWid, resolveAgentName } from "./naming";
 
 /** Coerce the backend's free-form state/status string into an {@link AgentState}. */
@@ -55,6 +69,38 @@ export function toAgentInfo(a: StatePatchAgent): AgentInfo {
     return update;
 }
 
+/**
+ * Live actor list from `/api/actors` → store-ready agents: drop those the
+ * deletion guard still suppresses and resolve a display name for each.
+ */
+export function reconcileActorList(actors: AgentInfo[], isDeleted: (id: string) => boolean): AgentInfo[] {
+    return actors.filter(a => !isDeleted(a.id)).map(a => ({ ...a, name: resolveAgentName(a.name, a.id) }));
+}
+
+/**
+ * Merge cost/message/uptime metrics onto an existing agent, preserving its
+ * identity/state and copying only the fields the payload actually carries
+ * (so `exactOptionalPropertyTypes` stays happy and undefined never clobbers).
+ */
+export function buildMetricsUpdate(p: MetricsPayload, existing: AgentInfo): AgentInfo {
+    const update: AgentInfo = {
+        id: p.agentId,
+        name: existing.name,
+        state: existing.state,
+        protected: existing.protected,
+    };
+    if (p.messagesProcessed !== undefined) {
+        update.messagesProcessed = p.messagesProcessed;
+    }
+    if (p.costUsd !== undefined) {
+        update.costUsd = p.costUsd;
+    }
+    if (p.uptime !== undefined) {
+        update.uptime = p.uptime;
+    }
+    return update;
+}
+
 interface FeedCtx {
     agentName: string;
     ts: number;
@@ -82,15 +128,12 @@ const FEED_MAPPERS: Record<string, (item: LogFeedItem, ctx: FeedCtx) => FeedItem
         const st = (item.status as Record<string, unknown> | undefined)?.["state"] as string | undefined;
         return st === "stopped" ? { type: "stopped", label: "stopped", agentName, timestamp: ts } : null;
     },
-    alert: (item, { agentName, ts }) => {
-        const isError = item.severity === "error" || item.severity === "critical";
-        return {
-            type: isError ? "alert-error" : "alert-warning",
-            label: item.message ?? "",
-            agentName: item.name ?? agentName,
-            timestamp: ts,
-        };
-    },
+    alert: (item, { agentName, ts }) => ({
+        type: alertKind(item.severity),
+        label: item.message ?? "",
+        agentName: item.name ?? agentName,
+        timestamp: ts,
+    }),
 };
 
 /**
@@ -99,7 +142,7 @@ const FEED_MAPPERS: Record<string, (item: LogFeedItem, ctx: FeedCtx) => FeedItem
  * Many entries (notably `log`) carry only the agent's id; the friendly name
  * arrives on the `spawned` entry for the same agent. Scanning the whole batch
  * first lets us attribute those nameless entries on reload, when no live MQTT
- * spawn event is available to populate the scene.
+ * spawn event is available to populate the store.
  */
 export function buildNameIndex(items: LogFeedItem[]): Map<string, string> {
     const index = new Map<string, string>();
@@ -118,7 +161,7 @@ export function buildNameIndex(items: LogFeedItem[]): Map<string, string> {
  *
  * `resolveName` supplies a friendly name for entries that carry only an id
  * (see {@link buildNameIndex}); it typically combines the batch index with the
- * live scene. Falls back to the id-derived name only when nothing else resolves.
+ * live store. Falls back to the id-derived name only when nothing else resolves.
  */
 export function mapLogFeedItem(
     item: LogFeedItem,
@@ -129,4 +172,157 @@ export function mapLogFeedItem(
     const agentName = resolved ?? (nameFromWid(agentId) || agentId.slice(0, 8) || "system");
     const ts = item.timestamp ? item.timestamp * 1000 : Date.now();
     return FEED_MAPPERS[item.type]?.(item, { agentName, ts }) ?? null;
+}
+
+/** High-water mark for log_feed replay, advanced in place by {@link selectLogFeedReplay}. */
+export interface LogFeedReplayState {
+    maxTs: number;
+    initialized: boolean;
+}
+
+/**
+ * Decide which `log_feed` items to (re)push, advancing `state` in place.
+ *
+ * The first batch replays the whole backlog (it happened before the browser
+ * connected — MQTT won't re-deliver it). Later batches emit only items newer
+ * than the high-water mark; the mark is still advanced even when nothing is
+ * pushed, so a reconnect doesn't replay the backlog. While direct MQTT is live
+ * it already delivers these events, so we skip (but keep advancing the mark).
+ * Returned items are oldest-first and exclude entries that don't map to a feed.
+ */
+export function selectLogFeedReplay(
+    items: LogFeedItem[],
+    state: LogFeedReplayState,
+    mqttLive: boolean,
+    resolveName?: (agentId: string) => string | undefined,
+): FeedItem[] {
+    const toFeed = (subset: LogFeedItem[]): FeedItem[] =>
+        [...subset]
+            .reverse()
+            .map(item => mapLogFeedItem(item, resolveName))
+            .filter((f): f is FeedItem => f !== null);
+
+    if (!state.initialized) {
+        state.initialized = true;
+        state.maxTs = items.length ? Math.max(...items.map(i => i.timestamp ?? 0)) : 0;
+        return toFeed(items);
+    }
+
+    const newItems = items.filter(item => (item.timestamp ?? 0) > state.maxTs);
+    if (newItems.length) {
+        state.maxTs = Math.max(...newItems.map(i => i.timestamp ?? 0));
+    }
+    return mqttLive ? [] : toFeed(newItems);
+}
+
+// ── Live MQTT event payloads → feed rows ───────────────────────────────────
+// Real-time counterpart of the `log_feed` replay above (which maps the same
+// events from the server's stored shape, via FEED_MAPPERS).
+
+/** Feed row for a heartbeat tick. */
+export function heartbeatFeedItem(p: HeartbeatPayload): FeedItem {
+    return { type: "heartbeat", label: "heartbeat", agentName: p.agentName, timestamp: p.timestampMs };
+}
+
+/** Display agent type — falls back to "agent" when the normaliser yields "". */
+export function spawnTypeLabel(p: SpawnPayload): string {
+    return p.agentType || "agent";
+}
+
+/** Feed row for a spawn. */
+export function spawnFeedItem(p: SpawnPayload): FeedItem {
+    return {
+        type: "spawn",
+        label: `spawned (${spawnTypeLabel(p)})`,
+        agentName: p.agentName,
+        timestamp: p.timestampMs,
+    };
+}
+
+/**
+ * Severity → alert kind, used for BOTH feed rows and toasts (and the WS log_feed
+ * alert mapper). "error" and "critical" are both errors — critical is the most
+ * severe level, never a mere warning; everything else is a warning. Single source
+ * so the feed and toast can't disagree on a severity (they once did for "critical").
+ */
+export function alertKind(severity: string | undefined): "alert-error" | "alert-warning" {
+    return severity === "error" || severity === "critical" ? "alert-error" : "alert-warning";
+}
+
+/** Feed row for a live alert (message/agent default to ""/"system"). */
+export function alertFeedItem(p: AlertPayload): FeedItem {
+    return {
+        type: alertKind(p.severity),
+        label: p.message ?? "",
+        agentName: p.agentName ?? "system",
+        timestamp: p.timestampMs,
+    };
+}
+
+/** A raw `/api/feed` row (server sends Unix *seconds*) → a chat feed row. */
+export function feedSeedItem(raw: {
+    label: string;
+    agentName: string;
+    timestamp?: number;
+    role?: string;
+}): FeedItem {
+    return {
+        type: "chat",
+        label: raw.label,
+        agentName: raw.agentName,
+        timestamp: raw.timestamp ? raw.timestamp * 1000 : Date.now(),
+        role: raw.role,
+    };
+}
+
+/** Feed row for a chat message (agent→user or any). */
+export function chatFeedItem(msg: ChatMessage): FeedItem {
+    return {
+        type: "chat",
+        label: `→ ${msg.to}: ${msg.content}`,
+        agentName: msg.from,
+        timestamp: msg.timestampMs,
+    };
+}
+
+/** Feed row when an agent reports stopped. */
+export function stoppedFeedItem(p: StatusPayload, now = Date.now()): FeedItem {
+    return { type: "stopped", label: "stopped", agentName: p.agentName, timestamp: now };
+}
+
+/** Feed row for a QA safety flag. */
+export function qaFlagFeedItem(p: QaFlagPayload): FeedItem {
+    return {
+        type: "qa-flag",
+        label: `[${p.category}] ${p.excerpt}`,
+        agentName: `qa-agent ← ${p.from}`,
+        timestamp: p.timestampMs,
+    };
+}
+
+/** Text of a log entry, preferring `message` then `text` (empty when neither). */
+export function logMessage(p: LogPayload): string {
+    return p.message ?? p.text ?? "";
+}
+
+/** Feed row for a non-empty log entry, or null when there's nothing to show. */
+export function logFeedItem(p: LogPayload, now = Date.now()): FeedItem | null {
+    const msg = logMessage(p);
+    return msg ? { type: "chat", label: msg, agentName: p.agentName, timestamp: now } : null;
+}
+
+/** Feed row for a completed task. */
+export function completedFeedItem(p: { agentName: string }, now = Date.now()): FeedItem {
+    return { type: "spawn", label: "task completed", agentName: p.agentName, timestamp: now };
+}
+
+/** Feed row for a remote node phoning home (agent count pluralised). */
+export function nodeHeartbeatFeedItem(p: NodeHeartbeatPayload, now = Date.now()): FeedItem {
+    const n = p.agents.length;
+    return {
+        type: "health",
+        label: `node online · ${n} agent${n !== 1 ? "s" : ""}`,
+        agentName: p.node,
+        timestamp: now,
+    };
 }

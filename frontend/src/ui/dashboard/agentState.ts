@@ -8,6 +8,9 @@
  */
 import type { AgentState } from "../../types/agent";
 
+/** Heartbeat age (ms) after which a remote node / agent is treated as stale. */
+export const STALE_MS = 180_000;
+
 /** System agents that exist but cannot be chatted with directly. */
 export const SYSTEM_AGENT_NAMES: Set<string> = new Set([
     "io-agent",

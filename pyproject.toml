@@ -63,14 +63,16 @@ docs      = [
     "watchdog>=6.0.0",
     "pdoc>=16.0.0",
 ]
-# Note: docs extras are only needed to *rebuild* site/ (run build_docs.py).
-# The pre-built site/ is committed to the repo and bundled into the wheel as-is.
+# Note: docs extras are only needed to *rebuild* the docs (run build_docs.py).
+# The pre-built static/docs/ is committed to the repo and bundled into the wheel as-is.
 dev       = [
     "wactorz[docs]",
     "pre-commit>=4.5.1",
     "coverage>=7.13.5",
     "twine>=6.2.0",
     "watchdog>=6.0.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
 ]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
@@ -129,6 +131,7 @@ exclude = [
 # ── pytest ─────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 # ── sdist (source distribution for PyPI) ──────────────────────────────────────
 [tool.hatch.build.targets.sdist]

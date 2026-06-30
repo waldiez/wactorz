@@ -3,9 +3,10 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * HTML-escape untrusted text before interpolating it into an `innerHTML`
- * template. Agent names / tasks come from spawned agents (LLM-authored) over
- * MQTT/WS, so they must never be trusted in a markup sink.
+ * HTML-escape arbitrary text before interpolating it into an `innerHTML`
+ * template. Used for values that may contain markup characters — e.g. uploaded
+ * attachment filenames (`a<b.png`) — so they render literally instead of being
+ * parsed as HTML.
  */
 const ENTITIES: Record<string, string> = {
     "&": "&amp;",
@@ -15,6 +16,7 @@ const ENTITIES: Record<string, string> = {
     "'": "&#39;",
 };
 
+/** Escape `& < > " '` in `value` (coerced to string) for safe `innerHTML` interpolation. */
 export function escapeHtml(value: unknown): string {
     return String(value ?? "").replace(/[&<>"']/g, c => ENTITIES[c] ?? c);
 }

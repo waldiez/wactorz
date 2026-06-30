@@ -1,35 +1,60 @@
 # Contributing to the Wactorz frontend
 
+<!-- markdownlint-disable MD036 -->
+
 ## Before you start
 
-- [ ] `bun run typecheck` passes on `main`
+- [ ] `bun run typecheck` passes on `dev`
 - [ ] `bun run fmt` has been run (Prettier, no manual style arguments)
 - [ ] You understand the [event bus](README.md#event-bus) — components talk via `CustomEvent`, not direct calls
 
 ## PR checklist
 
+> **Branch target:** all branches start from `dev` and all PRs target `dev`.
+> Never base on or open a PR against `main` — `main` is for releases only.
+
 ### Every PR
 
-- [ ] `bun run typecheck` — zero type errors
-- [ ] `bun run fmt` — no diff after running
+- [ ] `bun run lint` — typecheck + Prettier + ESLint + markdownlint all clean (what CI runs)
+- [ ] `bun run test` — all unit tests pass
+- [ ] New/changed exported functions and public methods have a JSDoc (see [Style guide](#style-guide))
+- [ ] `bun run coverage` — meets the gated thresholds (raise them as you add tests, never lower)
 - [ ] `bun run build` — bundle succeeds, no new chunk-size warnings
+- [ ] `bun run docs` — TypeDoc builds with no warnings
 - [ ] Tested in browser against a live backend (or at minimum the MQTT mock stack)
 
 ### New UI component
 
 - [ ] File lives in `src/ui/`
 - [ ] Component is a plain class — no framework, no global state
-- [ ] Wires events via `document.addEventListener` / `document.dispatchEvent`
+- [ ] Wires events via the typed `emit` / `listen` helpers in `src/events.ts`
 - [ ] Cleaned up in a `destroy()` method (remove event listeners)
-- [ ] Added to bootstrap order comment in `main.ts`
+- [ ] Instantiated in the matching numbered section of `main.ts` (see its header map)
+- [ ] Unit test added in `src/__tests__/` (coverage is gated in CI)
 - [ ] `bun run docs` — TypeDoc still builds
 
 ### New agent interaction (command / event)
 
 - [ ] New `CustomEvent` name follows the `af-*` prefix convention
-- [ ] Payload type added to `src/types/agent.ts`
+- [ ] Event name + payload added to `AppEventMap` in `src/events.ts` (the single
+      source of truth for `emit`/`listen` typing); domain payloads (MQTT/WS shapes)
+      stay in `src/types/`
 - [ ] Sender dispatches the event; receiver only listens — no circular calls
 - [ ] Backend counterpart event/command documented in the PR description
+
+### Touching `main.ts` (the composition root)
+
+`main.ts` is wiring only — it instantiates services, derives URLs, and registers
+handlers in its eight numbered sections. It is **covered** by `src/__tests__/main-bootstrap.test.ts`
+(no longer a coverage exclusion), so keep it thin:
+
+- [ ] Handlers stay thin delegators — store call + `pushFeed`/`toast`, nothing more
+- [ ] Any decision/transform goes in a tested module (`agents/mapping`,
+      `agents/deletionGuard`, `ui/haFeed`, `ui/dashboard/haConfig`), not inline
+- [ ] New transport/app-event handlers go in the right numbered section, before the
+      `connect()` calls in section 7
+- [ ] `main-bootstrap.test.ts` drives the new handler (mock the transport, invoke the
+      registered callback) so coverage stays green
 
 ### Touching the feed / CardDashboard
 
@@ -38,24 +63,31 @@
 - [ ] `nameFromWid()` used when displaying agent names from raw WID strings
 - [ ] `hideHeartbeats` toggle still works correctly
 
-### Touching SceneManager
+### Touching AgentStore
 
-- [ ] Public API (`setTheme`, agent CRUD, `onAgentSelected`, `dispose`) kept stable — it's the only coordinator `main.ts` wires to
+- [ ] Keep the public API stable: agent CRUD, `reconcileAgents`, `dispose`
 - [ ] Agent-state mutations go through `addOrUpdateAgent` / `removeAgent` so the CardDashboard stays in sync
 - [ ] No `console.log` left in coordinator code (use `console.info` for intentional dev output)
 
 ## Style guide
 
 **TypeScript**
+
 - Strict mode is on — no `any`, no `!` non-null assertions without a comment
 - Prefer `const` and immutable patterns
-- No comments explaining *what* code does — only *why* when it would surprise a reader
+- Inline comments explain *why*, not *what* — only when it would surprise a reader
+- Every exported function/const, public class method, and member of an exported
+  interface carries a short JSDoc (one or two lines, written for a stranger —
+  what it does now, not how it changed, dates, or who touched it).
+  `bun run docs` surfaces anything missing.
 
 **DOM**
+
 - Build elements in code (`document.createElement`) — no `innerHTML` with user-controlled strings (XSS)
 - Use CSS classes for state (`.active`, `.hidden`) rather than inline styles where possible
 
 **Events**
+
 - Always clean up `addEventListener` on component destroy
 - Never store references to other component instances — fire events instead
 

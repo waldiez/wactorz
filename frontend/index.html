@@ -47,54 +47,14 @@
     <link rel="manifest"         href="./site.webmanifest" crossorigin="use-credentials" />
   </head>
   <body>
-    <!-- 3D canvas -->
-    <canvas id="renderCanvas"></canvas>
-
-    <!-- HUD: agent count + health badge + page links -->
-    <div id="hud" class="glass" style="display:none">
-      <div class="hud-title">Wactorz</div>
-      <div class="hud-count" id="hud-count">0</div>
-      <div class="hud-label">Active Agents</div>
-      <div class="hud-badge healthy" id="hud-health">System Healthy</div>
-      <div id="hud-stats"></div>
-      <nav class="hud-links">
-        <a id="ha-link" href="#" target="_blank" rel="noopener" class="hud-link">⌂ Home Assistant</a>
-      </nav>
-      <button id="btn-settings" title="App settings">⚙ Settings</button>
-    </div>
-
-
-    <!-- Activity feed toggle (below theme switcher) -->
-    <button id="feed-toggle" style="display:none" title="Toggle activity feed">
-      Feed <span id="feed-badge"></span>
-    </button>
-
-    <!-- Activity feed panel -->
-    <div id="activity-feed">
-      <div id="feed-list"></div>
-    </div>
-
-    <!-- Chat panel (slides in from right on agent click) -->
-    <div id="chat-panel">
-      <div class="af-chat-sidebar">
-        <div class="af-chat-sidebar-search">
-          <input id="chat-sidebar-search" placeholder="Filter agents…" autocomplete="off">
-        </div>
-        <div class="af-chat-agent-list" id="chat-agent-list"></div>
-      </div>
-      <div class="af-chat-pane">
-        <div class="af-chat-pane-header">
-          <button class="af-chat-back-btn" id="panel-back" title="Back to agents">‹ Back</button>
-          <div class="af-chat-pane-title" id="panel-agent-name">— select an agent —</div>
-          <span class="af-chat-pane-state" id="panel-agent-status"></span>
-          <button class="close-btn" id="panel-close" title="Close">✕</button>
-        </div>
-        <div id="chat-messages"></div>
-      </div>
-    </div>
     <script type="module" src="/src/main.ts"></script>
     <script>
-      if ("serviceWorker" in navigator) {
+      // Register the service worker only for the standalone / desktop deployment.
+      // Behind Home Assistant's ingress proxy the app is served under a rotating
+      // /api/hassio_ingress/<slug>/… path; a cache there is useless (and would risk
+      // caching assets under a dead token), so we deliberately skip it. The backend
+      // injects a non-empty __WACTORZ_INGRESS_PATH only when serving behind ingress.
+      if ("serviceWorker" in navigator && !window.__WACTORZ_INGRESS_PATH) {
         window.addEventListener("load", () => {
           navigator.serviceWorker.register("./sw.js").then(
             r  => console.debug("[sw] registered, scope:", r.scope),

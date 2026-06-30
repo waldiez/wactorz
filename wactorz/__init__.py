@@ -16,17 +16,11 @@ except ImportError:
 try:
     from .agents.main_actor import MainActor
     from .agents.monitor_agent import MonitorActor
-    from .agents.manual_agent import ManualAgent
     from .agents.planner_agent import PlannerAgent
     from .agents.dynamic_agent import DynamicAgent
     from .agents.installer_agent import InstallerAgent
     from .agents.catalog_agent import CatalogAgent
-    __all__ += ["MainActor", "MonitorActor", "CodeAgent", "ManualAgent", "PlannerAgent",
+    __all__ += ["MainActor", "MonitorActor", "CodeAgent", "PlannerAgent",
                 "DynamicAgent", "InstallerAgent", "CatalogAgent"]
 except ImportError:
     pass
-#try:
-#    from .agents.ml_agent import MLAgent, YOLOAgent, AnomalyDetectorAgent
-#    __all__ += ["MLAgent", "YOLOAgent", "AnomalyDetectorAgent"]
-#except ImportError:
-#    pass

@@ -3,12 +3,89 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
----
-
-## [0.5.0] - 2026-06-16
+## [Unreleased] — pending
 
 ### Added
 
+- **Pipeline-rule conflict advisory** — planner now semantically checks a new rule
+  against active ones and flags duplicates and contradictions (e.g. "over 25° AC off"
+  vs "AC on") as a non-blocking "⚠️ Heads up" note at approval.
+
+### Fixed
+
+- **Planners leaked until restart** — proposal/pipeline planners never stopped and
+  stayed pinned by both the registry and the Supervisor. Added a lifetime watchdog
+  (`max_lifetime_s`, 10 min) + idempotent `_terminate()` doing `release()` →
+  `unregister()` → `stop()`.
+- **Plan steps silently dropped** — bad/cyclic `depends_on` aborted the plan with no
+  trace; references are now validated and failures surfaced per-step.
+- **`plan_only` could spawn agents** — `approved_plan` was checked first despite the
+  docs; precedence is now enforced in `on_start`.
+
+### Changed
+
+- **Unified planner JSON parsing** — both decomposition paths share
+  `_extract_json_array` instead of fragile fence-stripping.
+- **Continuous agents declarable** — `_ensure_agents` honours
+  `spawn_config["continuous"]` before falling back to code substring-matching.
+- **`_is_pipeline_request`** is now a proper `@staticmethod`.
+
+### Removed
+
+- **Flutter companion app** — the `mobile/` Flutter project (iOS/Android companion
+  app) and its `test-mobile` CI job were removed. The web dashboard and REST/WS
+  API remain the supported clients.
+
+### Fixed
+
+- **Planner-spawned agents silently missing setup** — `PlannerAgent` carried its
+  own drifted copy of the spawn logic, so dynamic agents it spawned skipped
+  migrated-state injection, TopicContract auto-wiring, and the `trusted` flag
+  (catalog agents were needlessly re-run through the safety validator). Spawn and
+  install logic for `MainActor` and `PlannerAgent` is now a single shared
+  `SpawnMixin`, so an agent behaves identically regardless of which one spawns it.
+  ~550 lines of duplication removed.
+
+### Changed
+
+- **`main_actor.py` decomposed** (6113 → ~4400 lines) with no behaviour change:
+  prompts → `agents/prompts/main_actor_prompts.py`, constants + pure helpers →
+  `agents/helpers/main_actor_helpers.py`, and two behaviour mixins →
+  `agents/mixins/{spawning,memory}.py`. `planner_agent.py` lost ~200 lines of
+  duplicated spawn code. New `agents/mixins/` and `agents/helpers/` subpackages
+  keep `agents/` to actual agents only.
+- **ha_actuator name collisions** now keyed on agent name (was `automation_id`);
+  a colliding actuator may get a different suffixed name.
+- **`type: "manual"` spawn configs** now route correctly through `MainActor`
+  (previously fell through to a no-op).
+
+### Added
+
+- **Weather catalog agent** — `@catalog spawn weather-agent` adds an optional manual weather helper backed by Open-Meteo for current conditions, forecasts, historical weather, default locations, and weather-related natural-language questions.
+- **Tests** — `test_spawning.py` (23) covering spawn routing, idempotency/replace,
+  both install models, the `trusted` flag and TopicContract wiring; `test_memory.py`
+  (12) covering fact extraction/namespacing and system-prompt assembly.
+
+### Notes
+
+- Dead code spotted, not yet removed: `_looks_like_home_automation_request` has no
+  callers.
+
+---
+
+## [Unreleased] - 2026-06-22
+
+### Fixed
+
+- **Headless `cli` interface self-shutdown** — `wactorz --interface cli` with no TTY (piped, Docker without `-it`, systemd) booted fully then tore the whole system down ~1s later: `input()` raised `EOFError` immediately, finishing the interactive loop, and with `run_forever()` already a no-op there was nothing left keeping the process alive. The `cli` interface now detects a non-interactive stdin and stays up via `run_forever()` instead of starting the interactive loop.
+
+---
+
+## [0.5.0] - 2026-06-22
+
+### Added
+
+- **`WACTORZ_TZ` env var** — optional override for the timezone used in agents' date/time context. Precedence: a user's `pref_timezone` fact > `WACTORZ_TZ` > standard `TZ` env var > host local zone. Blank = unchanged (falls through to `TZ` / system local), and any unknown zone value falls through to the next candidate rather than erroring.
 - **MQTT broker authentication** — optional `MQTT_USERNAME` / `MQTT_PASSWORD` (add-on options `mqtt_username` / `mqtt_password`) inject broker credentials into every in-process MQTT connection via a central `mqtt_client()` factory. Blank = anonymous, so the embedded/anonymous broker is unchanged; auth only engages when set. Fixes external brokers with `allow_anonymous false` — e.g. the official Home Assistant Mosquitto add-on — which previously rejected every connection. The dashboard's MQTT WebSocket proxy injects the same credentials into the browser's CONNECT server-side, so the live monitor keeps working under an authenticated broker without exposing credentials to the browser.
 
 ### Changed
@@ -24,8 +101,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Agents now anchored to the real current date/time** — every LLM-backed agent receives a live "current date & time" block at the top of its system prompt on each turn, so requests like "notify me tomorrow at 3pm" resolve against today's actual date instead of the model's training-cutoff guess (which defaulted to 2025 and silently produced wrong schedule dates). Injected in three previously-static spots: `LLMAgent`'s `complete`/`stream` calls (covers main and every base-class agent), `PlannerAgent`'s feasibility / pipeline-architect / task-planner calls (where a request is decomposed into a `schedule_spec`), and the synthesized remote LLM-agent bridge. The timezone resolves from the user's `pref_timezone` fact — the same source `ScheduledAgent` already fires against — for main and the planner, so what the model thinks "tomorrow" means now matches what actually gets scheduled.
 - **HA add-on blank page on boot** — the monitor web UI now binds *before* the supervisor starts, so a slow, unreachable, or auth-rejecting MQTT broker no longer leaves the add-on serving a blank page; the dashboard is reachable immediately and the overview fills in as agents register. `run.sh` also probes an external (non-embedded) broker for up to 15s before launch so wactorz doesn't churn against an unreachable broker at boot.
 - **Headline cost total** — the dashboard's total no longer drops below the visible cards. It now resolves each agent's cost from the same three sources the cards use (MQTT state → live actor → persisted `_final_cost`), and a durable, monotonic per-`actor_id` ledger (fed by each agent's heartbeat `cost_usd`, persisted under `_system`) keeps deletions and hard kills from ever lowering the total. A full metrics reset clears the ledger so the total can still be zeroed deliberately.
+- **Headline cost total drops on agent deletion** — follow-up to the headline-total fix above. The total could still read *lower* than the "this period" spend shown beside it (an impossible state) because it derived from delete-fragile sources: per-agent `_final_cost` rows are purged on delete, and the heartbeat-fed per-`actor_id` lifetime ledger can miss/lose short-lived agents. A new durable `_global_cost_alltime` counter is accrued at call time via the same path as the per-period spend buckets — so it is never reduced by a single agent's deletion or per-agent metrics reset — and is used as a third floor for the headline total (`max(live + historical, lifetime ledger, all-time counter)`). Deleted agents' spend is now retained and `this period ≤ all-time` always holds. The counter is seeded once from existing durable totals on upgrade and zeroed by a full cost/metrics reset; cap enforcement is unchanged (it still reads the per-period counter).
 - **HA add-on ingress URL escaping** — TTS, agent-avatar, and PWA-manifest requests now stay inside HA's `/api/hassio_ingress/<token>/` prefix. `TTSManager` fetched bare `/api/tts/voices` and `/api/tts`, and `AgentImageGen` returned root-absolute `/avatars/*.webp` — all of which resolve against HA core and 404 under ingress (server edge-tts silently fell back to browser voices; agent avatars failed to load). TTS now uses the same ingress-aware `_apiBase` as the rest of the UI, avatars use relative `./avatars/*` paths, and the `<link rel="manifest">` gained `crossorigin="use-credentials"` so the browser sends the ingress auth cookie (was a 401 on `site.webmanifest`).
 - **Dashboard XSS hardening** — agent names, tasks, and bios (set by spawned/LLM agents over MQTT) were interpolated raw into `innerHTML` in the social-card and chat-list views. A new `escapeHtml()` helper now escapes them, so an agent named `<img onerror=…>` can no longer execute script in the dashboard.
 - **Duplicate user message after history load** — a user's chat message could render twice: the optimistic echo used id `user-<ts>` while the persisted copy from `/api/chats` used `hist-<agent>-<rowid>`, so `_loadHistory`'s id-based de-dup never matched them. The persisted copy is now reconciled with its pending optimistic echo (same target + content + a tight timestamp window), adopting the persisted id instead of appending a second bubble. The window avoids collapsing a new message that merely repeats an older identical one, and when no optimistic copy exists the persisted message is still added — so a message that wasn't on screen is never hidden.
@@ -740,7 +819,11 @@ One round-trip instead of zero, live state every time.
 - Docker Compose stacks (dev and production)
 - `pyproject.toml` with optional dependency groups
 
-[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/waldiez/wactorz/compare/v0.4.4...v0.5.0
+[0.4.4]: https://github.com/waldiez/wactorz/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/waldiez/wactorz/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/waldiez/wactorz/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/waldiez/wactorz/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/waldiez/wactorz/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/waldiez/wactorz/compare/v0.2.0...v0.3.0

@@ -3,7 +3,7 @@ repos:
     hooks:
       - id: python-tests
         name: python tests
-        entry: python3 -m unittest discover -s tests -p test_*.py
+        entry: python3 -m pytest tests
         language: system
         pass_filenames: false
       - id: frontend-typecheck

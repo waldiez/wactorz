@@ -292,6 +292,48 @@ class LifetimeCostLedgerTest(unittest.TestCase):
         self.assertEqual(self._ms._lifetime_cost_total(), 0.05)
 
 
+class ResetActorCostTest(unittest.TestCase):
+    """A wipe / metrics-reset must realign the per-call accrual baseline, or the
+    global period and all-time counters stop advancing afterward because
+    delta = total_cost_usd - baseline goes negative (the "limit count stopped
+    counting after a wipe" bug)."""
+
+    def setUp(self):
+        import wactorz.monitor_server as ms
+        self._ms = ms
+
+    def test_zeroes_counters_and_baselines(self):
+        class _Actor:
+            total_cost_usd        = 0.42
+            total_input_tokens    = 1000
+            total_output_tokens   = 500
+            _last_persisted_usd   = 0.42
+            _last_period_cost_usd = 0.42
+        a = _Actor()
+        self._ms._reset_actor_cost(a)
+        self.assertEqual(a.total_cost_usd, 0.0)
+        self.assertEqual(a.total_input_tokens, 0)
+        self.assertEqual(a.total_output_tokens, 0)
+        self.assertEqual(a._last_persisted_usd, 0.0)
+        self.assertEqual(a._last_period_cost_usd, 0.0)
+
+    def test_next_delta_is_positive_after_reset(self):
+        """The first new spend after a wipe must yield a positive accrual delta
+        (was negative because the baseline kept the pre-wipe total)."""
+        class _Actor:
+            total_cost_usd      = 0.42
+            total_input_tokens  = 0
+            total_output_tokens = 0
+            _last_persisted_usd = 0.42
+        a = _Actor()
+        self._ms._reset_actor_cost(a)
+        a.total_cost_usd += 0.01   # one new LLM call after the wipe
+        self.assertGreater(a.total_cost_usd - a._last_persisted_usd, 0)
+
+    def test_actor_without_cost_attrs_is_noop(self):
+        self._ms._reset_actor_cost(object())  # must not raise
+
+
 class SnapshotTotalsTest(unittest.TestCase):
     """_snapshot() headline totals must match the cards the dashboard renders,
     including remote / spawned agents that live in state but not in this
@@ -576,6 +618,30 @@ class GlobalCostAccumulationTest(unittest.TestCase):
             self.L.reset_global_cost()
             self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 0.0, places=6)
 
+    def test_alltime_counter_survives_period_rollover(self):
+        """All-time spend keeps accruing across months while the monthly bucket resets."""
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
+            self.L._accumulate_global_cost(2.0)
+            self.assertAlmostEqual(self.L.get_global_alltime_cost(), 2.0, places=6)
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 7, 1)):
+            self.L._accumulate_global_cost(1.5)
+            # New month: "this period" resets, but all-time keeps both months.
+            self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 1.5, places=6)
+            self.assertAlmostEqual(self.L.get_global_alltime_cost(), 3.5, places=6)
+
+    def test_alltime_counter_never_below_period_spend(self):
+        """Invariant the dashboard relies on: all-time floor >= this-period spend."""
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
+            self.L._accumulate_global_cost(0.2157)
+            info = self.L.get_global_cost_info()
+        self.assertGreaterEqual(self.L.get_global_alltime_cost(), info["spend_usd"])
+
+    def test_reset_zeroes_alltime_too(self):
+        with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
+            self.L._accumulate_global_cost(3.0)
+            self.L.reset_global_cost()
+            self.assertAlmostEqual(self.L.get_global_alltime_cost(), 0.0, places=6)
+
     def test_weekly_key_is_iso_week(self):
         # 2026-01-01 is a Thursday → ISO week 2026-W01 (not the %W "W00" partial)
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 1, 1)):
@@ -583,6 +649,34 @@ class GlobalCostAccumulationTest(unittest.TestCase):
         # late-December days that belong to next year's ISO week 1
         with patch.object(self.L, "datetime", _fixed_datetime(2025, 12, 29)):
             self.assertEqual(self.L._period_key("weekly"), "2026-W01")
+
+    def test_planner_usage_feeds_period_spend(self):
+        from wactorz.agents.planner_agent import PlannerAgent
+
+        agent = PlannerAgent(llm_provider=None)
+        with patch("wactorz.agents.planner_agent._accumulate_global_cost") as accrue:
+            agent._accrue_usage({"input_tokens": 2, "output_tokens": 3, "cost_usd": 0.0123})
+            agent._accrue_usage({"input_tokens": 4, "output_tokens": 5, "cost_usd": 0.004})
+
+        self.assertAlmostEqual(agent.total_cost_usd, 0.0163, places=6)
+        deltas = [c.args[0] for c in accrue.call_args_list]
+        self.assertAlmostEqual(deltas[0], 0.0123, places=6)
+        self.assertAlmostEqual(deltas[1], 0.004, places=6)
+
+    def test_one_off_actuator_usage_feeds_period_spend(self):
+        from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
+
+        agent = OneOffActuatorAgent(
+            request="turn on the lamp",
+            llm_provider=None,
+            task_id="task-12345678",
+            reply_to_id="main",
+        )
+        with patch("wactorz.agents.one_off_actuator_agent._accumulate_global_cost") as accrue:
+            agent._accumulate_usage({"input_tokens": 7, "output_tokens": 8, "cost_usd": 0.0395})
+
+        self.assertAlmostEqual(agent.total_cost_usd, 0.0395, places=6)
+        accrue.assert_called_once_with(0.0395)
 
 
 if __name__ == "__main__":

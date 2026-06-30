@@ -10,6 +10,9 @@ import {
     normaliseHeartbeat,
     normaliseChat,
     normaliseStatus,
+    normaliseSpawn,
+    normaliseAlert,
+    normaliseQaFlag,
     MQTTClient,
 } from "../mqtt/MQTTClient";
 
@@ -229,6 +232,73 @@ describe("normaliseStatus", () => {
         const s = normaliseStatus({ actor_id: "20260325T151725.0000Z-bravo", name: "bravo" });
         expect(s.agentId).toBe("20260325T151725.0000Z-bravo");
         expect(s.agentName).toBe("bravo");
+    });
+});
+
+// The normalisers turn untrusted external JSON into typed payloads. They must
+// validate field types (not blindly spread the raw object), so a hostile or
+// malformed value can't be laundered in as if it were validated.
+describe("normaliser field validation (hardening)", () => {
+    it("drops a non-numeric cpu instead of trusting it (would crash toFixed downstream)", () => {
+        const hb = normaliseHeartbeat({ agentId: "x", cpu: "evil", memory_mb: "nope" });
+        expect(hb.cpu).toBeUndefined();
+        expect(hb.memory_mb).toBeUndefined();
+    });
+
+    it("does not launder unknown keys into the typed payload", () => {
+        const hb = normaliseHeartbeat({ agentId: "x", state: "running", __proto__hack: 1, evil: "y" });
+        expect("evil" in hb).toBe(false);
+        expect("__proto__hack" in hb).toBe(false);
+    });
+
+    it("coerces an invalid state to 'running'", () => {
+        expect(normaliseHeartbeat({ agentId: "x", state: "garbage" }).state).toBe("running");
+        expect(normaliseHeartbeat({ agentId: "x", state: { failed: "boom" } }).state).toEqual({
+            failed: "boom",
+        });
+    });
+
+    it("coerces an unknown alert severity to 'info'", () => {
+        expect(normaliseAlert({ agentId: "x", severity: "nuclear", message: "m" }).severity).toBe("info");
+    });
+
+    it("supports snake_case agent_type and yields '' (not undefined) when absent", () => {
+        expect(normaliseSpawn({ agentId: "x", agent_type: "monitor" }).agentType).toBe("monitor");
+        expect(normaliseSpawn({ agentId: "x" }).agentType).toBe("");
+    });
+
+    it("normalises a qa-flag: resolves snake_case id, coerces fields, defaults missing to ''", () => {
+        const qf = normaliseQaFlag({
+            agent_id: "qa-1",
+            from: "writer",
+            category: "safety",
+            severity: "high",
+            excerpt: "bad output",
+            message: "flagged",
+            timestamp: 1_700_000_000,
+        });
+        expect(qf).toEqual({
+            agentId: "qa-1",
+            agentName: resolveAgentName("", "qa-1"),
+            from: "writer",
+            category: "safety",
+            severity: "high",
+            excerpt: "bad output",
+            message: "flagged",
+            timestampMs: 1_700_000_000_000, // seconds → ms
+        });
+        // Non-string / absent fields don't leak through.
+        const bare = normaliseQaFlag({ category: 42 });
+        expect(bare.category).toBe("");
+        expect(bare.excerpt).toBe("");
+        expect(bare.from).toBe("");
+    });
+
+    it("does not throw on a null payload", () => {
+        expect(() => normaliseHeartbeat(null)).not.toThrow();
+        expect(() => normaliseStatus(null)).not.toThrow();
+        expect(() => normaliseAlert(null)).not.toThrow();
+        expect(() => normaliseQaFlag(null)).not.toThrow();
     });
 });
 
@@ -458,14 +528,6 @@ describe("MQTTClient", () => {
         expect(s.memTotalMb).toBeUndefined();
     });
 
-    it("routes system/coin → 'coin'", () => {
-        const spy = vi.fn();
-        client.on("coin", spy);
-        triggerMessage("system/coin", { balance: 42 });
-        expect(spy).toHaveBeenCalledOnce();
-        expect(spy.mock.calls[0]![0].balance).toBe(42);
-    });
-
     it("routes agents/{id}/metrics → 'metrics' with camelCase fields", () => {
         const spy = vi.fn();
         client.on("metrics", spy);
@@ -563,14 +625,38 @@ describe("MQTTClient", () => {
         expect(() => mockHandlers["message"]?.("agents/x/heartbeat", raw)).not.toThrow();
     });
 
+    it("does not throw on a null payload for a deref-heavy topic; surfaces it as raw", () => {
+        const spy = vi.fn();
+        client.on("raw", spy);
+        // system/host / metrics dereference the payload directly — a null body
+        // used to throw out of the message handler (M1).
+        expect(() => triggerMessage("system/host", null)).not.toThrow();
+        expect(() => triggerMessage("agents/x/metrics", null)).not.toThrow();
+        expect(spy).toHaveBeenCalled();
+    });
+
+    it("filters non-string entries out of a node's agent list", () => {
+        const spy = vi.fn();
+        client.on("node-heartbeat", spy);
+        triggerMessage("nodes/rpi/heartbeat", { agents: ["edge", 42, null, "io"] });
+        expect(spy.mock.calls[0]![0].agents).toEqual(["edge", "io"]);
+    });
+
+    it("treats a non-array agents field as an empty list", () => {
+        const spy = vi.fn();
+        client.on("node-heartbeat", spy);
+        triggerMessage("nodes/rpi/heartbeat", { agents: "not-an-array" });
+        expect(spy.mock.calls[0]![0].agents).toEqual([]);
+    });
+
     it("continues emitting to other listeners when one throws", () => {
         const failing = vi.fn(() => {
             throw new Error("oops");
         });
         const ok = vi.fn();
-        client.on("coin", failing);
-        client.on("coin", ok);
-        triggerMessage("system/coin", { balance: 1 });
+        client.on("system-health", failing);
+        client.on("system-health", ok);
+        triggerMessage("system/health", { ok: true });
         expect(ok).toHaveBeenCalledOnce();
     });
 });

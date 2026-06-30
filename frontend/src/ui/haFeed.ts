@@ -9,7 +9,7 @@
  * MQTT ha-state-bridge), so the pusher de-duplicates identical entity+state
  * pairs seen within a short window and ignores noisy/non-actionable states.
  */
-import type { FeedItem } from "./ActivityFeed";
+import type { FeedItem } from "../types/feed";
 
 /** Domains that produce meaningful on/off-style states worth showing in the feed. */
 const HA_FEED_DOMAINS = new Set([
@@ -56,4 +56,30 @@ export function createHaFeedPusher(
         recent.set(key, now);
         push({ type: "health", label: `${friendlyName} → ${state}`, agentName: "ha", timestamp: now });
     };
+}
+
+/** A parsed HA state-change from a raw `ha/...` MQTT message. */
+export interface HaRawEvent {
+    entityId: string;
+    state: string;
+    friendlyName: string;
+}
+
+/**
+ * Parse a raw `ha/state/{domain}/{entity_id}` MQTT message (the ha-state-bridge
+ * transport) into an HA event, or null when the topic isn't an HA state topic or
+ * carries no state. The entity id falls back to the last two topic segments; the
+ * friendly name to the entity id.
+ */
+export function parseHaRawEvent(topic: string, payload: unknown): HaRawEvent | null {
+    if (!topic.startsWith("ha/")) {
+        return null;
+    }
+    const p = (payload ?? {}) as Record<string, unknown>;
+    const entityId = (p["entity_id"] as string | undefined) ?? topic.split("/").slice(-2).join(".");
+    const newState = p["new_state"] as Record<string, unknown> | undefined;
+    const state = (newState?.["state"] as string | undefined) ?? "";
+    const attrs = newState?.["attributes"] as Record<string, unknown> | undefined;
+    const friendlyName = (attrs?.["friendly_name"] as string | undefined) ?? entityId;
+    return state ? { entityId, state, friendlyName } : null;
 }

@@ -358,5 +358,74 @@ describe("HAClient control methods", () => {
         fakeWS.sent = [];
         client.toggleEntity("light.x");
         expect(fakeWS.sent.length).toBe(0);
+        client.disconnect(); // stop the reconnect timer scheduled by onclose
+    });
+});
+
+describe("HAClient reconnect & lifecycle", () => {
+    it("connected is false while the socket is CLOSING (not just CLOSED)", () => {
+        const client = new HAClient("http://ha.local", "token");
+        client.connect(vi.fn());
+        expect(client.connected).toBe(true);
+        fakeWS.readyState = 2; // CLOSING
+        expect(client.connected).toBe(false);
+        client.disconnect();
+    });
+
+    it("connect() is idempotent — a second call while live does not open a second socket", () => {
+        const client = new HAClient("http://ha.local", "token");
+        client.connect(vi.fn());
+        client.connect(vi.fn()); // already live → no-op (just re-arms onUpdate)
+        expect(wsSpy).toHaveBeenCalledTimes(1);
+        client.disconnect();
+    });
+
+    it("auto-reconnects after an unexpected drop", () => {
+        vi.useFakeTimers();
+        const client = new HAClient("http://ha.local", "token");
+        client.connect(vi.fn());
+        expect(wsSpy).toHaveBeenCalledTimes(1);
+        fakeWS.onclose?.(); // unexpected drop → schedules reconnect
+        vi.advanceTimersByTime(1_000); // backoff fires
+        expect(wsSpy).toHaveBeenCalledTimes(2);
+        client.disconnect();
+        vi.useRealTimers();
+    });
+
+    it("does not reconnect after disconnect()", () => {
+        vi.useFakeTimers();
+        const client = new HAClient("http://ha.local", "token");
+        client.connect(vi.fn());
+        client.disconnect(); // sets _closed → onclose must not reschedule
+        vi.advanceTimersByTime(60_000);
+        expect(wsSpy).toHaveBeenCalledTimes(1);
+        vi.useRealTimers();
+    });
+
+    it("stops reconnecting after auth_invalid (a bad token must not hammer HA)", () => {
+        vi.useFakeTimers();
+        const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const client = new HAClient("http://ha.local", "bad-token");
+        client.connect(vi.fn());
+        fakeWS.receive({ type: "auth_invalid", message: "bad" });
+        fakeWS.onclose?.(); // HA drops the socket after rejecting auth
+        vi.advanceTimersByTime(60_000);
+        expect(wsSpy).toHaveBeenCalledTimes(1); // no reconnect attempts
+        errSpy.mockRestore();
+        vi.useRealTimers();
+    });
+
+    it("rejects pending tracked requests on close → registries fall back to empty (no hang)", async () => {
+        const regSpy = vi.fn();
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const client = new HAClient("http://ha.local", "token");
+        client.onRegistriesUpdate = regSpy;
+        client.connect(vi.fn());
+        fakeWS.receive({ type: "auth_ok" }); // kicks off the 3 registry requests
+        fakeWS.onclose?.(); // drop before any result → _failPending rejects them
+        client.disconnect(); // stop the reconnect timer
+        await new Promise(r => setTimeout(r, 10));
+        expect(regSpy).toHaveBeenCalledWith({ areas: [], entityEntries: [], deviceEntries: [] });
+        warnSpy.mockRestore();
     });
 });

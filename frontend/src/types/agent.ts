@@ -69,14 +69,6 @@ export interface NodeHeartbeatPayload {
     nodeId?: string;
 }
 
-/** WizAgent coin economy event. */
-export interface CoinPayload {
-    balance: number;
-    event?: string;
-    amount?: number;
-    reason?: string;
-}
-
 /** Status update payload. */
 export interface StatusPayload {
     agentId: string;
@@ -104,6 +96,18 @@ export interface SpawnPayload {
     agentType: string;
     timestampMs: number;
     protected?: boolean;
+}
+
+/** QA safety flag raised by the QAAgent. */
+export interface QaFlagPayload {
+    agentId: string;
+    agentName: string;
+    from: string;
+    category: string;
+    severity: string;
+    excerpt: string;
+    message: string;
+    timestampMs: number;
 }
 
 /** Chat message (user → agent or agent → user). */

@@ -12,13 +12,13 @@ This means:
   - The spawned agent is saved in main's spawn registry (persists across restarts)
 
 USAGE (from CLI or any agent):
-  @catalog spawn image-gen-agent
-  @catalog spawn sinergym-collector
+  @catalog spawn anomaly-detector
+  @catalog spawn timeseries-collector
   @catalog list
-  @catalog info sinergym-optimizer
+  @catalog info manual-agent
 
 Or via main (natural language):
-  "spawn the image generation agent"   → main finds catalog → catalog spawns it
+  "spawn the anomaly detector agent"   → main finds catalog → catalog spawns it
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -56,36 +56,42 @@ def _load_recipe(filename: str) -> Optional[str]:
 # CATALOG
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _build_catalog() -> dict:
-    catalog = {}
 
-    # ── image-gen-agent ───────────────────────────────────────────────────────
-    code = _load_recipe("image_gen_agent.py")
-    if code:
-        catalog["image-gen-agent"] = {
-            "name":         "image-gen-agent",
-            "type":         "dynamic",
-            "description":  "Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns absolute PNG path.",
-            "capabilities": ["image_generation", "text_to_image", "nvidia_nim", "flux"],
-            "install":      ["requests"],
+def _build_native_catalog() -> dict:
+    """Native Actor subclasses spawned directly by the catalog."""
+    native = {}
+
+    try:
+        from ..catalogue_agents.weather_agent import WeatherAgent
+        native["weather-agent"] = {
+            "name": "weather-agent",
+            "type": "native",
+            "factory": WeatherAgent,
+            "description": "Natural-language weather: current conditions, forecast, and history via Open-Meteo. No API key required.",
+            "capabilities": ["weather.current", "weather.forecast", "weather.history"],
             "input_schema": {
-                "prompt":      "str  — what to generate",
-                "output_path": "str  — absolute path to save PNG",
-                "width":       "int  — pixels wide, default 1024",
-                "height":      "int  — pixels tall, default 576 (16:9)",
-                "steps":       "int  — inference steps, default 20",
-                "api_key":     "str  — optional, overrides persisted nim_api_key",
+                "action": "current | forecast | history | set-default",
+                "location": "str - city name or lat,lon (optional, falls back to default)",
+                "days": "int - forecast horizon 1-16 (forecast only, default 3)",
+                "date": "str - ISO date or 'yesterday' (history only)",
             },
             "output_schema": {
-                "image_path": "str       — saved PNG path, or null",
-                "width":      "int",
-                "height":     "int",
-                "size_kb":    "int",
-                "error":      "str|null",
+                "location": "str",
+                "temp_c": "float",
+                "feels_like_c": "float",
+                "condition": "str",
+                "humidity": "int",
+                "wind_kph": "float",
             },
-            "poll_interval": 3600,
-            "code":          code,
         }
+        logger.info("[catalog] Loaded weather-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] weather-agent unavailable: {e}")
+
+    return native
+
+def _build_catalog() -> dict:
+    catalog = _build_native_catalog()
 
     # ── doc-to-pptx-agent ─────────────────────────────────────────────────────
     code = _load_recipe("doc_to_pptx_agent.py")
@@ -116,83 +122,6 @@ def _build_catalog() -> dict:
             "poll_interval": 3600,
             "code":          code,
         }
-
-   
-    # # ── discord-notify-agent ──────────────────────────────────────────────────
-    # code = _load_recipe("discord_notify_agent.py")
-    # if code:
-    #     catalog["discord-notify-agent"] = {
-    #         "name":         "discord-notify-agent",
-    #         "type":         "dynamic",
-    #         "description":  "Subscribes to MQTT events and posts notifications to a Discord webhook.",
-    #         "capabilities": ["discord", "notifications", "mqtt_subscriber", "webhook", "alerting"],
-    #         "install":      ["aiohttp", "aiomqtt"],
-    #         "input_schema": {
-    #             "mqtt_topic":    "str — MQTT topic to subscribe to",
-    #             "message_tpl":   "str — message template, use {data} for payload",
-    #             "trigger_key":   "str — optional: only trigger when this key exists",
-    #             "trigger_value": "str — optional: only trigger when trigger_key equals this",
-    #             "cooldown_s":    "int — seconds between notifications, default 10",
-    #             "webhook_url":   "str — Discord webhook URL (overrides persisted value)",
-    #         },
-    #         "output_schema": {"sent": "int — number of notifications sent"},
-    #         "poll_interval": 3600,
-    #         "code":          code,
-    #     }
-
-    # ── sinergym-collector ────────────────────────────────────────────────────
-    code = _load_recipe("sinergym_collector_agent.py")
-    if code:
-        catalog["sinergym-collector"] = {
-            "name":         "sinergym-collector",
-            "type":         "dynamic",
-            "description":  "Collects Sinergym episode data via MQTT for RL/Bayesian training. Listens on sinergym/env/{env_id}/observation and persists (obs, action, reward) tuples.",
-            "capabilities": ["sinergym", "data_collection", "rl_training", "energy_optimization", "building_simulation"],
-            "install":      ["aiomqtt", "numpy"],
-            "input_schema": {
-                "env_id":          "str  — Sinergym env ID, e.g. Eplus-5zone-hot-continuous-v1",
-                "obs_topic":       "str  — MQTT topic for observations",
-                "target_episodes": "int  — episodes to collect before triggering optimizer, default 10",
-                "chunk_size":      "int  — persist every N episodes, default 5",
-                "optimizer_name":  "str  — optimizer agent to notify on completion, default sinergym-optimizer",
-            },
-            "output_schema": {
-                "episodes_collected": "int",
-                "total_steps":        "int",
-                "data_key":           "str — episode_{N} recall keys",
-            },
-            "poll_interval": 3600,
-            "code":          code,
-        }
-        logger.info("[catalog] Loaded sinergym-collector recipe")
-
-    # ── sinergym-optimizer ────────────────────────────────────────────────────
-    code = _load_recipe("sinergym_optimizer_agent.py")
-    if code:
-        catalog["sinergym-optimizer"] = {
-            "name":         "sinergym-optimizer",
-            "type":         "dynamic",
-            "description":  "Energy optimization agent for Sinergym: trains RL (PPO) or Bayesian (GP) policy from collected episodes, then publishes actions to sinergym/env/{env_id}/action.",
-            "capabilities": ["sinergym", "rl", "bayesian_optimization", "energy_optimization", "policy_training", "building_control"],
-            "install":      ["stable-baselines3", "scikit-learn", "numpy", "torch", "aiomqtt", "gymnasium"],
-            "input_schema": {
-                "env_id":          "str  — Sinergym env ID, e.g. Eplus-5zone-hot-continuous-v1",
-                "strategy":        "str  — rl | bayesian | rulebased | combined, default rl",
-                "collector_name":  "str  — collector agent name, default sinergym-collector",
-                "obs_dim":         "int  — observation vector length, default 35",
-                "action_dim":      "int  — action vector length, default 2",
-                "training_steps":  "int  — RL training timesteps, default 50000",
-                "deploy_on_train": "bool — start publishing actions after training, default true",
-            },
-            "output_schema": {
-                "mean_reward": "float",
-                "strategy":    "str",
-                "phase":       "str — idle | training | deploying",
-            },
-            "poll_interval": 3600,
-            "code":          code,
-        }
-        logger.info("[catalog] Loaded sinergym-optimizer recipe")
 
     # ── ADD NEW RECIPES HERE ──────────────────────────────────────────────────
     # code = _load_recipe("my_new_agent.py")
@@ -441,6 +370,7 @@ class CatalogAgent(Actor):
             else:
                 logger.warning(f"[{self.name}] main not ready — could not inject manifest for '{name}'")
 
+
     def _current_task_description(self) -> str:
         return f"catalog ({len(self._catalog)} recipes)"
 
@@ -563,7 +493,7 @@ class CatalogAgent(Actor):
         if not recipe:
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
-        safe = {k: v for k, v in recipe.items() if k != "code"}
+        safe = {k: v for k, v in recipe.items() if k not in {"code", "factory"}}
         return {"ok": True, "message": f"Recipe for '{resolved}'", "recipe": safe}
 
     async def _action_spawn(self, name: str, payload: dict) -> dict:
@@ -590,6 +520,28 @@ class CatalogAgent(Actor):
         )
 
         try:
+            main = self._registry.find_by_name("main")
+            llm_provider = getattr(main, "llm", None) if main else None
+            persistence_dir = str(getattr(main, "_persistence_dir", "./state/main").parent) if main else "./state"
+
+            if recipe.get("type") == "native":
+                factory = recipe.get("factory")
+                if not factory:
+                    return {"ok": False, "message": f"Native recipe '{resolved}' has no factory"}
+                native_kwargs = {"name": resolved, "persistence_dir": persistence_dir}
+                if llm_provider:
+                    native_kwargs["llm_provider"] = llm_provider
+                actor = await self.spawn(factory, **native_kwargs)
+                if actor:
+                    msg = f"'{resolved}' spawned and running"
+                    logger.info(f"[{self.name}] {msg}")
+                    await self._mqtt_publish(
+                        f"agents/{self.actor_id}/logs",
+                        {"type": "log", "message": msg, "timestamp": time.time()},
+                    )
+                    return {"ok": True, "message": msg, "agent": resolved}
+                return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
+
             from .dynamic_agent import DynamicAgent
 
             install = recipe.get("install", [])
@@ -653,10 +605,6 @@ class CatalogAgent(Actor):
                 else:
                     logger.info(f"[{self.name}] All deps for '{resolved}' already installed — skipping installer")
 
-            main = self._registry.find_by_name("main")
-            llm_provider    = getattr(main, "llm", None) if main else None
-            persistence_dir = str(getattr(main, "_persistence_dir", "./state/main").parent) if main else "./state"
-
             actor = await self.spawn(
                 DynamicAgent,
                 name            = resolved,
@@ -692,7 +640,7 @@ class CatalogAgent(Actor):
             logger.error(f"[{self.name}] {msg}")
             return {"ok": False, "message": msg}
 
-    # ── Public API ─────────────────────────────────────────────────────────────
+    # Public API ─────────────────────────────────────────────────────────────
 
     def list_recipes(self) -> list[str]:
         return list(self._catalog.keys())

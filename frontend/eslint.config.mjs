@@ -46,7 +46,7 @@ const defaultConfig = defineConfig({
                 caughtErrorsIgnorePattern: "^_",
             },
         ],
-        "@typescript-eslint/no-explicit-any": "off",
+        "@typescript-eslint/no-explicit-any": "error",
         "@typescript-eslint/no-namespace": "off",
         "@typescript-eslint/no-unused-expressions": "off",
         "@typescript-eslint/no-use-before-define": "off",
@@ -78,7 +78,7 @@ const defaultConfig = defineConfig({
 
 export default [
     {
-        ignores: ["node_modules", "public", "**/assets/**"],
+        ignores: ["node_modules", "public", "dist", "coverage", "**/assets/**"],
     },
     ...defaultConfig.map(config => ({
         ...config,
@@ -87,13 +87,17 @@ export default [
     {
         // Test suites legitimately have long describe/it blocks with many
         // sequential assertions; size/statement caps don't model them well.
-        // Correctness rules (complexity, prettier, headers, unused) still apply.
+        // `any` is also allowed here: mocks and poking private members
+        // (`let cd: any`, class-returns-mock) are idiomatic in tests and not
+        // shipped. Correctness rules (complexity, prettier, headers, unused)
+        // still apply.
         files: ["**/__tests__/**", "**/*.{test,spec}.{ts,tsx}"],
         rules: {
             "max-lines": "off",
             "max-lines-per-function": "off",
             "max-statements": "off",
             "max-nested-callbacks": "off",
+            "@typescript-eslint/no-explicit-any": "off",
         },
     },
 ];

@@ -1198,7 +1198,7 @@ myenv\Scripts\activate
 # Mac/Linux
 source myenv/bin/activate
 
-pip install -r requirements.txt
+pip install -e ".[all]"
 
 # Set your LLM key
 export ANTHROPIC_API_KEY=sk-ant-...

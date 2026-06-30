@@ -71,6 +71,18 @@ state = {
 
 ws_clients: set = set()
 mqtt_client_ref = None
+# In-flight chat-generation tasks (direct_ws + REST paths) so POST /chat/stop can
+# cancel a turn mid-stream. The legacy MQTT path is handled separately by the
+# IOAgent via the io/chat/control topic.
+_inflight_chat_tasks: set = set()
+
+
+def _track_chat_task(task):
+    """Register an in-flight chat-generation task so /chat/stop can cancel it."""
+    _inflight_chat_tasks.add(task)
+    task.add_done_callback(_inflight_chat_tasks.discard)
+    return task
+
 # IDs that have been explicitly deleted — block re-admission from stale heartbeats.
 # Bounded so a long-running monitor doesn't leak memory across many deletions.
 # Stored as a list of (agent_id, deleted_at_ts) tuples so we can re-admit on
@@ -841,6 +853,16 @@ async def ws_handler(request):
                                     await _route_chat(c, ws_reply,
                                                       stream_fn=ws_stream_chunk,
                                                       stream_end_fn=ws_stream_end)
+                                except asyncio.CancelledError:
+                                    # Stop button: finalize the partial stream so
+                                    # the UI re-enables, then post a confirmation
+                                    # matching the IOAgent's wording.
+                                    try:
+                                        await ws_stream_end()
+                                        await ws_reply("⏹ Stopped.")
+                                    except Exception:
+                                        pass
+                                    raise
                                 except Exception as exc:
                                     logger.error(f"[ws] chat error: {exc}", exc_info=True)
                                     try:
@@ -848,7 +870,7 @@ async def ws_handler(request):
                                         await ws_stream_end()
                                     except Exception:
                                         pass
-                            asyncio.create_task(_safe_route())
+                            _track_chat_task(asyncio.create_task(_safe_route()))
                         elif content:
                             # No registry — tell the browser to use MQTT
                             await ws_reply("[system] Chat not available over WebSocket in this mode.")
@@ -1136,6 +1158,28 @@ def _lifetime_cost_total() -> float:
     return sum(_lifetime_cost.values())
 
 
+def _reset_actor_cost(actor) -> None:
+    """Zero a live actor's cost/token counters AND its per-call accrual baseline.
+
+    The baseline must move with total_cost_usd: _persist_cost / _accrue_usage
+    accumulate (total_cost_usd - baseline) into the global period and all-time
+    counters. Zeroing total_cost_usd on a reset without also zeroing the baseline
+    leaves the baseline at the pre-reset total, so every subsequent call yields a
+    negative delta and the period/all-time counters stop advancing until spend
+    climbs back past the old total — the "limit count stopped counting after a
+    wipe" bug.
+    """
+    if not hasattr(actor, "total_cost_usd"):
+        return
+    actor.total_cost_usd      = 0.0
+    actor.total_input_tokens  = 0
+    actor.total_output_tokens = 0
+    if hasattr(actor, "_last_persisted_usd"):
+        actor._last_persisted_usd = 0.0
+    if hasattr(actor, "_last_period_cost_usd"):
+        actor._last_period_cost_usd = 0.0
+
+
 def _historical_cost_usd(live_names: set) -> float:
     """Sum _final_cost for agents not in live_names."""
     if db is None:
@@ -1227,7 +1271,21 @@ def _snapshot() -> dict:
     # monotonic, so clamp the headline total up to whichever is larger — spend is
     # never lost, and the live path still covers the fresh-boot window before the
     # first heartbeat repopulates the ledger.
-    total_cost = max(live_cost + _historical_cost_usd(live_names), _lifetime_cost_total())
+    # The all-time call-time counter is delete-proof (a deleted agent's _final_cost
+    # row is purged and its lifetime-ledger high-water can be missed/popped, but
+    # the counter accrued its spend at call time). Use it as a third floor so the
+    # headline never drops below money already spent — and so it can never read
+    # lower than the "this period" spend shown beside it.
+    try:
+        from .agents.llm_agent import get_global_alltime_cost
+        alltime_cost = get_global_alltime_cost()
+    except Exception:
+        alltime_cost = 0.0
+    total_cost = max(
+        live_cost + _historical_cost_usd(live_names),
+        _lifetime_cost_total(),
+        alltime_cost,
+    )
     total_msgs = live_msgs + _historical_messages(live_names)
     return {
         "agents":           list(state["agents"].values()),
@@ -1765,7 +1823,7 @@ async def send_message_handler(request):
     # actor is dropped. Prepend the mention to route there, unless the caller
     # already addressed someone (@) or it's a slash command (/).
     routed = content if content.startswith(("@", "/")) else f"@{actor.name} {content}"
-    asyncio.create_task(_route_chat(routed, lambda t: None))
+    _track_chat_task(asyncio.create_task(_route_chat(routed, lambda t: None)))
     return web.json_response({"status": "sent"})
 
 
@@ -1901,10 +1959,7 @@ async def reset_handler(request):
                 actor.metrics.errors = 0
                 actor.metrics.tasks_completed = 0
                 actor.metrics.tasks_failed = 0
-                if hasattr(actor, "total_cost_usd"):
-                    actor.total_cost_usd      = 0.0
-                    actor.total_input_tokens  = 0
-                    actor.total_output_tokens = 0
+                _reset_actor_cost(actor)
                 if hasattr(actor, "_conversation_history"):
                     actor._conversation_history = []
                 if hasattr(actor, "_history_summary"):
@@ -1967,10 +2022,7 @@ async def reset_handler(request):
             if agent and actor.name != agent:
                 continue
             actor.metrics.messages_processed = 0
-            if hasattr(actor, "total_cost_usd"):
-                actor.total_cost_usd      = 0.0
-                actor.total_input_tokens  = 0
-                actor.total_output_tokens = 0
+            _reset_actor_cost(actor)
         # The headline total is max(live + historical, lifetime ledger).
         # reset_metrics cleared the kv ledger, but the in-memory _lifetime_cost
         # high-water survives in THIS process and pins the headline to its old
@@ -2104,8 +2156,46 @@ async def rest_chat_handler(request):
     # As above: route to the named agent, since _route_chat would otherwise
     # default to main when the message carries no @mention.
     routed = message if message.startswith(("@", "/")) else f"@{target.name} {message}"
-    asyncio.create_task(_route_chat(routed, lambda t: None))
+    _track_chat_task(asyncio.create_task(_route_chat(routed, lambda t: None)))
     return web.json_response({"status": "sent", "agent": agent_name})
+
+
+async def rest_chat_stop_handler(request):
+    """POST /chat/stop — cancel any in-flight generation. No request body needed.
+
+    Works in both runtime modes:
+      - direct_ws — cancels the in-process generation task(s) running here; the
+        cancelled stream finalizes and posts "⏹ Stopped." over the WebSocket.
+      - mqtt (legacy) — publishes {"action": "stop"} to io/chat/control so the
+        IOAgent cancels the turn it is streaming and replies on io/chat/response.
+    The user-facing confirmation rides the usual chat reply path, so the UI
+    needs no extra subscription.
+    """
+    from aiohttp import web
+
+    # direct_ws: cancel the in-process generation task(s).
+    tasks = [t for t in _inflight_chat_tasks if not t.done()]
+    for t in tasks:
+        t.cancel()
+
+    # legacy MQTT: tell the IOAgent to stop whatever it is generating.
+    published = False
+    if mqtt_client_ref:
+        try:
+            await mqtt_client_ref.publish(
+                "io/chat/control",
+                json.dumps({"action": "stop"}),
+                qos=1,
+            )
+            published = True
+        except Exception as exc:
+            logger.warning(f"[chat/stop] io/chat/control publish failed: {exc}")
+
+    return web.json_response({
+        "status":    "stopped",
+        "cancelled": len(tasks),
+        "published": published,
+    })
 
 
 async def actors_handler(request):
@@ -2462,6 +2552,8 @@ async def main(exit_on_failure: bool = False):
     # Chat (REST fire-and-forget)
     app.router.add_post("/api/chat",             rest_chat_handler)
     app.router.add_post("/chat",                 rest_chat_handler)
+    app.router.add_post("/api/chat/stop",        rest_chat_stop_handler)
+    app.router.add_post("/chat/stop",            rest_chat_stop_handler)
 
     app.router.add_get("/api/chats",             chat_log_handler)
     app.router.add_get("/chats",                 chat_log_handler)

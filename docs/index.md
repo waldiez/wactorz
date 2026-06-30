@@ -24,6 +24,7 @@ pip install wactorz[all]
 - **[Agents](agents.md)** — Built-in and custom agent reference
 - **[Auto-Wiring](mqtt_auto_wiring.md)** — TopicBus, contracts, and schema-aware planning
 - **[Interfaces](interfaces.md)** — CLI, REST, MCP, chat platforms, and dashboard
+- **[Google Calendar MCP](google-calendar-mcp.md)** — Proxy a configured Google Calendar MCP server through Wactorz MCP
 - **[Prometheus Monitoring](prometheus.md)** — Python metrics, Prometheus, and optional dependency probes
 - **[Pipelines](pipelines.md)** — Reactive rules, canonical patterns, planner workflow
 - **[MQTT Topics](mqtt_topics.md)** — Full topic reference with payload schemas

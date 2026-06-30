@@ -1,5 +1,6 @@
 import json
 import importlib.util
+import sys
 import unittest
 from unittest import mock
 
@@ -7,6 +8,9 @@ if importlib.util.find_spec("mcp") is None:
     mcp_server = None
     MCP_IMPORT_ERROR = "mcp optional dependency is not installed"
 else:
+    aiohttp_module = sys.modules.get("aiohttp")
+    if aiohttp_module is not None and not hasattr(aiohttp_module, "__path__"):
+        sys.modules.pop("aiohttp", None)
     from wactorz.interfaces import mcp_server
 
     MCP_IMPORT_ERROR = ""
@@ -15,6 +19,14 @@ else:
 EXPECTED_TOOLS = {
     "ask_wactorz",
     "ask_agent",
+    "calendar_status",
+    "calendar_mcp_list_tools",
+    "calendar_mcp_call_tool",
+    "calendar_list",
+    "calendar_today",
+    "calendar_week",
+    "calendar_create_event",
+    "calendar_delete_event",
     "list_agents",
     "list_capabilities",
     "stop_agent",
@@ -48,7 +60,12 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
     async def test_config_resource_sanitizes_tokens(self):
         with mock.patch.object(mcp_server, "WACTORZ_API_KEY", "secret-rest-key"), \
              mock.patch.object(mcp_server, "HA_TOKEN", "secret-ha-token"), \
-             mock.patch.object(mcp_server, "HA_URL", "http://ha.local:8123"):
+             mock.patch.object(mcp_server, "HA_URL", "http://ha.local:8123"), \
+             mock.patch.object(mcp_server, "CALENDAR_MCP_URL", "https://calendar.example/mcp"), \
+             mock.patch.object(mcp_server, "CALENDAR_MCP_TOKEN", ""), \
+             mock.patch.object(mcp_server, "CALENDAR_MCP_AUTHORIZATION", ""), \
+             mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_ID", "client-id.apps.googleusercontent.com"), \
+             mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_SECRET", "secret-client-secret"):
             payload = json.loads(await mcp_server.config_resource())
 
         self.assertEqual(
@@ -58,11 +75,15 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
                 "wactorz_auth": True,
                 "ha_url": "http://ha.local:8123",
                 "ha_auth": True,
+                "calendar_mcp_url": "https://calendar.example/mcp",
+                "calendar_mcp_auth": True,
+                "calendar_mcp_oauth_client": True,
             },
         )
         serialized = json.dumps(payload)
         self.assertNotIn("secret-rest-key", serialized)
         self.assertNotIn("secret-ha-token", serialized)
+        self.assertNotIn("secret-client-secret", serialized)
 
     async def test_list_agents_formats_running_agents(self):
         agents = [
@@ -91,6 +112,68 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
             result = await mcp_server.list_agents()
 
         self.assertEqual(result, error["error"])
+
+    async def test_calendar_status_sanitizes_remote_mcp_auth(self):
+        with mock.patch.object(mcp_server, "CALENDAR_MCP_URL", "https://calendar.example/mcp"), \
+             mock.patch.object(mcp_server, "CALENDAR_MCP_TOKEN", ""), \
+             mock.patch.object(mcp_server, "CALENDAR_MCP_AUTHORIZATION", ""), \
+             mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_ID", "client-id.apps.googleusercontent.com"), \
+             mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_SECRET", "secret-client-secret"), \
+             mock.patch.object(mcp_server, "CALENDAR_MCP_REDIRECT_URI", "http://localhost:8765/oauth/callback"), \
+             mock.patch.object(mcp_server, "CALENDAR_MCP_TOKEN_FILE", "C:/tmp/calendar_token.json"):
+            payload = json.loads(await mcp_server.calendar_status())
+
+        self.assertEqual(
+            payload,
+            {
+                "calendar_mcp_url": "https://calendar.example/mcp",
+                "calendar_mcp_auth": True,
+                "calendar_mcp_oauth_client": True,
+                "calendar_mcp_redirect_uri": "http://localhost:8765/oauth/callback",
+                "calendar_mcp_token_file": "C:/tmp/calendar_token.json",
+            },
+        )
+        self.assertNotIn("secret-client-secret", json.dumps(payload))
+
+    async def test_calendar_list_calls_remote_mcp_list_events(self):
+        with mock.patch.object(
+            mcp_server,
+            "_calendar_mcp_call",
+            mock.AsyncMock(return_value="event list"),
+        ) as call:
+            result = await mcp_server.calendar_list(5)
+
+        self.assertEqual(result, "event list")
+        call.assert_awaited_once_with("list_events", {"maxResults": 5})
+
+    async def test_calendar_create_event_calls_remote_mcp_create_event(self):
+        with mock.patch.object(
+            mcp_server,
+            "_calendar_mcp_call",
+            mock.AsyncMock(return_value="created"),
+        ) as call:
+            result = await mcp_server.calendar_create_event(
+                "Dentist",
+                "2026-06-03T15:00:00+03:00",
+                location="Athens",
+            )
+
+        self.assertEqual(result, "created")
+        call.assert_awaited_once_with(
+            "create_event",
+            {
+                "summary": "Dentist",
+                "startDateTime": "2026-06-03T15:00:00+03:00",
+                "location": "Athens",
+            },
+        )
+
+    async def test_calendar_mcp_call_tool_validates_json_object(self):
+        self.assertIn("Invalid arguments_json", await mcp_server.calendar_mcp_call_tool("x", "{"))
+        self.assertEqual(
+            await mcp_server.calendar_mcp_call_tool("x", "[]"),
+            "arguments_json must encode a JSON object.",
+        )
 
     async def test_ha_requires_configuration(self):
         with mock.patch.object(mcp_server, "HA_URL", ""), \

@@ -255,18 +255,23 @@ def _period_keys(now: float) -> dict:
 
 
 def _account(acc: dict, name: str, now: float, watts, dt_h,
-             energy_kwh, energy_kind) -> dict:
+             energy_today_kwh, energy_kind,
+             energy_month_kwh=None, energy_total_kwh=None) -> dict:
     """Update a plug's per-period kWh buckets.
 
-    Two sources, in priority order:
-      • METER (energy_kwh present): the device's own kWh counter. We add the
-        per-poll delta to week/month/total; for a daily-reset 'today' sensor the
-        day bucket mirrors the sensor directly (a true full-day figure). This is
-        accurate and survives wactorz downtime — the meter kept counting.
-      • ESTIMATED (no meter): integrate live watts over the elapsed interval.
-        Less accurate, and 'today' only counts from when we started watching.
+    Sources, by period, in priority order:
+      • A dedicated device meter for that exact period (energy_month_kwh /
+        energy_total_kwh): the plug's own absolute counter — e.g. Tapo's "this
+        month's consumption" sensor. Mirrored straight into the bucket, just
+        like 'today' below. Most accurate: it already reflects the whole
+        period, including usage from before wactorz started watching.
+      • The 'today' meter's per-poll delta, added to whichever periods don't
+        have their own dedicated sensor above.
+      • ESTIMATED (no meter at all): integrate live watts over the elapsed
+        interval. Least accurate, and only counts from when we started watching.
 
-    Buckets reset when their calendar period rolls over."""
+    Buckets reset when their calendar period rolls over (a no-op for periods
+    fed by their own absolute meter, since that's overwritten every poll anyway)."""
     rec = acc.setdefault(name, {
         "day_kwh": 0.0, "week_kwh": 0.0, "month_kwh": 0.0, "total_kwh": 0.0,
         "day": "", "week": "", "month": "",
@@ -278,34 +283,39 @@ def _account(acc: dict, name: str, now: float, watts, dt_h,
             rec[period] = keys[period]
             rec[f"{period}_kwh"] = 0.0
 
-    if energy_kwh is not None:
-        rec["source"] = "meter"
+    have_meter = (energy_today_kwh is not None or energy_month_kwh is not None
+                  or energy_total_kwh is not None)
+    rec["source"] = "meter" if have_meter else "estimated"
+
+    inc = 0.0
+    if energy_today_kwh is not None:
         last = rec.get("meter_last")
-        inc = 0.0
         if last is not None:
-            inc = energy_kwh - last
+            inc = energy_today_kwh - last
             if inc < 0:
                 # Sensor reset (daily rollover or device reboot). Don't count a
                 # negative; the small post-reset value is the new day's start.
                 inc = 0.0
-        rec["meter_last"] = energy_kwh
+        rec["meter_last"] = energy_today_kwh
 
         if energy_kind == "today":
-            rec["day_kwh"] = energy_kwh          # authoritative full-day value
+            rec["day_kwh"] = energy_today_kwh    # authoritative full-day value
         else:
             rec["day_kwh"] += inc                # 'since tracking' on day 1
-        rec["week_kwh"]  += inc
-        rec["month_kwh"] += inc
-        rec["total_kwh"] += inc
-    else:
-        rec["source"] = "estimated"
-        if dt_h and 0 < dt_h < 1.0 and watts is not None:
-            inc = (watts / 1000.0) * dt_h
-            if inc > 0:
-                rec["day_kwh"]   += inc
-                rec["week_kwh"]  += inc
-                rec["month_kwh"] += inc
-                rec["total_kwh"] += inc
+        rec["week_kwh"] += inc                   # no dedicated 'week' meter exists
+
+    rec["month_kwh"] = (energy_month_kwh if energy_month_kwh is not None
+                         else rec["month_kwh"] + inc)
+    rec["total_kwh"] = (energy_total_kwh if energy_total_kwh is not None
+                         else rec["total_kwh"] + inc)
+
+    if not have_meter and dt_h and 0 < dt_h < 1.0 and watts is not None:
+        inc_w = (watts / 1000.0) * dt_h
+        if inc_w > 0:
+            rec["day_kwh"]   += inc_w
+            rec["week_kwh"]  += inc_w
+            rec["month_kwh"] += inc_w
+            rec["total_kwh"] += inc_w
     return rec
 
 
@@ -362,6 +372,7 @@ async def process(agent):
     accum  = agent.state["accum"]
     summary = []
     total_watts = 0.0
+    plugs_dirty = False
 
     for name, plug in plugs.items():
         power_entity = plug.get("ha_entity_power")
@@ -381,14 +392,35 @@ async def process(agent):
             if e_raw is not None:
                 energy_kwh = e_raw * float(plug.get("energy_scale", 1.0))
 
+        # Dedicated month/total meters, if this device has them. Resolved lazily
+        # and cached on the plug record so a plug onboarded before this lookup
+        # existed gets backfilled automatically, with no re-import needed.
+        period_kwh = {}
+        for kind in ("month", "total"):
+            ent_key, scale_key = f"ha_entity_energy_{kind}", f"energy_scale_{kind}"
+            if power_entity and plug.get(ent_key) is None and not plug.get(f"{kind}_resolved"):
+                found_eid, found_scale = _find_energy_sensor(states, power_entity, kind)
+                if found_eid:
+                    plug[ent_key] = found_eid
+                    plug[scale_key] = found_scale
+                plug[f"{kind}_resolved"] = True
+                plugs_dirty = True
+            ent = plug.get(ent_key)
+            period_kwh[kind] = None
+            if ent:
+                raw = _read_watts(states.get(ent))
+                if raw is not None:
+                    period_kwh[kind] = raw * float(plug.get(scale_key, 1.0))
+
         # Nothing to work with this cycle.
-        if watts is None and energy_kwh is None:
+        if watts is None and energy_kwh is None and all(v is None for v in period_kwh.values()):
             continue
 
         # ── Energy + cost accounting ──────────────────────────────────────────
         last_ts = agent.state["last_poll"].get(name)
         dt_h = ((now - last_ts) / 3600.0) if last_ts else None
-        _account(accum, name, now, watts, dt_h, energy_kwh, plug.get("energy_kind"))
+        _account(accum, name, now, watts, dt_h, energy_kwh, plug.get("energy_kind"),
+                 energy_month_kwh=period_kwh["month"], energy_total_kwh=period_kwh["total"])
         agent.state["last_poll"][name]  = now
         if watts is not None:
             agent.state["last_watts"][name] = watts
@@ -435,6 +467,8 @@ async def process(agent):
 
     # Persist accumulators periodically (every cycle is fine — small dict)
     agent.persist("accum", accum)
+    if plugs_dirty:
+        agent.persist("plugs", plugs)
 
 
 async def _evaluate_rules(agent, plug_name: str, plug: dict, watts: float, now: float):
@@ -869,6 +903,30 @@ def _energy_kind(eid: str, friendly: str) -> str:
     if "month" in s:
         return "month"
     return "total"
+
+
+def _find_energy_sensor(states: dict, power_entity: str, kind: str):
+    """Find a sibling energy sensor of the given kind ('month'|'total') for the
+    same device as power_entity, by matching the entity's base name (the same
+    pairing logic _discover_candidates uses). Lets process() backfill a plug
+    that was onboarded before its dedicated month/total sensor was being read,
+    with no re-import required. Returns (entity_id, scale) or (None, 1.0)."""
+    base = _base_entity(power_entity)
+    for eid, st in states.items():
+        if not isinstance(st, dict) or not eid.startswith("sensor."):
+            continue
+        attrs = st.get("attributes", {}) or {}
+        unit  = str(attrs.get("unit_of_measurement") or "").lower()
+        dc    = str(attrs.get("device_class") or "").lower()
+        if dc != "energy" and unit not in ("kwh", "wh"):
+            continue
+        if _base_entity(eid) != base:
+            continue
+        friendly = attrs.get("friendly_name") or eid
+        if _energy_kind(eid, friendly) != kind:
+            continue
+        return eid, (0.001 if unit == "wh" else 1.0)
+    return None, 1.0
 
 
 def _discover_candidates(states: dict) -> list:

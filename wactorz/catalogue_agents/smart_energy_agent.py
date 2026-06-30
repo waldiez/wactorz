@@ -539,8 +539,10 @@ async def handle_task(agent, payload):
     action = str(payload.get("action") or "").strip().lower()
 
     if action == "status":
+        await _refresh_live_snapshot(agent)
         return _status(agent)
     if action in ("cost", "report"):
+        await _refresh_live_snapshot(agent)
         return await _report(agent, payload)
     if action == "add_plug":
         return _add_plug(agent, payload.get("plug"))
@@ -564,6 +566,18 @@ async def handle_task(agent, payload):
 
     # No text at all → friendly first-contact welcome
     return {"result": _welcome(agent)}
+
+
+async def _refresh_live_snapshot(agent):
+    """Refresh live HA readings before answering an interactive request.
+
+    The process loop keeps last_watts in memory, but that cache is intentionally
+    not persisted. A chat request can arrive before the next poll after restart,
+    so force one poll here and then answer from the same snapshot path.
+    """
+    if not agent.state.get("plugs"):
+        return
+    await process(agent)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -679,6 +693,7 @@ async def _converse(agent, text: str) -> dict:
     # ── Status / list (once plugs exist) ─────────────────────────────────────
     if has_plugs and any(w in low for w in ("status", "list plug", "my plug", "what plug",
                                             "which plug", "show plug", "overview", "summary")):
+        await _refresh_live_snapshot(agent)
         return _status(agent)
 
     if "help" in low:
@@ -1232,6 +1247,8 @@ async def _ask_llm(agent, question: str) -> dict:
     """Answer a free-text question using current readings + accumulators."""
     if agent.llm is None:
         return {"result": "No LLM configured — try: status, cost, list_plugs, list_rules"}
+
+    await _refresh_live_snapshot(agent)
 
     rate = agent.state["rate"]
     snapshot = {

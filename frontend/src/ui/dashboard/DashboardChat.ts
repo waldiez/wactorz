@@ -9,12 +9,13 @@
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import type { View } from "./types";
-import { canDirectMessage, pickChatTarget, stateColor, stateLabel } from "./agentState";
+import { canDirectMessage, stateColor, stateLabel } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar } from "./chatIobar";
 import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
 import { ChatInput } from "./chatInput";
+import { pickChatTarget, resolveSendTarget, stripLeadingMention } from "./chatRouting";
 import { SpeechToText } from "../../io/SpeechToText";
 import { renderMarkdown } from "../markdown";
 import { UPLOADS_ENABLED } from "./uploads";
@@ -410,41 +411,62 @@ export class DashboardChat {
             this._chatInput.recordSent(content, input);
         }
 
-        const target = select.value || "main-actor";
+        const prevTarget = this.chatTarget;
+        const target = resolveSendTarget(
+            content,
+            [...this.host.agents.values()].map(a => a.name),
+            select.value || "main-actor",
+        );
         this.chatTarget = target;
         this._lastSentTarget = target;
+        // The leading @mention is the routing prefix; drop it from the displayed
+        // bubble/feed (the transport re-adds the canonical one). Keep the original
+        // if stripping would leave nothing to send.
+        const body = stripLeadingMention(content, target) || content;
         const msg: ChatMessage = {
             id: `user-${Date.now()}`,
             from: "user",
             to: target,
-            content,
+            content: body,
             timestampMs: Date.now(),
             ...(attachments.length ? { attachments: [...attachments] } : {}),
         };
         this.chatMessages.push(msg);
         this._pendingAttachments = [];
         this._renderAttachTray();
-        this._showSentMessage(msg);
+        this._showSentMessage(msg, prevTarget !== target);
         input.value = "";
         input.style.height = "auto";
+        this._emitSend(body, target, msg.attachments?.map(a => a.id) ?? []);
+    }
+
+    /** Dispatch the send while flagging it as our own, so the af-send-message
+     *  listener below skips the message we've already shown optimistically. */
+    private _emitSend(content: string, target: string, attachments: string[]): void {
         this._selfDispatching = true;
-        emit("af-send-message", {
-            content,
-            target,
-            attachments: msg.attachments?.map(a => a.id) ?? [],
-        });
+        emit("af-send-message", { content, target, attachments });
         this._selfDispatching = false;
     }
 
-    /** Put a just-sent user message on screen: switch to the chat view (which
-     *  re-renders the thread) or append it directly if already there. */
-    private _showSentMessage(msg: ChatMessage): void {
+    /** Put a just-sent user message on screen. Not in chat view → switch to it
+     *  (re-renders the thread). Already there: a `@mention` may have switched the
+     *  target, so re-render the pane for the new target; otherwise just append. */
+    private _showSentMessage(msg: ChatMessage, targetSwitched: boolean): void {
         if (this.host.getView() !== "chat") {
             this.host.setView("chat");
-        } else {
-            this._appendChatMsgEl(msg);
-            this._scrollThread();
+            return;
         }
+        if (targetSwitched) {
+            this.renderSidebar();
+            this.renderChatPaneHeader();
+            this.renderChatThread();
+            this.updateTargetSelect();
+            void this.loadHistory(this.chatTarget);
+            this._scrollThread();
+            return;
+        }
+        this._appendChatMsgEl(msg);
+        this._scrollThread();
     }
 
     /** Subscribe to chat/stream/attachment DOM events (call when the dashboard is shown). */
@@ -511,6 +533,7 @@ export class DashboardChat {
                 return;
             }
             const { content, target } = detail;
+            const switched = this.chatTarget !== target;
             this.chatTarget = target;
             this._lastSentTarget = target;
             const msg: ChatMessage = {
@@ -521,7 +544,7 @@ export class DashboardChat {
                 timestampMs: Date.now(),
             };
             this.chatMessages.push(msg);
-            this._showSentMessage(msg);
+            this._showSentMessage(msg, switched);
         });
     }
 

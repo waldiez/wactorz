@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
+import { resolveSendTarget, stripLeadingMention } from "../ui/dashboard/chatRouting";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { View } from "../ui/dashboard/types";
 
@@ -47,6 +48,46 @@ const thread = (host: ChatHost) => host.root.querySelector<HTMLElement>("#af-cha
 // A raw UUID agent id — the backend uses these (not WIDs), and one that never
 // resolved to a friendly name keeps the id as its name.
 const UUID = "45511e2b-3a2f-4c1d-9e8a-1b2c3d4e5f60";
+
+describe("resolveSendTarget", () => {
+    const names = ["main-actor", "catalog", "worker"];
+
+    it("routes to a leading @mention over the picker target", () => {
+        expect(resolveSendTarget("@catalog do the thing", names, "main-actor")).toBe("catalog");
+    });
+
+    it("matches the mention case-insensitively", () => {
+        expect(resolveSendTarget("@Catalog hi", names, "main-actor")).toBe("catalog");
+    });
+
+    it("falls back to the picker when there is no mention", () => {
+        expect(resolveSendTarget("do the thing", names, "main-actor")).toBe("main-actor");
+    });
+
+    it("falls back when the mention names no known agent", () => {
+        expect(resolveSendTarget("@ghost hi", names, "main-actor")).toBe("main-actor");
+    });
+});
+
+describe("stripLeadingMention", () => {
+    it("drops a leading @target (case-insensitive) and following space", () => {
+        expect(stripLeadingMention("@catalog spawn x", "catalog")).toBe("spawn x");
+        expect(stripLeadingMention("@Catalog spawn x", "catalog")).toBe("spawn x");
+    });
+
+    it("handles a hyphenated agent name", () => {
+        expect(stripLeadingMention("@main-actor hi", "main-actor")).toBe("hi");
+    });
+
+    it("leaves content untouched when the leading mention isn't the target", () => {
+        expect(stripLeadingMention("@worker hi", "catalog")).toBe("@worker hi");
+        expect(stripLeadingMention("plain text", "catalog")).toBe("plain text");
+    });
+
+    it("does not strip a partial-name match", () => {
+        expect(stripLeadingMention("@catalogue hi", "catalog")).toBe("@catalogue hi");
+    });
+});
 
 describe("DashboardChat — syncChatTarget", () => {
     it("prefers main even when an id-named agent sorts first", () => {

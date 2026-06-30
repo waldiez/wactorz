@@ -191,7 +191,7 @@
   font-size: 10px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.6);
   margin-bottom: -4px;
 }
 .af-audio-tracks {
@@ -248,7 +248,7 @@
   background: none;
   border: none;
   cursor: pointer;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.6);
   transition: color 0.15s;
   font-family: inherit;
 }
@@ -335,7 +335,7 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.6);
 }
 .af-stat-value {
   margin-top: 8px;
@@ -442,7 +442,7 @@
 }
 .af-panel-head span {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.6);
 }
 
 /* ── Wactor card additions (controls use af-mini-btn) ── */
@@ -505,7 +505,7 @@
 }
 .af-node-meta {
   margin-top: 4px;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.6);
   font-size: 11px;
   line-height: 1.4;
 }
@@ -515,7 +515,7 @@
   border-radius: 20px;
   font-size: 11px;
   border: 1px solid rgba(127, 29, 29, 0.4);
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.6);
   background: rgba(127, 29, 29, 0.18);
 }
 .af-node-pill.online {
@@ -587,7 +587,7 @@
   align-items: center;
   justify-content: center;
   width: 14px;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.6);
 }
 /* Tint the line-icon to match each event type's accent. */
 .af-feed-spawn .af-feed-icon {
@@ -657,7 +657,7 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.6);
   text-align: center;
 }
 .af-stream-caret {

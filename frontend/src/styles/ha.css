@@ -124,7 +124,7 @@
 }
 
 .af-ha-empty {
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.6);
   text-align: center;
   margin-top: 40px;
   grid-column: 1 / -1;
@@ -139,7 +139,7 @@
 }
 
 .af-ha-empty-msg {
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.6);
   text-align: center;
   padding: 40px;
 }
@@ -153,7 +153,7 @@
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
-  color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.6);
   text-transform: uppercase;
   display: flex;
   align-items: center;
@@ -286,7 +286,7 @@
 
 .af-ha-ctrl-label {
   font-size: 9px;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .af-ha-slider-input {
@@ -325,6 +325,6 @@
   padding: 2px 8px;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.6);
   white-space: nowrap;
 }

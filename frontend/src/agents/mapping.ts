@@ -70,6 +70,14 @@ export function toAgentInfo(a: StatePatchAgent): AgentInfo {
 }
 
 /**
+ * Live actor list from `/api/actors` → store-ready agents: drop those the
+ * deletion guard still suppresses and resolve a display name for each.
+ */
+export function reconcileActorList(actors: AgentInfo[], isDeleted: (id: string) => boolean): AgentInfo[] {
+    return actors.filter(a => !isDeleted(a.id)).map(a => ({ ...a, name: resolveAgentName(a.name, a.id) }));
+}
+
+/**
  * Merge cost/message/uptime metrics onto an existing agent, preserving its
  * identity/state and copying only the fields the payload actually carries
  * (so `exactOptionalPropertyTypes` stays happy and undefined never clobbers).
@@ -248,6 +256,22 @@ export function alertFeedItem(p: AlertPayload): FeedItem {
         label: p.message ?? "",
         agentName: p.agentName ?? "system",
         timestamp: p.timestampMs,
+    };
+}
+
+/** A raw `/api/feed` row (server sends Unix *seconds*) → a chat feed row. */
+export function feedSeedItem(raw: {
+    label: string;
+    agentName: string;
+    timestamp?: number;
+    role?: string;
+}): FeedItem {
+    return {
+        type: "chat",
+        label: raw.label,
+        agentName: raw.agentName,
+        timestamp: raw.timestamp ? raw.timestamp * 1000 : Date.now(),
+        role: raw.role,
     };
 }
 

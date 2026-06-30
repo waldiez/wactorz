@@ -27,18 +27,34 @@
 
 - [ ] File lives in `src/ui/`
 - [ ] Component is a plain class — no framework, no global state
-- [ ] Wires events via `document.addEventListener` / `document.dispatchEvent`
+- [ ] Wires events via the typed `emit` / `listen` helpers in `src/events.ts`
 - [ ] Cleaned up in a `destroy()` method (remove event listeners)
-- [ ] Added to bootstrap order comment in `main.ts`
+- [ ] Instantiated in the matching numbered section of `main.ts` (see its header map)
 - [ ] Unit test added in `src/__tests__/` (coverage is gated in CI)
 - [ ] `bun run docs` — TypeDoc still builds
 
 ### New agent interaction (command / event)
 
 - [ ] New `CustomEvent` name follows the `af-*` prefix convention
-- [ ] Payload type added to `src/types/agent.ts`
+- [ ] Event name + payload added to `AppEventMap` in `src/events.ts` (the single
+      source of truth for `emit`/`listen` typing); domain payloads (MQTT/WS shapes)
+      stay in `src/types/`
 - [ ] Sender dispatches the event; receiver only listens — no circular calls
 - [ ] Backend counterpart event/command documented in the PR description
+
+### Touching `main.ts` (the composition root)
+
+`main.ts` is wiring only — it instantiates services, derives URLs, and registers
+handlers in its eight numbered sections. It is **covered** by `src/__tests__/main-bootstrap.test.ts`
+(no longer a coverage exclusion), so keep it thin:
+
+- [ ] Handlers stay thin delegators — store call + `pushFeed`/`toast`, nothing more
+- [ ] Any decision/transform goes in a tested module (`agents/mapping`,
+      `agents/deletionGuard`, `ui/haFeed`, `ui/dashboard/haConfig`), not inline
+- [ ] New transport/app-event handlers go in the right numbered section, before the
+      `connect()` calls in section 7
+- [ ] `main-bootstrap.test.ts` drives the new handler (mock the transport, invoke the
+      registered callback) so coverage stays green
 
 ### Touching the feed / CardDashboard
 

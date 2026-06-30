@@ -7,6 +7,8 @@ import {
     buildNameIndex,
     mapLogFeedItem,
     toAgentInfo,
+    reconcileActorList,
+    feedSeedItem,
     buildMetricsUpdate,
     heartbeatFeedItem,
     spawnTypeLabel,
@@ -287,5 +289,49 @@ describe("live MQTT event feed builders", () => {
         expect(nodeHeartbeatFeedItem({ node: "n", agents: [] } as NodeHeartbeatPayload, 1).label).toBe(
             "node online · 0 agents",
         );
+    });
+});
+
+describe("reconcileActorList", () => {
+    const actor = (id: string, name?: string): AgentInfo => ({ id, name: name ?? id }) as AgentInfo;
+
+    it("drops agents the deletion guard suppresses", () => {
+        const out = reconcileActorList([actor("a"), actor("b"), actor("c")], id => id === "b");
+        expect(out.map(a => a.id)).toEqual(["a", "c"]);
+    });
+
+    it("resolves a display name for each surviving agent", () => {
+        const [a] = reconcileActorList([actor("agent-Catalog-1a2b", "")], () => false);
+        expect(a?.name).toBe(resolveAgentName("", "agent-Catalog-1a2b"));
+    });
+
+    it("keeps an empty list empty and never mutates the input element", () => {
+        expect(reconcileActorList([], () => false)).toEqual([]);
+        const src = actor("x", "X");
+        reconcileActorList([src], () => false);
+        expect(src.name).toBe("X"); // spread copy, not in-place
+    });
+});
+
+describe("feedSeedItem", () => {
+    it("converts the server's Unix seconds to ms", () => {
+        expect(feedSeedItem({ label: "hi", agentName: "a", timestamp: 1700000000 })).toEqual({
+            type: "chat",
+            label: "hi",
+            agentName: "a",
+            timestamp: 1700000000000,
+            role: undefined,
+        });
+    });
+
+    it("falls back to now when the timestamp is missing or zero", () => {
+        const before = Date.now();
+        const item = feedSeedItem({ label: "x", agentName: "a", timestamp: 0 });
+        expect(item.timestamp).toBeGreaterThanOrEqual(before);
+        expect(feedSeedItem({ label: "x", agentName: "a" }).timestamp).toBeGreaterThanOrEqual(before);
+    });
+
+    it("passes the role through", () => {
+        expect(feedSeedItem({ label: "x", agentName: "a", timestamp: 1, role: "user" }).role).toBe("user");
     });
 });

@@ -3,15 +3,22 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * Wactorz Dashboard — entry point.
+ * Wactorz Dashboard — entry point / composition root.
  *
- * Bootstrap order:
- * 1. Create AgentStore (agent-state store + CardDashboard coordinator)
- * 2. Create MQTTClient and connect to broker
- * 3. Wire MQTT events → AgentStore (which drives the cards dashboard)
+ * This file only *wires*: it instantiates the services, derives the deployment
+ * URLs, and connects transports → store → UI. Every decision/transform lives in
+ * a tested module (agents/mapping, agents/deletionGuard, ui/haFeed,
+ * ui/dashboard/haConfig); the handlers below are thin delegators. Keep it that
+ * way — if a handler grows real logic, extract it (see CONTRIBUTING).
  *
- * The chat lives entirely in CardDashboard's in-card bar (DashboardChat),
- * which renders from the af-chat-message / af-stream-* events IOManager emits.
+ * The chat lives entirely in CardDashboard's in-card bar (DashboardChat), which
+ * renders from the af-chat-message / af-stream-* events IOManager emits.
+ *
+ * Sections below run top-to-bottom in this order:
+ *   1. Deployment env & service URLs   5. Wiring — Home Assistant feed
+ *   2. Core services & shared state    6. Wiring — app events (CustomEvents)
+ *   3. Helpers                         7. Startup — REST seed, TTS, connect
+ *   4. Wiring — transports (WS, MQTT)  8. Teardown
  */
 
 import "./app.css";
@@ -28,9 +35,9 @@ import { DropZone } from "./ui/DropZone";
 import { UPLOADS_ENABLED } from "./ui/dashboard/uploads";
 import type { AgentInfo } from "./types/agent";
 import type { FeedItem } from "./types/feed";
-import { resolveAgentName } from "./agents/naming";
 import {
     toAgentInfo,
+    reconcileActorList,
     buildNameIndex,
     selectLogFeedReplay,
     type LogFeedReplayState,
@@ -41,6 +48,7 @@ import {
     alertFeedItem,
     alertKind,
     chatFeedItem,
+    feedSeedItem,
     stoppedFeedItem,
     qaFlagFeedItem,
     logFeedItem,
@@ -49,11 +57,8 @@ import {
 } from "./agents/mapping";
 import { createDeletionGuard } from "./agents/deletionGuard";
 
-const agentStore = new AgentStore();
-
-// Clear any stale persisted theme from older builds.
-localStorage.removeItem("wactorz-theme");
-
+// ═══ 1 · Deployment env & service URLs ══════════════════════════════════════
+//
 // Two deployment contexts, both served same-origin:
 //
 //   1. HA addon       — __WACTORZ_INGRESS_PATH is injected by the Python
@@ -65,6 +70,9 @@ localStorage.removeItem("wactorz-theme");
 //
 // Never use window.location.host to build absolute URLs: inside the HAOS
 // webview that host is the HA instance itself, not the addon backend.
+
+// Clear any stale persisted theme from older builds.
+localStorage.removeItem("wactorz-theme");
 
 const _ingressPath: string = window.__WACTORZ_INGRESS_PATH ?? "";
 
@@ -95,21 +103,35 @@ const _mqttDefault = `${_wsBase}/mqtt`;
 localStorage.removeItem("wactorz-mqtt-url");
 
 const MQTT_BROKER = (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) || _mqttDefault;
-const mqtt = new MQTTClient(MQTT_BROKER);
 
+// ═══ 2 · Core services & shared state ════════════════════════════════════════
+
+const agentStore = new AgentStore();
+const mqtt = new MQTTClient(MQTT_BROKER);
 const ioManager = new IOManager(mqtt);
+const wsChat = new WSChatClient();
 
 // Global drag-and-drop upload overlay — only wired up when the backend endpoint
 // exists (flip UPLOADS_ENABLED once /api/upload is live), so the overlay never
 // appears for a feature that can't work yet.
 const _dropZone = UPLOADS_ENABLED ? new DropZone(_apiBase) : null;
 
-const wsChat = new WSChatClient();
-let liveSyncInFlight = false;
 // Live-grid deletion guard (mirrors the backend's _deleted_agent_ids): blocks
 // stale stop-window events from blinking a deleted card back, and re-admits a
 // re-spawn via its newer timestamp. See createDeletionGuard for the rationale.
 const { markDeleted, isDeleted } = createDeletionGuard();
+
+const _logFeedState: LogFeedReplayState = { maxTs: 0, initialized: false };
+let _mqttLive = false;
+let liveSyncInFlight = false;
+// Seed only once — MQTT reconnects must not re-add already-known agents.
+let seeded = false;
+
+// ═══ 3 · Helpers ═════════════════════════════════════════════════════════════
+
+function pushFeed(item: FeedItem): void {
+    emit("af-feed-push", { item });
+}
 
 function refreshLiveActors(): void {
     if (liveSyncInFlight) {
@@ -119,14 +141,7 @@ function refreshLiveActors(): void {
     fetch(`${_apiBase}/api/actors`)
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((actors: AgentInfo[]) => {
-            agentStore.reconcileAgents(
-                actors
-                    .filter(a => !isDeleted(a.id))
-                    .map(a => ({
-                        ...a,
-                        name: resolveAgentName(a.name, a.id),
-                    })),
-            );
+            agentStore.reconcileAgents(reconcileActorList(actors, isDeleted));
             log.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
         })
         .catch(err => {
@@ -138,6 +153,8 @@ function refreshLiveActors(): void {
             liveSyncInFlight = false;
         });
 }
+
+// ═══ 4 · Wiring — WebSocket transport (chat replies · state patches · log feed)
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
 wsChat.onChat((content, from, timestampMs) => {
@@ -185,20 +202,9 @@ wsChat.onStatePatch((agents, deletedId, stats) => {
     });
 });
 
-wsChat.connect(`${_wsBase}/ws`);
-refreshLiveActors();
-window.setInterval(() => {
-    refreshLiveActors();
-    agentStore.pruneStaleRemoteAgents();
-}, 15000);
-
 // The server embeds its in-memory log_feed (spawned/status/logs/alerts) in
 // every state-patch.  We use this as a reliable secondary path so MQTT events
 // appear in the feed even when the direct Mosquitto WebSocket is unavailable.
-
-const _logFeedState: LogFeedReplayState = { maxTs: 0, initialized: false };
-let _mqttLive = false;
-
 wsChat.onLogFeed(items => {
     // Nameless entries (e.g. `log`) borrow their friendly name from the
     // `spawned` entry in the same batch, then from the live agent store — so
@@ -211,68 +217,7 @@ wsChat.onLogFeed(items => {
     selectLogFeedReplay(items, _logFeedState, _mqttLive, resolveName).forEach(pushFeed);
 });
 
-// Seed the activity feed from SQLite chat_log so the feed view isn't empty
-// after a server restart. The server returns real Unix timestamps (seconds);
-// convert to ms for the feed.
-fetch(`${_apiBase}/api/feed`)
-    .then(r => (r.ok ? r.json() : []))
-    .then(
-        (items: { type: string; label: string; agentName: string; timestamp?: number; role?: string }[]) => {
-            log.info("[feed] /api/feed seed:", items.length, "items");
-            if (!items.length) {
-                return;
-            }
-            items.forEach(item => {
-                pushFeed({
-                    type: "chat",
-                    label: item.label,
-                    agentName: item.agentName,
-                    timestamp: item.timestamp ? item.timestamp * 1000 : Date.now(),
-                    role: item.role,
-                });
-            });
-        },
-    )
-    .catch(err => log.debug("[feed] /api/feed seed failed:", err));
-
-// Backend config (.env) is the source of truth. We track the last server value
-// we seeded (key + "__server") so we can tell "the user edited this locally"
-// from "the .env value changed". When the server value changes we update the
-// active key; otherwise a genuine user edit in Settings survives reloads.
-//
-// Note: the MQTT URL is intentionally NOT seeded here. The frontend always
-// connects to the same-origin /mqtt proxy (see _mqttDefault), so the broker's
-// address never belongs in the browser. Caching it here was the source of the
-// stale-port "Demo fallback" bug. A manual override is still available via the
-// Settings → MQTT field (wactorz-mqtt-url), which this never touches.
-fetch(`${_apiBase}/api/config`)
-    .then(r => (r.ok ? r.json() : null))
-    .then(cfg => {
-        if (!cfg) {
-            return;
-        }
-        // Seed `key` from the server value, letting .env changes propagate while
-        // preserving deliberate local edits.
-        const seedFromServer = (key: string, value: string) => {
-            if (!value) {
-                return;
-            }
-            const baselineKey = `${key}__server`;
-            const lastServer = localStorage.getItem(baselineKey);
-            // Server value changed (or never seeded) → adopt it as the active value.
-            if (value !== lastServer) {
-                localStorage.setItem(key, value);
-                localStorage.setItem(baselineKey, value);
-            }
-        };
-        seedFromServer("wactorz-ha-url", cfg.ha?.url ?? "");
-        seedFromServer("wactorz-ha-token", cfg.ha?.token ?? "");
-    })
-    .catch(err => log.debug("[config] /api/config seed failed:", err));
-
-function pushFeed(item: FeedItem): void {
-    emit("af-feed-push", { item });
-}
+// ═══ 4 · Wiring — MQTT transport ═════════════════════════════════════════════
 
 mqtt.on("heartbeat", payload => {
     if (isDeleted(payload.agentId, payload.timestampMs)) {
@@ -333,9 +278,6 @@ mqtt.on("status", payload => {
     }
 });
 
-// Seed only once — MQTT reconnects must not re-add already-known agents.
-let seeded = false;
-
 mqtt.on("connected", () => {
     _mqttLive = true;
     log.info("[Dashboard] MQTT connected");
@@ -388,8 +330,18 @@ mqtt.on("host-stats", stats => {
     }
 });
 
-// HA entity state-changes arrive over two transports; a single pusher filters
-// and de-duplicates them. See ui/haFeed.
+mqtt.on("disconnected", () => {
+    _mqttLive = false;
+    log.warn("[Dashboard] MQTT disconnected");
+    emit("af-connection-status", { status: "demo" });
+});
+
+mqtt.on("error", err => {
+    log.error("[Dashboard] MQTT error:", err);
+});
+
+// ═══ 5 · Wiring — Home Assistant feed ════════════════════════════════════════
+// HA entity state arrives over two transports; one pusher de-duplicates. See ui/haFeed.
 const pushHaFeed = createHaFeedPusher(pushFeed);
 
 // Path 1: direct HA WebSocket via HAClient (always works when HA is configured in frontend)
@@ -406,15 +358,7 @@ mqtt.on("raw", ({ topic, payload }) => {
     }
 });
 
-mqtt.on("disconnected", () => {
-    _mqttLive = false;
-    log.warn("[Dashboard] MQTT disconnected");
-    emit("af-connection-status", { status: "demo" });
-});
-
-mqtt.on("error", err => {
-    log.error("[Dashboard] MQTT error:", err);
-});
+// ═══ 6 · Wiring — app events (CustomEvents, see events.ts AppEventMap) ═══════
 
 // Streaming reply finished — notify
 listen("af-stream-end", detail => {
@@ -444,19 +388,6 @@ listen("af-send-message", detail => {
     void ioManager.send(content, agent);
 });
 
-// Probe server TTS availability + load voice list (base must be set first so
-// the request stays inside the ingress prefix instead of bare "/api").
-tts.setApiBase(_apiBase);
-tts.init();
-
-mqtt.connect();
-
-window.addEventListener("beforeunload", () => {
-    mqtt.disconnect();
-    wsChat.disconnect();
-    agentStore.dispose();
-});
-
 // wipe all
 listen("af-wipe-all", () => {
     agentStore.clearAll();
@@ -468,4 +399,45 @@ listen("af-wipe-all", () => {
 // keep showing stale lines until the next event.
 listen("af-clear-feed", () => {
     _logFeedState.maxTs = 0;
+});
+
+// ═══ 7 · Startup — REST seed, TTS probe, connect ═════════════════════════════
+
+wsChat.connect(`${_wsBase}/ws`);
+refreshLiveActors();
+window.setInterval(() => {
+    refreshLiveActors();
+    agentStore.pruneStaleRemoteAgents();
+}, 15000);
+
+// Seed the activity feed from SQLite chat_log so the feed view isn't empty
+// after a server restart (the server returns Unix seconds; feedSeedItem → ms).
+fetch(`${_apiBase}/api/feed`)
+    .then(r => (r.ok ? r.json() : []))
+    .then(
+        (items: { type: string; label: string; agentName: string; timestamp?: number; role?: string }[]) => {
+            log.info("[feed] /api/feed seed:", items.length, "items");
+            items.forEach(item => pushFeed(feedSeedItem(item)));
+        },
+    )
+    .catch(err => log.debug("[feed] /api/feed seed failed:", err));
+
+// HA credentials are seeded from /api/config by CardDashboard (see
+// ui/dashboard/haConfig) — the single source of truth. The MQTT URL is
+// deliberately never seeded: the frontend always uses the same-origin /mqtt
+// proxy (see _mqttDefault), so the broker address never belongs in the browser.
+
+// Probe server TTS availability + load voice list (base must be set first so
+// the request stays inside the ingress prefix instead of bare "/api").
+tts.setApiBase(_apiBase);
+tts.init();
+
+mqtt.connect();
+
+// ═══ 8 · Teardown ════════════════════════════════════════════════════════════
+
+window.addEventListener("beforeunload", () => {
+    mqtt.disconnect();
+    wsChat.disconnect();
+    agentStore.dispose();
 });

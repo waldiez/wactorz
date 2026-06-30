@@ -111,7 +111,7 @@ nodes/{node}/heartbeat  system/health
 ## Adding a new UI component
 
 1. Create `src/ui/MyComponent.ts`
-2. Instantiate in `main.ts` (follow the existing bootstrap order comment)
+2. Instantiate in `main.ts`, in the matching numbered section (see its header map)
 3. Subscribe to relevant events via `listen(type, handler)` from `src/events.ts`
 4. Fire events via `emit(type, detail)` rather than calling methods on other components directly
    (add the event to `AppEventMap` first)

@@ -39,7 +39,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[all,dev]"
 
       - name: Lint
         run: make lint-py

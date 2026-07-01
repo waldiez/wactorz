@@ -75,9 +75,19 @@ describe("IOManager.send — mqtt mode", () => {
         );
     });
 
-    it("pushes the user message to the feed", async () => {
+    it("feeds the user turn with the @agent routing mention when an agent is selected", async () => {
+        // Regression: direct-selecting an agent (no typed @) must still show the
+        // mention live, matching the persisted row seen after a refresh.
         await new IOManager(makeMqtt()).send("hello", agentInfo);
-        expect(lastEvent("af-feed-push")?.detail.item).toMatchObject({ agentName: "user", label: "hello" });
+        expect(lastEvent("af-feed-push")?.detail.item).toMatchObject({
+            agentName: "user",
+            label: "@alpha hello",
+        });
+    });
+
+    it("feeds the plain text when no agent is selected", async () => {
+        await new IOManager(makeMqtt()).send("hi", null);
+        expect(lastEvent("af-feed-push")?.detail.item).toMatchObject({ agentName: "user", label: "hi" });
     });
 
     it("toasts an error when the publish fails", async () => {

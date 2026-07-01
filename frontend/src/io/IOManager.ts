@@ -70,12 +70,14 @@ export class IOManager {
             id: _widGen.next(),
             from: "user",
             to: agent?.name ?? "main-actor",
-            content: text, // original (without @-prefix) for the feed
+            content, // routed form (`@agent …`), mirroring what goes on the wire
             timestampMs: Date.now(),
         };
 
+        // Echo the routed form so the live feed row matches the persisted one
+        // shown after a refresh — the feed renders the `@agent` mention.
         emit("af-feed-push", {
-            item: { type: "chat", label: text, agentName: "user", timestamp: msg.timestampMs },
+            item: { type: "chat", label: content, agentName: "user", timestamp: msg.timestampMs },
         });
 
         // direct_ws mode: send over WebSocket only — never fall back to MQTT.

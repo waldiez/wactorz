@@ -1,9 +1,9 @@
 {
   "name": "Wactorz Dashboard",
   "short_name": "Wactorz",
-  "description": "Wactorz: real-time multi-agent orchestration dashboard. Monitor, chat with, and control AI agents.",
-  "start_url": "/",
-  "scope": "/",
+  "description": "Real-time multi-agent orchestration dashboard. Monitor, chat with, and control AI agents.",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#050818",
@@ -12,19 +12,19 @@
   "categories": ["productivity", "developer"],
   "icons": [
     {
-      "src": "/icon.png",
+      "src": "./icon.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon.png",
+      "src": "./icon.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
     },
     {
-      "src": "/favicon.svg",
+      "src": "./favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
@@ -32,11 +32,18 @@
   ],
   "screenshots": [
     {
-      "src": "/screenshots/dashboard.png",
-      "sizes": "1280x720",
-      "type": "image/png",
+      "src": "./screenshots/dashboard.webp",
+      "sizes": "1920x1080",
+      "type": "image/webp",
       "form_factor": "wide",
-      "label": "Dashboard overview"
+      "label": "Wactorz dashboard"
+    },
+    {
+      "src": "./screenshots/mobile.webp",
+      "sizes": "1080x1920",
+      "type": "image/webp",
+      "form_factor": "narrow",
+      "label": "Wactorz dashboard on mobile"
     }
   ]
 }

@@ -4,13 +4,13 @@
  */
 /**
  * Chat input behaviour for the iobar textarea: history (↑/↓), ghost-text
- * autosuggestion from history, and the @mention panel. Owns all of that state
+ * autosuggestion from history, and the `@mention` panel. Owns all of that state
  * so CardDashboard doesn't have to; it reaches back to the host only for the
  * agent list, the active target, and the send action.
  */
 
 export interface ChatInputHost {
-    /** All known agent names (for @mention completion). */
+    /** All known agent names (for `@mention` completion). */
     agentNames(): string[];
     /** Set the active chat target (when a mention is accepted). */
     setTarget(name: string): void;
@@ -62,7 +62,7 @@ export class ChatInput {
         }
     }
 
-    /** Handle input changes: open the @mention panel or update the ghost suggestion. */
+    /** Handle input changes: open the `@mention` panel or update the ghost suggestion. */
     onChange(
         input: HTMLTextAreaElement,
         select: HTMLSelectElement,
@@ -73,7 +73,7 @@ export class ChatInput {
         // @mention detection: `@` anywhere at the end of the current word.
         const mentionMatch = /@(\w*)$/.exec(val);
         if (mentionMatch) {
-            this._openMentionPanel(mentionMatch[1] ?? "", mentionPanel, select, input);
+            this._openMentionPanel(mentionMatch[1] ?? "", mentionPanel, select, input, ghost);
             this._clearGhost(input, ghost);
             return;
         }
@@ -91,12 +91,15 @@ export class ChatInput {
         this.draft = "";
         this.suggestion = "";
         input.classList.remove("has-suggestion");
-        const ghost = input.previousElementSibling as HTMLElement | null;
-        if (ghost?.classList.contains("af-input-ghost")) {
+        // Locate the ghost by class within the input's wrapper rather than by
+        // sibling order, so a markup reorder can't silently break clearing.
+        const ghost = input.parentElement?.querySelector<HTMLElement>(".af-input-ghost");
+        if (ghost) {
             ghost.textContent = "";
         }
     }
 
+    /** Close the `@mention` panel and reset its selection state. */
     closePanel(panel: HTMLElement): void {
         this.mentionOpen = false;
         this.mentionIdx = -1;
@@ -120,7 +123,7 @@ export class ChatInput {
             e.preventDefault();
             const dir = e.key === "ArrowRight" ? 1 : -1;
             this.mentionIdx = Math.max(-1, Math.min(this.mentionMatches.length - 1, this.mentionIdx + dir));
-            this._renderMentionChips(mentionPanel, select, input);
+            this._renderMentionChips(mentionPanel, select, input, ghost);
             return true;
         }
         if (e.key === "Tab" || e.key === "Enter") {
@@ -237,6 +240,7 @@ export class ChatInput {
         panel: HTMLElement,
         select: HTMLSelectElement,
         input: HTMLTextAreaElement,
+        ghost: HTMLElement,
     ): void {
         const all = this.host.agentNames();
         this.mentionMatches = query ? all.filter(n => n.toLowerCase().startsWith(query.toLowerCase())) : all;
@@ -246,7 +250,7 @@ export class ChatInput {
         }
         this.mentionIdx = 0;
         this.mentionOpen = true;
-        this._renderMentionChips(panel, select, input);
+        this._renderMentionChips(panel, select, input, ghost);
         panel.classList.add("open");
     }
 
@@ -254,6 +258,7 @@ export class ChatInput {
         panel: HTMLElement,
         select: HTMLSelectElement,
         input: HTMLTextAreaElement,
+        ghost: HTMLElement,
     ): void {
         panel.textContent = "";
         this.mentionMatches.forEach((name, i) => {
@@ -262,7 +267,7 @@ export class ChatInput {
             chip.textContent = name;
             chip.addEventListener("mousedown", e => {
                 e.preventDefault();
-                this._acceptMention(name, input, select, panel, panel.previousElementSibling as HTMLElement);
+                this._acceptMention(name, input, select, panel, ghost);
             });
             panel.appendChild(chip);
         });
@@ -278,13 +283,18 @@ export class ChatInput {
         if (!name) {
             return;
         }
+        const opt = [...select.options].find(o => o.value === name || o.text === name);
+        if (!opt) {
+            // The mentioned agent isn't a valid target (left, or not messageable).
+            // Don't strip the query or fake a target switch — just dismiss the
+            // panel, so the placeholder never claims a target that wasn't set.
+            this.closePanel(panel);
+            return;
+        }
         // Replace the trailing @query with nothing (target is set via select).
         input.value = input.value.replace(/@\w*$/, "").trimEnd();
-        const opt = [...select.options].find(o => o.value === name || o.text === name);
-        if (opt) {
-            select.value = opt.value;
-            this.host.setTarget(opt.value);
-        }
+        select.value = opt.value;
+        this.host.setTarget(opt.value);
         input.placeholder = `Message @${name}…`;
         this.closePanel(panel);
         if (ghost) {

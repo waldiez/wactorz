@@ -3,6 +3,98 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — pending
+
+### Added
+
+- **Per-agent token counts** — LLM agents' cumulative input/output tokens now show on
+  their card next to cost (compact `12.5k↑ 900↓`); non-LLM agents show nothing, as
+  before. The counts were already on the wire but previously parsed and dropped.
+- **More activity-feed sources** — the dashboard feed now surfaces agent actuations
+  (what an agent actually changed) and anomaly events, via an extensible topic
+  registry so further feed-only topics are a one-line addition.
+- **Pipeline-rule conflict advisory** — planner now semantically checks a new rule
+  against active ones and flags duplicates and contradictions (e.g. "over 25° AC off"
+  vs "AC on") as a non-blocking "⚠️ Heads up" note at approval.
+
+### Fixed
+
+- **@mention could silently fail to switch target** — the mention list offered every
+  agent, but only messageable agents are in the target picker, so mentioning a
+  non-messageable one left the placeholder claiming a target that was never set.
+  Suggestions now mirror the picker (messageable only), and accepting an untargetable
+  name is a clean no-op.
+- **Planners leaked until restart** — proposal/pipeline planners never stopped and
+  stayed pinned by both the registry and the Supervisor. Added a lifetime watchdog
+  (`max_lifetime_s`, 10 min) + idempotent `_terminate()` doing `release()` →
+  `unregister()` → `stop()`.
+- **Plan steps silently dropped** — bad/cyclic `depends_on` aborted the plan with no
+  trace; references are now validated and failures surfaced per-step.
+- **`plan_only` could spawn agents** — `approved_plan` was checked first despite the
+  docs; precedence is now enforced in `on_start`.
+
+### Changed
+
+- **Home Assistant "Devices" → direct link** — the dashboard's embedded device
+  list/control panel was replaced with a "Devices" button that opens Home
+  Assistant's own UI in a new tab (using the URL from `/api/config`). HA entity
+  activity still appears in the activity feed via the MQTT state bridge.
+- **Unified planner JSON parsing** — both decomposition paths share
+  `_extract_json_array` instead of fragile fence-stripping.
+- **Continuous agents declarable** — `_ensure_agents` honours
+  `spawn_config["continuous"]` before falling back to code substring-matching.
+- **`_is_pipeline_request`** is now a proper `@staticmethod`.
+
+### Removed
+
+- **Flutter companion app** — the `mobile/` Flutter project (iOS/Android companion
+  app) and its `test-mobile` CI job were removed. The web dashboard and REST/WS
+  API remain the supported clients.
+
+### Fixed
+
+- **Planner-spawned agents silently missing setup** — `PlannerAgent` carried its
+  own drifted copy of the spawn logic, so dynamic agents it spawned skipped
+  migrated-state injection, TopicContract auto-wiring, and the `trusted` flag
+  (catalog agents were needlessly re-run through the safety validator). Spawn and
+  install logic for `MainActor` and `PlannerAgent` is now a single shared
+  `SpawnMixin`, so an agent behaves identically regardless of which one spawns it.
+  ~550 lines of duplication removed.
+
+### Changed
+
+- **`main_actor.py` decomposed** (6113 → ~4400 lines) with no behaviour change:
+  prompts → `agents/prompts/main_actor_prompts.py`, constants + pure helpers →
+  `agents/helpers/main_actor_helpers.py`, and two behaviour mixins →
+  `agents/mixins/{spawning,memory}.py`. `planner_agent.py` lost ~200 lines of
+  duplicated spawn code. New `agents/mixins/` and `agents/helpers/` subpackages
+  keep `agents/` to actual agents only.
+- **ha_actuator name collisions** now keyed on agent name (was `automation_id`);
+  a colliding actuator may get a different suffixed name.
+- **`type: "manual"` spawn configs** now route correctly through `MainActor`
+  (previously fell through to a no-op).
+
+### Added
+
+- **Weather catalog agent** — `@catalog spawn weather-agent` adds an optional manual weather helper backed by Open-Meteo for current conditions, forecasts, historical weather, default locations, and weather-related natural-language questions.
+- **Smart energy catalog agent** — `@catalog spawn smart-energy` adds an optional Home Assistant smart-plug helper for plug discovery, live wattage, kWh/cost tracking, and guarded user-requested auto-off rules.
+- **Tests** — `test_spawning.py` (23) covering spawn routing, idempotency/replace,
+  both install models, the `trusted` flag and TopicContract wiring; `test_memory.py`
+  (12) covering fact extraction/namespacing and system-prompt assembly.
+
+### Notes
+
+- Dead code spotted, not yet removed: `_looks_like_home_automation_request` has no
+  callers.
+
+---
+
+## [Unreleased] - 2026-06-22
+
+### Fixed
+
+- **Headless `cli` interface self-shutdown** — `wactorz --interface cli` with no TTY (piped, Docker without `-it`, systemd) booted fully then tore the whole system down ~1s later: `input()` raised `EOFError` immediately, finishing the interactive loop, and with `run_forever()` already a no-op there was nothing left keeping the process alive. The `cli` interface now detects a non-interactive stdin and stays up via `run_forever()` instead of starting the interactive loop.
+
 ---
 
 ## [0.5.0] - 2026-06-22

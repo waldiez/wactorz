@@ -1,5 +1,4 @@
-"""
-CATALOG AGENT — timeseries-collector
+"""CATALOG AGENT — timeseries-collector
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Background data collector. Subscribes to sensor, detection, HA state-change
 and Sinergym MQTT topics and writes every message to the SQLite time-series

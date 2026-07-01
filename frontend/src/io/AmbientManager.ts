@@ -16,6 +16,7 @@ const LS_VOLUME = "wactorz.ambientVolume";
 
 export type AmbientTrackId = "none" | "rain" | "forest" | "beach" | "cafe";
 
+/** Selectable ambient tracks (id + display label) for the audio popover. */
 export const AMBIENT_TRACKS: { id: AmbientTrackId; label: string }[] = [
     { id: "none", label: "Off" },
     { id: "rain", label: "🌧 Rain" },
@@ -227,6 +228,18 @@ function buildCafe(ctx: AudioContext, out: GainNode): Stopper {
     };
 }
 
+/** Read the persisted track, falling back to "none" for a missing/corrupt value. */
+function readTrack(): AmbientTrackId {
+    const raw = localStorage.getItem(LS_TRACK);
+    return AMBIENT_TRACKS.some(t => t.id === raw) ? (raw as AmbientTrackId) : "none";
+}
+
+/** Read the persisted volume, falling back to 0.4 for missing/NaN/out-of-range values. */
+function readVolume(): number {
+    const v = parseFloat(localStorage.getItem(LS_VOLUME) ?? "");
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.4;
+}
+
 export class AmbientManager {
     private _track: AmbientTrackId;
     private _volume: number;
@@ -236,34 +249,40 @@ export class AmbientManager {
     private _stop: Stopper | null = null;
 
     constructor() {
-        this._track = (localStorage.getItem(LS_TRACK) as AmbientTrackId) ?? "none";
-        this._volume = parseFloat(localStorage.getItem(LS_VOLUME) ?? "0.4");
+        this._track = readTrack();
+        this._volume = readVolume();
     }
 
+    /** Currently selected track id. */
     get track(): AmbientTrackId {
         return this._track;
     }
+    /** Current master volume (0–1). */
     get volume(): number {
         return this._volume;
     }
 
+    /** Switch to a track (persisted) and restart playback. */
     setTrack(id: AmbientTrackId): void {
         this._track = id;
         localStorage.setItem(LS_TRACK, id);
         this._restart();
     }
 
+    /** Set master volume (clamped 0–1, persisted) and apply it immediately. */
     setVolume(v: number): void {
         this._volume = Math.max(0, Math.min(1, v));
         localStorage.setItem(LS_VOLUME, String(this._volume));
         this._applyVolume();
     }
 
+    /** Duck to the reduced volume while TTS speaks (`true`) or restore it (`false`). */
     duck(on: boolean): void {
         this._ducked = on;
         this._applyVolume();
     }
 
+    /** Stop playback and close the audio context. */
     destroy(): void {
         this._stopCurrent();
         this._ctx?.close().catch(() => {});
@@ -321,4 +340,5 @@ export class AmbientManager {
     }
 }
 
+/** Shared AmbientManager singleton. */
 export const ambient = new AmbientManager();

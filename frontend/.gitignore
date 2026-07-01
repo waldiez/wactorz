@@ -1,3 +1,7 @@
 
 # eslint cache
 .eslintcache
+
+# build / coverage output (Vite emits to ../static/app; tsc --noEmit emits nothing)
+dist/
+coverage/

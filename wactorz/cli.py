@@ -1,25 +1,25 @@
-import asyncio
 import argparse
+import asyncio
 import logging
 import os
 import sys
 import threading
 import time
-
 from pathlib import Path
 
 _ = str(Path(__file__).parent)
 if sys.path[0] != _:
-	sys.path.insert(0, _)
+    sys.path.insert(0, _)
 
 
-from wactorz.config import CONFIG
+from wactorz.config import CONFIG  # noqa: E402
 
 # Windows: MUST be set before any async library is imported or started
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     # Fix Unicode output in Windows terminal (cp1252 -> utf-8)
     import io
+
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
@@ -36,9 +36,9 @@ logger = logging.getLogger(__name__)
 
 
 _RELOAD_PATTERNS = {".py", ".json", ".yaml", ".yml"}
-_RELOAD_IGNORE   = {"__pycache__", ".git", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
-_PKG_DIR         = Path(__file__).resolve().parent   # wactorz/
-_RELOAD_CWD      = os.getcwd()
+_RELOAD_IGNORE = {"__pycache__", ".git", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
+_PKG_DIR = Path(__file__).resolve().parent  # wactorz/
+_RELOAD_CWD = os.getcwd()
 
 
 def _state_dir() -> str:
@@ -86,7 +86,7 @@ def _start_reloader() -> None:
                 try:
                     os.chdir(_RELOAD_CWD)
                     time.sleep(0.1)
-                    os.execv(sys.executable, [sys.executable] + sys.argv)  # nosec
+                    os.execv(sys.executable, [sys.executable, *sys.argv])  # nosec
                 except Exception as exc:
                     logger.error("[reload] restart failed: %s", exc)
                     os._exit(1)  # nosec
@@ -115,42 +115,55 @@ def _start_reloader() -> None:
 
 
 def get_args():
-	parser = argparse.ArgumentParser(description="Wactorz - Multi-Agent Framework")
-	parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp", "telegram"])
-	parser.add_argument("--port", type=int)
-	parser.add_argument("--llm", choices=["anthropic", "openai", "ollama", "nim", "gemini", "none"])
-	parser.add_argument("--ollama-model",
-	                    help="Ollama model name (e.g. llama3, mistral)")
-	parser.add_argument("--nim-model",
-	                    help="NVIDIA NIM model, e.g. meta/llama-3.3-70b-instruct or deepseek-ai/deepseek-r1")
-	parser.add_argument("--gemini-model",
-	                    default="gemini-2.5-flash",
-	                    help="Google Gemini model (default: gemini-2.5-flash). Options: gemini-2.5-flash-lite, gemini-2.5-pro, gemini-3.1-pro")
-	parser.add_argument("--discord-token")
-	parser.add_argument("--mqtt-broker")
-	parser.add_argument("--mqtt-port", type=int)
-	parser.add_argument("--telegram-token")
-	parser.add_argument("--telegram-allowed-user-id", type=int)
-	parser.add_argument("--monitor-port", type=int,
-	                    default=int(os.getenv("MONITOR_PORT", str(CONFIG.ws_port))),
-	                    help="Port for the background web UI / monitor server (default: 8888)")
-	parser.add_argument("--no-monitor", action="store_true",
-	                    help="Disable the background web UI server")
-	parser.add_argument("--reload", action="store_true",
-	                    help="Watch wactorz/ for changes and auto-restart (dev mode)")
-	args, _ = parser.parse_known_args()
+    parser = argparse.ArgumentParser(description="Wactorz - Multi-Agent Framework")
+    parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp", "telegram"])
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--llm", choices=["anthropic", "openai", "ollama", "nim", "gemini", "none"])
+    parser.add_argument("--ollama-model", help="Ollama model name (e.g. llama3, mistral)")
+    parser.add_argument(
+        "--nim-model",
+        help="NVIDIA NIM model, e.g. meta/llama-3.3-70b-instruct or deepseek-ai/deepseek-r1",
+    )
+    parser.add_argument(
+        "--gemini-model",
+        default="gemini-2.5-flash",
+        help="Google Gemini model (default: gemini-2.5-flash). Options: gemini-2.5-flash-lite, gemini-2.5-pro, gemini-3.1-pro",
+    )
+    parser.add_argument("--discord-token")
+    parser.add_argument("--mqtt-broker")
+    parser.add_argument("--mqtt-port", type=int)
+    parser.add_argument("--telegram-token")
+    parser.add_argument("--telegram-allowed-user-id", type=int)
+    parser.add_argument(
+        "--monitor-port",
+        type=int,
+        default=int(os.getenv("MONITOR_PORT", str(CONFIG.ws_port))),
+        help="Port for the background web UI / monitor server (default: 8888)",
+    )
+    parser.add_argument(
+        "--no-monitor", action="store_true", help="Disable the background web UI server"
+    )
+    parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Watch wactorz/ for changes and auto-restart (dev mode)",
+    )
+    args, _ = parser.parse_known_args()
 
-	return args
+    return args
 
 
-async def _start_web_ui(port: int, mqtt_broker: str, mqtt_port: int, actor_registry=None, persistence_db=None) -> None:
+async def _start_web_ui(
+    port: int, mqtt_broker: str, mqtt_port: int, actor_registry=None, persistence_db=None
+) -> None:
     """Start the monitor web server as a quiet background asyncio task."""
     import logging as _log
+
     import wactorz.monitor_server as _ms
 
-    _ms.MQTT_BROKER  = mqtt_broker
-    _ms.MQTT_PORT    = mqtt_port
-    _ms.WS_PORT      = port
+    _ms.MQTT_BROKER = mqtt_broker
+    _ms.MQTT_PORT = mqtt_port
+    _ms.WS_PORT = port
     _ms.MQTT_WS_PORT = int(os.getenv("MQTT_WS_PORT", "9001"))
 
     # Wire the registry in so chat is routed directly — no IOAgent needed
@@ -169,20 +182,23 @@ async def _start_web_ui(port: int, mqtt_broker: str, mqtt_port: int, actor_regis
 
 
 async def build_system(args: argparse.Namespace):
-    from wactorz.core.registry import ActorSystem
-    from wactorz.core.actor import SupervisorStrategy
-    from wactorz.agents.main_actor import MainActor
-    from wactorz.agents.monitor_agent import MonitorActor
-    from wactorz.agents.installer_agent import InstallerAgent
-    from wactorz.agents.io_agent import IOAgent
     from wactorz.agents.catalog_agent import CatalogAgent
-    from wactorz.agents.llm_agent import (
-        AnthropicProvider, OpenAIProvider, OllamaProvider,
-        NIMProvider, GeminiProvider,
-    )
     from wactorz.agents.home_assistant_agent import HomeAssistantAgent
     from wactorz.agents.home_assistant_map_agent import HomeAssistantMapAgent
     from wactorz.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
+    from wactorz.agents.installer_agent import InstallerAgent
+    from wactorz.agents.io_agent import IOAgent
+    from wactorz.agents.llm_agent import (
+        AnthropicProvider,
+        GeminiProvider,
+        NIMProvider,
+        OllamaProvider,
+        OpenAIProvider,
+    )
+    from wactorz.agents.main_actor import MainActor
+    from wactorz.agents.monitor_agent import MonitorActor
+    from wactorz.core.actor import SupervisorStrategy
+    from wactorz.core.registry import ActorSystem
 
     llm = args.llm or CONFIG.llm_provider
     if llm == "anthropic":
@@ -190,7 +206,9 @@ async def build_system(args: argparse.Namespace):
         provider = AnthropicProvider(model=CONFIG.llm_model, api_key=api_key)
     elif llm == "openai":
         api_key = os.getenv("OPENAI_API_KEY") or CONFIG.llm_api_key
-        provider = OpenAIProvider(model=CONFIG.llm_model, api_key=api_key, base_url=CONFIG.openai_url or None)
+        provider = OpenAIProvider(
+            model=CONFIG.llm_model, api_key=api_key, base_url=CONFIG.openai_url or None
+        )
     elif llm == "ollama":
         ollama_model = args.ollama_model or CONFIG.llm_model
         provider = OllamaProvider(model=ollama_model, base_url=CONFIG.ollama_url)
@@ -230,10 +248,11 @@ async def build_system(args: argparse.Namespace):
     # Must be done here because cli bypasses system.start() and goes directly
     # to system.supervisor.start() — so we initialise the bus manually.
     from wactorz.core.topic_bus import init_topic_bus
+
     system.topic_bus = init_topic_bus(
-        mqtt_client  = system._mqtt_client,
-        mqtt_broker  = args.mqtt_broker or CONFIG.mqtt_host,
-        mqtt_port    = args.mqtt_port or CONFIG.mqtt_port,
+        mqtt_client=system._mqtt_client,
+        mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,
+        mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
     )
     logger.info("TopicBus initialised")
 
@@ -241,15 +260,18 @@ async def build_system(args: argparse.Namespace):
     # Replaces pickle-only storage. Redis is optional — falls back to
     # in-memory dict if not running. Run migration once to move existing
     # .pkl data to the new stores.
-    from wactorz.core.persistence import init_persistence, PersistenceAPI
+    from wactorz.core.persistence import PersistenceAPI, init_persistence
+
     _db, _redis, _pickle_store = init_persistence(
         db_path=os.path.join(_sd, "wactorz.db"),
         redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379"),
         state_dir=_sd,
         run_migration=True,
     )
-    logger.info("Persistence layer initialised (SQLite + %s + Pickle)",
-                "Redis" if not _redis._using_fallback else "in-memory fallback")
+    logger.info(
+        "Persistence layer initialised (SQLite + %s + Pickle)",
+        "Redis" if not _redis._using_fallback else "in-memory fallback",
+    )
 
     # ── Factory helpers (called fresh on each (re)start by the Supervisor) ────
     def _wire_persistence(actor):
@@ -258,62 +280,112 @@ async def build_system(args: argparse.Namespace):
         return actor
 
     def make_provider():
-        return provider   # stateless — same instance is fine
+        return provider  # stateless — same instance is fine
 
     def make_main():
         return _wire_persistence(
-            MainActor(llm_provider=make_provider(), name="main",
-                      persistence_dir="./state"))
+            MainActor(llm_provider=make_provider(), name="main", persistence_dir="./state")
+        )
 
     def make_monitor():
         return _wire_persistence(
-            MonitorActor(check_interval=15.0, heartbeat_timeout=60.0,
-                         auto_restart=False, persistence_dir="./state"))
+            MonitorActor(
+                check_interval=15.0,
+                heartbeat_timeout=60.0,
+                auto_restart=False,
+                persistence_dir="./state",
+            )
+        )
 
     def make_installer():
-        return _wire_persistence(
-            InstallerAgent(name="installer", persistence_dir="./state"))
-
+        return _wire_persistence(InstallerAgent(name="installer", persistence_dir="./state"))
 
     def make_ha_agent():
         return _wire_persistence(
-            HomeAssistantAgent(llm_provider=make_provider(),
-                               name="home-assistant-agent",
-                               persistence_dir="./state"))
+            HomeAssistantAgent(
+                llm_provider=make_provider(), name="home-assistant-agent", persistence_dir="./state"
+            )
+        )
 
     def make_ha_map_agent():
         return _wire_persistence(
             HomeAssistantMapAgent(
                 name="home-assistant-map-agent",
                 persistence_dir="./state",
-            ))
+            )
+        )
 
     def make_ha_state_bridge():
         return _wire_persistence(
             HomeAssistantStateBridgeAgent(
                 name="home-assistant-state-bridge",
                 persistence_dir="./state",
-            ))
+            )
+        )
 
     def make_io_agent():
-        return _wire_persistence(
-            IOAgent(name="io-agent", persistence_dir="./state"))
+        return _wire_persistence(IOAgent(name="io-agent", persistence_dir="./state"))
 
     def make_catalog():
-        return _wire_persistence(
-            CatalogAgent(name="catalog", persistence_dir="./state"))
-
+        return _wire_persistence(CatalogAgent(name="catalog", persistence_dir="./state"))
 
     (
-        system.supervisor
-        .supervise("main",                       make_main,          strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
-        .supervise("monitor",                    make_monitor,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=1.0)
-        .supervise("io-agent",                   make_io_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=1.0)
-        .supervise("installer",                  make_installer,     strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=3,  restart_delay=2.0)
-        .supervise("home-assistant-agent",       make_ha_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
-        .supervise("home-assistant-map-agent",   make_ha_map_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
-        .supervise("home-assistant-state-bridge",make_ha_state_bridge, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
-        .supervise("catalog",                    make_catalog,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
+        system.supervisor.supervise(
+            "main",
+            make_main,
+            strategy=SupervisorStrategy.ONE_FOR_ONE,
+            max_restarts=10,
+            restart_delay=2.0,
+        )
+        .supervise(
+            "monitor",
+            make_monitor,
+            strategy=SupervisorStrategy.ONE_FOR_ONE,
+            max_restarts=10,
+            restart_delay=1.0,
+        )
+        .supervise(
+            "io-agent",
+            make_io_agent,
+            strategy=SupervisorStrategy.ONE_FOR_ONE,
+            max_restarts=10,
+            restart_delay=1.0,
+        )
+        .supervise(
+            "installer",
+            make_installer,
+            strategy=SupervisorStrategy.ONE_FOR_ONE,
+            max_restarts=3,
+            restart_delay=2.0,
+        )
+        .supervise(
+            "home-assistant-agent",
+            make_ha_agent,
+            strategy=SupervisorStrategy.ONE_FOR_ONE,
+            max_restarts=5,
+            restart_delay=1.0,
+        )
+        .supervise(
+            "home-assistant-map-agent",
+            make_ha_map_agent,
+            strategy=SupervisorStrategy.ONE_FOR_ONE,
+            max_restarts=5,
+            restart_delay=1.0,
+        )
+        .supervise(
+            "home-assistant-state-bridge",
+            make_ha_state_bridge,
+            strategy=SupervisorStrategy.ONE_FOR_ONE,
+            max_restarts=5,
+            restart_delay=1.0,
+        )
+        .supervise(
+            "catalog",
+            make_catalog,
+            strategy=SupervisorStrategy.ONE_FOR_ONE,
+            max_restarts=10,
+            restart_delay=2.0,
+        )
     )
 
     # Bind the monitor web UI BEFORE starting the supervisor. Agent startup
@@ -347,8 +419,9 @@ async def app():
 
     system, main_actor, _db = await build_system(args)
 
-    from wactorz.monitoring.otel   import setup_otel, shutdown_otel
     from wactorz.monitoring.influx import setup_influx, shutdown_influx
+    from wactorz.monitoring.otel import setup_otel, shutdown_otel
+
     setup_otel(lambda: system.registry)
     setup_influx()
 
@@ -356,15 +429,28 @@ async def app():
     # supervisor, so it binds even if the broker stalls agent startup.
 
     from wactorz.interfaces.chat_interfaces import (
-        CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface, TelegramInterface
+        CLIInterface,
+        DiscordInterface,
+        RESTInterface,
+        TelegramInterface,
+        WhatsAppInterface,
     )
 
     interface = args.interface or CONFIG.interface
-    
+
     try:
         if interface == "cli":
-            iface = CLIInterface(main_actor)
-            await asyncio.gather(iface.run(), system.run_forever())
+            if sys.stdin.isatty():
+                iface = CLIInterface(main_actor)
+                await asyncio.gather(iface.run(), system.run_forever())
+            else:
+                # No TTY (piped/Docker/systemd): input() would raise EOFError on
+                # the first read, finishing iface.run() instantly and — paired
+                # with run_forever() — tearing the whole system down a second
+                # after boot. Skip the interactive loop and just stay up.
+                logger.info("stdin is not a TTY — running headless (no interactive CLI)")
+                system._running = True
+                await system.run_forever()
         elif interface == "rest":
             port = args.port or CONFIG.port
             iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)
@@ -391,8 +477,12 @@ async def app():
             if not telegram_token:
                 logger.error("TELEGRAM_BOT_TOKEN not set.")
                 sys.exit(1)
-            allowed_user_id = args.telegram_allowed_user_id or CONFIG.telegram_allowed_user_id or None
-            iface = TelegramInterface(main_actor, token=telegram_token, allowed_user_id=allowed_user_id)
+            allowed_user_id = (
+                args.telegram_allowed_user_id or CONFIG.telegram_allowed_user_id or None
+            )
+            iface = TelegramInterface(
+                main_actor, token=telegram_token, allowed_user_id=allowed_user_id
+            )
             await asyncio.gather(iface.run(), system.run_forever())
     except Exception as exc:
         logger.error(f"System error: {exc}", exc_info=True)
@@ -401,9 +491,10 @@ async def app():
         shutdown_influx()
         await system.stop_all()
 
+
 def main():
-	asyncio.run(app())
+    asyncio.run(app())
 
 
 if __name__ == "__main__":
-	main()
+    main()

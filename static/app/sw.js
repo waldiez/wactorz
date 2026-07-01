@@ -1,5 +1,13 @@
 /**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/**
  * Wactorz Service Worker
+ *
+ * Registered only in the standalone / desktop deployment (see index.html): behind
+ * Home Assistant's ingress proxy the app lives under a rotating /api/… path where
+ * caching is useless, so the SW is never installed there in the first place.
  *
  * Strategy:
  *   - index.html / entry points → network-first, cache fallback (ensures fresh JS hashes)
@@ -8,7 +16,7 @@
  *   - Everything else → network-first, fall back to cache
  */
 
-const CACHE = "wactorz-v3";
+const CACHE = "wactorz-v4";
 
 const NEVER_CACHE = ["/api/", "/ws", "/mqtt"];
 
@@ -46,11 +54,14 @@ self.addEventListener("fetch", (e) => {
       fetch(e.request)
         .then((res) => {
           if (res.ok) {
-            caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
+            // Clone synchronously, before `res` is returned and its body read —
+            // cloning later (inside the async cache write) throws "body already used".
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(e.request, copy));
           }
           return res;
         })
-        .catch(() => caches.match(e.request)),
+        .catch(() => caches.match(e.request).then((c) => c ?? Response.error())),
     );
     return;
   }
@@ -66,12 +77,19 @@ self.addEventListener("fetch", (e) => {
   ) {
     e.respondWith(
       caches.match(e.request).then((cached) => {
-        const fresh = fetch(e.request).then((res) => {
-          if (res.ok) {
-            caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
-          }
-          return res;
-        });
+        // Stale-while-revalidate: serve cache immediately, refresh in the background.
+        // The .catch is on the fetch chain itself (not gated behind `??`) so that on
+        // a cache hit the in-flight background fetch can't become an unhandled
+        // rejection when offline.
+        const fresh = fetch(e.request)
+          .then((res) => {
+            if (res.ok) {
+              const copy = res.clone();
+              caches.open(CACHE).then((c) => c.put(e.request, copy));
+            }
+            return res;
+          })
+          .catch(() => Response.error());
         return cached ?? fresh;
       }),
     );
@@ -83,10 +101,11 @@ self.addEventListener("fetch", (e) => {
     fetch(e.request)
       .then((res) => {
         if (res.ok) {
-          caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy));
         }
         return res;
       })
-      .catch(() => caches.match(e.request)),
+      .catch(() => caches.match(e.request).then((c) => c ?? Response.error())),
   );
 });

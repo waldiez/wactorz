@@ -11,6 +11,7 @@
 import { ambient, AMBIENT_TRACKS } from "../../io/AmbientManager";
 import { tts } from "../../io/TTSManager";
 import { toast } from "../ToastManager";
+import { listen } from "../../events";
 
 /** Beep + TTS toggle buttons; the TTS toggle shows/hides `voiceRow`. */
 function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
@@ -47,7 +48,10 @@ function buildVoiceRow(): HTMLElement {
 
     const voiceSel = document.createElement("select");
     voiceSel.className = "af-audio-select";
+    voiceSel.id = "af-tts-voice";
+    voiceSel.name = "tts-voice";
     voiceSel.title = "TTS voice";
+    voiceSel.setAttribute("aria-label", "TTS voice");
 
     const placeholderOpt = document.createElement("option");
     placeholderOpt.value = "";
@@ -75,7 +79,7 @@ function buildVoiceRow(): HTMLElement {
     };
 
     populateVoices();
-    document.addEventListener("tts-voices-loaded", () => populateVoices());
+    listen("tts-voices-loaded", () => populateVoices());
     voiceSel.addEventListener("change", () => tts.setVoice(voiceSel.value));
 
     voiceRow.appendChild(voiceSel);
@@ -95,6 +99,8 @@ function buildVolumeRow(): HTMLElement {
     const volSlider = document.createElement("input");
     volSlider.type = "range";
     volSlider.className = "af-audio-slider";
+    volSlider.name = "ambient-volume";
+    volSlider.setAttribute("aria-label", "Ambient volume");
     volSlider.min = "0";
     volSlider.max = "1";
     volSlider.step = "0.05";
@@ -179,7 +185,7 @@ const RESET_SCOPES: { scope: string; label: string; danger?: boolean }[] = [
 async function postReset(scope: string, label: string, pop: HTMLElement): Promise<void> {
     pop.classList.remove("open");
     try {
-        const ingress: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+        const ingress: string = window.__WACTORZ_INGRESS_PATH ?? "";
         const res = await fetch(`${ingress}/api/reset`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -188,11 +194,11 @@ async function postReset(scope: string, label: string, pop: HTMLElement): Promis
         if (res.ok) {
             toast.show({ type: "system", title: "Reset", message: `${label} cleared` });
         } else {
-            const err = await res.json().catch(() => ({}));
+            const err = (await res.json().catch(() => ({}))) as { error?: string };
             toast.show({
                 type: "alert-error",
                 title: "Reset failed",
-                message: (err as any).error ?? String(res.status),
+                message: err.error ?? String(res.status),
             });
         }
     } catch (e) {
@@ -231,7 +237,7 @@ function buildResetButton(
     };
     armResets.push(disarm);
 
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
         // Two-step confirm: first click arms, second fires.
         if (!armed) {
             armResets.forEach(fn => fn !== disarm && fn());
@@ -242,14 +248,21 @@ function buildResetButton(
             return;
         }
         disarm();
-        await postReset(scope, label, pop);
+        void postReset(scope, label, pop);
     });
 
     return btn;
 }
 
+/** A reset popover that exposes a hook to re-arm its two-step confirm buttons
+ *  (called when the popover is re-opened, so a previously-armed button resets). */
+export interface ResetPopover extends HTMLElement {
+    /** Re-arm (reset) the two-step confirm buttons; call when the popover re-opens. */
+    _resetArmed(): void;
+}
+
 /** Scoped state-reset menu with per-button two-step confirmation. */
-export function buildResetPopover(): HTMLElement {
+export function buildResetPopover(): ResetPopover {
     const pop = document.createElement("div");
     pop.className = "af-audio-popover glass";
     pop.style.cssText = "min-width:210px;padding:12px 14px;";
@@ -269,6 +282,5 @@ export function buildResetPopover(): HTMLElement {
         }
         pop.appendChild(buildResetButton(pop, armResets, spec));
     });
-    (pop as any)._resetArmed = () => armResets.forEach(fn => fn());
-    return pop;
+    return Object.assign(pop, { _resetArmed: () => armResets.forEach(fn => fn()) });
 }

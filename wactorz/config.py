@@ -1,7 +1,8 @@
-from dotenv import load_dotenv, find_dotenv
+import os
 from dataclasses import dataclass
 from pathlib import Path
-import os
+
+from dotenv import find_dotenv, load_dotenv
 
 
 def _env_truthy(name: str) -> bool:
@@ -87,9 +88,12 @@ CONFIG = AppConfig(
     mqtt_password=os.getenv("MQTT_PASSWORD", ""),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
-    ha_state_bridge_output_topic=os.getenv("HA_STATE_BRIDGE_OUTPUT_TOPIC", "homeassistant/state_changes"),
+    ha_state_bridge_output_topic=os.getenv(
+        "HA_STATE_BRIDGE_OUTPUT_TOPIC", "homeassistant/state_changes"
+    ),
     ha_state_bridge_domains=os.getenv("HA_STATE_BRIDGE_DOMAINS", ""),
-    ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0") not in ("0", "false", "no"),
+    ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0")
+    not in ("0", "false", "no"),
     discord_token=os.getenv("DISCORD_BOT_TOKEN", ""),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),

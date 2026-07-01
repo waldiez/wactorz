@@ -13,10 +13,10 @@ from datetime import date, timedelta
 
 from wactorz.catalogue_agents.weather_agent import (
     WeatherAgent,
-    parse_query,
     _clean_location,
-    _next_weekday,
     _label_for,
+    _next_weekday,
+    parse_query,
 )
 
 WED = date(2026, 6, 3)  # a Wednesday
@@ -57,7 +57,9 @@ class ParseIntentTest(unittest.TestCase):
         self.assertEqual(p["date_from"], "2026-06-05")  # Fri after Wed
 
     def test_next_week_is_following_monday_window(self):
-        p = self.assertIntent("how's the weather in los angeles next week", "forecast", "los angeles")
+        p = self.assertIntent(
+            "how's the weather in los angeles next week", "forecast", "los angeles"
+        )
         self.assertEqual((p["date_from"], p["date_to"]), ("2026-06-08", "2026-06-14"))
 
     def test_n_day_horizon(self):
@@ -66,7 +68,9 @@ class ParseIntentTest(unittest.TestCase):
         self.assertEqual(self._p("weather in new york this week")["days"], 7)
 
     def test_following_week_is_next_week(self):
-        p = self.assertIntent("whats the weather in athens for the following week", "forecast", "athens")
+        p = self.assertIntent(
+            "whats the weather in athens for the following week", "forecast", "athens"
+        )
         # "following week" = Mon–Sun of NEXT calendar week (same as "next week")
         self.assertEqual((p["date_from"], p["date_to"]), ("2026-06-08", "2026-06-14"))
         p2 = self._p("what will it be like the week after next in berlin")
@@ -169,42 +173,92 @@ class FormatTest(unittest.TestCase):
         self.agent = WeatherAgent(llm_provider=None, name="weather-agent")
 
     def test_current_format(self):
-        out = self.agent._format({
-            "kind": "current", "location": "Paris", "temp": 20.0, "feels_like": 19.0,
-            "humidity": 50, "wind": 7.0, "precip": 0, "code": 0, "condition": "clear",
-            "units": "celsius", "concern": None,
-        })
+        out = self.agent._format(
+            {
+                "kind": "current",
+                "location": "Paris",
+                "temp": 20.0,
+                "feels_like": 19.0,
+                "humidity": 50,
+                "wind": 7.0,
+                "precip": 0,
+                "code": 0,
+                "condition": "clear",
+                "units": "celsius",
+                "concern": None,
+            }
+        )
         self.assertIn("Paris", out)
         self.assertIn("20", out)
         self.assertIn("°C", out)
 
     def test_rain_verdict_yes(self):
-        out = self.agent._format({
-            "kind": "forecast", "location": "London", "units": "celsius", "concern": "rain",
-            "forecast": [{"date": "2026-06-04", "temp_min": 13.0, "temp_max": 18.0,
-                          "precip_mm": 5.0, "precip_prob": 100, "code": 61, "condition": "light rain"}],
-        })
+        out = self.agent._format(
+            {
+                "kind": "forecast",
+                "location": "London",
+                "units": "celsius",
+                "concern": "rain",
+                "forecast": [
+                    {
+                        "date": "2026-06-04",
+                        "temp_min": 13.0,
+                        "temp_max": 18.0,
+                        "precip_mm": 5.0,
+                        "precip_prob": 100,
+                        "code": 61,
+                        "condition": "light rain",
+                    }
+                ],
+            }
+        )
         self.assertIn("Yes", out)
         self.assertIn("umbrella", out.lower())
 
     def test_rain_verdict_no(self):
-        out = self.agent._format({
-            "kind": "forecast", "location": "Cairo", "units": "celsius", "concern": "rain",
-            "forecast": [{"date": "2026-06-04", "temp_min": 22.0, "temp_max": 35.0,
-                          "precip_mm": 0.0, "precip_prob": 0, "code": 0, "condition": "clear"}],
-        })
+        out = self.agent._format(
+            {
+                "kind": "forecast",
+                "location": "Cairo",
+                "units": "celsius",
+                "concern": "rain",
+                "forecast": [
+                    {
+                        "date": "2026-06-04",
+                        "temp_min": 22.0,
+                        "temp_max": 35.0,
+                        "precip_mm": 0.0,
+                        "precip_prob": 0,
+                        "code": 0,
+                        "condition": "clear",
+                    }
+                ],
+            }
+        )
         self.assertIn("No", out)
 
     def test_current_clothing_verdict(self):
-        out = self.agent._format({
-            "kind": "current", "location": "Athens", "temp": 29.0, "feels_like": 31.0,
-            "humidity": 39, "wind": 12.0, "precip": 0, "code": 0, "condition": "clear",
-            "units": "celsius", "concern": "clothing",
-        })
+        out = self.agent._format(
+            {
+                "kind": "current",
+                "location": "Athens",
+                "temp": 29.0,
+                "feels_like": 31.0,
+                "humidity": 39,
+                "wind": 12.0,
+                "precip": 0,
+                "code": 0,
+                "condition": "clear",
+                "units": "celsius",
+                "concern": "clothing",
+            }
+        )
         self.assertIn("No jacket needed", out)
 
     def test_error_passthrough(self):
-        self.assertIn("couldn't find", self.agent._format({"error": "I couldn't find a place called 'x'."}))
+        self.assertIn(
+            "couldn't find", self.agent._format({"error": "I couldn't find a place called 'x'."})
+        )
 
 
 class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
@@ -223,8 +277,15 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
             async def _current(self, location: str, units: str = "celsius") -> dict:
                 label = "Athens, Attica, Greece" if "athens" in location.lower() else location
                 return {
-                    "kind": "current", "location": label, "temp": 29.5, "feels_like": 31.4,
-                    "humidity": 39, "wind": 12.2, "precip": 0, "code": 0, "condition": "clear",
+                    "kind": "current",
+                    "location": label,
+                    "temp": 29.5,
+                    "feels_like": 31.4,
+                    "humidity": 39,
+                    "wind": 12.2,
+                    "precip": 0,
+                    "code": 0,
+                    "condition": "clear",
                 }
 
             async def _forecast(self, location: str, units: str = "celsius", **kwargs) -> dict:
@@ -233,9 +294,19 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
                 # (the agent anchors to the real current date; a fixed date rots).
                 tomorrow = (date.today() + timedelta(days=1)).isoformat()
                 return {
-                    "kind": "forecast", "location": label,
-                    "forecast": [{"date": tomorrow, "temp_min": 22.0, "temp_max": 31.0,
-                                  "precip_mm": 0.0, "precip_prob": 5, "code": 0, "condition": "clear"}],
+                    "kind": "forecast",
+                    "location": label,
+                    "forecast": [
+                        {
+                            "date": tomorrow,
+                            "temp_min": 22.0,
+                            "temp_max": 31.0,
+                            "precip_mm": 0.0,
+                            "precip_prob": 5,
+                            "code": 0,
+                            "condition": "clear",
+                        }
+                    ],
                 }
 
         agent = FakeWeatherAgent(llm_provider=None, name="weather-agent")
@@ -284,9 +355,15 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
                 }
                 key = location.split(",", 1)[0].lower()
                 return {
-                    "kind": "current", "location": labels.get(key, location),
-                    "temp": 20.0, "feels_like": 20.0, "humidity": 50,
-                    "wind": 7.0, "precip": 0, "code": 0, "condition": "clear",
+                    "kind": "current",
+                    "location": labels.get(key, location),
+                    "temp": 20.0,
+                    "feels_like": 20.0,
+                    "humidity": 50,
+                    "wind": 7.0,
+                    "precip": 0,
+                    "code": 0,
+                    "condition": "clear",
                 }
 
         agent = FakeWeatherAgent(llm_provider=None, name="weather-agent")
@@ -321,8 +398,15 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
             async def _current(self, location: str, units: str = "celsius") -> dict:
                 label = "Athens, Attica, Greece" if "athens" in location.lower() else location
                 return {
-                    "kind": "current", "location": label, "temp": 29.5, "feels_like": 31.6,
-                    "humidity": 40, "wind": 12.5, "precip": 0, "code": 0, "condition": "clear",
+                    "kind": "current",
+                    "location": label,
+                    "temp": 29.5,
+                    "feels_like": 31.6,
+                    "humidity": 40,
+                    "wind": 12.5,
+                    "precip": 0,
+                    "code": 0,
+                    "condition": "clear",
                 }
 
         agent = FakeWeatherAgent(llm_provider=None, name="weather-agent")

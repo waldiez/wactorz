@@ -9,6 +9,7 @@ The handler does `from aiohttp import web` at call time, so we patch a minimal
 order-independent: another test in the suite leaves an aiohttp stub without
 json_response in sys.modules, which would otherwise break us.
 """
+
 import json
 import sys
 import types

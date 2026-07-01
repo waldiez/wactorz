@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -31,43 +30,43 @@ def setup_influx() -> bool:
     """
     global _client, _write_api
 
-    url   = os.getenv("INFLUX_URL", "").rstrip("/")
+    url = os.getenv("INFLUX_URL", "").rstrip("/")
     token = os.getenv("INFLUX_TOKEN", "")
     if not url or not token:
         return False
 
     try:
-        from influxdb_client import InfluxDBClient, WriteOptions  # type: ignore
+        from influxdb_client import InfluxDBClient, WriteOptions  # type: ignore  # noqa: F401
         from influxdb_client.client.write_api import ASYNCHRONOUS  # type: ignore
     except ImportError:
-        logger.warning(
-            "influxdb-client not installed — run: pip install 'wactorz[influx]'"
-        )
+        logger.warning("influxdb-client not installed — run: pip install 'wactorz[influx]'")
         return False
 
-    org    = os.getenv("INFLUX_ORG",    "wactorz")
+    org = os.getenv("INFLUX_ORG", "wactorz")
     bucket = os.getenv("INFLUX_BUCKET", "wactorz")
 
-    _client    = InfluxDBClient(url=url, token=token, org=org)
+    _client = InfluxDBClient(url=url, token=token, org=org)
     _write_api = _client.write_api(write_options=ASYNCHRONOUS)
 
     logger.info(
         "InfluxDB enabled → %s  org=%s  bucket=%s",
-        url, org, bucket,
+        url,
+        org,
+        bucket,
     )
     # store bucket name for writes
     _write_api._wactorz_bucket = bucket
-    _write_api._wactorz_org    = org
+    _write_api._wactorz_org = org
     return True
 
 
-def write_chat(agent_name: str, role: str, content: str,
-               ts: Optional[float] = None) -> None:
+def write_chat(agent_name: str, role: str, content: str, ts: float | None = None) -> None:
     """Write one chat turn as an InfluxDB line-protocol point (fire-and-forget)."""
     if _write_api is None:
         return
     try:
         import time as _t
+
         from influxdb_client import Point  # type: ignore
 
         point = (
@@ -79,7 +78,7 @@ def write_chat(agent_name: str, role: str, content: str,
             .time(int((ts or _t.time()) * 1_000_000_000))  # nanoseconds
         )
         bucket = getattr(_write_api, "_wactorz_bucket", "wactorz")
-        org    = getattr(_write_api, "_wactorz_org",    "wactorz")
+        org = getattr(_write_api, "_wactorz_org", "wactorz")
         _write_api.write(bucket=bucket, org=org, record=point)
     except Exception as exc:
         logger.debug("InfluxDB write_chat failed: %s", exc)

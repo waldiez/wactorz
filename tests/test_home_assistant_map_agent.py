@@ -159,8 +159,15 @@ class HomeAssistantMapAgentTest(unittest.IsolatedAsyncioTestCase):
 
         chunk_payloads = [call.args[1] for call in calls[1:]]
         self.assertTrue(chunk_payloads)
-        self.assertTrue(all(item["type"] == "home_assistant_map_update_chunk" for item in chunk_payloads))
-        self.assertTrue(all(dispatcher._payload_size(item) <= dispatcher._max_payload_bytes for item in [first_payload, *chunk_payloads]))
+        self.assertTrue(
+            all(item["type"] == "home_assistant_map_update_chunk" for item in chunk_payloads)
+        )
+        self.assertTrue(
+            all(
+                dispatcher._payload_size(item) <= dispatcher._max_payload_bytes
+                for item in [first_payload, *chunk_payloads]
+            )
+        )
 
         encoded = "".join(chunk["data"] for chunk in chunk_payloads)
         rebuilt_payload = json.loads(base64.b64decode(encoded).decode("utf-8"))
@@ -200,7 +207,11 @@ class HomeAssistantMapAgentTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreaterEqual(len(chunks), 11)
         self.assertLessEqual(dispatcher._payload_size(manifest), dispatcher._max_payload_bytes)
-        self.assertTrue(all(dispatcher._payload_size(chunk) <= dispatcher._max_payload_bytes for chunk in chunks))
+        self.assertTrue(
+            all(
+                dispatcher._payload_size(chunk) <= dispatcher._max_payload_bytes for chunk in chunks
+            )
+        )
 
 
 if __name__ == "__main__":

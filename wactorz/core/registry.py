@@ -5,10 +5,12 @@ Supervisor implements Erlang/OTP-style supervision trees.
 """
 
 import asyncio
+import inspect
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Type
+from typing import Optional
 
 from .actor import Actor, Message, MessageType, SupervisorStrategy
 
@@ -16,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 # ── Supervision spec ──────────────────────────────────────────────────────────
+
 
 @dataclass
 class SupervisedSpec:
@@ -29,18 +32,19 @@ class SupervisedSpec:
     restart_window: sliding window in seconds for max_restarts accounting.
     restart_delay : seconds to wait before restarting (lets dependencies settle).
     """
-    factory:        Callable[[], "Actor"]
-    strategy:       SupervisorStrategy = SupervisorStrategy.ONE_FOR_ONE
-    max_restarts:   int   = 5
+
+    factory: Callable[[], "Actor"]
+    strategy: SupervisorStrategy = SupervisorStrategy.ONE_FOR_ONE
+    max_restarts: int = 5
     restart_window: float = 60.0
-    restart_delay:  float = 1.0
+    restart_delay: float = 1.0
 
     # Runtime state — managed by Supervisor, not set by caller
-    actor:          Optional["Actor"] = field(default=None, repr=False)
+    actor: Optional["Actor"] = field(default=None, repr=False)
     _restart_times: list = field(default_factory=list, repr=False)
     # Set to True when an actor is intentionally stopped/deleted by the user,
     # or when it has exhausted its restart budget.  The watch_loop skips retired specs.
-    retired:        bool = field(default=False, repr=False)
+    retired: bool = field(default=False, repr=False)
 
     def record_restart(self) -> bool:
         """Record a restart attempt. Returns True if still within budget."""
@@ -57,6 +61,7 @@ class SupervisedSpec:
         recent = [t for t in self._restart_times if t > cutoff]
         return len(recent) >= self.max_restarts
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,7 +73,7 @@ class ActorRegistry:
         self._lock = asyncio.Lock()
         # Back-reference to the Supervisor — set by ActorSystem after creating both.
         # Allows Actor.spawn() to auto-register children under supervision.
-        self._supervisor_ref: Optional["Supervisor"] = None
+        self._supervisor_ref: Supervisor | None = None
 
     async def register(self, actor: Actor):
         async with self._lock:
@@ -113,13 +118,13 @@ class ActorRegistry:
             if actor_id != sender_id:
                 await actor.receive(msg)
 
-    def get(self, actor_id: str) -> Optional[Actor]:
+    def get(self, actor_id: str) -> Actor | None:
         return self._actors.get(actor_id)
 
     def all_actors(self) -> list[Actor]:
         return list(self._actors.values())
 
-    def find_by_name(self, name: str) -> Optional[Actor]:
+    def find_by_name(self, name: str) -> Actor | None:
         for actor in self._actors.values():
             if actor.name == name:
                 return actor
@@ -153,38 +158,42 @@ class Supervisor:
     # …later, supervisor watches actors in the background via _watch_loop
     """
 
-    def __init__(self, registry: "ActorRegistry", inject_fn: Callable[["Actor"], None],
-                 poll_interval: float = 2.0):
-        self._registry     = registry
-        self._inject       = inject_fn           # sets MQTT client + broker/port on actor
-        self._poll_interval = poll_interval       # seconds between liveness checks
-        self._specs:     dict[str, SupervisedSpec] = {}   # name → spec (ordered)
-        self._order:     list[str] = []                   # insertion order for REST_FOR_ONE
-        self._watch_task: Optional[asyncio.Task] = None
+    def __init__(
+        self,
+        registry: "ActorRegistry",
+        inject_fn: Callable[["Actor"], None],
+        poll_interval: float = 2.0,
+    ):
+        self._registry = registry
+        self._inject = inject_fn  # sets MQTT client + broker/port on actor
+        self._poll_interval = poll_interval  # seconds between liveness checks
+        self._specs: dict[str, SupervisedSpec] = {}  # name → spec (ordered)
+        self._order: list[str] = []  # insertion order for REST_FOR_ONE
+        self._watch_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
     # ── Registration ──────────────────────────────────────────────────────────
 
     def supervise(
         self,
-        name:           str,
-        factory:        Callable[[], "Actor"],
-        strategy:       SupervisorStrategy = SupervisorStrategy.ONE_FOR_ONE,
-        max_restarts:   int   = 5,
+        name: str,
+        factory: Callable[[], "Actor"],
+        strategy: SupervisorStrategy = SupervisorStrategy.ONE_FOR_ONE,
+        max_restarts: int = 5,
         restart_window: float = 60.0,
-        restart_delay:  float = 1.0,
+        restart_delay: float = 1.0,
     ) -> "Supervisor":
         """Register an actor to be supervised. Call before start()."""
         spec = SupervisedSpec(
-            factory        = factory,
-            strategy       = strategy,
-            max_restarts   = max_restarts,
-            restart_window = restart_window,
-            restart_delay  = restart_delay,
+            factory=factory,
+            strategy=strategy,
+            max_restarts=max_restarts,
+            restart_window=restart_window,
+            restart_delay=restart_delay,
         )
         self._specs[name] = spec
         self._order.append(name)
-        return self   # fluent
+        return self  # fluent
 
     def release(self, name: str):
         """
@@ -201,7 +210,7 @@ class Supervisor:
         spec = self._specs.get(name)
         if spec is not None:
             spec.retired = True
-            spec.actor   = None
+            spec.actor = None
             logger.info(f"[Supervisor] Released '{name}' from supervision (intentional stop).")
 
     # ── Startup ───────────────────────────────────────────────────────────────
@@ -221,9 +230,9 @@ class Supervisor:
     # ── Watchdog thresholds ───────────────────────────────────────────────────
     # An actor is considered "silent" if its heartbeat is older than this.
     # (Actor heartbeats every 10s by default; allow 3× grace period.)
-    HEARTBEAT_TIMEOUT   = 35.0    # seconds without a heartbeat → treat as crashed
+    HEARTBEAT_TIMEOUT = 35.0  # seconds without a heartbeat → treat as crashed
     # An actor that has accumulated this many errors is "storming" — restart it.
-    ERROR_STORM_THRESHOLD = 10    # cumulative errors within the actor's lifetime
+    ERROR_STORM_THRESHOLD = 10  # cumulative errors within the actor's lifetime
 
     async def _watch_loop(self):
         """
@@ -235,6 +244,7 @@ class Supervisor:
         3. Error storm       — actor is alive but accumulating errors beyond a safe threshold
         """
         from .actor import ActorState
+
         while True:
             try:
                 await asyncio.sleep(self._poll_interval)
@@ -315,10 +325,8 @@ class Supervisor:
 
         elif crashed_spec.strategy == SupervisorStrategy.REST_FOR_ONE:
             idx = self._order.index(crashed_name)
-            affected = self._order[idx:]   # crashed + everyone registered after it
-            logger.info(
-                f"[Supervisor] REST_FOR_ONE — restarting: {affected}"
-            )
+            affected = self._order[idx:]  # crashed + everyone registered after it
+            logger.info(f"[Supervisor] REST_FOR_ONE — restarting: {affected}")
             for name in reversed(affected):
                 spec = self._specs[name]
                 if spec.actor and name != crashed_name:
@@ -340,7 +348,7 @@ class Supervisor:
             # every poll cycle even after budget is gone, logging the same critical
             # message endlessly and potentially re-entering the restart path.
             spec.retired = True
-            spec.actor   = None
+            spec.actor = None
             await self._notify_main(
                 f"🚨 **{name}** has crashed {spec.max_restarts} times and the Supervisor has given up. "
                 f"It is permanently stopped. Delete it and spawn a new one, or fix its code.",
@@ -351,7 +359,7 @@ class Supervisor:
         within_budget = spec.record_restart()
         if not within_budget:
             spec.retired = True
-            spec.actor   = None
+            spec.actor = None
             return
 
         if spec.restart_delay > 0:
@@ -386,8 +394,9 @@ class Supervisor:
 
     async def _spawn_actor(self, name: str, spec: SupervisedSpec) -> "Actor":
         """Create actor via factory, inject MQTT, register, and start."""
-        actor = await spec.factory() if asyncio.iscoroutinefunction(spec.factory) \
-                else spec.factory()
+        actor = (
+            await spec.factory() if inspect.iscoroutinefunction(spec.factory) else spec.factory()
+        )
         self._inject(actor)
         actor.supervisor_id = id(self)
         await self._registry.register(actor)
@@ -430,23 +439,29 @@ class Supervisor:
             # Find any actor we can send from — use the first supervised actor,
             # or fall back to directly appending if none are available yet.
             sender = next(
-                (spec.actor for spec in self._specs.values()
-                 if spec.actor is not None and not spec.retired),
+                (
+                    spec.actor
+                    for spec in self._specs.values()
+                    if spec.actor is not None and not spec.retired
+                ),
                 None,
             )
 
             if sender is not None:
+                import time as _t
+                import uuid
+
                 from .actor import Message, MessageType
-                import uuid, time as _t
+
                 msg = Message(
                     type=MessageType.TASK,
                     sender_id=sender.actor_id,
                     payload={
                         "_monitor_notification": True,
-                        "agent_name":  "supervisor",
-                        "message":     message,
-                        "severity":    severity,
-                        "timestamp":   _t.time(),
+                        "agent_name": "supervisor",
+                        "message": message,
+                        "severity": severity,
+                        "timestamp": _t.time(),
                     },
                     message_id=str(uuid.uuid4()),
                 )
@@ -455,12 +470,15 @@ class Supervisor:
                 # No running actor to send from — fall back to direct append
                 if hasattr(main, "_pending_notifications"):
                     import time as _t
-                    main._pending_notifications.append({
-                        "severity":  severity,
-                        "message":   message,
-                        "source":    "supervisor",
-                        "timestamp": _t.time(),
-                    })
+
+                    main._pending_notifications.append(
+                        {
+                            "severity": severity,
+                            "message": message,
+                            "source": "supervisor",
+                            "timestamp": _t.time(),
+                        }
+                    )
         except Exception as exc:
             logger.warning(f"[Supervisor] Could not notify main: {exc}")
 
@@ -472,16 +490,18 @@ class Supervisor:
         for name in self._order:
             spec = self._specs[name]
             actor = spec.actor
-            result.append({
-                "name":          name,
-                "strategy":      spec.strategy.value,
-                "max_restarts":  spec.max_restarts,
-                "restarts_used": len(spec._restart_times),
-                "exhausted":     spec.exhausted,
-                "retired":       spec.retired,
-                "actor_state":   actor.state.value if actor else "none",
-                "actor_id":      actor.actor_id[:8] if actor else None,
-            })
+            result.append(
+                {
+                    "name": name,
+                    "strategy": spec.strategy.value,
+                    "max_restarts": spec.max_restarts,
+                    "restarts_used": len(spec._restart_times),
+                    "exhausted": spec.exhausted,
+                    "retired": spec.retired,
+                    "actor_state": actor.state.value if actor else "none",
+                    "actor_id": actor.actor_id[:8] if actor else None,
+                }
+            )
         return result
 
     async def stop(self):
@@ -496,21 +516,22 @@ class Supervisor:
 class ActorSystem:
     """Top-level orchestrator."""
 
-    def __init__(self, mqtt_broker: str = "localhost", mqtt_port: int = 1883,
-                 state_dir: str = "./state"):
-        self.registry     = ActorRegistry()
+    def __init__(
+        self, mqtt_broker: str = "localhost", mqtt_port: int = 1883, state_dir: str = "./state"
+    ):
+        self.registry = ActorRegistry()
         self._mqtt_broker = mqtt_broker
-        self._mqtt_port   = mqtt_port
+        self._mqtt_port = mqtt_port
         self._mqtt_client = None
-        self._running     = False
-        self._supervisor: Optional[Supervisor] = None
-        self._state_dir   = state_dir
+        self._running = False
+        self._supervisor: Supervisor | None = None
+        self._state_dir = state_dir
 
     def _inject(self, actor: Actor):
         """Inject MQTT client + broker/port into an actor so it can publish and subscribe."""
         actor._mqtt_client = self._mqtt_client
         actor._mqtt_broker = self._mqtt_broker
-        actor._mqtt_port   = self._mqtt_port
+        actor._mqtt_port = self._mqtt_port
 
     @property
     def supervisor(self) -> "Supervisor":
@@ -526,15 +547,16 @@ class ActorSystem:
         if self._mqtt_client is None:
             return {"connected": False, "queue_depth": 0, "available": False}
         return {
-            "connected":   getattr(self._mqtt_client, "connected", False),
+            "connected": getattr(self._mqtt_client, "connected", False),
             "queue_depth": getattr(self._mqtt_client, "queue_depth", 0),
-            "available":   getattr(self._mqtt_client, "_available", False),
-            "client_id":   getattr(self._mqtt_client, "_client_id", "?"),
+            "available": getattr(self._mqtt_client, "_available", False),
+            "client_id": getattr(self._mqtt_client, "_client_id", "?"),
         }
 
     async def start(self, *initial_actors: Actor):
         self._running = True
         import os
+
         os.makedirs(self._state_dir, exist_ok=True)
         db_path = os.path.join(self._state_dir, "mqtt_outbox.db")
         self._mqtt_client = await _MQTTPublisher.create(
@@ -543,10 +565,11 @@ class ActorSystem:
 
         # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────
         from .topic_bus import init_topic_bus
+
         self.topic_bus = init_topic_bus(
-            mqtt_client  = self._mqtt_client,
-            mqtt_broker  = self._mqtt_broker,
-            mqtt_port    = self._mqtt_port,
+            mqtt_client=self._mqtt_client,
+            mqtt_broker=self._mqtt_broker,
+            mqtt_port=self._mqtt_port,
         )
         logger.info("[ActorSystem] TopicBus initialised")
 
@@ -557,7 +580,7 @@ class ActorSystem:
 
         logger.info(f"[ActorSystem] Started with {len(initial_actors)} actors.")
 
-    async def spawn(self, actor_class: Type[Actor], **kwargs) -> Actor:
+    async def spawn(self, actor_class: type[Actor], **kwargs) -> Actor:
         """Spawn and register a new actor in the system."""
         actor = actor_class(**kwargs)
         self._inject(actor)
@@ -575,7 +598,9 @@ class ActorSystem:
         if self._mqtt_client:
             await self._mqtt_client.disconnect()
             self._mqtt_client = None  # drop ref so GC can collect paho client now
-        import gc; gc.collect()  # break aiomqtt↔paho ref cycle while loop is open
+        import gc
+
+        gc.collect()  # break aiomqtt↔paho ref cycle while loop is open
         logger.info("[ActorSystem] All actors stopped.")
 
     async def run_forever(self):
@@ -605,7 +630,7 @@ class _MQTTPublisher:
 
     # Topics that must use QoS 1 regardless of caller setting
     _CRITICAL_TOPIC_PREFIXES = (
-        "nodes/",        # spawn, stop, desired_state
+        "nodes/",  # spawn, stop, desired_state
         "agents/by-name/",  # task routing
     )
     # Topics that are purely telemetry — always QoS 0 to avoid queue bloat
@@ -618,24 +643,28 @@ class _MQTTPublisher:
 
     def __init__(self, db_path: str = "./state/mqtt_outbox.db"):
         self._queue: asyncio.Queue = asyncio.Queue()
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self._available = False
         self._db_path = db_path
-        self._client_id = f"wactorz-publisher"
+        self._client_id = "wactorz-publisher"
         self._connected = False
 
     @classmethod
-    async def create(cls, broker: str, port: int,
-                     db_path: str = "./state/mqtt_outbox.db") -> "_MQTTPublisher":
+    async def create(
+        cls, broker: str, port: int, db_path: str = "./state/mqtt_outbox.db"
+    ) -> "_MQTTPublisher":
         pub = cls(db_path=db_path)
         try:
             import aiomqtt  # noqa
+
             pub._init_db()
             pub._load_pending_from_db()
             pub._task = asyncio.create_task(pub._run(broker, port))
             pub._available = True
-            logger.info(f"[MQTT] Publisher started → {broker}:{port} | "
-                        f"client_id={pub._client_id} | outbox_db={db_path}")
+            logger.info(
+                f"[MQTT] Publisher started → {broker}:{port} | "
+                f"client_id={pub._client_id} | outbox_db={db_path}"
+            )
         except ImportError:
             logger.warning("[MQTT] aiomqtt not installed. MQTT disabled.")
         except Exception as e:
@@ -646,7 +675,9 @@ class _MQTTPublisher:
 
     def _init_db(self):
         """Create outbox table if it doesn't exist."""
-        import sqlite3, os
+        import os
+        import sqlite3
+
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
         with sqlite3.connect(self._db_path) as db:
             db.execute("""
@@ -663,13 +694,22 @@ class _MQTTPublisher:
 
     def _save_to_db(self, topic: str, payload: str, retain: bool, qos: int) -> int:
         """Persist a message to SQLite. Returns row id."""
-        import sqlite3, time as _t
+        import sqlite3
+        import time as _t
+
         try:
             with sqlite3.connect(self._db_path) as db:
                 cur = db.execute(
                     "INSERT INTO outbox (topic, payload, retain, qos, ts) VALUES (?,?,?,?,?)",
-                    (topic, payload if isinstance(payload, str) else payload.decode("utf-8", errors="replace"),
-                     int(retain), qos, _t.time())
+                    (
+                        topic,
+                        payload
+                        if isinstance(payload, str)
+                        else payload.decode("utf-8", errors="replace"),
+                        int(retain),
+                        qos,
+                        _t.time(),
+                    ),
                 )
                 db.commit()
                 return cur.lastrowid
@@ -680,6 +720,7 @@ class _MQTTPublisher:
     def _delete_from_db(self, row_id: int):
         """Remove a delivered message from the outbox."""
         import sqlite3
+
         try:
             with sqlite3.connect(self._db_path) as db:
                 db.execute("DELETE FROM outbox WHERE id = ?", (row_id,))
@@ -690,6 +731,7 @@ class _MQTTPublisher:
     def _load_pending_from_db(self):
         """On startup, reload undelivered QoS 1 messages into the in-memory queue."""
         import sqlite3
+
         try:
             with sqlite3.connect(self._db_path) as db:
                 rows = db.execute(
@@ -749,18 +791,19 @@ class _MQTTPublisher:
         - Fixed client_id: same session resumed after reconnect
         - Messages are NOT dequeued until successfully published (no loss on disconnect)
         """
-        import aiomqtt
         from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
+
         backoff = 1.0
         _last_exc_str: str | None = None
 
         while True:
             try:
                 async with mqtt_client(
-                    broker, port,
-                    identifier   = self._client_id,
-                    clean_session = False,
-                    keepalive    = 30,
+                    broker,
+                    port,
+                    identifier=self._client_id,
+                    clean_session=False,
+                    keepalive=30,
                 ) as client:
                     self._connected = True
                     logger.info(f"[MQTT] Publisher connected | client_id={self._client_id}")
@@ -771,9 +814,7 @@ class _MQTTPublisher:
                         topic, payload, retain, qos, row_id = item
 
                         try:
-                            await client.publish(
-                                topic, payload, retain=retain, qos=qos
-                            )
+                            await client.publish(topic, payload, retain=retain, qos=qos)
                             # Only remove from queue AFTER successful publish
                             self._queue.task_done()
                             # Remove from SQLite outbox if it was persisted
@@ -811,5 +852,6 @@ class _MQTTPublisher:
 class _NoOpMQTT:
     async def publish(self, topic: str, payload: str):
         pass
+
     async def disconnect(self):
         pass

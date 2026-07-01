@@ -7,15 +7,15 @@ module a mixin currently lives in. When a concern is split or renamed, only this
 file changes; no call site moves.
 """
 
-from .spawning import SpawnMixin, _SpawnPlaceholder
 from .memory import MemoryMixin
-from .routing import RoutingMixin
 from .planning import PlanningMixin
+from .routing import RoutingMixin
+from .spawning import SpawnMixin, SpawnPlaceholder
 
 __all__ = [
     "SpawnMixin",
     "MemoryMixin",
     "RoutingMixin",
     "PlanningMixin",
-    "_SpawnPlaceholder",
+    "SpawnPlaceholder",
 ]

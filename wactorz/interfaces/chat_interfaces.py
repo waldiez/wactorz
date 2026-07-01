@@ -6,8 +6,7 @@ Supported: CLI (terminal), Discord, WhatsApp (via Twilio), REST.
 import asyncio
 import logging
 import os
-from typing import Any
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..core.mqtt import mqtt_client
 from ..monitoring import PrometheusMonitor
@@ -23,6 +22,7 @@ REMOTE_RUNNER_PATH = os.path.normpath(os.path.join(_HERE, "..", "remote_runner.p
 
 
 # ─── CLI Interface ──────────────────────────────────────────────────────────
+
 
 class CLIInterface:
     """
@@ -79,8 +79,7 @@ class CLIInterface:
             # Case 2: DynamicAgent with a handle_task function
             if hasattr(target, "_fn_handle_task") and target._fn_handle_task:
                 result = await target._fn_handle_task(
-                    target._api,
-                    {"message": message, "text": message, "query": message}
+                    target._api, {"message": message, "text": message, "query": message}
                 )
                 if isinstance(result, dict):
                     for key in ("reply", "answer", "result", "text", "response"):
@@ -126,9 +125,11 @@ class CLIInterface:
                 return f"[error] Agent '{agent_name}' not found. Remote agents: {', '.join(known)}"
             return f"[error] Agent '{agent_name}' not found. No remote nodes connected."
 
-        import json, uuid as _uuid
+        import json
+        import uuid as _uuid
+
         try:
-            import aiomqtt
+            import aiomqtt  # noqa: F401
         except ImportError:
             return "[error] aiomqtt not installed"
 
@@ -149,13 +150,18 @@ class CLIInterface:
                 result_holder.append({"error": str(e)})
 
         import asyncio
+
         listener = asyncio.create_task(_listen_for_reply())
         await asyncio.sleep(0.15)  # let subscriber connect first
 
         await main._mqtt_publish(
             f"agents/by-name/{agent_name}/task",
-            {"text": message, "payload": message,
-             "_remote_task": True, "_reply_topic": reply_topic},
+            {
+                "text": message,
+                "payload": message,
+                "_remote_task": True,
+                "_reply_topic": reply_topic,
+            },
         )
 
         try:
@@ -203,7 +209,8 @@ class CLIInterface:
                 ip = socket.gethostbyname(hostname)
                 print(f"[discover] Found via mDNS: {hostname} → {ip}")
                 ans = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda h=hostname, i=ip: input(f"  Use {h} ({i})? [Y/n]: ").strip().lower()
+                    None,
+                    lambda h=hostname, i=ip: input(f"  Use {h} ({i})? [Y/n]: ").strip().lower(),
                 )
                 if ans in ("", "y", "yes"):
                     return hostname
@@ -213,7 +220,7 @@ class CLIInterface:
         # 2. Network scan
         try:
             local_ip = socket.gethostbyname(socket.gethostname())
-            subnet   = ".".join(local_ip.split(".")[:3])
+            subnet = ".".join(local_ip.split(".")[:3])
         except Exception:
             subnet = "192.168.1"
 
@@ -223,7 +230,7 @@ class CLIInterface:
         if found:
             print(f"[discover] Found {len(found)} SSH-accessible host(s):")
             for i, ip in enumerate(found):
-                print(f"  [{i+1}] {ip}")
+                print(f"  [{i + 1}] {ip}")
             ans = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: input(f"  Pick [1-{len(found)}] or type IP manually: ").strip()
             )
@@ -244,7 +251,7 @@ class CLIInterface:
     async def _scan_subnet_ssh(self, subnet: str) -> list:
         """Async port-22 scan of an entire /24 subnet."""
         found = []
-        sem   = asyncio.Semaphore(60)
+        sem = asyncio.Semaphore(60)
 
         async def probe(ip):
             async with sem:
@@ -279,9 +286,16 @@ class CLIInterface:
 
         # Credentials
         loop = asyncio.get_event_loop()
-        user     = await loop.run_in_executor(None, lambda: input(f"\n  SSH user [pi]: ").strip() or "pi")
-        password = await loop.run_in_executor(None, lambda: __import__("getpass").getpass("  SSH password (leave blank for key auth): "))
-        broker   = await loop.run_in_executor(None, lambda: input("  MQTT broker IP (this machine's LAN IP): ").strip() or "localhost")
+        user = await loop.run_in_executor(
+            None, lambda: input("\n  SSH user [pi]: ").strip() or "pi"
+        )
+        password = await loop.run_in_executor(
+            None,
+            lambda: __import__("getpass").getpass("  SSH password (leave blank for key auth): "),
+        )
+        broker = await loop.run_in_executor(
+            None, lambda: input("  MQTT broker IP (this machine's LAN IP): ").strip() or "localhost"
+        )
 
         print(f"\n  Deploying to {user}@{host} as node '{node_name}'...")
         print("  (This may take 20-60s while packages install on the remote machine)")
@@ -290,14 +304,17 @@ class CLIInterface:
             print("[error] delegate_to_installer not available. Is the installer agent running?")
             return
 
-        result = await self.agent.delegate_to_installer({
-            "action":    "node_deploy",
-            "host":      host,
-            "user":      user,
-            "password":  password,
-            "node_name": node_name,
-            "broker":    broker,
-        }, timeout=120.0)
+        result = await self.agent.delegate_to_installer(
+            {
+                "action": "node_deploy",
+                "host": host,
+                "user": user,
+                "password": password,
+                "node_name": node_name,
+                "broker": broker,
+            },
+            timeout=120.0,
+        )
 
         if result.get("success"):
             print(f"""
@@ -349,8 +366,10 @@ class CLIInterface:
                     print()
                     for a in agents:
                         protected = " [protected]" if a.get("protected") else ""
-                        node      = f" [{a['node']}]" if a.get("node") else ""
-                        print(f"  [{a['state']:8s}] @{a['name']:<22s} {a['actor_id'][:8]}{protected}{node}")
+                        node = f" [{a['node']}]" if a.get("node") else ""
+                        print(
+                            f"  [{a['state']:8s}] @{a['name']:<22s} {a['actor_id'][:8]}{protected}{node}"
+                        )
                     print()
                     continue
 
@@ -364,13 +383,17 @@ class CLIInterface:
                     # Build local node group from actor registry
                     local_names = [a["name"] for a in agents if not a.get("node")]
                     print()
-                    print(f"  {'local':20s} {'online':6s}  {', '.join('@' + n for n in local_names) or '(none)'}")
+                    print(
+                        f"  {'local':20s} {'online':6s}  {', '.join('@' + n for n in local_names) or '(none)'}"
+                    )
                     for nd in sorted(remote_nodes, key=lambda x: x["node"]):
                         status = "online" if nd["online"] else "OFFLINE"
-                        names  = ', '.join('@' + n for n in nd["agents"]) or '(no agents)'
+                        names = ", ".join("@" + n for n in nd["agents"]) or "(no agents)"
                         print(f"  {nd['node']:20s} {status:6s}  {names}")
                     if not remote_nodes:
-                        print("  (no remote nodes seen yet — deploy one with /deploy <node> <host>)")
+                        print(
+                            "  (no remote nodes seen yet — deploy one with /deploy <node> <host>)"
+                        )
                     print()
                     continue
 
@@ -385,11 +408,11 @@ class CLIInterface:
                     elif not hasattr(self.agent, "migrate_agent"):
                         print("[error] migrate_agent not available on this actor.\n")
                     else:
-                        agent_name  = parts[1]
+                        agent_name = parts[1]
                         target_node = parts[2]
                         print(f"[Migrating @{agent_name} to {target_node}...]")
                         result = await self.agent.migrate_agent(agent_name, target_node)
-                        ok  = result.get("success", False)
+                        ok = result.get("success", False)
                         sym = "OK" if ok else "FAIL"
                         print(f"[{sym}] {result.get('message', '')}\n")
                     continue
@@ -399,24 +422,33 @@ class CLIInterface:
                     parts = text.split()
                     if len(parts) < 3:
                         print("[usage] /deploy-pkg <host-ip> <package> [package2 ...]")
-                        print("        e.g.  /deploy-pkg 192.168.1.50 adafruit-circuitpython-dht RPi.GPIO")
+                        print(
+                            "        e.g.  /deploy-pkg 192.168.1.50 adafruit-circuitpython-dht RPi.GPIO"
+                        )
                         print()
                     elif not hasattr(self.agent, "delegate_to_installer"):
                         print("[error] installer not available\n")
                     else:
-                        host     = parts[1]
+                        host = parts[1]
                         packages = parts[2:]
-                        loop     = asyncio.get_event_loop()
-                        user     = await loop.run_in_executor(None, lambda: input("  SSH user [pi]: ").strip() or "pi")
-                        password = await loop.run_in_executor(None, lambda: __import__("getpass").getpass("  SSH password: "))
+                        loop = asyncio.get_event_loop()
+                        user = await loop.run_in_executor(
+                            None, lambda: input("  SSH user [pi]: ").strip() or "pi"
+                        )
+                        password = await loop.run_in_executor(
+                            None, lambda: __import__("getpass").getpass("  SSH password: ")
+                        )
                         print(f"  Installing {packages} on {host}...")
-                        result = await self.agent.delegate_to_installer({
-                            "action":   "node_install",
-                            "host":     host,
-                            "user":     user,
-                            "password": password,
-                            "packages": packages,
-                        }, timeout=120.0)
+                        result = await self.agent.delegate_to_installer(
+                            {
+                                "action": "node_install",
+                                "host": host,
+                                "user": user,
+                                "password": password,
+                                "packages": packages,
+                            },
+                            timeout=120.0,
+                        )
                         ok = result.get("success", False)
                         if ok:
                             print(f"  [OK] {packages} installed on {host}\n")
@@ -434,14 +466,18 @@ class CLIInterface:
                     continue
 
                 if text.startswith("@"):
-                    parts      = text[1:].split(" ", 1)
+                    parts = text[1:].split(" ", 1)
                     agent_name = parts[0].strip()
-                    message    = parts[1].strip() if len(parts) > 1 else ""
+                    message = parts[1].strip() if len(parts) > 1 else ""
                     if not message:
                         print(f"[usage] @{agent_name} <your message>\n")
                         continue
                     print(f"\n[routing to @{agent_name}]")
-                    target = self.agent._registry.find_by_name(agent_name) if self.agent._registry else None
+                    target = (
+                        self.agent._registry.find_by_name(agent_name)
+                        if self.agent._registry
+                        else None
+                    )
                     # @main goes through the full orchestration pipeline
                     if target is self.agent:
                         print(f"\n@{agent_name}: ", end="", flush=True)
@@ -491,6 +527,7 @@ class CLIInterface:
 
 # ─── Discord Interface ──────────────────────────────────────────────────────
 
+
 class DiscordInterface:
     """
     Discord bot interface. Requires: pip install discord.py
@@ -526,16 +563,21 @@ class DiscordInterface:
             if not client.user.mentioned_in(message):
                 return  # Only respond when the bot is mentioned
 
-            text = message.content.replace(f'<@{client.user.id}>', '').replace(f'<@!{client.user.id}>', '').strip()
+            text = (
+                message.content.replace(f"<@{client.user.id}>", "")
+                .replace(f"<@!{client.user.id}>", "")
+                .strip()
+            )
             async with message.channel.typing():
                 response = await self.agent.process_user_input(text)
             for i in range(0, len(response), 2000):
-                await message.channel.send(response[i:i + 2000])
+                await message.channel.send(response[i : i + 2000])
 
         await client.start(self.token)
 
 
 # ─── Telegram Interface ─────────────────────────────────────────────────────
+
 
 class TelegramInterface:
     def __init__(self, main_actor: "MainActor", token: str, allowed_user_id: int | None = None):
@@ -547,7 +589,13 @@ class TelegramInterface:
         try:
             from telegram import Update
             from telegram.constants import ChatAction
-            from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
+            from telegram.ext import (
+                Application,
+                CommandHandler,
+                ContextTypes,
+                MessageHandler,
+                filters,
+            )
         except ImportError:
             logger.error("python-telegram-bot not installed. Run: pip install python-telegram-bot")
             return
@@ -567,21 +615,27 @@ class TelegramInterface:
             if not user:
                 return
 
-            logger.info("[Telegram] Message from id=%s username=%s: %s",
-                        user.id, user.username, update.message.text[:60])
+            logger.info(
+                "[Telegram] Message from id=%s username=%s: %s",
+                user.id,
+                user.username,
+                update.message.text[:60],
+            )
 
             if self.allowed_user_id and user.id != self.allowed_user_id:
                 logger.warning("[Telegram] Rejected message from user %s", user.id)
                 return
 
             text = update.message.text.strip()
-            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id, action=ChatAction.TYPING
+            )
 
             response = await self.agent.process_user_input(text)
             response = response or "(no response)"
 
             for i in range(0, len(response), 4096):
-                await update.message.reply_text(response[i:i + 4096])
+                await update.message.reply_text(response[i : i + 4096])
 
         app = Application.builder().token(self.token).build()
         app.add_handler(CommandHandler("start", start_cmd))
@@ -594,7 +648,9 @@ class TelegramInterface:
         await app.updater.start_polling()
         await asyncio.Event().wait()
 
+
 # ─── WhatsApp Interface (via Twilio) ───────────────────────────────────────
+
 
 class WhatsAppInterface:
     """
@@ -653,6 +709,7 @@ class WhatsAppInterface:
 
 
 # ─── OpenClaw / Generic REST Interface ────────────────────────────────────
+
 
 class RESTInterface:
     """
@@ -736,11 +793,13 @@ class RESTInterface:
                 return web.json_response({"error": "No message provided"}, status=400)
 
             response = await self.agent.process_user_input(message)
-            return web.json_response({
-                "status": "sent",
-                "agent": agent_name,
-                "response": response,
-            })
+            return web.json_response(
+                {
+                    "status": "sent",
+                    "agent": agent_name,
+                    "response": response,
+                }
+            )
 
         async def agents_endpoint(request):
             if registry is None:
@@ -753,6 +812,7 @@ class RESTInterface:
             target = body.get("target")
             command = body.get("command")
             from ..core.actor import MessageType
+
             cmd_map = {
                 "stop": MessageType.STOP,
                 "pause": MessageType.PAUSE,
@@ -777,7 +837,11 @@ class RESTInterface:
             content = body.get("content", "")
             if not content:
                 return web.json_response({"error": "No content provided"}, status=400)
-            await self.agent.send(actor.actor_id, MessageType.TASK, {"text": content, "content": content})
+            from ..core.actor import MessageType
+
+            await self.agent.send(
+                actor.actor_id, MessageType.TASK, {"text": content, "content": content}
+            )
             return web.json_response({"status": "sent"})
 
         async def stop_actor_endpoint(request):
@@ -824,7 +888,9 @@ class RESTInterface:
         async def ha_map_latest_endpoint(request):
             payload = self._latest_ha_map_payload()
             if payload is None:
-                return web.json_response({"error": "Home Assistant map snapshot not available"}, status=404)
+                return web.json_response(
+                    {"error": "Home Assistant map snapshot not available"}, status=404
+                )
             return web.json_response(payload)
 
         app = web.Application(middlewares=[self._monitor.middleware])

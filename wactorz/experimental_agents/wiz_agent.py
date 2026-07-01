@@ -57,9 +57,9 @@ class WizAgent(Actor):
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "wiz-agent")
         super().__init__(**kwargs)
-        self.protected  = False
-        self._balance: int          = 0
-        self._history: list[dict]   = []
+        self.protected = False
+        self._balance: int = 0
+        self._history: list[dict] = []
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -68,7 +68,12 @@ class WizAgent(Actor):
         self._history = list(self.recall("history", []))
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
-            {"agentId": self.actor_id, "agentName": self.name, "agentType": "coin", "timestamp": time.time()},
+            {
+                "agentId": self.actor_id,
+                "agentName": self.name,
+                "agentType": "coin",
+                "timestamp": time.time(),
+            },
         )
         self._tasks.append(asyncio.create_task(self._economy_listener()))
         self._tasks.append(asyncio.create_task(self._coin_heartbeat()))
@@ -85,12 +90,18 @@ class WizAgent(Actor):
 
     async def _economy_listener(self) -> None:
         try:
-            import aiomqtt
+            import aiomqtt  # noqa: F401
         except ImportError:
             logger.warning("[%s] aiomqtt not available — economy listener disabled", self.name)
             return
 
-        topics = ["agents/+/spawn", "agents/+/heartbeat", "system/health", "system/qa-flag", "system/alert"]
+        topics = [
+            "agents/+/spawn",
+            "agents/+/heartbeat",
+            "system/health",
+            "system/qa-flag",
+            "system/alert",
+        ]
 
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
@@ -108,7 +119,7 @@ class WizAgent(Actor):
                         self._handle_event(topic, payload)
             except asyncio.CancelledError:
                 break
-            except Exception as exc:
+            except Exception:
                 if self.state not in (ActorState.STOPPED, ActorState.FAILED):
                     await asyncio.sleep(5)
 
@@ -124,7 +135,11 @@ class WizAgent(Actor):
                 return
             self._apply(2, "Heartbeat received")
         elif topic == "system/health":
-            if isinstance(payload, dict) and payload.get("failed", 0) == 0 and payload.get("stopped", 0) == 0:
+            if (
+                isinstance(payload, dict)
+                and payload.get("failed", 0) == 0
+                and payload.get("stopped", 0) == 0
+            ):
                 self._apply(5, "System health OK")
         elif topic == "system/qa-flag":
             self._apply(-5, "QA flag raised")
@@ -133,7 +148,9 @@ class WizAgent(Actor):
 
     def _apply(self, delta: int, reason: str) -> None:
         self._balance += delta
-        self._history.append({"delta": delta, "reason": reason, "balance": self._balance, "timestamp": time.time()})
+        self._history.append(
+            {"delta": delta, "reason": reason, "balance": self._balance, "timestamp": time.time()}
+        )
         if len(self._history) > _MAX_HISTORY:
             self._history = self._history[-_MAX_HISTORY:]
         self._save()
@@ -143,10 +160,10 @@ class WizAgent(Actor):
         await self._mqtt_publish(
             "system/coin",
             {
-                "balance":   self._balance,
-                "event":     "earn" if delta >= 0 else "debit",
-                "amount":    abs(delta),
-                "reason":    reason,
+                "balance": self._balance,
+                "event": "earn" if delta >= 0 else "debit",
+                "amount": abs(delta),
+                "reason": reason,
                 "timestamp": time.time(),
             },
         )
@@ -168,7 +185,8 @@ class WizAgent(Actor):
         payload = msg.payload or {}
         text = str(
             payload.get("text") or payload.get("content") or payload.get("task") or ""
-            if isinstance(payload, dict) else payload
+            if isinstance(payload, dict)
+            else payload
         ).strip()
         if not text:
             return
@@ -186,7 +204,7 @@ class WizAgent(Actor):
         text = raw
         for pfx in ("@wiz-agent", "@wiz_agent"):
             if text.lower().startswith(pfx):
-                text = text[len(pfx):].lstrip()
+                text = text[len(pfx) :].lstrip()
                 break
         parts = text.split()
         if not parts:
@@ -216,14 +234,18 @@ class WizAgent(Actor):
     def _cmd_history(self, n: int) -> str:
         if not self._history:
             return "📭 No coin history yet."
-        n    = max(1, min(n, 50, len(self._history)))
+        n = max(1, min(n, 50, len(self._history)))
         rows = []
         for e in reversed(self._history[-n:]):
             sign = "+" if e["delta"] >= 0 else ""
-            ts   = e["timestamp"]
-            t    = f"{int(ts//3600)%24:02d}:{int(ts//60)%60:02d}:{int(ts)%60:02d}"
+            ts = e["timestamp"]
+            t = f"{int(ts // 3600) % 24:02d}:{int(ts // 60) % 60:02d}:{int(ts) % 60:02d}"
             rows.append(f"  `{t}` {sign}{e['delta']} Ƿ — {e['reason']} (bal: {e['balance']})")
-        return f"**Ƿ Coin History** (last {n})\n\n" + "\n".join(rows) + f"\n\n**Balance: Ƿ {self._balance}**"
+        return (
+            f"**Ƿ Coin History** (last {n})\n\n"
+            + "\n".join(rows)
+            + f"\n\n**Balance: Ƿ {self._balance}**"
+        )
 
     def _cmd_earn(self, args: list[str]) -> str:
         if not args:

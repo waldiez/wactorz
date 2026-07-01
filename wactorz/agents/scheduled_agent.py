@@ -68,7 +68,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Any
+from typing import Any
 
 try:
     from zoneinfo import ZoneInfo
@@ -77,18 +77,27 @@ except ImportError:  # Python < 3.9 — should not happen in this codebase
 
 from ..core.actor import Actor, Message, MessageType
 
-
 logger = logging.getLogger(__name__)
 
 
 # ── Day-of-week parsing ──────────────────────────────────────────────────────
 # Python's datetime.weekday(): Monday=0, Sunday=6
 _DAY_NAMES = {
-    "mon": 0, "tue": 1, "wed": 2, "thu": 3,
-    "fri": 4, "sat": 5, "sun": 6,
+    "mon": 0,
+    "tue": 1,
+    "wed": 2,
+    "thu": 3,
+    "fri": 4,
+    "sat": 5,
+    "sun": 6,
     # Tolerate full names too — LLMs sometimes spell them out
-    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
-    "friday": 4, "saturday": 5, "sunday": 6,
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
 }
 
 
@@ -106,7 +115,7 @@ _MAX_SLEEP_S = 300.0
 _ONESHOT_CATCHUP_S = 300.0
 
 
-def _resolve_timezone(spec_tz: Optional[str], user_tz: Optional[str]) -> Any:
+def _resolve_timezone(spec_tz: str | None, user_tz: str | None) -> Any:
     """
     Resolve the schedule's effective timezone.
 
@@ -179,7 +188,7 @@ def _next_fire_weekly(now_local: datetime, at: str, days: list[str]) -> datetime
     raise RuntimeError("weekly schedule produced no candidate — internal error")
 
 
-def _next_fire_interval(now_local: datetime, seconds: int, last_fire: Optional[datetime]) -> datetime:
+def _next_fire_interval(now_local: datetime, seconds: int, last_fire: datetime | None) -> datetime:
     """
     Next fire time for an interval schedule.
     If we've fired before, fire `seconds` after the last fire.
@@ -203,7 +212,9 @@ def _next_fire_once(at: str, tzinfo: Any) -> datetime:
     try:
         dt = datetime.fromisoformat(at.strip())
     except ValueError as e:
-        raise ValueError(f"once schedule 'at' must be ISO-8601 (YYYY-MM-DDTHH:MM:SS), got {at!r}") from e
+        raise ValueError(
+            f"once schedule 'at' must be ISO-8601 (YYYY-MM-DDTHH:MM:SS), got {at!r}"
+        ) from e
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=tzinfo)
     return dt
@@ -233,7 +244,8 @@ def _next_fire_cron(now_local: datetime, expr: str) -> datetime:
 @dataclass
 class _ScheduleState:
     """Mutable per-agent schedule state, persisted across restarts."""
-    last_fire_iso: Optional[str] = None    # ISO-8601 UTC
+
+    last_fire_iso: str | None = None  # ISO-8601 UTC
     fire_count: int = 0
 
 
@@ -252,21 +264,25 @@ class ScheduledAgent(Actor):
 
     def __init__(
         self,
-        schedule: Optional[dict] = None,
-        timezone: Optional[str] = None,
-        publish_topic: Optional[str] = None,
+        schedule: dict | None = None,
+        timezone: str | None = None,
+        publish_topic: str | None = None,
         description: str = "",
         **kwargs,
     ):
         kwargs.setdefault("name", "scheduled")
         super().__init__(**kwargs)
         if not isinstance(schedule, dict):
-            raise ValueError(f"ScheduledAgent requires a 'schedule' dict, got {type(schedule).__name__}")
-        self._schedule:    dict = dict(schedule)   # defensive copy
-        self._user_tz:     Optional[str] = timezone
-        self._tz                          = _resolve_timezone(self._schedule.get("tz"), timezone)
-        self._publish_topic: str          = publish_topic or f"schedule/{self.name}/fired"
-        self.description:    str          = description or f"Scheduled trigger ({self._schedule.get('type', '?')})"
+            raise ValueError(
+                f"ScheduledAgent requires a 'schedule' dict, got {type(schedule).__name__}"
+            )
+        self._schedule: dict = dict(schedule)  # defensive copy
+        self._user_tz: str | None = timezone
+        self._tz = _resolve_timezone(self._schedule.get("tz"), timezone)
+        self._publish_topic: str = publish_topic or f"schedule/{self.name}/fired"
+        self.description: str = (
+            description or f"Scheduled trigger ({self._schedule.get('type', '?')})"
+        )
 
         # Validate the schedule eagerly so a malformed spec fails at spawn,
         # not at first fire. Computing the next fire time is the cheapest
@@ -278,7 +294,7 @@ class ScheduledAgent(Actor):
             raise ValueError(f"Invalid schedule for {self.name}: {e}") from e
 
         # Background loop handle
-        self._loop_task: Optional[asyncio.Task] = None
+        self._loop_task: asyncio.Task | None = None
         # Used by handle_message for manual trigger/inspect commands
         self._manual_trigger_event: asyncio.Event = asyncio.Event()
 
@@ -288,8 +304,9 @@ class ScheduledAgent(Actor):
         # Restore last-fire state if persisted
         state = self.recall("_schedule_state") or {}
         if isinstance(state, dict):
-            self._state = _ScheduleState(**{k: v for k, v in state.items()
-                                            if k in ("last_fire_iso", "fire_count")})
+            self._state = _ScheduleState(
+                **{k: v for k, v in state.items() if k in ("last_fire_iso", "fire_count")}
+            )
         else:
             self._state = _ScheduleState()
 
@@ -381,7 +398,7 @@ class ScheduledAgent(Actor):
                 if not manual:
                     now_local = datetime.now(self._tz)
                     if now_local < next_fire:
-                        continue   # not time yet, recompute and sleep again
+                        continue  # not time yet, recompute and sleep again
 
                 # Time to fire (or manually triggered)
                 await self._fire(
@@ -401,7 +418,7 @@ class ScheduledAgent(Actor):
                 logger.error(f"[{self.name}] Loop error: {e!r} — backing off 30s")
                 await asyncio.sleep(30)
 
-    def _last_fire_local(self, tzinfo: Any) -> Optional[datetime]:
+    def _last_fire_local(self, tzinfo: Any) -> datetime | None:
         """Convert persisted UTC ISO timestamp to a tz-aware local datetime."""
         if not self._state.last_fire_iso:
             return None
@@ -413,7 +430,7 @@ class ScheduledAgent(Actor):
         except Exception:
             return None
 
-    def _compute_next_fire(self, now_local: datetime, last_fire: Optional[datetime]) -> datetime:
+    def _compute_next_fire(self, now_local: datetime, last_fire: datetime | None) -> datetime:
         """Dispatch to the right next-fire calculator based on schedule type."""
         spec = self._schedule
         stype = (spec.get("type") or "").strip().lower()
@@ -454,8 +471,7 @@ class ScheduledAgent(Actor):
             return _next_fire_cron(now_local, expr)
 
         raise ValueError(
-            f"Unknown schedule type: {stype!r}. "
-            f"Use one of: daily, weekly, interval, once, cron."
+            f"Unknown schedule type: {stype!r}. Use one of: daily, weekly, interval, once, cron."
         )
 
     # ── Firing ─────────────────────────────────────────────────────────────
@@ -463,19 +479,22 @@ class ScheduledAgent(Actor):
     async def _fire(self, now_utc: datetime, manual: bool = False):
         """Publish the fire event and update persisted state."""
         payload = {
-            "fired_at":      now_utc.isoformat(),
+            "fired_at": now_utc.isoformat(),
             "schedule_type": self._schedule.get("type", "?"),
-            "agent":         self.name,
-            "manual":        manual,
+            "agent": self.name,
+            "manual": manual,
         }
         try:
             await self._mqtt_publish(self._publish_topic, payload)
             self._state.last_fire_iso = now_utc.isoformat()
-            self._state.fire_count   += 1
-            self.persist("_schedule_state", {
-                "last_fire_iso": self._state.last_fire_iso,
-                "fire_count":    self._state.fire_count,
-            })
+            self._state.fire_count += 1
+            self.persist(
+                "_schedule_state",
+                {
+                    "last_fire_iso": self._state.last_fire_iso,
+                    "fire_count": self._state.fire_count,
+                },
+            )
             await self._log(
                 f"Fired{' (manual)' if manual else ''} → {self._publish_topic} "
                 f"[count={self._state.fire_count}]"
@@ -536,13 +555,13 @@ class ScheduledAgent(Actor):
                 last = self._last_fire_local(now_local.tzinfo)
                 next_fire = self._compute_next_fire(now_local, last)
                 info = {
-                    "name":          self.name,
-                    "schedule":      self._schedule,
-                    "tz":            str(self._tz),
+                    "name": self.name,
+                    "schedule": self._schedule,
+                    "tz": str(self._tz),
                     "publish_topic": self._publish_topic,
-                    "next_fire":     next_fire.isoformat(),
-                    "last_fire":     self._state.last_fire_iso,
-                    "fire_count":    self._state.fire_count,
+                    "next_fire": next_fire.isoformat(),
+                    "last_fire": self._state.last_fire_iso,
+                    "fire_count": self._state.fire_count,
                 }
                 await _reply({"result": info, "info": info})
             except Exception as e:
@@ -563,7 +582,8 @@ class ScheduledAgent(Actor):
 
 # ── Public helpers ──────────────────────────────────────────────────────────
 
-def _parse_duration(s: str) -> Optional[int]:
+
+def _parse_duration(s: str) -> int | None:
     """
     Parse '30s', '5m', '2h', '1d' to seconds. Returns None on failure.
     Used as a convenience input format for interval schedules.
@@ -585,7 +605,7 @@ def _parse_duration(s: str) -> Optional[int]:
         return None
 
 
-def describe_schedule(schedule: dict, tz_name: Optional[str] = None) -> str:
+def describe_schedule(schedule: dict, tz_name: str | None = None) -> str:
     """
     Render a schedule dict as a short human-readable string for /rules
     and the /plans dry-run preview. Pure function — no I/O.

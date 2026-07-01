@@ -8,8 +8,8 @@ sys.modules.setdefault("aiohttp", types.ModuleType("aiohttp"))
 sys.modules.setdefault("websockets", types.ModuleType("websockets"))
 sys.modules.setdefault("openai", types.ModuleType("openai"))
 
-from wactorz.agents.main_actor import MainActor
 from wactorz.agents.llm_agent import OpenAIProvider
+from wactorz.agents.main_actor import MainActor
 from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
 
 
@@ -46,7 +46,9 @@ class MainActorActuateRoutingTest(unittest.IsolatedAsyncioTestCase):
     async def test_process_user_input_routes_actuate_to_one_off_handler(self):
         actor = MainActor(llm_provider=None)
         actor._classify_intent = AsyncMock(return_value="ACTUATE")
-        actor._handle_actuate_intent = AsyncMock(return_value="Done: light.turn_on -> light.living_room.")
+        actor._handle_actuate_intent = AsyncMock(
+            return_value="Done: light.turn_on -> light.living_room."
+        )
         actor.delegate_task = AsyncMock()
 
         result = await actor.process_user_input("turn on the living room light")
@@ -80,7 +82,9 @@ class OpenAIProviderReasoningTest(unittest.IsolatedAsyncioTestCase):
 
         provider = OpenAIProvider.__new__(OpenAIProvider)
         provider.model = "gpt-5-mini"
-        provider.client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=_FakeCompletions()))
+        provider.client = types.SimpleNamespace(
+            chat=types.SimpleNamespace(completions=_FakeCompletions())
+        )
 
         text, _usage = await provider.complete(
             messages=[{"role": "user", "content": "hello"}],
@@ -103,8 +107,16 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
                 persistence_dir=tmpdir,
             )
 
-            with patch("wactorz.agents.one_off_actuator_agent.CONFIG", types.SimpleNamespace(ha_url="http://ha.local:8123", ha_token="token")), \
-                 patch("wactorz.agents.one_off_actuator_agent.fetch_devices_entities_with_location", AsyncMock(return_value=[])):
+            with (
+                patch(
+                    "wactorz.agents.one_off_actuator_agent.CONFIG",
+                    types.SimpleNamespace(ha_url="http://ha.local:8123", ha_token="token"),
+                ),
+                patch(
+                    "wactorz.agents.one_off_actuator_agent.fetch_devices_entities_with_location",
+                    AsyncMock(return_value=[]),
+                ),
+            ):
                 result = await agent._execute_request()
 
             self.assertEqual(result, "I couldn't identify a matching device for that request.")
@@ -122,9 +134,20 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
                 persistence_dir=tmpdir,
             )
 
-            with patch("wactorz.agents.one_off_actuator_agent.CONFIG", types.SimpleNamespace(ha_url="http://ha.local:8123", ha_token="token")), \
-                 patch("wactorz.agents.one_off_actuator_agent.fetch_devices_entities_with_location", AsyncMock(return_value=[])), \
-                 patch("wactorz.agents.one_off_actuator_agent.HAWebSocketClient", return_value=fake_client):
+            with (
+                patch(
+                    "wactorz.agents.one_off_actuator_agent.CONFIG",
+                    types.SimpleNamespace(ha_url="http://ha.local:8123", ha_token="token"),
+                ),
+                patch(
+                    "wactorz.agents.one_off_actuator_agent.fetch_devices_entities_with_location",
+                    AsyncMock(return_value=[]),
+                ),
+                patch(
+                    "wactorz.agents.one_off_actuator_agent.HAWebSocketClient",
+                    return_value=fake_client,
+                ),
+            ):
                 result = await agent._execute_request()
 
             self.assertEqual(result, "Done: light.turn_on -> light.living_room.")

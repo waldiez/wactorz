@@ -31,10 +31,11 @@ logging.basicConfig(
 # But keep Supervisor messages so we can see it working
 logging.getLogger("wactorz.core.registry").setLevel(logging.DEBUG)
 
-from wactorz.core.actor import Actor, Message, MessageType, ActorState, SupervisorStrategy
+from wactorz.core.actor import Actor, ActorState, Message
 from wactorz.core.registry import ActorRegistry, Supervisor
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def make_registry() -> ActorRegistry:
     reg = ActorRegistry()
@@ -44,6 +45,7 @@ def make_registry() -> ActorRegistry:
 def make_supervisor(registry: ActorRegistry) -> Supervisor:
     def noop_inject(actor):
         pass  # no MQTT in tests
+
     sup = Supervisor(registry, noop_inject, poll_interval=0.3)
     registry._supervisor_ref = sup
     return sup
@@ -52,6 +54,7 @@ def make_supervisor(registry: ActorRegistry) -> Supervisor:
 PASS = "\033[32m[PASS]\033[0m"
 FAIL = "\033[31m[FAIL]\033[0m"
 
+
 def result(label: str, ok: bool):
     tag = PASS if ok else FAIL
     print(f"  {tag}  {label}")
@@ -59,23 +62,25 @@ def result(label: str, ok: bool):
         # Keep running remaining tests but flag overall failure
         result._any_failed = True
 
+
 result._any_failed = False
 
 
 # ── Minimal actor base that skips MQTT entirely ───────────────────────────────
+
 
 class _TestActor(Actor):
     """Bare-bones actor for testing — no MQTT, no persistence."""
 
     def __init__(self, name: str, **kwargs):
         super().__init__(name=name, **kwargs)
-        self.spawn_count = 0   # incremented by factory each time a fresh instance is made
+        self.spawn_count = 0  # incremented by factory each time a fresh instance is made
 
     async def _mqtt_publish(self, topic, payload, retain=False, qos=0):
-        pass   # swallow — no broker in tests
+        pass  # swallow — no broker in tests
 
     async def _command_listener(self):
-        pass   # no MQTT → no command listener
+        pass  # no MQTT → no command listener
 
     async def _save_persistent_state(self):
         pass
@@ -90,6 +95,7 @@ class _TestActor(Actor):
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test 1 — FAILED state triggers restart
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 async def test1_failed_state():
     print("\nTest 1 — FAILED state detected and restarted")
@@ -124,6 +130,7 @@ async def test1_failed_state():
 # Test 2 — Error storm triggers restart
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 async def test2_error_storm():
     print("\nTest 2 — Error storm detected and restarted")
 
@@ -138,7 +145,7 @@ async def test2_error_storm():
 
     registry = make_registry()
     sup = make_supervisor(registry)
-    sup.ERROR_STORM_THRESHOLD = 10   # explicit for clarity
+    sup.ERROR_STORM_THRESHOLD = 10  # explicit for clarity
 
     def factory():
         return StormyActor(name="stormy-2")
@@ -156,6 +163,7 @@ async def test2_error_storm():
 # Test 3 — Heartbeat silence triggers restart
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 async def test3_heartbeat_silence():
     print("\nTest 3 — Heartbeat silence detected and restarted")
 
@@ -167,15 +175,15 @@ async def test3_heartbeat_silence():
             if spawn_count["n"] == 1:
                 # Pretend the actor started a long time ago and last heartbeat was ancient
                 # Use a large negative offset to fake old uptime
-                self.metrics.start_time     = time.time() - 200   # 200s ago
-                self.metrics.last_heartbeat = time.time() - 100   # 100s ago
+                self.metrics.start_time = time.time() - 200  # 200s ago
+                self.metrics.last_heartbeat = time.time() - 100  # 100s ago
 
         async def _heartbeat_loop(self, interval=10.0):
-            pass   # silence the heartbeat loop so last_heartbeat stays stale
+            pass  # silence the heartbeat loop so last_heartbeat stays stale
 
     registry = make_registry()
     sup = make_supervisor(registry)
-    sup.HEARTBEAT_TIMEOUT = 35.0   # keep default
+    sup.HEARTBEAT_TIMEOUT = 35.0  # keep default
 
     def factory():
         return SilentActor(name="silent-3")
@@ -192,6 +200,7 @@ async def test3_heartbeat_silence():
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test 4 — Intentional stop NOT restarted
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 async def test4_intentional_stop():
     print("\nTest 4 — Intentional stop NOT restarted")
@@ -218,7 +227,7 @@ async def test4_intentional_stop():
     spec = sup._specs.get("normal-4")
     actor = spec.actor if spec else None
     if actor:
-        sup.release("normal-4")   # unlink from supervision
+        sup.release("normal-4")  # unlink from supervision
         await actor.stop()
 
     # Wait long enough that the watch loop runs multiple cycles
@@ -232,6 +241,7 @@ async def test4_intentional_stop():
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test 5 — Intentional delete NOT restarted
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 async def test5_intentional_delete():
     print("\nTest 5 — Intentional delete NOT restarted")
@@ -256,7 +266,7 @@ async def test5_intentional_delete():
     spec = sup._specs.get("normal-5")
     actor = spec.actor if spec else None
     if actor:
-        sup.release("normal-5")                  # unlink
+        sup.release("normal-5")  # unlink
         await registry.unregister(actor.actor_id)
         await actor.stop()
 
@@ -270,6 +280,7 @@ async def test5_intentional_delete():
 # Test 6 — Budget exhaustion retires the spec (no infinite loop)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 async def test6_budget_exhaustion():
     print("\nTest 6 — Budget exhaustion retires spec (no infinite loop)")
 
@@ -278,7 +289,7 @@ async def test6_budget_exhaustion():
     class AlwaysCrashActor(_TestActor):
         async def on_start(self):
             spawn_count["n"] += 1
-            self.state = ActorState.FAILED   # always crash immediately
+            self.state = ActorState.FAILED  # always crash immediately
 
     registry = make_registry()
     sup = make_supervisor(registry)
@@ -289,7 +300,8 @@ async def test6_budget_exhaustion():
         return AlwaysCrashActor(name="always-crash-6")
 
     sup.supervise(
-        "always-crash-6", factory,
+        "always-crash-6",
+        factory,
         max_restarts=MAX,
         restart_window=60.0,
         restart_delay=0.0,
@@ -304,14 +316,14 @@ async def test6_budget_exhaustion():
 
     # After budget is gone, watch loop must not keep calling restart
     count_at_retirement = spawn_count["n"]
-    await asyncio.sleep(1.0)   # one more second — count must not grow
-    count_after_pause   = spawn_count["n"]
+    await asyncio.sleep(1.0)  # one more second — count must not grow
+    count_after_pause = spawn_count["n"]
 
     await sup.stop()
 
     result(
         f"Spec retired after {MAX} restarts (spawned={count_at_retirement})",
-        retired and count_at_retirement <= MAX + 1,   # initial + MAX restarts
+        retired and count_at_retirement <= MAX + 1,  # initial + MAX restarts
     )
     result(
         "No further spawns after retirement",
@@ -322,6 +334,7 @@ async def test6_budget_exhaustion():
 # ═══════════════════════════════════════════════════════════════════════════════
 # Runner
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 async def main():
     print("=" * 60)

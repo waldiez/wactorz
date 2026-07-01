@@ -35,14 +35,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional, Any
 
 from ...core.actor import Actor, MessageType
 
 logger = logging.getLogger(__name__)
 
 
-class _SpawnPlaceholder:
+class SpawnPlaceholder:
     """Returned when an agent is being installed+spawned in the background.
 
     Truthy stand-in so callers can report "spawning…" before the real actor
@@ -53,7 +52,7 @@ class _SpawnPlaceholder:
         self.name = name
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
-        return f"<_SpawnPlaceholder {self.name!r}>"
+        return f"<SpawnPlaceholder {self.name!r}>"
 
 
 class SpawnMixin:
@@ -67,7 +66,7 @@ class SpawnMixin:
         *,
         register: bool = True,
         blocking_install: bool = False,
-    ) -> Optional[Actor]:
+    ) -> Actor | None:
         """Spawn one agent locally from a spawn-config dict.
 
         Parameters
@@ -77,13 +76,13 @@ class SpawnMixin:
             (via the ``_register_spawn`` hook) so it survives restarts.
         blocking_install:
             Dynamic agents only. When False (main's default), missing packages
-            install in the BACKGROUND and a ``_SpawnPlaceholder`` is returned
+            install in the BACKGROUND and a ``SpawnPlaceholder`` is returned
             immediately. When True (the planner's pipeline path), the install
             blocks until complete and the real actor is returned — pipelines
             need the agent live before the next step runs.
 
         Returns the spawned ``Actor``, an existing actor (idempotent path), a
-        ``_SpawnPlaceholder`` (background install), or ``None`` on failure.
+        ``SpawnPlaceholder`` (background install), or ``None`` on failure.
         """
         name = config.get("name", "spawned-agent")
 
@@ -91,15 +90,12 @@ class SpawnMixin:
         existing = self._find_existing(name)
         if existing is not None:
             if not config.get("replace", False):
-                logger.info(
-                    f"[{self.name}] '{name}' already exists "
-                    f"(use replace=true to update)."
-                )
+                logger.info(f"[{self.name}] '{name}' already exists (use replace=true to update).")
                 return existing
             await self._stop_for_replace(existing, name)
 
-        agent_type    = config.get("type", "dynamic")
-        code          = config.get("code", "").strip()
+        agent_type = config.get("type", "dynamic")
+        code = config.get("code", "").strip()
         system_prompt = config.get("system_prompt", "").strip()
 
         # ── Route to the right agent class ─────────────────────────────────
@@ -129,7 +125,7 @@ class SpawnMixin:
 
     # ── Per-type spawn helpers ─────────────────────────────────────────────
 
-    async def _spawn_ha_actuator(self, config: dict, name: str) -> Optional[Actor]:
+    async def _spawn_ha_actuator(self, config: dict, name: str) -> Actor | None:
         """Spawn a HomeAssistantActuatorAgent (type: ha_actuator).
 
         Collision handling is standardized on the agent NAME (matching every
@@ -137,36 +133,37 @@ class SpawnMixin:
         preserved in the actuator config regardless of any name suffixing.
         """
         from ..home_assistant_actuator_agent import (
-            HomeAssistantActuatorAgent,
-            ActuatorConfig,
             ActuatorAction,
             ActuatorCondition,
+            ActuatorConfig,
+            HomeAssistantActuatorAgent,
         )
 
         if self._registry and self._registry.find_by_name(name):
             import hashlib
             import time
+
             suffix = hashlib.md5(f"{name}{time.time()}".encode()).hexdigest()[:4]
             name = f"{name}-{suffix}"
 
         actuator_cfg = ActuatorConfig(
-            automation_id    = config.get("automation_id", name),
-            description      = config.get("description", ""),
-            mqtt_topics      = config.get("mqtt_topics", []),
-            actions          = [ActuatorAction.from_dict(a) for a in config.get("actions", [])],
-            conditions       = [ActuatorCondition.from_dict(c) for c in config.get("conditions", [])],
-            detection_filter = config.get("detection_filter"),
-            cooldown_seconds = float(config.get("cooldown_seconds", 10.0)),
+            automation_id=config.get("automation_id", name),
+            description=config.get("description", ""),
+            mqtt_topics=config.get("mqtt_topics", []),
+            actions=[ActuatorAction.from_dict(a) for a in config.get("actions", [])],
+            conditions=[ActuatorCondition.from_dict(c) for c in config.get("conditions", [])],
+            detection_filter=config.get("detection_filter"),
+            cooldown_seconds=float(config.get("cooldown_seconds", 10.0)),
         )
         logger.info(f"[{self.name}] Spawning HomeAssistantActuatorAgent '{name}'")
         return await self.spawn(
             HomeAssistantActuatorAgent,
-            config          = actuator_cfg,
-            name            = name,
-            persistence_dir = str(self._persistence_dir.parent),
+            config=actuator_cfg,
+            name=name,
+            persistence_dir=str(self._persistence_dir.parent),
         )
 
-    async def _spawn_scheduled_agent(self, config: dict, name: str) -> Optional[Actor]:
+    async def _spawn_scheduled_agent(self, config: dict, name: str) -> Actor | None:
         """Spawn a ScheduledAgent. The schedule spec is validated in __init__,
         so a malformed config raises ValueError here, before registration runs.
         The user's preferred timezone is injected so "5pm" means 5pm where the
@@ -185,12 +182,12 @@ class SpawnMixin:
         try:
             actor = await self.spawn(
                 ScheduledAgent,
-                name            = name,
-                schedule        = schedule_spec,
-                timezone        = self._resolve_user_timezone(),
-                publish_topic   = publish_topic,
-                description     = config.get("description", ""),
-                persistence_dir = str(self._persistence_dir.parent),
+                name=name,
+                schedule=schedule_spec,
+                timezone=self._resolve_user_timezone(),
+                publish_topic=publish_topic,
+                description=config.get("description", ""),
+                persistence_dir=str(self._persistence_dir.parent),
             )
             logger.info(
                 f"[{self.name}] Spawned ScheduledAgent '{name}' "
@@ -204,20 +201,21 @@ class SpawnMixin:
             logger.error(f"[{self.name}] Failed to spawn ScheduledAgent '{name}': {e}")
             return None
 
-    async def _spawn_llm_agent(self, config: dict, name: str) -> Optional[Actor]:
+    async def _spawn_llm_agent(self, config: dict, name: str) -> Actor | None:
         """Spawn an LLMAgent — chat, Q&A, reasoning. Applies any migrated state
         before spawn so on_start()'s recall() finds conversation_history etc.
         """
         await self._apply_initial_state(name, config)
 
         from ..llm_agent import LLMAgent
+
         logger.info(f"[{self.name}] Spawning LLM agent '{name}'")
         return await self.spawn(
             LLMAgent,
-            name            = name,
-            llm_provider    = self.llm,
-            system_prompt   = config.get("system_prompt", "You are a helpful assistant."),
-            persistence_dir = str(self._persistence_dir.parent),
+            name=name,
+            llm_provider=self.llm,
+            system_prompt=config.get("system_prompt", "You are a helpful assistant."),
+            persistence_dir=str(self._persistence_dir.parent),
         )
 
     async def _spawn_dynamic_agent(
@@ -246,7 +244,7 @@ class SpawnMixin:
         # Default path: don't block the response — install + spawn in background.
         logger.info(f"[{self.name}] Scheduling background install+spawn for '{name}': {needed}")
         asyncio.create_task(self._install_then_spawn(config, name, code, needed))
-        return _SpawnPlaceholder(name)
+        return SpawnPlaceholder(name)
 
     async def _install_then_spawn(self, config: dict, name: str, code: str, packages: list):
         """Background task: install packages, then spawn, then register.
@@ -256,13 +254,17 @@ class SpawnMixin:
         is on the Actor base; guarded so the mixin stays testable without it.
         """
         import time
+
         publish = getattr(self, "_mqtt_publish", None)
         try:
             if publish is not None:
                 await publish(
                     f"agents/{self.actor_id}/logs",
-                    {"type": "log", "message": f"Installing {packages} for {name}…",
-                     "timestamp": time.time()},
+                    {
+                        "type": "log",
+                        "message": f"Installing {packages} for {name}…",
+                        "timestamp": time.time(),
+                    },
                 )
             await self._install_packages(packages, agent_name=name)
             actor = await self._do_spawn_dynamic(config, name, code)
@@ -271,14 +273,18 @@ class SpawnMixin:
                 if publish is not None:
                     await publish(
                         f"agents/{self.actor_id}/logs",
-                        {"type": "spawned", "message": f"'{name}' spawned after install",
-                         "child_name": name, "timestamp": time.time()},
+                        {
+                            "type": "spawned",
+                            "message": f"'{name}' spawned after install",
+                            "child_name": name,
+                            "timestamp": time.time(),
+                        },
                     )
                 logger.info(f"[{self.name}] Background spawn complete: {name}")
         except Exception as e:
             logger.error(f"[{self.name}] Background install+spawn failed for '{name}': {e}")
 
-    async def _do_spawn_dynamic(self, config: dict, name: str, code: str) -> Optional[Actor]:
+    async def _do_spawn_dynamic(self, config: dict, name: str, code: str) -> Actor | None:
         """Construct and start the DynamicAgent. Applies migrated state first,
         passes the ``trusted`` flag (catalog agents skip the safety validator),
         and registers a TopicContract when the config declares pub/sub topics so
@@ -287,22 +293,24 @@ class SpawnMixin:
         await self._apply_initial_state(name, config)
 
         from ..dynamic_agent import DynamicAgent
+
         actor = await self.spawn(
             DynamicAgent,
-            name            = name,
-            code            = code,
-            poll_interval   = float(config.get("poll_interval") or 1.0),
-            description     = config.get("description", ""),
-            input_schema    = config.get("input_schema", {}),
-            output_schema   = config.get("output_schema", {}),
-            llm_provider    = self.llm,
-            persistence_dir = str(self._persistence_dir.parent),
-            trusted         = bool(config.get("trusted", False)),
+            name=name,
+            code=code,
+            poll_interval=float(config.get("poll_interval") or 1.0),
+            description=config.get("description", ""),
+            input_schema=config.get("input_schema", {}),
+            output_schema=config.get("output_schema", {}),
+            llm_provider=self.llm,
+            persistence_dir=str(self._persistence_dir.parent),
+            trusted=bool(config.get("trusted", False)),
         )
 
         if actor is not None and (config.get("publishes") or config.get("subscribes")):
             try:
                 from ...core.topic_bus import TopicContract, get_topic_bus
+
                 contract = TopicContract.from_spawn_config({**config, "actor_id": actor.actor_id})
                 bus = get_topic_bus()
                 if bus:
@@ -325,6 +333,7 @@ class SpawnMixin:
         this is a heuristic; re-installing an present package is a cheap no-op.
         """
         import importlib
+
         needed = []
         for pkg in packages:
             import_name = pkg.replace("-", "_").split("[")[0]
@@ -358,18 +367,23 @@ class SpawnMixin:
             return
 
         import uuid
+
         task_id = f"install_{uuid.uuid4().hex[:8]}"
         future = asyncio.get_event_loop().create_future()
         self._result_futures[task_id] = future
         try:
             logger.info(f"[{self.name}] Installing {needed} for '{agent_name}' via installer…")
-            await self.send(installer.actor_id, MessageType.TASK, {
-                "action":   "install",
-                "packages": needed,
-                "task":     task_id,
-                "_task_id": task_id,
-                "reply_to": self.actor_id,
-            })
+            await self.send(
+                installer.actor_id,
+                MessageType.TASK,
+                {
+                    "action": "install",
+                    "packages": needed,
+                    "task": task_id,
+                    "_task_id": task_id,
+                    "reply_to": self.actor_id,
+                },
+            )
             try:
                 result = await asyncio.wait_for(future, timeout=120.0)
                 logger.info(
@@ -403,7 +417,10 @@ class SpawnMixin:
 
         try:
             from ...core.persistence import (
-                PersistenceAPI, get_db, get_redis, get_pickle_store,
+                PersistenceAPI,
+                get_db,
+                get_pickle_store,
+                get_redis,
             )
         except Exception as e:
             logger.debug(
@@ -411,8 +428,9 @@ class SpawnMixin:
                 f"injection for '{name}': {e}"
             )
             try:
-                from pathlib import Path
                 import pickle
+                from pathlib import Path
+
                 safe = name.replace("/", "_").replace("\\", "_")
                 pdir = Path(str(self._persistence_dir.parent)) / safe
                 pdir.mkdir(parents=True, exist_ok=True)
@@ -444,7 +462,7 @@ class SpawnMixin:
 
     # ── Hooks / shared helpers ─────────────────────────────────────────────
 
-    def _find_existing(self, name: str) -> Optional[Actor]:
+    def _find_existing(self, name: str) -> Actor | None:
         """Return a live actor for ``name`` if one exists, consulting both the
         registry and the supervisor's in-flight specs (which catch a spawn whose
         registration hasn't completed during a parallel-startup race).
@@ -482,7 +500,7 @@ class SpawnMixin:
         except Exception as e:
             logger.warning(f"[{self.name}] Error stopping old '{name}': {e}")
 
-    def _resolve_user_timezone(self) -> Optional[str]:
+    def _resolve_user_timezone(self) -> str | None:
         """Resolve the user's preferred timezone. MainActor owns the facts and
         reads them directly; peers (planner) read them from main via the
         registry. Returns None when unavailable.

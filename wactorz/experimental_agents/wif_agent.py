@@ -51,16 +51,21 @@ class WifAgent(Actor):
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "wif-agent")
         super().__init__(**kwargs)
-        self.protected  = False
+        self.protected = False
         self._expenses: list[dict] = []
-        self._budget: float        = 0.0
+        self._budget: float = 0.0
 
     async def on_start(self) -> None:
         self._expenses = self.recall("expenses", [])
-        self._budget   = float(self.recall("budget", 0.0))
+        self._budget = float(self.recall("budget", 0.0))
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
-            {"agentId": self.actor_id, "agentName": self.name, "agentType": "financier", "timestamp": time.time()},
+            {
+                "agentId": self.actor_id,
+                "agentName": self.name,
+                "agentType": "financier",
+                "timestamp": time.time(),
+            },
         )
         logger.info("[%s] started — %d expenses loaded", self.name, len(self._expenses))
 
@@ -77,7 +82,8 @@ class WifAgent(Actor):
         payload = msg.payload or {}
         text = str(
             payload.get("text") or payload.get("content") or payload.get("task") or ""
-            if isinstance(payload, dict) else payload
+            if isinstance(payload, dict)
+            else payload
         ).strip()
         if not text:
             return
@@ -95,23 +101,25 @@ class WifAgent(Actor):
         text = raw
         for pfx in ("@wif-agent", "@wif_agent"):
             if text.lower().startswith(pfx):
-                text = text[len(pfx):].lstrip()
+                text = text[len(pfx) :].lstrip()
                 break
         parts = text.split()
         if not parts:
             return _HELP
         cmd, args = parts[0].lower(), parts[1:]
         return {
-            "add":      lambda: self._cmd_add(args),
-            "budget":   lambda: self._cmd_budget(args),
-            "report":   lambda: self._cmd_report(),
-            "balance":  lambda: self._cmd_balance(),
+            "add": lambda: self._cmd_add(args),
+            "budget": lambda: self._cmd_budget(args),
+            "report": lambda: self._cmd_report(),
+            "balance": lambda: self._cmd_balance(),
             "compound": lambda: self._cmd_compound(args),
-            "loan":     lambda: self._cmd_loan(args),
-            "roi":      lambda: self._cmd_roi(args),
-            "tax":      lambda: self._cmd_tax(args),
-            "tip":      lambda: self._cmd_tip(args),
-        }.get(cmd, lambda: _HELP if cmd in ("help", "") else f"Unknown command: `{cmd}`. Type `help`.")()
+            "loan": lambda: self._cmd_loan(args),
+            "roi": lambda: self._cmd_roi(args),
+            "tax": lambda: self._cmd_tax(args),
+            "tip": lambda: self._cmd_tip(args),
+        }.get(
+            cmd, lambda: _HELP if cmd in ("help", "") else f"Unknown command: `{cmd}`. Type `help`."
+        )()
 
     # ── add ────────────────────────────────────────────────────────────────
     def _cmd_add(self, args: list[str]) -> str:
@@ -124,13 +132,15 @@ class WifAgent(Actor):
         except ValueError:
             return f"Invalid amount: `{args[0]}`"
         category = args[1].lower() if len(args) > 1 else "misc"
-        note     = " ".join(args[2:]) if len(args) > 2 else ""
-        self._expenses.append({"amount": amount, "category": category, "note": note, "timestamp": time.time()})
+        note = " ".join(args[2:]) if len(args) > 2 else ""
+        self._expenses.append(
+            {"amount": amount, "category": category, "note": note, "timestamp": time.time()}
+        )
         header = f"Logged **${amount:.2f}** → `{category}`" + (f" — _{note}_" if note else "")
         if self._budget > 0:
             spent = sum(e["amount"] for e in self._expenses)
-            pct   = min(spent / self._budget * 100, 999)
-            icon  = "🚨" if pct >= 100 else ("⚠" if pct >= 80 else "✓")
+            pct = min(spent / self._budget * 100, 999)
+            icon = "🚨" if pct >= 100 else ("⚠" if pct >= 80 else "✓")
             return f"{header}\n{icon} Budget: ${spent:.2f} / ${self._budget:.2f} ({pct:.0f}%)"
         return header
 
@@ -144,7 +154,7 @@ class WifAgent(Actor):
             return f"Invalid amount: `{args[0]}`"
         self._budget = amount
         spent = sum(e["amount"] for e in self._expenses)
-        pct   = min(spent / amount * 100, 999) if amount > 0 else 0
+        pct = min(spent / amount * 100, 999) if amount > 0 else 0
         return f"Budget set: **${amount:.2f}** | Spent so far: ${spent:.2f} ({pct:.0f}%)"
 
     # ── report ─────────────────────────────────────────────────────────────
@@ -155,21 +165,28 @@ class WifAgent(Actor):
         for e in self._expenses:
             by_cat[e["category"]] = by_cat.get(e["category"], 0) + e["amount"]
         total = sum(by_cat.values())
-        rows  = [f"  **{cat}**: ${amt:.2f} ({amt/total*100:.0f}%)" for cat, amt in sorted(by_cat.items(), key=lambda x: -x[1])]
-        return f"**Expense Report** ({len(self._expenses)} transactions)\n\n" + "\n".join(rows) + f"\n\n**Total: ${total:.2f}**"
+        rows = [
+            f"  **{cat}**: ${amt:.2f} ({amt / total * 100:.0f}%)"
+            for cat, amt in sorted(by_cat.items(), key=lambda x: -x[1])
+        ]
+        return (
+            f"**Expense Report** ({len(self._expenses)} transactions)\n\n"
+            + "\n".join(rows)
+            + f"\n\n**Total: ${total:.2f}**"
+        )
 
     # ── balance ────────────────────────────────────────────────────────────
     def _cmd_balance(self) -> str:
         spent = sum(e["amount"] for e in self._expenses)
         if self._budget <= 0:
             return f"**Balance**\n\nTotal spent: **${spent:.2f}** ({len(self._expenses)} transactions)\nBudget: _not set_"
-        rem  = self._budget - spent
-        pct  = min(spent / self._budget * 100, 999)
+        rem = self._budget - spent
+        pct = min(spent / self._budget * 100, 999)
         icon = "🚨" if pct >= 100 else ("⚠" if pct >= 80 else "✓")
         return (
             f"**Monthly Budget Balance**\n\n"
             f"{icon} ${spent:.2f} / ${self._budget:.2f} ({pct:.0f}%)\n"
-            f"{'${:.2f} left'.format(rem) if rem >= 0 else '${:.2f} over budget'.format(-rem)}"
+            f"{f'${rem:.2f} left' if rem >= 0 else f'${-rem:.2f} over budget'}"
         )
 
     # ── compound ───────────────────────────────────────────────────────────
@@ -180,9 +197,9 @@ class WifAgent(Actor):
             p, r, t = float(args[0].lstrip("$")), float(args[1].rstrip("%")) / 100, float(args[2])
         except ValueError:
             return "Invalid numbers."
-        n  = 12.0
+        n = 12.0
         fv = p * (1 + r / n) ** (n * t)
-        return f"**Compound Interest**\n\nPrincipal: ${p:,.2f} | Rate: {r*100:.2f}% | Term: {t:.0f}y\n→ **Future Value: ${fv:,.2f}** (interest: ${fv-p:,.2f})"
+        return f"**Compound Interest**\n\nPrincipal: ${p:,.2f} | Rate: {r * 100:.2f}% | Term: {t:.0f}y\n→ **Future Value: ${fv:,.2f}** (interest: ${fv - p:,.2f})"
 
     # ── loan ───────────────────────────────────────────────────────────────
     def _cmd_loan(self, args: list[str]) -> str:
@@ -194,8 +211,8 @@ class WifAgent(Actor):
             return "Invalid numbers."
         r = annual / 100 / 12
         monthly = (p * r * (1 + r) ** n / ((1 + r) ** n - 1)) if r else p / n
-        total   = monthly * n
-        return f"**Loan Calculator**\n\nPrincipal: ${p:,.2f} | Rate: {annual:.2f}% | Term: {n:.0f}mo\n→ **Monthly: ${monthly:,.2f}** | Total: ${total:,.2f} | Interest: ${total-p:,.2f}"
+        total = monthly * n
+        return f"**Loan Calculator**\n\nPrincipal: ${p:,.2f} | Rate: {annual:.2f}% | Term: {n:.0f}mo\n→ **Monthly: ${monthly:,.2f}** | Total: ${total:,.2f} | Interest: ${total - p:,.2f}"
 
     # ── roi ────────────────────────────────────────────────────────────────
     def _cmd_roi(self, args: list[str]) -> str:
@@ -208,7 +225,7 @@ class WifAgent(Actor):
         if inv == 0:
             return "Investment cannot be zero."
         gain = ret - inv
-        roi  = gain / inv * 100
+        roi = gain / inv * 100
         return f"**ROI**\n\nInvestment: ${inv:,.2f} | Return: ${ret:,.2f}\n→ Gain: ${gain:+,.2f} | **ROI: {roi:+.2f}%**"
 
     # ── tax ────────────────────────────────────────────────────────────────
@@ -217,11 +234,11 @@ class WifAgent(Actor):
             return "Usage: `tax <income> [bracket%]`  e.g. `tax 75000 25`"
         try:
             income = float(args[0].lstrip("$"))
-            rate   = float(args[1].rstrip("%")) if len(args) > 1 else 25.0
+            rate = float(args[1].rstrip("%")) if len(args) > 1 else 25.0
         except ValueError:
             return "Invalid numbers."
         tax = income * rate / 100
-        return f"**Tax Estimate**\n\nIncome: ${income:,.2f} | Rate: {rate:.1f}%\n→ Tax: **${tax:,.2f}** | Net: **${income-tax:,.2f}**\n_Simplified estimate — consult a professional._"
+        return f"**Tax Estimate**\n\nIncome: ${income:,.2f} | Rate: {rate:.1f}%\n→ Tax: **${tax:,.2f}** | Net: **${income - tax:,.2f}**\n_Simplified estimate — consult a professional._"
 
     # ── tip ────────────────────────────────────────────────────────────────
     def _cmd_tip(self, args: list[str]) -> str:
@@ -229,12 +246,12 @@ class WifAgent(Actor):
             return "Usage: `tip <bill> [percent]`  e.g. `tip 45 20`"
         try:
             bill = float(args[0].lstrip("$"))
-            pct  = float(args[1].rstrip("%")) if len(args) > 1 else 15.0
+            pct = float(args[1].rstrip("%")) if len(args) > 1 else 15.0
         except ValueError:
             return "Invalid numbers."
-        tip   = bill * pct / 100
+        tip = bill * pct / 100
         total = bill + tip
-        splits = "\n".join(f"  {n} people: ${total/n:.2f}/person" for n in (1, 2, 3, 4, 5))
+        splits = "\n".join(f"  {n} people: ${total / n:.2f}/person" for n in (1, 2, 3, 4, 5))
         return f"**Tip Calculator**\n\nBill: ${bill:.2f} | Tip ({pct:.0f}%): ${tip:.2f} | **Total: ${total:.2f}**\n\n{splits}"
 
     def _current_task_description(self) -> str:

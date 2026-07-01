@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
-from urllib.parse import urlparse
 import hashlib
 import logging
 import re
 import time
+from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 
 logger = logging.getLogger(__name__)
 
-from .ha_web_socket_client import HAWebSocketClient
+from .ha_web_socket_client import HAWebSocketClient  # noqa: E402
 
 
 # ── SWID ────────────────────────────────────────────────────────
@@ -195,11 +195,11 @@ async def fetch_devices_entities_with_location(
                     # "sw_version": d.get("sw_version"),
                     # "hw_version": d.get("hw_version"),
                     "area": device_area_name,
-                    "entities": sorted(ents, key=lambda x: (x["entity_id"] or "")),
+                    "entities": sorted(ents, key=lambda x: x["entity_id"] or ""),
                 }
             )
 
-        return sorted(output, key=lambda x: (x["name"] or ""))
+        return sorted(output, key=lambda x: x["name"] or "")
 
 
 async def _get_floors_safe(ha: HAWebSocketClient) -> list[dict[str, Any]]:
@@ -309,45 +309,53 @@ async def get_simplified_ha_data(ws_url: str, token: str) -> dict[str, list[dict
 
         return {
             "floors": [
-                drop_nulls({"floor_id": f["floor_id"], "name": f.get("name")})
-                for f in floors
+                drop_nulls({"floor_id": f["floor_id"], "name": f.get("name")}) for f in floors
             ],
-            "areas": [
-                drop_nulls({"area_id": a["area_id"], "name": a.get("name")})
-                for a in areas
-            ],
+            "areas": [drop_nulls({"area_id": a["area_id"], "name": a.get("name")}) for a in areas],
             "devices": [
-                drop_nulls({
-                    "id": d["id"],
-                    "name": d.get("name"),
-                    "name_by_user": d.get("name_by_user"),
-                    "area_id": d.get("area_id"),
-                    "manufacturer": d.get("manufacturer"),
-                    "model": d.get("model"),
-                    "labels": d.get("labels", []),
-                    "disabled_by": d.get("disabled_by"),
-                })
+                drop_nulls(
+                    {
+                        "id": d["id"],
+                        "name": d.get("name"),
+                        "name_by_user": d.get("name_by_user"),
+                        "area_id": d.get("area_id"),
+                        "manufacturer": d.get("manufacturer"),
+                        "model": d.get("model"),
+                        "labels": d.get("labels", []),
+                        "disabled_by": d.get("disabled_by"),
+                    }
+                )
                 for d in devices
             ],
             "entities": [
-                drop_nulls({
-                    "entity_id": e.get("entity_id"),
-                    "domain": (e.get("entity_id") or "").split(".")[0] or None,
-                    "name": (
-                        states_by_id.get(e.get("entity_id", ""), {}).get("attributes", {}).get("friendly_name")
-                        or e.get("original_name")
-                        or e.get("name")
-                    ),
-                    "area_id": e.get("area_id") or device_area_by_id.get(e.get("device_id")),
-                    "device_id": e.get("device_id"),
-                    "disabled_by": e.get("disabled_by"),
-                    "hidden_by": e.get("hidden_by"),
-                    "entity_category": e.get("entity_category"),
-                    "platform": e.get("platform"),
-                    "state": states_by_id.get(e.get("entity_id", ""), {}).get("state"),
-                    # "last_changed": states_by_id.get(e.get("entity_id", ""), {}).get("last_changed"),
-                    **{k: v for k, v in states_by_id.get(e.get("entity_id", ""), {}).get("attributes", {}).items() if k != "friendly_name"},
-                })
+                drop_nulls(
+                    {
+                        "entity_id": e.get("entity_id"),
+                        "domain": (e.get("entity_id") or "").split(".")[0] or None,
+                        "name": (
+                            states_by_id.get(e.get("entity_id", ""), {})
+                            .get("attributes", {})
+                            .get("friendly_name")
+                            or e.get("original_name")
+                            or e.get("name")
+                        ),
+                        "area_id": e.get("area_id") or device_area_by_id.get(e.get("device_id")),
+                        "device_id": e.get("device_id"),
+                        "disabled_by": e.get("disabled_by"),
+                        "hidden_by": e.get("hidden_by"),
+                        "entity_category": e.get("entity_category"),
+                        "platform": e.get("platform"),
+                        "state": states_by_id.get(e.get("entity_id", ""), {}).get("state"),
+                        # "last_changed": states_by_id.get(e.get("entity_id", ""), {}).get("last_changed"),
+                        **{
+                            k: v
+                            for k, v in states_by_id.get(e.get("entity_id", ""), {})
+                            .get("attributes", {})
+                            .items()
+                            if k != "friendly_name"
+                        },
+                    }
+                )
                 for e in entities
                 if e.get("platform") != "hassio"
             ],
@@ -408,7 +416,7 @@ async def get_devices(ws_url: str, token: str) -> list[dict[str, Any]]:
     ws_url = normalize_ha_ws_url(ws_url)
     async with HAWebSocketClient(ws_url, token) as ha:
         devices = await ha.call("config/device_registry/list")
-        for d in (devices or []):
+        for d in devices or []:
             d["swid"] = generate_swid(
                 d["id"],
                 name=d.get("name_by_user") or d.get("name"),
@@ -556,9 +564,7 @@ async def get_camera_entities(ws_url: str, token: str) -> list[dict[str, Any]]:
     ]
 
 
-async def get_camera_snapshot(
-    rest_base: str, token: str, camera_entity_id: str
-) -> dict[str, Any]:
+async def get_camera_snapshot(rest_base: str, token: str, camera_entity_id: str) -> dict[str, Any]:
     """Fetch a JPEG snapshot from HA and return it base64-encoded.
 
     rest_base must be an http/https URL (use normalize_ha_base_url first).
@@ -566,6 +572,7 @@ async def get_camera_snapshot(
     or {"error": str, "status": int, "detail": str, "entity_id": str} on failure.
     """
     import base64
+
     headers = {"Authorization": f"Bearer {token}"}
     url = f"{rest_base}/api/camera_proxy/{camera_entity_id}"
     logger.debug("Camera snapshot request: %s", url)
@@ -581,7 +588,9 @@ async def get_camera_snapshot(
                         pass
                     logger.warning(
                         "Camera snapshot failed for %s: HTTP %s — %s",
-                        camera_entity_id, resp.status, detail[:200] if detail else "(no body)",
+                        camera_entity_id,
+                        resp.status,
+                        detail[:200] if detail else "(no body)",
                     )
                     return {
                         "error": f"HTTP {resp.status}",
@@ -614,9 +623,7 @@ def get_camera_snapshot_url(rest_base: str, camera_entity_id: str) -> str:
     return f"{rest_base}/api/camera_proxy/{camera_entity_id}"
 
 
-async def get_camera_stream_urls(
-    ws_url: str, token: str, camera_entity_id: str
-) -> dict[str, Any]:
+async def get_camera_stream_urls(ws_url: str, token: str, camera_entity_id: str) -> dict[str, Any]:
     """Collect all available stream URLs for a camera entity from three sources.
 
     Sources attempted in order (failures are logged and skipped):
@@ -659,7 +666,8 @@ async def get_camera_stream_urls(
                 elif resp.status != 404:
                     logger.debug(
                         "Expose Camera Stream Source returned HTTP %s for %s",
-                        resp.status, camera_entity_id,
+                        resp.status,
+                        camera_entity_id,
                     )
     except Exception as exc:
         logger.debug("Expose Camera Stream Source unavailable for %s: %s", camera_entity_id, exc)
@@ -780,9 +788,7 @@ async def _post_automation_config(
                 body = await response.text()
 
             if response.status >= 400:
-                raise RuntimeError(
-                    f"REST automation POST failed ({response.status}): {body}"
-                )
+                raise RuntimeError(f"REST automation POST failed ({response.status}): {body}")
 
             return {
                 "automation_id": automation_id,
@@ -855,7 +861,7 @@ async def update_automation(
 
 async def delete_automation(base_url: str, token: str, automation_id: str) -> bool:
     """Delete an automation by ID. Returns True if deletion was successful.
-    This is undocumented but that is the endpoint used by the HA frontend to delete automations, 
+    This is undocumented but that is the endpoint used by the HA frontend to delete automations,
     so it should be stable."""
     normalized_base = normalize_ha_base_url(base_url)
     endpoint = f"{normalized_base}/api/config/automation/config/{automation_id}"
@@ -930,7 +936,9 @@ async def get_live_context(
     # ---- build set of exposed entity IDs ------------------------------------
     # expose_resp["exposed_entities"] maps entity_id → {assistant: bool, ...}.
     # An entity is considered exposed if at least one assistant has it set to True.
-    raw_exposed: dict[str, Any] = expose_resp.get("exposed_entities", expose_resp) if isinstance(expose_resp, dict) else {}
+    raw_exposed: dict[str, Any] = (
+        expose_resp.get("exposed_entities", expose_resp) if isinstance(expose_resp, dict) else {}
+    )
     exposed_entity_ids: set[str] = {
         eid
         for eid, assistants in raw_exposed.items()
@@ -970,9 +978,7 @@ async def get_live_context(
 
     for state in sorted(
         states,
-        key=lambda s: (
-            s.get("attributes", {}).get("friendly_name") or s.get("entity_id") or ""
-        ),
+        key=lambda s: s.get("attributes", {}).get("friendly_name") or s.get("entity_id") or "",
     ):
         entity_id: str = state.get("entity_id", "")
         if not entity_id or "." not in entity_id:

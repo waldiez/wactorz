@@ -1,5 +1,5 @@
-import json
 import importlib.util
+import json
 import unittest
 from unittest import mock
 
@@ -46,9 +46,11 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(EXPECTED_RESOURCES.issubset(uris))
 
     async def test_config_resource_sanitizes_tokens(self):
-        with mock.patch.object(mcp_server, "WACTORZ_API_KEY", "secret-rest-key"), \
-             mock.patch.object(mcp_server, "HA_TOKEN", "secret-ha-token"), \
-             mock.patch.object(mcp_server, "HA_URL", "http://ha.local:8123"):
+        with (
+            mock.patch.object(mcp_server, "WACTORZ_API_KEY", "secret-rest-key"),
+            mock.patch.object(mcp_server, "HA_TOKEN", "secret-ha-token"),
+            mock.patch.object(mcp_server, "HA_URL", "http://ha.local:8123"),
+        ):
             payload = json.loads(await mcp_server.config_resource())
 
         self.assertEqual(
@@ -93,8 +95,10 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, error["error"])
 
     async def test_ha_requires_configuration(self):
-        with mock.patch.object(mcp_server, "HA_URL", ""), \
-             mock.patch.object(mcp_server, "HA_TOKEN", ""):
+        with (
+            mock.patch.object(mcp_server, "HA_URL", ""),
+            mock.patch.object(mcp_server, "HA_TOKEN", ""),
+        ):
             self.assertEqual(
                 await mcp_server.ha_list_entities("light"),
                 "Home Assistant is not configured. Set HA_URL and HA_TOKEN env vars.",

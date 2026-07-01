@@ -10,9 +10,8 @@ base (self.persist, self.recall, self._registry).
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
-from ..prompts.main_actor_prompts import ORCHESTRATOR_PROMPT, FACTS_EXTRACT_PROMPT
+from ..prompts.main_actor_prompts import FACTS_EXTRACT_PROMPT, ORCHESTRATOR_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ class MemoryMixin:
     def get_user_facts(self) -> dict:
         return self.recall("_user_facts") or {}
 
-    def _preferred_timezone_name(self) -> Optional[str]:
+    def _preferred_timezone_name(self) -> str | None:
         """Main knows the user's timezone from facts — use it so the live
         date/time block matches what the scheduler actually fires against."""
         return self.get_user_facts().get("pref_timezone")
@@ -164,16 +163,16 @@ class MemoryMixin:
         facts = self.get_user_facts()
         if facts:
             buckets = {
-                "pref_":   ("PREFERENCES & IDENTITY", []),
-                "device_": ("DEVICES & SETUP",        []),
-                "policy_": ("STANDING POLICIES",      []),
-                "":        ("OTHER FACTS",            []),   # legacy / unprefixed
+                "pref_": ("PREFERENCES & IDENTITY", []),
+                "device_": ("DEVICES & SETUP", []),
+                "policy_": ("STANDING POLICIES", []),
+                "": ("OTHER FACTS", []),  # legacy / unprefixed
             }
             for k, v in facts.items():
                 placed = False
                 for prefix, (_, items) in buckets.items():
                     if prefix and k.startswith(prefix):
-                        items.append(f"  {k[len(prefix):]}: {v}")
+                        items.append(f"  {k[len(prefix) :]}: {v}")
                         placed = True
                         break
                 if not placed:
@@ -223,18 +222,22 @@ class MemoryMixin:
                 system=FACTS_EXTRACT_PROMPT,
                 max_tokens=300,
             )
-            self.total_input_tokens  += _usage.get("input_tokens", 0)
+            self.total_input_tokens += _usage.get("input_tokens", 0)
             self.total_output_tokens += _usage.get("output_tokens", 0)
-            self.total_cost_usd      += _usage.get("cost_usd", 0.0)
+            self.total_cost_usd += _usage.get("cost_usd", 0.0)
             self._persist_cost()
             import json as _json
-            clean = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+
+            clean = raw.strip().removeprefix("```json").removeprefix("```")
+            clean = clean.removesuffix("```").strip()
             if not clean:
                 logger.warning(f"[{self.name}] Facts extraction returned empty string")
                 return
             new_facts = _json.loads(clean)
             if not isinstance(new_facts, dict):
-                logger.warning(f"[{self.name}] Facts extraction returned non-dict: {type(new_facts).__name__}")
+                logger.warning(
+                    f"[{self.name}] Facts extraction returned non-dict: {type(new_facts).__name__}"
+                )
                 return
             if not new_facts:
                 logger.info(f"[{self.name}] Facts extraction: nothing durable in this turn")
@@ -250,12 +253,17 @@ class MemoryMixin:
                 # Heuristic guesses for common unprefixed keys
                 if k.endswith("_url") or k.endswith("_endpoint") or k.endswith("_path"):
                     normalized[f"device_{k}"] = v
-                elif k.startswith(("user_", "favorite_", "pref_")) or k in ("name", "age", "location", "language"):
+                elif k.startswith(("user_", "favorite_", "pref_")) or k in (
+                    "name",
+                    "age",
+                    "location",
+                    "language",
+                ):
                     normalized[f"pref_{k}"] = v
                 elif "policy" in k or "rule" in k or "threshold" in k:
                     normalized[f"policy_{k}"] = v
                 else:
-                    normalized[f"pref_{k}"] = v   # default bucket for unknowns
+                    normalized[f"pref_{k}"] = v  # default bucket for unknowns
 
             # Merge with existing facts (supersede on key collision — by design)
             facts = self.get_user_facts()

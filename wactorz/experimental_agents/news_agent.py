@@ -23,15 +23,15 @@ import asyncio
 import logging
 import time
 
-from ..core.actor import Actor, Message, MessageType
+from ..core.actor import Actor, Message
 
 logger = logging.getLogger(__name__)
 
-HN_API            = "https://hacker-news.firebaseio.com/v0"
-DEFAULT_COUNT     = 5
-MAX_COUNT         = 20
-HTTP_TIMEOUT      = 12
-USER_AGENT        = "Wactorz-NewsAgent/1.0"
+HN_API = "https://hacker-news.firebaseio.com/v0"
+DEFAULT_COUNT = 5
+MAX_COUNT = 20
+HTTP_TIMEOUT = 12
+USER_AGENT = "Wactorz-NewsAgent/1.0"
 
 _HELP_TEXT = """\
 **NewsAgent** — headlines via Hacker News (no API key needed)
@@ -48,12 +48,12 @@ _HELP_TEXT = """\
 ```"""
 
 _FEED_LABELS = {
-    "top":  "Top",
-    "new":  "Newest",
+    "top": "Top",
+    "new": "Newest",
     "best": "Best",
-    "ask":  "Ask HN",
+    "ask": "Ask HN",
     "show": "Show HN",
-    "job":  "Jobs",
+    "job": "Jobs",
 }
 
 
@@ -69,7 +69,7 @@ class NewsAgent(Actor):
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
             {
-                "agentId":   self.actor_id,
+                "agentId": self.actor_id,
                 "agentName": self.name,
                 "agentType": "data",
                 "timestamp": time.time(),
@@ -88,7 +88,7 @@ class NewsAgent(Actor):
         # Strip @news-agent prefix
         for prefix in ("@news-agent", "@news_agent"):
             if text.lower().startswith(prefix):
-                text = text[len(prefix):].lstrip()
+                text = text[len(prefix) :].lstrip()
                 break
 
         arg = text.lower().strip()
@@ -97,31 +97,31 @@ class NewsAgent(Actor):
 
         # Parse feed + count
         if first in ("", "top"):
-            feed  = "top"
+            feed = "top"
             count = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else DEFAULT_COUNT
         elif first == "new":
-            feed  = "new"
+            feed = "new"
             count = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else DEFAULT_COUNT
         elif first == "best":
-            feed  = "best"
+            feed = "best"
             count = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else DEFAULT_COUNT
         elif first == "ask":
-            feed  = "ask"
+            feed = "ask"
             count = DEFAULT_COUNT
         elif first == "show":
-            feed  = "show"
+            feed = "show"
             count = DEFAULT_COUNT
         elif first in ("jobs", "job"):
-            feed  = "job"
+            feed = "job"
             count = DEFAULT_COUNT
         elif first.isdigit():
-            feed  = "top"
+            feed = "top"
             count = int(first)
         elif first == "help":
             await self._reply(_HELP_TEXT)
             return
         else:
-            feed  = "top"
+            feed = "top"
             count = DEFAULT_COUNT
 
         count = min(count, MAX_COUNT)
@@ -155,24 +155,19 @@ class NewsAgent(Actor):
             take = min(count, len(ids), MAX_COUNT)
 
             # Fetch stories concurrently
-            tasks = [
-                self._fetch_item(session, ids[i])
-                for i in range(take)
-            ]
+            tasks = [self._fetch_item(session, ids[i]) for i in range(take)]
             items = await asyncio.gather(*tasks, return_exceptions=True)
 
             lines = []
-            for i, (item_id, item) in enumerate(zip(ids[:take], items)):
+            for i, (item_id, item) in enumerate(zip(ids[:take], items, strict=False)):
                 if isinstance(item, Exception) or not item:
                     continue
                 title = item.get("title", "(no title)")
-                url   = item.get("url", "")
+                url = item.get("url", "")
                 score = item.get("score", 0)
                 hn_url = f"https://news.ycombinator.com/item?id={item_id}"
-                link  = url if url else hn_url
-                lines.append(
-                    f"{i + 1}. **[{title}]({link})** — ⬆ {score} · [HN]({hn_url})"
-                )
+                link = url if url else hn_url
+                lines.append(f"{i + 1}. **[{title}]({link})** — ⬆ {score} · [HN]({hn_url})")
 
             if not lines:
                 return f"No {label} stories found right now."

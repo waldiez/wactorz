@@ -400,7 +400,7 @@ listen("af-clear-feed", () => {
 
 wsChat.connect(`${_wsBase}/ws`);
 refreshLiveActors();
-window.setInterval(() => {
+const _liveActorsTimer = window.setInterval(() => {
     refreshLiveActors();
     agentStore.pruneStaleRemoteAgents();
 }, 15000);
@@ -432,6 +432,7 @@ mqtt.connect();
 // ═══ 8 · Teardown ════════════════════════════════════════════════════════════
 
 window.addEventListener("beforeunload", () => {
+    window.clearInterval(_liveActorsTimer);
     mqtt.disconnect();
     wsChat.disconnect();
     agentStore.dispose();

@@ -5,7 +5,7 @@
     "": {
       "name": "wactorz-dashboard",
       "dependencies": {
-        "@waldiez/wid": "github:waldiez/wid",
+        "@waldiez/wid": "github:waldiez/wid#461ee68",
         "mqtt": "^5.15.1",
       },
       "devDependencies": {

@@ -13,35 +13,46 @@ __all__ = [
     "ActorSystem",
     "ActorRegistry",
 ]
-# Optional agents — only exported when their dependencies are available.
-try:
-    from .agents.llm_agent import (
-        AnthropicProvider,
-        LLMAgent,
-        NIMProvider,
-        OllamaProvider,
-        OpenAIProvider,
-    )
+# Agents & LLM providers. Optional provider SDKs (anthropic/openai) are imported
+# lazily inside the providers, so every symbol below resolves on a base install.
+from .agents import (
+    AnthropicProvider,
+    CatalogAgent,
+    DynamicAgent,
+    HomeAssistantActuatorAgent,
+    HomeAssistantAgent,
+    HomeAssistantMapAgent,
+    HomeAssistantStateBridgeAgent,
+    InstallerAgent,
+    IOAgent,
+    LLMAgent,
+    MainActor,
+    MonitorActor,
+    NIMProvider,
+    OllamaProvider,
+    OneOffActuatorAgent,
+    OpenAIProvider,
+    PlannerAgent,
+    ScheduledAgent,
+)
 
-    __all__ += ["LLMAgent", "AnthropicProvider", "OpenAIProvider", "OllamaProvider", "NIMProvider"]
-except ImportError:
-    pass
-try:
-    from .agents.catalog_agent import CatalogAgent
-    from .agents.dynamic_agent import DynamicAgent
-    from .agents.installer_agent import InstallerAgent
-    from .agents.main_actor import MainActor
-    from .agents.monitor_agent import MonitorActor
-    from .agents.planner_agent import PlannerAgent
-
-    __all__ += [
-        "MainActor",
-        "MonitorActor",
-        "CodeAgent",
-        "PlannerAgent",
-        "DynamicAgent",
-        "InstallerAgent",
-        "CatalogAgent",
-    ]
-except ImportError:
-    pass
+__all__ += [
+    "LLMAgent",
+    "AnthropicProvider",
+    "OpenAIProvider",
+    "OllamaProvider",
+    "NIMProvider",
+    "CatalogAgent",
+    "DynamicAgent",
+    "HomeAssistantActuatorAgent",
+    "HomeAssistantAgent",
+    "HomeAssistantMapAgent",
+    "HomeAssistantStateBridgeAgent",
+    "InstallerAgent",
+    "IOAgent",
+    "MainActor",
+    "MonitorActor",
+    "OneOffActuatorAgent",
+    "PlannerAgent",
+    "ScheduledAgent",
+]

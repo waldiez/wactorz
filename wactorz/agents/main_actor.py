@@ -19,7 +19,13 @@ from .helpers.main_actor_helpers import (
     _strip_live_context,
 )
 from .llm_agent import LLMAgent, LLMProvider
-from .mixins import MemoryMixin, PlanningMixin, RoutingMixin, SpawnMixin, _SpawnPlaceholder
+from .mixins import (
+    MemoryMixin,
+    PlanningMixin,
+    RoutingMixin,
+    SpawnMixin,
+    SpawnPlaceholder,
+)
 from .prompts.main_actor_prompts import (
     ORCHESTRATOR_PROMPT,
 )
@@ -1335,8 +1341,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Build a system footer summarizing spawn/delete actions
         footer_parts = []
         if spawned:
-            bg_names = [a.name for a in spawned if isinstance(a, _SpawnPlaceholder)]
-            live_names = [a.name for a in spawned if not isinstance(a, _SpawnPlaceholder)]
+            bg_names = [a.name for a in spawned if isinstance(a, SpawnPlaceholder)]
+            live_names = [a.name for a in spawned if not isinstance(a, SpawnPlaceholder)]
             if live_names:
                 replaced = '"replace": true' in response or '"replace":true' in response
                 action = "Replaced" if replaced else "Spawned"
@@ -1517,10 +1523,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         system_msg_parts = []
         if spawned:
-            names = ", ".join(
-                f"'{a.name}'" for a in spawned if not isinstance(a, _SpawnPlaceholder)
-            )
-            bg_names = [a.name for a in spawned if isinstance(a, _SpawnPlaceholder)]
+            names = ", ".join(f"'{a.name}'" for a in spawned if not isinstance(a, SpawnPlaceholder))
+            bg_names = [a.name for a in spawned if isinstance(a, SpawnPlaceholder)]
             if names:
                 replaced = '"replace": true' in full_response or '"replace":true' in full_response
                 system_msg_parts.append(

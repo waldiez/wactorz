@@ -41,7 +41,7 @@ from ...core.actor import Actor, MessageType
 logger = logging.getLogger(__name__)
 
 
-class _SpawnPlaceholder:
+class SpawnPlaceholder:
     """Returned when an agent is being installed+spawned in the background.
 
     Truthy stand-in so callers can report "spawning…" before the real actor
@@ -52,7 +52,7 @@ class _SpawnPlaceholder:
         self.name = name
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
-        return f"<_SpawnPlaceholder {self.name!r}>"
+        return f"<SpawnPlaceholder {self.name!r}>"
 
 
 class SpawnMixin:
@@ -76,13 +76,13 @@ class SpawnMixin:
             (via the ``_register_spawn`` hook) so it survives restarts.
         blocking_install:
             Dynamic agents only. When False (main's default), missing packages
-            install in the BACKGROUND and a ``_SpawnPlaceholder`` is returned
+            install in the BACKGROUND and a ``SpawnPlaceholder`` is returned
             immediately. When True (the planner's pipeline path), the install
             blocks until complete and the real actor is returned — pipelines
             need the agent live before the next step runs.
 
         Returns the spawned ``Actor``, an existing actor (idempotent path), a
-        ``_SpawnPlaceholder`` (background install), or ``None`` on failure.
+        ``SpawnPlaceholder`` (background install), or ``None`` on failure.
         """
         name = config.get("name", "spawned-agent")
 
@@ -244,7 +244,7 @@ class SpawnMixin:
         # Default path: don't block the response — install + spawn in background.
         logger.info(f"[{self.name}] Scheduling background install+spawn for '{name}': {needed}")
         asyncio.create_task(self._install_then_spawn(config, name, code, needed))
-        return _SpawnPlaceholder(name)
+        return SpawnPlaceholder(name)
 
     async def _install_then_spawn(self, config: dict, name: str, code: str, packages: list):
         """Background task: install packages, then spawn, then register.

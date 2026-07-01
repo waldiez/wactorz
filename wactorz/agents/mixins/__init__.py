@@ -10,12 +10,12 @@ file changes; no call site moves.
 from .memory import MemoryMixin
 from .planning import PlanningMixin
 from .routing import RoutingMixin
-from .spawning import SpawnMixin, _SpawnPlaceholder
+from .spawning import SpawnMixin, SpawnPlaceholder
 
 __all__ = [
     "SpawnMixin",
     "MemoryMixin",
     "RoutingMixin",
     "PlanningMixin",
-    "_SpawnPlaceholder",
+    "SpawnPlaceholder",
 ]

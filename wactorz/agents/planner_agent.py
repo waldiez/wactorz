@@ -25,7 +25,7 @@ import time
 from ..core.actor import Actor, Message, MessageType
 from ..core.mqtt import mqtt_client
 from .llm_agent import LLMProvider, _accumulate_global_cost
-from .mixins import SpawnMixin
+from .mixins.spawning import SpawnMixin
 
 logger = logging.getLogger(__name__)
 

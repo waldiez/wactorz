@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from wactorz.agents.mixins.spawning import SpawnMixin, _SpawnPlaceholder
+from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
 
 
 def run(coro):
@@ -238,7 +238,7 @@ def test_present_packages_spawn_directly(main_host):
             {"name": "d", "type": "dynamic", "code": "x", "install": ["os", "json"]}
         )
     )
-    assert not isinstance(actor, _SpawnPlaceholder)
+    assert not isinstance(actor, SpawnPlaceholder)
     assert not main_host.sent  # installer never contacted
 
 
@@ -250,7 +250,7 @@ def test_blocking_install(main_host):
             blocking_install=True,
         )
     )
-    assert not isinstance(actor, _SpawnPlaceholder)
+    assert not isinstance(actor, SpawnPlaceholder)
     assert main_host.sent and main_host.sent[0]["action"] == "install"
     assert main_host.spawn_calls
 
@@ -263,7 +263,7 @@ def test_background_install_returns_placeholder(main_host):
             {"name": "d3", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
             blocking_install=False,
         )
-        assert isinstance(actor, _SpawnPlaceholder)
+        assert isinstance(actor, SpawnPlaceholder)
         await asyncio.sleep(0.1)  # let the background task finish
 
     run(scenario())

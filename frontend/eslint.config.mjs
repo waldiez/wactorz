@@ -4,6 +4,7 @@
  */
 import headers from "eslint-plugin-headers";
 import eslintPluginPrettierRecommended from "eslint-plugin-prettier/recommended";
+import importPlugin from "eslint-plugin-import";
 import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 
@@ -18,7 +19,11 @@ const project = "./tsconfig.json";
 // noinspection JSCheckFunctionSignatures
 const defaultConfig = defineConfig({
     files: ["**/*.{ts,tsx}"],
-    extends: [...tseslint.configs.recommended, eslintPluginPrettierRecommended],
+    extends: [
+        ...tseslint.configs.recommended,
+        eslintPluginPrettierRecommended,
+        importPlugin.flatConfigs.typescript,
+    ],
     settings: {
         "import/resolver": {
             typescript: {
@@ -47,6 +52,9 @@ const defaultConfig = defineConfig({
             },
         ],
         "@typescript-eslint/no-explicit-any": "error",
+        // Guard the init-time circular-import invariant statically (the codebase
+        // leans on function-local imports to avoid cycles at module load).
+        "import/no-cycle": "error",
         "@typescript-eslint/no-namespace": "off",
         "@typescript-eslint/no-unused-expressions": "off",
         "@typescript-eslint/no-use-before-define": "off",

@@ -5,9 +5,9 @@
 /**
  * Maps Home Assistant entity state-changes onto activity-feed items.
  *
- * Two transports deliver the same events (the direct HA WebSocket and the
- * MQTT ha-state-bridge), so the pusher de-duplicates identical entity+state
- * pairs seen within a short window and ignores noisy/non-actionable states.
+ * The sole transport is the MQTT ha-state-bridge (`homeassistant/state_changes`).
+ * The pusher de-duplicates identical entity+state pairs seen within a short
+ * window and ignores noisy/non-actionable states.
  */
 import type { FeedItem } from "../types/feed";
 
@@ -65,7 +65,7 @@ export function createHaFeedPusher(
     };
 }
 
-/** A parsed HA state-change from a raw `ha/...` MQTT message. */
+/** A parsed HA state-change from a raw `homeassistant/state_changes/...` MQTT message. */
 export interface HaRawEvent {
     entityId: string;
     state: string;
@@ -73,13 +73,13 @@ export interface HaRawEvent {
 }
 
 /**
- * Parse a raw `ha/state/{domain}/{entity_id}` MQTT message (the ha-state-bridge
- * transport) into an HA event, or null when the topic isn't an HA state topic or
- * carries no state. The entity id falls back to the last two topic segments; the
- * friendly name to the entity id.
+ * Parse a raw `homeassistant/state_changes[/{domain}/{entity_id}]` MQTT message
+ * (the ha-state-bridge transport) into an HA event, or null when the topic isn't
+ * an HA state topic or carries no state. The entity id falls back to the last two
+ * topic segments (per-entity form); the friendly name to the entity id.
  */
 export function parseHaRawEvent(topic: string, payload: unknown): HaRawEvent | null {
-    if (!topic.startsWith("ha/")) {
+    if (!topic.startsWith("homeassistant/state_changes")) {
         return null;
     }
     const p = (payload ?? {}) as Record<string, unknown>;

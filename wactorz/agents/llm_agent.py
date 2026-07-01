@@ -489,6 +489,17 @@ class AnthropicProvider(LLMProvider):
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
         self.model = model
 
+    @staticmethod
+    def _extract_text(response) -> str:
+        """Join every text block, skipping thinking / redacted_thinking and any
+        other non-text block. Robust whether or not extended thinking is enabled;
+        without this, content[0] is a ThinkingBlock and .text raises."""
+        parts = []
+        for block in getattr(response, "content", None) or []:
+            if getattr(block, "type", None) == "text":
+                parts.append(getattr(block, "text", "") or "")
+        return "".join(parts).strip()
+
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         response = await self.client.messages.create(
             model=self.model,
@@ -496,7 +507,7 @@ class AnthropicProvider(LLMProvider):
             system=system,
             messages=messages,
         )
-        text = response.content[0].text
+        text = self._extract_text(response)
         usage = {
             "input_tokens":  response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
@@ -645,7 +656,7 @@ class OpenAIProvider(LLMProvider):
                 response = await self.client.chat.completions.create(**params)
             else:
                 raise
-        text = response.choices[0].message.content
+        text = response.choices[0].message.content or ""
         usage = {
             "input_tokens":  response.usage.prompt_tokens,
             "output_tokens": response.usage.completion_tokens,
@@ -765,7 +776,7 @@ class OllamaProvider(LLMProvider):
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{self.base_url}/api/chat", json=payload) as resp:
                 data = await resp.json()
-        text = data["message"]["content"]
+        text = (data.get("message") or {}).get("content") or ""
         prompt_eval = data.get("prompt_eval_count", 0)
         eval_count  = data.get("eval_count", 0)
         usage = {"input_tokens": prompt_eval, "output_tokens": eval_count, "cost_usd": 0.0}
@@ -901,7 +912,7 @@ class NIMProvider(LLMProvider):
             messages=full_messages,
             max_tokens=kwargs.get("max_tokens", 8192),
         )
-        text = response.choices[0].message.content
+        text = response.choices[0].message.content or ""
         input_tok  = response.usage.prompt_tokens     if response.usage else 0
         output_tok = response.usage.completion_tokens if response.usage else 0
         usage = {

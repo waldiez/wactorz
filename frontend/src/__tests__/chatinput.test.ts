@@ -102,6 +102,21 @@ describe("ChatInput @mentions", () => {
         chip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
         expect(h.host.setTarget).toHaveBeenCalledWith("main");
     });
+
+    it("a mention with no matching <select> option is a no-op, not a fake target switch", () => {
+        // A suggested name the <select> can't target (e.g. a non-messageable
+        // agent). Accepting it must NOT setTarget, must NOT strip the @query,
+        // and must dismiss the panel — never leaving a misleading placeholder.
+        (h.host.agentNames as ReturnType<typeof vi.fn>).mockReturnValue(["main", "io-agent", "ghost-agent"]);
+        h.input.value = "@ghost";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+        const chip = [...h.panel.querySelectorAll("button")].find(b => b.textContent === "ghost-agent")!;
+        expect(chip).toBeTruthy();
+        chip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        expect(h.host.setTarget).not.toHaveBeenCalled();
+        expect(h.input.value).toBe("@ghost");
+        expect(h.panel.classList.contains("open")).toBe(false);
+    });
 });
 
 describe("ChatInput send", () => {

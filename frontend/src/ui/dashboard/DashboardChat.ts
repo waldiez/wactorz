@@ -9,7 +9,7 @@
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import type { View } from "./types";
-import { canDirectMessage, stateColor, stateLabel } from "./agentState";
+import { canDirectMessage, messageableNames, stateColor, stateLabel } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar } from "./chatIobar";
@@ -51,7 +51,8 @@ export class DashboardChat {
 
     private _stt = new SpeechToText(window.__WACTORZ_INGRESS_PATH ?? "");
     private _chatInput = new ChatInput({
-        agentNames: () => [...this.host.agents.values()].map(a => a.name).filter(Boolean),
+        // Only messageable agents — mirrors the target <select> (see _populateSelect).
+        agentNames: () => messageableNames(this.host.agents.values()),
         setTarget: (name: string) => {
             this.chatTarget = name;
         },

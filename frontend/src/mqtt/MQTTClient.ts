@@ -85,7 +85,11 @@ export class MQTTClient {
                 clearTimeout(this._disconnectTimer);
                 this._disconnectTimer = null;
             }
-            this.client?.subscribe("#", { qos: 1 });
+            // Scope to the prefixes the dashboard actually routes (see
+            // handleMessage: agents/system/nodes + ha/ via the raw→parseHaRawEvent
+            // path) instead of "#", so unrelated broker topics never reach the
+            // browser to be parsed. All dynamic ids live under these prefixes.
+            this.client?.subscribe(["agents/#", "system/#", "nodes/#", "ha/#"], { qos: 1 });
             this.emit("connected", undefined);
         });
 

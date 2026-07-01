@@ -11,6 +11,17 @@ import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel, relTime, canDirectMessage } from "./agentState";
 import type { CostLimitInfo } from "./settings";
 
+/** Compact token count for the card meta line: 1234 → "1.2k", 1_200_000 → "1.2M". */
+function fmtTokens(n: number): string {
+    if (n >= 1_000_000) {
+        return `${(n / 1_000_000).toFixed(1)}M`;
+    }
+    if (n >= 1_000) {
+        return `${(n / 1_000).toFixed(1)}k`;
+    }
+    return String(n);
+}
+
 /** Build the host CPU/memory resource bar (gracefully blank when a stat is null). */
 export function buildHostBar(
     cpu: number | null,
@@ -229,10 +240,18 @@ function appendCardHeader(card: HTMLElement, agent: AgentInfo, hbMs: number): vo
 
     const meta = document.createElement("div");
     meta.className = "af-card-meta";
+    // Tokens only for LLM agents (non-LLM metrics carry no token fields → omitted).
+    const tokens =
+        agent.inputTokens != null || agent.outputTokens != null
+            ? `<span class="af-card-tokens" title="tokens in / out">${fmtTokens(
+                  agent.inputTokens ?? 0,
+              )}↑ ${fmtTokens(agent.outputTokens ?? 0)}↓</span>`
+            : "";
     meta.innerHTML = `
       <span>♥ <span class="af-card-hb-time">${hbMs ? relTime(hbMs) : "—"}</span></span>
       <span>${agent.messagesProcessed ?? 0} msgs</span>
       ${agent.costUsd != null ? `<span>$${agent.costUsd.toFixed(4)}</span>` : ""}
+      ${tokens}
     `;
 
     card.append(dot, name, stateLbl, meta);

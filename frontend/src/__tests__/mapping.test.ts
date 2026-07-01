@@ -175,6 +175,15 @@ describe("buildMetricsUpdate", () => {
         expect("costUsd" in update).toBe(false);
         expect("uptime" in update).toBe(false);
         expect("messagesProcessed" in update).toBe(false);
+        expect("inputTokens" in update).toBe(false); // non-LLM agents carry no tokens
+        expect("outputTokens" in update).toBe(false);
+    });
+
+    it("carries LLM token counts when present", () => {
+        const p = { agentId: "id1", inputTokens: 12480, outputTokens: 3210 } as MetricsPayload;
+        const update = buildMetricsUpdate(p, existing);
+        expect(update.inputTokens).toBe(12480);
+        expect(update.outputTokens).toBe(3210);
     });
 });
 

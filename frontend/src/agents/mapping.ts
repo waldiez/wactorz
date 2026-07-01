@@ -109,6 +109,12 @@ export function buildMetricsUpdate(p: MetricsPayload, existing: AgentInfo): Agen
     if (p.costUsd !== undefined) {
         update.costUsd = p.costUsd;
     }
+    if (p.inputTokens !== undefined) {
+        update.inputTokens = p.inputTokens;
+    }
+    if (p.outputTokens !== undefined) {
+        update.outputTokens = p.outputTokens;
+    }
     if (p.uptime !== undefined) {
         update.uptime = p.uptime;
     }

@@ -228,6 +228,18 @@ function buildCafe(ctx: AudioContext, out: GainNode): Stopper {
     };
 }
 
+/** Read the persisted track, falling back to "none" for a missing/corrupt value. */
+function readTrack(): AmbientTrackId {
+    const raw = localStorage.getItem(LS_TRACK);
+    return AMBIENT_TRACKS.some(t => t.id === raw) ? (raw as AmbientTrackId) : "none";
+}
+
+/** Read the persisted volume, falling back to 0.4 for missing/NaN/out-of-range values. */
+function readVolume(): number {
+    const v = parseFloat(localStorage.getItem(LS_VOLUME) ?? "");
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.4;
+}
+
 export class AmbientManager {
     private _track: AmbientTrackId;
     private _volume: number;
@@ -237,8 +249,8 @@ export class AmbientManager {
     private _stop: Stopper | null = null;
 
     constructor() {
-        this._track = (localStorage.getItem(LS_TRACK) as AmbientTrackId) ?? "none";
-        this._volume = parseFloat(localStorage.getItem(LS_VOLUME) ?? "0.4");
+        this._track = readTrack();
+        this._volume = readVolume();
     }
 
     /** Currently selected track id. */

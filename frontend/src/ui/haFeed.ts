@@ -50,6 +50,13 @@ export function createHaFeedPusher(
 
         const key = `${entityId}:${state}`;
         const now = Date.now();
+        // Evict entries past the dedup window so `recent` can't grow unbounded
+        // over a long session in a large HA install.
+        for (const [k, t] of recent) {
+            if (now - t >= DEDUP_WINDOW_MS) {
+                recent.delete(k);
+            }
+        }
         if (now - (recent.get(key) ?? 0) < DEDUP_WINDOW_MS) {
             return;
         }

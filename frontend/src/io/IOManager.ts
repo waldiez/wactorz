@@ -117,14 +117,13 @@ export class IOManager {
     /**
      * Handle an incoming agent→user chat message: read it aloud (TTS).
      *
-     * The dashboard renders the message from the `af-chat-message` event the
-     * caller dispatches; in direct_ws mode the WebSocket already delivered it,
-     * so this is a no-op there to avoid double TTS.
+     * One caller per transport — `wsChat.onChat` (direct_ws) and `mqtt.on("chat")`
+     * (mqtt) — and the backend delivers chat over exactly one of them per mode
+     * (WS frames are gated on a live registry; MQTT chat only otherwise), so there
+     * is no cross-transport double to guard against here. Streamed replies notify
+     * separately via `onStreamEnd`; this covers the non-streamed ones.
      */
     receiveAgentMessage(msg: ChatMessage): void {
-        if (this._ws?.chatMode === "direct_ws") {
-            return;
-        }
         // Ignore agent↔agent background chatter — only user-directed replies.
         if (msg.to && msg.to !== "user") {
             return;

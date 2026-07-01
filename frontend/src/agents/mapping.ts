@@ -29,6 +29,20 @@ import type { StatePatchAgent, LogFeedItem } from "../types/ws";
 import type { FeedItem } from "../types/feed";
 import { nameFromWid, resolveAgentName } from "./naming";
 
+// --- untrusted-payload field coercers (raw MQTT JSON) -------------------------
+/** Coerce to a plain object; null/primitive payloads become `{}`. */
+function asObj(p: unknown): Record<string, unknown> {
+    return p !== null && typeof p === "object" ? (p as Record<string, unknown>) : {};
+}
+/** A string value, or "" when not a string. */
+function asStr(v: unknown): string {
+    return typeof v === "string" ? v : "";
+}
+/** A finite number, or undefined otherwise. */
+function asNum(v: unknown): number | undefined {
+    return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
 /** Coerce the backend's free-form state/status string into an {@link AgentState}. */
 function toAgentState(raw: string): AgentState {
     if (raw === "paused" || raw === "stopped" || raw === "initializing") {
@@ -325,4 +339,77 @@ export function nodeHeartbeatFeedItem(p: NodeHeartbeatPayload, now = Date.now())
         agentName: p.node,
         timestamp: now,
     };
+}
+
+// ── Extensible raw-topic feed rows ─────────────────────────────────────────
+// Agent topics that are feed-only (not part of the typed MQTTEvents route) reach
+// the browser via the `raw` catch-all. Map `agents/{id}/{suffix}` → a feed row
+// here; surfacing another topic is a single entry + test, no MQTTClient changes.
+
+const RAW_AGENT_FEED_MAPPERS: Record<
+    string,
+    (agentName: string, p: Record<string, unknown>, ts: number) => FeedItem | null
+> = {
+    // HomeAssistantActuatorAgent audit trail: what an agent actually actuated.
+    actuations: (agentName, p, ts) => {
+        const actions = Array.isArray(p["actions"]) ? (p["actions"] as unknown[]) : [];
+        const first = asObj(actions[0]);
+        const auto = asStr(p["automation_id"]);
+        const what = actions.length
+            ? `${asStr(first["domain"])}.${asStr(first["service"])} ${asStr(first["entity_id"])}`.trim()
+            : "";
+        const more = actions.length > 1 ? ` (+${actions.length - 1})` : "";
+        const detail = what || `${actions.length} action${actions.length !== 1 ? "s" : ""}`;
+        return {
+            type: "health",
+            label: `actuated · ${auto ? `${auto}: ` : ""}${detail}${more}`,
+            agentName,
+            timestamp: ts,
+        };
+    },
+    // Statistical anomaly (ml/anomaly agents); only surface actual anomalies.
+    anomaly: (agentName, p, ts) => {
+        if (p["anomaly"] !== true) {
+            return null;
+        }
+        const value = asNum(p["value"]);
+        const z = asNum(p["zscore"]);
+        const bits = [
+            value !== undefined ? `value ${value}` : "",
+            z !== undefined ? `z ${z.toFixed(1)}` : "",
+        ].filter(Boolean);
+        return {
+            type: "alert-warning",
+            label: `anomaly${bits.length ? `: ${bits.join(" · ")}` : ""}`,
+            agentName,
+            timestamp: ts,
+        };
+    },
+};
+
+const RAW_AGENT_TOPIC = /^agents\/(.+)\/([^/]+)$/;
+
+/**
+ * Map an unrouted `agents/{id}/{suffix}` MQTT message to a feed row, or null when
+ * the suffix isn't one we surface. Feed-only display path (rides the `raw`
+ * catch-all), extended via `RAW_AGENT_FEED_MAPPERS`. `resolveName` supplies a
+ * friendly name from the live store, falling back to the id-derived name.
+ */
+export function rawFeedItem(
+    topic: string,
+    payload: unknown,
+    resolveName?: (agentId: string) => string | undefined,
+    now = Date.now(),
+): FeedItem | null {
+    const m = RAW_AGENT_TOPIC.exec(topic);
+    if (!m) {
+        return null;
+    }
+    const mapper = RAW_AGENT_FEED_MAPPERS[m[2]!];
+    if (!mapper) {
+        return null;
+    }
+    const agentId = m[1]!;
+    const agentName = resolveName?.(agentId) ?? (nameFromWid(agentId) || agentId.slice(0, 8) || "system");
+    return mapper(agentName, asObj(payload), now);
 }

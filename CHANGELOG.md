@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **More activity-feed sources** — the dashboard feed now surfaces agent actuations
+  (what an agent actually changed) and anomaly events, via an extensible topic
+  registry so further feed-only topics are a one-line addition.
 - **Pipeline-rule conflict advisory** — planner now semantically checks a new rule
   against active ones and flags duplicates and contradictions (e.g. "over 25° AC off"
   vs "AC on") as a non-blocking "⚠️ Heads up" note at approval.

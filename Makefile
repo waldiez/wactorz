@@ -1,13 +1,7 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py check fmt lint format clean \
         up down logs shell \
-<<<<<<< HEAD
-        run run-py test test-py coverage coverage-py ci \
-        install install-py install-docs install-dev install-frontend docs-serve docs-build publish \
-        package-appimage
-=======
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
->>>>>>> dev
 
 COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml

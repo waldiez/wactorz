@@ -54,6 +54,7 @@ import {
     logFeedItem,
     completedFeedItem,
     nodeHeartbeatFeedItem,
+    rawFeedItem,
 } from "./agents/mapping";
 import { createDeletionGuard } from "./agents/deletionGuard";
 
@@ -350,6 +351,13 @@ mqtt.on("raw", ({ topic, payload }) => {
     const ev = parseHaRawEvent(topic, payload);
     if (ev) {
         pushHaFeed(ev.entityId, ev.state, ev.friendlyName);
+        return;
+    }
+    // Other feed-only agent topics (actuations, anomaly, …) via the extensible
+    // registry in mapping.ts — resolve the friendly name from the live store.
+    const item = rawFeedItem(topic, payload, id => agentStore.getAgents().find(a => a.id === id)?.name);
+    if (item) {
+        pushFeed(item);
     }
 });
 

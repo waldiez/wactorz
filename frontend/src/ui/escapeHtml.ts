@@ -18,5 +18,8 @@ const ENTITIES: Record<string, string> = {
 
 /** Escape `& < > " '` in `value` (coerced to string) for safe `innerHTML` interpolation. */
 export function escapeHtml(value: unknown): string {
+    // Deliberate unknown→string coercion (numbers/booleans must stringify); a stray
+    // object becoming "[object Object]" is inert once escaped.
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
     return String(value ?? "").replace(/[&<>"']/g, c => ENTITIES[c] ?? c);
 }

@@ -20,10 +20,18 @@ const project = "./tsconfig.json";
 const defaultConfig = defineConfig({
     files: ["**/*.{ts,tsx}"],
     extends: [
-        ...tseslint.configs.recommended,
+        ...tseslint.configs.recommendedTypeChecked,
         eslintPluginPrettierRecommended,
         importPlugin.flatConfigs.typescript,
     ],
+    languageOptions: {
+        parserOptions: {
+            projectService: {
+                allowDefaultProject: ["vite.config.ts", "vitest.config.ts"],
+            },
+            tsconfigRootDir: import.meta.dirname,
+        },
+    },
     settings: {
         "import/resolver": {
             typescript: {
@@ -107,5 +115,12 @@ export default [
             "max-nested-callbacks": "off",
             "@typescript-eslint/no-explicit-any": "off",
         },
+    },
+    {
+        // Type-checked rules are too noisy for the test suite (heavy `any`, mock
+        // objects, private-member pokes) and add no shipping-code safety — disable
+        // them so type-aware linting covers src/ only.
+        files: ["**/__tests__/**", "**/*.{test,spec}.{ts,tsx}"],
+        ...tseslint.configs.disableTypeChecked,
     },
 ];

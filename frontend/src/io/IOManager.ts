@@ -59,6 +59,9 @@ export class IOManager {
     }
 
     /** Send `text` to the appropriate agent (direct_ws if available, else io/chat). */
+    // Async for the caller-facing contract; the transport calls (WS send / MQTT
+    // publish) are fire-and-forget, so there's nothing to await.
+    // eslint-disable-next-line @typescript-eslint/require-await
     async send(text: string, agent: AgentInfo | null): Promise<void> {
         let content = text;
         // Prepend @name if a specific agent is selected and no prefix given.

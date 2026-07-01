@@ -61,7 +61,7 @@ export class TTSManager {
         try {
             const res = await fetch(`${this._apiBase}/api/tts/voices`);
             if (res.ok) {
-                const data = await res.json();
+                const data: unknown = await res.json();
                 if (Array.isArray(data) && data.length > 0) {
                     this._voices = data as TTSVoice[];
                     this._serverAvailable = true;

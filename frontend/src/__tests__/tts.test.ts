@@ -552,6 +552,32 @@ describe("TTSManager", () => {
         (globalThis as any).AudioContext = origAC;
     });
 
+    it("_speakServer un-ducks ambient when the server TTS fails (regression)", async () => {
+        const origFetch = globalThis.fetch;
+        // 503 → server marked unavailable, falls back to the browser synth. The
+        // duck(true) from entry must be released, or ambient stays at DUCK_VOLUME.
+        globalThis.fetch = vi.fn().mockResolvedValue({
+            ok: false,
+            status: 503,
+            arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+            json: () => Promise.resolve(null),
+        });
+        localStorage.setItem("wactorz.tts", "1");
+
+        const { TTSManager } = await freshTTS();
+        // Same fresh module graph → this is the exact singleton TTSManager ducks.
+        const { ambient } = await import("../io/AmbientManager");
+        const duckSpy = vi.spyOn(ambient, "duck");
+
+        const m = new TTSManager();
+        m.notify("boom");
+        await vi.waitFor(() => expect(duckSpy).toHaveBeenCalledWith(false));
+        expect(duckSpy).toHaveBeenCalledWith(true); // ducked on entry
+        expect((globalThis as any).speechSynthesis.speak).toHaveBeenCalled(); // browser fallback ran
+
+        globalThis.fetch = origFetch;
+    });
+
     it("exports a singleton tts instance", async () => {
         const { tts, TTSManager } = await freshTTS();
         expect(tts).toBeInstanceOf(TTSManager);

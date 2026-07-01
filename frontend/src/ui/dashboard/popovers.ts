@@ -194,7 +194,7 @@ async function postReset(scope: string, label: string, pop: HTMLElement): Promis
         if (res.ok) {
             toast.show({ type: "system", title: "Reset", message: `${label} cleared` });
         } else {
-            const err: { error?: string } = await res.json().catch(() => ({}));
+            const err = (await res.json().catch(() => ({}))) as { error?: string };
             toast.show({
                 type: "alert-error",
                 title: "Reset failed",
@@ -237,7 +237,7 @@ function buildResetButton(
     };
     armResets.push(disarm);
 
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
         // Two-step confirm: first click arms, second fires.
         if (!armed) {
             armResets.forEach(fn => fn !== disarm && fn());
@@ -248,7 +248,7 @@ function buildResetButton(
             return;
         }
         disarm();
-        await postReset(scope, label, pop);
+        void postReset(scope, label, pop);
     });
 
     return btn;

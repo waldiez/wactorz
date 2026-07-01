@@ -57,7 +57,7 @@ export function stateLabel(state: AgentState): string {
     if (typeof state === "object") {
         return "failed";
     }
-    return state as string;
+    return state;
 }
 
 /** Agents sorted with main-actor pinned first, then alphabetical. */

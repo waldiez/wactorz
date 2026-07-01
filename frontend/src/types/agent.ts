@@ -126,7 +126,7 @@ export interface Attachment {
 
 export interface ChatMessage {
     id: string;
-    from: "user" | string; // "user" or agent name
+    from: string; // "user" or agent name
     to: string; // agent name or "user"
     content: string;
     timestampMs: number;

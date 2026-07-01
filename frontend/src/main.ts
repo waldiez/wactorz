@@ -425,7 +425,7 @@ fetch(`${_apiBase}/api/feed`)
 // Probe server TTS availability + load voice list (base must be set first so
 // the request stays inside the ingress prefix instead of bare "/api").
 tts.setApiBase(_apiBase);
-tts.init();
+void tts.init();
 
 mqtt.connect();
 

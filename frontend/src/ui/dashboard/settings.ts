@@ -78,13 +78,11 @@ function buildCostStatus(info: CostLimitInfo | null, currentLimit: number, perio
 
 /** Run an async button action while disabling the button. */
 function withBusy(btn: HTMLButtonElement, run: () => Promise<void> | void): void {
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
         btn.disabled = true;
-        try {
-            await run();
-        } finally {
+        void Promise.resolve(run()).finally(() => {
             btn.disabled = false;
-        }
+        });
     });
 }
 

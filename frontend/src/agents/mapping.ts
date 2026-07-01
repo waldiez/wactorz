@@ -42,7 +42,7 @@ export function toAgentInfo(a: StatePatchAgent): AgentInfo {
     const update: AgentInfo = {
         id: a.agent_id,
         name: resolveAgentName(a.name, a.agent_id),
-        state: toAgentState((a.state ?? a.status ?? "running") as string),
+        state: toAgentState(a.state ?? a.status ?? "running"),
         protected: a.protected ?? false,
     };
     if (a.messages_processed != null) {
@@ -125,7 +125,7 @@ const FEED_MAPPERS: Record<string, (item: LogFeedItem, ctx: FeedCtx) => FeedItem
         return msg ? { type: "chat", label: msg, agentName, timestamp: ts } : null;
     },
     status: (item, { agentName, ts }) => {
-        const st = (item.status as Record<string, unknown> | undefined)?.["state"] as string | undefined;
+        const st = item.status?.["state"] as string | undefined;
         return st === "stopped" ? { type: "stopped", label: "stopped", agentName, timestamp: ts } : null;
     },
     alert: (item, { agentName, ts }) => ({

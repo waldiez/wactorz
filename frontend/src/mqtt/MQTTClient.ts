@@ -148,7 +148,7 @@ export class MQTTClient {
 
     /** Remove a previously registered listener. Chainable. */
     off<K extends keyof MQTTEvents>(event: K, listener: Listener<MQTTEvents[K]>): this {
-        const arr = this.listeners[event] as Array<Listener<MQTTEvents[K]>> | undefined;
+        const arr = this.listeners[event];
         if (arr) {
             const idx = arr.indexOf(listener);
             if (idx !== -1) {
@@ -159,7 +159,7 @@ export class MQTTClient {
     }
 
     private emit<K extends keyof MQTTEvents>(event: K, data: MQTTEvents[K]): void {
-        const arr = this.listeners[event] as Array<Listener<MQTTEvents[K]>> | undefined;
+        const arr = this.listeners[event];
         arr?.forEach(fn => {
             try {
                 fn(data);

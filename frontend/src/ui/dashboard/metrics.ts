@@ -122,7 +122,7 @@ export class MetricsController {
         try {
             const res = await fetch(`${this._ingress}/api/cost`);
             if (res.ok) {
-                this._costLimitInfo = await res.json();
+                this._costLimitInfo = (await res.json()) as CostLimitInfo;
                 if (this.host.getView() === "overview") {
                     this.host.renderStats();
                 } else if (this.host.getView() === "settings") {

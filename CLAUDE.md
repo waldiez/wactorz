@@ -23,7 +23,7 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 | ---- | ------- |
 | Install dev deps | `make install-dev` |
 | Run backend | `make run` · full dev stack: `make dev-full` |
-| Python tests | `make test` (pytest) · coverage: `make coverage` |
+| Tests | `make test` (Python + frontend) · split: `make test-py` / `make test-frontend` · coverage: `make coverage` (or `-py` / `-frontend`) |
 | Build frontend | `make build-frontend` (never raw `bun run build` — this also syncs the installed package) |
 | Frontend lint | `make lint` (typecheck + prettier + eslint + markdownlint) |
 | Build everything | `make build` · local CI: `make ci` |

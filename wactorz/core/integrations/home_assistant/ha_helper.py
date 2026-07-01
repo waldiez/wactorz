@@ -27,8 +27,7 @@ def _normalize_swid_segment(text: str) -> str:
     # Keep only alphanumeric, hyphens, and dots
     segment = re.sub(r"[^a-z0-9\-\.]", "", segment)
     # Collapse repeated hyphens and strip leading/trailing hyphens
-    segment = re.sub(r"-{2,}", "-", segment).strip("-")
-    return segment
+    return re.sub(r"-{2,}", "-", segment).strip("-")
 
 
 def generate_swid(
@@ -109,16 +108,14 @@ def normalize_ha_base_url(url: str) -> str:
     if scheme in {"http", "https"}:
         netloc = parsed.netloc or parsed.path
         path = (parsed.path or "").rstrip("/")
-        if path.endswith("/api/websocket"):
-            path = path[: -len("/api/websocket")]
+        path = path.removesuffix("/api/websocket")
         return f"{scheme}://{netloc}{path}"
 
     if scheme in {"ws", "wss"}:
         http_scheme = "https" if scheme == "wss" else "http"
         netloc = parsed.netloc or parsed.path
         path = (parsed.path or "").rstrip("/")
-        if path.endswith("/api/websocket"):
-            path = path[: -len("/api/websocket")]
+        path = path.removesuffix("/api/websocket")
         return f"{http_scheme}://{netloc}{path}"
 
     return raw
@@ -862,7 +859,8 @@ async def update_automation(
 async def delete_automation(base_url: str, token: str, automation_id: str) -> bool:
     """Delete an automation by ID. Returns True if deletion was successful.
     This is undocumented but that is the endpoint used by the HA frontend to delete automations,
-    so it should be stable."""
+    so it should be stable.
+    """
     normalized_base = normalize_ha_base_url(base_url)
     endpoint = f"{normalized_base}/api/config/automation/config/{automation_id}"
     headers = {

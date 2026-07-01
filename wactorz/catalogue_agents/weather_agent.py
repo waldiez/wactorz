@@ -1,5 +1,4 @@
-"""
-WeatherAgent - natural-language weather via Open-Meteo (no API key).
+"""WeatherAgent - natural-language weather via Open-Meteo (no API key).
 
 Built for the way ordinary people actually ask:
 
@@ -422,8 +421,7 @@ def _label_for(d: date, today: date) -> str:
 
 
 def _next_weekday(today: date, target: int, force_next: bool = False) -> date:
-    """
-    Date of weekday `target` (0=Mon). The upcoming occurrence (today counts);
+    """Date of weekday `target` (0=Mon). The upcoming occurrence (today counts);
     force_next ("next friday") jumps to that weekday in the *following* week.
     """
     if force_next:
@@ -760,7 +758,7 @@ class WeatherAgent(Actor):
             if not loc or loc.upper() == "NONE" or len(loc) > 80:
                 return None
             return loc if await self._geocode(loc) else None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(f"[{self.name}] LLM location recovery failed: {e}")
             return None
 
@@ -865,7 +863,7 @@ class WeatherAgent(Actor):
                         logger.warning(f"[{self.name}] {url} → HTTP {resp.status}")
                         return None
                     return await resp.json()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"[{self.name}] request to {url} failed: {e}")
             return None
 

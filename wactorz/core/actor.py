@@ -1,5 +1,4 @@
-"""
-Base Actor - the foundation of the Actor Model framework.
+"""Base Actor - the foundation of the Actor Model framework.
 Every agent IS an actor. Actors communicate via message passing only.
 """
 
@@ -25,8 +24,7 @@ if TYPE_CHECKING:
 
 
 class SupervisorStrategy(str, Enum):
-    """
-    Restart strategy for supervised actors — inspired by Erlang/OTP.
+    """Restart strategy for supervised actors — inspired by Erlang/OTP.
 
     ONE_FOR_ONE   — restart only the crashed actor, leave siblings untouched.
                     Use for independent workers (weather-agent, news-agent, …).
@@ -109,8 +107,7 @@ class ActorMetrics:
 
 
 class Actor(ABC):
-    """
-    Base Actor class. All agents inherit from this.
+    """Base Actor class. All agents inherit from this.
     Actors are fully async and communicate only through messages.
     """
 
@@ -364,7 +361,8 @@ class Actor(ABC):
 
     def _estimate_memory_mb(self) -> float:
         """Bounded deep-size walk over this actor's own data structures.
-        Uses only sys.getsizeof — no new deps, works on Windows."""
+        Uses only sys.getsizeof — no new deps, works on Windows.
+        """
         seen: set = set()
 
         def _deep(obj: object, depth: int) -> int:
@@ -453,7 +451,7 @@ class Actor(ABC):
                                         sup.release(self.name)
                                 await self.stop()
                                 return
-                            elif command == "pause":
+                            if command == "pause":
                                 await self.pause()
                             elif command == "resume":
                                 await self.resume()
@@ -504,8 +502,7 @@ class Actor(ABC):
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 
     async def spawn(self, actor_class: type, **kwargs) -> "Actor":
-        """
-        Spawn a child actor. The child inherits:
+        """Spawn a child actor. The child inherits:
         - MQTT client (so it can publish heartbeats/status)
         - Registry (so it can send/receive messages)
         - Persistence dir defaults to same root
@@ -677,8 +674,7 @@ class Actor(ABC):
                 logger.error(f"[{self.name}] Failed to load state: {e}")
 
     def persist(self, key: str, value: Any):
-        """
-        Persist a key-value pair. Routes to the correct backend:
+        """Persist a key-value pair. Routes to the correct backend:
           - Known structured keys → SQLite
           - Known ephemeral keys → Redis
           - Everything else → Pickle
@@ -700,8 +696,7 @@ class Actor(ABC):
             logger.debug(f"[{self.name}] persist write failed: {e}")
 
     def recall(self, key: str, default: Any = None) -> Any:
-        """
-        Recall a persisted value. Routes to the correct backend.
+        """Recall a persisted value. Routes to the correct backend.
         Returns default if the key doesn't exist.
         """
         if self._persistence_api is not None:
@@ -725,13 +720,11 @@ class Actor(ABC):
                 # payloads carry only the topic id, and while an agent is being
                 # spawned or installing deps it isn't in any registry yet — but it
                 # always knows self.name, so the feed can attribute the row.
-                if isinstance(payload, dict) and (
-                    topic.endswith("/logs") or topic.endswith("/spawned")
-                ):
+                if isinstance(payload, dict) and (topic.endswith(("/logs", "/spawned"))):
                     payload.setdefault("name", self.name)
                 # Empty bytes = clear a retained message (MQTT spec)
                 # Must send raw empty bytes, not JSON-encoded
-                if payload == b"" or payload is None and retain:
+                if payload == b"" or (payload is None and retain):
                     encoded = b""
                 elif isinstance(payload, (bytes, bytearray)):
                     encoded = payload
@@ -745,8 +738,7 @@ class Actor(ABC):
         await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
 
     async def notify_user(self, text: str, **extra):
-        """
-        Push a user-facing chat message to the UI from this actor, OUTSIDE the
+        """Push a user-facing chat message to the UI from this actor, OUTSIDE the
         synchronous request/reply turn.
 
         The monitor forwards agents/{id}/chat messages to the chat panel as live
@@ -782,7 +774,6 @@ class Actor(ABC):
 
     async def on_start(self):
         """Called when actor starts. Override for init logic."""
-        pass
 
     async def publish_manifest(
         self,
@@ -792,8 +783,7 @@ class Actor(ABC):
         input_schema: dict = None,
         output_schema: dict = None,
     ):
-        """
-        Publish a capability manifest so main's topic registry can discover this actor.
+        """Publish a capability manifest so main's topic registry can discover this actor.
         Call from on_start() in any actor that wants to be discoverable.
         Manifests are retained — main sees them immediately even after restart.
 
@@ -817,12 +807,10 @@ class Actor(ABC):
 
     async def on_stop(self):
         """Called when actor stops. Override for cleanup."""
-        pass
 
     @abstractmethod
     async def handle_message(self, msg: Message):
         """Handle messages not caught by default handlers."""
-        pass
 
     def __repr__(self):
         return f"<Actor name={self.name} id={self.actor_id[:8]} state={self.state.value}>"

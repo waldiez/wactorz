@@ -1,5 +1,4 @@
-"""
-IOAgent - UI gateway actor.
+"""IOAgent - UI gateway actor.
 
 Listens on MQTT topic `io/chat` and routes messages to actors by `@agent-name`
 prefix. Messages with no `@` prefix are forwarded to `main-actor`. Replies are
@@ -25,8 +24,7 @@ IO_CHAT_CONTROL_TOPIC = "io/chat/control"  # UI publishes {"action": "stop"} her
 
 
 class IOAgent(Actor):
-    """
-    Gateway between the frontend UI and the actor network.
+    """Gateway between the frontend UI and the actor network.
 
     Receives raw chat payloads from the browser via MQTT `io/chat`, parses an
     optional `@name` prefix to select a target actor, and delivers the text as
@@ -121,9 +119,8 @@ class IOAgent(Actor):
             return
 
         # Slash commands are handled locally — never reach the LLM
-        if content.startswith("/"):
-            if await self._handle_slash(content):
-                return
+        if content.startswith("/") and await self._handle_slash(content):
+            return
 
         target_name, text = self._parse_mention(content)
 
@@ -198,8 +195,7 @@ class IOAgent(Actor):
             logger.debug(f"[{self.name}] ignoring unknown control action: {action!r}")
 
     async def _stop_generations(self):
-        """
-        Cancel any in-flight chat generation(s).
+        """Cancel any in-flight chat generation(s).
 
         Cancellation propagates down through process_user_input_stream →
         chat_stream → the provider's streaming context manager, which closes
@@ -248,8 +244,7 @@ class IOAgent(Actor):
         return self._registry.find_by_name("main")
 
     async def _handle_slash(self, text: str) -> bool:
-        """
-        Slash-command dispatch. The single source of truth lives in main_actor.py
+        """Slash-command dispatch. The single source of truth lives in main_actor.py
         — every slash command (including /deploy) is implemented there exactly
         once, so CLI, UI, Discord, and any future interface behave identically.
 
@@ -263,8 +258,7 @@ class IOAgent(Actor):
         return True
 
     async def _forward_slash_to_main(self, slash_text: str):
-        """
-        Pipe a slash command into main and stream its output back live.
+        """Pipe a slash command into main and stream its output back live.
 
         We flush each text chunk as it arrives — important for /deploy, which
         emits progress messages mid-execution (subnet scan, deploy phases).

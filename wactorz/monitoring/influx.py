@@ -1,5 +1,4 @@
-"""
-InfluxDB 2.x integration for Wactorz — chat log writer.
+"""InfluxDB 2.x integration for Wactorz — chat log writer.
 
 Activated when INFLUX_URL and INFLUX_TOKEN are set.
 Writes one point per conversation turn to the measurement `wactorz_chat`.
@@ -23,8 +22,7 @@ _write_api = None
 
 
 def setup_influx() -> bool:
-    """
-    Configure the InfluxDB write client.
+    """Configure the InfluxDB write client.
     Returns True if successfully set up, False if disabled or unavailable.
     Idempotent — safe to call multiple times.
     """
@@ -36,8 +34,13 @@ def setup_influx() -> bool:
         return False
 
     try:
-        from influxdb_client import InfluxDBClient, WriteOptions  # type: ignore  # noqa: F401
-        from influxdb_client.client.write_api import ASYNCHRONOUS  # type: ignore
+        from influxdb_client import (  # pyright: ignore[reportMissingImports]  # noqa: F401
+            InfluxDBClient,
+            WriteOptions,
+        )
+        from influxdb_client.client.write_api import (
+            ASYNCHRONOUS,  # pyright: ignore[reportMissingImports]
+        )
     except ImportError:
         logger.warning("influxdb-client not installed — run: pip install 'wactorz[influx]'")
         return False
@@ -67,7 +70,7 @@ def write_chat(agent_name: str, role: str, content: str, ts: float | None = None
     try:
         import time as _t
 
-        from influxdb_client import Point  # type: ignore
+        from influxdb_client import Point  # pyright: ignore[reportMissingImports]
 
         point = (
             Point("wactorz_chat")

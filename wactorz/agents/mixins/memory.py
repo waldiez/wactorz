@@ -24,12 +24,12 @@ class MemoryMixin:
 
     def _preferred_timezone_name(self) -> str | None:
         """Main knows the user's timezone from facts — use it so the live
-        date/time block matches what the scheduler actually fires against."""
+        date/time block matches what the scheduler actually fires against.
+        """
         return self.get_user_facts().get("pref_timezone")
 
     def _get_running_agents_summary(self) -> str:
-        """
-        Build a short, authoritative description of currently running agents
+        """Build a short, authoritative description of currently running agents
         by reading the live registry (same source the planner uses).
         Returns empty string if registry is unavailable or only main is running.
         """
@@ -58,8 +58,7 @@ class MemoryMixin:
         return "\n".join(lines)
 
     def _prefix_with_live_context(self, user_text: str) -> str:
-        """
-        Wrap the user's message with a `[CURRENT SYSTEM STATE]` block so the LLM
+        """Wrap the user's message with a `[CURRENT SYSTEM STATE]` block so the LLM
         sees the live agent list INSIDE the user message — not just the system
         prompt.
 
@@ -101,8 +100,7 @@ class MemoryMixin:
         return ctx + user_text
 
     def _rebuild_system_prompt(self):
-        """
-        Reconstruct the system prompt from ORCHESTRATOR_PROMPT plus dynamic blocks:
+        """Reconstruct the system prompt from ORCHESTRATOR_PROMPT plus dynamic blocks:
           1. Currently running agents (live registry — authoritative, refreshed each call)
           2. Known user facts (persisted)
 
@@ -196,8 +194,7 @@ class MemoryMixin:
         self._rebuild_system_prompt()
 
     async def _extract_and_save_facts(self, user_message: str, assistant_response: str):
-        """
-        After each exchange, ask the LLM to extract any new durable facts.
+        """After each exchange, ask the LLM to extract any new durable facts.
 
         Observability: this method logs every attempt at INFO level (start),
         success at INFO (with extracted keys), and failures at WARNING. If you
@@ -251,7 +248,7 @@ class MemoryMixin:
                     normalized[k] = v
                     continue
                 # Heuristic guesses for common unprefixed keys
-                if k.endswith("_url") or k.endswith("_endpoint") or k.endswith("_path"):
+                if k.endswith(("_url", "_endpoint", "_path")):
                     normalized[f"device_{k}"] = v
                 elif k.startswith(("user_", "favorite_", "pref_")) or k in (
                     "name",

@@ -1,5 +1,4 @@
-"""
-DynamicAgent - A generic actor shell whose behavior is defined by LLM-generated code.
+"""DynamicAgent - A generic actor shell whose behavior is defined by LLM-generated code.
 
 The LLM writes three async functions:
   async def setup(agent):        # called once on start — load models, open connections
@@ -24,7 +23,7 @@ import logging
 import time
 import traceback
 import types
-from typing import Any
+from typing import Any, ClassVar
 
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
@@ -34,8 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 class _AwaitableNone:
-    """
-    Sentinel that can be safely awaited (returns None) or used in bool context (False).
+    """Sentinel that can be safely awaited (returns None) or used in bool context (False).
 
     LLMs writing async code inside DynamicAgent frequently add `await` to sync API
     calls like agent.subscribe(), agent.window(), agent.persist(), etc.  Returning
@@ -57,8 +55,7 @@ _AWAITABLE_NONE = _AwaitableNone()
 
 
 class DynamicAgent(Actor):
-    """
-    Generic actor shell. Core behavior is provided as Python source code strings.
+    """Generic actor shell. Core behavior is provided as Python source code strings.
     The LLM writes setup/process/handle_task functions; this class runs them.
     """
 
@@ -290,8 +287,7 @@ class DynamicAgent(Actor):
 
     @staticmethod
     def _sanitize_code(code: str) -> str:
-        """
-        Block-aware sanitizer. Removes LLM self-setup patterns entirely:
+        """Block-aware sanitizer. Removes LLM self-setup patterns entirely:
         - try/except blocks containing LLM imports
         - if/else blocks checking api_key or llm_backend
         - orphan else:/elif: that follow sanitized blocks
@@ -347,7 +343,7 @@ class DynamicAgent(Actor):
             # try: blocks — nuke entirely if they touch LLM
             if stripped == "try:":
                 block, j = collect_block(lines, i + 1, indent)
-                full = [line] + block
+                full = [line, *block]
                 if any(line_is_bad(ln) for ln in full):
                     result.append(prefix + "pass  # sanitized: LLM setup block")
                     last_sanitized = True
@@ -424,9 +420,7 @@ class DynamicAgent(Actor):
             "increment_errors",
         )
         _sync_pat = r"\bawait\s+(agent\.(?:" + "|".join(_SYNC_METHODS) + r")\s*\()"
-        sanitized = re.sub(_sync_pat, r"\1", sanitized)
-
-        return sanitized
+        return re.sub(_sync_pat, r"\1", sanitized)
 
     # Max times on_start will ask the LLM to fix a syntax error before giving up
     _MAX_COMPILE_RETRIES = 2
@@ -436,7 +430,7 @@ class DynamicAgent(Actor):
     # This is NOT a sandbox — it's a best-effort blocklist.
     # For true isolation, run DynamicAgents in a subprocess or container.
 
-    _BLOCKED_PATTERNS = [
+    _BLOCKED_PATTERNS: ClassVar[list[tuple[str, str]]] = [
         # System-level access
         (r"\bos\.system\s*\(", "os.system() — use subprocess instead or avoid shell commands"),
         (r"\bos\.popen\s*\(", "os.popen() — use subprocess instead"),
@@ -458,7 +452,7 @@ class DynamicAgent(Actor):
     ]
 
     # Patterns that are suspicious but allowed — just logged as warnings
-    _WARN_PATTERNS = [
+    _WARN_PATTERNS: ClassVar[list[tuple[str, str]]] = [
         (r"\bsubprocess\b", "subprocess usage — ensure this is necessary"),
         (r"\bctypes\b", "ctypes — low-level C interface, use with caution"),
         (r"\bpickle\.loads?\b", "pickle — deserialization risk if data is untrusted"),
@@ -469,7 +463,7 @@ class DynamicAgent(Actor):
     ]
 
     # Patterns checked specifically inside process() body — cause 120s timeout crashes
-    _PROCESS_ANTIPATTERNS = [
+    _PROCESS_ANTIPATTERNS: ClassVar[list[tuple[str, str]]] = [
         (
             r"asyncio\.sleep\s*\(",
             "asyncio.sleep() inside process() — NEVER sleep in process(). "
@@ -498,8 +492,7 @@ class DynamicAgent(Actor):
     ]
 
     def _validate_code_safety(self, code: str) -> str | None:
-        """
-        Scan sanitized code for dangerous patterns before exec().
+        """Scan sanitized code for dangerous patterns before exec().
 
         Returns an error message string if blocked, None if OK.
         Warnings are logged but don't block execution.
@@ -529,8 +522,7 @@ class DynamicAgent(Actor):
 
     @staticmethod
     def _extract_function_body(code: str, fn_name: str) -> str | None:
-        """
-        Extract the body of a top-level function by name from source code.
+        """Extract the body of a top-level function by name from source code.
         Simple indentation-based parser — good enough for LLM-generated code.
         """
         import re
@@ -558,8 +550,7 @@ class DynamicAgent(Actor):
         return "\n".join(body_lines) if body_lines else None
 
     def _compile_code(self, code: str | None = None) -> str | None:
-        """
-        Sanitize, validate safety, then compile LLM-generated code into self._ns.
+        """Sanitize, validate safety, then compile LLM-generated code into self._ns.
 
         Returns the error message string if compilation fails, None on success.
         Callers use the error string to ask the LLM to fix the code and retry
@@ -607,15 +598,19 @@ class DynamicAgent(Actor):
                 _agent_name_for_shim = self.name  # capture for closure
 
                 class _ResilientVideoCapture(_real_cv2.VideoCapture):
-                    """
-                    Drop-in replacement for cv2.VideoCapture that retries the open
+                    """Drop-in replacement for cv2.VideoCapture that retries the open
                     with backoff when the MSMF backend grabs the device index but
                     then immediately fails to deliver frames.
 
                     Transparent to LLM code — same API, same isinstance() checks.
                     """
 
-                    _RETRY_DELAYS = [1.0, 2.0, 4.0, 8.0]  # seconds between retries
+                    _RETRY_DELAYS: ClassVar[list[float]] = [
+                        1.0,
+                        2.0,
+                        4.0,
+                        8.0,
+                    ]  # seconds between retries
                     # Time to wait after a successful open() before probing read().
                     # MSMF/DSHOW source readers need ~200-300ms to start streaming
                     # even after isOpened() returns True. Probing too soon yields
@@ -662,7 +657,7 @@ class DynamicAgent(Actor):
                         return super().read()
 
                     def _do_open(self):
-                        for attempt, delay in enumerate([0.0] + self._RETRY_DELAYS, start=1):
+                        for attempt, delay in enumerate([0.0, *self._RETRY_DELAYS], start=1):
                             if delay:
                                 import time as _t
 
@@ -738,8 +733,7 @@ class DynamicAgent(Actor):
             return f"{type(e).__name__}: {e}"
 
     async def _fix_syntax_with_llm(self, bad_code: str, error_msg: str) -> str | None:
-        """
-        Ask the configured LLM to fix a syntax error in agent code.
+        """Ask the configured LLM to fix a syntax error in agent code.
 
         Returns the (possibly still-broken) code string from the LLM, or None
         only if the LLM is completely unavailable (no provider, API error).
@@ -794,8 +788,7 @@ class DynamicAgent(Actor):
     _MAX_SETUP_RETRIES = 2
 
     async def _run_setup(self):
-        """
-        Run setup() as a background task with LLM self-correction on failure.
+        """Run setup() as a background task with LLM self-correction on failure.
 
         If setup() raises a runtime error (e.g. TypeError from await on sync call,
         NameError, AttributeError), the LLM is asked to fix the code and the whole
@@ -885,8 +878,7 @@ class DynamicAgent(Actor):
     async def _fix_runtime_with_llm(
         self, code: str, error_msg: str, traceback_str: str
     ) -> str | None:
-        """
-        Ask the LLM to fix a runtime error in agent code (setup/process).
+        """Ask the LLM to fix a runtime error in agent code (setup/process).
 
         Similar to _fix_syntax_with_llm but provides the traceback and
         explicit guidance about the agent API (sync vs async methods).
@@ -970,8 +962,7 @@ class DynamicAgent(Actor):
     _PROCESS_FAIL_THRESHOLD = 5
 
     async def _process_loop(self):
-        """
-        Continuously call the generated process() function.
+        """Continuously call the generated process() function.
 
         Erlang/OTP semantics:
         - Each error increments _consecutive_errors.
@@ -1059,10 +1050,9 @@ class DynamicAgent(Actor):
                             )
                             await asyncio.sleep(self.poll_interval)
                             continue
-                        else:
-                            logger.warning(
-                                f"[{self.name}] LLM fix introduced compile error: {compile_err}"
-                            )
+                        logger.warning(
+                            f"[{self.name}] LLM fix introduced compile error: {compile_err}"
+                        )
 
                 # ── Erlang: too many errors → FAILED → Supervisor restarts us ──
                 if self._consecutive_errors >= self._PROCESS_FAIL_THRESHOLD:
@@ -1164,8 +1154,7 @@ class DynamicAgent(Actor):
         traceback_str: str = "",
         fatal: bool = False,
     ):
-        """
-        Publish a structured error event to agents/{id}/errors AND send
+        """Publish a structured error event to agents/{id}/errors AND send
         a direct actor message to MonitorAgent so it works without MQTT.
         """
         self._consecutive_errors += 1
@@ -1215,8 +1204,7 @@ class DynamicAgent(Actor):
         )
 
     def _reset_error_count(self):
-        """
-        Reset the process()/setup() error counter after a clean run.
+        """Reset the process()/setup() error counter after a clean run.
 
         Deliberately does NOT touch _cb_error_count / _cb_error_last — those
         track subscribe callback errors which are independent of process().
@@ -1228,8 +1216,7 @@ class DynamicAgent(Actor):
             self._error_phase = ""
 
     def _persist_fixed_code(self, fixed_code: str):
-        """
-        Write the LLM-fixed code back to:
+        """Write the LLM-fixed code back to:
           1. main's spawn registry  — so system restarts use the fixed code
           2. Supervisor's factory   — so Supervisor-driven restarts use the fixed code
 
@@ -1321,8 +1308,7 @@ class DynamicAgent(Actor):
 
 
 class _LLMInterface:
-    """
-    Thin LLM wrapper exposed to generated code via agent.llm
+    """Thin LLM wrapper exposed to generated code via agent.llm
     Tracks token usage and cost just like LLMAgent does.
     """
 
@@ -1366,8 +1352,7 @@ class _LLMInterface:
         return response
 
     async def converse(self, user_message: str, system: str = "") -> str:
-        """
-        Stateful multi-turn chat — automatically maintains conversation history
+        """Stateful multi-turn chat — automatically maintains conversation history
         in agent.state['_chat_history']. Simplest way to build a chat agent.
 
         async def handle_task(agent, payload):
@@ -1382,8 +1367,7 @@ class _LLMInterface:
 
 
 def _ensure_result_handler(actor):
-    """
-    Patch handle_message once so that RESULT messages carrying _task_id
+    """Patch handle_message once so that RESULT messages carrying _task_id
     resolve the corresponding future. Safe to call multiple times.
     """
     if getattr(actor, "_result_handler_patched", False):
@@ -1413,8 +1397,7 @@ def _ensure_result_handler(actor):
 
 
 class _AgentAPI:
-    """
-    Clean API surface exposed to LLM-generated code via the `agent` parameter.
+    """Clean API surface exposed to LLM-generated code via the `agent` parameter.
     Wraps the actual Actor internals so generated code can't break the framework.
     """
 
@@ -1467,8 +1450,7 @@ class _AgentAPI:
     # are valid; pick whichever feels cleaner in your code.
 
     async def chat(self, messages, system: str = "", timeout: float = 60.0) -> str:
-        """
-        Multi-turn LLM call — mirrors _RemoteAgentAPI.chat() so the same
+        """Multi-turn LLM call — mirrors _RemoteAgentAPI.chat() so the same
         generated code runs locally and remotely.
 
         ``messages`` is a list of {"role": "user"/"assistant", "content": "..."}.
@@ -1492,7 +1474,8 @@ class _AgentAPI:
         """Publish data to an MQTT topic. Auto-registers topic in capability manifest
         and TopicBus contract so the agent is discoverable without explicit declare_contract().
         On every publish, captures the actual payload schema (field names + types)
-        so the planner and other agents know the real field names — not guesses."""
+        so the planner and other agents know the real field names — not guesses.
+        """
         await self._actor._mqtt_publish(topic, data)
 
         is_new_topic = topic not in self._published_topics
@@ -1545,8 +1528,7 @@ class _AgentAPI:
             await self._publish_manifest()
 
     def subscribe(self, topic: str, callback):
-        """
-        Subscribe to an MQTT topic and call callback(payload_dict) for each message.
+        """Subscribe to an MQTT topic and call callback(payload_dict) for each message.
         Runs as a background task — setup() returns immediately.
 
         IMPORTANT: callback is REQUIRED and must be an async function.
@@ -1735,8 +1717,7 @@ class _AgentAPI:
         await self._actor._mqtt_publish(f"agents/{self._actor.actor_id}/result", data)
 
     async def _publish_manifest(self):
-        """
-        Publish retained capability manifest so main/planner can discover this agent.
+        """Publish retained capability manifest so main/planner can discover this agent.
         Now includes full TopicContract (publishes, subscribes, triggers_when, schemas)
         so the planner can wire agents by data compatibility, not just by name.
         """
@@ -1811,16 +1792,14 @@ class _AgentAPI:
         )
 
     async def notify_user(self, text: str):
-        """
-        Push a user-facing chat message to the chat panel (see Actor.notify_user).
+        """Push a user-facing chat message to the chat panel (see Actor.notify_user).
         Use this — not log() or alert() — when the user should see the message in
         chat, e.g. when a long task finishes or an autonomous agent has news.
         """
         await self._actor.notify_user(text)
 
     def run_in_background(self, coro):
-        """
-        Schedule a coroutine on the actor's event loop and track it on the actor
+        """Schedule a coroutine on the actor's event loop and track it on the actor
         so it is cancelled cleanly on stop (same lifecycle as subscribe()).
         Returns the asyncio.Task.
 
@@ -1842,8 +1821,7 @@ class _AgentAPI:
         return _AWAITABLE_NONE  # safe to await
 
     def recall(self, key: str, default: Any = None) -> Any:
-        """
-        Load a persisted value. Returns `default` (None by default) if the
+        """Load a persisted value. Returns `default` (None by default) if the
         key doesn't exist — same shape as dict.get(), and identical to the
         remote runner's _RemoteAgentAPI.recall() so the same agent code
         works on local and remote without modification.
@@ -1958,8 +1936,7 @@ class _AgentAPI:
 
         reply_task = asyncio.create_task(_wait_reply())
         try:
-            result = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-            return result
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
         except asyncio.TimeoutError:
             logger.warning(
                 f"[{self.name}] send_to '{agent_name}' on '{remote_node}' timed out after {timeout}s"
@@ -1986,8 +1963,7 @@ class _AgentAPI:
         return list(await asyncio.gather(*coros, return_exceptions=True))
 
     def agents(self) -> list[dict]:
-        """
-        Return all running agents — both local and remote.
+        """Return all running agents — both local and remote.
 
         Local agents come from the registry. Remote agents are sourced from
         main._known_nodes (populated by node heartbeats). Each entry includes
@@ -2053,8 +2029,7 @@ class _AgentAPI:
         return result
 
     def nodes(self) -> list[dict]:
-        """
-        Return all known remote nodes with online status and running agents.
+        """Return all known remote nodes with online status and running agents.
         Only available when the agent is running under a MainActor system.
 
         Example:
@@ -2068,8 +2043,7 @@ class _AgentAPI:
         return []
 
     def topics(self, keyword: str = "") -> list[dict]:
-        """
-        Return all known MQTT topics published by agents, optionally filtered by keyword.
+        """Return all known MQTT topics published by agents, optionally filtered by keyword.
         Each entry: {"topic": str, "agents": [{"name", "node", "description"}, ...]}
 
         Example:
@@ -2084,8 +2058,7 @@ class _AgentAPI:
         return []
 
     def capabilities(self, keyword: str = "") -> list[dict]:
-        """
-        Return all known agents with their full capability profile.
+        """Return all known agents with their full capability profile.
         Each entry: {"name", "description", "capabilities", "input_schema", "output_schema"}
 
         Example:
@@ -2104,8 +2077,7 @@ class _AgentAPI:
         return await self.send_to(agent_name, payload, timeout=timeout)
 
     async def mqtt_get(self, topic: str, timeout: float = 10.0) -> Any | None:
-        """
-        Wait for one MQTT message on topic and return its parsed payload.
+        """Wait for one MQTT message on topic and return its parsed payload.
         Useful for reading live data published by remote agents.
 
         Example:
@@ -2144,8 +2116,7 @@ class _AgentAPI:
     # ── Topic Bus API ───────────────────────────────────────────────────────
 
     def window(self, topic: str, seconds: float = 300, max_size: int = 1000):
-        """
-        Create a sliding time window over an MQTT topic stream.
+        """Create a sliding time window over an MQTT topic stream.
 
         IMPORTANT: window() is synchronous — do NOT use await.
         CORRECT:  agent.state['w'] = agent.window('sensors/temp', seconds=60)
@@ -2171,8 +2142,7 @@ class _AgentAPI:
         from ..core.topic_bus import StreamWindow, get_topic_bus
 
         class _UnawaatableWindow:
-            """
-            Wraps StreamWindow and raises a clear TypeError if accidentally awaited.
+            """Wraps StreamWindow and raises a clear TypeError if accidentally awaited.
 
             We do NOT implement __await__ here. Yielding a StreamWindow from
             __await__ violates the awaitable protocol and causes
@@ -2231,8 +2201,7 @@ class _AgentAPI:
         consumes_schema: dict = None,
         **kwargs,
     ):
-        """
-        Declare this agent's topic contract — what it produces and consumes.
+        """Declare this agent's topic contract — what it produces and consumes.
 
         Call from setup() to make this agent discoverable by the planner
         and other agents via topic-based auto-wiring.
@@ -2295,8 +2264,7 @@ class _AgentAPI:
         return _AWAITABLE_NONE  # safe to await
 
     async def publish_world_state(self, key: str, data: Any, retain: bool = True):
-        """
-        Publish a piece of world state to the shared retained state hub.
+        """Publish a piece of world state to the shared retained state hub.
         Other agents can read this without making a request — it's always there.
 
         Topic: agents/{agent_name}/data/{key}
@@ -2315,8 +2283,7 @@ class _AgentAPI:
             await self.publish(topic, data)
 
     async def read_world_state(self, topic: str, timeout: float = 2.0) -> Any | None:
-        """
-        Read a retained world state topic — returns immediately if cached,
+        """Read a retained world state topic — returns immediately if cached,
         otherwise waits up to timeout seconds for the retained message.
 
         Usage:
@@ -2327,8 +2294,7 @@ class _AgentAPI:
         return await self.mqtt_get(topic, timeout=timeout)
 
     def wiring_opportunities(self) -> list[dict]:
-        """
-        Return a list of other agents this agent can be auto-wired to,
+        """Return a list of other agents this agent can be auto-wired to,
         based on topic contract compatibility.
 
         Usage:
@@ -2359,8 +2325,7 @@ class _AgentAPI:
         limit: int = 100_000,
         as_dataframe: bool = False,
     ) -> Any:
-        """
-        Query historical sensor readings from the time-series store.
+        """Query historical sensor readings from the time-series store.
 
         Returns a list of dicts by default. Set as_dataframe=True to get
         a pandas DataFrame (requires pandas installed).
@@ -2413,8 +2378,7 @@ class _AgentAPI:
         limit: int = 50_000,
         as_dataframe: bool = False,
     ) -> Any:
-        """
-        Query historical object detections (YOLO, camera agents).
+        """Query historical object detections (YOLO, camera agents).
 
         Usage:
             # All person detections in last 12 hours
@@ -2454,8 +2418,7 @@ class _AgentAPI:
         limit: int = 50_000,
         as_dataframe: bool = False,
     ) -> Any:
-        """
-        Query historical Home Assistant state changes.
+        """Query historical Home Assistant state changes.
 
         Usage:
             # All light state changes in last week
@@ -2487,8 +2450,7 @@ class _AgentAPI:
         return rows
 
     def ts_stats(self) -> dict:
-        """
-        Return row counts for all time-series tables.
+        """Return row counts for all time-series tables.
         Useful for checking how much data is available before training.
 
         Usage:

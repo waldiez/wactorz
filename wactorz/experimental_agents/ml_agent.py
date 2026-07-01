@@ -1,5 +1,4 @@
-"""
-MLAgent - Base class for non-LLM ML/DL agents.
+"""MLAgent - Base class for non-LLM ML/DL agents.
 Example: YOLO object detection, anomaly detection, forecasting models.
 These actors run 24/7 processing data streams.
 """
@@ -16,8 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class MLAgent(Actor):
-    """
-    Base for ML/DL agents that don't use LLMs.
+    """Base for ML/DL agents that don't use LLMs.
     Override `load_model()` and `predict()`.
     Can run in continuous loop mode (e.g. anomaly detection 24/7).
     """
@@ -45,12 +43,10 @@ class MLAgent(Actor):
     @abstractmethod
     def load_model(self) -> Any:
         """Load and return the ML model (runs in thread executor)."""
-        pass
 
     @abstractmethod
     async def predict(self, input_data: Any) -> Any:
         """Run inference. Override this."""
-        pass
 
     async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:
@@ -100,8 +96,7 @@ class MLAgent(Actor):
 
 
 class YOLOAgent(MLAgent):
-    """
-    Example ML agent using YOLO for object detection.
+    """Example ML agent using YOLO for object detection.
     Plug in any YOLO variant (ultralytics, yolov5, etc.)
     """
 
@@ -146,8 +141,7 @@ class YOLOAgent(MLAgent):
 
 
 class AnomalyDetectorAgent(MLAgent):
-    """
-    Simple statistical anomaly detection agent.
+    """Simple statistical anomaly detection agent.
     Runs 24/7 in continuous mode watching a data stream.
     """
 

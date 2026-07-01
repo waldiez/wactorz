@@ -1,5 +1,4 @@
-"""
-MainActor - Primary conversational agent and orchestrator.
+"""MainActor - Primary conversational agent and orchestrator.
 Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """
 
@@ -8,6 +7,7 @@ import json
 import logging
 import re
 import uuid
+from typing import ClassVar
 
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
@@ -35,7 +35,13 @@ logger = logging.getLogger(__name__)
 
 class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     DESCRIPTION = "Main orchestrator: spawns agents, routes tasks, manages the multi-agent system"
-    CAPABILITIES = ["spawn_agent", "list_agents", "list_nodes", "list_topics", "orchestration"]
+    CAPABILITIES: ClassVar[list[str]] = [
+        "spawn_agent",
+        "list_agents",
+        "list_nodes",
+        "list_topics",
+        "orchestration",
+    ]
 
     def __init__(self, llm_provider: LLMProvider | None = None, **kwargs):
         kwargs.setdefault("name", "main")
@@ -92,8 +98,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             logger.info(f"[{self.name}] Removed '{name}' from spawn registry.")
 
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = None):
-        """
-        Clear an agent's manifest from main's in-memory caches AND from the
+        """Clear an agent's manifest from main's in-memory caches AND from the
         retained MQTT manifest topic. Without this, list_capabilities() will
         keep reporting the agent (with running=false but never disappearing),
         and on next restart it would be re-loaded from the retained message.
@@ -118,8 +123,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             logger.debug(f"[{self.name}] Cleared retained manifest for '{name}'")
 
     def _record_agent_deletion(self, name: str, reason: str = "user request"):
-        """
-        Inject a system-style note into conversation history that an agent was
+        """Inject a system-style note into conversation history that an agent was
         deleted. This is critical because the LLM otherwise sees its own earlier
         turn ("Spawned 'chat-agent'") and assumes the agent still exists when
         the user later asks to spawn one with the same name.
@@ -177,7 +181,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     already_supervised.add(sup_name)
 
         if already_supervised:
-            skip = sorted(n for n in reg.keys() if n in already_supervised)
+            skip = sorted(n for n in reg if n in already_supervised)
             if skip:
                 logger.info(
                     f"[{self.name}] Supervisor already restarted "
@@ -260,8 +264,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             asyncio.create_task(self._extract_and_save_facts(clean_msg, "".join(full_response)))
 
     async def _record_external_exchange(self, user_message: str, assistant_response: str):
-        """
-        Record a turn that was handled OUTSIDE self.chat() / self.chat_stream() —
+        """Record a turn that was handled OUTSIDE self.chat() / self.chat_stream() —
         i.e. by the HA, ACTUATE, or PIPELINE branches that return before the LLM
         is called on main. Without this, those exchanges vanish from history and
         future turns have no memory of them.
@@ -561,7 +564,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 for svc, url in urls.items():
                     lines.append(f"  {svc}: {url}")
                 return note_prefix + "\n".join(lines)
-            elif len(parts) >= 3:
+            if len(parts) >= 3:
                 # /webhook discord <url>
                 service = parts[1].lower()
                 url = parts[2].strip()
@@ -572,11 +575,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     note_prefix
                     + f"Saved {service} webhook URL. Pipelines will use it automatically."
                 )
-            else:
-                return (
-                    note_prefix
-                    + "Usage: /webhook <service> <url>\nExample: /webhook discord https://discord.com/api/webhooks/..."
-                )
+            return (
+                note_prefix
+                + "Usage: /webhook <service> <url>\nExample: /webhook discord https://discord.com/api/webhooks/..."
+            )
 
         # Auto-detect webhook URLs in any message and persist them
         import re as _re
@@ -788,22 +790,21 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                         f"Stop signal sent to '{agent_name}' on node '{node}'. "
                         f"State is preserved — use /agents restart {agent_name} to resume."
                     )
-                else:
-                    # Local agent
-                    if self._registry:
-                        target = self._registry.find_by_name(agent_name)
-                        if target:
-                            actor_id = target.actor_id
-                            await self._registry.unregister(actor_id)
-                            await target.stop()
-                            self._record_agent_deletion(
-                                agent_name, reason=f"manually {past} via /agents"
-                            )
-                            return note_prefix + (
-                                f"Agent '{agent_name}' {past}. "
-                                f"State is preserved — use /agents restart {agent_name} to resume."
-                            )
-                    return note_prefix + f"Agent '{agent_name}' not found locally."
+                # Local agent
+                if self._registry:
+                    target = self._registry.find_by_name(agent_name)
+                    if target:
+                        actor_id = target.actor_id
+                        await self._registry.unregister(actor_id)
+                        await target.stop()
+                        self._record_agent_deletion(
+                            agent_name, reason=f"manually {past} via /agents"
+                        )
+                        return note_prefix + (
+                            f"Agent '{agent_name}' {past}. "
+                            f"State is preserved — use /agents restart {agent_name} to resume."
+                        )
+                return note_prefix + f"Agent '{agent_name}' not found locally."
 
         # ── /agents restart <name> ──────────────────────────────────────────
         if stripped.startswith("/agents restart "):
@@ -818,20 +819,19 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     f"Restart signal sent to '{agent_name}' on node '{node}'. "
                     f"State is preserved — the agent will resume from its last saved state."
                 )
-            else:
-                # Local agent — stop and re-spawn using config from spawn registry
-                config = reg.get(agent_name)
-                if not config:
-                    return note_prefix + f"Agent '{agent_name}' not found in spawn registry."
-                if self._registry:
-                    target = self._registry.find_by_name(agent_name)
-                    if target:
-                        await self._registry.unregister(target.actor_id)
-                        await target.stop()
-                new_config = dict(config)
-                new_config["replace"] = True
-                await self._spawn_from_config(new_config, save=True)
-                return note_prefix + f"Agent '{agent_name}' restarted locally."
+            # Local agent — stop and re-spawn using config from spawn registry
+            config = reg.get(agent_name)
+            if not config:
+                return note_prefix + f"Agent '{agent_name}' not found in spawn registry."
+            if self._registry:
+                target = self._registry.find_by_name(agent_name)
+                if target:
+                    await self._registry.unregister(target.actor_id)
+                    await target.stop()
+            new_config = dict(config)
+            new_config["replace"] = True
+            await self._spawn_from_config(new_config, save=True)
+            return note_prefix + f"Agent '{agent_name}' restarted locally."
 
         # ── /nodes remove <node> ────────────────────────────────────────────
         if stripped.startswith("/nodes remove "):
@@ -885,10 +885,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             )
 
         # ── /agents / /capabilities ─────────────────────────────────────────
-        if (
-            stripped in ("/agents", "/capabilities")
-            or stripped.startswith("/agents ")
-            or stripped.startswith("/capabilities ")
+        if stripped in ("/agents", "/capabilities") or stripped.startswith(
+            ("/agents ", "/capabilities ")
         ):
             keyword = ""
             for prefix in ("/capabilities ", "/agents "):
@@ -897,7 +895,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     break
             caps = self.list_capabilities(keyword)
             if not caps:
-                msg = "No agents found" + (f" matching {repr(keyword)}" if keyword else "") + "."
+                msg = "No agents found" + (f" matching {keyword!r}" if keyword else "") + "."
                 msg += " Agents publish their capabilities on startup."
                 return note_prefix + msg
             lines = ["Agent capabilities" + (" matching " + repr(keyword) if keyword else "") + ":"]
@@ -1363,8 +1361,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return note_prefix + clean
 
     async def process_user_input_stream(self, text: str):
-        """
-        Streaming version of process_user_input().
+        """Streaming version of process_user_input().
         Yields text chunks as the LLM generates them, then a final dict:
           {"done": True, "spawned": [...names...], "system_msg": "..."}
 
@@ -1396,10 +1393,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # All slash-commands and direct API intercepts are handled by process_user_input
         # Route them there to avoid duplicating all that logic here
         _stripped = text.strip().rstrip("()")
-        _is_command = (
-            _stripped.startswith("/")
-            or _stripped in ("list_nodes", "main.list_nodes", "rules")
-            or _stripped.startswith("@")
+        _is_command = _stripped.startswith(("/", "@")) or _stripped in (
+            "list_nodes",
+            "main.list_nodes",
+            "rules",
         )
         if _is_command:
             # /deploy is the one slash command that needs to stream progress
@@ -1597,8 +1594,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return None
 
     async def _resolve_or_spawn(self, agent_name: str):
-        """
-        Resolve an agent by name, auto-spawning it from a catalog recipe if it
+        """Resolve an agent by name, auto-spawning it from a catalog recipe if it
         isn't running yet. Shared by @mention delegations and <delegate> blocks.
 
         Returns (target_actor_or_None, spawnable_bool).
@@ -1641,8 +1637,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return target, spawnable
 
     async def _run_delegation(self, agent_name: str, payload) -> str:
-        """
-        Dispatch one already-resolved delegation and format the result string.
+        """Dispatch one already-resolved delegation and format the result string.
         Shared by @mention delegations and <delegate> blocks.
         """
         json_str = json.dumps(payload)
@@ -1664,8 +1659,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             return f"[{agent_name} error: {e}]"
 
     async def _process_delegate_commands(self, response: str):
-        """
-        Scan the LLM response for structured delegation blocks and execute them:
+        """Scan the LLM response for structured delegation blocks and execute them:
 
             <delegate>{"agent": "manual-agent", "task": "search for the Philips 2200 manual"}</delegate>
             <delegate>{"agent": "weather-agent", "payload": {"city": "Athens"}}</delegate>
@@ -1711,7 +1705,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             else:
                 payload = {"text": str(cfg.get("task", "")).strip()}
 
-            target, spawnable = await self._resolve_or_spawn(agent_name)
+            target, _spawnable = await self._resolve_or_spawn(agent_name)
             if not target:
                 result_str = f"[Could not reach {agent_name}]"
             else:
@@ -1725,8 +1719,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return response, results
 
     async def _execute_llm_delegations(self, response: str) -> str:
-        """
-        Scan the LLM response for @agent-name delegation patterns and execute them.
+        """Scan the LLM response for @agent-name delegation patterns and execute them.
         Replaces the matched pattern in the response with the actual result.
 
         Prefer <delegate>{...}</delegate> blocks (see _process_delegate_commands).
@@ -1899,8 +1892,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return clean, spawned
 
     async def _process_delete_commands(self, response: str):
-        """
-        Scan the LLM response for <delete>{"name": "agent-name"}</delete> blocks
+        """Scan the LLM response for <delete>{"name": "agent-name"}</delete> blocks
         and execute them. Mirrors _process_spawn_commands so deletion has the same
         UX as spawn: the LLM emits a tagged block, we parse and execute, and the
         block is stripped from the user-visible response.
@@ -2083,8 +2075,7 @@ async def handle_task(agent, payload):
 """
 
     def _inject_llm_bridge_code(self, config: dict) -> dict:
-        """
-        If ``config`` is for an LLM-typed agent without code, return a copy
+        """If ``config`` is for an LLM-typed agent without code, return a copy
         with synthesized bridge code so the remote runner can actually run it.
 
         No-op (returns the original config) when:
@@ -2131,8 +2122,7 @@ async def handle_task(agent, payload):
         return out
 
     async def _spawn_remote(self, config: dict, node: str, save: bool) -> None:
-        """
-        Publish a spawn command to a remote node via MQTT.
+        """Publish a spawn command to a remote node via MQTT.
         The remote_runner.py on that machine will receive it and run the agent.
         Remote agents appear in the dashboard exactly like local ones
         because they connect to the same MQTT broker.
@@ -2262,13 +2252,12 @@ async def handle_task(agent, payload):
             # registry stays small and bridge regenerates fresh per spawn.
             self._save_to_spawn_registry(config)
 
-        return None
+        return
 
     async def _update_node_desired_state(
         self, node: str, new_config: dict = None, remove_name: str = None
     ) -> None:
-        """
-        Maintain nodes/{node}/desired_state as a retained MQTT message containing
+        """Maintain nodes/{node}/desired_state as a retained MQTT message containing
         ALL agents that should run on this node. The runner reads this on startup
         and reconciles — spawning missing agents, ignoring already-running ones.
         """
@@ -2323,8 +2312,7 @@ async def handle_task(agent, payload):
         ]
 
     def list_topics(self, keyword: str = "") -> list[dict]:
-        """
-        Return all known MQTT topics published by agents, optionally filtered by keyword.
+        """Return all known MQTT topics published by agents, optionally filtered by keyword.
         Each entry: {"topic": str, "agents": [{"name", "node", "description"}, ...]}
 
         Example:
@@ -2353,8 +2341,7 @@ async def handle_task(agent, payload):
         return sorted(results, key=lambda x: x["topic"])
 
     def list_capabilities(self, keyword: str = "") -> list[dict]:
-        """
-        Return all known agents with their full capability profile:
+        """Return all known agents with their full capability profile:
         name, description, capabilities, input_schema, output_schema.
 
         Includes remote agents — they appear in _agent_manifests via the
@@ -2397,8 +2384,7 @@ async def handle_task(agent, payload):
         return sorted(results, key=lambda x: x["name"])
 
     async def _manifest_listener(self):
-        """
-        Subscribe to agents/+/manifest and build a searchable topic registry.
+        """Subscribe to agents/+/manifest and build a searchable topic registry.
         Retained manifests are delivered immediately on subscribe so the registry
         is populated even for agents that started before main restarted.
 
@@ -2555,8 +2541,7 @@ async def handle_task(agent, payload):
                     await asyncio.sleep(5)
 
     async def _state_return_listener(self):
-        """
-        Receive an agent's full config + persistent state from a remote node
+        """Receive an agent's full config + persistent state from a remote node
         during remote→local migration triggered with the '@main' sentinel.
 
         Topic: nodes/+/state_return
@@ -2713,8 +2698,7 @@ async def handle_task(agent, payload):
     # non-streaming path.
 
     async def _slash_deploy_stream(self, stripped: str):
-        """
-        Async generator implementing /deploy. Yields progress strings.
+        """Async generator implementing /deploy. Yields progress strings.
 
         Forms accepted:
             /deploy <node>                                     — discovery only
@@ -2858,8 +2842,7 @@ async def handle_task(agent, payload):
         return sorted(found, key=lambda x: int(x.split(".")[-1]))
 
     async def migrate_agent(self, agent_name: str, target_node: str) -> dict:
-        """
-        Move a running agent to a different node.
+        """Move a running agent to a different node.
 
         Sources of truth, in priority order:
           1. Spawn registry — has the full config including code.
@@ -3145,8 +3128,7 @@ async def handle_task(agent, payload):
         return {"success": True, "message": msg}
 
     async def _node_heartbeat_listener(self):
-        """
-        Subscribe to nodes/+/heartbeat so main knows which remote nodes are online.
+        """Subscribe to nodes/+/heartbeat so main knows which remote nodes are online.
         Updates self._known_nodes which is used by list_nodes() and the LLM context.
 
         Also detects agents that silently vanished from a node (crash, OOM kill,
@@ -3328,8 +3310,7 @@ async def handle_task(agent, payload):
                     await asyncio.sleep(5)
 
     async def _node_offline_watcher(self):
-        """
-        Periodically check for nodes that have gone silent. If a node has not
+        """Periodically check for nodes that have gone silent. If a node has not
         sent a heartbeat in NODE_OFFLINE_GRACE_S, treat all its agents as gone
         and drop the node from our tracking.
 
@@ -3396,8 +3377,7 @@ async def handle_task(agent, payload):
     # ── Delegation ─────────────────────────────────────────────────────────
 
     async def _llm_bridge_listener(self):
-        """
-        Listens on main/llm_request for LLM calls from remote agents.
+        """Listens on main/llm_request for LLM calls from remote agents.
 
         Remote agents call agent.ask_llm(prompt) or agent.chat(messages).
         The request arrives here with a _reply_topic; we run the LLM call
@@ -3514,8 +3494,7 @@ async def handle_task(agent, payload):
                     await asyncio.sleep(5)
 
     async def _remote_observed_samples_listener(self):
-        """
-        Subscribe to all MQTT topics published by remote agents and update
+        """Subscribe to all MQTT topics published by remote agents and update
         their TopicContract.observed_samples with real payload field names.
 
         This is what gives the planner accurate schema context for remote
@@ -3587,8 +3566,7 @@ async def handle_task(agent, payload):
                     await asyncio.sleep(5)
 
     async def delegate_to_installer(self, payload: dict, timeout: float = 300.0) -> dict:
-        """
-        Send a task to the installer agent and wait for the result.
+        """Send a task to the installer agent and wait for the result.
         Handles node_deploy, node_install, node_run, install, check actions.
         timeout is generous (300s) because deploys involve SSH + pip installs.
         """
@@ -3619,8 +3597,7 @@ async def handle_task(agent, payload):
     async def delegate_task(
         self, target_name: str, task: str, timeout: float = 60.0
     ) -> dict | None:
-        """
-        Send a task to a named agent and wait for its result.
+        """Send a task to a named agent and wait for its result.
 
         Routing priority:
           1. Local registry — fast in-process mailbox path
@@ -3716,8 +3693,7 @@ async def handle_task(agent, payload):
             await self.send(target.actor_id, command)
 
     async def delete_spawned_agent(self, name: str):
-        """
-        Permanently delete an agent.
+        """Permanently delete an agent.
 
         Unlike a stop (which preserves state so the agent can resume later),
         delete removes EVERY trace so a future spawn with the same name
@@ -3789,8 +3765,7 @@ async def handle_task(agent, payload):
         self._record_agent_deletion(name, reason="deleted (no live actor found)")
 
     async def _purge_agent_retained_topics(self, actor_id: str) -> None:
-        """
-        Publish empty retained payloads on every per-agent MQTT topic so the
+        """Publish empty retained payloads on every per-agent MQTT topic so the
         broker stops re-delivering them on later reconnects.
 
         Mirrors the same purge done by the remote runner on delete and by the
@@ -3819,8 +3794,7 @@ async def handle_task(agent, payload):
                 )
 
     async def _purge_local_agent_persistence(self, actor, name: str) -> None:
-        """
-        For a local actor: hard-delete its persisted state across all
+        """For a local actor: hard-delete its persisted state across all
         backends (SQLite kv_store rows, Redis ephemeral keys, pickle file).
 
         Uses the actor's own PersistenceAPI when available so the right

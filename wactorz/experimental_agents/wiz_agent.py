@@ -1,5 +1,4 @@
-"""
-WizAgent — WaldiezCoin in-game economist (WIZ = Waldiez In-game Zeal).
+"""WizAgent — WaldiezCoin in-game economist (WIZ = Waldiez In-game Zeal).
 
 Tracks the WaldiezCoin (Ƿ) economy: earns on agent activity, deducts on
 QA flags and alerts. Publishes `system/coin` on every balance change.

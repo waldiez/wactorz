@@ -1,5 +1,4 @@
-"""
-CodeAgent - An actor that can write AND execute code.
+"""CodeAgent - An actor that can write AND execute code.
 Execution is sandboxed with configurable permissions.
 """
 
@@ -10,6 +9,7 @@ import tempfile
 import traceback
 from io import StringIO
 from pathlib import Path
+from typing import ClassVar
 
 from ..core.actor import Message, MessageType
 from .llm_agent import LLMAgent
@@ -23,18 +23,17 @@ Be concise. Prefer standard library when possible."""
 
 
 class CodeAgent(LLMAgent):
-    """
-    An agent that can generate Python code via LLM and execute it.
+    """An agent that can generate Python code via LLM and execute it.
     Supports in-process execution (fast) and subprocess execution (safe).
     """
 
     DESCRIPTION = "Generates and executes Python code on request"
-    CAPABILITIES = ["code_generation", "code_execution", "python"]
-    INPUT_SCHEMA = {
+    CAPABILITIES: ClassVar[list[str]] = ["code_generation", "code_execution", "python"]
+    INPUT_SCHEMA: ClassVar[dict[str, str]] = {
         "text": "str — describe what code to write or run, e.g. 'calculate fibonacci(30)', "
         "'parse this CSV and return row count', 'sort this list: [3,1,2]'"
     }
-    OUTPUT_SCHEMA = {
+    OUTPUT_SCHEMA: ClassVar[dict[str, str]] = {
         "result": "str — code output or return value",
         "code": "str — the generated Python code that was executed",
     }
@@ -79,8 +78,7 @@ class CodeAgent(LLMAgent):
         """Execute code and return stdout, stderr, return_code."""
         if self.execution_mode == "inprocess":
             return await self._run_inprocess(code)
-        else:
-            return await self._run_subprocess(code)
+        return await self._run_subprocess(code)
 
     async def _run_inprocess(self, code: str) -> dict:
         """Run code in the same process. Fast but less isolated."""

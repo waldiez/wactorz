@@ -1,12 +1,13 @@
 import hashlib
 import unittest
+from typing import ClassVar
 from unittest.mock import patch
 
 from wactorz.core.integrations.home_assistant import ha_helper
 
 
 class _FakeHAWebSocketClient:
-    instances = []
+    instances: ClassVar[list] = []
 
     def __init__(self, ws_url: str, token: str):
         self.ws_url = ws_url
@@ -29,7 +30,7 @@ class _FakeHAWebSocketClient:
         self.calls.append(command)
         if command in self.exceptions:
             raise self.exceptions[command]
-        if command in self.response_queues and self.response_queues[command]:
+        if self.response_queues.get(command):
             return self.response_queues[command].pop(0)
         return self.responses.get(command)
 
@@ -70,10 +71,10 @@ class _FakeResponse:
 
 
 class _FakeClientSession:
-    instances = []
-    get_results = []
-    post_results = []
-    delete_results = []
+    instances: ClassVar[list] = []
+    get_results: ClassVar[list] = []
+    post_results: ClassVar[list] = []
+    delete_results: ClassVar[list] = []
 
     def __init__(self):
         self.get_calls = []
@@ -441,7 +442,7 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entities["light.kitchen"]["area_id"], "living")
 
     async def test_simple_registry_helpers_call_expected_commands(self):
-        floors, areas, devices, entities, states = self._set_fixture_responses()
+        floors, areas, _devices, entities, states = self._set_fixture_responses()
 
         self.assertEqual(await ha_helper.get_floors("http://ha.local:8123", "token"), floors)
         self.assertEqual(await ha_helper.get_areas("http://ha.local:8123", "token"), areas)
@@ -773,8 +774,8 @@ class HomeAssistantHelperLiveContextTest(unittest.IsolatedAsyncioTestCase):
                 {"state": "on", "attributes": {"friendly_name": "Missing Entity"}},
             ],
             "config/area_registry/list": areas,
-            "config/entity_registry/list": entities
-            + [
+            "config/entity_registry/list": [
+                *entities,
                 {"entity_id": "switch.hidden", "area_id": "kitchen"},
             ],
             "homeassistant/expose_entity/list": exposed

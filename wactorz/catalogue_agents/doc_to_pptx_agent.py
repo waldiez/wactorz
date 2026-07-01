@@ -1,5 +1,4 @@
-"""
-DEMO AGENT — doc-to-pptx-agent  (v2 — PDF image extraction + NIM fallback)
+"""DEMO AGENT — doc-to-pptx-agent  (v2 — PDF image extraction + NIM fallback)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Converts a PDF or TXT document into a polished PowerPoint presentation.
 

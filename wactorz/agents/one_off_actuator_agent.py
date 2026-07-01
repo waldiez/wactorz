@@ -5,7 +5,7 @@ import json
 import logging
 import shutil
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 from wactorz.config import CONFIG
 
@@ -58,7 +58,7 @@ class OneOffActuatorAgent(Actor):
     """Ephemeral actor that resolves and executes one-shot HA service calls."""
 
     DESCRIPTION = "Ephemeral Home Assistant actuator for one-shot natural-language device control"
-    CAPABILITIES = [
+    CAPABILITIES: ClassVar[list[str]] = [
         "home_automation",
         "ha_actuation",
         "device_control",
@@ -167,8 +167,7 @@ class OneOffActuatorAgent(Actor):
         cleaned = (raw or "").strip()
         if cleaned.startswith("```"):
             cleaned = cleaned.strip("`")
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
+            cleaned = cleaned.removeprefix("json")
             cleaned = cleaned.strip()
         data = json.loads(cleaned)
         if not isinstance(data, list):

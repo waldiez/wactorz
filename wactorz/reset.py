@@ -1,5 +1,4 @@
-"""
-wactorz-reset  —  clear stored state without touching running agents.
+"""wactorz-reset  —  clear stored state without touching running agents.
 
 Scopes
 ------

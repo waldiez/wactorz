@@ -1,6 +1,4 @@
-"""
-Wactorz - Entry Point
-"""
+"""Wactorz - Entry Point"""
 
 import asyncio
 

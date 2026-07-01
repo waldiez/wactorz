@@ -1,5 +1,4 @@
-"""
-QAAgent - Passive safety observer.
+"""QAAgent - Passive safety observer.
 
 Receives a copy of every chat message and publishes `system/qa-flag` on
 policy violations. Rule-based only — no LLM required, zero latency.
@@ -91,7 +90,7 @@ class QAAgent(Actor):
                 if pat in lower:
                     return f"agent-error-exposed ({pat})", "error"
             trimmed = content.strip()
-            if (trimmed.startswith("{") or trimmed.startswith("[")) and len(trimmed) > 20:
+            if (trimmed.startswith(("{", "["))) and len(trimmed) > 20:
                 try:
                     json.loads(trimmed)
                     return "raw-data-bleed", "warning"

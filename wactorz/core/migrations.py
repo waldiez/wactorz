@@ -1,5 +1,4 @@
-"""
-wactorz.core.migrations — Schema & State Migration Framework
+"""wactorz.core.migrations — Schema & State Migration Framework
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Handles version upgrades when users update wactorz (e.g. 0.3 → 0.4).
 
@@ -53,8 +52,7 @@ FRAMEWORK_VERSION = 2
 
 
 def migrate_sql_2(conn: sqlite3.Connection):
-    """
-    v1 → v2: Add migration tracking table and framework_version to schema_version.
+    """v1 → v2: Add migration tracking table and framework_version to schema_version.
     Also adds any missing columns/tables that may not exist in older databases.
     """
     # Add migration history table
@@ -105,8 +103,7 @@ _SQL_MIGRATIONS = {
 
 
 def migrate_state_2(db, redis, pickle_store):
-    """
-    v1 → v2: Upgrade persisted state structures.
+    """v1 → v2: Upgrade persisted state structures.
 
     - EntityBaseline: add missing fields (is_binary, transition_freq, ready)
     - TopicContract observed_samples: ensure proper dict structure
@@ -263,8 +260,7 @@ def _upgrade_topic_contracts(db):
 
 
 def _stamp_spawn_registry(db):
-    """
-    Mark all existing spawn registry entries with the current framework version.
+    """Mark all existing spawn registry entries with the current framework version.
     This lets us detect stale configs on future upgrades.
     """
     try:
@@ -309,8 +305,7 @@ _API_CHANGES = {
 
 
 def validate_spawn_registry(db) -> list[dict]:
-    """
-    Check all spawn registry entries for compatibility with the current version.
+    """Check all spawn registry entries for compatibility with the current version.
 
     Returns a list of issues found:
       [{"agent": "name", "severity": "warning|error", "message": "...", "action": "..."}]
@@ -413,8 +408,7 @@ def validate_spawn_registry(db) -> list[dict]:
 
 
 def auto_fix_spawn_registry(db) -> list[str]:
-    """
-    Attempt to auto-fix known issues in spawn registry configs.
+    """Attempt to auto-fix known issues in spawn registry configs.
     Returns list of fixes applied.
 
     Currently handles:
@@ -500,8 +494,7 @@ def get_current_version(db) -> int:
 
 
 def run_migrations(db, redis=None, pickle_store=None) -> dict:
-    """
-    Run all pending migrations from current version to FRAMEWORK_VERSION.
+    """Run all pending migrations from current version to FRAMEWORK_VERSION.
 
     Called automatically by init_persistence(). Safe to call multiple times.
 

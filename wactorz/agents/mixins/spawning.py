@@ -1,5 +1,4 @@
-"""
-SpawnMixin — the single, shared implementation of local agent spawning.
+"""SpawnMixin — the single, shared implementation of local agent spawning.
 
 Both ``MainActor`` and ``PlannerAgent`` previously carried their own near-copies
 of this logic (``MainActor._spawn_from_config`` and ``PlannerAgent._spawn_agent``),

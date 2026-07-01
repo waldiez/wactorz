@@ -1,5 +1,4 @@
-"""
-HomeAssistantActuatorAgent — reactive actuator for external automations.
+"""HomeAssistantActuatorAgent — reactive actuator for external automations.
 
 Subscribes to one or more MQTT topics, filters incoming detection payloads,
 evaluates optional Home Assistant entity conditions, and calls HA services via
@@ -152,8 +151,7 @@ class ActuatorConfig:
 
 
 class HomeAssistantActuatorAgent(Actor):
-    """
-    Reactive actuator that subscribes to MQTT topics and calls HA services.
+    """Reactive actuator that subscribes to MQTT topics and calls HA services.
 
     One instance per external automation.  Lifecycle:
       on_start → open persistent HA WebSocket + subscribe to MQTT topics

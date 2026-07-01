@@ -25,8 +25,7 @@ class RoutingMixin:
     """Intent classification + one-off actuation. Mix into an LLMAgent host."""
 
     async def _classify_intent(self, text: str) -> str:
-        """
-        Classify user intent as ACTUATE, HA, PIPELINE, or OTHER using a single cheap LLM call.
+        """Classify user intent as ACTUATE, HA, PIPELINE, or OTHER using a single cheap LLM call.
         Returns one of: 'ACTUATE', 'HA', 'PIPELINE', 'OTHER'
         """
         if not text or text.startswith("/"):

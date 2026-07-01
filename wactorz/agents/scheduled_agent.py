@@ -1,5 +1,4 @@
-"""
-ScheduledAgent — first-class scheduled trigger primitive.
+"""ScheduledAgent — first-class scheduled trigger primitive.
 
 Fires an MQTT event at a configured schedule. Designed to be paired with a
 downstream consumer (ha_actuator, dynamic agent, etc.) that subscribes to
@@ -73,7 +72,7 @@ from typing import Any
 try:
     from zoneinfo import ZoneInfo
 except ImportError:  # Python < 3.9 — should not happen in this codebase
-    ZoneInfo = None  # type: ignore
+    ZoneInfo = None  # type: ignore[assignment]
 
 from ..core.actor import Actor, Message, MessageType
 
@@ -116,8 +115,7 @@ _ONESHOT_CATCHUP_S = 300.0
 
 
 def _resolve_timezone(spec_tz: str | None, user_tz: str | None) -> Any:
-    """
-    Resolve the schedule's effective timezone.
+    """Resolve the schedule's effective timezone.
 
     Order: explicit spec_tz > user_tz fact > system local.
     Returns a tzinfo. Falls back to UTC if nothing else works (which is
@@ -163,8 +161,7 @@ def _next_fire_daily(now_local: datetime, at: str) -> datetime:
 
 
 def _next_fire_weekly(now_local: datetime, at: str, days: list[str]) -> datetime:
-    """
-    Next fire time for a weekly schedule. days is a list of day-name strings.
+    """Next fire time for a weekly schedule. days is a list of day-name strings.
     Picks the soonest matching weekday at or after `at` time.
     """
     if not days:
@@ -189,8 +186,7 @@ def _next_fire_weekly(now_local: datetime, at: str, days: list[str]) -> datetime
 
 
 def _next_fire_interval(now_local: datetime, seconds: int, last_fire: datetime | None) -> datetime:
-    """
-    Next fire time for an interval schedule.
+    """Next fire time for an interval schedule.
     If we've fired before, fire `seconds` after the last fire.
     Otherwise, fire `seconds` from now.
     """
@@ -204,8 +200,7 @@ def _next_fire_interval(now_local: datetime, seconds: int, last_fire: datetime |
 
 
 def _next_fire_once(at: str, tzinfo: Any) -> datetime:
-    """
-    Parse an ISO-8601 datetime as the one-shot fire time.
+    """Parse an ISO-8601 datetime as the one-shot fire time.
     The string is interpreted in `tzinfo` if it has no zone info itself.
     """
     # datetime.fromisoformat accepts "2026-05-02T17:00:00" or with offset
@@ -221,8 +216,7 @@ def _next_fire_once(at: str, tzinfo: Any) -> datetime:
 
 
 def _next_fire_cron(now_local: datetime, expr: str) -> datetime:
-    """
-    Cron expression — supported only if `croniter` is installed.
+    """Cron expression — supported only if `croniter` is installed.
     Falls back to ValueError if not, with a hint to use structured form.
     """
     try:
@@ -250,8 +244,7 @@ class _ScheduleState:
 
 
 class ScheduledAgent(Actor):
-    """
-    First-class scheduled trigger agent. See module docstring for spec format.
+    """First-class scheduled trigger agent. See module docstring for spec format.
 
     Spawn-time kwargs:
         name:        actor name (e.g. "evening-lights-trigger")
@@ -357,8 +350,7 @@ class ScheduledAgent(Actor):
     # ── Scheduling loop ────────────────────────────────────────────────────
 
     async def _run_loop(self):
-        """
-        Sleep until the next fire time, fire, recompute, repeat.
+        """Sleep until the next fire time, fire, recompute, repeat.
 
         Wake bounded to _MAX_SLEEP_S so DST transitions / clock jumps /
         laptop sleep don't leave us stranded. On wake we always recompute
@@ -523,11 +515,10 @@ class ScheduledAgent(Actor):
     # ── Message handling ───────────────────────────────────────────────────
 
     async def handle_message(self, msg: Message):
-        """
-        Supports two task types for inspection / testing:
+        """Supports two task types for inspection / testing:
 
-          {"action": "trigger"} — fire NOW without advancing the schedule
-          {"action": "info"}    — return current schedule + next fire info
+        {"action": "trigger"} — fire NOW without advancing the schedule
+        {"action": "info"}    — return current schedule + next fire info
         """
         if msg.type != MessageType.TASK:
             return
@@ -584,8 +575,7 @@ class ScheduledAgent(Actor):
 
 
 def _parse_duration(s: str) -> int | None:
-    """
-    Parse '30s', '5m', '2h', '1d' to seconds. Returns None on failure.
+    """Parse '30s', '5m', '2h', '1d' to seconds. Returns None on failure.
     Used as a convenience input format for interval schedules.
     """
     if not s:
@@ -606,8 +596,7 @@ def _parse_duration(s: str) -> int | None:
 
 
 def describe_schedule(schedule: dict, tz_name: str | None = None) -> str:
-    """
-    Render a schedule dict as a short human-readable string for /rules
+    """Render a schedule dict as a short human-readable string for /rules
     and the /plans dry-run preview. Pure function — no I/O.
     """
     stype = (schedule.get("type") or "?").lower()

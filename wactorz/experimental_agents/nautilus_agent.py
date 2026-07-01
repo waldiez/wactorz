@@ -1,5 +1,4 @@
-"""
-NautilusAgent — SSH & rsync file-transfer bridge.
+"""NautilusAgent — SSH & rsync file-transfer bridge.
 
 Named after the nautilus: a spiral protective shell (SSH = Secure Shell) and
 the Jules Verne submarine that autonomously traverses unreachable depths.
@@ -105,7 +104,7 @@ class NautilusAgent(Actor):
     # ── SSH helpers ────────────────────────────────────────────────────────
 
     def _build_ssh_args(self) -> list[str]:
-        args = ["ssh"] + _ssh_opts(self._strict)
+        args = ["ssh", *_ssh_opts(self._strict)]
         if self._ssh_key:
             args += ["-i", self._ssh_key]
         return args
@@ -172,7 +171,7 @@ class NautilusAgent(Actor):
 
     async def _rsync(self, src: str, dst: str, direction: str):
         await self._reply(f"Starting rsync {direction}: `{src}` → `{dst}`...")
-        ssh_parts = ["ssh"] + _ssh_opts(self._strict)
+        ssh_parts = ["ssh", *_ssh_opts(self._strict)]
         if self._ssh_key:
             ssh_parts += ["-i", self._ssh_key]
         ssh_e = " ".join(ssh_parts)

@@ -1,5 +1,4 @@
-"""
-WeatherAgent — current weather via wttr.in (no API key required).
+"""WeatherAgent — current weather via wttr.in (no API key required).
 
 Usage:
   @weather-agent [location]   fetch weather for location

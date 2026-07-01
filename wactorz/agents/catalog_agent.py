@@ -1,5 +1,4 @@
-"""
-CatalogAgent — Pre-built Agent Recipe Library
+"""CatalogAgent — Pre-built Agent Recipe Library
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Holds a catalog of ready-made DynamicAgent recipes (name → full spawn config).
 On request it spawns any catalog agent by sending its full config to main,
@@ -291,8 +290,7 @@ def _build_catalog() -> dict:
 
 
 class CatalogAgent(Actor):
-    """
-    Pre-built agent recipe library.
+    """Pre-built agent recipe library.
     Spawns any catalog agent on request by delegating to main's spawn pipeline.
     """
 
@@ -446,7 +444,7 @@ class CatalogAgent(Actor):
             return norm
 
         # 3. Strip trailing '-agent' suffix
-        stripped = norm[:-6] if norm.endswith("-agent") else norm
+        stripped = norm.removesuffix("-agent")
         if stripped and stripped in self._catalog:
             return stripped
 
@@ -637,8 +635,7 @@ class CatalogAgent(Actor):
                     {"type": "log", "message": msg, "timestamp": time.time()},
                 )
                 return {"ok": True, "message": msg, "agent": resolved}
-            else:
-                return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
+            return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
         except Exception as e:
             msg = f"Failed to spawn '{resolved}': {e}"

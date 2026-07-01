@@ -271,10 +271,9 @@ async def test_restart_count_increments():
     def factory():
         crash_counter["n"] += 1
         should_crash = crash_counter["n"] <= 2
-        a = CrashOnceActor(
+        return CrashOnceActor(
             name="counted", should_crash=should_crash, persistence_dir="/tmp/af_test"
         )
-        return a
 
     system.supervisor.supervise(
         "counted",
@@ -361,10 +360,9 @@ async def test_one_for_all_restarts_siblings():
             call_n["n"] += 1
             start_counts[name] += 1
             crash_this_time = should_crash and call_n["n"] == 1
-            a = CrashOnceActor(
+            return CrashOnceActor(
                 name=name, should_crash=crash_this_time, persistence_dir="/tmp/af_test"
             )
-            return a
 
         return factory
 
@@ -427,10 +425,9 @@ async def test_rest_for_one_only_downstream():
             call_n["n"] += 1
             start_counts[name] += 1
             crash_this_time = should_crash and call_n["n"] == 1
-            a = CrashOnceActor(
+            return CrashOnceActor(
                 name=name, should_crash=crash_this_time, persistence_dir="/tmp/af_test"
             )
-            return a
 
         return factory
 

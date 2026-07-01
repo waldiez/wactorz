@@ -1,5 +1,4 @@
-"""
-TopicBus — Reactive Pub/Sub Coordination Layer
+"""TopicBus — Reactive Pub/Sub Coordination Layer
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 This module is the core of Wactorz's shift from name-based RPC to
 topic-based reactive coordination.
@@ -65,8 +64,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TopicContract:
-    """
-    Declares what an agent produces and consumes via MQTT topics.
+    """Declares what an agent produces and consumes via MQTT topics.
 
     Included in spawn config:
         {
@@ -112,11 +110,10 @@ class TopicContract:
     observed_samples: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        """
-        Guard against LLM mistakes:
-          - Coerce bare strings to single-element lists
-          - Filter out bogus entries like literal "publishes"/"subscribes" that
-            leak from LLM code passing kwarg names as values
+        """Guard against LLM mistakes:
+        - Coerce bare strings to single-element lists
+        - Filter out bogus entries like literal "publishes"/"subscribes" that
+          leak from LLM code passing kwarg names as values
         """
         if isinstance(self.publishes, str):
             self.publishes = [self.publishes]
@@ -143,10 +140,7 @@ class TopicContract:
 
     def matches_topic(self, topic: str) -> bool:
         """Check if this agent subscribes to a given topic (supports # and + wildcards)."""
-        for pattern in self.subscribes:
-            if _topic_matches(pattern, topic):
-                return True
-        return False
+        return any(_topic_matches(pattern, topic) for pattern in self.subscribes)
 
     def produces_topic(self, topic: str) -> bool:
         """Check if this agent publishes to a given topic pattern."""
@@ -156,8 +150,7 @@ class TopicContract:
         return False
 
     def update_observed(self, topic: str, payload: dict):
-        """
-        Record the actual field names and types from a real published message.
+        """Record the actual field names and types from a real published message.
         Called automatically by _AgentAPI.publish() — agents don't need to
         call this themselves.
 
@@ -219,8 +212,7 @@ class TopicContract:
 
 
 def _topic_matches(pattern: str, topic: str) -> bool:
-    """
-    Match an MQTT topic against a pattern with # and + wildcards.
+    """Match an MQTT topic against a pattern with # and + wildcards.
     # matches any number of levels. + matches exactly one level.
     """
     if pattern == topic:
@@ -246,8 +238,7 @@ def _match_parts(p: list[str], t: list[str]) -> bool:
 
 
 class TopicRegistry:
-    """
-    Global index of all live TopicContracts, queryable by topic pattern.
+    """Global index of all live TopicContracts, queryable by topic pattern.
 
     Agents register their contracts on startup. The planner and other agents
     query the registry to discover what data is available and who produces it —
@@ -283,8 +274,7 @@ class TopicRegistry:
             )
 
     def prune_stale(self, live_agent_names: set[str]) -> list[str]:
-        """
-        Remove contracts for agents that are no longer running.
+        """Remove contracts for agents that are no longer running.
 
         Call this before plan generation to ensure the planner doesn't wire
         against topics from stopped/deleted/replaced agents. Returns the
@@ -326,8 +316,7 @@ class TopicRegistry:
         ]
 
     def find_wiring_opportunities(self) -> list[tuple[TopicContract, TopicContract, str]]:
-        """
-        Find pairs of agents that can be automatically wired together:
+        """Find pairs of agents that can be automatically wired together:
         agent A publishes topic X, agent B subscribes to X.
         Returns list of (producer, consumer, matching_topic).
         """
@@ -353,8 +342,7 @@ class TopicRegistry:
         }
 
     def to_planner_context(self) -> str:
-        """
-        Format the registry as context for the planner LLM prompt.
+        """Format the registry as context for the planner LLM prompt.
         Shows what data flows are available, who can be wired to whom,
         and the ACTUAL payload schemas observed from real messages.
         """
@@ -392,8 +380,7 @@ class TopicRegistry:
 
 
 class SharedStateHub:
-    """
-    Maintains retained MQTT topics for shared world state.
+    """Maintains retained MQTT topics for shared world state.
 
     Instead of agents asking each other for state, they read from retained
     topics that are always up to date. Any agent can read current state
@@ -484,8 +471,7 @@ class SharedStateHub:
 
 
 class StreamWindow:
-    """
-    Sliding time window over an MQTT topic stream.
+    """Sliding time window over an MQTT topic stream.
 
     Allows agents to reason about temporal patterns without implementing
     their own ring buffers. The window is updated every time a message
@@ -588,9 +574,7 @@ class StreamWindow:
         for e in self._buffer:
             if e["_ts"] < cutoff:
                 continue
-            if key is None:
-                count += 1
-            elif key in e and (value is None or e[key] == value):
+            if key is None or (key in e and (value is None or e[key] == value)):
                 count += 1
         return count
 
@@ -631,8 +615,7 @@ class StreamWindow:
 
 
 class TopicBus:
-    """
-    Central coordination hub — ties together TopicRegistry, SharedStateHub,
+    """Central coordination hub — ties together TopicRegistry, SharedStateHub,
     and StreamWindow. Injected into ActorSystem at startup.
 
     Responsible for:

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from typing import ClassVar
 
 from ..helpers.main_actor_helpers import (
     PENDING_PLANS_KEY,
@@ -89,8 +90,7 @@ class PlanningMixin:
         return max(pending, key=lambda p: p.get("created_at", 0))
 
     def _format_plan_proposal(self, plan: dict) -> str:
-        """
-        Render a pending plan as a human-readable summary for the user.
+        """Render a pending plan as a human-readable summary for the user.
 
         Goals (in priority order):
           1. Show what the rule WILL DO in plain English (most important).
@@ -225,7 +225,7 @@ class PlanningMixin:
         task_preview = rule.get("task", "")[:60]
         return f"Rule '{rule_id}' deleted. Stopped agents: {', '.join(stopped) or 'none running'}.\nRule was: {task_preview}"
 
-    _PLANNING_KEYWORDS = [
+    _PLANNING_KEYWORDS: ClassVar[list[str]] = [
         # Coordination signals
         "and then",
         "after that",
@@ -264,8 +264,7 @@ class PlanningMixin:
     ]
 
     async def _needs_planning(self, text: str) -> bool:
-        """
-        Heuristic: does this task benefit from multi-agent coordination?
+        """Heuristic: does this task benefit from multi-agent coordination?
         Keeps main fast — only escalates genuinely complex requests.
         """
         import re
@@ -417,8 +416,7 @@ class PlanningMixin:
             self._result_futures.pop(task_id, None)
 
     def _dryrun_enabled(self, text: str) -> bool:
-        """
-        Decide whether dry-run / approval should gate this PIPELINE request.
+        """Decide whether dry-run / approval should gate this PIPELINE request.
 
         Bypass conditions (always skip approval):
           - Text uses the explicit bypass marker `pipeline!` or `coordinate!`
@@ -441,8 +439,7 @@ class PlanningMixin:
         return True
 
     async def _propose_or_execute_pipeline(self, text: str) -> str:
-        """
-        Top-level entry for PIPELINE intent. Decides between dry-run (build
+        """Top-level entry for PIPELINE intent. Decides between dry-run (build
         plan, ask for approval, store proposal) and immediate execution
         (bypass marker or policy-disabled). Returns the user-facing response.
         """
@@ -484,7 +481,7 @@ class PlanningMixin:
     # corrections like "ok lets go for 55 as a threshold". The new logic
     # requires the message to be SHORT enough that it can only be approval
     # or rejection. See _looks_like_approval / _looks_like_rejection.
-    _APPROVE_PHRASES = {
+    _APPROVE_PHRASES: ClassVar[set[str]] = {
         "yes",
         "y",
         "yep",
@@ -513,7 +510,7 @@ class PlanningMixin:
         "create it",
         "make it",
     }
-    _APPROVE_EMPHASIS = {
+    _APPROVE_EMPHASIS: ClassVar[set[str]] = {
         "please",
         "now",
         "go",
@@ -528,7 +525,7 @@ class PlanningMixin:
         "yes",
         "good",
     }
-    _REJECT_PHRASES = {
+    _REJECT_PHRASES: ClassVar[set[str]] = {
         "no",
         "n",
         "nope",
@@ -550,7 +547,8 @@ class PlanningMixin:
     @classmethod
     def _looks_like_approval(cls, cleaned: str) -> bool:
         """Strict approval detection. Only fires when the message is short
-        enough that it cannot also be a correction or a new request."""
+        enough that it cannot also be a correction or a new request.
+        """
         if cleaned in cls._APPROVE_PHRASES:
             return True
         # Allow up to a 3-token expansion where every extra token is itself
@@ -575,9 +573,8 @@ class PlanningMixin:
         if cleaned in cls._REJECT_PHRASES:
             return True
         tokens = cleaned.split()
-        if len(tokens) <= 3 and tokens and tokens[0] in cls._REJECT_PHRASES:
-            return True  # "no thanks", "cancel that", "stop please" — all clearly negative
-        return False
+        # "no thanks", "cancel that", "stop please" — all clearly negative
+        return len(tokens) <= 3 and bool(tokens) and tokens[0] in cls._REJECT_PHRASES
 
     # Correction-intent signals: words that suggest the user is adjusting
     # the pending plan rather than confirming or starting fresh. Used only
@@ -622,7 +619,8 @@ class PlanningMixin:
         """Heuristic: does this message look like an adjustment to a pending
         plan rather than a fresh request? Pure heuristic — false positives
         get a confirm-or-new prompt, false negatives fall through to OTHER
-        intent (mildly annoying but not destructive)."""
+        intent (mildly annoying but not destructive).
+        """
         lowered = text.lower()
         # Numbers + units strongly suggest correction ("change to 55%", "every 30s")
         import re
@@ -637,8 +635,7 @@ class PlanningMixin:
         return any(h in lowered for h in cls._CORRECTION_HINTS)
 
     async def _handle_pending_plan_response(self, text: str) -> str | None:
-        """
-        If there is a pending plan and the user's message looks like a
+        """If there is a pending plan and the user's message looks like a
         response to it (yes/no/correction), handle it and return the result.
         Returns None if there's no pending plan or the message clearly
         isn't a response — the message then flows through normal processing.
@@ -673,8 +670,7 @@ class PlanningMixin:
         return None
 
     async def _revise_pending_plan(self, proposal: dict, correction: str) -> str:
-        """
-        The user typed something that looks like an adjustment to a pending
+        """The user typed something that looks like an adjustment to a pending
         plan ("let's use 55 instead", "change the interval to 30 seconds").
         Mark the old plan superseded, re-run the planner with the original
         task plus the correction as feedback, and present the new proposal.
@@ -777,8 +773,7 @@ class PlanningMixin:
     )
 
     def _warn_if_pending_plan_collision(self, text: str) -> str | None:
-        """
-        If a plan is already pending and the user types something that looks
+        """If a plan is already pending and the user types something that looks
         like another spawn / pipeline request, return a warning message and
         do NOT process the request. This stops the silent-duplicate scenario:
           1. user types pipeline request → plan A pending
@@ -821,8 +816,7 @@ class PlanningMixin:
     async def run_pipeline(
         self, goal: str, agents: list[str], timeout: float = 300.0, force_replan: bool = False
     ) -> dict:
-        """
-        Spawn an ephemeral TaskManager to coordinate a multi-agent pipeline.
+        """Spawn an ephemeral TaskManager to coordinate a multi-agent pipeline.
         Returns the final synthesised result without blocking main's context.
 
         Usage:
@@ -853,8 +847,7 @@ class PlanningMixin:
         logger.info(f"[{self.name}] Pipeline started: {mgr.name} for goal: {goal[:60]}")
 
         try:
-            result = await asyncio.wait_for(future, timeout=timeout)
-            return result
+            return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
             logger.warning(f"[{self.name}] Pipeline timed out after {timeout}s")
             return {"error": f"Pipeline timed out after {timeout}s"}

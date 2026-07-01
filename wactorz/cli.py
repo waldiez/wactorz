@@ -86,7 +86,7 @@ def _start_reloader() -> None:
                 try:
                     os.chdir(_RELOAD_CWD)
                     time.sleep(0.1)
-                    os.execv(sys.executable, [sys.executable] + sys.argv)  # nosec
+                    os.execv(sys.executable, [sys.executable, *sys.argv])  # nosec
                 except Exception as exc:
                     logger.error("[reload] restart failed: %s", exc)
                     os._exit(1)  # nosec

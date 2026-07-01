@@ -38,8 +38,7 @@ from wactorz.core.registry import ActorRegistry, Supervisor
 
 
 def make_registry() -> ActorRegistry:
-    reg = ActorRegistry()
-    return reg
+    return ActorRegistry()
 
 
 def make_supervisor(registry: ActorRegistry) -> Supervisor:

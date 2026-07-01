@@ -13,9 +13,9 @@ from .routing import RoutingMixin
 from .spawning import SpawnMixin, SpawnPlaceholder
 
 __all__ = [
-    "SpawnMixin",
     "MemoryMixin",
-    "RoutingMixin",
     "PlanningMixin",
+    "RoutingMixin",
+    "SpawnMixin",
     "SpawnPlaceholder",
 ]

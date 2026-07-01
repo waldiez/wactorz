@@ -30,8 +30,7 @@ def _normalize_agent_name(name: str) -> str:
 
 
 def _parse_plan_envelope(planner_result: str) -> dict | None:
-    """
-    Try to parse a planner result string as a plan envelope (the JSON dict
+    """Try to parse a planner result string as a plan envelope (the JSON dict
     returned by plan_only mode). Returns the envelope dict if it's a valid
     proposal, or None if the result is a regular answer (e.g. error message,
     feasibility failure, or fallback prose).
@@ -48,8 +47,7 @@ def _parse_plan_envelope(planner_result: str) -> dict | None:
 
 
 def _parse_spawn_config(raw: str) -> dict:
-    """
-    Robustly parse a spawn config that may contain raw multiline code strings.
+    """Robustly parse a spawn config that may contain raw multiline code strings.
     Uses character scanning to correctly handle } and " inside the code value.
     """
     raw = raw.strip()
@@ -108,7 +106,7 @@ def _looks_like_home_automation_request(text: str) -> bool:
     lowered = (text or "").lower()
     if "home assistant" in lowered:
         return True
-    if lowered.startswith("spawn ") or lowered.startswith("/"):
+    if lowered.startswith(("spawn ", "/")):
         return False
 
     # Wactorz pipeline requests — these involve external sensors/agents, not HA natively
@@ -210,7 +208,8 @@ def _looks_like_home_automation_request(text: str) -> bool:
 def _strip_live_context(message: str) -> str:
     """Remove the [CURRENT SYSTEM STATE...][END SYSTEM STATE] prefix if present.
     Used before fact extraction so the auto-injected agent list doesn't get
-    treated as user-stated facts."""
+    treated as user-stated facts.
+    """
     if not isinstance(message, str) or "[CURRENT SYSTEM STATE" not in message:
         return message
     end_marker = "[END SYSTEM STATE]"
@@ -223,7 +222,8 @@ def _strip_live_context(message: str) -> str:
 
 def _strip_dryrun_bypass(text: str) -> str:
     """Strip the `pipeline!` / `coordinate!` bypass marker from the user's
-    text so the planner doesn't see it as part of the task."""
+    text so the planner doesn't see it as part of the task.
+    """
     if not text:
         return text
     lowered = text.lower().lstrip()

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-remote_runner.py — Wactorz edge node runner.
+"""remote_runner.py — Wactorz edge node runner.
 
 Deploy this single file to any machine (Raspberry Pi, VM, edge device).
 It connects to the shared MQTT broker, listens for spawn commands from main,
@@ -142,7 +141,8 @@ _AWAITABLE_NONE = _AwaitableNone()
 
 class _RemoteStreamWindow:
     """Sliding time window over an MQTT topic. Background task fills a buffer;
-    queries are synchronous and operate on the in-memory buffer."""
+    queries are synchronous and operate on the in-memory buffer.
+    """
 
     def __init__(
         self, topic: str, broker: str, port: int, seconds: float = 300, max_size: int = 1000
@@ -255,9 +255,7 @@ class _RemoteStreamWindow:
         for e in self._buffer:
             if e.get("_ts", 0) < cutoff:
                 continue
-            if key is None:
-                count += 1
-            elif key in e and (value is None or e[key] == value):
+            if key is None or (key in e and (value is None or e[key] == value)):
                 count += 1
         return count
 
@@ -289,7 +287,8 @@ class _RemoteLLMInterface:
 
     async def complete(self, messages: list, system: str = "", timeout: float = 60.0) -> str:
         """Multi-turn LLM call — same shape as local agent.llm.complete().
-        `messages` is a list of {role, content} dicts."""
+        `messages` is a list of {role, content} dicts.
+        """
         # Reuse the top-level chat() implementation (routes to main/llm_request
         # with a 'messages' field). The name collision is unfortunate — local
         # naming wins because agent code references agent.llm.complete.
@@ -297,7 +296,8 @@ class _RemoteLLMInterface:
 
     async def converse(self, user_message: str, system: str = "", timeout: float = 60.0) -> str:
         """Stateful multi-turn chat — mirrors local _LLMInterface.converse().
-        Maintains history in agent.state['_chat_history']."""
+        Maintains history in agent.state['_chat_history'].
+        """
         history = self._api.state.setdefault("_chat_history", [])
         history.append({"role": "user", "content": user_message})
         reply = await self.complete(messages=history, system=system, timeout=timeout)
@@ -309,8 +309,7 @@ class _RemoteLLMInterface:
 
 
 class _RemoteAgentAPI:
-    """
-    Mirrors the agent API that DynamicAgent provides to generated code.
+    """Mirrors the agent API that DynamicAgent provides to generated code.
     All methods that touch MQTT go through the shared client.
     """
 
@@ -390,7 +389,8 @@ class _RemoteAgentAPI:
         with the TopicBus and the planner can auto-wire it correctly.
 
         The shape matches DynamicAgent._publish_manifest() exactly, so main's
-        _manifest_listener can treat local and remote agents uniformly."""
+        _manifest_listener can treat local and remote agents uniformly.
+        """
         cfg = self._agent._config
         # Merge declared values (from declare_contract / subscribe) with the
         # spawn config, so the manifest reflects everything the running code
@@ -446,8 +446,7 @@ class _RemoteAgentAPI:
 
     # ── Subscriptions ─────────────────────────────────────────────────────────
     def subscribe(self, topic: str, callback):
-        """
-        Subscribe to an MQTT topic and call callback(payload_dict) for each
+        """Subscribe to an MQTT topic and call callback(payload_dict) for each
         message. Runs as a background task — setup() returns immediately.
 
         IMPORTANT: callback is REQUIRED and must be an async function.
@@ -567,8 +566,7 @@ class _RemoteAgentAPI:
 
     # ── One-shot reads / time windows / world state ──────────────────────────
     async def mqtt_get(self, topic: str, timeout: float = 10.0) -> Any | None:
-        """
-        Wait for one MQTT message on topic and return its parsed payload.
+        """Wait for one MQTT message on topic and return its parsed payload.
         Useful for reading retained world-state topics or one-off queries.
         Returns None on timeout.
         """
@@ -607,8 +605,7 @@ class _RemoteAgentAPI:
     def window(
         self, topic: str, seconds: float = 300, max_size: int = 1000
     ) -> "_RemoteStreamWindow":
-        """
-        Create a sliding time window over an MQTT topic stream.
+        """Create a sliding time window over an MQTT topic stream.
 
         IMPORTANT: window() is synchronous — do NOT use await.
         Correct:  agent.state['w'] = agent.window('sensors/temp', seconds=60)
@@ -629,8 +626,7 @@ class _RemoteAgentAPI:
         return w
 
     async def publish_world_state(self, key: str, data: Any, retain: bool = True):
-        """
-        Publish a piece of world state to the shared retained state hub.
+        """Publish a piece of world state to the shared retained state hub.
         Other agents can read this without making a request — it's always there.
 
         Topic: agents/{agent_name}/data/{key}
@@ -638,8 +634,7 @@ class _RemoteAgentAPI:
         await self.publish(f"agents/{self.name}/data/{key}", data)
 
     async def read_world_state(self, topic: str, timeout: float = 2.0) -> Any | None:
-        """
-        Read a retained world-state topic — returns the cached value if the
+        """Read a retained world-state topic — returns the cached value if the
         broker has one, otherwise waits up to `timeout` seconds for it.
         """
         return await self.mqtt_get(topic, timeout=timeout)
@@ -654,8 +649,7 @@ class _RemoteAgentAPI:
         consumes_schema: dict = None,
         **kwargs,
     ):
-        """
-        Declare this agent's topic contract — what it produces and consumes.
+        """Declare this agent's topic contract — what it produces and consumes.
 
         Call from setup() to make this agent discoverable by the planner and
         other agents via topic-based auto-wiring. Same signature and aliases
@@ -706,8 +700,7 @@ class _RemoteAgentAPI:
         return _AWAITABLE_NONE
 
     def wiring_opportunities(self) -> list:
-        """
-        Remote agents can't query the central TopicBus directly — that runs in
+        """Remote agents can't query the central TopicBus directly — that runs in
         the main process. Returns an empty list. Use `/agents` from main or
         ask the planner if you need wiring info.
         """
@@ -729,8 +722,7 @@ class _RemoteAgentAPI:
         ]
 
     def topics(self, keyword: str = "") -> list:
-        """
-        Topics this remote node has observed locally — built from its own
+        """Topics this remote node has observed locally — built from its own
         published topics and the topics it actively subscribes to. The
         cluster-wide view lives on main; this is the best a remote node can
         do without an RPC round-trip.
@@ -745,8 +737,7 @@ class _RemoteAgentAPI:
         return out
 
     def capabilities(self, keyword: str = "") -> list:
-        """
-        Single-element list describing this agent's own capability profile.
+        """Single-element list describing this agent's own capability profile.
         Cluster-wide capability search lives on main.
         """
         cfg = self._agent._config
@@ -768,7 +759,8 @@ class _RemoteAgentAPI:
     @property
     def logger(self):
         """Compatibility shim — allows agent.logger.info/warning/error in
-        generated code, mirroring DynamicAgent._AgentAPI.logger."""
+        generated code, mirroring DynamicAgent._AgentAPI.logger.
+        """
         api = self
 
         class _LoggerShim:
@@ -793,7 +785,8 @@ class _RemoteAgentAPI:
     # ── Logging ───────────────────────────────────────────────────────────────
     async def log(self, message: str, level: str = "info"):
         """Add a message to the event log. Signature mirrors DynamicAgent.log()
-        so generated code that passes `level=` works on both local and remote."""
+        so generated code that passes `level=` works on both local and remote.
+        """
         # Encode safely for terminals that can't handle all unicode
         safe_msg = str(message).encode("ascii", errors="replace").decode("ascii")
         getattr(logger, level, logger.info)(f"[{self.name}] {safe_msg}")
@@ -830,8 +823,7 @@ class _RemoteAgentAPI:
 
     # ── LLM access (routed back to main node — API key stays there) ──────────
     async def ask_llm(self, prompt: str, system: str = "", timeout: float = 60.0) -> str:
-        """
-        Send a prompt to the LLM via the main node's LLM bridge.
+        """Send a prompt to the LLM via the main node's LLM bridge.
         The API key never needs to be on the edge device — main handles the call
         and returns the text response over MQTT.
 
@@ -864,8 +856,7 @@ class _RemoteAgentAPI:
             self._agent._pending_replies.pop(reply_topic, None)
 
     async def chat(self, messages: list, system: str = "", timeout: float = 60.0) -> str:
-        """
-        Multi-turn LLM call. messages is a list of {"role": "user"/"assistant", "content": "..."}.
+        """Multi-turn LLM call. messages is a list of {"role": "user"/"assistant", "content": "..."}.
         Useful for conversational agents that maintain their own history.
         """
         reply_topic = f"nodes/{self._agent.node_name}/reply/{uuid.uuid4().hex[:8]}"
@@ -893,8 +884,7 @@ class _RemoteAgentAPI:
             self._agent._pending_replies.pop(reply_topic, None)
 
     async def send_to(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Any:
-        """
-        Send a task to any agent (local or remote) via MQTT and wait for reply.
+        """Send a task to any agent (local or remote) via MQTT and wait for reply.
         Uses a reply-to topic unique to this call so responses can be correlated.
         """
         reply_topic = f"nodes/{self._agent.node_name}/reply/{uuid.uuid4().hex[:8]}"
@@ -932,8 +922,7 @@ class _RemoteAgentAPI:
 
 
 class _RemoteAgent:
-    """
-    Lightweight equivalent of DynamicAgent that runs on the edge node.
+    """Lightweight equivalent of DynamicAgent that runs on the edge node.
     Holds compiled user code and drives setup/process/handle_task.
     """
 
@@ -1033,8 +1022,7 @@ class _RemoteAgent:
                 pass
 
     def _delete_state(self) -> bool:
-        """
-        Permanently remove the agent's on-disk JSON state file.
+        """Permanently remove the agent's on-disk JSON state file.
 
         This is what makes a delete (vs a stop) actually irreversible — without
         it, the next runner startup would reload state.json via _load_state()
@@ -1078,8 +1066,7 @@ class _RemoteAgent:
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def start(self):
-        """
-        Start the agent under a supervision loop.
+        """Start the agent under a supervision loop.
         The supervisor restarts the agent on unexpected crashes up to
         max_restarts times, with exponential back-off between attempts.
         Compile errors and deliberate stop() calls are never retried.
@@ -1088,8 +1075,7 @@ class _RemoteAgent:
         asyncio.create_task(self._supervisor_loop())
 
     async def _supervisor_loop(self):
-        """
-        Supervisor that mirrors the local OTP ONE_FOR_ONE strategy.
+        """Supervisor that mirrors the local OTP ONE_FOR_ONE strategy.
         Runs _run_lifecycle() in a loop; on crash, waits and retries.
         """
         while self._running and not self._failed:
@@ -1151,8 +1137,7 @@ class _RemoteAgent:
                 self._ns = {}
 
     async def _run_lifecycle(self):
-        """
-        One full agent lifecycle: compile → setup → process loop + heartbeat loop.
+        """One full agent lifecycle: compile → setup → process loop + heartbeat loop.
         Raises on unhandled exceptions so _supervisor_loop can catch and restart.
         Compile errors and setup fatals publish an error event then return cleanly
         (no restart — broken code won't fix itself on retry).
@@ -1248,8 +1233,7 @@ class _RemoteAgent:
     _PROCESS_ESCALATE_AFTER = 5
 
     async def _process_loop(self):
-        """
-        Run process() in a loop with per-error backoff.
+        """Run process() in a loop with per-error backoff.
         After _PROCESS_ESCALATE_AFTER consecutive errors, raises RuntimeError
         so the supervisor loop gets a clean restart (fresh namespace, reset state).
         A single successful call resets the consecutive counter.
@@ -1351,7 +1335,8 @@ class _RemoteAgent:
 
     def deliver_reply(self, reply_topic: str, data: Any) -> bool:
         """Called by runner when an inbound reply arrives for this agent.
-        Returns True if this agent had a pending future for the topic."""
+        Returns True if this agent had a pending future for the topic.
+        """
         fut = self._pending_replies.get(reply_topic)
         if fut and not fut.done():
             fut.set_result(data)
@@ -1363,8 +1348,7 @@ class _RemoteAgent:
 
 
 class _RemoteRunner:
-    """
-    The long-running process on the edge node.
+    """The long-running process on the edge node.
     Connects to the MQTT broker, listens for spawn commands, manages agents.
     """
 
@@ -1440,8 +1424,7 @@ class _RemoteRunner:
         )
 
     async def stop_agent(self, name: str, delete: bool = False):
-        """
-        Stop an agent. When `delete=True`, also wipe everything that would
+        """Stop an agent. When `delete=True`, also wipe everything that would
         otherwise survive the stop:
           - the JSON state file on disk (~/wactorz/state/<name>_state.json)
           - the retained MQTT topics for this agent (status / heartbeat /
@@ -1469,8 +1452,7 @@ class _RemoteRunner:
             logger.info(f"[runner] Agent '{name}' permanently deleted from this node.")
 
     async def _purge_agent_retained(self, actor_id: str) -> None:
-        """
-        Clear retained MQTT messages for an agent that has just been deleted.
+        """Clear retained MQTT messages for an agent that has just been deleted.
 
         Empty-payload-with-retain is the MQTT idiom for "remove this retained
         topic" — without it, the broker keeps re-delivering the agent's last
@@ -1506,7 +1488,6 @@ class _RemoteRunner:
 
     async def _install_packages(self, packages: list):
         """Install pip packages on the edge node."""
-
         pkgs = " ".join(packages)
         logger.info(f"[runner] Installing: {pkgs}")
         proc = await asyncio.create_subprocess_shell(
@@ -1560,8 +1541,7 @@ class _RemoteRunner:
     # ── MQTT publisher task (paho-mqtt direct — aiomqtt v2.x doesn't flush reliably) ──
 
     async def _publisher_loop(self):
-        """
-        Uses paho-mqtt directly for reliable fire-and-forget publishing.
+        """Uses paho-mqtt directly for reliable fire-and-forget publishing.
         aiomqtt v2.x wraps paho but its internal network loop doesn't get CPU
         time when we block on queue.get(), causing silent message loss.
         paho.loop_start() runs a background thread that handles ACKs/keepalives.
@@ -1616,14 +1596,13 @@ class _RemoteRunner:
     # ── MQTT subscriber task ──────────────────────────────────────────────────
 
     async def _subscriber_loop(self):
-        """
-        Subscribes to:
-          nodes/{node_name}/spawn          — spawn a new agent
-          nodes/{node_name}/stop           — stop a named agent
-          nodes/{node_name}/stop_all       — stop all agents and shut down
-          nodes/{node_name}/list           — publish list of running agents
-          nodes/{node_name}/reply/#        — route replies back to waiting agents
-          agents/by-name/+/task           — task addressed to a named agent
+        """Subscribes to:
+        nodes/{node_name}/spawn          — spawn a new agent
+        nodes/{node_name}/stop           — stop a named agent
+        nodes/{node_name}/stop_all       — stop all agents and shut down
+        nodes/{node_name}/list           — publish list of running agents
+        nodes/{node_name}/reply/#        — route replies back to waiting agents
+        agents/by-name/+/task           — task addressed to a named agent
         """
         await self._deps_ready.wait()
         import aiomqtt
@@ -1900,8 +1879,7 @@ class _RemoteRunner:
                 t.cancel()
 
     async def _restart_agent(self, name: str):
-        """
-        Restart a single agent without losing its config or persisted state.
+        """Restart a single agent without losing its config or persisted state.
         The agent's state file is left on disk — the fresh instance picks it up
         via _load_state() on startup, so no state is lost.
         """
@@ -1924,8 +1902,7 @@ class _RemoteRunner:
         await self.spawn_agent(config)
 
     async def _restart(self):
-        """
-        Gracefully restart the runner process in-place using os.execv.
+        """Gracefully restart the runner process in-place using os.execv.
         - Stops all agents (their state files are flushed to disk by stop())
         - Publishes a "restarting" heartbeat so main sees the transition
         - Re-execs itself: same PID, same venv, clean asyncio state
@@ -1941,7 +1918,7 @@ class _RemoteRunner:
         )
         # Drain the publish queue before we replace the process image
         await asyncio.sleep(0.5)
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        os.execv(sys.executable, [sys.executable, *sys.argv])
 
     async def _shutdown(self):
         self._running = False
@@ -1955,8 +1932,7 @@ class _RemoteRunner:
         sys.exit(0)
 
     async def _migrate_agent(self, payload: dict):
-        """
-        Move a running agent to a different node.
+        """Move a running agent to a different node.
 
         P0 fix: agent._persistent_state is serialised into the spawn config
         under "_initial_state" so the target node starts with the full state
@@ -2116,7 +2092,7 @@ def main():
     args = parser.parse_args()
 
     # --node takes priority over --name if both supplied
-    node_name = args.node if args.node else args.name
+    node_name = args.node or args.name
 
     logging.basicConfig(
         level=getattr(logging, args.loglevel),
@@ -2161,7 +2137,7 @@ async def _run_supervisor_tests():
             self.events = []
 
         async def publish(self, topic, data):
-            self.events.append((topic, data if isinstance(data, dict) else data))
+            self.events.append((topic, data))
 
     def make_agent(code, max_restarts=3, restart_delay=0.01, poll_interval=0.01, escalate_after=5):
         runner = _StubRunner()

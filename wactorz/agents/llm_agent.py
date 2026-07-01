@@ -1,5 +1,4 @@
-"""
-LLMAgent - An actor backed by a Large Language Model.
+"""LLMAgent - An actor backed by a Large Language Model.
 Supports Anthropic Claude, OpenAI, Ollama (local), and custom providers.
 """
 
@@ -39,8 +38,7 @@ def _global_cost_kv_key(period: str) -> str:
 
 
 def resolve_now(tz_name: str | None = None) -> datetime:
-    """
-    Current time in the first usable timezone of:
+    """Current time in the first usable timezone of:
         tz_name (e.g. a user's pref_timezone) > WACTORZ_TZ env > TZ env > local.
 
     Named zones are resolved with zoneinfo; any bad/unknown value falls through
@@ -60,8 +58,7 @@ def resolve_now(tz_name: str | None = None) -> datetime:
 
 
 def current_time_context(tz_name: str | None = None) -> str:
-    """
-    Live date/time preamble to prepend to any agent's system prompt so the LLM
+    """Live date/time preamble to prepend to any agent's system prompt so the LLM
     anchors to the real present moment instead of its training-cutoff guess.
     """
     now = resolve_now(tz_name)
@@ -169,7 +166,8 @@ def _seed_alltime_cost(db) -> None:
 
 def get_global_alltime_cost() -> float:
     """Durable all-time LLM spend, accrued at call time. Survives agent deletion
-    and per-agent metrics resets (unlike _final_cost / the lifetime ledger)."""
+    and per-agent metrics resets (unlike _final_cost / the lifetime ledger).
+    """
     db = get_db()
     if db is None:
         return 0.0
@@ -507,7 +505,8 @@ class AnthropicProvider(LLMProvider):
     def _extract_text(response) -> str:
         """Join every text block, skipping thinking / redacted_thinking and any
         other non-text block. Robust whether or not extended thinking is enabled;
-        without this, content[0] is a ThinkingBlock and .text raises."""
+        without this, content[0] is a ThinkingBlock and .text raises.
+        """
         parts = []
         for block in getattr(response, "content", None) or []:
             if getattr(block, "type", None) == "text":
@@ -655,7 +654,7 @@ class OpenAIProvider(LLMProvider):
             api_key=api_key, **({"base_url": base_url} if base_url else {})
         )
         self.model = model
-        self.base_url = base_url if base_url else None
+        self.base_url = base_url or None
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
@@ -787,7 +786,7 @@ class OllamaProvider(LLMProvider):
     def _chat_messages(messages: list[dict], system: str = "") -> list[dict]:
         if not system:
             return list(messages)
-        return [{"role": "system", "content": system}] + list(messages)
+        return [{"role": "system", "content": system}, *list(messages)]
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         import aiohttp
@@ -900,8 +899,7 @@ class OllamaProvider(LLMProvider):
 
 
 class NIMProvider(LLMProvider):
-    """
-    NVIDIA NIM — OpenAI-compatible API hosted at integrate.api.nvidia.com.
+    """NVIDIA NIM — OpenAI-compatible API hosted at integrate.api.nvidia.com.
     Free tier: 1000 requests/month per model. No local GPU required.
 
     Popular free models:
@@ -1034,8 +1032,7 @@ class NIMProvider(LLMProvider):
 
 
 class GeminiProvider(LLMProvider):
-    """
-    Google Gemini via the official google-genai SDK.
+    """Google Gemini via the official google-genai SDK.
     Install: pip install google-genai
 
     Recommended models (March 2026):
@@ -1065,7 +1062,7 @@ class GeminiProvider(LLMProvider):
         contents = self._to_gemini_contents(messages)
         config = self._types.GenerateContentConfig(
             system_instruction=system or None,
-            max_output_tokens=kwargs.get("max_tokens", None),
+            max_output_tokens=kwargs.get("max_tokens"),
         )
 
         response = self.client.models.generate_content(
@@ -1098,7 +1095,7 @@ class GeminiProvider(LLMProvider):
         config = self._types.GenerateContentConfig(
             system_instruction=system or None,
             tools=[self._types.Tool(function_declarations=function_declarations)],
-            max_output_tokens=kwargs.get("max_tokens", None),
+            max_output_tokens=kwargs.get("max_tokens"),
         )
         response = self.client.models.generate_content(
             model=self.model_name,
@@ -1232,10 +1229,7 @@ class GeminiProvider(LLMProvider):
                 )
                 continue
             content = m.get("content", "")
-            if isinstance(content, list):
-                parts = content
-            else:
-                parts = [{"text": str(content)}]
+            parts = content if isinstance(content, list) else [{"text": str(content)}]
             # Gemini uses "user" and "model" (not "assistant")
             gemini_role = "model" if role == "assistant" else "user"
             # Merge consecutive same-role messages (Gemini requires alternating)
@@ -1247,8 +1241,7 @@ class GeminiProvider(LLMProvider):
 
 
 class LLMAgent(Actor):
-    """
-    An Actor that uses an LLM to process tasks.
+    """An Actor that uses an LLM to process tasks.
     Maintains conversation history and supports tool use.
     """
 
@@ -1278,8 +1271,7 @@ class LLMAgent(Actor):
         return self._current_task
 
     def _preferred_timezone_name(self) -> str | None:
-        """
-        Override hook for subclasses that know the user's timezone.
+        """Override hook for subclasses that know the user's timezone.
 
         Base LLMAgent has no access to user facts, so it returns None and
         resolution falls through to the WACTORZ_TZ / TZ env vars and finally the
@@ -1357,8 +1349,7 @@ class LLMAgent(Actor):
         self.persist("history_summary", self._history_summary)
 
     async def _maybe_summarize(self):
-        """
-        If history exceeds summarize_threshold, compress the oldest half into a
+        """If history exceeds summarize_threshold, compress the oldest half into a
         rolling summary and keep only the most recent max_history messages.
         The summary is prepended as a system-style context message when sending
         to the LLM so no facts are lost.
@@ -1409,8 +1400,7 @@ class LLMAgent(Actor):
             self._conversation_history = self._conversation_history[-self.max_history :]
 
     def _build_messages_with_summary(self, n: int) -> list[dict]:
-        """
-        Build the message list to send to the LLM, prepending the rolling summary
+        """Build the message list to send to the LLM, prepending the rolling summary
         as context if one exists.
         """
         recent = self._conversation_history[-n:]
@@ -1562,8 +1552,7 @@ class LLMAgent(Actor):
         return response
 
     async def chat_stream(self, user_message: str):
-        """
-        Streaming version of chat(). Yields text chunks, then a final usage dict.
+        """Streaming version of chat(). Yields text chunks, then a final usage dict.
         The caller is responsible for printing chunks as they arrive.
 
         Usage:

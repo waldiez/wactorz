@@ -1,5 +1,4 @@
-"""
-TickAgent — scheduler / timer (NATO: CHRON / Tango).
+"""TickAgent — scheduler / timer (NATO: CHRON / Tango).
 
 Schedule one-shot messages or recurring reminders without any external
 cron daemon. All timers live in-process; they survive restarts only if

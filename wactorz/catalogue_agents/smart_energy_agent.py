@@ -1,5 +1,4 @@
-"""
-CATALOG AGENT — smart-energy
+"""CATALOG AGENT — smart-energy
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 LLM-powered energy brain for smart plugs exposed through Home Assistant.
 Brand-agnostic: works with any plug HA can see (Tapo, Shelly, Sonoff, Kasa…)

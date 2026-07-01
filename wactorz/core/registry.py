@@ -1,5 +1,4 @@
-"""
-ActorRegistry - Central registry and message router for all actors.
+"""ActorRegistry - Central registry and message router for all actors.
 ActorSystem orchestrates startup, shutdown, and actor lifecycle.
 Supervisor implements Erlang/OTP-style supervision trees.
 """
@@ -22,8 +21,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SupervisedSpec:
-    """
-    Descriptor for one actor under supervision.
+    """Descriptor for one actor under supervision.
 
     factory      : zero-arg async callable that creates and returns a fresh
                    Actor instance (already injected with MQTT / registry).
@@ -135,8 +133,7 @@ class ActorRegistry:
 
 
 class Supervisor:
-    """
-    OTP-inspired supervision tree node.
+    """OTP-inspired supervision tree node.
 
     Sits above ActorSystem and owns a set of critical actors.  When one of
     those actors crashes (state == FAILED or task raises), the Supervisor
@@ -196,8 +193,7 @@ class Supervisor:
         return self  # fluent
 
     def release(self, name: str):
-        """
-        Voluntarily remove an actor from supervision — the Erlang 'unlink' equivalent.
+        """Voluntarily remove an actor from supervision — the Erlang 'unlink' equivalent.
 
         Call this BEFORE sending a stop or delete command to an actor so the
         Supervisor doesn't race to restart it.  Safe to call even if the name
@@ -235,8 +231,7 @@ class Supervisor:
     ERROR_STORM_THRESHOLD = 10  # cumulative errors within the actor's lifetime
 
     async def _watch_loop(self):
-        """
-        Poll supervised actors for failure and trigger restarts.
+        """Poll supervised actors for failure and trigger restarts.
 
         Detects three Erlang-style failure modes:
         1. state == FAILED   — actor explicitly marked itself dead (compile/setup/process exhausted)
@@ -420,8 +415,7 @@ class Supervisor:
         spec.actor = None
 
     async def _notify_main(self, message: str, severity: str = "critical"):
-        """
-        Send a supervision event to MainActor via the actor message queue.
+        """Send a supervision event to MainActor via the actor message queue.
 
         Uses MessageType.TASK with _monitor_notification=True so main's
         handle_message intercepts it and queues it in _pending_notifications —
@@ -613,8 +607,7 @@ class ActorSystem:
 
 
 class _MQTTPublisher:
-    """
-    Reliable async MQTT publisher with:
+    """Reliable async MQTT publisher with:
       - Persistent in-memory outbox queue (messages survive reconnects)
       - SQLite-backed durable outbox (messages survive process crashes)
       - clean_session=False + fixed client_id (broker holds QoS 1 messages)
@@ -655,7 +648,7 @@ class _MQTTPublisher:
     ) -> "_MQTTPublisher":
         pub = cls(db_path=db_path)
         try:
-            import aiomqtt  # noqa
+            import aiomqtt  # noqa: F401
 
             pub._init_db()
             pub._load_pending_from_db()
@@ -785,8 +778,7 @@ class _MQTTPublisher:
     # ── Background drain loop ──────────────────────────────────────────────
 
     async def _run(self, broker: str, port: int):
-        """
-        Background loop: maintain persistent MQTT connection and drain the outbox.
+        """Background loop: maintain persistent MQTT connection and drain the outbox.
         - clean_session=False: broker holds subscriptions + QoS 1 messages across reconnects
         - Fixed client_id: same session resumed after reconnect
         - Messages are NOT dequeued until successfully published (no loss on disconnect)

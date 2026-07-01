@@ -1,5 +1,4 @@
-"""
-Chat Interfaces - Connect users to the MainActor via different channels.
+"""Chat Interfaces - Connect users to the MainActor via different channels.
 Supported: CLI (terminal), Discord, WhatsApp (via Twilio), REST.
 """
 
@@ -25,8 +24,7 @@ REMOTE_RUNNER_PATH = os.path.normpath(os.path.join(_HERE, "..", "remote_runner.p
 
 
 class CLIInterface:
-    """
-    Terminal chat interface.
+    """Terminal chat interface.
 
     Commands:
       @agent-name <message>         speak directly to a named agent
@@ -188,8 +186,7 @@ class CLIInterface:
     # ── Node discovery ─────────────────────────────────────────────────────
 
     async def _discover_host(self, node_name: str) -> str:
-        """
-        Find a remote host automatically:
+        """Find a remote host automatically:
         1. mDNS  — try {node_name}.local and raspberrypi.local
         2. Scan  — scan local subnet for SSH (port 22)
         3. Manual — ask user
@@ -238,7 +235,7 @@ class CLIInterface:
             ans_stripped = ans.strip("[] \t")
             if ans_stripped.isdigit() and 1 <= int(ans_stripped) <= len(found):
                 return found[int(ans_stripped) - 1]
-            elif ans:
+            if ans:
                 return ans  # treat as a literal IP/hostname
         else:
             print("[discover] No SSH hosts found on local network.")
@@ -272,8 +269,7 @@ class CLIInterface:
     # ── Deploy ─────────────────────────────────────────────────────────────
 
     async def _deploy(self, node_name: str, host: str = ""):
-        """
-        Deploy an Wactorz edge node to a remote machine.
+        """Deploy an Wactorz edge node to a remote machine.
         Discovers the host, prompts for credentials, then delegates the
         actual SSH work to the installer agent (node_deploy action).
         """
@@ -529,8 +525,7 @@ class CLIInterface:
 
 
 class DiscordInterface:
-    """
-    Discord bot interface. Requires: pip install discord.py
+    """Discord bot interface. Requires: pip install discord.py
     Set DISCORD_BOT_TOKEN in environment.
     """
 
@@ -653,8 +648,7 @@ class TelegramInterface:
 
 
 class WhatsAppInterface:
-    """
-    WhatsApp via Twilio. Runs an aiohttp webhook server.
+    """WhatsApp via Twilio. Runs an aiohttp webhook server.
     Requires: pip install aiohttp twilio
     Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in environment.
     """
@@ -712,8 +706,7 @@ class WhatsAppInterface:
 
 
 class RESTInterface:
-    """
-    Generic REST API interface. Connect any chat platform via webhooks.
+    """Generic REST API interface. Connect any chat platform via webhooks.
     POST /chat with {"message": "..."} → returns {"response": "..."}
     """
 

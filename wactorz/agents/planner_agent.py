@@ -1,5 +1,4 @@
-"""
-PlannerAgent — On-demand task orchestrator with plan caching and auto-spawning.
+"""PlannerAgent — On-demand task orchestrator with plan caching and auto-spawning.
 
 Spawned by MainActor when a task is too complex for a single agent.
 Pipeline:
@@ -44,9 +43,7 @@ _CACHE_TTL_S = 86400  # 24 hours
 
 
 class PlannerAgent(Actor, SpawnMixin):
-    """
-    On-demand orchestrator. Spawned per complex task, self-terminates when done.
-    """
+    """On-demand orchestrator. Spawned per complex task, self-terminates when done."""
 
     def __init__(
         self,
@@ -158,8 +155,7 @@ class PlannerAgent(Actor, SpawnMixin):
             self._last_period_cost_usd = self.total_cost_usd
 
     def _now_context(self) -> str:
-        """
-        Live date/time block for planning prompts. Resolves the user's timezone
+        """Live date/time block for planning prompts. Resolves the user's timezone
         from main's facts (same source the scheduler uses) so a "tomorrow at 3pm"
         request is decomposed against the correct calendar date and zone.
         """
@@ -250,8 +246,7 @@ class PlannerAgent(Actor, SpawnMixin):
 
     @staticmethod
     def _is_pipeline_request(task: str) -> bool:
-        """
-        Detect reactive/persistent pipeline requests vs one-shot tasks.
+        """Detect reactive/persistent pipeline requests vs one-shot tasks.
         Pipelines use conditional/temporal language: if/when/whenever/monitor/watch/notify.
         Also catches explicit spawn/continuous-agent requests like:
           "spawn an agent to log the mean..."
@@ -263,7 +258,7 @@ class PlannerAgent(Actor, SpawnMixin):
         lowered = task.lower()
 
         # Explicit pipeline prefix always wins
-        if lowered.startswith("pipeline:") or lowered.startswith("pipeline "):
+        if lowered.startswith(("pipeline:", "pipeline ")):
             return True
 
         patterns = [
@@ -413,8 +408,7 @@ class PlannerAgent(Actor, SpawnMixin):
     # ── Pipeline mode (persistent reactive agents) ─────────────────────────
 
     async def _run_pipeline(self, task: str, workers: list[dict]) -> str:
-        """
-        Builds and spawns persistent reactive agents for if/when/wherever rules.
+        """Builds and spawns persistent reactive agents for if/when/wherever rules.
 
         Two modes governed by constructor flags (set by main):
           - plan_only=True: build the plan, return it as a JSON string, do NOT spawn.
@@ -487,8 +481,7 @@ class PlannerAgent(Actor, SpawnMixin):
     async def _execute_pipeline_plan(
         self, plan: list[dict], task: str, resolution_note: str = ""
     ) -> str:
-        """
-        Spawn each agent in the plan, register with main, build the final summary.
+        """Spawn each agent in the plan, register with main, build the final summary.
         Extracted from _run_pipeline so dry-run can reuse the same execution path
         after a user approval.
 
@@ -701,8 +694,7 @@ class PlannerAgent(Actor, SpawnMixin):
         )
 
     async def _resolve_data_references(self, task: str) -> tuple[str, str]:
-        """
-        Resolve vague data references in a task to concrete MQTT topics or HA entities.
+        """Resolve vague data references in a task to concrete MQTT topics or HA entities.
 
         Examples:
           "log when temperature > 22"
@@ -951,8 +943,7 @@ class PlannerAgent(Actor, SpawnMixin):
         return enriched, note
 
     async def _sample_live_topics(self, bus) -> list[str]:
-        """
-        Peek at one live MQTT message from each registered publish topic.
+        """Peek at one live MQTT message from each registered publish topic.
         Returns formatted lines with actual field names and an example value.
 
         This is the fallback when observed_samples haven't been captured yet
@@ -1040,8 +1031,7 @@ class PlannerAgent(Actor, SpawnMixin):
         return sample_lines
 
     async def _decompose_pipeline(self, task: str, workers: list[dict]) -> list[dict]:
-        """
-        Decomposes a reactive pipeline request into persistent agent spawn configs.
+        """Decomposes a reactive pipeline request into persistent agent spawn configs.
 
         Flow:
           1. Query HomeAssistantAgent for live entities (delegates — no duplication)
@@ -1128,9 +1118,7 @@ class PlannerAgent(Actor, SpawnMixin):
                 logger.warning(f"[{self.name}] Direct HA fetch failed: {e}")
 
         ha_section = (
-            ha_entities_text
-            if ha_entities_text
-            else "  (HA not reachable — use entity IDs provided by the user)"
+            ha_entities_text or "  (HA not reachable — use entity IDs provided by the user)"
         )
 
         # ── Resolve real camera stream URLs via home-assistant-agent ───────
@@ -1405,10 +1393,8 @@ class PlannerAgent(Actor, SpawnMixin):
                 self._accrue_usage(_usage)
                 clean = feas_resp.strip()
                 for fence in ("```json", "```"):
-                    if clean.startswith(fence):
-                        clean = clean[len(fence) :]
-                    if clean.endswith("```"):
-                        clean = clean[:-3]
+                    clean = clean.removeprefix(fence)
+                    clean = clean.removesuffix("```")
                 clean = clean.strip()
                 feas = json.loads(clean)
                 if not feas.get("feasible", True):
@@ -1762,8 +1748,7 @@ class PlannerAgent(Actor, SpawnMixin):
     # ── Pipeline code validator ────────────────────────────────────────────
 
     def _validate_pipeline_code(self, plan: list[dict]) -> list[dict]:
-        """
-        Scan generated dynamic agent code for common LLM mistakes and fix them.
+        """Scan generated dynamic agent code for common LLM mistakes and fix them.
         Currently catches:
           - Raw aiomqtt.Client() usage (should use agent.subscribe() instead)
           - Hardcoded MQTT broker hostnames
@@ -1852,8 +1837,7 @@ class PlannerAgent(Actor, SpawnMixin):
 
     @staticmethod
     def _rewrite_aiomqtt_to_subscribe(code: str, topic: str) -> str:
-        """
-        Best-effort rewrite of raw aiomqtt MQTT subscription code to use agent.subscribe().
+        """Best-effort rewrite of raw aiomqtt MQTT subscription code to use agent.subscribe().
         Extracts the message handling callback and rewires it.
         Returns empty string if rewrite fails (original code kept).
         """
@@ -2239,8 +2223,7 @@ Example:
     # ── Missing agent spawning ─────────────────────────────────────────────
 
     async def _ensure_agents(self, plan: list[dict]) -> list[dict]:
-        """
-        For any step with a spawn_config, spawn the agent if it's not running.
+        """For any step with a spawn_config, spawn the agent if it's not running.
         Updates the plan with the actual agent name once spawned.
 
         Continuous agents (those with a process() loop or subscribe-based setup)
@@ -2541,8 +2524,7 @@ Example:
     # ── Helpers ────────────────────────────────────────────────────────────
 
     async def _bootstrap_ha_entity_states(self, task: str, plan: list[dict] | None = None) -> None:
-        """
-        After pipeline agents are spawned they sit idle until the next MQTT
+        """After pipeline agents are spawned they sit idle until the next MQTT
         change arrives.  If the relevant HA entity is *already* in the desired
         state (e.g. lights are already on) that change never comes, so the
         agents never fire.

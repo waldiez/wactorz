@@ -1,5 +1,4 @@
-"""
-InstallerAgent — pre-defined agent that installs Python packages on demand.
+"""InstallerAgent — pre-defined agent that installs Python packages on demand.
 Always uses sys.executable so packages land in the active venv (e.g. myenv),
 not the system Python.
 """
@@ -71,8 +70,7 @@ IMPORT_TO_PACKAGE = {
 
 
 class InstallerAgent(Actor):
-    """
-    Pre-defined agent that installs Python packages on demand.
+    """Pre-defined agent that installs Python packages on demand.
     Uses sys.executable so packages are installed into the active venv.
     """
 
@@ -307,8 +305,7 @@ class InstallerAgent(Actor):
     # ── Remote node helpers (SSH via asyncssh) ──────────────────────────────
 
     def _ssh_kwargs(self, payload: dict) -> dict:
-        """
-        Build asyncssh connection kwargs from a task payload.
+        """Build asyncssh connection kwargs from a task payload.
         Falls back to persisted credentials from a previous node_deploy
         so callers don't need to pass password/key_path every time.
         """
@@ -380,8 +377,7 @@ class InstallerAgent(Actor):
         )
 
     async def _node_install(self, payload: dict) -> dict:
-        """
-        Install pip packages on a remote node via SSH.
+        """Install pip packages on a remote node via SSH.
 
         payload keys:
           host      — IP or hostname of the remote machine
@@ -445,16 +441,14 @@ class InstallerAgent(Actor):
                         "packages": packages,
                         "output": output[-300:],
                     }
-                else:
-                    self._log_remote(f"✗ Install failed on {host}: {output[-200:]}")
-                    return {"success": False, "host": host, "error": output[-400:]}
+                self._log_remote(f"✗ Install failed on {host}: {output[-200:]}")
+                return {"success": False, "host": host, "error": output[-400:]}
 
         except Exception as e:
             return {"success": False, "host": host, "error": str(e)}
 
     async def _node_deploy(self, payload: dict) -> dict:
-        """
-        Full bootstrap of a new Wactorz edge node via SSH.
+        """Full bootstrap of a new Wactorz edge node via SSH.
 
         Steps:
           1. Create ~/wactorz/ directory
@@ -570,8 +564,7 @@ class InstallerAgent(Actor):
             return {"success": False, "node_name": node_name, "host": host, "error": str(e)}
 
     async def _node_run(self, payload: dict) -> dict:
-        """
-        Run an arbitrary shell command on a remote node via SSH.
+        """Run an arbitrary shell command on a remote node via SSH.
 
         payload keys:
           host     — IP or hostname

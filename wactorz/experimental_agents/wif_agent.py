@@ -1,5 +1,4 @@
-"""
-WifAgent — Finance expert (WIF = Waldiez In Finance).
+"""WifAgent — Finance expert (WIF = Waldiez In Finance).
 
 In-memory finance tracker with calculations. No external API key required.
 All state persisted via Actor pickle mechanism.

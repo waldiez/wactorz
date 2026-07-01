@@ -1,5 +1,4 @@
-"""
-wactorz.core.persistence — Unified persistence layer.
+"""wactorz.core.persistence — Unified persistence layer.
 
 Replaces pickle-only storage with a 3-tier architecture:
   - SQLite:  durable structured data (spawn registry, rules, facts, contracts, time-series)
@@ -193,8 +192,7 @@ CREATE INDEX IF NOT EXISTS idx_chatlog_agent_ts    ON chat_log (agent_name, ts);
 
 
 class WactorzDB:
-    """
-    Thread-safe SQLite connection manager.
+    """Thread-safe SQLite connection manager.
     One instance per process, created at startup.
     """
 
@@ -266,8 +264,7 @@ class WactorzDB:
         self._conn.commit()
 
     def kv_purge_agent(self, agent: str) -> int:
-        """
-        Hard-delete EVERY kv_store row for a given agent. Used when an agent
+        """Hard-delete EVERY kv_store row for a given agent. Used when an agent
         is permanently deleted (not just stopped) so its persisted state does
         not survive into the next process lifetime.
 
@@ -382,8 +379,7 @@ class WactorzDB:
     def write_chat_log(
         self, ts: float, agent_name: str, role: str, content: str, session_id: str = ""
     ):
-        """
-        Persist a single chat turn so the UI feed can be rebuilt with real
+        """Persist a single chat turn so the UI feed can be rebuilt with real
         timestamps after a restart. The schema is created in init_state.sql.
         """
         self._conn.execute(
@@ -418,8 +414,7 @@ class WactorzDB:
         since: float | None = None,
         limit: int = 200,
     ) -> list[dict]:
-        """
-        Return chat_log rows newest-first as plain dicts. Used by the
+        """Return chat_log rows newest-first as plain dicts. Used by the
         /api/chats endpoint and by feed_handler to seed the UI feed.
         """
         sql = "SELECT id, ts, agent_name, role, content, session_id FROM chat_log"
@@ -452,8 +447,7 @@ class WactorzDB:
         field: str | None = None,
         limit: int = 100_000,
     ) -> list[dict]:
-        """
-        Query sensor readings by time range, topic, entity, or field.
+        """Query sensor readings by time range, topic, entity, or field.
         Returns list of dicts suitable for pandas DataFrame conversion.
         """
         since = time.time() - (hours * 3600)
@@ -474,7 +468,7 @@ class WactorzDB:
         rows = self._conn.execute(
             f"SELECT ts, topic, entity_id, field, value, value_str, unit, agent, node "
             f"FROM sensor_readings WHERE {where} ORDER BY ts ASC LIMIT ?",
-            params + [limit],
+            [*params, limit],
         ).fetchall()
 
         return [dict(r) for r in rows]
@@ -502,7 +496,7 @@ class WactorzDB:
         rows = self._conn.execute(
             f"SELECT ts, agent, class_name, confidence, bbox, metadata, node "
             f"FROM detections WHERE {where} ORDER BY ts ASC LIMIT ?",
-            params + [limit],
+            [*params, limit],
         ).fetchall()
 
         return [dict(r) for r in rows]
@@ -529,7 +523,7 @@ class WactorzDB:
         rows = self._conn.execute(
             f"SELECT ts, entity_id, old_state, new_state, domain, attributes "
             f"FROM ha_state_changes WHERE {where} ORDER BY ts ASC LIMIT ?",
-            params + [limit],
+            [*params, limit],
         ).fetchall()
 
         return [dict(r) for r in rows]
@@ -552,7 +546,7 @@ class WactorzDB:
         rows = self._conn.execute(
             f"SELECT ts, agent, domain, service, entity_id, payload, trigger, rule_id "
             f"FROM actuations WHERE {where} ORDER BY ts ASC LIMIT ?",
-            params + [limit],
+            [*params, limit],
         ).fetchall()
 
         return [dict(r) for r in rows]
@@ -586,8 +580,7 @@ class WactorzDB:
 
 
 class RedisStore:
-    """
-    Optional Redis wrapper for ephemeral fast-access data.
+    """Optional Redis wrapper for ephemeral fast-access data.
     Falls back to an in-memory dict if Redis is unavailable.
     """
 
@@ -656,23 +649,21 @@ class RedisStore:
         if self._redis:
             prefix_len = len(self._prefix)
             return [k[prefix_len:] for k in self._redis.keys(self._key(pattern))]
-        else:
-            import fnmatch
+        import fnmatch
 
-            now = time.time()
-            return [
-                k
-                for k, v in self._fallback.items()
-                if fnmatch.fnmatch(k, pattern) and (not v.get("expires") or v["expires"] > now)
-            ]
+        now = time.time()
+        return [
+            k
+            for k, v in self._fallback.items()
+            if fnmatch.fnmatch(k, pattern) and (not v.get("expires") or v["expires"] > now)
+        ]
 
 
 # ── Pickle Store (for agent.state only) ───────────────────────────────────
 
 
 class PickleStore:
-    """
-    Pickle-based persistence for arbitrary Python objects.
+    """Pickle-based persistence for arbitrary Python objects.
     Used ONLY for agent.state dicts (ML models, numpy arrays, cv2 captures).
     """
 
@@ -705,8 +696,7 @@ class PickleStore:
         return {}
 
     def delete(self, agent_name: str):
-        """
-        Remove the agent's state.pkl AND its containing directory.
+        """Remove the agent's state.pkl AND its containing directory.
 
         Without removing the directory, a subsequent re-spawn of an agent
         with the same name would find an empty folder rather than a truly
@@ -759,8 +749,7 @@ _REDIS_KEYS = {
 
 
 class PersistenceAPI:
-    """
-    Drop-in replacement for Actor.persist() / Actor.recall().
+    """Drop-in replacement for Actor.persist() / Actor.recall().
 
     Routes data to the correct store based on key name:
       - Known structured keys → SQLite
@@ -800,11 +789,10 @@ class PersistenceAPI:
     def get(self, key: str, default: Any = None) -> Any:
         if key in _SQLITE_KEYS:
             return self.db.kv_get(self.agent, key, default)
-        elif key in _REDIS_KEYS:
+        if key in _REDIS_KEYS:
             return self.redis.get(f"{self.agent}:{key}", default)
-        else:
-            state = self.pickle.load(self.agent)
-            return state.get(key, default)
+        state = self.pickle.load(self.agent)
+        return state.get(key, default)
 
     def delete(self, key: str):
         if key in _SQLITE_KEYS:
@@ -828,8 +816,7 @@ class PersistenceAPI:
         return result
 
     def load_snapshot(self, snapshot: dict, *, replace: bool = True) -> dict:
-        """
-        Bulk-load a state snapshot (the inverse of all()).
+        """Bulk-load a state snapshot (the inverse of all()).
 
         Used at migration time: the source node ships its complete state, and
         the destination calls this once BEFORE the agent's on_start() runs so
@@ -883,8 +870,7 @@ class PersistenceAPI:
         return applied
 
     def purge(self) -> dict:
-        """
-        Permanently delete EVERY stored value for this agent across all
+        """Permanently delete EVERY stored value for this agent across all
         backends (SQLite kv_store, Redis ephemeral keys, pickle state file).
 
         Use this only when the agent is being fully deleted — not on stop or
@@ -928,8 +914,7 @@ class PersistenceAPI:
 
 
 def migrate_from_pickle(state_dir: str, db: WactorzDB, redis: RedisStore):
-    """
-    One-time migration: read existing .pkl files and write to SQLite/Redis.
+    """One-time migration: read existing .pkl files and write to SQLite/Redis.
 
     Only migrates keys that do NOT already exist in SQLite/Redis — this makes the
     function safe to call on every startup without overwriting newer SQLite data
@@ -987,8 +972,7 @@ def init_persistence(
     state_dir: str = "./state",
     run_migration: bool = True,
 ) -> tuple[WactorzDB, RedisStore, PickleStore]:
-    """
-    Initialize the persistence layer. Call once at startup from cli.py.
+    """Initialize the persistence layer. Call once at startup from cli.py.
 
     Redis URL is resolved in this order:
       1. Explicit redis_url parameter

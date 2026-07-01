@@ -1,5 +1,4 @@
-"""
-UdxAgent — User and Developer Xpert.
+"""UdxAgent — User and Developer Xpert.
 
 Zero-LLM, zero-API-key built-in knowledge base about the Wactorz system.
 Responds instantly. Has access to self._registry to enumerate live agents.
@@ -268,12 +267,8 @@ class UdxAgent(Actor):
         if lower.startswith(("help ", "docs ", "explain ")):
             topic = text.split(None, 1)[1] if " " in text else ""
             result = _lookup(topic)
-            return (
-                result
-                if result
-                else (
-                    f"No docs on **{topic}** yet. Try `@main-actor`.\n\n**Available topics:** {_TOPICS}"
-                )
+            return result or (
+                f"No docs on **{topic}** yet. Try `@main-actor`.\n\n**Available topics:** {_TOPICS}"
             )
         if lower == "agents":
             return self._list_agents()

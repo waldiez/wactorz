@@ -1,5 +1,4 @@
-"""
-MonitorActor — System health observer and user notifier.
+"""MonitorActor — System health observer and user notifier.
 
 Responsibilities:
   1. Heartbeat monitoring — detect unresponsive actors
@@ -91,9 +90,12 @@ class MonitorActor(Actor):
                 self._alert_state[msg.sender_id] = False
 
         # Structured error event forwarded from agents/{id}/errors
-        if msg.type == MessageType.TASK and isinstance(msg.payload, dict):
-            if msg.payload.get("_monitor_error_event"):
-                await self._handle_error_event(msg.payload)
+        if (
+            msg.type == MessageType.TASK
+            and isinstance(msg.payload, dict)
+            and msg.payload.get("_monitor_error_event")
+        ):
+            await self._handle_error_event(msg.payload)
 
     # ── Monitor loop ───────────────────────────────────────────────────────
 
@@ -157,8 +159,7 @@ class MonitorActor(Actor):
     # ── Error event handling ───────────────────────────────────────────────
 
     async def _handle_error_event(self, event: dict):
-        """
-        Observer-only: classify severity, fire MQTT alert, notify user.
+        """Observer-only: classify severity, fire MQTT alert, notify user.
         The Supervisor is the single restart authority — never call
         actor.stop() / actor.start() here.
         """

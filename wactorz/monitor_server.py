@@ -1,5 +1,4 @@
-"""
-Wactorz Monitor — WebSocket dashboard + optional MQTT bridge.
+"""Wactorz Monitor — WebSocket dashboard + optional MQTT bridge.
 
 Chat routing modes (set via registry wiring in cli.py):
   direct_ws  — registry is set; chat goes straight to actors over WebSocket.
@@ -99,7 +98,8 @@ _hard_resetting = False
 def _mark_deleted(agent_id: str) -> None:
     """Add an agent_id to the deleted list with FIFO eviction. If already
     present, refresh its deleted-at timestamp so any in-flight retained
-    messages from the previous incarnation stay blocked."""
+    messages from the previous incarnation stay blocked.
+    """
     _undelete(agent_id)  # remove any prior entry so the new timestamp wins
     _deleted_agent_ids.append((agent_id, time.time()))
     if len(_deleted_agent_ids) > _DELETED_IDS_MAX:
@@ -111,12 +111,11 @@ def _is_deleted(agent_id: str, newer_than: float = 0.0) -> bool:
     the caller has evidence (a message timestamp) that's strictly later than
     the deletion — that means the agent was respawned and we should re-admit
     it on the next update_agent() call. The actual un-delete happens there;
-    this function stays a pure query."""
+    this function stays a pure query.
+    """
     for aid, ts in _deleted_agent_ids:
         if aid == agent_id:
-            if newer_than > ts:
-                return False
-            return True
+            return not newer_than > ts
     return False
 
 
@@ -277,29 +276,26 @@ async def _delete_agent(agent_id: str) -> str:
                 asyncio.create_task(actor.stop())
                 routed = "via local registry"
 
-    if routed in ("unknown", "main path failed"):
+    if routed in ("unknown", "main path failed") and mqtt_client_ref:
         # MQTT-only mode (or main unavailable). Route by node if we have one.
-        if mqtt_client_ref:
-            if node:
-                try:
-                    await mqtt_client_ref.publish(
-                        f"nodes/{node}/stop",
-                        json.dumps({"name": name}),
-                    )
-                    routed = f"via nodes/{node}/stop"
-                except Exception as e:
-                    logger.warning(f"[delete] nodes/{node}/stop publish failed: {e}")
-            else:
-                try:
-                    await mqtt_client_ref.publish(
-                        f"agents/{agent_id}/commands",
-                        json.dumps(
-                            {"command": "stop", "sender": "monitor", "timestamp": time.time()}
-                        ),
-                    )
-                    routed = f"via agents/{agent_id}/commands"
-                except Exception as e:
-                    logger.warning(f"[delete] commands publish failed: {e}")
+        if node:
+            try:
+                await mqtt_client_ref.publish(
+                    f"nodes/{node}/stop",
+                    json.dumps({"name": name}),
+                )
+                routed = f"via nodes/{node}/stop"
+            except Exception as e:
+                logger.warning(f"[delete] nodes/{node}/stop publish failed: {e}")
+        else:
+            try:
+                await mqtt_client_ref.publish(
+                    f"agents/{agent_id}/commands",
+                    json.dumps({"command": "stop", "sender": "monitor", "timestamp": time.time()}),
+                )
+                routed = f"via agents/{agent_id}/commands"
+            except Exception as e:
+                logger.warning(f"[delete] commands publish failed: {e}")
 
     # Always purge retained — even when main handled the delete, we want the
     # dashboard's view to clear immediately rather than wait for tombstones.
@@ -462,8 +458,7 @@ async def _scan_subnet_ssh(subnet: str) -> list:
 
 
 async def handle_slash(text: str, reply_fn) -> bool:
-    """
-    Dispatch a slash command. Returns True if recognised.
+    """Dispatch a slash command. Returns True if recognised.
     `reply_fn` is an async callable that sends a string back to the user.
     """
     parts = text.split()
@@ -583,10 +578,9 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
 
             remote_node = None
             for node_name, nd in main._known_nodes.items():
-                if _rt.time() - nd.get("last_seen", 0) < 30:
-                    if target_name in nd.get("agents", []):
-                        remote_node = node_name
-                        break
+                if _rt.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get("agents", []):
+                    remote_node = node_name
+                    break
 
             if remote_node:
                 import json as _json
@@ -628,6 +622,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                                     except Exception:
                                         text_out = msg.payload.decode()
                                     return str(text_out)
+                                return None
 
                             text_out = await asyncio.wait_for(_get_reply(), timeout=150.0)
                             await reply_fn(text_out)
@@ -1866,7 +1861,8 @@ def _best_cost(ag, actor, name: str) -> float:
     state first, then the live actor object, then the persisted _final_cost row.
     Returns 0.0 when nothing is known so it can be summed safely. The headline
     total must use this — summing only state["cost_usd"] dropped agents whose
-    cost lives on the actor object / SQLite (the reachy-body case)."""
+    cost lives on the actor object / SQLite (the reachy-body case).
+    """
     if ag is not None:
         c = ag.get("cost_usd")
         if c is not None:
@@ -2169,7 +2165,7 @@ async def reset_handler(request):
         finally:
             _hard_resetting = False
         return web.json_response({"status": "ok", "scope": "all", "agent": None})
-    elif scope == "chat":
+    if scope == "chat":
         _reset.reset_chat(agent)
         # Also clear the LIVE in-memory conversation on running actors. reset_chat
         # only clears the persisted chat_log/kv, so without this the agent still
@@ -2598,8 +2594,7 @@ async def config_handler(request):
 
 
 async def feed_handler(request):
-    """
-    Return recent chat events for the UI feed, with REAL persisted timestamps.
+    """Return recent chat events for the UI feed, with REAL persisted timestamps.
 
     Previously this read from kv_store.conversation_history, which is just a
     JSON list with no timestamps — so each entry got `i` (the loop index) as

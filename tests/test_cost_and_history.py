@@ -519,10 +519,9 @@ def _make_web_stub():
             self.data = data
             self.status = status
 
-    web = types.SimpleNamespace(
+    return types.SimpleNamespace(
         json_response=lambda data, **kw: _JsonResponse(data, **kw),
     )
-    return web
 
 
 class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):

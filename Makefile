@@ -89,8 +89,8 @@ lint: ## Full frontend lint (typecheck + prettier + eslint)
 lint-py: ## Lint Python — gated ruff (fails) + advisory docstrings/typing (reports only)
 	$(PYTHON) -m ruff check wactorz tests
 	$(PYTHON) -m ruff format --check wactorz tests
-	@echo "── advisory (non-blocking): docstrings + good-practice rules ──"
-	-$(PYTHON) -m ruff check wactorz --extend-select D,SIM,RET,PIE --statistics
+	@echo "── advisory (non-blocking): not-yet-gated families ──"
+	-$(PYTHON) -m ruff check wactorz --extend-select G,LOG,TRY,C90,PTH,S,T20,DTZ --statistics
 	@echo "── advisory (non-blocking): basedpyright (basic) ──"
 	@command -v basedpyright >/dev/null 2>&1 && basedpyright wactorz || echo "(basedpyright not installed — run 'make install-dev')"
 

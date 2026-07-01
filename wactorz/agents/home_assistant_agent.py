@@ -1,5 +1,4 @@
-"""
-HomeAssistantAgent - Unified Home Assistant agent.
+"""HomeAssistantAgent - Unified Home Assistant agent.
 
 Handles all HA operations in a single agent:
   - recommend_hardware    : advise which devices/entities are needed
@@ -25,7 +24,7 @@ import json
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 from wactorz.config import CONFIG
 
@@ -78,12 +77,17 @@ class HomeAssistantAgent(LLMAgent):
     """Unified Home Assistant agent: hardware recommendations and automation CRUD."""
 
     DESCRIPTION = "Controls Home Assistant: automations, devices, areas, entities"
-    CAPABILITIES = ["home_automation", "ha_automations", "ha_devices", "ha_entities"]
-    INPUT_SCHEMA = {
+    CAPABILITIES: ClassVar[list[str]] = [
+        "home_automation",
+        "ha_automations",
+        "ha_devices",
+        "ha_entities",
+    ]
+    INPUT_SCHEMA: ClassVar[dict[str, str]] = {
         "text": "str — natural language command or query, e.g. 'turn on living room lights', "
         "'list all automations', 'create automation that turns off lights at 11pm'"
     }
-    OUTPUT_SCHEMA = {
+    OUTPUT_SCHEMA: ClassVar[dict[str, str]] = {
         "result": "str — human-readable confirmation or list of results",
         "data": "list|dict|null — structured HA API response when applicable",
     }
@@ -129,8 +133,7 @@ class HomeAssistantAgent(LLMAgent):
         return response
 
     async def chat_stream(self, user_message: str):
-        """
-        Override LLMAgent streaming path so direct @home-assistant-agent calls
+        """Override LLMAgent streaming path so direct @home-assistant-agent calls
         still use Home Assistant intent routing instead of generic LLM chat.
         """
         response = await self.chat(user_message)

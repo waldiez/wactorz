@@ -1,5 +1,4 @@
-"""
-NewsAgent — HackerNews headlines on demand. No API key required.
+"""NewsAgent — HackerNews headlines on demand. No API key required.
 
 Sources:
   - Hacker News Firebase API (default)
@@ -166,7 +165,7 @@ class NewsAgent(Actor):
                 url = item.get("url", "")
                 score = item.get("score", 0)
                 hn_url = f"https://news.ycombinator.com/item?id={item_id}"
-                link = url if url else hn_url
+                link = url or hn_url
                 lines.append(f"{i + 1}. **[{title}]({link})** — ⬆ {score} · [HN]({hn_url})")
 
             if not lines:

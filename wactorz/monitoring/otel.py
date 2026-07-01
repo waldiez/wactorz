@@ -1,5 +1,4 @@
-"""
-OpenTelemetry integration for Wactorz.
+"""OpenTelemetry integration for Wactorz.
 
 Activated when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 Pushes the same per-actor metrics as the Prometheus collector via OTLP HTTP.
@@ -28,8 +27,7 @@ _export_warned = False  # suppress repeated connection-error log spam
 
 
 def setup_otel(registry_provider: RegistryProvider) -> bool:
-    """
-    Configure OTel SDK and start periodic metric export.
+    """Configure OTel SDK and start periodic metric export.
     Returns True if OTel was successfully set up, False if disabled or unavailable.
     Idempotent — safe to call multiple times.
     """

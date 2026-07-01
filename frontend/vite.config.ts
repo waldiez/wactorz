@@ -28,8 +28,9 @@ export default defineConfig({
         rollupOptions: {
             output: {
                 manualChunks: id => {
-                    // mqtt.js + ws deps
-                    if (id.includes("mqtt") || id.includes("node_modules")) {
+                    // Third-party deps → one vendor chunk. (Don't match "mqtt" by
+                    // name — that also catches the app's own src/mqtt/ modules.)
+                    if (id.includes("node_modules")) {
                         return "vendor";
                     }
                 },

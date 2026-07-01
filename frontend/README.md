@@ -91,7 +91,7 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-chat-message` | main.ts (WS/MQTT) → DashboardChat | `{ msg: ChatMessage }` |
 | `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from }` |
 | `af-stream-end` | IOManager → DashboardChat | `{ text, from }` |
-| `af-connection-status` | main.ts (MQTT/WS) → CardDashboard | `{ status: "live" \| "demo" }` |
+| `af-connection-status` | main.ts (MQTT/WS) → CardDashboard | `{ status: "live" \| "connecting" \| "demo" }` |
 | `af-attachment-added` | DropZone / chatIobar → DashboardChat | `{ attachment }` |
 | `af-reset-chat` | WSChatClient → DashboardChat | `{ agent: string \| null }` |
 | `af-clear-feed` | WSChatClient / main.ts → CardDashboard | _(none)_ |

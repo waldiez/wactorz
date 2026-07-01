@@ -208,8 +208,11 @@ export class TTSManager {
     }
 
     private _speakServer(text: string): void {
-        // duck ambient while server audio plays
+        // Duck ambient while server audio plays; release it the instant we know the
+        // audio won't play (any failure/fallback below) or when it finishes. Every
+        // early-return path must call unduck() or ambient stays pinned at DUCK_VOLUME.
         ambient.duck(true);
+        const unduck = () => ambient.duck(false);
         const params = new URLSearchParams({ text });
         const voice = this.selectedVoice;
         if (voice) {
@@ -220,10 +223,12 @@ export class TTSManager {
             .then(res => {
                 if (res.status === 503 || res.status === 404) {
                     this._serverAvailable = false;
+                    unduck();
                     this._speakBrowser(text);
                     return null;
                 }
                 if (!res.ok) {
+                    unduck();
                     return null;
                 }
                 this._serverAvailable = true;
@@ -236,6 +241,7 @@ export class TTSManager {
                 // Decode + play through AudioContext (already unlocked by beep gesture)
                 const ctx = this._ctx();
                 if (!ctx) {
+                    unduck();
                     this._speakBrowser(text);
                     return;
                 }
@@ -244,18 +250,17 @@ export class TTSManager {
                         const src = ctx.createBufferSource();
                         src.buffer = decoded;
                         src.connect(ctx.destination);
-                        src.onended = () => {
-                            ambient.duck(false);
-                        };
+                        src.onended = unduck;
                         src.start();
                     })
                     .catch(() => {
-                        ambient.duck(false);
+                        unduck();
                         this._speakBrowser(text);
                     });
             })
             .catch(() => {
                 this._serverAvailable = false;
+                unduck();
                 this._speakBrowser(text);
             });
     }

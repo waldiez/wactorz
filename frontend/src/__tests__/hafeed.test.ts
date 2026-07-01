@@ -81,6 +81,19 @@ describe("createHaFeedPusher", () => {
         pusher("light.kitchen", "off", "Kitchen");
         expect(push).toHaveBeenCalledTimes(2);
     });
+
+    it("eviction sweep keeps still-fresh entries deduped", () => {
+        // A later event triggers the prune; a within-window entry must survive it
+        // (guards the leak fix from over-evicting and breaking dedup).
+        const push = vi.fn<(item: FeedItem) => void>();
+        const pusher = createHaFeedPusher(push);
+        pusher("light.a", "on", "A");
+        vi.advanceTimersByTime(1000);
+        pusher("light.b", "on", "B"); // triggers a sweep; A is only 1s old
+        push.mockClear();
+        pusher("light.a", "on", "A"); // A still inside the 5s window → deduped
+        expect(push).not.toHaveBeenCalled();
+    });
 });
 
 describe("parseHaRawEvent", () => {

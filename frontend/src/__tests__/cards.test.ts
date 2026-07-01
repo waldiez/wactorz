@@ -150,4 +150,11 @@ describe("buildWactorCard", () => {
         const card = buildWactorCard(agent("worker"), 0, cb());
         expect(card.querySelector(".af-card-tokens")).toBeNull();
     });
+
+    it("omits tokens and cost for an idle LLM agent reporting zeros", () => {
+        // e.g. home-assistant-agent that hasn't made a call: 0/0 tokens, $0 cost.
+        const card = buildWactorCard(agent("ha", { inputTokens: 0, outputTokens: 0, costUsd: 0 }), 0, cb());
+        expect(card.querySelector(".af-card-tokens")).toBeNull();
+        expect(card.querySelector(".af-card-meta")!.textContent).not.toContain("$");
+    });
 });

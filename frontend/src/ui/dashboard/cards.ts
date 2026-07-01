@@ -240,21 +240,31 @@ function appendCardHeader(card: HTMLElement, agent: AgentInfo, hbMs: number): vo
 
     const meta = document.createElement("div");
     meta.className = "af-card-meta";
-    // Tokens only for LLM agents (non-LLM metrics carry no token fields → omitted).
-    const tokens =
-        agent.inputTokens != null || agent.outputTokens != null
-            ? `<span class="af-card-tokens" title="tokens in / out">${fmtTokens(
-                  agent.inputTokens ?? 0,
-              )}↑ ${fmtTokens(agent.outputTokens ?? 0)}↓</span>`
-            : "";
+    // Cost only when actually spent — an idle LLM agent reports $0.0000, which is noise.
+    const cost = agent.costUsd ?? 0;
     meta.innerHTML = `
       <span>♥ <span class="af-card-hb-time">${hbMs ? relTime(hbMs) : "—"}</span></span>
       <span>${agent.messagesProcessed ?? 0} msgs</span>
-      ${agent.costUsd != null ? `<span>$${agent.costUsd.toFixed(4)}</span>` : ""}
-      ${tokens}
+      ${cost > 0 ? `<span>$${cost.toFixed(4)}</span>` : ""}
     `;
 
     card.append(dot, name, stateLbl, meta);
+    appendTokenLine(card, agent);
+}
+
+/** Append the LLM token-usage line — only when there's real usage: an idle LLM
+ *  agent reports 0/0 and non-LLM agents report nothing, so neither shows a line. */
+function appendTokenLine(card: HTMLElement, agent: AgentInfo): void {
+    const inTok = agent.inputTokens ?? 0;
+    const outTok = agent.outputTokens ?? 0;
+    if (inTok === 0 && outTok === 0) {
+        return;
+    }
+    const tokens = document.createElement("div");
+    tokens.className = "af-card-tokens";
+    tokens.title = "tokens in / out";
+    tokens.textContent = `${fmtTokens(inTok)}↑ ${fmtTokens(outTok)}↓`;
+    card.appendChild(tokens);
 }
 
 /** Build a single agent ("wactor") card, wiring its control buttons to `cb`. */

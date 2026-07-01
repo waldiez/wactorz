@@ -16,6 +16,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **@mention could silently fail to switch target** — the mention list offered every
+  agent, but only messageable agents are in the target picker, so mentioning a
+  non-messageable one left the placeholder claiming a target that was never set.
+  Suggestions now mirror the picker (messageable only), and accepting an untargetable
+  name is a clean no-op.
 - **Planners leaked until restart** — proposal/pipeline planners never stopped and
   stayed pinned by both the registry and the Supervisor. Added a lifetime watchdog
   (`max_lifetime_s`, 10 min) + idempotent `_terminate()` doing `release()` →

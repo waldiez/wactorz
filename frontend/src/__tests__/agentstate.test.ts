@@ -3,7 +3,14 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { canDirectMessage, stateColor, stateLabel, sortAgents, relTime } from "../ui/dashboard/agentState";
+import {
+    canDirectMessage,
+    messageableNames,
+    stateColor,
+    stateLabel,
+    sortAgents,
+    relTime,
+} from "../ui/dashboard/agentState";
 import type { AgentState } from "../types/agent";
 
 describe("canDirectMessage", () => {
@@ -18,6 +25,20 @@ describe("canDirectMessage", () => {
     it("allows normal agents unless they are protected", () => {
         expect(canDirectMessage({ name: "worker" })).toBe(true);
         expect(canDirectMessage({ name: "worker", protected: true })).toBe(false);
+    });
+});
+
+describe("messageableNames", () => {
+    it("keeps only messageable agents and drops empty names", () => {
+        expect(
+            messageableNames([
+                { name: "main", protected: true }, // pinned → kept
+                { name: "io-agent" }, // system → dropped
+                { name: "worker" }, // normal → kept
+                { name: "locked", protected: true }, // protected → dropped
+                { name: "" }, // empty → dropped
+            ]),
+        ).toEqual(["main", "worker"]);
     });
 });
 

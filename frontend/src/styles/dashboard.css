@@ -634,6 +634,11 @@
   white-space: nowrap;
   flex: 1;
 }
+/* The `@agent` routing token on the user's own rows — echoes the agent-name blue. */
+.af-feed-mention {
+  color: #93c5fd;
+  font-weight: 600;
+}
 
 /* ── Chat view (inside body) ── */
 .af-chat {

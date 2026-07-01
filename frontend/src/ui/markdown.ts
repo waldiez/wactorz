@@ -340,7 +340,7 @@ const INLINE_RULES: InlineRule[] = [
             const text = m[1]!;
             const href = m[2]!;
             if (!URL_SAFE.test(href)) {
-                return document.createTextNode(m[0]!);
+                return document.createTextNode(m[0]);
             }
             const a = document.createElement("a");
             a.href = href;
@@ -355,7 +355,7 @@ const INLINE_RULES: InlineRule[] = [
         // text so "see https://x.com." doesn't swallow the full stop into the link.
         re: /\bhttps?:\/\/[^\s<]+/,
         build: m => {
-            let url = m[0]!;
+            let url = m[0];
             const trail = /[.,;:!?)\]}'"]+$/.exec(url)?.[0] ?? "";
             if (trail) {
                 url = url.slice(0, url.length - trail.length);
@@ -423,7 +423,7 @@ function appendInline(el: HTMLElement, text: string): void {
             el.appendChild(document.createTextNode(rest.slice(0, best.idx)));
         }
         el.appendChild(best.rule.build(best.m));
-        rest = rest.slice(best.idx + best.m[0]!.length);
+        rest = rest.slice(best.idx + best.m[0].length);
     }
     if (rest) {
         el.appendChild(document.createTextNode(rest));

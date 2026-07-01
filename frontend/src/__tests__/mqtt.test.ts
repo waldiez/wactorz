@@ -318,6 +318,14 @@ describe("MQTTClient", () => {
         client.disconnect();
     });
 
+    it("subscribes to the routed topic prefixes, not the '#' firehose", () => {
+        // beforeEach connected + fired the connect handler, so subscribe ran.
+        expect(mockMqttClient.subscribe).toHaveBeenCalledWith(
+            ["agents/#", "system/#", "nodes/#", "homeassistant/state_changes/#"],
+            { qos: 1 },
+        );
+    });
+
     it("emits 'connected' on broker connect", () => {
         const spy = vi.fn();
         const c = new MQTTClient();

@@ -137,4 +137,24 @@ describe("buildWactorCard", () => {
         expect(card.querySelector(".af-card-protected")).not.toBeNull();
         expect(actions(card)).not.toContain("delete");
     });
+
+    it("shows compact in/out tokens for an LLM agent", () => {
+        const card = buildWactorCard(agent("llm", { inputTokens: 12480, outputTokens: 900 }), 0, cb());
+        const tok = card.querySelector(".af-card-tokens");
+        expect(tok).not.toBeNull();
+        expect(tok!.textContent).toContain("12.5k↑");
+        expect(tok!.textContent).toContain("900↓");
+    });
+
+    it("omits the token widget for a non-LLM agent (no token fields)", () => {
+        const card = buildWactorCard(agent("worker"), 0, cb());
+        expect(card.querySelector(".af-card-tokens")).toBeNull();
+    });
+
+    it("omits tokens and cost for an idle LLM agent reporting zeros", () => {
+        // e.g. home-assistant-agent that hasn't made a call: 0/0 tokens, $0 cost.
+        const card = buildWactorCard(agent("ha", { inputTokens: 0, outputTokens: 0, costUsd: 0 }), 0, cb());
+        expect(card.querySelector(".af-card-tokens")).toBeNull();
+        expect(card.querySelector(".af-card-meta")!.textContent).not.toContain("$");
+    });
 });

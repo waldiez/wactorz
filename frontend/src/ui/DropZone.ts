@@ -61,7 +61,7 @@ export class DropZone {
         on("drop", e => e.preventDefault());
 
         on("dragenter", e => {
-            if (!this._hasFiles(e as DragEvent)) {
+            if (!this._hasFiles(e)) {
                 return;
             }
             this.dragDepth++;

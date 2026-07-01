@@ -85,7 +85,15 @@ export class MQTTClient {
                 clearTimeout(this._disconnectTimer);
                 this._disconnectTimer = null;
             }
-            this.client?.subscribe("#", { qos: 1 });
+            // Scope to the prefixes the dashboard actually routes (see
+            // handleMessage: agents/system/nodes + homeassistant/state_changes via
+            // the raw→parseHaRawEvent path) instead of "#", so unrelated broker
+            // topics never reach the browser to be parsed. All dynamic ids live
+            // under these prefixes. Subscribe narrowly to state_changes (not all of
+            // homeassistant/#) to skip the large chunked map payloads we don't use.
+            this.client?.subscribe(["agents/#", "system/#", "nodes/#", "homeassistant/state_changes/#"], {
+                qos: 1,
+            });
             this.emit("connected", undefined);
         });
 
@@ -148,7 +156,7 @@ export class MQTTClient {
 
     /** Remove a previously registered listener. Chainable. */
     off<K extends keyof MQTTEvents>(event: K, listener: Listener<MQTTEvents[K]>): this {
-        const arr = this.listeners[event] as Array<Listener<MQTTEvents[K]>> | undefined;
+        const arr = this.listeners[event];
         if (arr) {
             const idx = arr.indexOf(listener);
             if (idx !== -1) {
@@ -159,7 +167,7 @@ export class MQTTClient {
     }
 
     private emit<K extends keyof MQTTEvents>(event: K, data: MQTTEvents[K]): void {
-        const arr = this.listeners[event] as Array<Listener<MQTTEvents[K]>> | undefined;
+        const arr = this.listeners[event];
         arr?.forEach(fn => {
             try {
                 fn(data);

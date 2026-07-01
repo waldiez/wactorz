@@ -91,7 +91,7 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-chat-message` | main.ts (WS/MQTT) → DashboardChat | `{ msg: ChatMessage }` |
 | `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from }` |
 | `af-stream-end` | IOManager → DashboardChat | `{ text, from }` |
-| `af-connection-status` | main.ts (MQTT/WS) → CardDashboard | `{ status: "live" \| "demo" }` |
+| `af-connection-status` | main.ts (MQTT/WS) → CardDashboard | `{ status: "live" \| "connecting" \| "demo" }` |
 | `af-attachment-added` | DropZone / chatIobar → DashboardChat | `{ attachment }` |
 | `af-reset-chat` | WSChatClient → DashboardChat | `{ agent: string \| null }` |
 | `af-clear-feed` | WSChatClient / main.ts → CardDashboard | _(none)_ |
@@ -150,7 +150,13 @@ It defaults to `""`, so standalone builds need no configuration.
 The dashboard does **not** talk to Home Assistant directly: the "Devices" nav button
 links out to the HA UI (new tab) using the `ha.url` from `/api/config`. No HA token
 ever reaches the browser. HA entity activity still reaches the feed via the
-`ha-state-bridge-agent` over MQTT (`ha/state/#`).
+`ha-state-bridge-agent` over MQTT (`homeassistant/state_changes/#`).
+
+The MQTT client subscribes to `agents/#`, `system/#`, `nodes/#`, and
+`homeassistant/state_changes/#`. Most agent topics are routed to typed events in
+`MQTTClient.ts`; feed-only agent topics (e.g. `actuations`, `anomaly`) ride the
+`raw` catch-all and are mapped to feed rows by the extensible `rawFeedItem`
+registry in `agents/mapping.ts` — add a topic there without touching the client.
 
 ## Feature flags (build-time)
 

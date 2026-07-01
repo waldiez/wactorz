@@ -54,6 +54,7 @@ import {
     logFeedItem,
     completedFeedItem,
     nodeHeartbeatFeedItem,
+    rawFeedItem,
 } from "./agents/mapping";
 import { createDeletionGuard } from "./agents/deletionGuard";
 
@@ -342,14 +343,21 @@ mqtt.on("error", err => {
 
 // ═══ 5 · Wiring — Home Assistant feed ════════════════════════════════════════
 // HA entity state reaches the activity feed via the ha-state-bridge-agent over
-// MQTT (ha/state/{domain}/{entity_id}). The browser no longer talks to HA
-// directly — the Devices nav button just links out to the HA UI.
+// MQTT (homeassistant/state_changes/{domain}/{entity_id}). The browser no longer
+// talks to HA directly — the Devices nav button just links out to the HA UI.
 const pushHaFeed = createHaFeedPusher(pushFeed);
 
 mqtt.on("raw", ({ topic, payload }) => {
     const ev = parseHaRawEvent(topic, payload);
     if (ev) {
         pushHaFeed(ev.entityId, ev.state, ev.friendlyName);
+        return;
+    }
+    // Other feed-only agent topics (actuations, anomaly, …) via the extensible
+    // registry in mapping.ts — resolve the friendly name from the live store.
+    const item = rawFeedItem(topic, payload, id => agentStore.getAgents().find(a => a.id === id)?.name);
+    if (item) {
+        pushFeed(item);
     }
 });
 
@@ -400,7 +408,7 @@ listen("af-clear-feed", () => {
 
 wsChat.connect(`${_wsBase}/ws`);
 refreshLiveActors();
-window.setInterval(() => {
+const _liveActorsTimer = window.setInterval(() => {
     refreshLiveActors();
     agentStore.pruneStaleRemoteAgents();
 }, 15000);
@@ -425,13 +433,14 @@ fetch(`${_apiBase}/api/feed`)
 // Probe server TTS availability + load voice list (base must be set first so
 // the request stays inside the ingress prefix instead of bare "/api").
 tts.setApiBase(_apiBase);
-tts.init();
+void tts.init();
 
 mqtt.connect();
 
 // ═══ 8 · Teardown ════════════════════════════════════════════════════════════
 
 window.addEventListener("beforeunload", () => {
+    window.clearInterval(_liveActorsTimer);
     mqtt.disconnect();
     wsChat.disconnect();
     agentStore.dispose();

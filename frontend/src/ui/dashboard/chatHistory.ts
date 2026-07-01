@@ -54,7 +54,7 @@ async function fromChatLog(agentId: string): Promise<ChatMessage[]> {
     if (!res.ok) {
         return [];
     }
-    const rows: { id: number; ts: number; role: string; content: string }[] = await res.json();
+    const rows = (await res.json()) as { id: number; ts: number; role: string; content: string }[];
     return stripInternalTurns(rows.reverse()).map(r => ({
         id: `hist-${agentId}-${r.id}`,
         from: r.role === "user" ? "user" : agentId,
@@ -70,7 +70,7 @@ async function fromKvStore(agentId: string): Promise<ChatMessage[]> {
     if (!res.ok) {
         return [];
     }
-    const rawAll: { role: string; content: string }[] = await res.json();
+    const rawAll = (await res.json()) as { role: string; content: string }[];
     const raw = stripInternalTurns(rawAll);
     const base = Date.now() - raw.length * 2000 - 5000;
     return raw.map((m, i) => ({

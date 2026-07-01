@@ -7,12 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Per-agent token counts** — LLM agents' cumulative input/output tokens now show on
+  their card next to cost (compact `12.5k↑ 900↓`); non-LLM agents show nothing, as
+  before. The counts were already on the wire but previously parsed and dropped.
+- **More activity-feed sources** — the dashboard feed now surfaces agent actuations
+  (what an agent actually changed) and anomaly events, via an extensible topic
+  registry so further feed-only topics are a one-line addition.
 - **Pipeline-rule conflict advisory** — planner now semantically checks a new rule
   against active ones and flags duplicates and contradictions (e.g. "over 25° AC off"
   vs "AC on") as a non-blocking "⚠️ Heads up" note at approval.
 
 ### Fixed
 
+- **@mention could silently fail to switch target** — the mention list offered every
+  agent, but only messageable agents are in the target picker, so mentioning a
+  non-messageable one left the placeholder claiming a target that was never set.
+  Suggestions now mirror the picker (messageable only), and accepting an untargetable
+  name is a clean no-op.
 - **Planners leaked until restart** — proposal/pipeline planners never stopped and
   stayed pinned by both the registry and the Supervisor. Added a lifetime watchdog
   (`max_lifetime_s`, 10 min) + idempotent `_terminate()` doing `release()` →

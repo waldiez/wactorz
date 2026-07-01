@@ -1,4 +1,8 @@
 /**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/**
  * Wactorz Service Worker
  *
  * Registered only in the standalone / desktop deployment (see index.html): behind

@@ -22,6 +22,7 @@ import {
     logFeedItem,
     completedFeedItem,
     nodeHeartbeatFeedItem,
+    rawFeedItem,
 } from "../agents/mapping";
 import { resolveAgentName } from "../agents/naming";
 import type { LogFeedItem, StatePatchAgent } from "../types/ws";
@@ -174,6 +175,15 @@ describe("buildMetricsUpdate", () => {
         expect("costUsd" in update).toBe(false);
         expect("uptime" in update).toBe(false);
         expect("messagesProcessed" in update).toBe(false);
+        expect("inputTokens" in update).toBe(false); // non-LLM agents carry no tokens
+        expect("outputTokens" in update).toBe(false);
+    });
+
+    it("carries LLM token counts when present", () => {
+        const p = { agentId: "id1", inputTokens: 12480, outputTokens: 3210 } as MetricsPayload;
+        const update = buildMetricsUpdate(p, existing);
+        expect(update.inputTokens).toBe(12480);
+        expect(update.outputTokens).toBe(3210);
     });
 });
 
@@ -333,5 +343,53 @@ describe("feedSeedItem", () => {
 
     it("passes the role through", () => {
         expect(feedSeedItem({ label: "x", agentName: "a", timestamp: 1, role: "user" }).role).toBe("user");
+    });
+});
+
+describe("rawFeedItem", () => {
+    it("returns null for non-agent and unmapped topics", () => {
+        expect(rawFeedItem("system/health", {})).toBeNull();
+        expect(rawFeedItem("homeassistant/state_changes/light/k", {})).toBeNull();
+        expect(rawFeedItem("agents/abc/detections", { count: 3 })).toBeNull();
+    });
+
+    it("builds an actuation row with the first action and a count of the rest", () => {
+        const item = rawFeedItem(
+            "agents/abc/actuations",
+            {
+                automation_id: "hallway",
+                actions: [
+                    { domain: "light", service: "turn_on", entity_id: "light.hallway" },
+                    { domain: "switch", service: "turn_off", entity_id: "switch.fan" },
+                ],
+            },
+            undefined,
+            1000,
+        );
+        expect(item).toMatchObject({ type: "health", timestamp: 1000 });
+        expect(item?.label).toContain("hallway");
+        expect(item?.label).toContain("light.turn_on light.hallway");
+        expect(item?.label).toContain("+1");
+    });
+
+    it("surfaces an anomaly only when anomaly === true", () => {
+        expect(rawFeedItem("agents/abc/anomaly", { anomaly: false, value: 5 })).toBeNull();
+        const item = rawFeedItem(
+            "agents/abc/anomaly",
+            { anomaly: true, value: 142.3, zscore: 4.12 },
+            undefined,
+            2000,
+        );
+        expect(item).toMatchObject({ type: "alert-warning", timestamp: 2000 });
+        expect(item?.label).toContain("value 142.3");
+        expect(item?.label).toContain("z 4.1");
+    });
+
+    it("resolves the agent name via the resolver, else an id-derived fallback", () => {
+        const named = rawFeedItem("agents/xyz/anomaly", { anomaly: true }, id =>
+            id === "xyz" ? "sensor-agent" : undefined,
+        );
+        expect(named?.agentName).toBe("sensor-agent");
+        expect(rawFeedItem("agents/abcdef1234/anomaly", { anomaly: true })?.agentName).toBeTruthy();
     });
 });

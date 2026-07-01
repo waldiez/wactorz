@@ -1018,7 +1018,7 @@ class _RemoteAgent:
 
     def _save_state(self):
         try:
-            with open(self._state_path, "w") as f:
+            with open(self._state_path, "w", encoding="utf-8") as f:
                 json.dump(self._persistent_state, f)
         except Exception as e:
             logger.warning(f"[{self.name}] State save failed: {e}")
@@ -1026,7 +1026,7 @@ class _RemoteAgent:
     def _load_state(self):
         if os.path.exists(self._state_path):
             try:
-                with open(self._state_path) as f:
+                with open(self._state_path, encoding="utf-8") as f:
                     self._persistent_state = json.load(f)
                 logger.info(f"[{self.name}] Loaded persistent state.")
             except Exception:

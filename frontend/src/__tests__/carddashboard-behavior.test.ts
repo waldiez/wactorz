@@ -272,6 +272,13 @@ describe("CardDashboard behaviour", () => {
             cd.lastHb.set("ghost", Date.now());
             expect(() => cd._refreshTimestamps()).not.toThrow();
         });
+
+        it("removeAgent clears the agent's lastHb entry (no leak on churn)", () => {
+            cd.show([agent("catalog")]);
+            cd.lastHb.set("catalog", Date.now());
+            cd.removeAgent("catalog");
+            expect(cd.lastHb.has("catalog")).toBe(false);
+        });
     });
 
     describe("Home Assistant nav link (external link, no embedded client)", () => {

@@ -179,7 +179,7 @@ describe("main.ts bootstrap", () => {
 
     it("routes HA raw events through the feed (and ignores non-HA topics)", () => {
         mqttHandler("raw")({
-            topic: "ha/state/light/x",
+            topic: "homeassistant/state_changes/light/x",
             payload: { new_state: { state: "on", attributes: { friendly_name: "Lamp" } } },
         });
         mqttHandler("raw")({ topic: "not-ha", payload: {} }); // parses to null

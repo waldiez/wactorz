@@ -189,6 +189,7 @@ export class CardDashboard {
     removeAgent(id: string): void {
         const removed = this.agents.get(id);
         this.agents.delete(id);
+        this.lastHb.delete(id); // else churned agents leak dead entries _refreshTimestamps scans
         // history is keyed by agent NAME, not UUID — look up name before deleting
         if (removed) {
             this._chat.forgetHistory(removed.name);

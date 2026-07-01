@@ -71,6 +71,8 @@ function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTM
             onClose?.(popover);
         }
     });
+    // Page-lifetime listener: CardDashboard is a single instance never remounted,
+    // so this is intentionally not removed. If that assumption ever changes, this leaks.
     document.addEventListener("click", e => {
         if (!popover.contains(e.target as Node)) {
             onClose?.(popover);
@@ -220,6 +222,7 @@ export function buildBottomNav(opts: {
         sheet.classList.toggle("open");
         moreBtn.classList.toggle("active", sheet.classList.contains("open"));
     });
+    // Page-lifetime listener (see note above): single-instance, not removed by design.
     document.addEventListener("click", () => {
         sheet.classList.remove("open");
         moreBtn.classList.remove("active");

@@ -209,10 +209,12 @@ async def setup(agent):
         except Exception:
             pass
 
-    # ---- Discover HA entities so the LLM uses the right IDs ----
-    # Without this the planner falls back to a hardcoded entity_id that may not
-    # exist on the user's HA (different network = different entities).
-    agent.state["ha_entities"] = await _fetch_ha_entities(agent)
+    # ---- HA is delegated to the home-assistant-agent ----
+    # reachy never calls HA's REST API directly. The entity inventory (only used to
+    # fill entity_ids in reactive robot-binds) is fetched lazily from the HA agent on
+    # first plan — not here — to avoid a startup race if the HA agent isn't up yet.
+    agent.state.setdefault("ha_entities", {})
+    agent.state.setdefault("ha_entities_ts", 0.0)
 
     # ---- Optional: recorded emotion library (HF dataset) ----
     agent.state["moves"] = None
@@ -350,7 +352,7 @@ Robot commands:
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
   {"cmd":"say","text":"<what to say>"}
   {"cmd":"say","text":"<what to say>","voice":"<edge-tts voice name>"}
-  {"cmd":"volume","preset":"whisper|normal|louder|presenter"}  ← human speaking modes (whisper=35, normal=60, louder=80, presenter=100)
+  {"cmd":"volume","preset":"whisper|normal|louder|presenter"}  ← human speaking modes (whisper=70, normal=85, louder=93, presenter=100)
   {"cmd":"volume","level":<0-100>}    ← absolute robot speaker volume; 100=loudest, 50=mid, 0=quietest
   {"cmd":"volume","delta":<+/-pts>}   ← relative change in level points (add to the CURRENT level shown below)
   {"cmd":"volume","mute":true|false}  ← mute (true) or restore the pre-mute volume (false)
@@ -362,26 +364,34 @@ Speech & volume rules:
   "speak up" / "speak loudly" -> preset louder; "presenter/presentation mode" / "for the audience" / "fill the room" -> preset presenter.
 - ABSOLUTE: "max/full/loudest volume" -> level 100; "minimum/quietest" -> level 0;
   "half volume" -> level 50; "set volume to N" / "N percent" -> level N.
-  (Avoid very low levels like under 30 — they are near-inaudible on the robot speaker; use preset whisper instead.)
+  (The robot speaker is near-inaudible below ~65 — for any normal speech prefer a
+   preset over a raw number, and never go under ~65 unless the user explicitly wants near-silent.)
 - RELATIVE (use delta, NOT level — the current level is given below):
   "a bit/slightly/a little louder" -> delta +15; "louder" / "turn it up" -> delta +25; "much louder" -> level 100;
   "a bit quieter" -> delta -15; "quieter" / "turn it down" / "too loud" -> delta -25.
 - MUTE: "mute" / "silence" / "be quiet" / "stop talking" -> mute true;
   "unmute" / "speak up again" / "sound back on" -> mute false.
 
-Home Assistant commands (use the actual entity_id from the inventory below):
-  {"cmd":"ha","service":"light.turn_on","entity_id":"<light entity>"}
-  {"cmd":"ha","service":"light.turn_off","entity_id":"<light entity>"}
-  {"cmd":"ha","service":"switch.turn_on","entity_id":"<switch entity>"}
-  {"cmd":"ha","service":"switch.turn_off","entity_id":"<switch entity>"}
+Home Assistant — DELEGATED to the home-assistant-agent (you NEVER call HA directly):
+  {"cmd":"ha","request":"<the smart-home request in plain natural language>"}
+Use this for ANY smart-home thing — lights, switches, plugs, climate, scenes, sensors —
+AND for creating / editing / listing / deleting Home Assistant AUTOMATIONS. Put the user's
+full intent in 'request' (keep the room/device names they said). The home-assistant-agent
+resolves the real entities and automations itself, so you do NOT pass entity_ids or HA
+service names. Examples of 'request' values: "turn on the kitchen light",
+"create an automation that turns the porch light off at sunrise", "list my automations".
 
-Reactive bindings — for "WHEN X happens, do Y" requests:
+Reactive bindings — "WHEN X happens, do Y". SPLIT by what Y is:
+- Y is a ROBOT action (wake / sleep / say / emotion / pose / antennas) → reachy-side bind:
   {"cmd":"bind",
    "topic":"homeassistant/state_changes",
-   "when":{"entity_id":"<entity>","new_state.state":"on"|"off"},
-   "do":{"cmd":"<wake|sleep|pose|...>"}}
-  {"cmd":"unbind","topic":"homeassistant/state_changes"}    ← removes ALL rules on a topic
-A bind is a STANDING rule — it survives restarts and fires every time the HA event matches.
+   "when":{"entity_id":"<entity_id from the inventory>","new_state.state":"on"|"off"},
+   "do":{"cmd":"<wake|sleep|say|emotion|pose|...>"}}
+  {"cmd":"unbind","topic":"homeassistant/state_changes"}   ← removes ALL rules on a topic
+  A bind is a STANDING reachy rule — survives restarts, fires every time the HA event matches.
+- Y is an HA action (turn a light/switch/device on or off, set climate, etc.) → do NOT bind;
+  make it a real Home Assistant automation via the HA agent:
+  {"cmd":"ha","request":"create an automation: when <trigger>, <ha action>"}
 
 Expressive gestures (combine with say for rich expression — use say for speech, motion for feeling):
 - "happy noise" / "happy" -> antennas wiggle up (left:60,right:60 then left:30,right:30 then left:60,right:60), head tilt up (pitch:-10)
@@ -397,14 +407,17 @@ Conventions:
 - "sleep" is a sleepy droop animation only — it does NOT power down.
 
 Decision rules — CRITICAL:
+- ANY smart-home / Home Assistant request — control OR automation — becomes a single
+  {"cmd":"ha","request":"..."} that forwards the user's words to the home-assistant-agent.
+  Never emit entity_ids or HA service names yourself; never call HA directly.
+- "turn on/off the light", "open/close the lamp", "lights on", "switch on", "set the
+  thermostat", "list/create/delete an automation" → all are {"cmd":"ha","request":"..."}.
 - "WHEN X" / "EVERY TIME X" / "if X happens" / "whenever" / "react to" / "when ... goes on/off"
-  → the user wants a STANDING RULE. Emit one or more {"cmd":"bind",...} commands,
-    NOT a one-shot action. Do not also emit the action itself afterwards.
+  → the user wants a STANDING RULE, not a one-shot. SPLIT by the reaction:
+    • reaction is a ROBOT action → {"cmd":"bind",...} (reachy-side).
+    • reaction is an HA action  → {"cmd":"ha","request":"create an automation: when X, <action>"}.
+  Do not also emit the one-shot action afterwards.
 - A request without "when/whenever/every/if" is a one-shot — emit the action directly.
-- If the user mentions a light, lamp, switch, plug, or any smart home thing in a
-  one-shot request, you MUST emit the matching {"cmd":"ha", ...} command.
-- "turn on/off the light", "open/close the lamp", "lights on", "switch on"
-  → ALL mean an HA light.turn_on / light.turn_off call.
 - ONLY add wake/sleep when the user asks for robot motion, an expression,
   or explicitly says wake/sleep. Pure HA requests do NOT need wake/sleep.
 
@@ -493,23 +506,32 @@ async def _nl_to_commands(agent, text):
     import json as _json
     if agent.llm is None:
         return None
-    # Inject the live HA entity list so the LLM uses real IDs from THIS network.
+    # Light/switch inventory — ONLY used to fill entity_ids in reactive robot-binds
+    # (HA control/automation is delegated as natural language, no ids needed). Fetched
+    # lazily from the home-assistant-agent and cached; retried at most once a minute
+    # while empty so a not-yet-ready HA agent eventually populates it.
     ents = agent.state.get("ha_entities") or {}
+    have = ents.get("lights") or ents.get("switches")
+    if not have and (_time.time() - agent.state.get("ha_entities_ts", 0.0)) > 60:
+        ents = await _ha_entities_via_agent(agent)
+        agent.state["ha_entities"] = ents
+        agent.state["ha_entities_ts"] = _time.time()
     lines = []
     for kind, items in (("Lights", ents.get("lights", [])), ("Switches", ents.get("switches", []))):
         if not items:
             continue
-        lines.append(f"\n{kind} (use the exact entity_id):")
+        lines.append(f"\n{kind} (entity_id for binds):")
         for it in items:
             lines.append(f"  {it['entity_id']:50s}  ({it['name']})")
-    ha_section = "\n".join(lines) if lines else "\n(no HA entities discovered — ha commands will fail)"
+    ha_section = ("\n".join(lines) if lines
+                  else "\n(no entity inventory yet — for binds, use the device name the user gave)")
     # Inject the current speaker volume so the LLM can do relative ("a bit louder")
     # and mute/unmute requests correctly.
     cur_level = agent.state.get("volume_level", 100)
     muted = bool(agent.state.get("muted"))
     vol_section = (f"\n\nCurrent speaker volume: level {cur_level} (0-100), "
                    f"muted={'yes' if muted else 'no'}.")
-    system_with_ents = _NL_SYSTEM + "\n\nLive HA inventory:" + ha_section + vol_section
+    system_with_ents = _NL_SYSTEM + "\n\nEntity inventory (for binds only):" + ha_section + vol_section
     raw = await agent.llm.chat(text, system=system_with_ents)
     raw = (raw or "").strip()
     if raw.startswith("```"):
@@ -621,7 +643,13 @@ async def handle_task(agent, payload):
                     # a few short motions fits comfortably).
                     cmds = _parse_speak_compound(stripped) or await _nl_to_commands(agent, stripped)
                     if not cmds:
-                        return {"ok": False, "error": "could not parse instruction", "text": stripped,
+                        # Return a clear 'result' message — NOT the raw input under
+                        # 'text', or the io-agent's reply picker (reply→result→text)
+                        # echoes the user's own words back at them.
+                        return {"ok": False, "error": "could not parse instruction",
+                                "result": (f"I couldn't turn \"{stripped}\" into a robot action. "
+                                           "Try something like \"wake\", \"say hello\", "
+                                           "\"whisper hi\", or \"presenter mode\"."),
                                 "_task_id": _tid, "task": _tid}
                     # If reachy is offline, skip robot commands but still run HA ones.
                     ok_link, link_reason = _is_connected(agent)
@@ -733,7 +761,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "stop":          result = await _stop(agent)
         elif cmd == "say":           result = await _say(agent, payload)
         elif cmd == "volume":        result = await _volume(agent, payload)
-        elif cmd == "ha":            result = await _ha_call(agent, payload)
+        elif cmd == "ha":            result = await _ha(agent, payload)
         else:
             raise ValueError(f"unknown cmd: {cmd}")
 
@@ -1143,14 +1171,15 @@ async def _boost_audio(agent, src_path, attenuation_db=0.0):
 _ROBOT_GAIN_MIN_DB = -20.0
 _ROBOT_GAIN_MAX_DB = 24.0
 
-# Human-friendly speaking modes -> 0-100 speaker level. The raw 0-100 scale is
-# perceptually weak at the bottom (10 ≈ inaudible on the Mini's speaker), so these
-# presets target known-usable loudness instead of leaving users to guess numbers.
+# Human-friendly speaking modes -> 0-100 speaker level. The Mini's speaker curve
+# is heavily top-loaded: measured on real hardware, ~35 is inaudible, ~60 sounds
+# like a whisper, and 100 is a satisfactory shout. So the usable band is roughly
+# 65-100 — these presets live there instead of the dead lower half.
 _VOLUME_PRESETS = {
-    "whisper":   35,   # close/intimate — quiet but still audible
-    "normal":    60,   # conversational, one-on-one
-    "louder":    80,   # small group / noisy room
-    "presenter": 100,  # presentation / audience / fill the room
+    "whisper":   70,   # soft but reliably audible (below ~65 is wasted)
+    "normal":    85,   # clear conversational, one-on-one
+    "louder":    93,   # room-filling / small group
+    "presenter": 100,  # presentation / audience / shout — the ceiling
 }
 
 
@@ -1301,70 +1330,74 @@ async def _volume(agent, payload):
     return result
 
 
-async def _fetch_ha_entities(agent):
-    """Query HA /api/states once at startup. Returns {'lights': [...], 'switches': [...]}.
-    Used to inject the right entity IDs into the LLM system prompt — without this
-    the planner uses a hardcoded entity that may not exist on this network."""
-    import os, aiohttp
-    ha_url   = (os.environ.get("HA_URL") or "").strip()
-    ha_token = os.environ.get("HA_TOKEN")
-    if not ha_url or not ha_token:
-        await agent.log("HA_URL or HA_TOKEN not set — skipping entity discovery", level="warning")
-        return {"lights": [], "switches": []}
-    headers = {"Authorization": f"Bearer {ha_token}"}
+async def _ha_entities_via_agent(agent):
+    """Light/switch inventory obtained FROM the home-assistant-agent — no direct HA
+    REST. Only needed so the planner can fill real entity_ids into reachy-side
+    reactive binds ('when the living-room light turns on, wake up'). Best-effort:
+    returns {'lights': [...], 'switches': [...]}, empty on any failure."""
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"{ha_url.rstrip('/')}/api/states", headers=headers,
-                             timeout=aiohttp.ClientTimeout(total=5)) as r:
-                if r.status != 200:
-                    await agent.log(f"HA states fetch returned {r.status}", level="warning")
-                    return {"lights": [], "switches": []}
-                states = await r.json()
+        res = await agent.send_to("home-assistant-agent",
+                                  {"text": "list all entities"}, timeout=20.0)
     except Exception as e:
-        await agent.log(f"HA entity discovery failed: {e}", level="warning")
+        await agent.log(f"HA entity inventory via agent failed: {e}", level="warning")
         return {"lights": [], "switches": []}
+    if not isinstance(res, dict):
+        return {"lights": [], "switches": []}
+    rows = res.get("entities") or (res.get("data") or {}).get("entities") or []
     lights, switches = [], []
-    for s in states:
-        eid = s.get("entity_id", "")
-        if s.get("state") == "unavailable":
-            continue  # skip dead entities so the LLM doesn't try them
-        name = (s.get("attributes") or {}).get("friendly_name", eid)
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        eid  = str(r.get("entity_id", ""))
+        name = r.get("name") or eid
         if eid.startswith("light."):
             lights.append({"entity_id": eid, "name": name})
         elif eid.startswith("switch."):
             switches.append({"entity_id": eid, "name": name})
-    await agent.log(f"HA entities discovered: {len(lights)} light(s), {len(switches)} switch(es)")
+    await agent.log(f"HA inventory via agent: {len(lights)} light(s), {len(switches)} switch(es)")
     return {"lights": lights, "switches": switches}
 
 
-async def _ha_call(agent, payload):
-    """Call a Home Assistant service. payload = {service: 'light.turn_on', entity_id: '...'}.
-    Reads HA_URL and HA_TOKEN from process env (.env is loaded by wactorz at startup)."""
-    import os, aiohttp
-    service   = payload.get("service")    # e.g. "light.turn_on"
-    entity_id = payload.get("entity_id")
-    if not service or "." not in service:
-        raise ValueError("ha requires 'service' like 'light.turn_on'")
-    domain, action = service.split(".", 1)
-    ha_url   = (os.environ.get("HA_URL") or "").strip()
-    ha_token = os.environ.get("HA_TOKEN")
-    if not ha_url or not ha_token:
-        raise RuntimeError("HA_URL or HA_TOKEN not set in environment")
-    url = f"{ha_url.rstrip('/')}/api/services/{domain}/{action}"
-    body = {}
-    if entity_id:
-        body["entity_id"] = entity_id
-    # Pass through any extra fields (brightness, color, etc.)
-    for k, v in (payload or {}).items():
-        if k not in ("cmd", "action", "service", "entity_id", "id", "_task_id", "task", "_verb"):
-            body[k] = v
-    headers = {"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=body, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as r:
-            text = await r.text()
-            if r.status >= 400:
-                raise RuntimeError(f"HA call {service} failed [{r.status}]: {text[:200]}")
-    return {"service": service, "entity_id": entity_id}
+async def _ha(agent, payload):
+    """Delegate any Home Assistant request to the home-assistant-agent.
+
+    reachy NO LONGER talks to HA's REST API directly. The home-assistant-agent owns
+    all HA logic — it resolves entities, controls devices, and creates/edits/lists/
+    deletes automations from a natural-language request. We just forward the ask and
+    relay its answer.
+
+    Accepts (first non-empty wins):
+      {"cmd":"ha","request":"turn on the living room light"}                  ← preferred
+      {"cmd":"ha","request":"create an automation: when the door opens, turn on the porch light"}
+      {"cmd":"ha","service":"light.turn_on","entity_id":"light.x"}            ← legacy, rendered to NL
+    """
+    request = (payload.get("request") or payload.get("text")
+               or payload.get("message") or payload.get("query") or "").strip()
+    if not request:
+        # Legacy structured form -> natural language so the HA agent can act on it.
+        service   = payload.get("service")
+        entity_id = payload.get("entity_id")
+        if service and "." in service:
+            _, action = service.split(".", 1)
+            verb = ("turn on"  if action.endswith("turn_on")  else
+                    "turn off" if action.endswith("turn_off") else
+                    action.replace("_", " "))
+            request = f"{verb} {entity_id}".strip() if entity_id else f"call service {service}"
+        else:
+            raise ValueError("ha requires a natural-language 'request' (or legacy service+entity_id)")
+
+    # send_to waits for the HA agent's RESULT. Cap at 45s to stay inside reachy's
+    # 60s handle_task budget (automation creation can take a couple of LLM calls).
+    result = await agent.send_to("home-assistant-agent", {"text": request}, timeout=45.0)
+    if result is None:
+        raise RuntimeError("home-assistant-agent did not respond (not running / no reply)")
+    if isinstance(result, dict):
+        # send_to surfaces routing failures as {"error": ...} with no 'result'.
+        if result.get("error") and not result.get("result"):
+            raise RuntimeError(f"home-assistant-agent error: {result['error']}")
+        return {"delegated_to": "home-assistant-agent", "request": request,
+                "ha_result": result.get("result"), "data": result.get("data")}
+    return {"delegated_to": "home-assistant-agent", "request": request, "ha_result": str(result)}
 
 
 # ============================================================

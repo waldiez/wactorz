@@ -7,12 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Named volume presets for reachy** - `whisper` (70), `normal` (85), `louder` (93)
+  and `presenter` (100) speaking modes, mapped to the robot speaker's usable loudness band.
+  Deterministic "whisper X" / "say X softly|loudly" set the level and speak aloud.
 - **Pipeline-rule conflict advisory** — planner now semantically checks a new rule
   against active ones and flags duplicates and contradictions (e.g. "over 25° AC off"
   vs "AC on") as a non-blocking "⚠️ Heads up" note at approval.
 
 ### Fixed
 
+- **Reachy no longer echoes unparsed input** - when the planner can't turn a message
+  into a robot action, reachy returns a helpful hint instead of repeating the user's words.
 - **Planners leaked until restart** — proposal/pipeline planners never stopped and
   stayed pinned by both the registry and the Supervisor. Added a lifetime watchdog
   (`max_lifetime_s`, 10 min) + idempotent `_terminate()` doing `release()` →
@@ -24,6 +29,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Reachy Home Assistant routed through the HA agent** - reachy-body delegates all
+  device control and automations to `home-assistant-agent` (natural-language
+  `{cmd:ha, request}`) instead of calling HA's REST API directly; entity discovery for
+  reactive binds is routed through the HA agent too.
 - **Unified planner JSON parsing** — both decomposition paths share
   `_extract_json_array` instead of fragile fence-stripping.
 - **Continuous agents declarable** — `_ensure_agents` honours

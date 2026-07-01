@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Per-agent token counts** — LLM agents' cumulative input/output tokens now show on
+  their card next to cost (compact `12.5k↑ 900↓`); non-LLM agents show nothing, as
+  before. The counts were already on the wire but previously parsed and dropped.
 - **More activity-feed sources** — the dashboard feed now surfaces agent actuations
   (what an agent actually changed) and anomaly events, via an extensible topic
   registry so further feed-only topics are a one-line addition.

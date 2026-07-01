@@ -27,7 +27,7 @@ export const UPLOADS_ENABLED = import.meta.env["VITE_UPLOADS_ENABLED"] === "true
 const STUB_UPLOADS = false;
 
 /** Accepted MIME-type prefixes. */
-export const ACCEPTED_MIME = ["image/", "audio/", "video/", "text/", "application/pdf"];
+export const ACCEPTED_MIME = ["image/", "audio/", "text/", "application/pdf"];
 /** Accepted file extensions (checked when the MIME prefix doesn't match). */
 export const ACCEPTED_EXT = [
     ".pdf",

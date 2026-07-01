@@ -173,10 +173,12 @@ describe("IOManager.receiveAgentMessage", () => {
         expect(tts.notify).not.toHaveBeenCalled();
     });
 
-    it("stays silent in direct_ws mode (the WS path handles replies)", () => {
+    it("reads a non-streamed reply aloud in direct_ws mode too", () => {
+        // Regression: non-streamed direct_ws replies (slash commands, one-shot,
+        // errors) arrive WS-only and must speak — streamed ones already do.
         const io = new IOManager(makeMqtt());
         io.setWSClient(makeWS("direct_ws") as unknown as WSChatClient);
         io.receiveAgentMessage(reply());
-        expect(tts.notify).not.toHaveBeenCalled();
+        expect(tts.notify).toHaveBeenCalledWith("hi", "alpha");
     });
 });

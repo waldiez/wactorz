@@ -68,6 +68,26 @@ function splitMention(item: FeedItem): { mention: string | null; body: string } 
     return m ? { mention: m[1]!, body: m[2]! } : { mention: null, body: raw };
 }
 
+/** The message span: the `@agent` mention (if any) as a styled token, then the
+ *  body text, truncated at 120 chars with the full text kept as a tooltip. */
+function buildTextSpan(item: FeedItem): HTMLElement {
+    const text = document.createElement("span");
+    text.className = "af-feed-text";
+    const { mention, body } = splitMention(item);
+    if (mention) {
+        const men = document.createElement("span");
+        men.className = "af-feed-mention";
+        men.textContent = mention;
+        text.append(men, document.createTextNode(" "));
+    }
+    const shown = body.length > 120 ? body.slice(0, 120) + "…" : body;
+    text.appendChild(document.createTextNode(shown));
+    if (body.length > 120) {
+        text.title = body;
+    }
+    return text;
+}
+
 /** Append a single feed row to `container`. */
 export function feedItemEl(container: HTMLElement, item: FeedItem): void {
     const row = document.createElement("div");
@@ -86,24 +106,7 @@ export function feedItemEl(container: HTMLElement, item: FeedItem): void {
         second: "2-digit",
     });
 
-    const agent = buildAgentSpan(item);
-
-    const text = document.createElement("span");
-    text.className = "af-feed-text";
-    const { mention, body } = splitMention(item);
-    if (mention) {
-        const men = document.createElement("span");
-        men.className = "af-feed-mention";
-        men.textContent = mention;
-        text.append(men, document.createTextNode(" "));
-    }
-    const shown = body.length > 120 ? body.slice(0, 120) + "…" : body;
-    text.appendChild(document.createTextNode(shown));
-    if (body.length > 120) {
-        text.title = body;
-    }
-
-    row.append(icon, time, agent, text);
+    row.append(icon, time, buildAgentSpan(item), buildTextSpan(item));
     container.appendChild(row);
 }
 

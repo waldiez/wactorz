@@ -342,8 +342,8 @@ mqtt.on("error", err => {
 
 // ═══ 5 · Wiring — Home Assistant feed ════════════════════════════════════════
 // HA entity state reaches the activity feed via the ha-state-bridge-agent over
-// MQTT (ha/state/{domain}/{entity_id}). The browser no longer talks to HA
-// directly — the Devices nav button just links out to the HA UI.
+// MQTT (homeassistant/state_changes/{domain}/{entity_id}). The browser no longer
+// talks to HA directly — the Devices nav button just links out to the HA UI.
 const pushHaFeed = createHaFeedPusher(pushFeed);
 
 mqtt.on("raw", ({ topic, payload }) => {

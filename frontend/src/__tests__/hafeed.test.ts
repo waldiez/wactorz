@@ -102,12 +102,12 @@ describe("parseHaRawEvent", () => {
     });
 
     it("returns null when there is no state", () => {
-        expect(parseHaRawEvent("ha/state/light/k", { new_state: {} })).toBeNull();
-        expect(parseHaRawEvent("ha/state/light/k", {})).toBeNull();
+        expect(parseHaRawEvent("homeassistant/state_changes/light/k", { new_state: {} })).toBeNull();
+        expect(parseHaRawEvent("homeassistant/state_changes/light/k", {})).toBeNull();
     });
 
     it("parses entity_id, state and friendly_name", () => {
-        const ev = parseHaRawEvent("ha/state/light/k", {
+        const ev = parseHaRawEvent("homeassistant/state_changes/light/k", {
             entity_id: "light.kitchen",
             new_state: { state: "on", attributes: { friendly_name: "Kitchen" } },
         });
@@ -115,11 +115,19 @@ describe("parseHaRawEvent", () => {
     });
 
     it("falls back: entity id from topic tail, friendly name from entity id", () => {
-        const ev = parseHaRawEvent("ha/state/light/k", { new_state: { state: "off" } });
+        const ev = parseHaRawEvent("homeassistant/state_changes/light/k", { new_state: { state: "off" } });
         expect(ev).toEqual({ entityId: "light.k", state: "off", friendlyName: "light.k" });
     });
 
+    it("parses the flat (per_entity=0) topic via the payload entity_id", () => {
+        const ev = parseHaRawEvent("homeassistant/state_changes", {
+            entity_id: "switch.fan",
+            new_state: { state: "on" },
+        });
+        expect(ev).toEqual({ entityId: "switch.fan", state: "on", friendlyName: "switch.fan" });
+    });
+
     it("tolerates a null payload", () => {
-        expect(parseHaRawEvent("ha/state/light/k", null)).toBeNull();
+        expect(parseHaRawEvent("homeassistant/state_changes/light/k", null)).toBeNull();
     });
 });

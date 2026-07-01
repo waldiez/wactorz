@@ -6,11 +6,12 @@ object (which the caller must keep a reference to) or None when no tray can be
 shown. All behaviour and state access is injected via TrayHooks, so this module
 holds no shell state.
 """
+
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from wactorz.desktop.config import _ASSETS, APP_ICON, APP_ID, APP_NAME
 
@@ -20,16 +21,17 @@ Callback = Callable[[], None]
 @dataclass
 class TrayHooks:
     """Behaviour + state accessors the tray menu wires up."""
-    on_toggle: Callback                       # show/hide the window
-    on_configure: Callback                    # open the Configure form
-    on_check_updates: Callback                # manual update check
-    on_quit: Callback                         # quit the app
+
+    on_toggle: Callback  # show/hide the window
+    on_configure: Callback  # open the Configure form
+    on_check_updates: Callback  # manual update check
+    on_quit: Callback  # quit the app
     autostart_enabled: Callable[[], bool]
     set_autostart: Callable[[bool], None]
     auto_update_enabled: Callable[[], bool]
     set_auto_update: Callable[[bool], None]
     pending_update_version: Callable[[], str]  # "" when no update is known
-    open_download: Callback                    # open the release page
+    open_download: Callback  # open the release page
 
 
 def build_qt_tray(hooks: TrayHooks):
@@ -73,7 +75,7 @@ def build_qt_tray(hooks: TrayHooks):
         if version:
             download.setText(f"Download v{version}…")
 
-    menu.aboutToShow.connect(_refresh_download)   # re-evaluate each time it opens
+    menu.aboutToShow.connect(_refresh_download)  # re-evaluate each time it opens
     _refresh_download()
 
     def _checkable(label: str, get: Callable[[], bool], set_: Callable[[bool], None]) -> QAction:
@@ -83,7 +85,7 @@ def build_qt_tray(hooks: TrayHooks):
 
         def _on(checked: bool) -> None:
             set_(checked)
-            action.setChecked(get())   # re-sync if the write failed
+            action.setChecked(get())  # re-sync if the write failed
 
         action.triggered.connect(_on)
         return action
@@ -106,9 +108,9 @@ def build_qt_tray(hooks: TrayHooks):
     menu.addAction(quit_item)
     tray.setContextMenu(menu)
     tray.activated.connect(
-        lambda reason: hooks.on_toggle()
-        if reason == QSystemTrayIcon.ActivationReason.Trigger
-        else None
+        lambda reason: (
+            hooks.on_toggle() if reason == QSystemTrayIcon.ActivationReason.Trigger else None
+        )
     )
     tray.setToolTip(APP_NAME)
     tray.show()
@@ -116,7 +118,7 @@ def build_qt_tray(hooks: TrayHooks):
 
 
 def build_pystray_tray(hooks: TrayHooks):
-    """macOS / Windows tray via pystray's native backend (no Qt, no GTK); return
+    """MacOS / Windows tray via pystray's native backend (no Qt, no GTK); return
     the icon, or None.
 
     Used only off Linux: pywebview runs a native loop there, so a Qt tray can't
@@ -129,30 +131,37 @@ def build_pystray_tray(hooks: TrayHooks):
     except ImportError:
         return None
     try:
-        image = Image.open(_ASSETS / "icon.png")   # PNG is always PIL-readable
+        image = Image.open(_ASSETS / "icon.png")  # PNG is always PIL-readable
     except Exception:
         return None
 
     def _toggler(get: Callable[[], bool], set_: Callable[[bool], None]):
         def _handler(icon, item) -> None:
             set_(not get())
-            icon.update_menu()   # re-render the checkmark from the new state
+            icon.update_menu()  # re-render the checkmark from the new state
+
         return _handler
 
     menu = pystray.Menu(
         pystray.MenuItem("Show / Hide", lambda icon, item: hooks.on_toggle(), default=True),
         pystray.MenuItem("Configure...", lambda icon, item: hooks.on_configure()),
         pystray.MenuItem("Check for Updates...", lambda icon, item: hooks.on_check_updates()),
-        pystray.MenuItem(lambda item: f"Download v{hooks.pending_update_version()}…",
-                         lambda icon, item: hooks.open_download(),
-                         visible=lambda item: bool(hooks.pending_update_version())),
+        pystray.MenuItem(
+            lambda item: f"Download v{hooks.pending_update_version()}…",
+            lambda icon, item: hooks.open_download(),
+            visible=lambda item: bool(hooks.pending_update_version()),
+        ),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Start at login",
-                         _toggler(hooks.autostart_enabled, hooks.set_autostart),
-                         checked=lambda item: hooks.autostart_enabled()),
-        pystray.MenuItem("Check for updates automatically",
-                         _toggler(hooks.auto_update_enabled, hooks.set_auto_update),
-                         checked=lambda item: hooks.auto_update_enabled()),
+        pystray.MenuItem(
+            "Start at login",
+            _toggler(hooks.autostart_enabled, hooks.set_autostart),
+            checked=lambda item: hooks.autostart_enabled(),
+        ),
+        pystray.MenuItem(
+            "Check for updates automatically",
+            _toggler(hooks.auto_update_enabled, hooks.set_auto_update),
+            checked=lambda item: hooks.auto_update_enabled(),
+        ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Quit Wactorz", lambda icon, item: hooks.on_quit()),
     )
@@ -160,5 +169,5 @@ def build_pystray_tray(hooks: TrayHooks):
     try:
         icon.run_detached()
     except Exception:
-        return None   # e.g. macOS main-thread limitation — fall back to no tray
+        return None  # e.g. macOS main-thread limitation — fall back to no tray
     return icon

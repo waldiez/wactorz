@@ -3,6 +3,7 @@
 Only preferences without an OS-level source of truth live here — currently the
 auto-update-check toggle. (Autostart state lives in the OS artifact, not here.)
 """
+
 from __future__ import annotations
 
 import json

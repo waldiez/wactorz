@@ -1,4 +1,4 @@
-"""Run-at-login toggle. The OS artifact is the single source of truth:
+r"""Run-at-login toggle. The OS artifact is the single source of truth:
 
   macOS   ~/Library/LaunchAgents/<APP_ID>.plist
   Windows HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run  value "<APP_NAME>"
@@ -6,6 +6,7 @@
 
 is_enabled() reflects whether it exists; set_enabled() creates or removes it.
 """
+
 from __future__ import annotations
 
 import os
@@ -25,7 +26,8 @@ _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 def _launch_argv() -> list[str]:
     """Command that relaunches the app. Inside an AppImage, sys.executable is a
     transient mount path, so prefer $APPIMAGE (the stable .AppImage path). Then
-    the frozen exe, else `python -m wactorz.desktop.app` from source."""
+    the frozen exe, else `python -m wactorz.desktop.app` from source.
+    """
     appimage = os.environ.get("APPIMAGE")
     if appimage:
         return [appimage]
@@ -98,7 +100,8 @@ def _set_windows(enabled: bool) -> None:
 
 def _find_installed_desktop() -> Path | None:
     """The installed app-menu launcher (<APP_ID>.desktop) in the XDG data dirs,
-    if the app was installed (pip/system). None for an AppImage or source run."""
+    if the app was installed (pip/system). None for an AppImage or source run.
+    """
     name = f"{APP_ID}.desktop"
     home = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
     data_dirs = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"

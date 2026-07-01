@@ -5,6 +5,7 @@ A check notifies the user and, when a newer release is found, remembers it
 interactive (manual) check also opens the release page right away; a background
 check stays quiet unless an update is found.
 """
+
 from __future__ import annotations
 
 import json
@@ -31,7 +32,8 @@ def _version_tuple(v: str) -> tuple:
 
 def _is_newer(latest: str, current: str) -> bool:
     """True if `latest` is a newer release than `current`. Zero-pads to equal
-    length so e.g. 0.5 vs 0.5.0 compare equal rather than older."""
+    length so e.g. 0.5 vs 0.5.0 compare equal rather than older.
+    """
     a, b = _version_tuple(latest), _version_tuple(current)
     if not a:
         return False
@@ -53,7 +55,8 @@ def open_download() -> None:
 def check_for_updates(interactive: bool = True) -> None:
     """Check for a newer release off the GUI thread. Interactive (the manual tray
     check) always reports a result and opens the release page when an update is
-    found; a background check (interactive=False) stays silent unless one is."""
+    found; a background check (interactive=False) stays silent unless one is.
+    """
     threading.Thread(target=_update_check_task, args=(interactive,), daemon=True).start()
 
 

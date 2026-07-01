@@ -3,6 +3,7 @@
 Tiny self-contained documents loaded as inline HTML — no network or backend
 needed, so the splash paints before the backend is up.
 """
+
 from __future__ import annotations
 
 import html as _html
@@ -67,7 +68,9 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
     """The Configure form, pre-filled from `values` (env var -> current value).
     Optional `message` shows a banner (e.g. why config opened). `can_cancel` adds
     a Cancel button (only when there's a running app to return to). Submits back
-    through window.pywebview.api.save_config()."""
+    through window.pywebview.api.save_config().
+    """
+
     def val(key: str) -> str:
         return _html.escape(values.get(key, ""), quote=True)
 
@@ -77,20 +80,32 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
         for pid, label in _LLM_PROVIDERS
     )
     banner = f'<div class="banner">{_html.escape(message)}</div>' if message else ""
-    cancel = ('<button onclick="window.pywebview.api.close_config()" '
-              'style="background:#334155;margin-left:.5rem">Cancel</button>' if can_cancel else "")
+    cancel = (
+        '<button onclick="window.pywebview.api.close_config()" '
+        'style="background:#334155;margin-left:.5rem">Cancel</button>'
+        if can_cancel
+        else ""
+    )
     # No running app to return to → offer Retry (re-connect with current config)
     # instead of Cancel, e.g. after starting the broker.
-    retry = ('<button onclick="window.pywebview.api.retry()" '
-             'style="background:#0ea5e9;margin-left:.5rem">Retry</button>' if not can_cancel else "")
+    retry = (
+        '<button onclick="window.pywebview.api.retry()" '
+        'style="background:#0ea5e9;margin-left:.5rem">Retry</button>'
+        if not can_cancel
+        else ""
+    )
     # Same action as the bottom button, as an icon at the top so it's reachable
     # without scrolling: back-arrow to return to the app, or reload to retry.
     if can_cancel:
-        top_action = ('<button class="iconbtn" title="Back to app" '
-                      'onclick="window.pywebview.api.close_config()">&#8592;</button>')
+        top_action = (
+            '<button class="iconbtn" title="Back to app" '
+            'onclick="window.pywebview.api.close_config()">&#8592;</button>'
+        )
     else:
-        top_action = ('<button class="iconbtn" title="Retry connection" '
-                      'onclick="window.pywebview.api.retry()">&#8635;</button>')
+        top_action = (
+            '<button class="iconbtn" title="Retry connection" '
+            'onclick="window.pywebview.api.retry()">&#8635;</button>'
+        )
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{{margin:0;height:100%;background:#0A0E1A;color:#e2e8f0;
        font-family:-apple-system,Segoe UI,Roboto,sans-serif}}
@@ -123,24 +138,24 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
   {banner}
   <fieldset><legend>LLM</legend>
     <label>Provider</label><select id="LLM_PROVIDER">{options}</select>
-    <label>Model</label><input id="LLM_MODEL" value="{val('LLM_MODEL')}" placeholder="claude-sonnet-4-6">
-    <label>API key</label><input id="LLM_API_KEY" type="password" value="{val('LLM_API_KEY')}">
+    <label>Model</label><input id="LLM_MODEL" value="{val("LLM_MODEL")}" placeholder="claude-sonnet-4-6">
+    <label>API key</label><input id="LLM_API_KEY" type="password" value="{val("LLM_API_KEY")}">
     <label>OpenAI-compatible URL <span style="color:#64748b">(OpenAI / Groq / vLLM …)</span></label>
-    <input id="OPENAI_URL" value="{val('OPENAI_URL')}" placeholder="https://api.openai.com/v1">
+    <input id="OPENAI_URL" value="{val("OPENAI_URL")}" placeholder="https://api.openai.com/v1">
     <label>Ollama URL <span style="color:#64748b">(when provider = Ollama)</span></label>
-    <input id="OLLAMA_URL" value="{val('OLLAMA_URL')}" placeholder="http://localhost:11434">
+    <input id="OLLAMA_URL" value="{val("OLLAMA_URL")}" placeholder="http://localhost:11434">
   </fieldset>
   <fieldset><legend>MQTT broker</legend>
-    <label>Host</label><input id="MQTT_HOST" value="{val('MQTT_HOST')}" placeholder="localhost">
+    <label>Host</label><input id="MQTT_HOST" value="{val("MQTT_HOST")}" placeholder="localhost">
     <div class="row">
-      <div><label>Port</label><input id="MQTT_PORT" value="{val('MQTT_PORT')}" placeholder="1883"></div>
-      <div><label>Username</label><input id="MQTT_USERNAME" value="{val('MQTT_USERNAME')}"></div>
+      <div><label>Port</label><input id="MQTT_PORT" value="{val("MQTT_PORT")}" placeholder="1883"></div>
+      <div><label>Username</label><input id="MQTT_USERNAME" value="{val("MQTT_USERNAME")}"></div>
     </div>
-    <label>Password</label><input id="MQTT_PASSWORD" type="password" value="{val('MQTT_PASSWORD')}">
+    <label>Password</label><input id="MQTT_PASSWORD" type="password" value="{val("MQTT_PASSWORD")}">
   </fieldset>
   <fieldset><legend>Home Assistant <span style="color:#64748b">(optional)</span></legend>
-    <label>URL</label><input id="HA_URL" value="{val('HA_URL')}" placeholder="http://homeassistant.local:8123">
-    <label>Token</label><input id="HA_TOKEN" type="password" value="{val('HA_TOKEN')}">
+    <label>URL</label><input id="HA_URL" value="{val("HA_URL")}" placeholder="http://homeassistant.local:8123">
+    <label>Token</label><input id="HA_TOKEN" type="password" value="{val("HA_TOKEN")}">
   </fieldset>
   <button onclick="save()">Save &amp; Restart</button>{retry}{cancel}<span id="status"></span>
 <script>

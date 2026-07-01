@@ -1,4 +1,5 @@
 """Shared constants and paths for the desktop shell."""
+
 from __future__ import annotations
 
 import os
@@ -7,14 +8,15 @@ import sys
 from pathlib import Path
 
 APP_NAME = "Wactorz"
-APP_ID = "io.waldiez.wactorz"          # desktop-file id / WM_CLASS
+APP_ID = "io.waldiez.wactorz"  # desktop-file id / WM_CLASS
 HOST = "127.0.0.1"
 
 
 def _free_port() -> int:
     """An OS-assigned free loopback port, so the desktop's own backend never
     collides with another wactorz already holding the default 8888 (which would
-    otherwise make the health probe attach to that instance's UI instead)."""
+    otherwise make the health probe attach to that instance's UI instead).
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind((HOST, 0))
         return sock.getsockname()[1]
@@ -45,7 +47,7 @@ _ASSETS = (
 )
 APP_ICON = _ASSETS / f"icon.{ICON_EXT}"
 
-SPLASH_BG = "#0A0E1A"          # window surface colour while the page paints
+SPLASH_BG = "#0A0E1A"  # window surface colour while the page paints
 
 
 def _data_dir() -> Path:

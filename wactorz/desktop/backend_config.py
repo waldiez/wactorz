@@ -5,6 +5,7 @@ and merged into the backend child's environment at spawn, taking precedence over
 the inherited shell/.env so the desktop config is authoritative (this also
 sidesteps a stale shell var shadowing the real value). Keys mirror .env.template.
 """
+
 from __future__ import annotations
 
 import os
@@ -16,9 +17,17 @@ _USER_ENV = DATA_DIR / "user.env"
 
 # Managed keys, mirroring .env.template — everything the Configure view sets.
 KEYS = (
-    "LLM_PROVIDER", "LLM_MODEL", "LLM_API_KEY", "OPENAI_URL", "OLLAMA_URL",
-    "MQTT_HOST", "MQTT_PORT", "MQTT_USERNAME", "MQTT_PASSWORD",
-    "HA_URL", "HA_TOKEN",
+    "LLM_PROVIDER",
+    "LLM_MODEL",
+    "LLM_API_KEY",
+    "OPENAI_URL",
+    "OLLAMA_URL",
+    "MQTT_HOST",
+    "MQTT_PORT",
+    "MQTT_USERNAME",
+    "MQTT_PASSWORD",
+    "HA_URL",
+    "HA_TOKEN",
 )
 
 
@@ -57,7 +66,8 @@ def load() -> dict[str, str]:
 
 def save(values: dict[str, str]) -> None:
     """Persist the managed keys to user.env. A blank value clears that key;
-    unknown keys already in the file are left untouched."""
+    unknown keys already in the file are left untouched.
+    """
     env = _read()
     for key in KEYS:
         value = (values.get(key) or "").strip()
@@ -70,5 +80,6 @@ def save(values: dict[str, str]) -> None:
 
 def env_for_backend() -> dict[str, str]:
     """Non-empty config to inject into the backend child's environment (the whole
-    user.env, including any hand-added keys)."""
+    user.env, including any hand-added keys).
+    """
     return {k: v for k, v in _read().items() if v}

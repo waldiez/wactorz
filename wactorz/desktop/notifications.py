@@ -6,6 +6,7 @@ that's unavailable (dev runs / older macOS). Both deliver on the main thread —
 notifications are often fired from worker threads and AppKit/UN delivery off the
 main thread silently no-ops. Other platforms use plyer.
 """
+
 from __future__ import annotations
 
 import os
@@ -20,16 +21,17 @@ _UN_AUTH = 4 | 2
 # Alert(4, older macOS) | Banner(16) | List(32) | Sound(2).
 _UN_PRESENT = 4 | 16 | 32 | 2
 
-_un_delegate = None        # retained: center.delegate is a non-owning reference
-_un_ready = False          # delegate set + authorization requested
-_legacy_delegate = None    # retained delegate for the NSUserNotification fallback
+_un_delegate = None  # retained: center.delegate is a non-owning reference
+_un_ready = False  # delegate set + authorization requested
+_legacy_delegate = None  # retained delegate for the NSUserNotification fallback
 
 
 # ── macOS: modern UNUserNotificationCenter ──────────────────────────────────
 def _macos_un_center():
     """UNUserNotificationCenter, or None if unavailable (older macOS / not a real
     bundle / framework missing). First call wires the foreground-presentation
-    delegate and requests authorization (the one-time permission prompt)."""
+    delegate and requests authorization (the one-time permission prompt).
+    """
     global _un_delegate, _un_ready
     try:
         from UserNotifications import UNUserNotificationCenter
@@ -82,7 +84,8 @@ def _deliver_macos_un(title: str, body: str) -> bool:
 # ── macOS: legacy NSUserNotification fallback ───────────────────────────────
 def _deliver_macos_legacy(title: str, body: str) -> None:
     """Deprecated NSUserNotification path — used only when UN is unavailable.
-    A delegate forces presentation even when frontmost."""
+    A delegate forces presentation even when frontmost.
+    """
     global _legacy_delegate
     try:
         from Foundation import NSObject, NSUserNotification, NSUserNotificationCenter
@@ -91,6 +94,7 @@ def _deliver_macos_legacy(title: str, body: str) -> None:
         if center is None:
             return
         if _legacy_delegate is None:
+
             class _PresentAlways(NSObject):
                 def userNotificationCenter_shouldPresentNotification_(self, center, note):
                     return True
@@ -114,7 +118,8 @@ def _deliver_macos(title: str, body: str) -> None:
 
 def _notify_macos_native(title: str, body: str) -> None:
     """Post a macOS notification, hopping to the main thread (callers are often
-    worker threads, where delivery silently no-ops)."""
+    worker threads, where delivery silently no-ops).
+    """
     try:
         from PyObjCTools import AppHelper
 
@@ -125,7 +130,8 @@ def _notify_macos_native(title: str, body: str) -> None:
 
 def request_authorization() -> None:
     """Proactively request macOS notification permission at launch (shows the
-    system prompt once). No-op off macOS / when UN is unavailable."""
+    system prompt once). No-op off macOS / when UN is unavailable.
+    """
     if sys.platform != "darwin":
         return
     try:
@@ -141,7 +147,8 @@ def _host_env() -> dict:
     bundle. The bundle sets LD_LIBRARY_PATH to its own libs; a host tool like
     notify-send must NOT inherit that or it loads the bundle's (possibly older,
     ABI-mismatched) libs and fails. PyInstaller stashes the real value in
-    LD_LIBRARY_PATH_ORIG — restore it (or drop the override)."""
+    LD_LIBRARY_PATH_ORIG — restore it (or drop the override).
+    """
     env = os.environ.copy()
     orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
     if orig:
@@ -154,7 +161,8 @@ def _host_env() -> dict:
 def _notify_linux(title: str, body: str) -> bool:
     """Use notify-send (libnotify) directly. Avoids plyer's hard dbus-python
     dependency (a C extension we don't bundle). notify-send ships on essentially
-    every Linux desktop. Returns True if the call ran."""
+    every Linux desktop. Returns True if the call ran.
+    """
     try:
         cmd = ["notify-send", "-a", APP_NAME]
         if APP_ICON.exists():
@@ -162,8 +170,9 @@ def _notify_linux(title: str, body: str) -> bool:
         cmd += [title, body]
         # Run with the host's library path (see _host_env) and silence output:
         # with no notification daemon, notify-send spews a GDBus ServiceUnknown.
-        subprocess.run(cmd, check=False, env=_host_env(),
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            cmd, check=False, env=_host_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
         return True
     except Exception:
         return False

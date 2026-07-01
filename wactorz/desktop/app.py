@@ -12,8 +12,8 @@ webview. Builds are imported lazily, so a build without PySide6 (e.g. the
 deb/rpm flavour, which uses the system WebKit2GTK webview) simply runs without
 a tray rather than failing to start.
 """
-from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import signal
@@ -54,13 +54,13 @@ load_dotenv(find_dotenv())
 
 _DEFAULT_WINDOW_STATE = {"width": 1280, "height": 720, "x": None, "y": None}
 
-_backend: "subprocess.Popen | None" = None
+_backend: subprocess.Popen | None = None
 _window = None
-_hidden = False                # True when hidden to the tray (our hide(); no event)
-_minimized = False             # tracked from the minimized/restored window events
-_shown = False                 # the window is revealed only once the page paints
-_tray = None                   # kept alive for the lifetime of the process
-_tray_ok = False               # True only when a tray icon is actually shown
+_hidden = False  # True when hidden to the tray (our hide(); no event)
+_minimized = False  # tracked from the minimized/restored window events
+_shown = False  # the window is revealed only once the page paints
+_tray = None  # kept alive for the lifetime of the process
+_tray_ok = False  # True only when a tray icon is actually shown
 # Live geometry, kept fresh by the resized/moved events so we never have to read
 # a hidden or torn-down window at shutdown. Seeded from the saved state on launch.
 _window_geometry = dict(_DEFAULT_WINDOW_STATE)
@@ -68,7 +68,8 @@ _window_geometry = dict(_DEFAULT_WINDOW_STATE)
 
 def _sanitize_window_state(s: dict) -> dict:
     """Coerce a loaded state dict to valid values (it may be hand-edited or a
-    partial/old file): positive int width/height; x/y int or None."""
+    partial/old file): positive int width/height; x/y int or None.
+    """
     out = dict(_DEFAULT_WINDOW_STATE)
     try:
         w, h = int(s["width"]), int(s["height"])
@@ -86,7 +87,8 @@ def _sanitize_window_state(s: dict) -> dict:
 
 def _load_window_state() -> dict:
     """Last saved window geometry, sanitized — or defaults. Never raises; a
-    missing or corrupt file just yields the defaults."""
+    missing or corrupt file just yields the defaults.
+    """
     try:
         if WINDOW_STATE_FILE.exists():
             return _sanitize_window_state(json.loads(WINDOW_STATE_FILE.read_text()))
@@ -106,7 +108,8 @@ def _on_window_moved(x, y) -> None:
 def _place_window() -> None:
     """After the GUI is up (screens are known): keep the window on a connected
     screen and no larger than it. Fixes a saved position on a monitor that is no
-    longer present, and a saved size larger than the current display."""
+    longer present, and a saved size larger than the current display.
+    """
     if _window is None:
         return
     try:
@@ -153,7 +156,8 @@ def _place_window() -> None:
 def _save_window_state() -> None:
     """Persist the tracked geometry. Best-effort — never raises. Reads the
     tracked dict (not the live window), so it is correct even when quitting from
-    the tray with the window hidden."""
+    the tray with the window hidden.
+    """
     try:
         WINDOW_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         WINDOW_STATE_FILE.write_text(json.dumps(_window_geometry))
@@ -161,9 +165,8 @@ def _save_window_state() -> None:
         pass
 
 
-
 # ── backend child ─────────────────────────────────────────────────────────────
-def _spawn_backend() -> "subprocess.Popen":
+def _spawn_backend() -> subprocess.Popen:
     # Run from a per-user writable dir: the backend writes wactorz.log,
     # monitor.log and ./state relative to its cwd, which fails under an
     # all-users install (e.g. C:\Program Files). INTERFACE=rest makes it serve
@@ -180,7 +183,7 @@ def _spawn_backend() -> "subprocess.Popen":
     )
     cmd = [sys.executable, "--run-backend"] if FROZEN else [sys.executable, "-m", "wactorz"]
     try:
-        log = open(BACKEND_LOG, "w")
+        log = open(BACKEND_LOG, "w", encoding="utf-8")  # noqa: SIM115
         return subprocess.Popen(
             cmd, env=env, cwd=str(DATA_DIR), stdout=log, stderr=subprocess.STDOUT
         )
@@ -203,7 +206,7 @@ def _wait_for_backend(timeout: float = 30.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if _backend is not None and _backend.poll() is not None:
-            return False   # child exited before serving — see BACKEND_LOG
+            return False  # child exited before serving — see BACKEND_LOG
         try:
             with urllib.request.urlopen(health, timeout=1):
                 return True
@@ -214,7 +217,8 @@ def _wait_for_backend(timeout: float = 30.0) -> bool:
 
 def _mqtt_reachable(timeout: float = 3.0) -> bool:
     """TCP-probe the configured MQTT broker. The backend can't start without it,
-    so a quick check lets us open Configure instead of waiting out the timeout."""
+    so a quick check lets us open Configure instead of waiting out the timeout.
+    """
     env = backend_config.env_for_backend()
     host = env.get("MQTT_HOST") or os.environ.get("MQTT_HOST") or "localhost"
     try:
@@ -231,7 +235,8 @@ def _mqtt_reachable(timeout: float = 3.0) -> bool:
 def _wait_for_mqtt(timeout: float = 25.0) -> bool:
     """Poll the MQTT broker until reachable or timeout. Covers the broker (often
     a local Docker container) still starting up at login — a single probe would
-    lose that race and pop Configure even though it comes up a moment later."""
+    lose that race and pop Configure even though it comes up a moment later.
+    """
     deadline = time.time() + timeout
     while True:
         if _mqtt_reachable(timeout=2.0):
@@ -243,18 +248,21 @@ def _wait_for_mqtt(timeout: float = 25.0) -> bool:
 
 def _show_config(message: str = "") -> None:
     """Load the Configure form. Offer Cancel only when the backend is running,
-    i.e. there's a live app to return to (not on first-run / failure)."""
+    i.e. there's a live app to return to (not on first-run / failure).
+    """
     if _window is not None:
         backend_up = _backend is not None and _backend.poll() is None
         _window.load_html(pages.config_html(backend_config.load(), message, can_cancel=backend_up))
-        _reveal_window()   # bring it forward if opened from the tray while hidden
+        _reveal_window()  # bring it forward if opened from the tray while hidden
 
 
 def _defer_nav(action) -> None:
     """Run a window navigation just after the current JS-API call returns.
     Navigating synchronously inside an Api method makes pywebview deliver the
     call's return value on the new page (where the callback is gone) and raise,
-    so hand it to a worker that lets the call return first."""
+    so hand it to a worker that lets the call return first.
+    """
+
     def _run():
         time.sleep(0.05)
         try:
@@ -278,7 +286,8 @@ def _stop_backend() -> None:
 
 def _restart_backend() -> None:
     """Apply saved config: stop the child, show the splash, respawn with the new
-    env, then load the app (or back to Configure / the error page). Off-thread."""
+    env, then load the app (or back to Configure / the error page). Off-thread.
+    """
     global _backend
     _stop_backend()
     if not _mqtt_reachable():
@@ -310,13 +319,15 @@ class Api:
 
     def retry(self) -> bool:
         """Retry connecting with the current config (e.g. after starting the
-        broker) without saving — restart the backend off-thread."""
+        broker) without saving — restart the backend off-thread.
+        """
         threading.Thread(target=_restart_backend, daemon=True).start()
         return True
 
     def save_config(self, values: dict) -> bool:
         """Persist config, then restart the backend off-thread so the call
-        returns promptly; the window reloads when the restart finishes."""
+        returns promptly; the window reloads when the restart finishes.
+        """
         backend_config.save(values or {})
         threading.Thread(target=_restart_backend, daemon=True).start()
         return True
@@ -336,7 +347,8 @@ def _on_restored(*_) -> None:
 def _toggle() -> None:
     """Tray Show/Hide. Bases the decision on real window state — a native
     minimize (no hide event) would otherwise desync a simple flag and make the
-    first click a no-op."""
+    first click a no-op.
+    """
     global _hidden
     if _window is None:
         return
@@ -350,7 +362,8 @@ def _toggle() -> None:
 # ── lifecycle ─────────────────────────────────────────────────────────────────
 def _set_app_user_model_id() -> None:
     """Windows: set the AppUserModelID so the taskbar groups the window under our
-    icon. Must run before the window is created; a no-op on other platforms."""
+    icon. Must run before the window is created; a no-op on other platforms.
+    """
     if os.name != "nt":
         return
     try:
@@ -376,7 +389,7 @@ def _on_closing() -> bool:
     if _tray_ok and _window is not None:
         _window.hide()
         _hidden = True
-        return False   # cancel the real close
+        return False  # cancel the real close
     _shutdown()
     return True
 
@@ -410,7 +423,8 @@ def _install_macos_quit_handler() -> None:
     """macOS: Dock-Quit / ⌘Q go through NSApp's applicationShouldTerminate, which
     pywebview gates on the window 'closing' veto — so hide-to-tray also blocks
     quitting. Install an app delegate that quits for real. The red close button
-    (windowShouldClose) is untouched, so it still hides to the tray."""
+    (windowShouldClose) is untouched, so it still hides to the tray.
+    """
     if sys.platform != "darwin":
         return
     try:
@@ -422,8 +436,8 @@ def _install_macos_quit_handler() -> None:
 
         class _QuitDelegate(NSObject):
             def applicationShouldTerminate_(self, app):
-                _shutdown()              # saves state, stops backend, os._exit
-                return NSTerminateNow    # belt-and-suspenders if _shutdown returns
+                _shutdown()  # saves state, stops backend, os._exit
+                return NSTerminateNow  # belt-and-suspenders if _shutdown returns
 
             def applicationShouldHandleReopen_hasVisibleWindows_(self, app, has_visible):
                 # Dock-icon click while hidden to the tray → bring the window back.
@@ -446,11 +460,12 @@ def _install_macos_quit_handler() -> None:
 
 def _load_when_ready(window) -> None:
     """Worker (runs after the GUI loop starts): correct the window placement,
-    wait for MQTT, start the backend, load the app, then reveal the window."""
+    wait for MQTT, start the backend, load the app, then reveal the window.
+    """
     global _backend
     _place_window()
     _install_macos_quit_handler()
-    notifications.request_authorization()   # macOS: prompt for permission once
+    notifications.request_authorization()  # macOS: prompt for permission once
     if not _wait_for_mqtt():
         # The backend can't start without MQTT; configure instead of failing.
         notifications.notify(APP_NAME, "MQTT broker unreachable — opening configuration.")
@@ -462,7 +477,7 @@ def _load_when_ready(window) -> None:
         if _wait_for_backend():
             window.events.loaded += _on_app_loaded
             window.load_url(URL)
-            time.sleep(2.0)    # fallback reveal if the 'loaded' event doesn't fire
+            time.sleep(2.0)  # fallback reveal if the 'loaded' event doesn't fire
             _on_app_loaded()
         else:
             notifications.notify(APP_NAME, "Backend did not start in time")
@@ -476,13 +491,13 @@ def _load_when_ready(window) -> None:
 
 def _qt_available() -> bool:
     """True if PySide6 is importable — the Qt webview + tray backend."""
-    import importlib.util
     return importlib.util.find_spec("PySide6") is not None
 
 
 def _gtk_available() -> bool:
     """True if PyGObject (the GTK/WebKit2 webview backend) is importable."""
     import importlib.util
+
     return importlib.util.find_spec("gi") is not None
 
 
@@ -519,7 +534,7 @@ def launch_desktop() -> None:
     signal.signal(signal.SIGTERM, _shutdown)
 
     state = _load_window_state()
-    _window_geometry.update(state)   # so an untouched session re-saves the same
+    _window_geometry.update(state)  # so an untouched session re-saves the same
     _window = webview.create_window(
         APP_NAME,
         html=pages.LOADING_HTML,
@@ -563,7 +578,7 @@ def launch_desktop() -> None:
     start_kwargs = {"icon": APP_ICON}
     if _use_qt:
         start_kwargs["gui"] = "qt"
-    webview.start(_load_when_ready, _window, **start_kwargs)   # blocks the main thread
+    webview.start(_load_when_ready, _window, **start_kwargs)  # blocks the main thread
     _shutdown()
 
 

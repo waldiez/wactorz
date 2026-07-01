@@ -6,6 +6,7 @@ resolve the app id (silences the "App info not found" QDBus warning), and gives
 the autostart copy-the-launcher path (see autostart.py) a real file to copy.
 Idempotent — rewritten each launch so Exec/$APPIMAGE stays current.
 """
+
 from __future__ import annotations
 
 import os
@@ -23,7 +24,8 @@ _ICON = _ICON_DIR / f"{APP_ID}.png"
 
 def _exec() -> str:
     """How the menu entry relaunches the app: the stable AppImage path, the
-    frozen exe, or `python -m wactorz.desktop.app` from source."""
+    frozen exe, or `python -m wactorz.desktop.app` from source.
+    """
     appimage = os.environ.get("APPIMAGE")
     if appimage:
         return appimage
@@ -34,7 +36,8 @@ def _exec() -> str:
 
 def install() -> None:
     """Install ~/.local/share/applications/<APP_ID>.desktop (+ icon). Linux only,
-    best-effort."""
+    best-effort.
+    """
     if not sys.platform.startswith("linux"):
         return
     try:

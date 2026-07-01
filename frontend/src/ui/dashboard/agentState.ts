@@ -73,7 +73,7 @@ export function sortAgents<T extends { name: string }>(agents: Iterable<T>): T[]
     });
 }
 
-/** Compact relative time like "now", "12s ago", "3m ago". */
+/** Compact relative time like "now", "12s ago", "3m ago", "2h ago", "5d ago". */
 export function relTime(ms: number): string {
     const s = Math.round((Date.now() - ms) / 1000);
     if (s < 5) {
@@ -82,5 +82,11 @@ export function relTime(ms: number): string {
     if (s < 60) {
         return `${s}s ago`;
     }
-    return `${Math.floor(s / 60)}m ago`;
+    if (s < 3600) {
+        return `${Math.floor(s / 60)}m ago`;
+    }
+    if (s < 86400) {
+        return `${Math.floor(s / 3600)}h ago`;
+    }
+    return `${Math.floor(s / 86400)}d ago`;
 }

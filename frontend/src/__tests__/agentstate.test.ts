@@ -54,5 +54,7 @@ describe("relTime", () => {
         expect(relTime(100_000)).toBe("now"); // 0s
         expect(relTime(100_000 - 12_000)).toBe("12s ago");
         expect(relTime(100_000 - 180_000)).toBe("3m ago");
+        expect(relTime(100_000 - 7_200_000)).toBe("2h ago"); // ≥1h → hours
+        expect(relTime(100_000 - 259_200_000)).toBe("3d ago"); // ≥24h → days
     });
 });

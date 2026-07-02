@@ -146,6 +146,34 @@ describe("mapLogFeedItem", () => {
         expect(mapLogFeedItem(item)?.type).toBe("alert-error");
     });
 
+    it("maps a completed entry via the shared builder (matches the live path)", () => {
+        const item: LogFeedItem = { type: "completed", agent_id: "a", name: "Worker", timestamp: 2 };
+        expect(mapLogFeedItem(item)).toEqual({
+            type: "spawn",
+            label: "task completed",
+            agentName: "Worker",
+            timestamp: 2000,
+        });
+    });
+
+    it("maps a stopped status via the shared builder, and drops non-stopped states", () => {
+        const stopped: LogFeedItem = {
+            type: "status",
+            agent_id: "a",
+            name: "Worker",
+            status: { state: "stopped" },
+            timestamp: 3,
+        };
+        expect(mapLogFeedItem(stopped)).toEqual({
+            type: "stopped",
+            label: "stopped",
+            agentName: "Worker",
+            timestamp: 3000,
+        });
+        const running: LogFeedItem = { type: "status", agent_id: "a", status: { state: "running" } };
+        expect(mapLogFeedItem(running)).toBeNull();
+    });
+
     it("drops a log entry with no message", () => {
         expect(mapLogFeedItem({ type: "log", agent_id: "uuid-1" })).toBeNull();
     });

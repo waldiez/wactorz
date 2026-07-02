@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Global error surfacing** — uncaught exceptions and unhandled promise rejections
+  now log with context and raise a toast, instead of failing silently to the console.
+
 - **Per-agent token counts** — LLM agents' cumulative input/output tokens now show on
   their card next to cost (compact `12.5k↑ 900↓`); non-LLM agents show nothing, as
   before. The counts were already on the wire but previously parsed and dropped.

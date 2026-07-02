@@ -23,7 +23,7 @@ export default defineConfig({
     build: {
         outDir: "../static/app",
         emptyOutDir: true,
-        sourcemap: true,
+        sourcemap: false,
         target: "es2022",
         rollupOptions: {
             output: {

@@ -14,6 +14,7 @@
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { emit } from "../events";
+import { toast } from "../ui/ToastManager";
 
 // Registries the mocked transports populate as main.ts wires them up.
 const mockMqtt: Record<string, (...a: any[]) => void> = {};
@@ -214,5 +215,15 @@ describe("main.ts bootstrap", () => {
         emit("af-clear-feed");
         window.dispatchEvent(new Event("beforeunload"));
         expect(true).toBe(true);
+    });
+
+    it("routes uncaught errors and unhandled rejections to a toast", () => {
+        vi.mocked(toast.show).mockClear();
+        window.dispatchEvent(
+            Object.assign(new Event("error"), { error: new Error("boom"), message: "boom" }),
+        );
+        expect(toast.show).toHaveBeenCalledTimes(1);
+        window.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: new Error("nope") }));
+        expect(toast.show).toHaveBeenCalledTimes(2);
     });
 });

@@ -148,6 +148,9 @@ export function buildStatCards(container: HTMLElement, data: StatCardData): void
         const card = document.createElement("div");
         card.className = "af-stat-card";
         card.style.borderColor = `${accent}44`;
+        // Safe innerHTML: label/value/detail/accent/extra all come from
+        // computeStatSpecs — fixed strings, numbers and hex colors, never
+        // user- or agent-supplied input.
         card.innerHTML = `
         <div class="af-stat-label">${label}</div>
         <div class="af-stat-value" style="color:${accent}">${value}</div>

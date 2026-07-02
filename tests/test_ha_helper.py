@@ -1238,7 +1238,10 @@ class HomeAssistantHelperCameraTest(unittest.IsolatedAsyncioTestCase):
 class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         _reset_fakes()
-        self._patch_session = patch("aiohttp.ClientSession", _FakeClientSession)
+        self._patch_session = patch(
+            "wactorz.core.integrations.home_assistant.ha_helper.aiohttp.ClientSession",
+            _FakeClientSession,
+        )
         self._patch_session.start()
 
     def tearDown(self):

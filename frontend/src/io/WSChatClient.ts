@@ -13,6 +13,7 @@
  *   {"type":"chat","from":"io-gateway","content":"...","timestamp":...}
  */
 import { log } from "./logger";
+import { toMs } from "../mqtt/MQTTClient";
 import { emit } from "../events";
 import type { StatePatchAgent, SnapshotStats, LogFeedItem } from "../types/ws";
 
@@ -256,8 +257,7 @@ export class WSChatClient {
         // is server-side — the reply frame should carry the real agent name.
         const rawFrom = asStr(data["from"], "io-gateway");
         const from = rawFrom === "io-gateway" ? this._lastAgentName : rawFrom;
-        const rawTs = data["timestamp"] as number | undefined;
-        const ts = rawTs ? (rawTs < 1e10 ? rawTs * 1000 : rawTs) : Date.now();
+        const ts = toMs(data["timestamp"]);
 
         if (data["type"] === "chat") {
             this._onChat?.(asStr(data["content"]), from, ts);

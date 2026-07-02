@@ -10,6 +10,7 @@
  * reconciling optimistic user echoes with their persisted copies.
  */
 import type { ChatMessage } from "../../types/agent";
+import { toMs } from "../../mqtt/MQTTClient";
 
 function ingressBase(): string {
     return window.__WACTORZ_INGRESS_PATH ?? "";
@@ -60,7 +61,7 @@ async function fromChatLog(agentId: string): Promise<ChatMessage[]> {
         from: r.role === "user" ? "user" : agentId,
         to: r.role === "user" ? agentId : "user",
         content: r.content,
-        timestampMs: r.ts < 1e10 ? r.ts * 1000 : r.ts,
+        timestampMs: toMs(r.ts),
     }));
 }
 

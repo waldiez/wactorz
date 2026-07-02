@@ -140,7 +140,11 @@ function refreshLiveActors(): void {
         return;
     }
     liveSyncInFlight = true;
-    fetch(`${_apiBase}/api/actors`)
+    // Bound the request so a hung fetch can't pin liveSyncInFlight and wedge every
+    // future refresh (the browser's default timeout is ~90s).
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => ctrl.abort(), 10_000);
+    fetch(`${_apiBase}/api/actors`, { signal: ctrl.signal })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((actors: AgentInfo[]) => {
             agentStore.reconcileAgents(reconcileActorList(actors, isDeleted));
@@ -152,6 +156,7 @@ function refreshLiveActors(): void {
             log.debug("[Dashboard] live actor refresh failed:", err);
         })
         .finally(() => {
+            window.clearTimeout(timer);
             liveSyncInFlight = false;
         });
 }

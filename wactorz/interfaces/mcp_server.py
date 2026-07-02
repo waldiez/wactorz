@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import stat
+import sys
 import asyncio
 import webbrowser
 from pathlib import Path
@@ -37,6 +38,12 @@ from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import web
+
+from wactorz.core.integrations.google_calendar import (
+    GoogleCalendarClient,
+    calendar_config_status,
+    format_events,
+)
 
 try:
     from mcp import ClientSession
@@ -221,7 +228,7 @@ class _CalendarMcpTokenStorage(TokenStorage):
 
 
 async def _open_oauth_browser(url: str) -> None:
-    print(f"\nCalendar MCP OAuth required. Open this URL if the browser does not open:\n{url}\n")
+    print(f"\nCalendar MCP OAuth required. Open this URL if the browser does not open:\n{url}\n", file=sys.stderr)
     try:
         webbrowser.open(url)
     except Exception:
@@ -320,13 +327,9 @@ async def _calendar_mcp_call(tool_name: str, arguments: dict | None = None) -> s
 
 @mcp.tool()
 async def calendar_status() -> str:
-    """
-    Show remote Calendar MCP configuration status.
-
-    This does not expose tokens. Use calendar_mcp_list_tools to verify the
-    remote server is reachable.
-    """
-    return json.dumps(
+    """Show sanitized Google Calendar and remote Calendar MCP configuration status."""
+    status = calendar_config_status()
+    status.update(
         {
             "calendar_mcp_url": CALENDAR_MCP_URL or None,
             "calendar_mcp_auth": bool(
@@ -337,9 +340,9 @@ async def calendar_status() -> str:
             "calendar_mcp_oauth_client": bool(CALENDAR_MCP_CLIENT_ID),
             "calendar_mcp_redirect_uri": CALENDAR_MCP_REDIRECT_URI if CALENDAR_MCP_CLIENT_ID else None,
             "calendar_mcp_token_file": CALENDAR_MCP_TOKEN_FILE if CALENDAR_MCP_CLIENT_ID else None,
-        },
-        indent=2,
+        }
     )
+    return json.dumps(status, indent=2)
 
 
 @mcp.tool()
@@ -347,8 +350,9 @@ async def calendar_mcp_list_tools() -> str:
     """List tools exposed by the configured remote Calendar MCP server."""
     if not CALENDAR_MCP_URL:
         return (
-            "Calendar MCP is not configured. Set CALENDAR_MCP_URL and, if needed, "
-            "CALENDAR_MCP_TOKEN or CALENDAR_MCP_AUTHORIZATION."
+            "Remote Calendar MCP is not configured. Set CALENDAR_MCP_URL only "
+            "if you want to proxy a separate MCP server. Native Google Calendar "
+            "uses GOOGLE_CALENDAR_* environment variables."
         )
     try:
         auth = _calendar_mcp_auth()
@@ -385,26 +389,54 @@ async def calendar_mcp_call_tool(tool_name: str, arguments_json: str = "{}") -> 
     return await _calendar_mcp_call(tool_name, arguments)
 
 
+def _google_calendar_configured() -> bool:
+    return bool(calendar_config_status().get("google_calendar_auth"))
+
+
+async def _calendar_native_or_remote(tool_name: str, arguments: dict | None = None) -> str:
+    if _google_calendar_configured():
+        client = GoogleCalendarClient()
+        args = arguments or {}
+        try:
+            if tool_name == "list_events":
+                if args.get("range"):
+                    events = await client.list_range(str(args["range"]), max_results=int(args.get("maxResults") or 10))
+                else:
+                    events = await client.list_events(max_results=int(args.get("maxResults") or 10))
+                return format_events(events)
+            if tool_name == "create_event":
+                event = await client.create_event(
+                    summary=str(args.get("summary") or ""),
+                    start=str(args.get("startDateTime") or args.get("start") or ""),
+                    end=str(args.get("endDateTime") or args.get("end") or ""),
+                    location=str(args.get("location") or ""),
+                    description=str(args.get("description") or ""),
+                )
+                return json.dumps(event, indent=2)
+            if tool_name == "delete_event":
+                result = await client.delete_event(str(args.get("eventId") or args.get("event_id") or ""))
+                return json.dumps(result, indent=2)
+        except Exception as exc:
+            return f"Google Calendar error: {exc}"
+    return await _calendar_mcp_call(tool_name, arguments)
+
+
 @mcp.tool()
 async def calendar_list(count: int = 10) -> str:
-    """
-    List upcoming events through the configured remote Calendar MCP server.
-
-    Assumes the remote server exposes a list_events tool.
-    """
-    return await _calendar_mcp_call("list_events", {"maxResults": count})
+    """List upcoming Google Calendar events, or proxy list_events to remote Calendar MCP."""
+    return await _calendar_native_or_remote("list_events", {"maxResults": count})
 
 
 @mcp.tool()
 async def calendar_today() -> str:
-    """List today's events through the configured remote Calendar MCP server."""
-    return await _calendar_mcp_call("list_events", {"range": "today"})
+    """List today's Google Calendar events, or proxy list_events to remote Calendar MCP."""
+    return await _calendar_native_or_remote("list_events", {"range": "today"})
 
 
 @mcp.tool()
 async def calendar_week() -> str:
-    """List this week's events through the configured remote Calendar MCP server."""
-    return await _calendar_mcp_call("list_events", {"range": "week"})
+    """List this week's Google Calendar events, or proxy list_events to remote Calendar MCP."""
+    return await _calendar_native_or_remote("list_events", {"range": "week"})
 
 
 @mcp.tool()
@@ -415,11 +447,7 @@ async def calendar_create_event(
     location: str = "",
     description: str = "",
 ) -> str:
-    """
-    Create an event through the configured remote Calendar MCP server.
-
-    start/end should be ISO-8601 datetimes, e.g. 2026-06-03T15:00:00+03:00.
-    """
+    """Create a Google Calendar event, or proxy create_event to remote Calendar MCP."""
     payload = {"summary": summary, "startDateTime": start}
     if end:
         payload["endDateTime"] = end
@@ -427,13 +455,13 @@ async def calendar_create_event(
         payload["location"] = location
     if description:
         payload["description"] = description
-    return await _calendar_mcp_call("create_event", payload)
+    return await _calendar_native_or_remote("create_event", payload)
 
 
 @mcp.tool()
 async def calendar_delete_event(event_id: str) -> str:
-    """Delete a calendar event through the configured remote Calendar MCP server."""
-    return await _calendar_mcp_call("delete_event", {"eventId": event_id})
+    """Delete a Google Calendar event, or proxy delete_event to remote Calendar MCP."""
+    return await _calendar_native_or_remote("delete_event", {"eventId": event_id})
 
 
 # ─── Agent management tools ─────────────────────────────────────────────────
@@ -635,6 +663,7 @@ async def config_resource() -> str:
             "wactorz_auth": bool(WACTORZ_API_KEY),
             "ha_url": HA_URL or None,
             "ha_auth": bool(HA_TOKEN),
+            **calendar_config_status(),
             "calendar_mcp_url": CALENDAR_MCP_URL or None,
             "calendar_mcp_auth": bool(
                 CALENDAR_MCP_CLIENT_ID

@@ -19,6 +19,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Dashboard could fail to load in private-mode / storage-disabled browsers** —
+  `localStorage` access during startup threw (Safari private mode, storage disabled,
+  quota exceeded), aborting bootstrap with a blank page. All access now routes through
+  a `safeStorage` wrapper that degrades to `null`/no-ops, so the dashboard loads and
+  persistence is best-effort.
 - **@mention could silently fail to switch target** — the mention list offered every
   agent, but only messageable agents are in the target picker, so mentioning a
   non-messageable one left the placeholder claiming a target that was never set.

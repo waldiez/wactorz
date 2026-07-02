@@ -22,6 +22,7 @@
  */
 
 import "./app.css";
+import { safeStorage } from "./safeStorage";
 import { AgentStore } from "./agents/AgentStore";
 import { MQTTClient } from "./mqtt/MQTTClient";
 import { IOManager } from "./io/IOManager";
@@ -73,7 +74,7 @@ import { createDeletionGuard } from "./agents/deletionGuard";
 // webview that host is the HA instance itself, not the addon backend.
 
 // Clear any stale persisted theme from older builds.
-localStorage.removeItem("wactorz-theme");
+safeStorage.remove("wactorz-theme");
 
 const _ingressPath: string = window.__WACTORZ_INGRESS_PATH ?? "";
 
@@ -101,7 +102,7 @@ const _mqttDefault = `${_wsBase}/mqtt`;
 // Self-heal browsers that cached a URL under old builds (incl. the hardcoded :8888
 // value). Removing it on load means existing users recover automatically on the
 // next page load — no manual localStorage clearing required.
-localStorage.removeItem("wactorz-mqtt-url");
+safeStorage.remove("wactorz-mqtt-url");
 
 const MQTT_BROKER = (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) || _mqttDefault;
 

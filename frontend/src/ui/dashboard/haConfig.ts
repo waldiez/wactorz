@@ -11,17 +11,19 @@
  * re-write when it changes, so a stale value can't override a fresh `.env`.
  */
 
+import { safeStorage } from "../../safeStorage";
+
 /** Seed the HA URL key from the server value; returns whether it wrote. */
 export function seedKeyFromServer(key: string, value: string | undefined | null): boolean {
     if (!value) {
         return false;
     }
     const baselineKey = `${key}__server`;
-    if (value === localStorage.getItem(baselineKey)) {
+    if (value === safeStorage.get(baselineKey)) {
         return false;
     }
-    localStorage.setItem(key, value);
-    localStorage.setItem(baselineKey, value);
+    safeStorage.set(key, value);
+    safeStorage.set(baselineKey, value);
     return true;
 }
 

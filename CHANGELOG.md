@@ -24,6 +24,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   quota exceeded), aborting bootstrap with a blank page. All access now routes through
   a `safeStorage` wrapper that degrades to `null`/no-ops, so the dashboard loads and
   persistence is best-effort.
+- **Dashboard reliability nits** — the live-actor refresh now times out after 10s (a
+  hung request could otherwise wedge every later refresh); chat/upload message ids use
+  collision-free WIDs instead of `Date.now()`; loaded chat history is capped like the
+  live feed; and the service worker no longer skips caching sibling paths like `/wsfoo`.
 - **@mention could silently fail to switch target** — the mention list offered every
   agent, but only messageable agents are in the target picker, so mentioning a
   non-messageable one left the placeholder claiming a target that was never set.

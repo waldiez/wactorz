@@ -8,6 +8,7 @@
  * host only for the shared root element, the agent map, and view switching.
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
+import { uid } from "../../ids";
 import type { View } from "./types";
 import { canDirectMessage, messageableNames, stateColor, stateLabel } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
@@ -325,6 +326,8 @@ export class DashboardChat {
             return;
         }
         this.chatMessages.unshift(...mergeChatHistory(this.chatMessages, incoming));
+        // Cap to the most recent 500, matching the live feed.
+        this.chatMessages = this.chatMessages.slice(-500);
         this.renderChatThread();
     }
 
@@ -425,7 +428,7 @@ export class DashboardChat {
         // if stripping would leave nothing to send.
         const body = stripLeadingMention(content, target) || content;
         const msg: ChatMessage = {
-            id: `user-${Date.now()}`,
+            id: uid("user"),
             from: "user",
             to: target,
             content: body,
@@ -538,7 +541,7 @@ export class DashboardChat {
             this.chatTarget = target;
             this._lastSentTarget = target;
             const msg: ChatMessage = {
-                id: `user-${Date.now()}`,
+                id: uid("user"),
                 from: "user",
                 to: target,
                 content,
@@ -573,7 +576,7 @@ export class DashboardChat {
         this._evEnd = listen("af-stream-end", () => {
             if (this._streamFrom && this._streamText) {
                 this.chatMessages.push({
-                    id: `stream-${Date.now()}`,
+                    id: uid("stream"),
                     from: this._streamFrom,
                     to: this._streamTarget ?? this._lastSentTarget,
                     content: this._streamText,

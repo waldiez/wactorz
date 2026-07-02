@@ -43,8 +43,16 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
-  // Never intercept API / WebSocket upgrade requests
-  if (NEVER_CACHE.some((p) => url.pathname.startsWith(p))) return;
+  // Never intercept API / WebSocket upgrade requests. A trailing-slash entry
+  // (/api/) matches by prefix; a bare entry (/ws, /mqtt) matches only the exact
+  // path or a sub-path, never a sibling like /wsfoo.
+  const path = url.pathname;
+  if (
+    NEVER_CACHE.some((n) =>
+      n.endsWith("/") ? path.startsWith(n) : path === n || path.startsWith(n + "/"),
+    )
+  )
+    return;
   if (e.request.method !== "GET") return;
 
   // HTML entry points: network-first so the browser always gets the latest

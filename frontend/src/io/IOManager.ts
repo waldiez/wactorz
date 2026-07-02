@@ -13,15 +13,13 @@
  * the content so IOAgent can route it.
  */
 
-import { HLCWidGen } from "@waldiez/wid";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { MQTTClient } from "../mqtt/MQTTClient";
 import type { WSChatClient } from "./WSChatClient";
 import { tts } from "./TTSManager";
 import { toast } from "../ui/ToastManager";
 import { emit } from "../events";
-
-const _widGen = new HLCWidGen({ node: "browser", W: 4 });
+import { uid } from "../ids";
 
 export class IOManager {
     private _lastStreamFrom = "";
@@ -70,7 +68,7 @@ export class IOManager {
         }
 
         const msg: ChatMessage = {
-            id: _widGen.next(),
+            id: uid(),
             from: "user",
             to: agent?.name ?? "main-actor",
             content, // routed form (`@agent …`), mirroring what goes on the wire

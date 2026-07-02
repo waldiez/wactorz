@@ -88,6 +88,39 @@ def _build_native_catalog() -> dict:
     except ImportError as e:
         logger.warning(f"[catalog] weather-agent unavailable: {e}")
 
+    try:
+        from .google_calendar_agent import GoogleCalendarAgent
+        native["google-calendar-agent"] = {
+            "name": "google-calendar-agent",
+            "type": "native",
+            "factory": GoogleCalendarAgent,
+            "description": "Accesses Google Calendar: list today/upcoming events, create events, and delete events.",
+            "capabilities": [
+                "google_calendar",
+                "calendar",
+                "schedule",
+                "events",
+                "list_events",
+                "create_event",
+                "delete_event",
+            ],
+            "input_schema": {
+                "text": "str - natural-language calendar request, e.g. 'what is on my calendar today?'",
+                "operation": "status | list_events | today | tomorrow | week | create_event | delete_event",
+                "summary": "str - event title for create_event",
+                "start": "str - ISO-8601 start datetime for create_event",
+                "event_id": "str - event id for delete_event",
+            },
+            "output_schema": {
+                "result": "str - human-readable calendar response",
+                "events": "list - returned events for list operations",
+                "event": "dict - created event for create_event",
+            },
+        }
+        logger.info("[catalog] Loaded google-calendar-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] google-calendar-agent unavailable: {e}")
+
     return native
 
 def _build_catalog() -> dict:

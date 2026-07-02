@@ -1,6 +1,6 @@
 # Google Calendar
 
-Wactorz can access Google Calendar directly through the built-in `google-calendar-agent`. The MCP server exposes the same calendar operations for MCP clients, and can still proxy a separate remote Calendar MCP server when `CALENDAR_MCP_URL` is configured.
+Wactorz can access Google Calendar through the catalog-backed `google-calendar-agent`. The MCP server exposes the same calendar operations for MCP clients, and can still proxy a separate remote Calendar MCP server when `CALENDAR_MCP_URL` is configured.
 
 ## Native Google Calendar setup
 
@@ -30,7 +30,7 @@ Read-only mode allows listing events but blocks `create_event` and `delete_event
 
 ## Wactorz agent usage
 
-Start Wactorz normally. The supervised `google-calendar-agent` starts with the core agents and publishes capabilities such as `google_calendar`, `calendar`, `events`, and `create_event`.
+Start Wactorz normally. The catalog advertises `google-calendar-agent` as a spawnable recipe with capabilities such as `google_calendar`, `calendar`, `events`, and `create_event`. The first normal calendar request can auto-spawn it, or you can start it explicitly with `@catalog spawn google-calendar-agent`.
 
 Example user requests:
 
@@ -40,7 +40,7 @@ show my calendar this week
 create a calendar event called Dentist tomorrow at 15:00
 ```
 
-For event creation, the agent uses the configured LLM to resolve natural-language dates into ISO-8601 datetimes. Structured calls can bypass parsing by sending `operation=create_event`, `summary`, `start`, and optional `end`, `location`, or `description`.
+For event creation, the spawned agent uses the configured LLM to resolve natural-language dates into ISO-8601 datetimes. Structured calls can bypass parsing by sending `operation=create_event`, `summary`, `start`, and optional `end`, `location`, or `description`.
 
 ## MCP tools
 

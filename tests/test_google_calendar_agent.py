@@ -48,3 +48,15 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
             location="Athens",
             description="",
         )
+
+
+class GoogleCalendarCatalogTest(unittest.TestCase):
+    def test_google_calendar_agent_is_catalog_recipe(self):
+        from wactorz.agents.catalog_agent import CatalogAgent
+
+        catalog = CatalogAgent(name="catalog-test", persistence_dir="state/test-google-calendar-catalog")
+        info = catalog._action_info("google-calendar-agent")
+
+        self.assertTrue(info["ok"])
+        self.assertEqual(info["recipe"]["type"], "native")
+        self.assertIn("calendar", info["recipe"]["capabilities"])

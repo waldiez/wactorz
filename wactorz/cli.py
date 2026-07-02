@@ -183,7 +183,6 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.home_assistant_agent import HomeAssistantAgent
     from wactorz.agents.home_assistant_map_agent import HomeAssistantMapAgent
     from wactorz.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
-    from wactorz.agents.google_calendar_agent import GoogleCalendarAgent
 
     llm = args.llm or CONFIG.llm_provider
     if llm == "anthropic":
@@ -296,14 +295,6 @@ async def build_system(args: argparse.Namespace):
                 persistence_dir="./state",
             ))
 
-    def make_google_calendar_agent():
-        return _wire_persistence(
-            GoogleCalendarAgent(
-                llm_provider=make_provider(),
-                name="google-calendar-agent",
-                persistence_dir="./state",
-            ))
-
     def make_io_agent():
         return _wire_persistence(
             IOAgent(name="io-agent", persistence_dir="./state"))
@@ -322,7 +313,6 @@ async def build_system(args: argparse.Namespace):
         .supervise("home-assistant-agent",       make_ha_agent,      strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-map-agent",   make_ha_map_agent,  strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=5,  restart_delay=1.0)
         .supervise("home-assistant-state-bridge",make_ha_state_bridge, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
-        .supervise("google-calendar-agent",      make_google_calendar_agent, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=5, restart_delay=1.0)
         .supervise("catalog",                    make_catalog,       strategy=SupervisorStrategy.ONE_FOR_ONE,  max_restarts=10, restart_delay=2.0)
     )
 

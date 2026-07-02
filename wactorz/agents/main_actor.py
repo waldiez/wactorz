@@ -301,6 +301,20 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return any(word in lowered for word in calendar_words)
 
     async def _handle_calendar_intent(self, text: str) -> str:
+        target, spawnable = await self._resolve_or_spawn("google-calendar-agent")
+        if not target and self._registry:
+            catalog = self._registry.find_by_name("catalog")
+            if catalog and hasattr(catalog, "_action_spawn"):
+                spawn_result = await catalog._action_spawn("google-calendar-agent", {})
+                if spawn_result and spawn_result.get("ok"):
+                    await asyncio.sleep(0.5)
+                    target = self._registry.find_by_name("google-calendar-agent")
+
+        if not target:
+            if spawnable:
+                return "I found the Google Calendar catalog recipe, but could not spawn it right now. Please retry."
+            return "I could not find the Google Calendar catalog recipe. Check `/agents calendar`."
+
         result = await self.delegate_task("google-calendar-agent", text, timeout=120.0)
         if result and isinstance(result, dict) and result.get("result"):
             return str(result["result"])

@@ -108,6 +108,20 @@ const MQTT_BROKER = (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) 
 
 // ═══ 2 · Core services & shared state ════════════════════════════════════════
 
+// Global safety net — surface otherwise-silent failures (uncaught exceptions and
+// unhandled promise rejections) to the log and a toast; without this they reach
+// only the console.
+function reportGlobalError(context: string, detail: unknown): void {
+    log.error(`[${context}]`, detail);
+    toast.show({
+        type: "alert-error",
+        title: "Unexpected error",
+        message: "Something went wrong — see the console for details.",
+    });
+}
+window.addEventListener("error", e => reportGlobalError("uncaught", e.error ?? e.message));
+window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
+
 const agentStore = new AgentStore();
 const mqtt = new MQTTClient(MQTT_BROKER);
 const ioManager = new IOManager(mqtt);

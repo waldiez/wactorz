@@ -18,6 +18,7 @@
  */
 
 import type { AgentInfo } from "../types/agent";
+import { safeStorage } from "../safeStorage";
 import type { FeedItem } from "../types/feed";
 import { buildHeader, buildBottomNav, setHaNavUrl } from "./dashboard/header";
 import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
@@ -59,7 +60,7 @@ export class CardDashboard {
 
     /** HA base URL (seeded from /api/config) — the Devices nav button links to it. */
     private get haUrl(): string | null {
-        return localStorage.getItem("wactorz-ha-url") || null;
+        return safeStorage.get("wactorz-ha-url") || null;
     }
 
     constructor() {

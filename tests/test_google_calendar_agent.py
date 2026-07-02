@@ -19,12 +19,12 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("startTime", arguments)
         self.assertIn("endTime", arguments)
 
-    async def test_structured_create_event_requires_title_start_and_end(self):
+    async def test_structured_create_event_requires_start_and_end_when_title_present(self):
         agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
 
         result = await agent._process({"operation": "create_event", "summary": "Dentist"})
 
-        self.assertIn("title", result["result"])
+        self.assertIn("What time", result["result"])
         self.assertIn("start", result["missing"])
         self.assertIn("end", result["missing"])
 
@@ -50,6 +50,44 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
                 "location": "Athens",
             },
         )
+
+    async def test_help_is_user_friendly(self):
+        agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
+
+        result = await agent._process({"text": "what can you do"})
+
+        self.assertIn("Google Calendar", result["result"])
+        self.assertIn("make an event now for 2 hours", result["result"])
+        self.assertNotIn("calendar_mcp_url", result["result"])
+
+    async def test_natural_create_now_for_duration_uses_default_title(self):
+        agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
+        agent.client.call_tool = mock.AsyncMock(return_value="created")
+
+        result = await agent._process({"text": "make an event now for 2 hours"})
+
+        self.assertEqual(result["result"], "created")
+        tool_name, arguments = agent.client.call_tool.await_args.args
+        self.assertEqual(tool_name, "create_event")
+        self.assertEqual(arguments["summary"], "New event")
+        self.assertIn("startTime", arguments)
+        self.assertIn("endTime", arguments)
+
+    async def test_create_followup_reuses_pending_request(self):
+        agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
+        agent.client.call_tool = mock.AsyncMock(return_value="created")
+
+        first = await agent._process({"text": "make an event"})
+        self.assertIn("What time", first["result"])
+
+        second = await agent._process({"text": "8am to 7pm"})
+
+        self.assertEqual(second["result"], "created")
+        tool_name, arguments = agent.client.call_tool.await_args.args
+        self.assertEqual(tool_name, "create_event")
+        self.assertEqual(arguments["summary"], "New event")
+        self.assertIn("T08:00:00", arguments["startTime"])
+        self.assertIn("T19:00:00", arguments["endTime"])
 
 
 class GoogleCalendarCatalogTest(unittest.TestCase):

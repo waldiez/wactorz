@@ -25,7 +25,7 @@ CALENDAR_PARSE_PROMPT = """You convert a user calendar request into JSON only.
 
 Return exactly one JSON object with:
 - action: one of status, list_events, today, tomorrow, week, create_event, delete_event
-- summary: event title for create_event
+- summary: event title for create_event. If the user did not name it, use "New event".
 - start: ISO-8601 datetime with timezone for create_event, or empty string
 - end: ISO-8601 datetime with timezone for create_event, or empty string
 - location: optional event location
@@ -34,8 +34,9 @@ Return exactly one JSON object with:
 - count: integer max event count
 
 If the user asks to see calendar events, use today/tomorrow/week/list_events.
-If creating an event and any required detail is missing, still choose create_event
-and leave the missing field empty so the caller can ask a follow-up.
+If creating an event and a title is missing, use "New event".
+If start or end is missing, still choose create_event and leave the missing
+field empty so the caller can ask a follow-up.
 Use the live date/time context from the system prompt to resolve relative dates.
 """
 
@@ -73,6 +74,7 @@ class GoogleCalendarAgent(LLMAgent):
         kwargs.setdefault("system_prompt", CALENDAR_PARSE_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
         self.client = GoogleCalendarMcpClient()
+        self._pending_create: dict[str, Any] = {}
 
     async def chat(self, user_message: str) -> str:
         ts_user = time.time()
@@ -104,11 +106,23 @@ class GoogleCalendarAgent(LLMAgent):
     async def _process(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             action_payload = await self._resolve_action(payload)
+            text = str(payload.get("text") or payload.get("message") or payload.get("query") or "")
+            action_payload = self._merge_calendar_followup(action_payload, text)
             action = action_payload.get("action") or action_payload.get("operation") or "today"
+
+            if action == "help":
+                return {"result": _help_text()}
 
             if action == "status":
                 status = calendar_mcp_config_status()
-                return {"result": json.dumps(status, indent=2), "status": status}
+                auth = "connected" if status.get("calendar_mcp_auth") else "not connected yet"
+                return {
+                    "result": (
+                        f"Google Calendar MCP is {auth}. I can show today's events, "
+                        "list upcoming events, create events, and delete events by id."
+                    ),
+                    "status": status,
+                }
 
             if action in ("list_events", "today", "tomorrow", "week"):
                 count = int(action_payload.get("count") or action_payload.get("pageSize") or 10)
@@ -120,9 +134,16 @@ class GoogleCalendarAgent(LLMAgent):
                 summary = str(action_payload.get("summary") or "").strip()
                 start = str(action_payload.get("start") or action_payload.get("startTime") or "").strip()
                 end = str(action_payload.get("end") or action_payload.get("endTime") or "").strip()
+                if not summary and not (payload.get("operation") or payload.get("action")):
+                    summary = "New event"
                 if not summary or not start or not end:
+                    self._pending_create = {
+                        key: value
+                        for key, value in {**self._pending_create, **action_payload, "summary": summary}.items()
+                        if value
+                    }
                     return {
-                        "result": "I need an event title plus ISO-8601 start and end times to create a calendar event.",
+                        "result": _missing_create_message(summary, start, end),
                         "missing": [
                             name
                             for name, value in (("summary", summary), ("start", start), ("end", end))
@@ -142,6 +163,7 @@ class GoogleCalendarAgent(LLMAgent):
                     if value:
                         arguments[target] = value
                 result = await self.client.call_tool("create_event", arguments)
+                self._pending_create = {}
                 return {"result": result}
 
             if action == "delete_event":
@@ -167,6 +189,8 @@ class GoogleCalendarAgent(LLMAgent):
         text = str(payload.get("text") or payload.get("message") or payload.get("query") or "").strip()
         if not text:
             return {"action": "today"}
+        if _is_help_request(text):
+            return {"action": "help"}
 
         if self.llm is not None:
             try:
@@ -182,11 +206,25 @@ class GoogleCalendarAgent(LLMAgent):
                 self._persist_cost()
                 data = json.loads(_extract_json(response))
                 if isinstance(data, dict):
+                    if (data.get("action") or data.get("operation")) == "create_event":
+                        data = {**_parse_create_details(text), **data}
                     return data
             except Exception as exc:
                 logger.debug("[%s] Calendar parse via LLM failed: %s", self.name, exc)
 
         return _fallback_parse(text)
+
+    def _merge_calendar_followup(self, action_payload: dict[str, Any], text: str) -> dict[str, Any]:
+        if not self._pending_create:
+            return action_payload
+        action = action_payload.get("action") or action_payload.get("operation")
+        if action not in (None, "today", "list_events"):
+            return action_payload
+        parsed = _parse_create_details(text)
+        if not parsed:
+            return action_payload
+        merged = {**self._pending_create, **parsed, "action": "create_event"}
+        return {key: value for key, value in merged.items() if value}
 
 
 def _calendar_timezone() -> ZoneInfo:
@@ -216,6 +254,86 @@ def _list_events_arguments(action: str, count: int) -> dict[str, Any]:
     return args
 
 
+def _help_text() -> str:
+    return (
+        "I can help with your Google Calendar. Try: 'what's on today?', "
+        "'show this week', 'make an event now for 2 hours', or "
+        "'create Dentist tomorrow 3pm to 4pm'."
+    )
+
+
+def _missing_create_message(summary: str, start: str, end: str) -> str:
+    missing = []
+    if not summary:
+        missing.append("a title")
+    if not start or not end:
+        missing.append("a time window")
+    if missing == ["a time window"]:
+        return "Sure. What time should I put it on the calendar for? For example: 'today 8am to 7pm'."
+    if missing == ["a title"]:
+        return "What should I call the event?"
+    return "Sure. What should I call it, and when should it be? For example: 'Dentist tomorrow 3pm to 4pm'."
+
+
+def _parse_create_details(text: str) -> dict[str, Any]:
+    lower = text.lower().strip()
+    if not lower:
+        return {}
+    details: dict[str, Any] = {"action": "create_event"}
+    title_match = re.search(
+        r"\b(?:called|named|title(?:d)?|about)\s+(.+?)(?=\s+(?:today|tomorrow|now|from|at|\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b)|$)",
+        text,
+        re.I,
+    )
+    if title_match:
+        details["summary"] = title_match.group(1).strip(" .")
+
+    tz = _calendar_timezone()
+    now = datetime.now(tz).replace(microsecond=0)
+    day = now
+    if "tomorrow" in lower:
+        day = now + timedelta(days=1)
+
+    duration_match = re.search(r"\bnow\s+for\s+(\d+(?:\.\d+)?)\s*(hour|hours|hr|hrs|minute|minutes|min|mins)\b", lower)
+    if duration_match:
+        amount = float(duration_match.group(1))
+        unit = duration_match.group(2)
+        delta = timedelta(hours=amount) if unit.startswith(("hour", "hr")) else timedelta(minutes=amount)
+        details["start"] = now.isoformat()
+        details["end"] = (now + delta).isoformat()
+        return details
+
+    range_match = re.search(
+        r"\b(?:from\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-|until)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b",
+        lower,
+    )
+    if range_match:
+        start_hour, start_min, start_ampm, end_hour, end_min, end_ampm = range_match.groups()
+        start_dt = _time_on_day(day, int(start_hour), int(start_min or 0), start_ampm or end_ampm)
+        end_dt = _time_on_day(day, int(end_hour), int(end_min or 0), end_ampm or start_ampm)
+        if end_dt <= start_dt:
+            end_dt += timedelta(days=1)
+        details["start"] = start_dt.isoformat()
+        details["end"] = end_dt.isoformat()
+        return details
+
+    at_match = re.search(r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", lower)
+    if at_match:
+        hour, minute, ampm = at_match.groups()
+        start_dt = _time_on_day(day, int(hour), int(minute or 0), ampm)
+        details["start"] = start_dt.isoformat()
+        details["end"] = (start_dt + timedelta(hours=1)).isoformat()
+    return details
+
+
+def _time_on_day(day: datetime, hour: int, minute: int, ampm: str | None) -> datetime:
+    if ampm == "pm" and hour != 12:
+        hour += 12
+    elif ampm == "am" and hour == 12:
+        hour = 0
+    return day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
 def _extract_json(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
@@ -225,11 +343,20 @@ def _extract_json(text: str) -> str:
     return match.group(0) if match else text
 
 
+def _is_help_request(text: str) -> bool:
+    lower = text.lower()
+    return any(phrase in lower for phrase in ("what can you do", "help", "capabilities"))
+
+
 def _fallback_parse(text: str) -> dict[str, Any]:
     lower = text.lower()
+    if _is_help_request(text):
+        return {"action": "help"}
+    create_details = _parse_create_details(text)
     action = "today"
-    if any(word in lower for word in ("create", "add", "schedule", "book")):
-        action = "create_event"
+    if any(word in lower for word in ("create", "add", "schedule", "book", "make an event", "make a meeting")):
+        create_details["action"] = "create_event"
+        return create_details
     elif "delete" in lower or "remove" in lower or "cancel" in lower:
         action = "delete_event"
     elif "tomorrow" in lower:

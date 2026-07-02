@@ -9,6 +9,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Global error surfacing** — uncaught exceptions and unhandled promise rejections
   now log with context and raise a toast, instead of failing silently to the console.
+- **Content-Security-Policy on the dashboard** — the monitor server sends an enforcing
+  CSP with a per-request nonce for inline scripts and `frame-ancestors 'self'`, restricting
+  script/connect/worker/style/img sources. Works behind Home Assistant ingress (the header is
+  forwarded and framing is same-origin); rolled out via a report-only pass verified on both
+  standalone and ingress before enforcing.
 
 - **Per-agent token counts** — LLM agents' cumulative input/output tokens now show on
   their card next to cost (compact `12.5k↑ 900↓`); non-LLM agents show nothing, as

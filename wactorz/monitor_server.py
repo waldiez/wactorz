@@ -1542,17 +1542,15 @@ def _with_no_cache(response):
     return response
 
 
-def _csp_report_only(nonce: str) -> str:
-    """Build the dashboard's report-only Content-Security-Policy.
+def _csp_policy(nonce: str) -> str:
+    """Build the dashboard's Content-Security-Policy.
 
-    Report-only logs violations to the browser console without blocking, so it is
-    safe to ship before an enforcing policy is verified in a real browser. It is
-    nonce-based (not hash-based) because the bootstrap script is injected per
+    Nonce-based (not hash-based) because the bootstrap script is injected per
     request and its content varies with the ingress path, so a static hash would
-    not match under Home Assistant ingress. ``frame-ancestors 'self'`` is included to
-    probe, under report-only, that the HA ingress iframe frames the add-on from the
-    same origin (it does — ingress serves the app on the HA origin that embeds it);
-    no violation confirms it is safe to keep once the policy is enforced.
+    not match under Home Assistant ingress. ``frame-ancestors 'self'`` allows the
+    same-origin HA ingress / Nabu Casa remote iframe while blocking foreign framing.
+    Verified compliant on both standalone and HA ingress (via a report-only pass)
+    before being enforced.
     """
     return "; ".join(
         (
@@ -1605,7 +1603,7 @@ async def index_handler(request):
             content = content.replace("<script>", f"<script nonce='{nonce}'>")
             content = content.replace("<head>", f"<head>{inject}", 1)
             response = _with_no_cache(web.Response(text=content, content_type="text/html"))
-            response.headers["Content-Security-Policy-Report-Only"] = _csp_report_only(nonce)
+            response.headers["Content-Security-Policy"] = _csp_policy(nonce)
             return response
     raise web.HTTPNotFound()
 

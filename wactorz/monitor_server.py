@@ -10,6 +10,7 @@ so the frontend knows whether to send chat over /ws or publish to io/chat.
 """
 
 import asyncio
+import secrets
 import sys
 
 if sys.platform == "win32":
@@ -1541,6 +1542,30 @@ def _with_no_cache(response):
     return response
 
 
+def _csp_report_only(nonce: str) -> str:
+    """Build the dashboard's report-only Content-Security-Policy.
+
+    Report-only logs violations to the browser console without blocking, so it is
+    safe to ship before an enforcing policy is verified in a real browser. It is
+    nonce-based (not hash-based) because the bootstrap script is injected per
+    request and its content varies with the ingress path, so a static hash would
+    not match under Home Assistant ingress. ``frame-ancestors`` is omitted so the
+    HA ingress iframe is never flagged; it is decided when the policy is enforced.
+    """
+    return "; ".join(
+        (
+            "default-src 'self'",
+            f"script-src 'self' 'nonce-{nonce}'",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data:",
+            "font-src 'self'",
+            "connect-src 'self'",
+            "object-src 'none'",
+            "base-uri 'self'",
+        )
+    )
+
+
 async def index_handler(request):
     from aiohttp import web
 
@@ -1555,15 +1580,22 @@ async def index_handler(request):
     ]:
         if candidate.exists():
             ingress_path = request.headers.get("X-Ingress-Path", "").rstrip("/")
+            # Per-request nonce for the injected bootstrap script below so the CSP
+            # can allow it without 'unsafe-inline'.
+            nonce = secrets.token_urlsafe(16)
             # Inject the ingress path so the frontend can prefix all fetch/WS URLs.
             # When not behind ingress, ingress_path is "" and all URLs stay relative.
-            inject = f"<script>window.__WACTORZ_INGRESS_PATH='{ingress_path}';</script>"
+            inject = (
+                f"<script nonce='{nonce}'>window.__WACTORZ_INGRESS_PATH='{ingress_path}';</script>"
+            )
             if ingress_path:
                 inject = f'<base href="{ingress_path}/">{inject}'
 
             content = candidate.read_text(encoding="utf-8")
             content = content.replace("<head>", f"<head>{inject}", 1)
-            return _with_no_cache(web.Response(text=content, content_type="text/html"))
+            response = _with_no_cache(web.Response(text=content, content_type="text/html"))
+            response.headers["Content-Security-Policy-Report-Only"] = _csp_report_only(nonce)
+            return response
     raise web.HTTPNotFound()
 
 

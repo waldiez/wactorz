@@ -500,11 +500,11 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
                 wraps=lambda h: h,  # pass-through so we can still inspect the call
             ) as localise:
                 with patch(
-                    "wactorz.agents.home_assistant_agent._to_utc", wraps=lambda s: s
+                    "wactorz.agents.home_assistant_agent.to_utc", wraps=lambda s: s
                 ) as to_utc:
                     await agent._handle_other_request("what was the office temperature at 17:00?")
 
-        # _to_utc must have been called for the start_time argument
+        # to_utc must have been called for the start_time argument
         to_utc.assert_called_with("2026-06-27T17:00:00")
         # localise_history_timestamps must have been called with the history
         localise.assert_called_once_with(utc_history)

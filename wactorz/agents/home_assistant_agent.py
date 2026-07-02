@@ -31,7 +31,6 @@ from wactorz.config import CONFIG
 
 from ..core.actor import Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import (
-    _to_utc,
     create_automation_via_rest,
     delete_automation,
     get_areas,
@@ -48,6 +47,7 @@ from ..core.integrations.home_assistant.ha_helper import (
     history_to_csv,
     localise_history_timestamps,
     normalize_ha_base_url,
+    to_utc,
     update_automation,
 )
 from .llm_agent import LLMAgent, LLMProvider
@@ -700,8 +700,8 @@ class HomeAssistantAgent(LLMAgent):
                 elif tool_name == "get_entity_history":
                     args = getattr(call, "arguments", {}) or {}
                     eids = args.get("entity_ids") or []
-                    start = _to_utc(args["start_time"]) if args.get("start_time") else None
-                    end = _to_utc(args["end_time"]) if args.get("end_time") else None
+                    start = to_utc(args["start_time"]) if args.get("start_time") else None
+                    end = to_utc(args["end_time"]) if args.get("end_time") else None
                     try:
                         history = await get_entity_history(
                             self.ha_url,

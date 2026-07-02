@@ -991,7 +991,7 @@ def history_to_csv(history: dict[str, Any]) -> str:
     return buf.getvalue()
 
 
-def _to_utc(s: str) -> str:
+def to_utc(s: str) -> str:
     """Parse an ISO-8601 string and return its UTC equivalent.
 
     Naive strings (no UTC offset) are treated as local time before conversion.

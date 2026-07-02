@@ -343,20 +343,20 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
         self.assertIn("sensor.temp,2026-06-28T17:00:00,21.5,", csv_str)
 
     def test_to_utc_offset_aware_string_converted(self):
-        result = ha_helper._to_utc("2026-06-27T17:00:00+02:00")
+        result = ha_helper.to_utc("2026-06-27T17:00:00+02:00")
         self.assertEqual(result, "2026-06-27T15:00:00+00:00")
 
     def test_to_utc_naive_treated_as_local(self):
         from datetime import datetime, timezone
 
         naive = "2026-06-27T17:00:00"
-        result = ha_helper._to_utc(naive)
+        result = ha_helper.to_utc(naive)
         dt = datetime.fromisoformat(naive).astimezone().astimezone(timezone.utc)
         self.assertEqual(result, dt.isoformat())
 
     def test_to_utc_unparseable_passes_through(self):
-        self.assertEqual(ha_helper._to_utc("not-a-date"), "not-a-date")
-        self.assertEqual(ha_helper._to_utc(""), "")
+        self.assertEqual(ha_helper.to_utc("not-a-date"), "not-a-date")
+        self.assertEqual(ha_helper.to_utc(""), "")
 
     def test_localise_history_timestamps_converts_utc(self):
         history = {

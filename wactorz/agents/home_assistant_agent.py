@@ -612,7 +612,6 @@ class HomeAssistantAgent(LLMAgent):
                 }
 
             self._accumulate_usage(getattr(completion, "usage", {}))
-            print(completion)
             tool_calls = list(getattr(completion, "tool_calls", []) or [])
             if not tool_calls:
                 content = str(getattr(completion, "content", "") or "").strip()

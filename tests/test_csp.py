@@ -24,6 +24,7 @@ def test_csp_report_only_includes_nonce_and_key_directives():
     assert "script-src 'self' 'nonce-TESTNONCE'" in policy
     assert "style-src 'self' 'unsafe-inline'" in policy  # dashboard sets inline styles
     assert "connect-src 'self'" in policy
+    assert "worker-src 'self' blob:" in policy  # mqtt.js blob-URL worker
     assert "object-src 'none'" in policy
     # Omitted on purpose so the Home Assistant ingress iframe is never flagged.
     assert "frame-ancestors" not in policy
@@ -45,6 +46,8 @@ async def test_index_handler_sets_report_only_csp_with_matching_nonce():
     # The nonce in the header is the same one stamped on the injected script.
     nonce = re.search(r"'nonce-([A-Za-z0-9_-]+)'", csp).group(1)
     assert f"<script nonce='{nonce}'>" in resp.text
+    # Every inline script is nonce-stamped — no bare <script> slips through.
+    assert "<script>" not in resp.text
     # Enforcing CSP is NOT set (report-only only) until verified in a browser.
     assert resp.headers.get("Content-Security-Policy") is None
 

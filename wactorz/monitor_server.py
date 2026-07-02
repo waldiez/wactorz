@@ -1560,6 +1560,8 @@ def _csp_report_only(nonce: str) -> str:
             "img-src 'self' data:",
             "font-src 'self'",
             "connect-src 'self'",
+            # mqtt.js runs its client in a Web Worker created from a blob: URL.
+            "worker-src 'self' blob:",
             "object-src 'none'",
             "base-uri 'self'",
         )
@@ -1592,6 +1594,10 @@ async def index_handler(request):
                 inject = f'<base href="{ingress_path}/">{inject}'
 
             content = candidate.read_text(encoding="utf-8")
+            # Stamp the same nonce on the page's own inline scripts (e.g. the SW
+            # registration) so they pass the CSP too. First-party bare `<script>`
+            # tags only — the module bundle carries `type=`/`src=`.
+            content = content.replace("<script>", f"<script nonce='{nonce}'>")
             content = content.replace("<head>", f"<head>{inject}", 1)
             response = _with_no_cache(web.Response(text=content, content_type="text/html"))
             response.headers["Content-Security-Policy-Report-Only"] = _csp_report_only(nonce)

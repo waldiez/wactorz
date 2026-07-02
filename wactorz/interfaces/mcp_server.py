@@ -28,29 +28,20 @@ Claude Desktop config (~/.claude/claude_desktop_config.json):
 import json
 import logging
 import os
-import stat
-import sys
-import asyncio
-import webbrowser
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Any
-from urllib.parse import urlparse
 
 import aiohttp
-from aiohttp import web
-
-from wactorz.core.integrations.google_calendar import (
-    GoogleCalendarClient,
-    calendar_config_status,
-    format_events,
+from wactorz.core.integrations.google_calendar_mcp import (
+    DEFAULT_CALENDAR_MCP_SCOPES,
+    GOOGLE_CALENDAR_MCP_URL,
+    GoogleCalendarMcpClient,
 )
 
 try:
-    from mcp import ClientSession
-    from mcp.client.auth import OAuthClientProvider, TokenStorage
-    from mcp.client.streamable_http import streamablehttp_client
     from mcp.server.fastmcp import FastMCP
-    from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 except ImportError as exc:
     raise SystemExit(
         "The 'mcp' package is required. Install with: pip install wactorz[mcp]"
@@ -62,7 +53,7 @@ WACTORZ_URL = os.getenv("WACTORZ_URL", "http://localhost:8000").rstrip("/")
 WACTORZ_API_KEY = os.getenv("WACTORZ_API_KEY", "")
 HA_URL = os.getenv("HA_URL", "").rstrip("/")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
-CALENDAR_MCP_URL = os.getenv("CALENDAR_MCP_URL", "").rstrip("/")
+CALENDAR_MCP_URL = os.getenv("CALENDAR_MCP_URL", GOOGLE_CALENDAR_MCP_URL).rstrip("/")
 CALENDAR_MCP_TOKEN = os.getenv("CALENDAR_MCP_TOKEN", "")
 CALENDAR_MCP_AUTHORIZATION = os.getenv("CALENDAR_MCP_AUTHORIZATION", "")
 CALENDAR_MCP_CLIENT_ID = os.getenv("CALENDAR_MCP_CLIENT_ID", "")
@@ -73,9 +64,7 @@ CALENDAR_MCP_REDIRECT_URI = os.getenv(
 )
 CALENDAR_MCP_SCOPES = os.getenv(
     "CALENDAR_MCP_SCOPES",
-    "https://www.googleapis.com/auth/calendar.calendarlist.readonly "
-    "https://www.googleapis.com/auth/calendar.events.freebusy "
-    "https://www.googleapis.com/auth/calendar.events.readonly",
+    DEFAULT_CALENDAR_MCP_SCOPES,
 )
 CALENDAR_MCP_TOKEN_FILE = (
     os.getenv("CALENDAR_MCP_TOKEN_FILE")
@@ -173,203 +162,65 @@ async def ask_agent(agent_name: str, message: str) -> str:
 # ─── Remote Calendar MCP tools ──────────────────────────────────────────────
 
 
-def _calendar_mcp_headers() -> dict[str, str]:
-    auth = CALENDAR_MCP_AUTHORIZATION
-    if not auth and CALENDAR_MCP_TOKEN:
-        auth = f"Bearer {CALENDAR_MCP_TOKEN}"
-    return {"Authorization": auth} if auth else {}
-
-
-class _CalendarMcpTokenStorage(TokenStorage):
-    def __init__(self, token_file: str):
-        self.path = Path(token_file).expanduser()
-
-    def _read(self) -> dict:
-        try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {}
-        except Exception:
-            logger.warning("Could not read Calendar MCP token file %s", self.path)
-            return {}
-
-    def _write(self, data: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        try:
-            self.path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-        except Exception:
-            pass
-
-    async def get_tokens(self) -> OAuthToken | None:
-        raw = self._read().get("tokens")
-        return OAuthToken.model_validate(raw) if raw else None
-
-    async def set_tokens(self, tokens: OAuthToken) -> None:
-        data = self._read()
-        data["tokens"] = tokens.model_dump(mode="json", exclude_none=True)
-        self._write(data)
-
-    async def get_client_info(self) -> OAuthClientInformationFull | None:
-        if CALENDAR_MCP_CLIENT_ID and CALENDAR_MCP_CLIENT_SECRET:
-            return OAuthClientInformationFull(
-                client_id=CALENDAR_MCP_CLIENT_ID,
-                client_secret=CALENDAR_MCP_CLIENT_SECRET,
-                token_endpoint_auth_method="client_secret_post",
-                redirect_uris=[CALENDAR_MCP_REDIRECT_URI],
-            )
-        raw = self._read().get("client_info")
-        return OAuthClientInformationFull.model_validate(raw) if raw else None
-
-    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
-        data = self._read()
-        data["client_info"] = client_info.model_dump(mode="json", exclude_none=True)
-        self._write(data)
-
-
-async def _open_oauth_browser(url: str) -> None:
-    print(f"\nCalendar MCP OAuth required. Open this URL if the browser does not open:\n{url}\n", file=sys.stderr)
+def _calendar_timezone() -> ZoneInfo:
+    tz = os.getenv("CALENDAR_MCP_TIMEZONE") or os.getenv("TZ") or "UTC"
     try:
-        webbrowser.open(url)
+        return ZoneInfo(tz)
     except Exception:
-        pass
+        return ZoneInfo("UTC")
 
 
-async def _wait_for_oauth_callback() -> tuple[str, str | None]:
-    parsed = urlparse(CALENDAR_MCP_REDIRECT_URI)
-    host = parsed.hostname or "localhost"
-    port = parsed.port or 8765
-    path = parsed.path or "/oauth/callback"
-    loop = asyncio.get_running_loop()
-    future: asyncio.Future[tuple[str, str | None]] = loop.create_future()
-
-    async def callback(request: web.Request) -> web.Response:
-        if request.path != path:
-            return web.Response(status=404, text="Not found")
-        code = request.query.get("code", "")
-        state = request.query.get("state")
-        if not future.done():
-            future.set_result((code, state))
-        return web.Response(text="Calendar MCP authentication complete. You can close this window.")
-
-    app = web.Application()
-    app.router.add_get(path, callback)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, host, port)
-    await site.start()
-    try:
-        return await future
-    finally:
-        await runner.cleanup()
+def _calendar_range_arguments(range_name: str, count: int = 10) -> dict[str, Any]:
+    tz = _calendar_timezone()
+    now = datetime.now(tz)
+    if range_name == "today":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+    elif range_name == "week":
+        start = now
+        end = now + timedelta(days=7)
+    else:
+        start = now
+        end = now + timedelta(days=1)
+    return {
+        "pageSize": count,
+        "orderBy": "startTime",
+        "startTime": start.isoformat(),
+        "endTime": end.isoformat(),
+        "timeZone": tz.key,
+    }
 
 
-def _calendar_mcp_auth():
-    if not (CALENDAR_MCP_CLIENT_ID and CALENDAR_MCP_CLIENT_SECRET):
-        return None
-    metadata = OAuthClientMetadata(
-        redirect_uris=[CALENDAR_MCP_REDIRECT_URI],
-        token_endpoint_auth_method="client_secret_post",
-        grant_types=["authorization_code", "refresh_token"],
-        response_types=["code"],
-        scope=CALENDAR_MCP_SCOPES,
-        client_name="Wactorz Calendar MCP",
-    )
-    return OAuthClientProvider(
-        server_url=CALENDAR_MCP_URL,
-        client_metadata=metadata,
-        storage=_CalendarMcpTokenStorage(CALENDAR_MCP_TOKEN_FILE),
-        redirect_handler=_open_oauth_browser,
-        callback_handler=_wait_for_oauth_callback,
-    )
-
-
-def _format_mcp_content(result: Any) -> str:
-    if getattr(result, "structuredContent", None) is not None:
-        return json.dumps(result.structuredContent, indent=2)
-    content = getattr(result, "content", None)
-    if not content:
-        return str(result)
-    parts = []
-    for item in content:
-        text = getattr(item, "text", None)
-        if text is not None:
-            parts.append(text)
-        else:
-            try:
-                parts.append(item.model_dump_json(indent=2))
-            except Exception:
-                parts.append(str(item))
-    return "\n".join(parts)
+def _calendar_mcp_status_from_constants() -> dict[str, Any]:
+    return {
+        "calendar_mcp_url": CALENDAR_MCP_URL or None,
+        "calendar_mcp_auth": bool(
+            CALENDAR_MCP_CLIENT_ID
+            or CALENDAR_MCP_TOKEN
+            or CALENDAR_MCP_AUTHORIZATION
+        ),
+        "calendar_mcp_oauth_client": bool(CALENDAR_MCP_CLIENT_ID),
+        "calendar_mcp_redirect_uri": CALENDAR_MCP_REDIRECT_URI if CALENDAR_MCP_CLIENT_ID else None,
+        "calendar_mcp_token_file": CALENDAR_MCP_TOKEN_FILE if CALENDAR_MCP_CLIENT_ID else None,
+    }
 
 
 async def _calendar_mcp_call(tool_name: str, arguments: dict | None = None) -> str:
-    """Call a tool on a configured remote Calendar MCP server."""
-    if not CALENDAR_MCP_URL:
-        return (
-            "Calendar MCP is not configured. Set CALENDAR_MCP_URL and, if needed, "
-            "CALENDAR_MCP_TOKEN or CALENDAR_MCP_AUTHORIZATION."
-        )
-    try:
-        auth = _calendar_mcp_auth()
-        async with streamablehttp_client(
-            CALENDAR_MCP_URL,
-            headers={} if auth else _calendar_mcp_headers(),
-            auth=auth,
-        ) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool(tool_name, arguments or {})
-                return _format_mcp_content(result)
-    except Exception as exc:
-        return f"Calendar MCP error: {exc}"
+    """Call a tool on the configured Google Calendar MCP server."""
+    return await GoogleCalendarMcpClient().call_tool(tool_name, arguments)
 
 
 @mcp.tool()
 async def calendar_status() -> str:
-    """Show sanitized Google Calendar and remote Calendar MCP configuration status."""
-    status = calendar_config_status()
-    status.update(
-        {
-            "calendar_mcp_url": CALENDAR_MCP_URL or None,
-            "calendar_mcp_auth": bool(
-                CALENDAR_MCP_CLIENT_ID
-                or CALENDAR_MCP_TOKEN
-                or CALENDAR_MCP_AUTHORIZATION
-            ),
-            "calendar_mcp_oauth_client": bool(CALENDAR_MCP_CLIENT_ID),
-            "calendar_mcp_redirect_uri": CALENDAR_MCP_REDIRECT_URI if CALENDAR_MCP_CLIENT_ID else None,
-            "calendar_mcp_token_file": CALENDAR_MCP_TOKEN_FILE if CALENDAR_MCP_CLIENT_ID else None,
-        }
-    )
+    """Show sanitized Google Calendar MCP configuration status."""
+    status = _calendar_mcp_status_from_constants()
     return json.dumps(status, indent=2)
 
 
 @mcp.tool()
 async def calendar_mcp_list_tools() -> str:
-    """List tools exposed by the configured remote Calendar MCP server."""
-    if not CALENDAR_MCP_URL:
-        return (
-            "Remote Calendar MCP is not configured. Set CALENDAR_MCP_URL only "
-            "if you want to proxy a separate MCP server. Native Google Calendar "
-            "uses GOOGLE_CALENDAR_* environment variables."
-        )
-    try:
-        auth = _calendar_mcp_auth()
-        async with streamablehttp_client(
-            CALENDAR_MCP_URL,
-            headers={} if auth else _calendar_mcp_headers(),
-            auth=auth,
-        ) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                tools = await session.list_tools()
-                return "\n".join(
-                    f"{tool.name}: {tool.description or ''}".rstrip()
-                    for tool in tools.tools
-                )
-    except Exception as exc:
-        return f"Calendar MCP error: {exc}"
+    """List tools exposed by the configured Google Calendar MCP server."""
+    return await GoogleCalendarMcpClient().list_tools()
 
 
 @mcp.tool()
@@ -389,54 +240,23 @@ async def calendar_mcp_call_tool(tool_name: str, arguments_json: str = "{}") -> 
     return await _calendar_mcp_call(tool_name, arguments)
 
 
-def _google_calendar_configured() -> bool:
-    return bool(calendar_config_status().get("google_calendar_auth"))
-
-
-async def _calendar_native_or_remote(tool_name: str, arguments: dict | None = None) -> str:
-    if _google_calendar_configured():
-        client = GoogleCalendarClient()
-        args = arguments or {}
-        try:
-            if tool_name == "list_events":
-                if args.get("range"):
-                    events = await client.list_range(str(args["range"]), max_results=int(args.get("maxResults") or 10))
-                else:
-                    events = await client.list_events(max_results=int(args.get("maxResults") or 10))
-                return format_events(events)
-            if tool_name == "create_event":
-                event = await client.create_event(
-                    summary=str(args.get("summary") or ""),
-                    start=str(args.get("startDateTime") or args.get("start") or ""),
-                    end=str(args.get("endDateTime") or args.get("end") or ""),
-                    location=str(args.get("location") or ""),
-                    description=str(args.get("description") or ""),
-                )
-                return json.dumps(event, indent=2)
-            if tool_name == "delete_event":
-                result = await client.delete_event(str(args.get("eventId") or args.get("event_id") or ""))
-                return json.dumps(result, indent=2)
-        except Exception as exc:
-            return f"Google Calendar error: {exc}"
-    return await _calendar_mcp_call(tool_name, arguments)
-
 
 @mcp.tool()
 async def calendar_list(count: int = 10) -> str:
-    """List upcoming Google Calendar events, or proxy list_events to remote Calendar MCP."""
-    return await _calendar_native_or_remote("list_events", {"maxResults": count})
+    """List upcoming Google Calendar events through the Google Calendar MCP server."""
+    return await _calendar_mcp_call("list_events", {"pageSize": count, "orderBy": "startTime"})
 
 
 @mcp.tool()
 async def calendar_today() -> str:
-    """List today's Google Calendar events, or proxy list_events to remote Calendar MCP."""
-    return await _calendar_native_or_remote("list_events", {"range": "today"})
+    """List today's Google Calendar events through the Google Calendar MCP server."""
+    return await _calendar_mcp_call("list_events", _calendar_range_arguments("today"))
 
 
 @mcp.tool()
 async def calendar_week() -> str:
-    """List this week's Google Calendar events, or proxy list_events to remote Calendar MCP."""
-    return await _calendar_native_or_remote("list_events", {"range": "week"})
+    """List this week's Google Calendar events through the Google Calendar MCP server."""
+    return await _calendar_mcp_call("list_events", _calendar_range_arguments("week"))
 
 
 @mcp.tool()
@@ -447,21 +267,21 @@ async def calendar_create_event(
     location: str = "",
     description: str = "",
 ) -> str:
-    """Create a Google Calendar event, or proxy create_event to remote Calendar MCP."""
-    payload = {"summary": summary, "startDateTime": start}
-    if end:
-        payload["endDateTime"] = end
+    """Create a Google Calendar event through the Google Calendar MCP server."""
+    if not end:
+        return "calendar_create_event requires an ISO-8601 end time because Google Calendar MCP create_event requires endTime."
+    payload = {"summary": summary, "startTime": start, "endTime": end}
     if location:
         payload["location"] = location
     if description:
         payload["description"] = description
-    return await _calendar_native_or_remote("create_event", payload)
+    return await _calendar_mcp_call("create_event", payload)
 
 
 @mcp.tool()
 async def calendar_delete_event(event_id: str) -> str:
-    """Delete a Google Calendar event, or proxy delete_event to remote Calendar MCP."""
-    return await _calendar_native_or_remote("delete_event", {"eventId": event_id})
+    """Delete a Google Calendar event through the Google Calendar MCP server."""
+    return await _calendar_mcp_call("delete_event", {"eventId": event_id})
 
 
 # ─── Agent management tools ─────────────────────────────────────────────────
@@ -663,14 +483,7 @@ async def config_resource() -> str:
             "wactorz_auth": bool(WACTORZ_API_KEY),
             "ha_url": HA_URL or None,
             "ha_auth": bool(HA_TOKEN),
-            **calendar_config_status(),
-            "calendar_mcp_url": CALENDAR_MCP_URL or None,
-            "calendar_mcp_auth": bool(
-                CALENDAR_MCP_CLIENT_ID
-                or CALENDAR_MCP_TOKEN
-                or CALENDAR_MCP_AUTHORIZATION
-            ),
-            "calendar_mcp_oauth_client": bool(CALENDAR_MCP_CLIENT_ID),
+            **_calendar_mcp_status_from_constants(),
         },
         indent=2,
     )

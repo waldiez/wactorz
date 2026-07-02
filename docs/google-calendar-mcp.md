@@ -1,96 +1,96 @@
-# Google Calendar
+# Google Calendar MCP
 
-Wactorz can access Google Calendar through the catalog-backed `google-calendar-agent`. The MCP server exposes the same calendar operations for MCP clients, and can still proxy a separate remote Calendar MCP server when `CALENDAR_MCP_URL` is configured.
+Wactorz uses Google's hosted Calendar MCP server for Google Calendar access. The catalogue-backed `google-calendar-agent` calls MCP tools such as `list_events`, `create_event`, and `delete_event`; it does not call the Google Calendar REST API directly.
 
-## Native Google Calendar setup
-
-For read and write access, configure OAuth credentials that can refresh an access token:
+Google's hosted MCP endpoint is:
 
 ```bash
-export GOOGLE_CALENDAR_CLIENT_ID="...apps.googleusercontent.com"
-export GOOGLE_CALENDAR_CLIENT_SECRET="..."
-export GOOGLE_CALENDAR_REFRESH_TOKEN="..."
-export GOOGLE_CALENDAR_ID="primary"
-export GOOGLE_CALENDAR_TIMEZONE="Europe/Athens"
+https://calendarmcp.googleapis.com/mcp/v1
 ```
 
-For short manual tests, you can set an access token instead of refresh-token credentials:
+## Google Cloud setup
+
+In your Google Cloud project, enable both services:
 
 ```bash
-export GOOGLE_CALENDAR_ACCESS_TOKEN="..."
+gcloud services enable calendar-json.googleapis.com --project=PROJECT_ID
+gcloud services enable calendarmcp.googleapis.com --project=PROJECT_ID
 ```
 
-Optional safety switch:
+Then configure the OAuth consent screen and create an OAuth 2.0 Web application client. Add the redirect URI used by Wactorz:
+
+```text
+http://localhost:8765/oauth/callback
+```
+
+## Wactorz environment
+
+Set these values before starting Wactorz or `wactorz-mcp`:
 
 ```bash
-export GOOGLE_CALENDAR_READONLY="1"
+export CALENDAR_MCP_URL="https://calendarmcp.googleapis.com/mcp/v1"
+export CALENDAR_MCP_CLIENT_ID="...apps.googleusercontent.com"
+export CALENDAR_MCP_CLIENT_SECRET="..."
+export CALENDAR_MCP_REDIRECT_URI="http://localhost:8765/oauth/callback"
+export CALENDAR_MCP_TOKEN_FILE="$HOME/.wactorz/calendar_mcp_token.json"
+export CALENDAR_MCP_TIMEZONE="Europe/Athens"
 ```
 
-Read-only mode allows listing events but blocks `create_event` and `delete_event`.
+`CALENDAR_MCP_URL` defaults to Google's hosted endpoint, so you can omit it unless you want to be explicit.
+
+Default scopes:
+
+```text
+https://www.googleapis.com/auth/calendar.calendarlist.readonly
+https://www.googleapis.com/auth/calendar.events
+https://www.googleapis.com/auth/calendar.events.freebusy
+https://www.googleapis.com/auth/calendar.events.readonly
+```
+
+Override with `CALENDAR_MCP_SCOPES` only if your OAuth app uses a narrower or different scope set.
 
 ## Wactorz agent usage
 
-Start Wactorz normally. The catalog advertises `google-calendar-agent` as a spawnable recipe with capabilities such as `google_calendar`, `calendar`, `events`, and `create_event`. The first normal calendar request can auto-spawn it, or you can start it explicitly with `@catalog spawn google-calendar-agent`.
+Start Wactorz normally. The catalogue advertises `google-calendar-agent` as a spawnable recipe with capabilities such as `google_calendar`, `calendar`, `events`, and `create_event`. The first normal calendar request can auto-spawn it, or you can start it explicitly:
+
+```text
+@catalog spawn google-calendar-agent
+```
 
 Example user requests:
 
 ```text
 what is on my calendar today?
 show my calendar this week
-create a calendar event called Dentist tomorrow at 15:00
+create a calendar event called Dentist tomorrow from 15:00 to 16:00
 ```
 
-For event creation, the spawned agent uses the configured LLM to resolve natural-language dates into ISO-8601 datetimes. Structured calls can bypass parsing by sending `operation=create_event`, `summary`, `start`, and optional `end`, `location`, or `description`.
+For event creation, the agent resolves natural language into Google's MCP `create_event` arguments. Structured calls should use `operation=create_event`, `summary`, `start`, and `end`; the MCP server requires both `startTime` and `endTime`.
 
-## MCP tools
+## Wactorz MCP tools
 
-Install Wactorz with the MCP extra and run the MCP server as usual:
+Install Wactorz with the MCP extra and run the MCP server:
 
 ```bash
 pip install "wactorz[mcp]"
 wactorz-mcp
 ```
 
-The Wactorz MCP server registers these Calendar tools:
+The Wactorz MCP server registers convenience tools backed by Google Calendar MCP:
 
-- `calendar_status` - sanitized Google Calendar and remote MCP configuration status.
-- `calendar_list` - list upcoming Google Calendar events.
-- `calendar_today` - list today's Google Calendar events.
-- `calendar_week` - list this week's Google Calendar events.
-- `calendar_create_event` - create a Google Calendar event.
-- `calendar_delete_event` - delete a Google Calendar event.
-- `calendar_mcp_list_tools` - optional: list tools exposed by a remote Calendar MCP server.
-- `calendar_mcp_call_tool` - optional: call any remote Calendar MCP tool with a JSON object string.
-
-When native Google Calendar auth is configured, `calendar_list`, `calendar_today`, `calendar_week`, `calendar_create_event`, and `calendar_delete_event` use Google Calendar directly. If native auth is not configured, those tools fall back to the remote MCP proxy path.
-
-## Optional remote Calendar MCP proxy
-
-Configure a remote Calendar MCP endpoint only if you already run a separate Calendar MCP server:
-
-```bash
-export CALENDAR_MCP_URL="https://your-calendar-mcp.example/mcp"
-```
-
-For bearer-style auth, set one of:
-
-```bash
-export CALENDAR_MCP_TOKEN="..."
-# or, for a complete header value:
-export CALENDAR_MCP_AUTHORIZATION="Bearer ..."
-```
-
-For OAuth-capable remote MCP servers, set the client credentials and optional callback settings:
-
-```bash
-export CALENDAR_MCP_CLIENT_ID="...apps.googleusercontent.com"
-export CALENDAR_MCP_CLIENT_SECRET="..."
-export CALENDAR_MCP_REDIRECT_URI="http://localhost:8765/oauth/callback"
-export CALENDAR_MCP_TOKEN_FILE="$HOME/.wactorz/calendar_mcp_token.json"
-```
-
-The remote MCP token file is written with user-only permissions when the platform allows it.
+- `calendar_status` - sanitized Calendar MCP configuration status.
+- `calendar_list` - calls Google MCP `list_events`.
+- `calendar_today` - calls Google MCP `list_events` with today's time window.
+- `calendar_week` - calls Google MCP `list_events` with the next seven days.
+- `calendar_create_event` - calls Google MCP `create_event`.
+- `calendar_delete_event` - calls Google MCP `delete_event`.
+- `calendar_mcp_list_tools` - lists tools exposed by Google's Calendar MCP server.
+- `calendar_mcp_call_tool` - calls any Calendar MCP tool with a JSON object string.
 
 ## Sanitized config resource
 
-`wactorz://config` includes whether Google Calendar and remote Calendar MCP are configured, but it never exposes tokens, refresh tokens, or client secrets.
+`wactorz://config` includes whether Calendar MCP is configured, but it never exposes tokens or client secrets.
+
+## Security note
+
+Calendar events can contain untrusted text. Treat event content as data, review creates/updates/deletes carefully, and connect only trusted MCP clients to your Google Calendar account.

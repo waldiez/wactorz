@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ..core.actor import Message, MessageType
-from ..core.integrations.google_calendar import (
-    GoogleCalendarClient,
-    calendar_config_status,
-    format_events,
+from ..core.integrations.google_calendar_mcp import (
+    GoogleCalendarMcpClient,
+    calendar_mcp_config_status,
 )
 from .llm_agent import LLMAgent, LLMProvider
 
@@ -70,7 +72,7 @@ class GoogleCalendarAgent(LLMAgent):
         kwargs.setdefault("name", "google-calendar-agent")
         kwargs.setdefault("system_prompt", CALENDAR_PARSE_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
-        self.client = GoogleCalendarClient()
+        self.client = GoogleCalendarMcpClient()
 
     async def chat(self, user_message: str) -> str:
         ts_user = time.time()
@@ -105,38 +107,49 @@ class GoogleCalendarAgent(LLMAgent):
             action = action_payload.get("action") or action_payload.get("operation") or "today"
 
             if action == "status":
-                status = calendar_config_status()
+                status = calendar_mcp_config_status()
                 return {"result": json.dumps(status, indent=2), "status": status}
 
             if action in ("list_events", "today", "tomorrow", "week"):
-                count = int(action_payload.get("count") or action_payload.get("max_results") or 10)
-                if action == "list_events":
-                    events = await self.client.list_events(max_results=count)
-                else:
-                    events = await self.client.list_range(action, max_results=count)
-                return {"result": format_events(events), "events": events}
+                count = int(action_payload.get("count") or action_payload.get("pageSize") or 10)
+                arguments = _list_events_arguments(action, count)
+                result = await self.client.call_tool("list_events", arguments)
+                return {"result": result}
 
             if action == "create_event":
                 summary = str(action_payload.get("summary") or "").strip()
-                start = str(action_payload.get("start") or "").strip()
-                if not summary or not start:
+                start = str(action_payload.get("start") or action_payload.get("startTime") or "").strip()
+                end = str(action_payload.get("end") or action_payload.get("endTime") or "").strip()
+                if not summary or not start or not end:
                     return {
-                        "result": "I need an event title and an ISO-8601 start time to create a calendar event.",
-                        "missing": [name for name, value in (("summary", summary), ("start", start)) if not value],
+                        "result": "I need an event title plus ISO-8601 start and end times to create a calendar event.",
+                        "missing": [
+                            name
+                            for name, value in (("summary", summary), ("start", start), ("end", end))
+                            if not value
+                        ],
                     }
-                event = await self.client.create_event(
-                    summary=summary,
-                    start=start,
-                    end=str(action_payload.get("end") or ""),
-                    location=str(action_payload.get("location") or ""),
-                    description=str(action_payload.get("description") or ""),
-                )
-                return {"result": f"Created calendar event: {event['summary']} at {event['start']}", "event": event}
+                arguments = {"summary": summary, "startTime": start, "endTime": end}
+                for source, target in (
+                    ("location", "location"),
+                    ("description", "description"),
+                    ("calendar_id", "calendarId"),
+                    ("calendarId", "calendarId"),
+                    ("timeZone", "timeZone"),
+                    ("timezone", "timeZone"),
+                ):
+                    value = action_payload.get(source)
+                    if value:
+                        arguments[target] = value
+                result = await self.client.call_tool("create_event", arguments)
+                return {"result": result}
 
             if action == "delete_event":
                 event_id = str(action_payload.get("event_id") or action_payload.get("eventId") or "").strip()
-                await self.client.delete_event(event_id)
-                return {"result": f"Deleted calendar event {event_id}.", "event_id": event_id}
+                if not event_id:
+                    return {"result": "I need the calendar event id to delete an event.", "missing": ["event_id"]}
+                result = await self.client.call_tool("delete_event", {"eventId": event_id})
+                return {"result": result, "event_id": event_id}
 
             return {"result": f"Unsupported calendar action: {action}"}
         except Exception as exc:
@@ -174,6 +187,33 @@ class GoogleCalendarAgent(LLMAgent):
                 logger.debug("[%s] Calendar parse via LLM failed: %s", self.name, exc)
 
         return _fallback_parse(text)
+
+
+def _calendar_timezone() -> ZoneInfo:
+    tz = os.getenv("CALENDAR_MCP_TIMEZONE") or os.getenv("TZ") or "UTC"
+    try:
+        return ZoneInfo(tz)
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def _list_events_arguments(action: str, count: int) -> dict[str, Any]:
+    args: dict[str, Any] = {"pageSize": count, "orderBy": "startTime"}
+    tz = _calendar_timezone()
+    now = datetime.now(tz)
+    if action == "today":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+    elif action == "tomorrow":
+        start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+    elif action == "week":
+        start = now
+        end = now + timedelta(days=7)
+    else:
+        return args
+    args.update({"startTime": start.isoformat(), "endTime": end.isoformat(), "timeZone": tz.key})
+    return args
 
 
 def _extract_json(text: str) -> str:

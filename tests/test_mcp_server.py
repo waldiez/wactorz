@@ -75,7 +75,6 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["calendar_mcp_url"], "https://calendar.example/mcp")
         self.assertTrue(payload["calendar_mcp_auth"])
         self.assertTrue(payload["calendar_mcp_oauth_client"])
-        self.assertIn("google_calendar_auth", payload)
         serialized = json.dumps(payload)
         self.assertNotIn("secret-rest-key", serialized)
         self.assertNotIn("secret-ha-token", serialized)
@@ -124,7 +123,6 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["calendar_mcp_oauth_client"])
         self.assertEqual(payload["calendar_mcp_redirect_uri"], "http://localhost:8765/oauth/callback")
         self.assertEqual(payload["calendar_mcp_token_file"], "C:/tmp/calendar_token.json")
-        self.assertIn("google_calendar_auth", payload)
         self.assertNotIn("secret-client-secret", json.dumps(payload))
 
     async def test_calendar_list_calls_remote_mcp_list_events(self):
@@ -136,45 +134,7 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
             result = await mcp_server.calendar_list(5)
 
         self.assertEqual(result, "event list")
-        call.assert_awaited_once_with("list_events", {"maxResults": 5})
-
-    async def test_calendar_list_uses_native_google_calendar_when_configured(self):
-        client = mock.Mock()
-        client.list_events = mock.AsyncMock(return_value=[
-            {"id": "evt-1", "summary": "Standup", "start": "2026-07-03T10:00:00+03:00"}
-        ])
-        with mock.patch.object(mcp_server, "calendar_config_status", return_value={"google_calendar_auth": True}), \
-             mock.patch.object(mcp_server, "GoogleCalendarClient", return_value=client), \
-             mock.patch.object(mcp_server, "_calendar_mcp_call", mock.AsyncMock(return_value="remote")) as remote_call:
-            result = await mcp_server.calendar_list(3)
-
-        self.assertIn("Standup", result)
-        client.list_events.assert_awaited_once_with(max_results=3)
-        remote_call.assert_not_called()
-
-    async def test_calendar_create_event_uses_native_google_calendar_when_configured(self):
-        client = mock.Mock()
-        client.create_event = mock.AsyncMock(return_value={
-            "id": "evt-2",
-            "summary": "Dentist",
-            "start": "2026-07-03T15:00:00+03:00",
-        })
-        with mock.patch.object(mcp_server, "calendar_config_status", return_value={"google_calendar_auth": True}), \
-             mock.patch.object(mcp_server, "GoogleCalendarClient", return_value=client):
-            result = await mcp_server.calendar_create_event(
-                "Dentist",
-                "2026-07-03T15:00:00+03:00",
-                location="Athens",
-            )
-
-        self.assertIn("Dentist", result)
-        client.create_event.assert_awaited_once_with(
-            summary="Dentist",
-            start="2026-07-03T15:00:00+03:00",
-            end="",
-            location="Athens",
-            description="",
-        )
+        call.assert_awaited_once_with("list_events", {"pageSize": 5, "orderBy": "startTime"})
 
     async def test_calendar_create_event_calls_remote_mcp_create_event(self):
         with mock.patch.object(
@@ -185,6 +145,7 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
             result = await mcp_server.calendar_create_event(
                 "Dentist",
                 "2026-06-03T15:00:00+03:00",
+                "2026-06-03T16:00:00+03:00",
                 location="Athens",
             )
 
@@ -193,10 +154,25 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
             "create_event",
             {
                 "summary": "Dentist",
-                "startDateTime": "2026-06-03T15:00:00+03:00",
+                "startTime": "2026-06-03T15:00:00+03:00",
+                "endTime": "2026-06-03T16:00:00+03:00",
                 "location": "Athens",
             },
         )
+
+    async def test_calendar_create_event_requires_end_time(self):
+        with mock.patch.object(
+            mcp_server,
+            "_calendar_mcp_call",
+            mock.AsyncMock(return_value="created"),
+        ) as call:
+            result = await mcp_server.calendar_create_event(
+                "Dentist",
+                "2026-06-03T15:00:00+03:00",
+            )
+
+        self.assertIn("requires", result)
+        call.assert_not_called()
 
     async def test_calendar_mcp_call_tool_validates_json_object(self):
         self.assertIn("Invalid arguments_json", await mcp_server.calendar_mcp_call_tool("x", "{"))

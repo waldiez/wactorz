@@ -26,8 +26,8 @@ def test_csp_report_only_includes_nonce_and_key_directives():
     assert "connect-src 'self'" in policy
     assert "worker-src 'self' blob:" in policy  # mqtt.js blob-URL worker
     assert "object-src 'none'" in policy
-    # Omitted on purpose so the Home Assistant ingress iframe is never flagged.
-    assert "frame-ancestors" not in policy
+    # 'self' allows the same-origin HA ingress iframe while blocking foreign framing.
+    assert "frame-ancestors 'self'" in policy
 
 
 class _Req:

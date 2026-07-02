@@ -1549,8 +1549,10 @@ def _csp_report_only(nonce: str) -> str:
     safe to ship before an enforcing policy is verified in a real browser. It is
     nonce-based (not hash-based) because the bootstrap script is injected per
     request and its content varies with the ingress path, so a static hash would
-    not match under Home Assistant ingress. ``frame-ancestors`` is omitted so the
-    HA ingress iframe is never flagged; it is decided when the policy is enforced.
+    not match under Home Assistant ingress. ``frame-ancestors 'self'`` is included to
+    probe, under report-only, that the HA ingress iframe frames the add-on from the
+    same origin (it does — ingress serves the app on the HA origin that embeds it);
+    no violation confirms it is safe to keep once the policy is enforced.
     """
     return "; ".join(
         (
@@ -1564,6 +1566,9 @@ def _csp_report_only(nonce: str) -> str:
             "worker-src 'self' blob:",
             "object-src 'none'",
             "base-uri 'self'",
+            # HA ingress (and Nabu Casa remote) frame the add-on from the same
+            # origin, so 'self' allows the iframe while blocking foreign framing.
+            "frame-ancestors 'self'",
         )
     )
 

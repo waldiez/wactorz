@@ -28,6 +28,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Tests** — `test_spawning.py` (23) covering spawn routing, idempotency/replace,
   both install models, the `trusted` flag and TopicContract wiring; `test_memory.py`
   (12) covering fact extraction/namespacing and system-prompt assembly.
+- **Home Assistant entity history** — `home-assistant-agent` can now answer questions
+  about past entity states (e.g. "what was the office temperature yesterday at 17:00?"),
+  backed by a new `get_entity_history` helper against HA's `/api/history/period` REST
+  endpoint. The current local datetime is injected into the LLM prompt so relative
+  times resolve correctly, and returned timestamps are localised to the server's
+  timezone. Also available as a structured `get_history` A2A operation for peer agents,
+  which returns the history as CSV alongside the raw JSON.
 
 ### Changed
 

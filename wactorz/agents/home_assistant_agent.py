@@ -31,6 +31,7 @@ from wactorz.config import CONFIG
 
 from ..core.actor import Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import (
+    _to_utc,
     create_automation_via_rest,
     delete_automation,
     get_areas,
@@ -41,10 +42,9 @@ from ..core.integrations.home_assistant.ha_helper import (
     get_camera_stream_urls,
     get_devices,
     get_entities,
-    _to_utc,
     get_entity_history,
-    get_states,
     get_simplified_ha_data,
+    get_states,
     history_to_csv,
     localise_history_timestamps,
     normalize_ha_base_url,
@@ -57,9 +57,9 @@ from .prompts.home_assistant_prompts import (
     HA_CAMERA_LIST_TOOL,
     HA_CAMERA_SNAPSHOT_TOOL,
     HA_CAMERA_STREAM_TOOL,
-    HA_HISTORY_TOOL,
     HA_DELETE_CONFIRM_PROMPT,
     HA_EDIT_AUTOMATION_PROMPT,
+    HA_HISTORY_TOOL,
     HA_IDENTIFY_AUTOMATION_PROMPT,
     HA_OTHER_PROMPT,
     HA_OTHER_TOOL,
@@ -81,21 +81,22 @@ class AutomationEditError(Exception):
 
 class HomeAssistantAgent(LLMAgent):
     """Unified Home Assistant agent: hardware recommendations, automation CRUD, and entity history."""
-    DESCRIPTION   = (
+
+    DESCRIPTION = (
         "Controls Home Assistant: automations, devices, areas, entities, and entity history. "
         "Supports natural language queries (current state, camera snapshots, historical data) "
         "and structured agent-to-agent operations via the 'operation' payload field."
     )
-    CAPABILITIES  = [
+    CAPABILITIES: ClassVar[list[str]] = [
         "home_automation",
         "ha_automations",
         "ha_devices",
         "ha_entities",
         "ha_history",
     ]
-    INPUT_SCHEMA  = {
+    INPUT_SCHEMA: ClassVar[dict[str, Any]] = {
         "text": "str — natural language command or query, e.g. 'turn on living room lights', "
-                "'list all automations', 'what was the office temperature yesterday at 17:00?'",
+        "'list all automations', 'what was the office temperature yesterday at 17:00?'",
         "operation": (
             "str (optional) — structured agent-to-agent operation, bypasses LLM. "
             "Supported values: "
@@ -107,10 +108,10 @@ class HomeAssistantAgent(LLMAgent):
             "fetch entity state history; times are ISO-8601, agent stores/returns UTC."
         ),
     }
-    OUTPUT_SCHEMA = {
+    OUTPUT_SCHEMA: ClassVar[dict[str, Any]] = {
         "result": "str — human-readable confirmation or summary",
-        "data":   "list|dict|null — structured HA API response when applicable",
-        "csv":    "str — CSV of entity history rows (only present for get_history operation)",
+        "data": "list|dict|null — structured HA API response when applicable",
+        "csv": "str — CSV of entity history rows (only present for get_history operation)",
         "format": "str — 'csv' when csv field is present",
     }
 
@@ -556,14 +557,20 @@ class HomeAssistantAgent(LLMAgent):
 
         try:
             history = await get_entity_history(
-                self.ha_url, self.ha_token, entity_ids,
-                start_time=start_time, end_time=end_time,
+                self.ha_url,
+                self.ha_token,
+                entity_ids,
+                start_time=start_time,
+                end_time=end_time,
             )
         except Exception as exc:
             return {"result": f"Entity history fetch failed: {exc}", "error": str(exc)}
 
         if "error" in history:
-            return {"result": f"Entity history fetch failed: {history['error']}", "error": history["error"]}
+            return {
+                "result": f"Entity history fetch failed: {history['error']}",
+                "error": history["error"],
+            }
 
         csv_str = history_to_csv(history)
         return {
@@ -572,7 +579,6 @@ class HomeAssistantAgent(LLMAgent):
             "csv": csv_str,
             "format": "csv",
         }
-
 
     async def _handle_other_request(self, text: str) -> dict[str, Any]:
         if not self.ha_url or not self.ha_token:
@@ -593,7 +599,13 @@ class HomeAssistantAgent(LLMAgent):
         messages: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
         tool_cache: dict[str, str] = {}
         snapshots_taken: list[dict[str, Any]] = []
-        tools = [HA_OTHER_TOOL, HA_CAMERA_LIST_TOOL, HA_CAMERA_SNAPSHOT_TOOL, HA_CAMERA_STREAM_TOOL, HA_HISTORY_TOOL]
+        tools = [
+            HA_OTHER_TOOL,
+            HA_CAMERA_LIST_TOOL,
+            HA_CAMERA_SNAPSHOT_TOOL,
+            HA_CAMERA_STREAM_TOOL,
+            HA_HISTORY_TOOL,
+        ]
 
         for _round in range(self._other_tool_max_rounds):
             try:
@@ -692,8 +704,11 @@ class HomeAssistantAgent(LLMAgent):
                     end = _to_utc(args["end_time"]) if args.get("end_time") else None
                     try:
                         history = await get_entity_history(
-                            self.ha_url, self.ha_token, eids,
-                            start_time=start, end_time=end,
+                            self.ha_url,
+                            self.ha_token,
+                            eids,
+                            start_time=start,
+                            end_time=end,
                         )
                         if "error" in history:
                             is_error = True

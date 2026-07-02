@@ -286,11 +286,26 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
     def test_history_to_csv_normal(self):
         history = {
             "sensor.temp": [
-                {"entity_id": "sensor.temp", "state": "21.5", "last_changed": "2026-06-28T17:00:00", "attributes": {"unit_of_measurement": "°C"}},
-                {"entity_id": "sensor.temp", "state": "21.8", "last_changed": "2026-06-28T17:05:00", "attributes": {"unit_of_measurement": "°C"}},
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-28T17:00:00",
+                    "attributes": {"unit_of_measurement": "°C"},
+                },
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.8",
+                    "last_changed": "2026-06-28T17:05:00",
+                    "attributes": {"unit_of_measurement": "°C"},
+                },
             ],
             "sensor.humidity": [
-                {"entity_id": "sensor.humidity", "state": "55", "last_changed": "2026-06-28T17:00:00", "attributes": {}},
+                {
+                    "entity_id": "sensor.humidity",
+                    "state": "55",
+                    "last_changed": "2026-06-28T17:00:00",
+                    "attributes": {},
+                },
             ],
         }
         csv_str = ha_helper.history_to_csv(history)
@@ -316,7 +331,12 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
     def test_history_to_csv_missing_unit(self):
         history = {
             "sensor.temp": [
-                {"entity_id": "sensor.temp", "state": "21.5", "last_changed": "2026-06-28T17:00:00", "attributes": {}},
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-28T17:00:00",
+                    "attributes": {},
+                },
             ],
         }
         csv_str = ha_helper.history_to_csv(history)
@@ -328,6 +348,7 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
 
     def test_to_utc_naive_treated_as_local(self):
         from datetime import datetime, timezone
+
         naive = "2026-06-27T17:00:00"
         result = ha_helper._to_utc(naive)
         dt = datetime.fromisoformat(naive).astimezone().astimezone(timezone.utc)
@@ -340,7 +361,12 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
     def test_localise_history_timestamps_converts_utc(self):
         history = {
             "sensor.temp": [
-                {"entity_id": "sensor.temp", "state": "21.5", "last_changed": "2026-06-27T15:00:00+00:00", "attributes": {}},
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-27T15:00:00+00:00",
+                    "attributes": {},
+                },
             ]
         }
         result = ha_helper.localise_history_timestamps(history)
@@ -348,18 +374,25 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
         # Converted to local tz — must no longer be UTC (+00:00) if local offset is non-zero,
         # but always a valid ISO string parseable by fromisoformat.
         from datetime import datetime
+
         dt = datetime.fromisoformat(ts)
         self.assertIsNotNone(dt.tzinfo)
 
     def test_localise_history_timestamps_handles_z_suffix(self):
         history = {
             "sensor.temp": [
-                {"entity_id": "sensor.temp", "state": "21.5", "last_changed": "2026-06-27T15:00:00Z", "attributes": {}},
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-27T15:00:00Z",
+                    "attributes": {},
+                },
             ]
         }
         result = ha_helper.localise_history_timestamps(history)
         ts = result["sensor.temp"][0]["last_changed"]
         from datetime import datetime
+
         dt = datetime.fromisoformat(ts)
         self.assertIsNotNone(dt.tzinfo)
 
@@ -1298,9 +1331,7 @@ class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
         _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
         dt = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
 
-        await ha_helper.get_entity_history(
-            "http://ha.local:8123", "tok", "light.x", start_time=dt
-        )
+        await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x", start_time=dt)
 
         session = _FakeClientSession.instances[0]
         called_url = session.get_calls[0][0]
@@ -1312,9 +1343,7 @@ class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
         _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
         dt = datetime(2024, 6, 2, 0, 0, 0, tzinfo=timezone.utc)
 
-        await ha_helper.get_entity_history(
-            "http://ha.local:8123", "tok", "light.x", end_time=dt
-        )
+        await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x", end_time=dt)
 
         session = _FakeClientSession.instances[0]
         params = session.get_calls[0][1]["params"]
@@ -1372,8 +1401,11 @@ class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
         _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
 
         await ha_helper.get_entity_history(
-            "http://ha.local:8123", "tok", "light.x",
-            minimal_response=False, significant_changes_only=True
+            "http://ha.local:8123",
+            "tok",
+            "light.x",
+            minimal_response=False,
+            significant_changes_only=True,
         )
 
         session = _FakeClientSession.instances[0]

@@ -427,16 +427,24 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
                     ],
                     assistant_message={"role": "assistant", "content": "", "tool_calls": []},
                 ),
-                ToolCompletion(content="It was 21.5C at 17:00 on Saturday.", usage={"output_tokens": 4}),
+                ToolCompletion(
+                    content="It was 21.5C at 17:00 on Saturday.", usage={"output_tokens": 4}
+                ),
             ]
         )
         agent = self._agent(llm)
 
         with patch(
             "wactorz.agents.home_assistant_agent.get_entity_history",
-            new=AsyncMock(return_value={"sensor.office_temp": [{"state": "21.5", "last_changed": "2026-06-27T17:00:00"}]}),
+            new=AsyncMock(
+                return_value={
+                    "sensor.office_temp": [{"state": "21.5", "last_changed": "2026-06-27T17:00:00"}]
+                }
+            ),
         ) as get_history:
-            result = await agent._handle_other_request("what was the office temperature on saturday at 17:00?")
+            result = await agent._handle_other_request(
+                "what was the office temperature on saturday at 17:00?"
+            )
 
         get_history.assert_awaited_once()
         _, call_kwargs = get_history.await_args
@@ -445,7 +453,9 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("+00:00", call_kwargs["end_time"])
         self.assertEqual(result["result"], "It was 21.5C at 17:00 on Saturday.")
 
-    async def test_other_tool_loop_get_entity_history_converts_times_to_utc_and_localises_result(self):
+    async def test_other_tool_loop_get_entity_history_converts_times_to_utc_and_localises_result(
+        self,
+    ):
         """Naive start/end times are converted to UTC for the HA call; returned timestamps are localised."""
         llm = _ToolLLM(
             [
@@ -457,7 +467,10 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
                             id="call-1",
                             name="get_entity_history",
                             # LLM provides naive local time (no offset)
-                            arguments={"entity_ids": ["sensor.office_temp"], "start_time": "2026-06-27T17:00:00"},
+                            arguments={
+                                "entity_ids": ["sensor.office_temp"],
+                                "start_time": "2026-06-27T17:00:00",
+                            },
                         )
                     ],
                     assistant_message={"role": "assistant", "content": "", "tool_calls": []},
@@ -469,7 +482,12 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
 
         utc_history = {
             "sensor.office_temp": [
-                {"entity_id": "sensor.office_temp", "state": "21.5", "last_changed": "2026-06-27T15:00:00+00:00", "attributes": {}},
+                {
+                    "entity_id": "sensor.office_temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-27T15:00:00+00:00",
+                    "attributes": {},
+                },
             ]
         }
 
@@ -481,7 +499,9 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
                 "wactorz.agents.home_assistant_agent.localise_history_timestamps",
                 wraps=lambda h: h,  # pass-through so we can still inspect the call
             ) as localise:
-                with patch("wactorz.agents.home_assistant_agent._to_utc", wraps=lambda s: s) as to_utc:
+                with patch(
+                    "wactorz.agents.home_assistant_agent._to_utc", wraps=lambda s: s
+                ) as to_utc:
                     await agent._handle_other_request("what was the office temperature at 17:00?")
 
         # _to_utc must have been called for the start_time argument
@@ -498,7 +518,13 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
                 ToolCompletion(
                     content="",
                     usage={},
-                    tool_calls=[ToolCall(id="call-1", name="get_entity_history", arguments={"entity_ids": ["sensor.x"]})],
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="get_entity_history",
+                            arguments={"entity_ids": ["sensor.x"]},
+                        )
+                    ],
                     assistant_message={"role": "assistant", "content": "", "tool_calls": []},
                 ),
                 ToolCompletion(content="I could not fetch that history.", usage={}),
@@ -508,7 +534,9 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
 
         with patch(
             "wactorz.agents.home_assistant_agent.get_entity_history",
-            new=AsyncMock(return_value={"error": "HTTP 401", "status": 401, "detail": "unauthorized"}),
+            new=AsyncMock(
+                return_value={"error": "HTTP 401", "status": 401, "detail": "unauthorized"}
+            ),
         ):
             result = await agent._handle_other_request("what was sensor.x doing yesterday?")
 
@@ -1821,7 +1849,16 @@ class HomeAssistantAgentHistoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("entity_ids", result["result"])
 
     async def test_get_history_accepts_singular_entity_id(self):
-        history = {"sensor.office_temp": [{"entity_id": "sensor.office_temp", "state": "21.5", "last_changed": "t", "attributes": {}}]}
+        history = {
+            "sensor.office_temp": [
+                {
+                    "entity_id": "sensor.office_temp",
+                    "state": "21.5",
+                    "last_changed": "t",
+                    "attributes": {},
+                }
+            ]
+        }
         agent = self._agent()
         with patch(
             "wactorz.agents.home_assistant_agent.get_entity_history",
@@ -1829,29 +1866,52 @@ class HomeAssistantAgentHistoryTest(unittest.IsolatedAsyncioTestCase):
         ) as get_history:
             result = await agent._get_history({"entity_id": "sensor.office_temp"})
         get_history.assert_awaited_once_with(
-            agent.ha_url, agent.ha_token, ["sensor.office_temp"], start_time=None, end_time=None,
+            agent.ha_url,
+            agent.ha_token,
+            ["sensor.office_temp"],
+            start_time=None,
+            end_time=None,
         )
         self.assertEqual(result["data"], history)
 
     async def test_get_history_success_returns_csv_and_data(self):
         history = {
-            "sensor.office_temp": [{"entity_id": "sensor.office_temp", "state": "21.5", "last_changed": "2026-06-28T00:00:00", "attributes": {"unit_of_measurement": "C"}}],
-            "sensor.bedroom_temp": [{"entity_id": "sensor.bedroom_temp", "state": "19.0", "last_changed": "2026-06-28T00:00:00", "attributes": {"unit_of_measurement": "C"}}],
+            "sensor.office_temp": [
+                {
+                    "entity_id": "sensor.office_temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-28T00:00:00",
+                    "attributes": {"unit_of_measurement": "C"},
+                }
+            ],
+            "sensor.bedroom_temp": [
+                {
+                    "entity_id": "sensor.bedroom_temp",
+                    "state": "19.0",
+                    "last_changed": "2026-06-28T00:00:00",
+                    "attributes": {"unit_of_measurement": "C"},
+                }
+            ],
         }
         agent = self._agent()
         with patch(
             "wactorz.agents.home_assistant_agent.get_entity_history",
             new=AsyncMock(return_value=history),
         ) as get_history:
-            result = await agent._get_history({
-                "entity_ids": ["sensor.office_temp", "sensor.bedroom_temp"],
-                "start_time": "2026-06-28T00:00:00",
-                "end_time": "2026-06-28T00:05:00",
-            })
+            result = await agent._get_history(
+                {
+                    "entity_ids": ["sensor.office_temp", "sensor.bedroom_temp"],
+                    "start_time": "2026-06-28T00:00:00",
+                    "end_time": "2026-06-28T00:05:00",
+                }
+            )
 
         get_history.assert_awaited_once_with(
-            agent.ha_url, agent.ha_token, ["sensor.office_temp", "sensor.bedroom_temp"],
-            start_time="2026-06-28T00:00:00", end_time="2026-06-28T00:05:00",
+            agent.ha_url,
+            agent.ha_token,
+            ["sensor.office_temp", "sensor.bedroom_temp"],
+            start_time="2026-06-28T00:00:00",
+            end_time="2026-06-28T00:05:00",
         )
         self.assertEqual(result["format"], "csv")
         self.assertEqual(result["data"], history)
@@ -1863,7 +1923,9 @@ class HomeAssistantAgentHistoryTest(unittest.IsolatedAsyncioTestCase):
         agent = self._agent()
         with patch(
             "wactorz.agents.home_assistant_agent.get_entity_history",
-            new=AsyncMock(return_value={"error": "HTTP 401", "status": 401, "detail": "unauthorized"}),
+            new=AsyncMock(
+                return_value={"error": "HTTP 401", "status": 401, "detail": "unauthorized"}
+            ),
         ):
             result = await agent._get_history({"entity_ids": ["sensor.x"]})
         self.assertEqual(result["error"], "HTTP 401")
@@ -1884,7 +1946,9 @@ class HomeAssistantAgentHistoryTest(unittest.IsolatedAsyncioTestCase):
     async def test_handle_message_dispatches_get_history(self):
         agent = self._agent()
         agent.send = AsyncMock()
-        agent._get_history = AsyncMock(return_value={"result": "Fetched history for 1 entity.", "csv": "...", "data": {}})
+        agent._get_history = AsyncMock(
+            return_value={"result": "Fetched history for 1 entity.", "csv": "...", "data": {}}
+        )
         agent._process = AsyncMock()
 
         payload = {"operation": "get_history", "entity_ids": ["sensor.office_temp"]}

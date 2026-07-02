@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import csv
-import io
-from datetime import datetime, timezone
-from typing import Any
-from urllib.parse import urlparse
 import hashlib
+import io
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -912,6 +910,7 @@ async def get_entity_history(
         entity_id.  Entities with no recorded history appear with an empty list.
         On failure: ``{"error": str, "status": int, "detail": str}``.
     """
+
     def _to_iso(dt: datetime | str) -> str:
         return dt.isoformat() if isinstance(dt, datetime) else dt
 

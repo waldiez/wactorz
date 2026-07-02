@@ -51,6 +51,11 @@
     <link rel="stylesheet" crossorigin href="./assets/index-vj2OEFug.css">
   </head>
   <body>
+    <!-- CSP note: inline scripts are allowed only because the monitor server stamps
+         each first-party inline script with a per-request nonce at serve time (see
+         monitor_server.index_handler / _csp_report_only). It also injects a nonced
+         window.__WACTORZ_INGRESS_PATH bootstrap into the document head. Keep inline
+         scripts first-party — never inline remote or user-supplied content here. -->
     <script>
       // Register the service worker only for the standalone / desktop deployment.
       // Behind Home Assistant's ingress proxy the app is served under a rotating

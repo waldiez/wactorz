@@ -315,13 +315,14 @@ export class DashboardChat {
         }
     }
 
-    /** Fetch and merge persisted chat history for an agent once (subsequent calls no-op). */
-    async loadHistory(agentId: string): Promise<void> {
-        if (this._historyLoaded.has(agentId)) {
+    /** Fetch and merge an agent's persisted chat history once, by agent NAME
+     *  (history is keyed by name, not actor id; subsequent calls no-op). */
+    async loadHistory(agentName: string): Promise<void> {
+        if (this._historyLoaded.has(agentName)) {
             return;
         }
-        this._historyLoaded.add(agentId);
-        const incoming = await fetchChatHistory(agentId);
+        this._historyLoaded.add(agentName);
+        const incoming = await fetchChatHistory(agentName);
         if (!incoming.length) {
             return;
         }

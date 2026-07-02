@@ -8,6 +8,7 @@
  * back via `onSetView`; the active-view highlight is maintained by the caller.
  */
 import type { View, ConnState } from "./types";
+import { uid } from "../../ids";
 import { buildAudioPopover, buildResetPopover, type ResetPopover } from "./popovers";
 import { iconMarkup, type IconName } from "./icons";
 
@@ -60,9 +61,16 @@ export function setHaNavUrl(root: HTMLElement, haUrl: string | null): void {
  *  outside click. `onClose` runs whenever the popover is dismissed. */
 function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTMLElement) => void): void {
     document.body.appendChild(popover);
+    if (!popover.id) {
+        popover.id = uid("af-pop");
+    }
+    btn.setAttribute("aria-haspopup", "true");
+    btn.setAttribute("aria-controls", popover.id);
+    btn.setAttribute("aria-expanded", "false");
     btn.addEventListener("click", e => {
         e.stopPropagation();
         const open = popover.classList.toggle("open");
+        btn.setAttribute("aria-expanded", String(open));
         if (open) {
             const r = btn.getBoundingClientRect();
             popover.style.top = `${r.bottom + 6}px`;
@@ -77,6 +85,7 @@ function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTM
         if (!popover.contains(e.target as Node)) {
             onClose?.(popover);
             popover.classList.remove("open");
+            btn.setAttribute("aria-expanded", "false");
         }
     });
 }
@@ -118,6 +127,9 @@ function buildHeaderRight(view: View, onSetView: (v: View) => void, haUrl: strin
         const btn = document.createElement("button");
         btn.className = `af-view-btn${key === view ? " active" : ""}`;
         btn.dataset["view"] = key;
+        if (key === view) {
+            btn.setAttribute("aria-current", "page");
+        }
         btn.innerHTML = `${iconMarkup(icon)}<span class="af-view-label">${label}</span>`;
         btn.addEventListener("click", () => onSetView(key));
         right.appendChild(btn);
@@ -168,6 +180,9 @@ function bottomTab(key: View, icon: IconName, label: string, view: View, extra: 
     const btn = document.createElement("button");
     btn.className = `af-view-btn af-bottom-tab${extra}${key === view ? " active" : ""}`;
     btn.dataset["view"] = key;
+    if (key === view) {
+        btn.setAttribute("aria-current", "page");
+    }
     btn.innerHTML = `<span class="af-bottom-tab-icon">${iconMarkup(icon, 20)}</span><span class="af-bottom-tab-label">${label}</span>`;
     return btn;
 }
@@ -217,15 +232,20 @@ export function buildBottomNav(opts: {
         sheet.appendChild(btn);
     });
 
+    moreBtn.setAttribute("aria-haspopup", "true");
+    moreBtn.setAttribute("aria-expanded", "false");
     moreBtn.addEventListener("click", e => {
         e.stopPropagation();
         sheet.classList.toggle("open");
-        moreBtn.classList.toggle("active", sheet.classList.contains("open"));
+        const open = sheet.classList.contains("open");
+        moreBtn.classList.toggle("active", open);
+        moreBtn.setAttribute("aria-expanded", String(open));
     });
     // Page-lifetime listener (see note above): single-instance, not removed by design.
     document.addEventListener("click", () => {
         sheet.classList.remove("open");
         moreBtn.classList.remove("active");
+        moreBtn.setAttribute("aria-expanded", "false");
     });
 
     nav.append(moreBtn, sheet);

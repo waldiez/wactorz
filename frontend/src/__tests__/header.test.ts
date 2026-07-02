@@ -25,10 +25,12 @@ describe("buildHeader", () => {
         expect(header.querySelectorAll(".af-view-btn").length).toBe(7);
     });
 
-    it("marks the current view active", () => {
+    it("marks the current view active (class + aria-current)", () => {
         const header = buildHeader({ view: "feed", connState: "demo", onSetView: vi.fn(), haUrl: null });
         const active = header.querySelector(".af-view-btn.active")!;
         expect(active.getAttribute("data-view")).toBe("feed");
+        expect(active.getAttribute("aria-current")).toBe("page");
+        expect(header.querySelectorAll('[aria-current="page"]').length).toBe(1);
     });
 
     it("routes a tab click through onSetView", () => {
@@ -42,10 +44,15 @@ describe("buildHeader", () => {
         const header = buildHeader({ view: "overview", connState: "live", onSetView: vi.fn(), haUrl: null });
         document.body.appendChild(header);
         const audioBtn = header.querySelector<HTMLButtonElement>('[title="Audio settings"]')!;
+        expect(audioBtn.getAttribute("aria-haspopup")).toBe("true");
+        expect(audioBtn.getAttribute("aria-controls")).toBeTruthy();
+        expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
         audioBtn.click(); // open: toggles `.open` and positions the popover
         expect(document.querySelector("div.open")).not.toBeNull();
+        expect(audioBtn.getAttribute("aria-expanded")).toBe("true");
         audioBtn.click(); // close: the else branch (onClose is undefined for audio)
         expect(document.querySelector("div.open")).toBeNull();
+        expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
     });
 });
 

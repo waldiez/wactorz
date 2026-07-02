@@ -17,6 +17,7 @@
 
 import mqtt, { type MqttClient } from "mqtt";
 import { log } from "../io/logger";
+import { uid } from "../ids";
 import { nameFromWid, resolveAgentName } from "../agents/naming";
 import type {
     AgentState,
@@ -426,7 +427,7 @@ export function normaliseChat(p: unknown): ChatMessage {
     const o = asObj(p);
     const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
     return {
-        id: str(o["id"]) || `chat-${timestampMs}`,
+        id: str(o["id"]) || uid("chat"), // WID, not `chat-${ms}`: same-ms ids collide and dedupe-drop
         from: str(o["from"] ?? o["agentName"] ?? o["name"]),
         to: str(o["to"]) || "user", // default to "user" when field absent
         content: str(o["content"]),

@@ -192,6 +192,14 @@ describe("normaliseChat", () => {
         expect(msg.id).toMatch(/^chat-/);
     });
 
+    it("generates unique ids for same-millisecond messages", () => {
+        const ts = 1_700_000_000_000;
+        const a = normaliseChat({ content: "one", timestampMs: ts });
+        const b = normaliseChat({ content: "two", timestampMs: ts });
+        expect(a.id).not.toBe(b.id);
+        expect(a.timestampMs).toBe(ts); // timestamp still carried as its own field
+    });
+
     it("defaults to field from agentName when from is absent", () => {
         const msg = normaliseChat({ agentName: "io-agent", content: "hi" });
         expect(msg.from).toBe("io-agent");

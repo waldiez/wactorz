@@ -23,6 +23,7 @@
 
 import "./app.css";
 import { safeStorage } from "./safeStorage";
+import { uid } from "./ids";
 import { AgentStore } from "./agents/AgentStore";
 import { MQTTClient } from "./mqtt/MQTTClient";
 import { IOManager } from "./io/IOManager";
@@ -181,7 +182,7 @@ function refreshLiveActors(): void {
 wsChat.onChat((content, from, timestampMs) => {
     toast.show({ type: "chat", title: from, message: content.slice(0, 120) });
     const msg = {
-        id: `ws-${timestampMs}`,
+        id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
         from,
         to: "user",
         content,

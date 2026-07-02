@@ -407,6 +407,143 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Home Assistant tool request failed", result["result"])
         self.assertIn("provider does not support tools", result["error"])
 
+    async def test_other_tool_loop_calls_get_entity_history(self):
+        """A model tool request executes get_entity_history with the parsed args."""
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={"input_tokens": 2},
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="get_entity_history",
+                            arguments={
+                                "entity_ids": ["sensor.office_temp"],
+                                "start_time": "2026-06-27T17:00:00",
+                                "end_time": "2026-06-27T17:05:00",
+                            },
+                        )
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(
+                    content="It was 21.5C at 17:00 on Saturday.", usage={"output_tokens": 4}
+                ),
+            ]
+        )
+        agent = self._agent(llm)
+
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(
+                return_value={
+                    "sensor.office_temp": [{"state": "21.5", "last_changed": "2026-06-27T17:00:00"}]
+                }
+            ),
+        ) as get_history:
+            result = await agent._handle_other_request(
+                "what was the office temperature on saturday at 17:00?"
+            )
+
+        get_history.assert_awaited_once()
+        _, call_kwargs = get_history.await_args
+        # Times must have been converted to UTC (offset-aware, ending "+00:00")
+        self.assertIn("+00:00", call_kwargs["start_time"])
+        self.assertIn("+00:00", call_kwargs["end_time"])
+        self.assertEqual(result["result"], "It was 21.5C at 17:00 on Saturday.")
+
+    async def test_other_tool_loop_get_entity_history_converts_times_to_utc_and_localises_result(
+        self,
+    ):
+        """Naive start/end times are converted to UTC for the HA call; returned timestamps are localised."""
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="get_entity_history",
+                            # LLM provides naive local time (no offset)
+                            arguments={
+                                "entity_ids": ["sensor.office_temp"],
+                                "start_time": "2026-06-27T17:00:00",
+                            },
+                        )
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Done.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+
+        utc_history = {
+            "sensor.office_temp": [
+                {
+                    "entity_id": "sensor.office_temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-27T15:00:00+00:00",
+                    "attributes": {},
+                },
+            ]
+        }
+
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(return_value=utc_history),
+        ) as get_history:
+            with patch(
+                "wactorz.agents.home_assistant_agent.localise_history_timestamps",
+                wraps=lambda h: h,  # pass-through so we can still inspect the call
+            ) as localise:
+                with patch(
+                    "wactorz.agents.home_assistant_agent.to_utc", wraps=lambda s: s
+                ) as to_utc:
+                    await agent._handle_other_request("what was the office temperature at 17:00?")
+
+        # to_utc must have been called for the start_time argument
+        to_utc.assert_called_with("2026-06-27T17:00:00")
+        # localise_history_timestamps must have been called with the history
+        localise.assert_called_once_with(utc_history)
+        # get_entity_history was called (times may have been converted, but call happened)
+        get_history.assert_awaited_once()
+
+    async def test_other_tool_loop_get_entity_history_error_marks_tool_result_as_error(self):
+        """An error dict from get_entity_history is surfaced as a tool error to the LLM."""
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="get_entity_history",
+                            arguments={"entity_ids": ["sensor.x"]},
+                        )
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="I could not fetch that history.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(
+                return_value={"error": "HTTP 401", "status": 401, "detail": "unauthorized"}
+            ),
+        ):
+            result = await agent._handle_other_request("what was sensor.x doing yesterday?")
+
+        self.assertEqual(result["result"], "I could not fetch that history.")
+        tool_message = llm.calls[1]["messages"][-1]
+        self.assertTrue(tool_message["is_error"])
+
     async def test_edit_automation_updates_generated_automation(self):
         """Editing awaits generation and sends the generated automation payload to HA."""
         updated_automation = self._valid_automation()
@@ -1690,6 +1827,138 @@ class HomeAssistantAgentCameraTest(unittest.IsolatedAsyncioTestCase):
         agent = self._agent(llm)
         result = await agent._handle_other_request("do something unsupported")
         self.assertEqual(result["result"], "Cannot do that.")
+
+
+class HomeAssistantAgentHistoryTest(unittest.IsolatedAsyncioTestCase):
+    def _agent(self, llm_provider=None) -> HomeAssistantAgent:
+        return _make_agent(self, llm_provider)
+
+    # ── _get_history (deterministic agent-to-agent path) ───────────────────
+
+    async def test_get_history_no_config(self):
+        agent = self._agent()
+        agent.ha_url = ""
+        result = await agent._get_history({"entity_ids": ["sensor.office_temp"]})
+        self.assertEqual(result["error"], "not_configured")
+        self.assertIn("not configured", result["result"])
+
+    async def test_get_history_missing_entity_ids(self):
+        agent = self._agent()
+        result = await agent._get_history({})
+        self.assertEqual(result["error"], "missing_entity_ids")
+        self.assertIn("entity_ids", result["result"])
+
+    async def test_get_history_accepts_singular_entity_id(self):
+        history = {
+            "sensor.office_temp": [
+                {
+                    "entity_id": "sensor.office_temp",
+                    "state": "21.5",
+                    "last_changed": "t",
+                    "attributes": {},
+                }
+            ]
+        }
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(return_value=history),
+        ) as get_history:
+            result = await agent._get_history({"entity_id": "sensor.office_temp"})
+        get_history.assert_awaited_once_with(
+            agent.ha_url,
+            agent.ha_token,
+            ["sensor.office_temp"],
+            start_time=None,
+            end_time=None,
+        )
+        self.assertEqual(result["data"], history)
+
+    async def test_get_history_success_returns_csv_and_data(self):
+        history = {
+            "sensor.office_temp": [
+                {
+                    "entity_id": "sensor.office_temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-28T00:00:00",
+                    "attributes": {"unit_of_measurement": "C"},
+                }
+            ],
+            "sensor.bedroom_temp": [
+                {
+                    "entity_id": "sensor.bedroom_temp",
+                    "state": "19.0",
+                    "last_changed": "2026-06-28T00:00:00",
+                    "attributes": {"unit_of_measurement": "C"},
+                }
+            ],
+        }
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(return_value=history),
+        ) as get_history:
+            result = await agent._get_history(
+                {
+                    "entity_ids": ["sensor.office_temp", "sensor.bedroom_temp"],
+                    "start_time": "2026-06-28T00:00:00",
+                    "end_time": "2026-06-28T00:05:00",
+                }
+            )
+
+        get_history.assert_awaited_once_with(
+            agent.ha_url,
+            agent.ha_token,
+            ["sensor.office_temp", "sensor.bedroom_temp"],
+            start_time="2026-06-28T00:00:00",
+            end_time="2026-06-28T00:05:00",
+        )
+        self.assertEqual(result["format"], "csv")
+        self.assertEqual(result["data"], history)
+        self.assertIn("sensor.office_temp,2026-06-28T00:00:00,21.5,C", result["csv"])
+        self.assertIn("sensor.bedroom_temp,2026-06-28T00:00:00,19.0,C", result["csv"])
+        self.assertIn("2 entit", result["result"])
+
+    async def test_get_history_ha_error_is_reported(self):
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(
+                return_value={"error": "HTTP 401", "status": 401, "detail": "unauthorized"}
+            ),
+        ):
+            result = await agent._get_history({"entity_ids": ["sensor.x"]})
+        self.assertEqual(result["error"], "HTTP 401")
+        self.assertIn("HTTP 401", result["result"])
+
+    async def test_get_history_exception_is_reported(self):
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(side_effect=RuntimeError("offline")),
+        ):
+            result = await agent._get_history({"entity_ids": ["sensor.x"]})
+        self.assertIn("offline", result["result"])
+        self.assertIn("error", result)
+
+    # ── A2A dispatch via handle_message ─────────────────────────────────────
+
+    async def test_handle_message_dispatches_get_history(self):
+        agent = self._agent()
+        agent.send = AsyncMock()
+        agent._get_history = AsyncMock(
+            return_value={"result": "Fetched history for 1 entity.", "csv": "...", "data": {}}
+        )
+        agent._process = AsyncMock()
+
+        payload = {"operation": "get_history", "entity_ids": ["sensor.office_temp"]}
+        await agent.handle_message(Message(MessageType.TASK, "sender", payload))
+
+        agent._get_history.assert_awaited_once_with(payload)
+        agent._process.assert_not_awaited()
+        sent = agent.send.await_args.args[2]
+        self.assertIn("Fetched history", sent["result"])
+        self.assertEqual(sent["csv"], "...")
 
 
 if __name__ == "__main__":

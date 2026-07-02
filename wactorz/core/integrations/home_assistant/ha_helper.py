@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -870,6 +873,172 @@ async def delete_automation(base_url: str, token: str, automation_id: str) -> bo
     async with aiohttp.ClientSession() as session:
         async with session.delete(endpoint, headers=headers) as response:
             return response.status == 200
+
+
+async def get_entity_history(
+    base_url: str,
+    token: str,
+    entity_ids: str | list[str],
+    start_time: datetime | str | None = None,
+    end_time: datetime | str | None = None,
+    minimal_response: bool = True,
+    significant_changes_only: bool = False,
+) -> dict[str, Any]:
+    """Fetch historical state changes for one or more entities.
+
+    Calls HA's /api/history/period REST endpoint. ``start_time`` defaults to
+    HA's own default (1 day before ``end_time``/now) when omitted.
+
+    Args:
+        base_url: HA base URL (normalized internally via normalize_ha_base_url).
+        token: Long-lived access token.
+        entity_ids: A single entity_id string or a list of entity_id strings.
+        start_time: Start of the history window. Accepts a ``datetime`` object
+            (converted to ISO-8601) or a pre-formatted ISO-8601 string.
+            When omitted, HA defaults to 1 day before ``end_time`` (or now).
+        end_time: End of the history window. Same format as ``start_time``.
+            When omitted, HA defaults to now.
+        minimal_response: When True (default), HA omits attributes except for
+            the first and last state in each entity's series, reducing payload
+            size. Set to False to receive full attributes for every state.
+        significant_changes_only: When True, HA skips attribute-only changes
+            for sensor-like domains. Defaults to False so all changes are
+            included unless the caller explicitly opts out.
+
+    Returns:
+        On success: ``{entity_id: [state_obj, ...], ...}`` — a dict keyed by
+        entity_id.  Entities with no recorded history appear with an empty list.
+        On failure: ``{"error": str, "status": int, "detail": str}``.
+    """
+
+    def _to_iso(dt: datetime | str) -> str:
+        return dt.isoformat() if isinstance(dt, datetime) else dt
+
+    rest_base = normalize_ha_base_url(base_url)
+    ids = [entity_ids] if isinstance(entity_ids, str) else list(entity_ids)
+
+    path = "/api/history/period"
+    if start_time is not None:
+        path = f"{path}/{_to_iso(start_time)}"
+    url = f"{rest_base}{path}"
+
+    params: dict[str, str] = {"filter_entity_id": ",".join(ids)}
+    if end_time is not None:
+        params["end_time"] = _to_iso(end_time)
+    if minimal_response:
+        params["minimal_response"] = "true"
+    if significant_changes_only:
+        params["significant_changes_only"] = "true"
+
+    headers = {"Authorization": f"Bearer {token}"}
+    logger.debug("Entity history request: %s params=%s", url, params)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params) as resp:
+                if resp.status != 200:
+                    detail = ""
+                    try:
+                        detail = await resp.text()
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "Entity history failed: HTTP %s — %s",
+                        resp.status,
+                        detail[:200] if detail else "(no body)",
+                    )
+                    return {
+                        "error": f"HTTP {resp.status}",
+                        "status": resp.status,
+                        "detail": detail[:200] if detail else "",
+                    }
+                raw: list[list[dict[str, Any]]] = await resp.json()
+    except Exception as exc:
+        logger.warning("Entity history exception: %s", exc)
+        return {"error": str(exc)}
+
+    result: dict[str, list[dict[str, Any]]] = {eid: [] for eid in ids}
+    for entity_states in raw:
+        if not entity_states:
+            continue
+        eid = entity_states[0].get("entity_id")
+        if eid:
+            result[eid] = entity_states
+
+    return result
+
+
+def history_to_csv(history: dict[str, Any]) -> str:
+    """Convert a get_entity_history result to a CSV string.
+
+    Args:
+        history: The dict returned by ``get_entity_history``.  Entries that are
+            error dicts or empty lists are silently skipped.
+
+    Returns:
+        A CSV string with header ``entity_id,last_changed,state,unit_of_measurement``.
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["entity_id", "last_changed", "state", "unit_of_measurement"])
+    for eid, states in history.items():
+        if not isinstance(states, list):
+            continue
+        for s in states:
+            if not isinstance(s, dict):
+                continue
+            unit = s.get("attributes", {}).get("unit_of_measurement", "")
+            writer.writerow([eid, s.get("last_changed", ""), s.get("state", ""), unit or ""])
+    return buf.getvalue()
+
+
+def to_utc(s: str) -> str:
+    """Parse an ISO-8601 string and return its UTC equivalent.
+
+    Naive strings (no UTC offset) are treated as local time before conversion.
+    Returns the original string unchanged if it cannot be parsed.
+    """
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return s
+    if dt.tzinfo is None:
+        dt = dt.astimezone()  # attach local tz
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+_TS_KEYS = ("last_changed", "last_updated", "last_reported")
+
+
+def localise_history_timestamps(history: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of the history dict with timestamp fields converted to local tz.
+
+    HA returns ``last_changed`` / ``last_updated`` / ``last_reported`` in UTC.
+    This converts them to the server's local timezone so the LLM can correlate
+    them with user-provided local times (e.g. "Saturday at 17:00").
+    Error-dict values and non-list entries are passed through unchanged.
+    """
+    local_tz = datetime.now().astimezone().tzinfo
+    result: dict[str, Any] = {}
+    for eid, states in history.items():
+        if not isinstance(states, list):
+            result[eid] = states
+            continue
+        localised = []
+        for s in states:
+            if not isinstance(s, dict):
+                localised.append(s)
+                continue
+            s = dict(s)
+            for key in _TS_KEYS:
+                if isinstance(s.get(key), str):
+                    try:
+                        dt = datetime.fromisoformat(s[key].replace("Z", "+00:00"))
+                        s[key] = dt.astimezone(local_tz).isoformat()
+                    except ValueError:
+                        pass
+            localised.append(s)
+        result[eid] = localised
+    return result
 
 
 _LIVE_CONTEXT_INTERESTING_ATTRIBUTES = frozenset(

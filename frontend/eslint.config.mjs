@@ -4,6 +4,7 @@
  */
 import headers from "eslint-plugin-headers";
 import eslintPluginPrettierRecommended from "eslint-plugin-prettier/recommended";
+import importPlugin from "eslint-plugin-import";
 import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 
@@ -18,7 +19,19 @@ const project = "./tsconfig.json";
 // noinspection JSCheckFunctionSignatures
 const defaultConfig = defineConfig({
     files: ["**/*.{ts,tsx}"],
-    extends: [...tseslint.configs.recommended, eslintPluginPrettierRecommended],
+    extends: [
+        ...tseslint.configs.recommendedTypeChecked,
+        eslintPluginPrettierRecommended,
+        importPlugin.flatConfigs.typescript,
+    ],
+    languageOptions: {
+        parserOptions: {
+            projectService: {
+                allowDefaultProject: ["vite.config.ts", "vitest.config.ts"],
+            },
+            tsconfigRootDir: import.meta.dirname,
+        },
+    },
     settings: {
         "import/resolver": {
             typescript: {
@@ -47,6 +60,9 @@ const defaultConfig = defineConfig({
             },
         ],
         "@typescript-eslint/no-explicit-any": "error",
+        // Guard the init-time circular-import invariant statically (the codebase
+        // leans on function-local imports to avoid cycles at module load).
+        "import/no-cycle": "error",
         "@typescript-eslint/no-namespace": "off",
         "@typescript-eslint/no-unused-expressions": "off",
         "@typescript-eslint/no-use-before-define": "off",
@@ -99,5 +115,12 @@ export default [
             "max-nested-callbacks": "off",
             "@typescript-eslint/no-explicit-any": "off",
         },
+    },
+    {
+        // Type-checked rules are too noisy for the test suite (heavy `any`, mock
+        // objects, private-member pokes) and add no shipping-code safety — disable
+        // them so type-aware linting covers src/ only.
+        files: ["**/__tests__/**", "**/*.{test,spec}.{ts,tsx}"],
+        ...tseslint.configs.disableTypeChecked,
     },
 ];

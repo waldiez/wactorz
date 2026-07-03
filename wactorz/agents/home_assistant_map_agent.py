@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import base64
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -38,9 +38,7 @@ class MapUpdateDispatcher:
         self._mqtt_topic = (mqtt_topic or "").strip()
         self._target_actor_name = (target_actor_name or "").strip()
         self._max_payload_bytes = (
-            int(max_payload_bytes)
-            if int(max_payload_bytes) > 0
-            else DEFAULT_MQTT_MAX_PAYLOAD_BYTES
+            int(max_payload_bytes) if int(max_payload_bytes) > 0 else DEFAULT_MQTT_MAX_PAYLOAD_BYTES
         )
 
     async def dispatch(self, payload: dict[str, Any]) -> None:
@@ -71,7 +69,9 @@ class MapUpdateDispatcher:
     def _payload_size(self, payload: dict[str, Any]) -> int:
         return len(json.dumps(payload).encode("utf-8"))
 
-    def _max_chunk_data_chars(self, payload: dict[str, Any], snapshot_id: str, encoded_payload: str) -> int:
+    def _max_chunk_data_chars(
+        self, payload: dict[str, Any], snapshot_id: str, encoded_payload: str
+    ) -> int:
         digits = 1
         while True:
             worst_case_index = int("9" * digits)
@@ -93,7 +93,9 @@ class MapUpdateDispatcher:
                 return max_data_chars
             digits = required_digits
 
-    def _build_chunked_payloads(self, payload: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    def _build_chunked_payloads(
+        self, payload: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         snapshot_id = uuid.uuid4().hex
         raw_json = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         encoded_payload = base64.b64encode(raw_json).decode("ascii")
@@ -111,7 +113,7 @@ class MapUpdateDispatcher:
             {
                 **base_chunk,
                 "chunk_index": index,
-                "data": encoded_payload[offset:offset + max_data_chars],
+                "data": encoded_payload[offset : offset + max_data_chars],
             }
             for index, offset in enumerate(range(0, len(encoded_payload), max_data_chars))
         ]
@@ -237,7 +239,9 @@ class HomeAssistantMapAgent(Actor):
 
     async def _entity_registry_listener(self) -> None:
         if not self.ha_url or not self.ha_ws_url or not self.ha_token:
-            self._last_error = "HA_URL/HOME_ASSISTANT_URL or HA_TOKEN/HOME_ASSISTANT_TOKEN is not configured"
+            self._last_error = (
+                "HA_URL/HOME_ASSISTANT_URL or HA_TOKEN/HOME_ASSISTANT_TOKEN is not configured"
+            )
             logger.warning("[%s] %s", self.name, self._last_error)
             return
 

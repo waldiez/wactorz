@@ -1,11 +1,24 @@
 repos:
   - repo: local
     hooks:
+      # Gated Python lint + format (Ruff). Advisory rules (docstrings, typing) are
+      # intentionally NOT here — run `make lint-py` for those; they never block a commit.
+      - id: ruff-format
+        name: ruff format
+        entry: ruff format
+        language: system
+        types: [python]
+      - id: ruff-check
+        name: ruff check
+        entry: ruff check --fix
+        language: system
+        types: [python]
       - id: python-tests
         name: python tests
         entry: python3 -m pytest tests
         language: system
         pass_filenames: false
+        files: \.py$
       - id: frontend-typecheck
         name: frontend typecheck
         entry: bash -lc 'cd frontend && bun install && bun run typecheck'

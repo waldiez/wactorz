@@ -7,21 +7,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Global error surfacing** — uncaught exceptions and unhandled promise rejections
+  now log with context and raise a toast, instead of failing silently to the console.
+- **Content-Security-Policy on the dashboard** — the monitor server sends an enforcing
+  CSP with a per-request nonce for inline scripts and `frame-ancestors 'self'`, restricting
+  script/connect/worker/style/img sources. Works behind Home Assistant ingress (the header is
+  forwarded and framing is same-origin); rolled out via a report-only pass verified on both
+  standalone and ingress before enforcing.
+- **Per-agent token counts** — LLM agents' cumulative input/output tokens now show on
+  their card next to cost (compact `12.5k↑ 900↓`); non-LLM agents show nothing, as
+  before. The counts were already on the wire but previously parsed and dropped.
+- **More activity-feed sources** — the dashboard feed now surfaces agent actuations
+  (what an agent actually changed) and anomaly events, via an extensible topic
+  registry so further feed-only topics are a one-line addition.
 - **Pipeline-rule conflict advisory** — planner now semantically checks a new rule
   against active ones and flags duplicates and contradictions (e.g. "over 25° AC off"
   vs "AC on") as a non-blocking "⚠️ Heads up" note at approval.
-
-### Added
-
+- **Weather catalog agent** — `@catalog spawn weather-agent` adds an optional manual weather helper backed by Open-Meteo for current conditions, forecasts, historical weather, default locations, and weather-related natural-language questions.
+- **Smart energy catalog agent** — `@catalog spawn smart-energy` adds an optional Home Assistant smart-plug helper for plug discovery, live wattage, kWh/cost tracking, and guarded user-requested auto-off rules.
+- **Tests** — `test_spawning.py` (23) covering spawn routing, idempotency/replace,
+  both install models, the `trusted` flag and TopicContract wiring; `test_memory.py`
+  (12) covering fact extraction/namespacing and system-prompt assembly.
+- **Home Assistant entity history** — `home-assistant-agent` can now answer questions
+  about past entity states (e.g. "what was the office temperature yesterday at 17:00?"),
+  backed by a new `get_entity_history` helper against HA's `/api/history/period` REST
+  endpoint. The current local datetime is injected into the LLM prompt so relative
+  times resolve correctly, and returned timestamps are localised to the server's
+  timezone. Also available as a structured `get_history` A2A operation for peer agents,
+  which returns the history as CSV alongside the raw JSON.
 - **Gmail agent (`gmail-agent`)** — new catalog-backed native agent that searches/reads
   mail, lists labels and drafts, and creates drafts. Draft-first by design (like Google's
   hosted Gmail MCP, it never sends). Hosted Gmail MCP primary with a Gmail REST v1 fallback
   on `PERMISSION_DENIED`, mirroring the calendar agent.
-- **Gmail read answers your question** — when an LLM is configured, `read` now returns a concise answer to the asked question (or a short summary), quoting exact amounts/dates, instead of dumping the raw email; bodies are also de-noised (tracking URLs → `[link]`, collapsed blank lines). Without an LLM it returns the cleaned body.
 - **Gmail: read an email's full contents** — new `read` action opens one message (by id, or the
   top match of a topic query) and returns its readable body — text/plain, or HTML stripped to
   text — so "what does the trello one say?" / "content of the latest vodafone bill" return the
   actual message instead of a search snippet list.
+- **Gmail read answers your question** — when an LLM is configured, `read` now returns a
+  concise answer to the asked question (or a short summary), quoting exact amounts/dates,
+  instead of dumping the raw email; bodies are also de-noised (tracking URLs → `[link]`,
+  collapsed blank lines). Without an LLM it returns the cleaned body.
 - **Direct OAuth login** (`GoogleMcpClient.authorize_direct`) — mints a REST token via a
   direct Google OAuth flow with caller-chosen scopes, bypassing the MCP server's scope set.
   Used to get a Gmail token **without** `gmail.metadata` (which blocks free-text `q` search),
@@ -37,42 +62,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and denies tool execution even for fully-scoped tokens) or the `mcp` extra isn't
   installed. MCP stays the primary path and resumes automatically once the project
   is allowlisted. Events are rendered as readable lines instead of raw JSON.
-
-### Fixed
-
-- **Calendar "show events" flooded with recurring instances** — the upcoming-events list had no
-  time bound, so a yearly recurring event (e.g. a birthday) returned many past/future copies that
-  looked identical. It's now bounded to now → +1 year, and cross-year dates include the year.
-- **Gmail HTML entities not decoded** — message subjects and snippets showed raw entities
-  (`didn&#39;t`, `&quot;`, `&amp;`); they're now unescaped to real characters.
-- **Gmail draft follow-up dropped bare replies** — after "make an email to X" the agent asked
-  "what should the email say?" but a plain reply (e.g. "Bloop") wasn't captured as the body. It
-  now fills whichever field it just asked for (body if the recipient is known, or the recipient
-  if the reply is an email address). "make an email/draft …" phrasings are also recognised.
-- **OAuth refresh token wiped on first refresh** — the MCP token storage replaced the whole
-  token blob on every refresh, but Google omits `refresh_token` from refresh responses, so the
-  first silent refresh dropped it and permanently broke re-auth (surfaced once an access token
-  expired). Storage now preserves the initial refresh token. Affects Calendar and Gmail.
-- **Calendar agent "No time zone found with key UTC"** — every read (`today`,
-  `week`, `list_events`) crashed on systems without the IANA tz database (e.g.
-  Windows without `tzdata`), where even `ZoneInfo("UTC")` raises. Timezone
-  resolution now falls back to the system-local offset and only sends Google a
-  `timeZone` key when it's a valid IANA zone (a bare `UTC` is rejected too).
-- **Planners leaked until restart** — proposal/pipeline planners never stopped and
-  stayed pinned by both the registry and the Supervisor. Added a lifetime watchdog
-  (`max_lifetime_s`, 10 min) + idempotent `_terminate()` doing `release()` →
-  `unregister()` → `stop()`.
-- **Plan steps silently dropped** — bad/cyclic `depends_on` aborted the plan with no
-  trace; references are now validated and failures surfaced per-step.
-- **`plan_only` could spawn agents** — `approved_plan` was checked first despite the
-  docs; precedence is now enforced in `on_start`.
+  which returns the history as CSV alongside the raw JSON.
 
 ### Changed
 
+- **Home Assistant "Devices" → direct link** — the dashboard's embedded device
+  list/control panel was replaced with a "Devices" button that opens Home
+  Assistant's own UI in a new tab (using the URL from `/api/config`). HA entity
+  activity still appears in the activity feed via the MQTT state bridge.
+- **`main_actor.py` decomposed** (6113 → ~4400 lines) with no behaviour change:
+  prompts → `agents/prompts/main_actor_prompts.py`, constants + pure helpers →
+  `agents/helpers/main_actor_helpers.py`, and two behaviour mixins →
+  `agents/mixins/{spawning,memory}.py`. `planner_agent.py` lost ~200 lines of
+  duplicated spawn code. New `agents/mixins/` and `agents/helpers/` subpackages
+  keep `agents/` to actual agents only.
 - **Unified planner JSON parsing** — both decomposition paths share
   `_extract_json_array` instead of fragile fence-stripping.
 - **Continuous agents declarable** — `_ensure_agents` honours
   `spawn_config["continuous"]` before falling back to code substring-matching.
+- **ha_actuator name collisions** now keyed on agent name (was `automation_id`);
+  a colliding actuator may get a different suffixed name.
+- **`type: "manual"` spawn configs** now route correctly through `MainActor`
+  (previously fell through to a no-op).
 - **`_is_pipeline_request`** is now a proper `@staticmethod`.
 
 ### Removed
@@ -83,6 +94,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Frontend minor fixes** — synthesised chat/WS message ids now use collision-free
+  WIDs instead of `<prefix>-<ms>` (two messages in the same millisecond could collide and
+  be dedupe-dropped); the dashboard now asks not to be indexed (`robots: noindex, nofollow`
+  — it is an ops control surface); chat-history params renamed `agentId` to `agentName` to
+  match what they actually receive; a11y attributes added (lightbox `role="dialog"`/
+  `aria-modal`, popover `aria-haspopup`/`aria-expanded`/`aria-controls`, view tabs
+  `aria-current="page"`).
+- **Dashboard could fail to load in private-mode / storage-disabled browsers** —
+  `localStorage` access during startup threw (Safari private mode, storage disabled,
+  quota exceeded), aborting bootstrap with a blank page. All access now routes through
+  a `safeStorage` wrapper that degrades to `null`/no-ops, so the dashboard loads and
+  persistence is best-effort.
+- **Dashboard reliability nits** — the live-actor refresh now times out after 10s (a
+  hung request could otherwise wedge every later refresh); chat/upload message ids use
+  collision-free WIDs instead of `Date.now()`; loaded chat history is capped like the
+  live feed; and the service worker no longer skips caching sibling paths like `/wsfoo`.
+- **@mention could silently fail to switch target** — the mention list offered every
+  agent, but only messageable agents are in the target picker, so mentioning a
+  non-messageable one left the placeholder claiming a target that was never set.
+  Suggestions now mirror the picker (messageable only), and accepting an untargetable
+  name is a clean no-op.
+- **Planners leaked until restart** — proposal/pipeline planners never stopped and
+  stayed pinned by both the registry and the Supervisor. Added a lifetime watchdog
+  (`max_lifetime_s`, 10 min) + idempotent `_terminate()` doing `release()` →
+  `unregister()` → `stop()`.
+- **Plan steps silently dropped** — bad/cyclic `depends_on` aborted the plan with no
+  trace; references are now validated and failures surfaced per-step.
+- **`plan_only` could spawn agents** — `approved_plan` was checked first despite the
+  docs; precedence is now enforced in `on_start`.
 - **Planner-spawned agents silently missing setup** — `PlannerAgent` carried its
   own drifted copy of the spawn logic, so dynamic agents it spawned skipped
   migrated-state injection, TopicContract auto-wiring, and the `trusted` flag
@@ -90,39 +130,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   install logic for `MainActor` and `PlannerAgent` is now a single shared
   `SpawnMixin`, so an agent behaves identically regardless of which one spawns it.
   ~550 lines of duplication removed.
-
-### Changed
-
-- **`main_actor.py` decomposed** (6113 → ~4400 lines) with no behaviour change:
-  prompts → `agents/prompts/main_actor_prompts.py`, constants + pure helpers →
-  `agents/helpers/main_actor_helpers.py`, and two behaviour mixins →
-  `agents/mixins/{spawning,memory}.py`. `planner_agent.py` lost ~200 lines of
-  duplicated spawn code. New `agents/mixins/` and `agents/helpers/` subpackages
-  keep `agents/` to actual agents only.
-- **ha_actuator name collisions** now keyed on agent name (was `automation_id`);
-  a colliding actuator may get a different suffixed name.
-- **`type: "manual"` spawn configs** now route correctly through `MainActor`
-  (previously fell through to a no-op).
-
-### Added
-
-- **Weather catalog agent** — `@catalog spawn weather-agent` adds an optional manual weather helper backed by Open-Meteo for current conditions, forecasts, historical weather, default locations, and weather-related natural-language questions.
-- **Tests** — `test_spawning.py` (23) covering spawn routing, idempotency/replace,
-  both install models, the `trusted` flag and TopicContract wiring; `test_memory.py`
-  (12) covering fact extraction/namespacing and system-prompt assembly.
-
-### Notes
-
-- Dead code spotted, not yet removed: `_looks_like_home_automation_request` has no
-  callers.
-
----
-
-## [Unreleased] - 2026-06-22
-
-### Fixed
-
 - **Headless `cli` interface self-shutdown** — `wactorz --interface cli` with no TTY (piped, Docker without `-it`, systemd) booted fully then tore the whole system down ~1s later: `input()` raised `EOFError` immediately, finishing the interactive loop, and with `run_forever()` already a no-op there was nothing left keeping the process alive. The `cli` interface now detects a non-interactive stdin and stays up via `run_forever()` instead of starting the interactive loop.
+- **Calendar agent "No time zone found with key UTC"** — every read (`today`,
+  `week`, `list_events`) crashed on systems without the IANA tz database (e.g.
+  Windows without `tzdata`), where even `ZoneInfo("UTC")` raises. Timezone
+  resolution now falls back to the system-local offset and only sends Google a
+  `timeZone` key when it's a valid IANA zone (a bare `UTC` is rejected too).
+- **OAuth refresh token wiped on first refresh** — the MCP token storage replaced the whole
+  token blob on every refresh, but Google omits `refresh_token` from refresh responses, so the
+  first silent refresh dropped it and permanently broke re-auth (surfaced once an access token
+  expired). Storage now preserves the initial refresh token. Affects Calendar and Gmail.
+- **Calendar "show events" flooded with recurring instances** — the upcoming-events list had no
+  time bound, so a yearly recurring event (e.g. a birthday) returned many past/future copies that
+  looked identical. It's now bounded to now → +1 year, and cross-year dates include the year.
+- **Gmail HTML entities not decoded** — message subjects and snippets showed raw entities
+  (`didn&#39;t`, `&quot;`, `&amp;`); they're now unescaped to real characters.
+- **Gmail draft follow-up dropped bare replies** — after "make an email to X" the agent asked
+  "what should the email say?" but a plain reply (e.g. "Bloop") wasn't captured as the body. It
+  now fills whichever field it just asked for (body if the recipient is known, or the recipient
+  if the reply is an email address). "make an email/draft …" phrasings are also recognised.
 
 ---
 

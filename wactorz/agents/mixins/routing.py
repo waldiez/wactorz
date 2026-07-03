@@ -14,6 +14,7 @@ import logging
 import uuid
 
 from wactorz.config import CONFIG
+
 from ...core.actor import MessageType
 from ..prompts.main_actor_prompts import INTENT_CLASSIFIER_PROMPT
 
@@ -24,8 +25,7 @@ class RoutingMixin:
     """Intent classification + one-off actuation. Mix into an LLMAgent host."""
 
     async def _classify_intent(self, text: str) -> str:
-        """
-        Classify user intent as ACTUATE, HA, PIPELINE, or OTHER using a single cheap LLM call.
+        """Classify user intent as ACTUATE, HA, PIPELINE, or OTHER using a single cheap LLM call.
         Returns one of: 'ACTUATE', 'HA', 'PIPELINE', 'OTHER'
         """
         if not text or text.startswith("/"):
@@ -42,9 +42,9 @@ class RoutingMixin:
                 ),
                 timeout=60.0,
             )
-            self.total_input_tokens  += _usage.get("input_tokens", 0)
+            self.total_input_tokens += _usage.get("input_tokens", 0)
             self.total_output_tokens += _usage.get("output_tokens", 0)
-            self.total_cost_usd      += _usage.get("cost_usd", 0.0)
+            self.total_cost_usd += _usage.get("cost_usd", 0.0)
             self._persist_cost()
             token = (decision or "").strip().upper().split()[0] if decision else "OTHER"
             if token in ("HA", "PIPELINE", "OTHER", "ACTUATE"):
@@ -56,11 +56,12 @@ class RoutingMixin:
         except Exception as e:
             logger.debug(f"[{self.name}] Intent classification failed: {e}")
             return "OTHER"
-            
-            
+
     async def _handle_actuate_intent(self, text: str) -> str:
         if not CONFIG.ha_url or not CONFIG.ha_token:
-            return "Home Assistant is not configured. Set `HA_URL` and `HA_TOKEN` in your .env file."
+            return (
+                "Home Assistant is not configured. Set `HA_URL` and `HA_TOKEN` in your .env file."
+            )
 
         from ..one_off_actuator_agent import OneOffActuatorAgent
 
@@ -78,12 +79,16 @@ class RoutingMixin:
                     _ha_task_id = f"actuate_entities_{uuid.uuid4().hex[:8]}"
                     _ha_future: asyncio.Future = asyncio.get_running_loop().create_future()
                     self._result_futures[_ha_task_id] = _ha_future
-                    await self.send(ha_agent.actor_id, MessageType.TASK, {
-                        "text": "list_entities",
-                        "_task_id": _ha_task_id,
-                        "task": _ha_task_id,
-                        "reply_to": self.actor_id,
-                    })
+                    await self.send(
+                        ha_agent.actor_id,
+                        MessageType.TASK,
+                        {
+                            "text": "list_entities",
+                            "_task_id": _ha_task_id,
+                            "task": _ha_task_id,
+                            "reply_to": self.actor_id,
+                        },
+                    )
                     try:
                         ha_result = await asyncio.wait_for(_ha_future, timeout=10.0)
                     except asyncio.TimeoutError:

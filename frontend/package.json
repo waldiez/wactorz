@@ -13,8 +13,8 @@
     "typecheck": "tsc --noEmit",
     "eslint:check": "eslint --config ./eslint.config.mjs --report-unused-disable-directives --max-warnings 0 --no-warn-ignored --cache .",
     "eslint": "eslint --config ./eslint.config.mjs --fix --cache .",
-    "prettier:check": "prettier \"src/**/*{.ts,.tsx,.css,.json}\" --check",
-    "prettier": "prettier \"src/**/*{.ts,.tsx,.css,.json}\" --write --list-different",
+    "prettier:check": "prettier \"src/**/*{.ts,.tsx,.css,.json}\" \"*.{ts,mjs}\" --check",
+    "prettier": "prettier \"src/**/*{.ts,.tsx,.css,.json}\" \"*.{ts,mjs}\" --write --list-different",
     "markdownlint:check": "markdownlint-cli2 \"*.md\"",
     "markdownlint": "markdownlint-cli2 --fix \"*.md\"",
     "fmt": "bun run prettier",
@@ -25,7 +25,7 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@waldiez/wid": "github:waldiez/wid",
+    "@waldiez/wid": "github:waldiez/wid#69164d3",
     "mqtt": "^5.15.1"
   },
   "devDependencies": {
@@ -34,14 +34,15 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-headers": "^1.3.4",
+    "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-prettier": "^5.5.6",
     "happy-dom": "^20.10.6",
-    "markdownlint-cli2": "^0.22.1",
-    "prettier": "^3.9.1",
+    "markdownlint-cli2": "^0.23.0",
+    "prettier": "^3.9.4",
     "typedoc": "^0.28.19",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.62.0",
-    "vite": "^8.1.0",
+    "typescript-eslint": "^8.62.1",
+    "vite": "^8.1.3",
     "vitest": "^4.1.9"
   }
 }

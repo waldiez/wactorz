@@ -19,11 +19,11 @@ frontend/
 ├── src/
 │   ├── main.ts            # Bootstrap — wires transports → store + UI
 │   ├── events.ts          # Typed app event bus over document CustomEvents (emit/listen + AppEventMap)
-│   ├── types/             # Shared types: agent.ts, feed.ts, ha.ts, tts.ts, ws.ts, global.d.ts (Window augmentation)
+│   ├── types/             # Shared types: agent.ts, feed.ts, tts.ts, ws.ts, global.d.ts (Window augmentation)
 │   ├── mqtt/              # MQTT WebSocket client + typed event emitter
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
 │   ├── io/                # IO/transport: IOManager, WSChatClient, TTSManager, SpeechToText,
-│   │                      #   HAClient, AmbientManager, logger
+│   │                      #   AmbientManager, logger
 │   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard
 │   ├── styles/            # Global CSS (base, cards, chat, dashboard, …); app.css is the entry
 │   └── __tests__/         # Vitest unit tests (happy-dom)
@@ -91,9 +91,8 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-chat-message` | main.ts (WS/MQTT) → DashboardChat | `{ msg: ChatMessage }` |
 | `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from }` |
 | `af-stream-end` | IOManager → DashboardChat | `{ text, from }` |
-| `af-connection-status` | main.ts (MQTT/WS) → CardDashboard | `{ status: "live" \| "demo" }` |
+| `af-connection-status` | main.ts (MQTT/WS) → CardDashboard | `{ status: "live" \| "connecting" \| "demo" }` |
 | `af-attachment-added` | DropZone / chatIobar → DashboardChat | `{ attachment }` |
-| `af-ha-state-change` | HAClient → main.ts | `{ entityId, state, friendlyName }` |
 | `af-reset-chat` | WSChatClient → DashboardChat | `{ agent: string \| null }` |
 | `af-clear-feed` | WSChatClient / main.ts → CardDashboard | _(none)_ |
 | `af-wipe-all` | WSChatClient / main.ts → CardDashboard | _(none)_ |
@@ -146,9 +145,18 @@ The same bundle serves two targets, distinguished at runtime:
 
 `__WACTORZ_INGRESS_PATH` is typed in `src/types/global.d.ts` and read wherever a
 same-origin URL is built (e.g. `main.ts`, `chatHistory.ts`, `popovers.ts`, `haConfig`).
-`HAClient` is the exception — it connects to the user-supplied HA URL directly, not
-via the ingress prefix. It
-defaults to `""`, so standalone builds need no configuration.
+It defaults to `""`, so standalone builds need no configuration.
+
+The dashboard does **not** talk to Home Assistant directly: the "Devices" nav button
+links out to the HA UI (new tab) using the `ha.url` from `/api/config`. No HA token
+ever reaches the browser. HA entity activity still reaches the feed via the
+`ha-state-bridge-agent` over MQTT (`homeassistant/state_changes/#`).
+
+The MQTT client subscribes to `agents/#`, `system/#`, `nodes/#`, and
+`homeassistant/state_changes/#`. Most agent topics are routed to typed events in
+`MQTTClient.ts`; feed-only agent topics (e.g. `actuations`, `anomaly`) ride the
+`raw` catch-all and are mapped to feed rows by the extensible `rawFeedItem`
+registry in `agents/mapping.ts` — add a topic there without touching the client.
 
 ## Feature flags (build-time)
 

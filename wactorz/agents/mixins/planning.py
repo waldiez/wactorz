@@ -12,11 +12,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Optional
+from typing import ClassVar
 
 from ..helpers.main_actor_helpers import (
-    PIPELINE_RULES_KEY,
     PENDING_PLANS_KEY,
+    PIPELINE_RULES_KEY,
     _parse_plan_envelope,
     _strip_dryrun_bypass,
 )
@@ -34,7 +34,9 @@ class PlanningMixin:
         rules = self.get_pipeline_rules()
         rules[rule["rule_id"]] = rule
         self.persist(PIPELINE_RULES_KEY, rules)
-        logger.info(f"[{self.name}] Pipeline rule saved: {rule['rule_id']} agents={rule.get('agents', [])}")
+        logger.info(
+            f"[{self.name}] Pipeline rule saved: {rule['rule_id']} agents={rule.get('agents', [])}"
+        )
 
     # ── Pending-plan registry (dry-run / approval flow) ────────────────────
     # When PIPELINE intent fires, the planner runs in plan_only mode and returns
@@ -49,17 +51,18 @@ class PlanningMixin:
     #     "status":     "pending"|"approved"|"rejected"|"superseded"|"expired",
     #     "envelope":   dict,           # the full plan envelope from the planner
     # } }
-    PLAN_TTL_S = 24 * 3600   # auto-expire pending plans after 24h
+    PLAN_TTL_S = 24 * 3600  # auto-expire pending plans after 24h
 
     def get_pending_plans(self) -> dict:
         plans = self.recall(PENDING_PLANS_KEY) or {}
         # Expire stale entries on every read so we don't have to gc separately
         import time as _t
+
         now = _t.time()
         expired_ids = [
-            pid for pid, p in plans.items()
-            if p.get("status") == "pending"
-            and (now - p.get("created_at", now)) > self.PLAN_TTL_S
+            pid
+            for pid, p in plans.items()
+            if p.get("status") == "pending" and (now - p.get("created_at", now)) > self.PLAN_TTL_S
         ]
         if expired_ids:
             for pid in expired_ids:
@@ -78,7 +81,7 @@ class PlanningMixin:
             plans[plan_id]["status"] = status
             self.persist(PENDING_PLANS_KEY, plans)
 
-    def _most_recent_pending_plan(self) -> Optional[dict]:
+    def _most_recent_pending_plan(self) -> dict | None:
         """Returns the most-recently-created plan still in 'pending' status, or None."""
         plans = self.get_pending_plans()
         pending = [p for p in plans.values() if p.get("status") == "pending"]
@@ -87,8 +90,7 @@ class PlanningMixin:
         return max(pending, key=lambda p: p.get("created_at", 0))
 
     def _format_plan_proposal(self, plan: dict) -> str:
-        """
-        Render a pending plan as a human-readable summary for the user.
+        """Render a pending plan as a human-readable summary for the user.
 
         Goals (in priority order):
           1. Show what the rule WILL DO in plain English (most important).
@@ -100,9 +102,9 @@ class PlanningMixin:
           5. Make the approval actions obvious.
         """
         envelope = plan.get("envelope", {})
-        agents   = envelope.get("plan", []) or envelope.get("agents", [])
-        task     = plan.get("task", envelope.get("task", "?"))
-        plan_id  = plan.get("plan_id", "?")
+        agents = envelope.get("plan", []) or envelope.get("agents", [])
+        task = plan.get("task", envelope.get("task", "?"))
+        plan_id = plan.get("plan_id", "?")
 
         lines = []
         lines.append(f"**Proposed pipeline** (id `{plan_id}`)")
@@ -116,7 +118,7 @@ class PlanningMixin:
             desc = step.get("description") or step.get("spawn_config", {}).get("description", "")
             spawn_cfg = step.get("spawn_config", {})
             agent_type = spawn_cfg.get("type", "dynamic")
-            install   = spawn_cfg.get("install", []) or []
+            install = spawn_cfg.get("install", []) or []
 
             lines.append(f"\n  {i}. **{name}** ({agent_type})")
             if desc:
@@ -130,7 +132,10 @@ class PlanningMixin:
                 if isinstance(schedule_spec, dict) and schedule_spec:
                     try:
                         from ..scheduled_agent import describe_schedule
-                        tz_name = schedule_spec.get("tz") or self.get_user_facts().get("pref_timezone")
+
+                        tz_name = schedule_spec.get("tz") or self.get_user_facts().get(
+                            "pref_timezone"
+                        )
                         lines.append(f"     fires: {describe_schedule(schedule_spec, tz_name)}")
                     except Exception:
                         lines.append(f"     fires: {schedule_spec}")
@@ -144,7 +149,7 @@ class PlanningMixin:
 
             # Outputs — what it publishes
             pubs = step.get("publishes", []) or spawn_cfg.get("publish", []) or []
-            if pubs and agent_type != "scheduled":   # already shown above for scheduled
+            if pubs and agent_type != "scheduled":  # already shown above for scheduled
                 lines.append(f"     publishes: {', '.join(pubs)}")
 
             # External side effects — webhooks/notifications/HA actions
@@ -157,7 +162,9 @@ class PlanningMixin:
                 side_effects.append("posts to Discord")
             if "api.telegram.org" in code:
                 side_effects.append("posts to Telegram")
-            if "homeassistant" in code.lower() and ("turn_on" in code or "turn_off" in code or "call_service" in code):
+            if "homeassistant" in code.lower() and (
+                "turn_on" in code or "turn_off" in code or "call_service" in code
+            ):
                 side_effects.append("controls Home Assistant device")
             if agent_type == "ha_actuator":
                 target = spawn_cfg.get("entity_id") or spawn_cfg.get("target", "?")
@@ -185,7 +192,9 @@ class PlanningMixin:
         lines.append("**To proceed:**")
         lines.append("  Reply **yes** (or **approve**) to spawn the agents above.")
         lines.append("  Reply **no** (or **reject**) to discard this plan.")
-        lines.append("  Reply with a correction (e.g. _'use the bedroom sensor instead'_) to revise.")
+        lines.append(
+            "  Reply with a correction (e.g. _'use the bedroom sensor instead'_) to revise."
+        )
         lines.append(f"  Or run `/plans show {plan_id}` to see the full code.")
 
         return "\n".join(lines)
@@ -207,41 +216,77 @@ class PlanningMixin:
                     await actor.stop()
                     await self._registry.unregister(actor_id)
                     await self._clear_agent_manifest(agent_name, actor_id)
-                    self._record_agent_deletion(agent_name, reason=f"pipeline rule '{rule_id}' deleted")
+                    self._record_agent_deletion(
+                        agent_name, reason=f"pipeline rule '{rule_id}' deleted"
+                    )
                     stopped.append(agent_name)
         del rules[rule_id]
         self.persist(PIPELINE_RULES_KEY, rules)
         task_preview = rule.get("task", "")[:60]
         return f"Rule '{rule_id}' deleted. Stopped agents: {', '.join(stopped) or 'none running'}.\nRule was: {task_preview}"
 
-    _PLANNING_KEYWORDS = [
+    _PLANNING_KEYWORDS: ClassVar[list[str]] = [
         # Coordination signals
-        "and then", "after that", "also", "combine", "compare",
-        "coordinate", "plan", "pipeline", "orchestrate", "summarize both",
-        "using multiple", "all agents", "several agents",
+        "and then",
+        "after that",
+        "also",
+        "combine",
+        "compare",
+        "coordinate",
+        "plan",
+        "pipeline",
+        "orchestrate",
+        "summarize both",
+        "using multiple",
+        "all agents",
+        "several agents",
         # Multi-step / multi-domain signals
-        "first.*then", "step by step", "in order",
-        "weather.*news", "news.*weather", "manual.*code", "search.*analyze",
+        "first.*then",
+        "step by step",
+        "in order",
+        "weather.*news",
+        "news.*weather",
+        "manual.*code",
+        "search.*analyze",
         # Reactive pipeline signals
-        "if.*then", "when.*send", "when.*turn", "when.*open", "when.*close",
-        "whenever", "monitor.*and", "watch.*and", "detect.*and",
-        "notify me", "alert me", "automatically",
+        "if.*then",
+        "when.*send",
+        "when.*turn",
+        "when.*open",
+        "when.*close",
+        "whenever",
+        "monitor.*and",
+        "watch.*and",
+        "detect.*and",
+        "notify me",
+        "alert me",
+        "automatically",
     ]
 
     async def _needs_planning(self, text: str) -> bool:
-        """
-        Heuristic: does this task benefit from multi-agent coordination?
+        """Heuristic: does this task benefit from multi-agent coordination?
         Keeps main fast — only escalates genuinely complex requests.
         """
         import re
+
         lowered = text.lower()
 
         # Explicit user request for coordination
-        if any(w in lowered for w in (
-            "coordinate:", "plan:", "pipeline:", "@planner",
-            "ask the planner", "use the planner", "create a pipeline",
-            "set up a pipeline", "create a rule", "set up a rule",
-        )):
+        if any(
+            w in lowered
+            for w in (
+                "coordinate:",
+                "plan:",
+                "pipeline:",
+                "@planner",
+                "ask the planner",
+                "use the planner",
+                "create a pipeline",
+                "set up a pipeline",
+                "create a rule",
+                "set up a rule",
+            )
+        ):
             return True
 
         # Keyword heuristic — multiple signals needed to avoid false positives
@@ -251,8 +296,11 @@ class PlanningMixin:
 
         # References two or more known agent names
         if self._registry:
-            agent_names = [a.name for a in self._registry.all_actors()
-                           if a.name not in {"main", "monitor", "installer"}]
+            agent_names = [
+                a.name
+                for a in self._registry.all_actors()
+                if a.name not in {"main", "monitor", "installer"}
+            ]
             mentioned = sum(1 for name in agent_names if name in lowered)
             if mentioned >= 2:
                 return True
@@ -264,8 +312,8 @@ class PlanningMixin:
         task: str,
         is_pipeline_intent: bool = False,
         plan_only: bool = False,
-        approved_plan: Optional[dict] = None,
-    ) -> Optional[str]:
+        approved_plan: dict | None = None,
+    ) -> str | None:
         """Spawn a PlannerAgent, hand it the task, wait for the result.
 
         is_pipeline_intent: when True, the caller has classified this as a
@@ -288,38 +336,47 @@ class PlanningMixin:
         previously-generated plan.
         """
         from ..planner_agent import PlannerAgent
-        import uuid
 
         # Enrich vague follow-up tasks with recent conversation context
         # so the planner has the full picture (e.g. which entity was found).
         # PIPELINE intent skips this — see docstring.
         # approved_plan also skips: the plan was already built with the right context.
         enriched_task = task
-        if (not is_pipeline_intent
-                and not approved_plan
-                and self._conversation_history
-                and len(task.split()) < 15):
+        if (
+            not is_pipeline_intent
+            and not approved_plan
+            and self._conversation_history
+            and len(task.split()) < 15
+        ):
             # Short/vague task — inject last 3 exchanges as context
             recent = self._conversation_history[-6:]  # 3 user+assistant pairs
             ctx_lines = []
             for m in recent:
-                role    = "User" if m["role"] == "user" else "Assistant"
+                role = "User" if m["role"] == "user" else "Assistant"
                 content = str(m["content"])[:300]
                 ctx_lines.append(f"{role}: {content}")
             if ctx_lines:
-                enriched_task = (
-                    f"{task}\n\n"
-                    f"[Context from recent conversation:]\n"
-                    + "\n".join(ctx_lines)
+                enriched_task = f"{task}\n\n[Context from recent conversation:]\n" + "\n".join(
+                    ctx_lines
                 )
 
         planner_name = f"planner-{uuid.uuid4().hex[:6]}"
-        mode = "approved-execute" if approved_plan else ("plan-only" if plan_only else "plan-and-execute")
-        logger.info(f"[{self.name}] Spawning planner '{planner_name}' (mode={mode}) for: {enriched_task[:60]}")
+        mode = (
+            "approved-execute"
+            if approved_plan
+            else ("plan-only" if plan_only else "plan-and-execute")
+        )
+        logger.info(
+            f"[{self.name}] Spawning planner '{planner_name}' (mode={mode}) for: {enriched_task[:60]}"
+        )
 
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
-            {"type": "log", "message": f"Complex task detected — spawning planner ({mode})...", "timestamp": __import__('time').time()},
+            {
+                "type": "log",
+                "message": f"Complex task detected — spawning planner ({mode})...",
+                "timestamp": __import__("time").time(),
+            },
         )
 
         task_id = f"plan_{uuid.uuid4().hex[:8]}"
@@ -358,10 +415,8 @@ class PlanningMixin:
         finally:
             self._result_futures.pop(task_id, None)
 
-
     def _dryrun_enabled(self, text: str) -> bool:
-        """
-        Decide whether dry-run / approval should gate this PIPELINE request.
+        """Decide whether dry-run / approval should gate this PIPELINE request.
 
         Bypass conditions (always skip approval):
           - Text uses the explicit bypass marker `pipeline!` or `coordinate!`
@@ -384,8 +439,7 @@ class PlanningMixin:
         return True
 
     async def _propose_or_execute_pipeline(self, text: str) -> str:
-        """
-        Top-level entry for PIPELINE intent. Decides between dry-run (build
+        """Top-level entry for PIPELINE intent. Decides between dry-run (build
         plan, ask for approval, store proposal) and immediate execution
         (bypass marker or policy-disabled). Returns the user-facing response.
         """
@@ -407,14 +461,16 @@ class PlanningMixin:
             return planner_result
 
         # Store the proposal
-        import uuid as _uuid, time as _t
+        import time as _t
+        import uuid as _uuid
+
         plan_id = _uuid.uuid4().hex[:8]
         proposal = {
-            "plan_id":    plan_id,
-            "task":       text,
+            "plan_id": plan_id,
+            "task": text,
             "created_at": _t.time(),
-            "status":     "pending",
-            "envelope":   envelope,
+            "status": "pending",
+            "envelope": envelope,
         }
         self.save_pending_plan(proposal)
         return self._format_plan_proposal(proposal)
@@ -425,31 +481,74 @@ class PlanningMixin:
     # corrections like "ok lets go for 55 as a threshold". The new logic
     # requires the message to be SHORT enough that it can only be approval
     # or rejection. See _looks_like_approval / _looks_like_rejection.
-    _APPROVE_PHRASES = {
-        "yes", "y", "yep", "yeah", "yup", "ya",
-        "ok", "okay", "k", "kk",
-        "sure", "fine", "alright",
-        "go", "go ahead", "do it", "send it", "ship it",
-        "approve", "approved", "approved!",
-        "proceed", "confirm", "confirmed",
-        "spawn it", "create it", "make it",
+    _APPROVE_PHRASES: ClassVar[set[str]] = {
+        "yes",
+        "y",
+        "yep",
+        "yeah",
+        "yup",
+        "ya",
+        "ok",
+        "okay",
+        "k",
+        "kk",
+        "sure",
+        "fine",
+        "alright",
+        "go",
+        "go ahead",
+        "do it",
+        "send it",
+        "ship it",
+        "approve",
+        "approved",
+        "approved!",
+        "proceed",
+        "confirm",
+        "confirmed",
+        "spawn it",
+        "create it",
+        "make it",
     }
-    _APPROVE_EMPHASIS = {
-        "please", "now", "go", "do it", "thanks", "thx", "ahead",
-        "confirm", "confirmed", "approved", "ok", "yes", "good",
+    _APPROVE_EMPHASIS: ClassVar[set[str]] = {
+        "please",
+        "now",
+        "go",
+        "do it",
+        "thanks",
+        "thx",
+        "ahead",
+        "confirm",
+        "confirmed",
+        "approved",
+        "ok",
+        "yes",
+        "good",
     }
-    _REJECT_PHRASES = {
-        "no", "n", "nope", "nah",
-        "reject", "rejected",
-        "cancel", "skip", "discard", "drop it",
-        "abort", "stop", "stop it",
-        "nevermind", "never mind", "forget it",
+    _REJECT_PHRASES: ClassVar[set[str]] = {
+        "no",
+        "n",
+        "nope",
+        "nah",
+        "reject",
+        "rejected",
+        "cancel",
+        "skip",
+        "discard",
+        "drop it",
+        "abort",
+        "stop",
+        "stop it",
+        "nevermind",
+        "never mind",
+        "forget it",
     }
 
     @classmethod
     def _looks_like_approval(cls, cleaned: str) -> bool:
         """Strict approval detection. Only fires when the message is short
-        enough that it cannot also be a correction or a new request."""
+        enough that it cannot also be a correction or a new request.
+        """
         if cleaned in cls._APPROVE_PHRASES:
             return True
         # Allow up to a 3-token expansion where every extra token is itself
@@ -474,20 +573,45 @@ class PlanningMixin:
         if cleaned in cls._REJECT_PHRASES:
             return True
         tokens = cleaned.split()
-        if len(tokens) <= 3 and tokens and tokens[0] in cls._REJECT_PHRASES:
-            return True   # "no thanks", "cancel that", "stop please" — all clearly negative
-        return False
+        # "no thanks", "cancel that", "stop please" — all clearly negative
+        return len(tokens) <= 3 and bool(tokens) and tokens[0] in cls._REJECT_PHRASES
 
     # Correction-intent signals: words that suggest the user is adjusting
     # the pending plan rather than confirming or starting fresh. Used only
     # when a plan is pending — outside that context these words are noise.
     _CORRECTION_HINTS = (
-        "actually", "instead", "rather", "let's", "lets", "make it",
-        "change", "change it", "use ", "set it to", "set the",
-        "should be", "needs to be", "make that", "but ",
-        " threshold", " interval", " every ", " seconds", " minutes",
-        " hours", " minutes", " degrees", "%", "celsius", "fahrenheit",
-        "increase", "decrease", "raise", "lower", "higher", "lower",
+        "actually",
+        "instead",
+        "rather",
+        "let's",
+        "lets",
+        "make it",
+        "change",
+        "change it",
+        "use ",
+        "set it to",
+        "set the",
+        "should be",
+        "needs to be",
+        "make that",
+        "but ",
+        " threshold",
+        " interval",
+        " every ",
+        " seconds",
+        " minutes",
+        " hours",
+        " minutes",
+        " degrees",
+        "%",
+        "celsius",
+        "fahrenheit",
+        "increase",
+        "decrease",
+        "raise",
+        "lower",
+        "higher",
+        "lower",
     )
 
     @classmethod
@@ -495,19 +619,23 @@ class PlanningMixin:
         """Heuristic: does this message look like an adjustment to a pending
         plan rather than a fresh request? Pure heuristic — false positives
         get a confirm-or-new prompt, false negatives fall through to OTHER
-        intent (mildly annoying but not destructive)."""
+        intent (mildly annoying but not destructive).
+        """
         lowered = text.lower()
         # Numbers + units strongly suggest correction ("change to 55%", "every 30s")
         import re
-        if re.search(r"\b\d+(\.\d+)?\s*(%|c|°|sec|secs|seconds|min|mins|minutes|hour|hours|hr|hrs)\b", lowered):
+
+        if re.search(
+            r"\b\d+(\.\d+)?\s*(%|c|°|sec|secs|seconds|min|mins|minutes|hour|hours|hr|hrs)\b",
+            lowered,
+        ):
             return True
         if re.search(r"\b(threshold|interval|frequency|rate|delay)\b", lowered):
             return True
         return any(h in lowered for h in cls._CORRECTION_HINTS)
 
-    async def _handle_pending_plan_response(self, text: str) -> Optional[str]:
-        """
-        If there is a pending plan and the user's message looks like a
+    async def _handle_pending_plan_response(self, text: str) -> str | None:
+        """If there is a pending plan and the user's message looks like a
         response to it (yes/no/correction), handle it and return the result.
         Returns None if there's no pending plan or the message clearly
         isn't a response — the message then flows through normal processing.
@@ -542,8 +670,7 @@ class PlanningMixin:
         return None
 
     async def _revise_pending_plan(self, proposal: dict, correction: str) -> str:
-        """
-        The user typed something that looks like an adjustment to a pending
+        """The user typed something that looks like an adjustment to a pending
         plan ("let's use 55 instead", "change the interval to 30 seconds").
         Mark the old plan superseded, re-run the planner with the original
         task plus the correction as feedback, and present the new proposal.
@@ -551,14 +678,15 @@ class PlanningMixin:
         old_id = proposal["plan_id"]
         original_task = proposal["task"]
         revised_task = (
-            f"{original_task}\n\n"
-            f"[User correction to the previous plan: {correction.strip()}]"
+            f"{original_task}\n\n[User correction to the previous plan: {correction.strip()}]"
         )
         logger.info(f"[{self.name}] Revising plan {old_id} with correction: {correction[:80]!r}")
         self.update_plan_status(old_id, "superseded")
 
         # Re-run planner in plan_only mode with the enriched task
-        planner_result = await self._run_planner(revised_task, is_pipeline_intent=True, plan_only=True)
+        planner_result = await self._run_planner(
+            revised_task, is_pipeline_intent=True, plan_only=True
+        )
         if not planner_result:
             return f"Could not revise plan `{old_id}`. The planner did not respond — please retry."
 
@@ -567,14 +695,16 @@ class PlanningMixin:
             # Planner returned a regular answer — pass it through
             return planner_result
 
-        import uuid as _uuid, time as _t
+        import time as _t
+        import uuid as _uuid
+
         new_id = _uuid.uuid4().hex[:8]
         new_proposal = {
-            "plan_id":    new_id,
-            "task":       original_task,   # keep original; correction lives in envelope
+            "plan_id": new_id,
+            "task": original_task,  # keep original; correction lives in envelope
             "created_at": _t.time(),
-            "status":     "pending",
-            "envelope":   envelope,
+            "status": "pending",
+            "envelope": envelope,
             "supersedes": old_id,
         }
         self.save_pending_plan(new_proposal)
@@ -615,16 +745,35 @@ class PlanningMixin:
     # warning (one extra message); false NEGATIVES are what we're avoiding
     # because they cause silent duplicate spawns.
     _SPAWN_INTENT_WORDS = (
-        "spawn", "create", "build", "make a", "add a", "set up a", "set up an",
-        "start a", "start an", "deploy", "launch", "i want a", "i need a",
-        "generate", "produce", "watch for", "monitor", "alert me",
-        "if ", "when ", "whenever ", "trigger ", "schedule",
-        "every ", "each ",
+        "spawn",
+        "create",
+        "build",
+        "make a",
+        "add a",
+        "set up a",
+        "set up an",
+        "start a",
+        "start an",
+        "deploy",
+        "launch",
+        "i want a",
+        "i need a",
+        "generate",
+        "produce",
+        "watch for",
+        "monitor",
+        "alert me",
+        "if ",
+        "when ",
+        "whenever ",
+        "trigger ",
+        "schedule",
+        "every ",
+        "each ",
     )
 
-    def _warn_if_pending_plan_collision(self, text: str) -> Optional[str]:
-        """
-        If a plan is already pending and the user types something that looks
+    def _warn_if_pending_plan_collision(self, text: str) -> str | None:
+        """If a plan is already pending and the user types something that looks
         like another spawn / pipeline request, return a warning message and
         do NOT process the request. This stops the silent-duplicate scenario:
           1. user types pipeline request → plan A pending
@@ -647,8 +796,8 @@ class PlanningMixin:
         if not any(w in lowered for w in self._SPAWN_INTENT_WORDS):
             return None
         # Spawn-like request while a plan is pending — warn
-        pid     = pending["plan_id"]
-        ptask   = pending.get("task", "?")[:80]
+        pid = pending["plan_id"]
+        ptask = pending.get("task", "?")[:80]
         return (
             f"⚠️  You have a pending plan `{pid}` for: _{ptask}_\n\n"
             f"Your new message looks like another spawn or rule request, which would\n"
@@ -664,9 +813,10 @@ class PlanningMixin:
 
         # ── Spawn ──────────────────────────────────────────────────────────────
 
-    async def run_pipeline(self, goal: str, agents: list[str], timeout: float = 300.0, force_replan: bool = False) -> dict:
-        """
-        Spawn an ephemeral TaskManager to coordinate a multi-agent pipeline.
+    async def run_pipeline(
+        self, goal: str, agents: list[str], timeout: float = 300.0, force_replan: bool = False
+    ) -> dict:
+        """Spawn an ephemeral TaskManager to coordinate a multi-agent pipeline.
         Returns the final synthesised result without blocking main's context.
 
         Usage:
@@ -676,10 +826,9 @@ class PlanningMixin:
             )
         """
         from ..task_manager import TaskManager
-        import uuid
 
         task_id = uuid.uuid4().hex[:8]
-        future  = asyncio.get_event_loop().create_future()
+        future = asyncio.get_event_loop().create_future()
         self._result_futures[task_id] = future
 
         mgr = await self.spawn(
@@ -698,8 +847,7 @@ class PlanningMixin:
         logger.info(f"[{self.name}] Pipeline started: {mgr.name} for goal: {goal[:60]}")
 
         try:
-            result = await asyncio.wait_for(future, timeout=timeout)
-            return result
+            return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
             logger.warning(f"[{self.name}] Pipeline timed out after {timeout}s")
             return {"error": f"Pipeline timed out after {timeout}s"}

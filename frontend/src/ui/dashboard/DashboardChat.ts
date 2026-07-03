@@ -8,8 +8,9 @@
  * host only for the shared root element, the agent map, and view switching.
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
+import { uid } from "../../ids";
 import type { View } from "./types";
-import { canDirectMessage, stateColor, stateLabel } from "./agentState";
+import { canDirectMessage, messageableNames, stateColor, stateLabel } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar } from "./chatIobar";
@@ -51,7 +52,8 @@ export class DashboardChat {
 
     private _stt = new SpeechToText(window.__WACTORZ_INGRESS_PATH ?? "");
     private _chatInput = new ChatInput({
-        agentNames: () => [...this.host.agents.values()].map(a => a.name).filter(Boolean),
+        // Only messageable agents — mirrors the target <select> (see _populateSelect).
+        agentNames: () => messageableNames(this.host.agents.values()),
         setTarget: (name: string) => {
             this.chatTarget = name;
         },
@@ -313,17 +315,20 @@ export class DashboardChat {
         }
     }
 
-    /** Fetch and merge persisted chat history for an agent once (subsequent calls no-op). */
-    async loadHistory(agentId: string): Promise<void> {
-        if (this._historyLoaded.has(agentId)) {
+    /** Fetch and merge an agent's persisted chat history once, by agent NAME
+     *  (history is keyed by name, not actor id; subsequent calls no-op). */
+    async loadHistory(agentName: string): Promise<void> {
+        if (this._historyLoaded.has(agentName)) {
             return;
         }
-        this._historyLoaded.add(agentId);
-        const incoming = await fetchChatHistory(agentId);
+        this._historyLoaded.add(agentName);
+        const incoming = await fetchChatHistory(agentName);
         if (!incoming.length) {
             return;
         }
         this.chatMessages.unshift(...mergeChatHistory(this.chatMessages, incoming));
+        // Cap to the most recent 500, matching the live feed.
+        this.chatMessages = this.chatMessages.slice(-500);
         this.renderChatThread();
     }
 
@@ -424,7 +429,7 @@ export class DashboardChat {
         // if stripping would leave nothing to send.
         const body = stripLeadingMention(content, target) || content;
         const msg: ChatMessage = {
-            id: `user-${Date.now()}`,
+            id: uid("user"),
             from: "user",
             to: target,
             content: body,
@@ -537,7 +542,7 @@ export class DashboardChat {
             this.chatTarget = target;
             this._lastSentTarget = target;
             const msg: ChatMessage = {
-                id: `user-${Date.now()}`,
+                id: uid("user"),
                 from: "user",
                 to: target,
                 content,
@@ -556,7 +561,9 @@ export class DashboardChat {
                 this._streamTarget = this._lastSentTarget;
                 this._streamText = "";
             }
-            this._streamText += chunk;
+            // Cap accumulation so a runaway/looping stream can't grow this without bound.
+            this._streamText =
+                this._streamText.length < 200_000 ? this._streamText + chunk : this._streamText;
             if (this.host.getView() !== "chat") {
                 return;
             }
@@ -572,7 +579,7 @@ export class DashboardChat {
         this._evEnd = listen("af-stream-end", () => {
             if (this._streamFrom && this._streamText) {
                 this.chatMessages.push({
-                    id: `stream-${Date.now()}`,
+                    id: uid("stream"),
                     from: this._streamFrom,
                     to: this._streamTarget ?? this._lastSentTarget,
                     content: this._streamText,
@@ -583,10 +590,8 @@ export class DashboardChat {
                 this._streamBody.textContent = "";
                 this._streamBody.appendChild(renderMarkdown(this._streamText));
             }
-            this._streamRow = null;
-            this._streamBody = null;
-            this._streamFrom = null;
-            this._streamTarget = null;
+            this._streamRow = this._streamBody = null;
+            this._streamFrom = this._streamTarget = null;
             this._streamText = "";
         });
     }

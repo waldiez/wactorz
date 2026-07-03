@@ -17,8 +17,9 @@ class MqttClientFactoryTest(unittest.TestCase):
         cfg = types.SimpleNamespace(mqtt_username=cfg_user, mqtt_password=cfg_pass)
         # CONFIG is imported lazily inside mqtt_client() (from ..config), so patch
         # it at the source module, not on wactorz.core.mqtt.
-        with mock.patch("wactorz.config.CONFIG", cfg), mock.patch.dict(
-            sys.modules, {"aiomqtt": fake_aiomqtt}
+        with (
+            mock.patch("wactorz.config.CONFIG", cfg),
+            mock.patch.dict(sys.modules, {"aiomqtt": fake_aiomqtt}),
         ):
             m.mqtt_client("broker", 1883, **kwargs)
         return captured

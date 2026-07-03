@@ -81,6 +81,19 @@ describe("createHaFeedPusher", () => {
         pusher("light.kitchen", "off", "Kitchen");
         expect(push).toHaveBeenCalledTimes(2);
     });
+
+    it("eviction sweep keeps still-fresh entries deduped", () => {
+        // A later event triggers the prune; a within-window entry must survive it
+        // (guards the leak fix from over-evicting and breaking dedup).
+        const push = vi.fn<(item: FeedItem) => void>();
+        const pusher = createHaFeedPusher(push);
+        pusher("light.a", "on", "A");
+        vi.advanceTimersByTime(1000);
+        pusher("light.b", "on", "B"); // triggers a sweep; A is only 1s old
+        push.mockClear();
+        pusher("light.a", "on", "A"); // A still inside the 5s window → deduped
+        expect(push).not.toHaveBeenCalled();
+    });
 });
 
 describe("parseHaRawEvent", () => {
@@ -89,12 +102,12 @@ describe("parseHaRawEvent", () => {
     });
 
     it("returns null when there is no state", () => {
-        expect(parseHaRawEvent("ha/state/light/k", { new_state: {} })).toBeNull();
-        expect(parseHaRawEvent("ha/state/light/k", {})).toBeNull();
+        expect(parseHaRawEvent("homeassistant/state_changes/light/k", { new_state: {} })).toBeNull();
+        expect(parseHaRawEvent("homeassistant/state_changes/light/k", {})).toBeNull();
     });
 
     it("parses entity_id, state and friendly_name", () => {
-        const ev = parseHaRawEvent("ha/state/light/k", {
+        const ev = parseHaRawEvent("homeassistant/state_changes/light/k", {
             entity_id: "light.kitchen",
             new_state: { state: "on", attributes: { friendly_name: "Kitchen" } },
         });
@@ -102,11 +115,19 @@ describe("parseHaRawEvent", () => {
     });
 
     it("falls back: entity id from topic tail, friendly name from entity id", () => {
-        const ev = parseHaRawEvent("ha/state/light/k", { new_state: { state: "off" } });
+        const ev = parseHaRawEvent("homeassistant/state_changes/light/k", { new_state: { state: "off" } });
         expect(ev).toEqual({ entityId: "light.k", state: "off", friendlyName: "light.k" });
     });
 
+    it("parses the flat (per_entity=0) topic via the payload entity_id", () => {
+        const ev = parseHaRawEvent("homeassistant/state_changes", {
+            entity_id: "switch.fan",
+            new_state: { state: "on" },
+        });
+        expect(ev).toEqual({ entityId: "switch.fan", state: "on", friendlyName: "switch.fan" });
+    });
+
     it("tolerates a null payload", () => {
-        expect(parseHaRawEvent("ha/state/light/k", null)).toBeNull();
+        expect(parseHaRawEvent("homeassistant/state_changes/light/k", null)).toBeNull();
     });
 });

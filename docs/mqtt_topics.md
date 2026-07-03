@@ -296,6 +296,134 @@ Monitor heartbeat alerts use `last_seen_ago` and `state` instead of `message`.
 
 ---
 
+### `agents/{id}/chat`
+**Published by:** Every agent (via `speak()`), IOAgent, and the io-gateway
+**Trigger:** On chat output / assistant reply
+**Purpose:** Chat messages. The monitor forwards these to the dashboard chat panel as live output.
+
+```json
+{
+  "from":      "main",
+  "text":      "Hi there!",
+  "timestamp": 1740000000.0
+}
+```
+
+---
+
+### `agents/{id}/spawn`
+**Published by:** IOAgent and other discoverable agents
+**Trigger:** On startup (self-announce)
+**Purpose:** Announce that an agent has come online so listeners can discover it.
+
+```json
+{
+  "actor_id":  "io-gateway",
+  "name":      "io-gateway",
+  "timestamp": 1740000000.0
+}
+```
+
+---
+
+## IO / Chat Gateway Topics
+
+The browser talks to the system through the IOAgent (`agents/io_agent.py`).
+
+### `io/chat`
+**Published by:** Browser / UI (via MQTT bridge)
+**Trigger:** User sends a chat message
+**Purpose:** Inbound user messages. IOAgent parses an optional `@name` prefix to route to a named actor.
+
+```json
+{ "text": "@yolo-agent what do you see?" }
+```
+
+---
+
+### `io/chat/response`
+**Published by:** IOAgent
+**Trigger:** When a routed actor replies
+**Purpose:** Stable outbound topic the UI always subscribes to.
+
+```json
+{ "from": "yolo-agent", "text": "I see 2 people.", "timestamp": 1740000000.0 }
+```
+
+---
+
+### `io/chat/control`
+**Published by:** Browser / UI
+**Trigger:** User clicks "stop" during a streaming turn
+**Purpose:** Cancel an in-flight turn.
+
+```json
+{ "action": "stop" }
+```
+
+---
+
+## LLM Bridge & RPC Reply Topics
+
+Remote agents never hold API keys — they route LLM calls through `main`, which
+replies on a per-request ephemeral topic.
+
+### `main/llm_request`
+**Published by:** Remote agents (`remote_runner.py`)
+**Subscribed by:** MainActor (`main_actor.py`)
+**Purpose:** Centralized LLM calls so no API key leaves `main`.
+
+```json
+{
+  "prompt":       "...",
+  "_reply_topic": "main/reply/{actor_id}/{uuid}"
+}
+```
+
+---
+
+### `main/reply/{actor_id}/{uuid}`
+**Published by:** MainActor (and any RPC responder)
+**Trigger:** Reply to an `main/llm_request` or task request
+**Purpose:** Ephemeral, per-request reply channel (UUID suffix, one-shot).
+
+---
+
+## Shared World State Topics (`home/…`)
+
+Maintained by `SharedStateHub` (`core/topic_bus.py`) as **retained** topics so any
+agent can read current state without a request/response round-trip.
+
+### `home/state/{domain}/{entity_id}`
+**Published by:** SharedStateHub (`publish_ha_state`)
+**Purpose:** Mirror of a Home Assistant entity state (retained).
+
+```json
+{ "entity_id": "light.hallway", "state": "on", "attributes": {}, "ts": 1740000000.0 }
+```
+
+---
+
+### `home/presence/{zone}`
+**Published by:** SharedStateHub (`publish_presence`)
+**Purpose:** Occupancy/presence per zone (retained).
+
+```json
+{ "zone": "kitchen", "present": true, "people": ["alice"], "source": "", "ts": 1740000000.0 }
+```
+
+---
+
+### `home/energy/current`
+**Published by:** SharedStateHub (`publish_energy`)
+**Purpose:** Current energy consumption (retained).
+
+```json
+{ "kwh": 1.2, "cost_per_hour": 0.18, "source": "", "ts": 1740000000.0 }
+```
+
+---
+
 ## System Topics
 
 ### `system/health`
@@ -363,6 +491,23 @@ Monitor heartbeat alerts use `last_seen_ago` and `state` instead of `message`.
 
 ---
 
+### `homeassistant/map/entities_with_location`
+**Published by:** `HomeAssistantMapAgent`
+**Trigger:** On map/location refresh
+**Purpose:** Entities that carry location data, for map rendering. Oversized payloads are chunked on the same topic.
+
+```json
+{
+  "type": "ha_map_entities",
+  "entities": [
+    { "entity_id": "device_tracker.phone", "lat": 37.98, "lon": 23.72 }
+  ],
+  "timestamp": 1740000000.0
+}
+```
+
+---
+
 ### `schedule/{name}/fired`
 **Published by:** `ScheduledAgent`
 **Trigger:** Scheduled fire time or manual trigger
@@ -409,11 +554,31 @@ Monitor heartbeat alerts use `last_seen_ago` and `state` instead of `message`.
 | `nodes/{node}/heartbeat` | Remote runner | `{ "node": "...", "node_id": "...", "agents": [...], "agent_count": 1, "broker": "...", "pid": 123, "uptime_s": 12.3, "cpu_pct": 1.2, "mem_used_mb": 100, "mem_free_mb": 1000 }` |
 | `agents/{node}/logs` | Remote runner | `{ "type": "spawned", "message": "...", "node": "...", "timestamp": ... }` |
 | `nodes/{node}/logs` | Remote runner | `{ "type": "log", "message": "...", "timestamp": ... }` |
+| `nodes/{node}/list` | Main actor | *(request)* published to make the runner emit `nodes/{node}/agents` |
 | `nodes/{node}/agents` | Remote runner | `{ "node": "...", "agents": [...] }` |
 | `nodes/{node}/migrate_result` | Remote runner | `{ "success": true, "agent": "...", "from_node": "...", "to_node": "..." }` |
 | `nodes/{node}/state_return` | Remote runner | `{ "agent": "...", "state": {...}, "return_token": "..." }` |
 | `nodes/{node}/reply/#` | Remote runner | Reply payloads for node requests |
 | `agents/by-name/{agent}/task` | Main actor | `{ "text": "...", "payload": "...", "_reply_topic": "...", "_remote_task": true }` |
+
+---
+
+## Catalogue Agent Topics
+
+Published by the ready-made agents in `catalogue_agents/`.
+
+| Topic | Published by | Payload |
+|---|---|---|
+| `custom/sensors/energy/{name}/power` | SmartEnergyAgent | `{ "watts": ..., "timestamp": ... }` |
+| `custom/sensors/energy/{name}/cost` | SmartEnergyAgent | `{ "cost": ..., "timestamp": ... }` |
+| `sinergym/anomalies/{env_id}` | AnomalyDetectorAgent | anomaly record |
+| `wactorz/anomalies/{entity_id}` | AnomalyDetectorAgent | anomaly record |
+| `{node}/{name}/detections` | Remote DynamicAgent API | detection payload *(note: not `agents/`-prefixed — a remote-node variant of `agents/{id}/detections`)* |
+
+> **Documented-only namespaces:** `core/topic_bus.py` also describes
+> `wactorz/intents/{id}`, `wactorz/results/{id}` (planner intents/results) and the
+> generic `custom/{agent}/{stream}` form. These are design conventions — only the
+> concrete `custom/sensors/energy/*` topics above are actually published today.
 
 ---
 
@@ -434,6 +599,12 @@ mosquitto_sub -h localhost -p 1883 -t "agents/+/metrics"
 
 # System health
 mosquitto_sub -h localhost -p 1883 -t "system/#"
+
+# Chat traffic (inbound + responses)
+mosquitto_sub -h localhost -p 1883 -t "io/chat/#"
+
+# Shared world state (retained)
+mosquitto_sub -h localhost -p 1883 -t "home/#"
 
 # Send a command to an agent (replace {actor_id} with actual UUID)
 mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command":"pause"}'
@@ -461,11 +632,14 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `agents/{id}/manifest` | Discoverable actors | Startup / topic update |
 | `agents/{id}/actuations` | HomeAssistantActuatorAgent | After HA actions |
 | `agents/{name}/data/{key}` | Dynamic / remote agents | World-state helper |
+| `agents/{id}/chat` | Every agent / IOAgent | On chat output |
+| `agents/{id}/spawn` | IOAgent / discoverable agents | On startup (self-announce) |
 | `system/health` | Monitor agent | Every 15s |
 | `system/host` | Monitor agent | Every 15s |
 | `homeassistant/state_changes` | HomeAssistantStateBridgeAgent | HA state change |
 | `homeassistant/state_changes/{domain}/{entity_id}` | HomeAssistantStateBridgeAgent | HA state change |
 | `homeassistant/state_changes/{entity_id}` | home-assistant-agent | Bootstrap current state |
+| `homeassistant/map/entities_with_location` | HomeAssistantMapAgent | Map/location refresh |
 | `schedule/{name}/fired` | ScheduledAgent | Schedule fire |
 | `nodes/{node}/spawn` | Main actor | On remote spawn |
 | `nodes/{node}/desired_state` | Main actor | Remote reconciliation |
@@ -481,3 +655,17 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `nodes/{node}/migrate_result` | Remote runner | Migration result |
 | `nodes/{node}/state_return` | Remote runner | Remote-to-local state return |
 | `agents/by-name/{agent}/task` | Main actor | Remote named-agent task |
+| `nodes/{node}/list` | Main actor | Request runner's agent list |
+| `io/chat` | Browser / UI | User message inbound |
+| `io/chat/response` | IOAgent | Response outbound (UI subscribes) |
+| `io/chat/control` | Browser / UI | Cancel in-flight turn |
+| `main/llm_request` | Remote agents | Route LLM call through main |
+| `main/reply/{actor_id}/{uuid}` | Main / RPC responders | Ephemeral reply channel |
+| `home/state/{domain}/{entity_id}` | SharedStateHub | HA state mirror (retained) |
+| `home/presence/{zone}` | SharedStateHub | Occupancy per zone (retained) |
+| `home/energy/current` | SharedStateHub | Energy consumption (retained) |
+| `custom/sensors/energy/{name}/power` | SmartEnergyAgent | Per-loop power reading |
+| `custom/sensors/energy/{name}/cost` | SmartEnergyAgent | Per-loop cost reading |
+| `sinergym/anomalies/{env_id}` | AnomalyDetectorAgent | Anomaly record |
+| `wactorz/anomalies/{entity_id}` | AnomalyDetectorAgent | Anomaly record |
+| `{node}/{name}/detections` | Remote DynamicAgent API | Remote detections variant |

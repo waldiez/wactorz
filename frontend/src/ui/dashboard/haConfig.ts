@@ -3,32 +3,31 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * Bootstrap of Home Assistant credentials from the server's `/api/config`
- * endpoint — the single source of truth for HA config seeding.
+ * Bootstrap the Home Assistant URL from the server's `/api/config` endpoint.
  *
- * Policy: the server's `.env` value is authoritative, but a deliberate local
- * edit (Settings) must survive reloads. We record the last value we seeded under
- * `${key}__server` and only re-adopt the server value when it *changes* from that
- * baseline — so a changed `.env` propagates while a manual edit is preserved.
+ * The URL is the only HA value the browser needs — the Devices nav button links
+ * straight to the HA UI, so no token is ever fetched or stored. The server's
+ * value is authoritative; we record it under `wactorz-ha-url__server` and only
+ * re-write when it changes, so a stale value can't override a fresh `.env`.
  */
 
-/** Apply the seed policy for one key against localStorage. Returns whether it wrote. */
+import { safeStorage } from "../../safeStorage";
+
+/** Seed the HA URL key from the server value; returns whether it wrote. */
 export function seedKeyFromServer(key: string, value: string | undefined | null): boolean {
     if (!value) {
         return false;
     }
     const baselineKey = `${key}__server`;
-    // Server value unchanged since we last seeded → leave the active key alone so
-    // a deliberate local edit survives.
-    if (value === localStorage.getItem(baselineKey)) {
+    if (value === safeStorage.get(baselineKey)) {
         return false;
     }
-    localStorage.setItem(key, value);
-    localStorage.setItem(baselineKey, value);
+    safeStorage.set(key, value);
+    safeStorage.set(baselineKey, value);
     return true;
 }
 
-/** Fetch `/api/config` and seed the HA url/token. Returns whether anything changed. */
+/** Fetch `/api/config` and seed the HA URL. Returns whether it changed. */
 export async function seedHaConfigFromServer(): Promise<boolean> {
     try {
         const ingress: string = window.__WACTORZ_INGRESS_PATH ?? "";
@@ -36,10 +35,8 @@ export async function seedHaConfigFromServer(): Promise<boolean> {
         if (!resp.ok) {
             return false;
         }
-        const cfg = (await resp.json()) as { ha?: { url?: string; token?: string } };
-        const urlChanged = seedKeyFromServer("wactorz-ha-url", cfg.ha?.url);
-        const tokenChanged = seedKeyFromServer("wactorz-ha-token", cfg.ha?.token);
-        return urlChanged || tokenChanged;
+        const cfg = (await resp.json()) as { ha?: { url?: string } };
+        return seedKeyFromServer("wactorz-ha-url", cfg.ha?.url);
     } catch {
         return false; // server may not be ready yet
     }

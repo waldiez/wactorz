@@ -18,7 +18,6 @@ import type {
     HeartbeatPayload,
     SpawnPayload,
     AlertPayload,
-    StatusPayload,
     LogPayload,
     NodeHeartbeatPayload,
     ChatMessage,
@@ -28,6 +27,20 @@ import type {
 import type { StatePatchAgent, LogFeedItem } from "../types/ws";
 import type { FeedItem } from "../types/feed";
 import { nameFromWid, resolveAgentName } from "./naming";
+
+// --- untrusted-payload field coercers (raw MQTT JSON) -------------------------
+/** Coerce to a plain object; null/primitive payloads become `{}`. */
+function asObj(p: unknown): Record<string, unknown> {
+    return p !== null && typeof p === "object" ? (p as Record<string, unknown>) : {};
+}
+/** A string value, or "" when not a string. */
+function asStr(v: unknown): string {
+    return typeof v === "string" ? v : "";
+}
+/** A finite number, or undefined otherwise. */
+function asNum(v: unknown): number | undefined {
+    return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
 
 /** Coerce the backend's free-form state/status string into an {@link AgentState}. */
 function toAgentState(raw: string): AgentState {
@@ -42,7 +55,7 @@ export function toAgentInfo(a: StatePatchAgent): AgentInfo {
     const update: AgentInfo = {
         id: a.agent_id,
         name: resolveAgentName(a.name, a.agent_id),
-        state: toAgentState((a.state ?? a.status ?? "running") as string),
+        state: toAgentState(a.state ?? a.status ?? "running"),
         protected: a.protected ?? false,
     };
     if (a.messages_processed != null) {
@@ -95,6 +108,12 @@ export function buildMetricsUpdate(p: MetricsPayload, existing: AgentInfo): Agen
     if (p.costUsd !== undefined) {
         update.costUsd = p.costUsd;
     }
+    if (p.inputTokens !== undefined) {
+        update.inputTokens = p.inputTokens;
+    }
+    if (p.outputTokens !== undefined) {
+        update.outputTokens = p.outputTokens;
+    }
     if (p.uptime !== undefined) {
         update.uptime = p.uptime;
     }
@@ -114,20 +133,15 @@ const FEED_MAPPERS: Record<string, (item: LogFeedItem, ctx: FeedCtx) => FeedItem
         agentName: item.agentName ?? item.name ?? agentName,
         timestamp: ts,
     }),
-    completed: (_item, { agentName, ts }) => ({
-        type: "spawn",
-        label: "task completed",
-        agentName,
-        timestamp: ts,
-    }),
+    completed: (_item, { agentName, ts }) => completedFeedItem({ agentName }, ts),
     log: (item, { agentName, ts }) => {
         const msg = item.message ?? item.text ?? "";
         return msg ? { type: "chat", label: msg, agentName, timestamp: ts } : null;
     },
-    status: (item, { agentName, ts }) => {
-        const st = (item.status as Record<string, unknown> | undefined)?.["state"] as string | undefined;
-        return st === "stopped" ? { type: "stopped", label: "stopped", agentName, timestamp: ts } : null;
-    },
+    status: (item, { agentName, ts }) =>
+        (item.status?.["state"] as string | undefined) === "stopped"
+            ? stoppedFeedItem({ agentName }, ts)
+            : null,
     alert: (item, { agentName, ts }) => ({
         type: alertKind(item.severity),
         label: item.message ?? "",
@@ -286,7 +300,7 @@ export function chatFeedItem(msg: ChatMessage): FeedItem {
 }
 
 /** Feed row when an agent reports stopped. */
-export function stoppedFeedItem(p: StatusPayload, now = Date.now()): FeedItem {
+export function stoppedFeedItem(p: { agentName: string }, now = Date.now()): FeedItem {
     return { type: "stopped", label: "stopped", agentName: p.agentName, timestamp: now };
 }
 
@@ -325,4 +339,77 @@ export function nodeHeartbeatFeedItem(p: NodeHeartbeatPayload, now = Date.now())
         agentName: p.node,
         timestamp: now,
     };
+}
+
+// ── Extensible raw-topic feed rows ─────────────────────────────────────────
+// Agent topics that are feed-only (not part of the typed MQTTEvents route) reach
+// the browser via the `raw` catch-all. Map `agents/{id}/{suffix}` → a feed row
+// here; surfacing another topic is a single entry + test, no MQTTClient changes.
+
+const RAW_AGENT_FEED_MAPPERS: Record<
+    string,
+    (agentName: string, p: Record<string, unknown>, ts: number) => FeedItem | null
+> = {
+    // HomeAssistantActuatorAgent audit trail: what an agent actually actuated.
+    actuations: (agentName, p, ts) => {
+        const actions = Array.isArray(p["actions"]) ? (p["actions"] as unknown[]) : [];
+        const first = asObj(actions[0]);
+        const auto = asStr(p["automation_id"]);
+        const what = actions.length
+            ? `${asStr(first["domain"])}.${asStr(first["service"])} ${asStr(first["entity_id"])}`.trim()
+            : "";
+        const more = actions.length > 1 ? ` (+${actions.length - 1})` : "";
+        const detail = what || `${actions.length} action${actions.length !== 1 ? "s" : ""}`;
+        return {
+            type: "health",
+            label: `actuated · ${auto ? `${auto}: ` : ""}${detail}${more}`,
+            agentName,
+            timestamp: ts,
+        };
+    },
+    // Statistical anomaly (ml/anomaly agents); only surface actual anomalies.
+    anomaly: (agentName, p, ts) => {
+        if (p["anomaly"] !== true) {
+            return null;
+        }
+        const value = asNum(p["value"]);
+        const z = asNum(p["zscore"]);
+        const bits = [
+            value !== undefined ? `value ${value}` : "",
+            z !== undefined ? `z ${z.toFixed(1)}` : "",
+        ].filter(Boolean);
+        return {
+            type: "alert-warning",
+            label: `anomaly${bits.length ? `: ${bits.join(" · ")}` : ""}`,
+            agentName,
+            timestamp: ts,
+        };
+    },
+};
+
+const RAW_AGENT_TOPIC = /^agents\/(.+)\/([^/]+)$/;
+
+/**
+ * Map an unrouted `agents/{id}/{suffix}` MQTT message to a feed row, or null when
+ * the suffix isn't one we surface. Feed-only display path (rides the `raw`
+ * catch-all), extended via `RAW_AGENT_FEED_MAPPERS`. `resolveName` supplies a
+ * friendly name from the live store, falling back to the id-derived name.
+ */
+export function rawFeedItem(
+    topic: string,
+    payload: unknown,
+    resolveName?: (agentId: string) => string | undefined,
+    now = Date.now(),
+): FeedItem | null {
+    const m = RAW_AGENT_TOPIC.exec(topic);
+    if (!m) {
+        return null;
+    }
+    const mapper = RAW_AGENT_FEED_MAPPERS[m[2]!];
+    if (!mapper) {
+        return null;
+    }
+    const agentId = m[1]!;
+    const agentName = resolveName?.(agentId) ?? (nameFromWid(agentId) || agentId.slice(0, 8) || "system");
+    return mapper(agentName, asObj(payload), now);
 }

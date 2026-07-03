@@ -10,6 +10,8 @@
  * Auto-ducks to DUCK_VOLUME when TTS is speaking.
  */
 
+import { safeStorage } from "../safeStorage";
+
 const DUCK_VOLUME = 0.12;
 const LS_TRACK = "wactorz.ambientTrack";
 const LS_VOLUME = "wactorz.ambientVolume";
@@ -228,6 +230,18 @@ function buildCafe(ctx: AudioContext, out: GainNode): Stopper {
     };
 }
 
+/** Read the persisted track, falling back to "none" for a missing/corrupt value. */
+function readTrack(): AmbientTrackId {
+    const raw = safeStorage.get(LS_TRACK);
+    return AMBIENT_TRACKS.some(t => t.id === raw) ? (raw as AmbientTrackId) : "none";
+}
+
+/** Read the persisted volume, falling back to 0.4 for missing/NaN/out-of-range values. */
+function readVolume(): number {
+    const v = parseFloat(safeStorage.get(LS_VOLUME) ?? "");
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.4;
+}
+
 export class AmbientManager {
     private _track: AmbientTrackId;
     private _volume: number;
@@ -237,8 +251,8 @@ export class AmbientManager {
     private _stop: Stopper | null = null;
 
     constructor() {
-        this._track = (localStorage.getItem(LS_TRACK) as AmbientTrackId) ?? "none";
-        this._volume = parseFloat(localStorage.getItem(LS_VOLUME) ?? "0.4");
+        this._track = readTrack();
+        this._volume = readVolume();
     }
 
     /** Currently selected track id. */
@@ -253,14 +267,14 @@ export class AmbientManager {
     /** Switch to a track (persisted) and restart playback. */
     setTrack(id: AmbientTrackId): void {
         this._track = id;
-        localStorage.setItem(LS_TRACK, id);
+        safeStorage.set(LS_TRACK, id);
         this._restart();
     }
 
     /** Set master volume (clamped 0–1, persisted) and apply it immediately. */
     setVolume(v: number): void {
         this._volume = Math.max(0, Math.min(1, v));
-        localStorage.setItem(LS_VOLUME, String(this._volume));
+        safeStorage.set(LS_VOLUME, String(this._volume));
         this._applyVolume();
     }
 

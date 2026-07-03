@@ -1,5 +1,5 @@
-import json
 import importlib.util
+import json
 import sys
 import unittest
 from unittest import mock
@@ -58,14 +58,16 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(EXPECTED_RESOURCES.issubset(uris))
 
     async def test_config_resource_sanitizes_tokens(self):
-        with mock.patch.object(mcp_server, "WACTORZ_API_KEY", "secret-rest-key"), \
-             mock.patch.object(mcp_server, "HA_TOKEN", "secret-ha-token"), \
-             mock.patch.object(mcp_server, "HA_URL", "http://ha.local:8123"), \
-             mock.patch.object(mcp_server, "CALENDAR_MCP_URL", "https://calendar.example/mcp"), \
-             mock.patch.object(mcp_server, "CALENDAR_MCP_TOKEN", ""), \
-             mock.patch.object(mcp_server, "CALENDAR_MCP_AUTHORIZATION", ""), \
-             mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_ID", "client-id.apps.googleusercontent.com"), \
-             mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_SECRET", "secret-client-secret"):
+        with (
+            mock.patch.object(mcp_server, "WACTORZ_API_KEY", "secret-rest-key"),
+            mock.patch.object(mcp_server, "HA_TOKEN", "secret-ha-token"),
+            mock.patch.object(mcp_server, "HA_URL", "http://ha.local:8123"),
+            mock.patch.object(mcp_server, "CALENDAR_MCP_URL", "https://calendar.example/mcp"),
+            mock.patch.object(mcp_server, "CALENDAR_MCP_TOKEN", ""),
+            mock.patch.object(mcp_server, "CALENDAR_MCP_AUTHORIZATION", ""),
+            mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_ID", "client-id.apps.googleusercontent.com"),
+            mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_SECRET", "secret-client-secret"),
+        ):
             payload = json.loads(await mcp_server.config_resource())
 
         self.assertEqual(payload["wactorz_url"], mcp_server.WACTORZ_URL)
@@ -182,8 +184,10 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_ha_requires_configuration(self):
-        with mock.patch.object(mcp_server, "HA_URL", ""), \
-             mock.patch.object(mcp_server, "HA_TOKEN", ""):
+        with (
+            mock.patch.object(mcp_server, "HA_URL", ""),
+            mock.patch.object(mcp_server, "HA_TOKEN", ""),
+        ):
             self.assertEqual(
                 await mcp_server.ha_list_entities("light"),
                 "Home Assistant is not configured. Set HA_URL and HA_TOKEN env vars.",

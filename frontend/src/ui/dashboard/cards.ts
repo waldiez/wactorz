@@ -11,16 +11,31 @@ import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel, relTime, canDirectMessage } from "./agentState";
 import type { CostLimitInfo } from "./settings";
 
-/** Build the host CPU/memory resource bar (gracefully blank when a stat is null). */
-export function buildHostBar(
+/** Compact token count for the card meta line: 1234 → "1.2k", 1_200_000 → "1.2M". */
+function fmtTokens(n: number): string {
+    if (n >= 1_000_000) {
+        return `${(n / 1_000_000).toFixed(1)}M`;
+    }
+    if (n >= 1_000) {
+        return `${(n / 1_000).toFixed(1)}k`;
+    }
+    return String(n);
+}
+
+export interface HostBarValues {
+    cpuPct: number;
+    cpuText: string;
+    memPct: number;
+    memText: string;
+}
+
+/** Clamp/format CPU + memory into host-bar display values, shared by the
+ *  initial build and the live-patch paint so the two can't drift apart. */
+export function hostBarValues(
     cpu: number | null,
     memUsed: number | null,
     memTotal: number | null,
-): HTMLElement {
-    const bar = document.createElement("div");
-    bar.id = "af-host-bar";
-    bar.className = "af-host-bar";
-
+): HostBarValues {
     const cpuPct = cpu != null ? Math.max(0, Math.min(100, cpu)) : 0;
     const cpuText = cpu != null ? `${cpu.toFixed(1)}%` : "—";
     const memPct =
@@ -33,6 +48,20 @@ export function buildHostBar(
                 ? `${(memUsed / 1024).toFixed(1)} / ${(memTotal / 1024).toFixed(1)} GB`
                 : `${memUsed.toFixed(0)} MB`
             : "—";
+    return { cpuPct, cpuText, memPct, memText };
+}
+
+/** Build the host CPU/memory resource bar (gracefully blank when a stat is null). */
+export function buildHostBar(
+    cpu: number | null,
+    memUsed: number | null,
+    memTotal: number | null,
+): HTMLElement {
+    const bar = document.createElement("div");
+    bar.id = "af-host-bar";
+    bar.className = "af-host-bar";
+
+    const { cpuPct, cpuText, memPct, memText } = hostBarValues(cpu, memUsed, memTotal);
 
     bar.innerHTML = `
       <div class="af-host-label">APP</div>
@@ -137,6 +166,9 @@ export function buildStatCards(container: HTMLElement, data: StatCardData): void
         const card = document.createElement("div");
         card.className = "af-stat-card";
         card.style.borderColor = `${accent}44`;
+        // Safe innerHTML: label/value/detail/accent/extra all come from
+        // computeStatSpecs — fixed strings, numbers and hex colors, never
+        // user- or agent-supplied input.
         card.innerHTML = `
         <div class="af-stat-label">${label}</div>
         <div class="af-stat-value" style="color:${accent}">${value}</div>
@@ -229,13 +261,31 @@ function appendCardHeader(card: HTMLElement, agent: AgentInfo, hbMs: number): vo
 
     const meta = document.createElement("div");
     meta.className = "af-card-meta";
+    // Cost only when actually spent — an idle LLM agent reports $0.0000, which is noise.
+    const cost = agent.costUsd ?? 0;
     meta.innerHTML = `
       <span>♥ <span class="af-card-hb-time">${hbMs ? relTime(hbMs) : "—"}</span></span>
       <span>${agent.messagesProcessed ?? 0} msgs</span>
-      ${agent.costUsd != null ? `<span>$${agent.costUsd.toFixed(4)}</span>` : ""}
+      ${cost > 0 ? `<span>$${cost.toFixed(4)}</span>` : ""}
     `;
 
     card.append(dot, name, stateLbl, meta);
+    appendTokenLine(card, agent);
+}
+
+/** Append the LLM token-usage line — only when there's real usage: an idle LLM
+ *  agent reports 0/0 and non-LLM agents report nothing, so neither shows a line. */
+function appendTokenLine(card: HTMLElement, agent: AgentInfo): void {
+    const inTok = agent.inputTokens ?? 0;
+    const outTok = agent.outputTokens ?? 0;
+    if (inTok === 0 && outTok === 0) {
+        return;
+    }
+    const tokens = document.createElement("div");
+    tokens.className = "af-card-tokens";
+    tokens.title = "tokens in / out";
+    tokens.textContent = `${fmtTokens(inTok)}↑ ${fmtTokens(outTok)}↓`;
+    card.appendChild(tokens);
 }
 
 /** Build a single agent ("wactor") card, wiring its control buttons to `cb`. */

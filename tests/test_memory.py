@@ -10,8 +10,6 @@ Run with ``pytest`` (or ``make test-py``). Async methods are driven through
 
 import asyncio
 
-import pytest
-
 from wactorz.agents.mixins.memory import MemoryMixin
 
 
@@ -20,6 +18,7 @@ def run(coro):
 
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
+
 
 class FakeActor:
     def __init__(self, name, description=""):
@@ -78,6 +77,7 @@ def host(registry_actors=None, llm=None):
 
 # ── User facts ───────────────────────────────────────────────────────────────
 
+
 def test_get_user_facts_empty():
     assert host().get_user_facts() == {}
 
@@ -96,12 +96,17 @@ def test_preferred_timezone():
 
 # ── Running-agents summary ───────────────────────────────────────────────────
 
+
 def test_running_agents_summary_filters():
-    h = host([
-        FakeActor("main"), FakeActor("monitor"), FakeActor("installer"),
-        FakeActor("planner-abc123"),
-        FakeActor("cpu-sensor", "Reports CPU temperature"),
-    ])
+    h = host(
+        [
+            FakeActor("main"),
+            FakeActor("monitor"),
+            FakeActor("installer"),
+            FakeActor("planner-abc123"),
+            FakeActor("cpu-sensor", "Reports CPU temperature"),
+        ]
+    )
     summary = h._get_running_agents_summary()
     assert "cpu-sensor" in summary
     assert "Reports CPU temperature" in summary
@@ -119,8 +124,11 @@ def test_running_agents_summary_empty():
 
 # ── Live-context prefix ──────────────────────────────────────────────────────
 
+
 def test_prefix_with_agents():
-    out = host([FakeActor("alpha"), FakeActor("beta")])._prefix_with_live_context("what is running?")
+    out = host([FakeActor("alpha"), FakeActor("beta")])._prefix_with_live_context(
+        "what is running?"
+    )
     assert "[CURRENT SYSTEM STATE" in out and "[END SYSTEM STATE]" in out
     assert "alpha, beta" in out
     assert out.endswith("what is running?")
@@ -134,11 +142,17 @@ def test_prefix_without_agents():
 
 # ── System-prompt assembly ───────────────────────────────────────────────────
 
+
 def test_rebuild_system_prompt():
     h = host([FakeActor("cpu-sensor", "CPU temps")])
-    h.persist("_user_facts", {
-        "pref_user_name": "Bob", "device_ha_url": "http://x", "policy_quiet": "23-07",
-    })
+    h.persist(
+        "_user_facts",
+        {
+            "pref_user_name": "Bob",
+            "device_ha_url": "http://x",
+            "policy_quiet": "23-07",
+        },
+    )
     h._rebuild_system_prompt()
     sp = h.system_prompt
     assert "MAIN-SPECIFIC OVERRIDE" in sp
@@ -150,6 +164,7 @@ def test_rebuild_system_prompt():
 
 
 # ── Fact extraction ──────────────────────────────────────────────────────────
+
 
 def test_extract_facts_saves_and_normalizes():
     llm = FakeLLM('{"user_name": "Bob", "pref_timezone": "Europe/Athens", "ha_url": "http://ha"}')

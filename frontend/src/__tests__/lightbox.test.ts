@@ -17,6 +17,15 @@ describe("openLightbox", () => {
         const img = overlay!.querySelector("img")!;
         expect(img.getAttribute("src")).toBe("http://example.com/a.png");
         expect(img.getAttribute("alt")).toBe("a picture");
+        expect(overlay!.getAttribute("role")).toBe("dialog");
+        expect(overlay!.getAttribute("aria-modal")).toBe("true");
+        expect(overlay!.getAttribute("aria-label")).toBe("a picture");
+    });
+
+    it("falls back to a generic aria-label when alt is empty", () => {
+        openLightbox("http://example.com/a.png");
+        const overlay = document.querySelector(".af-lightbox")!;
+        expect(overlay.getAttribute("aria-label")).toBe("Image preview");
     });
 
     it("defaults alt to an empty string", () => {

@@ -1,5 +1,4 @@
-"""
-MCP Server - Exposes wactorz capabilities as Model Context Protocol tools.
+"""MCP Server - Exposes wactorz capabilities as Model Context Protocol tools.
 
 Any MCP-compatible client (Claude Desktop, Cursor, Zed, etc.) can connect
 and drive a running wactorz instance: chat with the orchestrator, manage
@@ -120,9 +119,7 @@ async def _wactorz_get(path: str) -> Any:
 async def _wactorz_delete(path: str) -> dict:
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.delete(
-                f"{WACTORZ_URL}{path}", headers=_wactorz_headers()
-            ) as resp:
+            async with session.delete(f"{WACTORZ_URL}{path}", headers=_wactorz_headers()) as resp:
                 return {"status": resp.status, "text": await resp.text()}
     except aiohttp.ClientConnectorError:
         return {"status": 0, "text": f"Cannot connect to wactorz at {WACTORZ_URL}. Is it running?"}
@@ -135,8 +132,7 @@ async def _wactorz_delete(path: str) -> dict:
 
 @mcp.tool()
 async def ask_wactorz(message: str) -> str:
-    """
-    Send a message to the wactorz main orchestrator.
+    """Send a message to the wactorz main orchestrator.
 
     The orchestrator will route to an existing agent, spawn a new one, or
     answer directly. Use for fuzzy requests ("monitor my CPU temp",
@@ -148,8 +144,7 @@ async def ask_wactorz(message: str) -> str:
 
 @mcp.tool()
 async def ask_agent(agent_name: str, message: str) -> str:
-    """
-    Send a message directly to a named agent, bypassing the orchestrator.
+    """Send a message directly to a named agent, bypassing the orchestrator.
 
     Use when you already know which agent should handle the request.
     Agent names are lowercase-hyphenated (e.g. "home-assistant-agent").
@@ -320,8 +315,7 @@ async def list_agents() -> str:
 
 @mcp.tool()
 async def list_capabilities(keyword: str = "") -> str:
-    """
-    List the full agent capability catalog (running + spawnable).
+    """List the full agent capability catalog (running + spawnable).
 
     Each entry shows name, description, capabilities, and whether the agent
     is running or available as a catalog recipe. Filter with an optional
@@ -366,8 +360,7 @@ def _require_ha() -> str | None:
 
 @mcp.tool()
 async def ha_list_entities(domain: str = "") -> str:
-    """
-    List Home Assistant entities. Filter by domain (e.g. "light", "sensor",
+    """List Home Assistant entities. Filter by domain (e.g. "light", "sensor",
     "switch", "climate") or pass "" for all. Returns up to 100 entities.
     """
     err = _require_ha()
@@ -424,8 +417,7 @@ async def ha_call_service(
     entity_id: str = "",
     data_json: str = "{}",
 ) -> str:
-    """
-    Call a Home Assistant service (e.g. turn on a light, set thermostat).
+    """Call a Home Assistant service (e.g. turn on a light, set thermostat).
 
     Examples:
       ha_call_service("light", "turn_on", "light.kitchen")

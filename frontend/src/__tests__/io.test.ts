@@ -75,9 +75,19 @@ describe("IOManager.send — mqtt mode", () => {
         );
     });
 
-    it("pushes the user message to the feed", async () => {
+    it("feeds the user turn with the @agent routing mention when an agent is selected", async () => {
+        // Regression: direct-selecting an agent (no typed @) must still show the
+        // mention live, matching the persisted row seen after a refresh.
         await new IOManager(makeMqtt()).send("hello", agentInfo);
-        expect(lastEvent("af-feed-push")?.detail.item).toMatchObject({ agentName: "user", label: "hello" });
+        expect(lastEvent("af-feed-push")?.detail.item).toMatchObject({
+            agentName: "user",
+            label: "@alpha hello",
+        });
+    });
+
+    it("feeds the plain text when no agent is selected", async () => {
+        await new IOManager(makeMqtt()).send("hi", null);
+        expect(lastEvent("af-feed-push")?.detail.item).toMatchObject({ agentName: "user", label: "hi" });
     });
 
     it("toasts an error when the publish fails", async () => {
@@ -141,6 +151,20 @@ describe("IOManager streaming", () => {
         ws.endCb!();
         expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "two", from: "beta" });
     });
+
+    it("caps accumulation on a runaway stream instead of growing without bound", () => {
+        const io = new IOManager(makeMqtt());
+        const ws = makeWS("direct_ws");
+        io.setWSClient(ws as unknown as WSChatClient);
+        const chunk = "x".repeat(10_000);
+        for (let i = 0; i < 30; i++) {
+            ws.chunkCb!(chunk, "alpha");
+        }
+        ws.endCb!();
+        const text = lastEvent("af-stream-end")?.detail.text as string;
+        expect(text.length).toBeLessThan(300_000);
+        expect(text.length).toBeGreaterThan(0);
+    });
 });
 
 describe("IOManager.receiveAgentMessage", () => {
@@ -163,10 +187,12 @@ describe("IOManager.receiveAgentMessage", () => {
         expect(tts.notify).not.toHaveBeenCalled();
     });
 
-    it("stays silent in direct_ws mode (the WS path handles replies)", () => {
+    it("reads a non-streamed reply aloud in direct_ws mode too", () => {
+        // Regression: non-streamed direct_ws replies (slash commands, one-shot,
+        // errors) arrive WS-only and must speak — streamed ones already do.
         const io = new IOManager(makeMqtt());
         io.setWSClient(makeWS("direct_ws") as unknown as WSChatClient);
         io.receiveAgentMessage(reply());
-        expect(tts.notify).not.toHaveBeenCalled();
+        expect(tts.notify).toHaveBeenCalledWith("hi", "alpha");
     });
 });

@@ -3,12 +3,8 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * Settings view: the LLM spend-limit panel and generic localStorage-backed
- * config sections (e.g. Home Assistant URL/token).
- *
- * Persistence of the generic sections is local (localStorage); the spend-limit
- * panel delegates save/reset to the dashboard via callbacks so it can hit the
- * backend and re-render.
+ * Settings view: the LLM spend-limit panel. The panel delegates save/reset to
+ * the dashboard via callbacks so it can hit the backend and re-render.
  */
 
 export interface CostLimitInfo {
@@ -24,13 +20,6 @@ export interface CostLimitInfo {
 export interface CostLimitCallbacks {
     onSaveLimit: (limitUsd: number, period: string) => Promise<void> | void;
     onResetSpend: () => Promise<void> | void;
-}
-
-interface SettingsField {
-    key: string;
-    label: string;
-    placeholder: string;
-    type: string;
 }
 
 function labelledField(labelText: string, control: HTMLElement): HTMLLabelElement {
@@ -89,13 +78,11 @@ function buildCostStatus(info: CostLimitInfo | null, currentLimit: number, perio
 
 /** Run an async button action while disabling the button. */
 function withBusy(btn: HTMLButtonElement, run: () => Promise<void> | void): void {
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
         btn.disabled = true;
-        try {
-            await run();
-        } finally {
+        void Promise.resolve(run()).finally(() => {
             btn.disabled = false;
-        }
+        });
     });
 }
 
@@ -168,118 +155,7 @@ function buildCostLimitSection(info: CostLimitInfo | null, cb: CostLimitCallback
     return section;
 }
 
-/** Show/hide reveal toggle for a password input. */
-function buildRevealToggle(input: HTMLInputElement): HTMLButtonElement {
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "af-settings-eye";
-    toggle.title = "Show / hide";
-    toggle.textContent = "👁";
-    toggle.addEventListener("click", () => {
-        input.type = input.type === "password" ? "text" : "password";
-        toggle.textContent = input.type === "password" ? "👁" : "🙈";
-    });
-    return toggle;
-}
-
-/** A "set / not configured" origin dot that repaints as the input changes. */
-function buildOriginBadge(input: HTMLInputElement): HTMLElement {
-    const badge = document.createElement("span");
-    const paint = () => {
-        badge.className = `af-settings-origin${input.value ? " set" : ""}`;
-        badge.title = input.value ? "Value is set" : "Not configured";
-        badge.textContent = input.value ? "●" : "○";
-    };
-    paint();
-    input.addEventListener("input", paint);
-    return badge;
-}
-
-/** Build one labelled config input with an origin badge and (optional) reveal toggle. */
-function buildConfigField(field: SettingsField, inputs: Map<string, HTMLInputElement>): HTMLLabelElement {
-    const { key, label, placeholder, type } = field;
-    const lbl = document.createElement("label");
-    lbl.className = "af-settings-field";
-
-    const span = document.createElement("span");
-    span.className = "af-settings-label";
-    span.textContent = label;
-
-    const input = document.createElement("input");
-    input.type = type;
-    // `key` is the storage key (e.g. "wactorz-ha-url"); reuse it as id+name so
-    // the wrapping <label> associates and the field has proper form semantics.
-    input.id = key;
-    input.name = key;
-    input.className = "af-cfg-input";
-    input.placeholder = placeholder;
-    input.value = localStorage.getItem(key) ?? "";
-
-    const badge = buildOriginBadge(input);
-
-    if (type === "password") {
-        lbl.append(span, input, buildRevealToggle(input), badge);
-    } else {
-        lbl.append(span, input, badge);
-    }
-    inputs.set(key, input);
-    return lbl;
-}
-
-/** Save row that persists every field to localStorage with a transient "Saved." note. */
-function buildSectionSaveRow(inputs: Map<string, HTMLInputElement>): HTMLElement {
-    const actions = document.createElement("div");
-    actions.className = "af-settings-actions";
-    const saveBtn = document.createElement("button");
-    saveBtn.className = "af-mini-btn";
-    saveBtn.style.cssText = "padding:6px 18px;font-size:12px;";
-    saveBtn.textContent = "Save";
-    const msg = document.createElement("span");
-    msg.className = "af-settings-msg";
-    saveBtn.addEventListener("click", () => {
-        inputs.forEach((input, key) => {
-            if (input.value.trim()) {
-                localStorage.setItem(key, input.value.trim());
-            } else {
-                localStorage.removeItem(key);
-            }
-        });
-        msg.textContent = "Saved.";
-        msg.style.color = "#34d399";
-        setTimeout(() => (msg.textContent = ""), 2000);
-    });
-    actions.append(saveBtn, msg);
-    return actions;
-}
-
-/** A generic localStorage-backed settings section with a Save button. */
-function buildSettingsSection(heading: string, fields: SettingsField[], note?: string): HTMLElement {
-    const section = document.createElement("div");
-    section.className = "af-settings-section";
-
-    const h = document.createElement("h3");
-    h.className = "af-settings-section-heading";
-    h.textContent = heading;
-    section.appendChild(h);
-
-    const grid = document.createElement("div");
-    grid.className = "af-settings-grid";
-    const inputs = new Map<string, HTMLInputElement>();
-    fields.forEach(field => grid.appendChild(buildConfigField(field, inputs)));
-    section.appendChild(grid);
-
-    if (note) {
-        const noteEl = document.createElement("p");
-        noteEl.className = "af-settings-note";
-        noteEl.textContent = note;
-        section.appendChild(noteEl);
-    }
-
-    section.appendChild(buildSectionSaveRow(inputs));
-    return section;
-}
-
-/** Assemble the full settings view (spend limit + Home Assistant config). */
+/** Assemble the settings view (LLM spend-limit panel). */
 export function buildSettingsView(info: CostLimitInfo | null, cb: CostLimitCallbacks): HTMLElement {
     const el = document.createElement("div");
     el.className = "af-settings";
@@ -290,23 +166,8 @@ export function buildSettingsView(info: CostLimitInfo | null, cb: CostLimitCallb
     el.appendChild(title);
 
     el.appendChild(buildCostLimitSection(info, cb));
-    el.appendChild(
-        buildSettingsSection("🏠 Home Assistant", [
-            {
-                key: "wactorz-ha-url",
-                label: "URL",
-                placeholder: "http://homeassistant.local:8123",
-                type: "text",
-            },
-            {
-                key: "wactorz-ha-token",
-                label: "Token",
-                placeholder: "Long-lived access token",
-                type: "password",
-            },
-        ]),
-    );
-    // No MQTT URL field: the dashboard always connects to the same-origin /mqtt
-    // proxy (derived from window.location), so there is nothing to configure.
+    // No Home Assistant fields: the HA URL comes from /api/config and the Devices
+    // nav button links straight to HA — the browser never holds a token.
+    // No MQTT URL field either: the dashboard always uses the same-origin /mqtt proxy.
     return el;
 }

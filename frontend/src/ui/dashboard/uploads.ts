@@ -13,6 +13,7 @@
  * the endpoint and `UPLOADS_ENABLED` go live and `STUB_UPLOADS` stays off.
  */
 import type { Attachment } from "../../types/agent";
+import { uid } from "../../ids";
 
 /**
  * Whether the attachment UI (drag-drop + paste) is shown. Off by default;
@@ -27,7 +28,7 @@ export const UPLOADS_ENABLED = import.meta.env["VITE_UPLOADS_ENABLED"] === "true
 const STUB_UPLOADS = false;
 
 /** Accepted MIME-type prefixes. */
-export const ACCEPTED_MIME = ["image/", "audio/", "video/", "text/", "application/pdf"];
+export const ACCEPTED_MIME = ["image/", "audio/", "text/", "application/pdf"];
 /** Accepted file extensions (checked when the MIME prefix doesn't match). */
 export const ACCEPTED_EXT = [
     ".pdf",
@@ -70,8 +71,6 @@ export function isImage(att: Attachment): boolean {
     return att.mime.startsWith("image/");
 }
 
-let _localSeq = 0;
-
 /**
  * Validate and upload `file`, resolving to its {@link Attachment}. Throws on a
  * type/size violation. With `STUB_UPLOADS` the file stays client-side (object
@@ -87,7 +86,7 @@ export async function uploadFile(file: File, apiBase = ""): Promise<Attachment> 
     }
     if (STUB_UPLOADS) {
         return {
-            id: `local-${Date.now()}-${_localSeq++}`,
+            id: uid("local"),
             name: file.name,
             mime: file.type,
             size: file.size,

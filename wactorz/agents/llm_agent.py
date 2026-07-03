@@ -1,5 +1,4 @@
-"""
-LLMAgent - An actor backed by a Large Language Model.
+"""LLMAgent - An actor backed by a Large Language Model.
 Supports Anthropic Claude, OpenAI, Ollama (local), and custom providers.
 """
 
@@ -9,7 +8,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.persistence import get_db
@@ -18,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 # ── Global cost limit ────────────────────────────────────────────────────────
+
 
 def _period_key(period: str) -> str:
     now = datetime.now()
@@ -36,9 +36,9 @@ def _global_cost_kv_key(period: str) -> str:
 
 # ── Live date/time context (shared by LLMAgent and non-LLMAgent actors) ───────
 
-def resolve_now(tz_name: Optional[str] = None) -> datetime:
-    """
-    Current time in the first usable timezone of:
+
+def resolve_now(tz_name: str | None = None) -> datetime:
+    """Current time in the first usable timezone of:
         tz_name (e.g. a user's pref_timezone) > WACTORZ_TZ env > TZ env > local.
 
     Named zones are resolved with zoneinfo; any bad/unknown value falls through
@@ -50,15 +50,15 @@ def resolve_now(tz_name: Optional[str] = None) -> datetime:
             continue
         try:
             from zoneinfo import ZoneInfo
+
             return datetime.now(ZoneInfo(name))
         except Exception:
             logger.debug("Unknown timezone '%s' — trying next candidate", name)
     return datetime.now().astimezone()
 
 
-def current_time_context(tz_name: Optional[str] = None) -> str:
-    """
-    Live date/time preamble to prepend to any agent's system prompt so the LLM
+def current_time_context(tz_name: str | None = None) -> str:
+    """Live date/time preamble to prepend to any agent's system prompt so the LLM
     anchors to the real present moment instead of its training-cutoff guess.
     """
     now = resolve_now(tz_name)
@@ -90,14 +90,13 @@ def _known_persisted_cost_total(db) -> float:
     """Best available durable lifetime cost, used only for one-time migration."""
     total = 0.0
     try:
-        rows = db.conn.execute(
-            "SELECT value FROM kv_store WHERE key = '_final_cost'"
-        ).fetchall()
+        rows = db.conn.execute("SELECT value FROM kv_store WHERE key = '_final_cost'").fetchall()
         for row in rows:
             try:
                 value = row[0]
                 if isinstance(value, str):
                     import json as _json
+
                     value = _json.loads(value)
                 if isinstance(value, dict):
                     total += float(value.get("cost_usd") or 0.0)
@@ -167,7 +166,8 @@ def _seed_alltime_cost(db) -> None:
 
 def get_global_alltime_cost() -> float:
     """Durable all-time LLM spend, accrued at call time. Survives agent deletion
-    and per-agent metrics resets (unlike _final_cost / the lifetime ledger)."""
+    and per-agent metrics resets (unlike _final_cost / the lifetime ledger).
+    """
     db = get_db()
     if db is None:
         return 0.0
@@ -180,6 +180,7 @@ def get_global_alltime_cost() -> float:
 def get_global_cost_info() -> dict:
     """Return current period spend and limit. Used by GET /api/cost."""
     from ..config import CONFIG
+
     db = get_db()
     # Runtime override (set via POST /api/cost/limit) takes priority over env var
     limit = CONFIG.llm_cost_limit_usd
@@ -275,8 +276,10 @@ def _check_cost_limit() -> None:
     if info["warning"]:
         logger.warning(
             "[cost-limit] %.1f%% of $%.2f %s budget used ($%.4f)",
-            info["pct_used"], info["limit_usd"],
-            info["period"], info["spend_usd"],
+            info["pct_used"],
+            info["limit_usd"],
+            info["period"],
+            info["spend_usd"],
         )
 
 
@@ -285,50 +288,49 @@ def _check_cost_limit() -> None:
 # Supports prefix matching so "gpt-5" covers "gpt-5-mini", etc.
 _FALLBACK_PRICING: dict[str, tuple[float, float]] = {
     # Anthropic
-    "claude-opus-4-6":        ( 5.00, 25.00),
-    "claude-sonnet-4-6":      ( 3.00, 15.00),
-    "claude-haiku-4-5":       ( 1.00,  5.00),
+    "claude-opus-4-6": (5.00, 25.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-haiku-4-5": (1.00, 5.00),
     # OpenAI
-    "gpt-5.4-pro":            (30.00, 180.00),
-    "gpt-5.4-mini":           ( 0.75,   4.50),
-    "gpt-5.4-nano":           ( 0.20,   1.25),
-    "gpt-5.4":                ( 2.50,  15.00),
-    "gpt-5.2-pro":            (21.00, 168.00),
-    "gpt-5.2-chat-latest":    ( 1.75,  14.00),
-    "gpt-5.2-codex":          ( 1.75,  14.00),
-    "gpt-5.2":                ( 1.75,  14.00),
-    "gpt-5.1-codex-max":      ( 1.25,  10.00),
-    "gpt-5.1-codex-mini":     ( 0.275,  2.20),
-    "gpt-5.1-chat-latest":    ( 1.25,  10.00),
-    "gpt-5.1-codex":          ( 1.25,  10.00),
-    "gpt-5.1":                ( 1.25,  10.00),
-    "gpt-5-search-api":       ( 1.25,  10.00),
-    "gpt-5-pro":              (15.00, 120.00),
-    "gpt-5-chat-latest":      ( 1.25,  10.00),
-    "gpt-5-codex":            ( 1.25,  10.00),
-    "gpt-5-mini":             ( 0.275,  2.20),
-    "gpt-5-nano":             ( 0.055,  0.44),
-    "gpt-5":                  ( 1.25,  10.00),
-    "gpt-4o":                 ( 2.50, 10.00),
-    "gpt-4o-mini":            ( 0.15,  0.60),
-    "gpt-4-turbo":            (10.00, 30.00),
+    "gpt-5.4-pro": (30.00, 180.00),
+    "gpt-5.4-mini": (0.75, 4.50),
+    "gpt-5.4-nano": (0.20, 1.25),
+    "gpt-5.4": (2.50, 15.00),
+    "gpt-5.2-pro": (21.00, 168.00),
+    "gpt-5.2-chat-latest": (1.75, 14.00),
+    "gpt-5.2-codex": (1.75, 14.00),
+    "gpt-5.2": (1.75, 14.00),
+    "gpt-5.1-codex-max": (1.25, 10.00),
+    "gpt-5.1-codex-mini": (0.275, 2.20),
+    "gpt-5.1-chat-latest": (1.25, 10.00),
+    "gpt-5.1-codex": (1.25, 10.00),
+    "gpt-5.1": (1.25, 10.00),
+    "gpt-5-search-api": (1.25, 10.00),
+    "gpt-5-pro": (15.00, 120.00),
+    "gpt-5-chat-latest": (1.25, 10.00),
+    "gpt-5-codex": (1.25, 10.00),
+    "gpt-5-mini": (0.275, 2.20),
+    "gpt-5-nano": (0.055, 0.44),
+    "gpt-5": (1.25, 10.00),
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4-turbo": (10.00, 30.00),
     # Ollama — local, no cost
-    "ollama":                 ( 0.00,  0.00),
+    "ollama": (0.00, 0.00),
     # NVIDIA NIM — free tier covers most usage; paid tier pricing varies by model
-    "nim/":                          ( 0.00,  0.00),
+    "nim/": (0.00, 0.00),
     # Google Gemini
-    "gemini-2.5-flash-lite":         ( 0.10,  0.40),
-    "gemini-2.0-flash":              ( 0.075, 0.30),
-    "gemini-2.5-flash":              ( 0.30,  2.50),
-    "gemini-3-flash":                ( 0.50,  3.00),
-    "gemini-2.5-pro":                ( 1.25, 10.00),
-    "gemini-3.1-pro":                ( 2.00, 12.00),
-    "gemini-":                       ( 0.30,  2.50),
+    "gemini-2.5-flash-lite": (0.10, 0.40),
+    "gemini-2.0-flash": (0.075, 0.30),
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-3-flash": (0.50, 3.00),
+    "gemini-2.5-pro": (1.25, 10.00),
+    "gemini-3.1-pro": (2.00, 12.00),
+    "gemini-": (0.30, 2.50),
 }
 
 _LITELLM_PRICING_URL = (
-    "https://raw.githubusercontent.com/BerriAI/litellm/main"
-    "/model_prices_and_context_window.json"
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 )
 _PRICING_TTL = 86400.0  # 24 hours
 
@@ -348,6 +350,7 @@ async def _refresh_pricing() -> None:
     _pricing_fetch_in_progress = True
     try:
         import aiohttp
+
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 _LITELLM_PRICING_URL,
@@ -390,13 +393,21 @@ def pricing_info(model: str) -> dict[str, object]:
     if model in _dynamic_pricing:
         inp, out = _dynamic_pricing[model]
         age = time.time() - _dynamic_pricing_ts
-        return {"source": "live", "input_per_1m": inp, "output_per_1m": out,
-                "cache_age_s": round(age)}
+        return {
+            "source": "live",
+            "input_per_1m": inp,
+            "output_per_1m": out,
+            "cache_age_s": round(age),
+        }
     key = next((k for k in _FALLBACK_PRICING if model.startswith(k)), None)
     if key:
         inp, out = _FALLBACK_PRICING[key]
-        return {"source": "fallback", "input_per_1m": inp, "output_per_1m": out,
-                "matched_prefix": key}
+        return {
+            "source": "fallback",
+            "input_per_1m": inp,
+            "output_per_1m": out,
+            "matched_prefix": key,
+        }
     return {"source": "unknown", "input_per_1m": 0.0, "output_per_1m": 0.0}
 
 
@@ -484,10 +495,23 @@ def _openai_tool_result_message(message: dict[str, Any]) -> dict[str, Any]:
 
 
 class AnthropicProvider(LLMProvider):
-    def __init__(self, model: str = "claude-sonnet-4-6", api_key: Optional[str] = None):
+    def __init__(self, model: str = "claude-sonnet-4-6", api_key: str | None = None):
         import anthropic
+
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
         self.model = model
+
+    @staticmethod
+    def _extract_text(response) -> str:
+        """Join every text block, skipping thinking / redacted_thinking and any
+        other non-text block. Robust whether or not extended thinking is enabled;
+        without this, content[0] is a ThinkingBlock and .text raises.
+        """
+        parts = []
+        for block in getattr(response, "content", None) or []:
+            if getattr(block, "type", None) == "text":
+                parts.append(getattr(block, "text", "") or "")
+        return "".join(parts).strip()
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         response = await self.client.messages.create(
@@ -496,13 +520,13 @@ class AnthropicProvider(LLMProvider):
             system=system,
             messages=messages,
         )
-        text = response.content[0].text
+        text = self._extract_text(response)
         usage = {
-            "input_tokens":  response.usage.input_tokens,
+            "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
-            "cost_usd":      _calc_cost(self.model,
-                                        response.usage.input_tokens,
-                                        response.usage.output_tokens),
+            "cost_usd": _calc_cost(
+                self.model, response.usage.input_tokens, response.usage.output_tokens
+            ),
         }
         return text, usage
 
@@ -579,7 +603,9 @@ class AnthropicProvider(LLMProvider):
                         "content": [
                             {
                                 "type": "tool_result",
-                                "tool_use_id": message.get("tool_call_id") or message.get("id") or "",
+                                "tool_use_id": message.get("tool_call_id")
+                                or message.get("id")
+                                or "",
                                 "content": str(message.get("content", "")),
                                 "is_error": bool(message.get("is_error")),
                             }
@@ -609,21 +635,26 @@ class AnthropicProvider(LLMProvider):
                 yield chunk
             # Final message has usage counts
             final = await s.get_final_message()
-            input_tokens  = final.usage.input_tokens
+            input_tokens = final.usage.input_tokens
             output_tokens = final.usage.output_tokens
         yield {
-            "input_tokens":  input_tokens,
+            "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "cost_usd":      _calc_cost(self.model, input_tokens, output_tokens),
+            "cost_usd": _calc_cost(self.model, input_tokens, output_tokens),
         }
 
 
 class OpenAIProvider(LLMProvider):
-    def __init__(self, model: str = "gpt-4o", api_key: Optional[str] = None, base_url: Optional[str] = None):
+    def __init__(
+        self, model: str = "gpt-4o", api_key: str | None = None, base_url: str | None = None
+    ):
         import openai
-        self.client = openai.AsyncOpenAI(api_key=api_key, **({"base_url": base_url} if base_url else {}))
+
+        self.client = openai.AsyncOpenAI(
+            api_key=api_key, **({"base_url": base_url} if base_url else {})
+        )
         self.model = model
-        self.base_url = base_url if base_url else None
+        self.base_url = base_url or None
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
@@ -634,7 +665,7 @@ class OpenAIProvider(LLMProvider):
         }
         reasoning_effort = kwargs.get("reasoning_effort")
         if (reasoning_effort == "none" or reasoning_effort is None) and self.base_url is not None:
-            params["extra_body"] = { "chat_template_kwargs": {"enable_thinking": False}}
+            params["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
         if reasoning_effort:
             params["reasoning_effort"] = reasoning_effort
         try:
@@ -645,13 +676,13 @@ class OpenAIProvider(LLMProvider):
                 response = await self.client.chat.completions.create(**params)
             else:
                 raise
-        text = response.choices[0].message.content
+        text = response.choices[0].message.content or ""
         usage = {
-            "input_tokens":  response.usage.prompt_tokens,
+            "input_tokens": response.usage.prompt_tokens,
             "output_tokens": response.usage.completion_tokens,
-            "cost_usd":      _calc_cost(self.model,
-                                        response.usage.prompt_tokens,
-                                        response.usage.completion_tokens),
+            "cost_usd": _calc_cost(
+                self.model, response.usage.prompt_tokens, response.usage.completion_tokens
+            ),
         }
         return text, usage
 
@@ -663,8 +694,7 @@ class OpenAIProvider(LLMProvider):
         **kwargs: Any,
     ) -> ToolCompletion:
         full_messages = ([{"role": "system", "content": system}] if system else []) + [
-            _openai_tool_result_message(m) if m.get("role") == "tool" else m
-            for m in messages
+            _openai_tool_result_message(m) if m.get("role") == "tool" else m for m in messages
         ]
         response = await self.client.chat.completions.create(
             model=self.model,
@@ -679,7 +709,9 @@ class OpenAIProvider(LLMProvider):
             ToolCall(
                 id=getattr(call, "id", ""),
                 name=getattr(getattr(call, "function", None), "name", ""),
-                arguments=_parse_tool_arguments(getattr(getattr(call, "function", None), "arguments", "{}")),
+                arguments=_parse_tool_arguments(
+                    getattr(getattr(call, "function", None), "arguments", "{}")
+                ),
             )
             for call in raw_calls
         ]
@@ -734,17 +766,18 @@ class OpenAIProvider(LLMProvider):
                 if delta:
                     yield delta
                 if chunk.usage:
-                    input_tokens  = chunk.usage.prompt_tokens
+                    input_tokens = chunk.usage.prompt_tokens
                     output_tokens = chunk.usage.completion_tokens
         yield {
-            "input_tokens":  input_tokens,
+            "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "cost_usd":      _calc_cost(self.model, input_tokens, output_tokens),
+            "cost_usd": _calc_cost(self.model, input_tokens, output_tokens),
         }
 
 
 class OllamaProvider(LLMProvider):
     """Local LLM via Ollama."""
+
     def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434"):
         self.model = model
         self.base_url = base_url
@@ -753,10 +786,11 @@ class OllamaProvider(LLMProvider):
     def _chat_messages(messages: list[dict], system: str = "") -> list[dict]:
         if not system:
             return list(messages)
-        return [{"role": "system", "content": system}] + list(messages)
+        return [{"role": "system", "content": system}, *list(messages)]
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         import aiohttp
+
         payload = {
             "model": self.model,
             "messages": self._chat_messages(messages, system),
@@ -765,9 +799,9 @@ class OllamaProvider(LLMProvider):
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{self.base_url}/api/chat", json=payload) as resp:
                 data = await resp.json()
-        text = data["message"]["content"]
+        text = (data.get("message") or {}).get("content") or ""
         prompt_eval = data.get("prompt_eval_count", 0)
-        eval_count  = data.get("eval_count", 0)
+        eval_count = data.get("eval_count", 0)
         usage = {"input_tokens": prompt_eval, "output_tokens": eval_count, "cost_usd": 0.0}
         return text, usage
 
@@ -809,7 +843,9 @@ class OllamaProvider(LLMProvider):
             function = call.get("function", {}) if isinstance(call, dict) else {}
             tool_calls.append(
                 ToolCall(
-                    id=str(call.get("id") or f"ollama_tool_{idx}") if isinstance(call, dict) else f"ollama_tool_{idx}",
+                    id=str(call.get("id") or f"ollama_tool_{idx}")
+                    if isinstance(call, dict)
+                    else f"ollama_tool_{idx}",
                     name=str(function.get("name") or ""),
                     arguments=_parse_tool_arguments(function.get("arguments") or {}),
                 )
@@ -834,7 +870,10 @@ class OllamaProvider(LLMProvider):
 
     async def stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
-        import aiohttp, json as _json
+        import json as _json
+
+        import aiohttp
+
         payload = {
             "model": self.model,
             "messages": self._chat_messages(messages, system),
@@ -854,14 +893,13 @@ class OllamaProvider(LLMProvider):
                     if delta:
                         yield delta
                     if data.get("done"):
-                        input_tokens  = data.get("prompt_eval_count", 0)
+                        input_tokens = data.get("prompt_eval_count", 0)
                         output_tokens = data.get("eval_count", 0)
         yield {"input_tokens": input_tokens, "output_tokens": output_tokens, "cost_usd": 0.0}
 
 
 class NIMProvider(LLMProvider):
-    """
-    NVIDIA NIM — OpenAI-compatible API hosted at integrate.api.nvidia.com.
+    """NVIDIA NIM — OpenAI-compatible API hosted at integrate.api.nvidia.com.
     Free tier: 1000 requests/month per model. No local GPU required.
 
     Popular free models:
@@ -883,14 +921,15 @@ class NIMProvider(LLMProvider):
 
     def __init__(
         self,
-        model:    str = "meta/llama-3.3-70b-instruct",
-        api_key:  Optional[str] = None,
+        model: str = "meta/llama-3.3-70b-instruct",
+        api_key: str | None = None,
         base_url: str = NIM_BASE_URL,
     ):
         import openai
-        self.model  = model
+
+        self.model = model
         self.client = openai.AsyncOpenAI(
-            api_key=api_key or "dummy",   # NIM free tier may not require a key locally
+            api_key=api_key or "dummy",  # NIM free tier may not require a key locally
             base_url=base_url,
         )
 
@@ -901,13 +940,13 @@ class NIMProvider(LLMProvider):
             messages=full_messages,
             max_tokens=kwargs.get("max_tokens", 8192),
         )
-        text = response.choices[0].message.content
-        input_tok  = response.usage.prompt_tokens     if response.usage else 0
+        text = response.choices[0].message.content or ""
+        input_tok = response.usage.prompt_tokens if response.usage else 0
         output_tok = response.usage.completion_tokens if response.usage else 0
         usage = {
-            "input_tokens":  input_tok,
+            "input_tokens": input_tok,
             "output_tokens": output_tok,
-            "cost_usd":      _calc_cost(self.model, input_tok, output_tok),
+            "cost_usd": _calc_cost(self.model, input_tok, output_tok),
         }
         return text, usage
 
@@ -919,8 +958,7 @@ class NIMProvider(LLMProvider):
         **kwargs: Any,
     ) -> ToolCompletion:
         full_messages = ([{"role": "system", "content": system}] if system else []) + [
-            _openai_tool_result_message(m) if m.get("role") == "tool" else m
-            for m in messages
+            _openai_tool_result_message(m) if m.get("role") == "tool" else m for m in messages
         ]
         try:
             response = await self.client.chat.completions.create(
@@ -940,7 +978,9 @@ class NIMProvider(LLMProvider):
             ToolCall(
                 id=getattr(call, "id", ""),
                 name=getattr(getattr(call, "function", None), "name", ""),
-                arguments=_parse_tool_arguments(getattr(getattr(call, "function", None), "arguments", "{}")),
+                arguments=_parse_tool_arguments(
+                    getattr(getattr(call, "function", None), "arguments", "{}")
+                ),
             )
             for call in raw_calls
         ]
@@ -982,18 +1022,17 @@ class NIMProvider(LLMProvider):
                 if delta:
                     yield delta
                 if chunk.usage:
-                    input_tokens  = chunk.usage.prompt_tokens
+                    input_tokens = chunk.usage.prompt_tokens
                     output_tokens = chunk.usage.completion_tokens
         yield {
-            "input_tokens":  input_tokens,
+            "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "cost_usd":      _calc_cost(self.model, input_tokens, output_tokens),
+            "cost_usd": _calc_cost(self.model, input_tokens, output_tokens),
         }
 
 
 class GeminiProvider(LLMProvider):
-    """
-    Google Gemini via the official google-genai SDK.
+    """Google Gemini via the official google-genai SDK.
     Install: pip install google-genai
 
     Recommended models (March 2026):
@@ -1009,8 +1048,8 @@ class GeminiProvider(LLMProvider):
 
     def __init__(
         self,
-        model:   str = "gemini-2.5-flash",
-        api_key: Optional[str] = None,
+        model: str = "gemini-2.5-flash",
+        api_key: str | None = None,
     ):
         from google import genai
         from google.genai import types as genai_types
@@ -1023,7 +1062,7 @@ class GeminiProvider(LLMProvider):
         contents = self._to_gemini_contents(messages)
         config = self._types.GenerateContentConfig(
             system_instruction=system or None,
-            max_output_tokens=kwargs.get("max_tokens", None),
+            max_output_tokens=kwargs.get("max_tokens"),
         )
 
         response = self.client.models.generate_content(
@@ -1038,9 +1077,9 @@ class GeminiProvider(LLMProvider):
         output_tokens = getattr(usage_meta, "candidates_token_count", 0) if usage_meta else 0
 
         usage = {
-            "input_tokens":  input_tokens,
+            "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "cost_usd":      _calc_cost(self.model_name, input_tokens, output_tokens),
+            "cost_usd": _calc_cost(self.model_name, input_tokens, output_tokens),
         }
         return text, usage
 
@@ -1056,7 +1095,7 @@ class GeminiProvider(LLMProvider):
         config = self._types.GenerateContentConfig(
             system_instruction=system or None,
             tools=[self._types.Tool(function_declarations=function_declarations)],
-            max_output_tokens=kwargs.get("max_tokens", None),
+            max_output_tokens=kwargs.get("max_tokens"),
         )
         response = self.client.models.generate_content(
             model=self.model_name,
@@ -1073,7 +1112,9 @@ class GeminiProvider(LLMProvider):
                     text_parts.append(text)
                 function_call = getattr(part, "function_call", None)
                 if function_call:
-                    call_id = str(getattr(function_call, "id", "") or f"gemini_tool_{len(tool_calls)}")
+                    call_id = str(
+                        getattr(function_call, "id", "") or f"gemini_tool_{len(tool_calls)}"
+                    )
                     args = getattr(function_call, "args", {}) or {}
                     tool_calls.append(
                         ToolCall(
@@ -1153,16 +1194,16 @@ class GeminiProvider(LLMProvider):
             elif kind == "text":
                 yield value
             elif kind == "usage":
-                input_tokens  = value.prompt_token_count     or 0
+                input_tokens = value.prompt_token_count or 0
                 output_tokens = value.candidates_token_count or 0
             elif kind == "error":
                 logger.error(f"[GeminiProvider] Stream error: {value}")
                 break
 
         yield {
-            "input_tokens":  input_tokens,
+            "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "cost_usd":      _calc_cost(self.model_name, input_tokens, output_tokens),
+            "cost_usd": _calc_cost(self.model_name, input_tokens, output_tokens),
         }
 
     @staticmethod
@@ -1188,10 +1229,7 @@ class GeminiProvider(LLMProvider):
                 )
                 continue
             content = m.get("content", "")
-            if isinstance(content, list):
-                parts = content
-            else:
-                parts = [{"text": str(content)}]
+            parts = content if isinstance(content, list) else [{"text": str(content)}]
             # Gemini uses "user" and "model" (not "assistant")
             gemini_role = "model" if role == "assistant" else "user"
             # Merge consecutive same-role messages (Gemini requires alternating)
@@ -1203,14 +1241,13 @@ class GeminiProvider(LLMProvider):
 
 
 class LLMAgent(Actor):
-    """
-    An Actor that uses an LLM to process tasks.
+    """An Actor that uses an LLM to process tasks.
     Maintains conversation history and supports tool use.
     """
 
     def __init__(
         self,
-        llm_provider: Optional[LLMProvider] = None,
+        llm_provider: LLMProvider | None = None,
         system_prompt: str = "You are a helpful AI agent.",
         max_history: int = 20,
         summarize_threshold: int = 30,
@@ -1222,20 +1259,19 @@ class LLMAgent(Actor):
         self.max_history = max_history
         self.summarize_threshold = summarize_threshold  # compress when history exceeds this
         self._conversation_history: list[dict] = []
-        self._history_summary: str = ""   # rolling summary of compressed messages
+        self._history_summary: str = ""  # rolling summary of compressed messages
         self._current_task = "idle"
         # Cost / token tracking — must be set here so subclasses (MainActor etc.) inherit them
-        self.total_input_tokens  = 0
+        self.total_input_tokens = 0
         self.total_output_tokens = 0
-        self.total_cost_usd      = 0.0
+        self.total_cost_usd = 0.0
         self._last_persisted_usd = 0.0
 
     def _current_task_description(self) -> str:
         return self._current_task
 
-    def _preferred_timezone_name(self) -> Optional[str]:
-        """
-        Override hook for subclasses that know the user's timezone.
+    def _preferred_timezone_name(self) -> str | None:
+        """Override hook for subclasses that know the user's timezone.
 
         Base LLMAgent has no access to user facts, so it returns None and
         resolution falls through to the WACTORZ_TZ / TZ env vars and finally the
@@ -1260,7 +1296,7 @@ class LLMAgent(Actor):
         for m in saved:
             if not isinstance(m, dict):
                 continue
-            role    = m.get("role", "")
+            role = m.get("role", "")
             content = m.get("content", "")
             if role not in ("user", "assistant"):
                 continue
@@ -1271,15 +1307,15 @@ class LLMAgent(Actor):
                 if "ts" in m and isinstance(m["ts"], (int, float)):
                     entry["ts"] = m["ts"]
                 clean.append(entry)
-        self._conversation_history = clean[-self.max_history:]
+        self._conversation_history = clean[-self.max_history :]
         self._history_summary = self.recall("history_summary", "")
 
         # Restore lifetime cost so heartbeats carry accurate totals after restart
         saved_cost = self.recall("_final_cost", {})
         if isinstance(saved_cost, dict):
-            self.total_input_tokens  += saved_cost.get("input_tokens", 0)
+            self.total_input_tokens += saved_cost.get("input_tokens", 0)
             self.total_output_tokens += saved_cost.get("output_tokens", 0)
-            self.total_cost_usd      += saved_cost.get("cost_usd", 0.0)
+            self.total_cost_usd += saved_cost.get("cost_usd", 0.0)
         # Align persisted baseline so global cost doesn't re-add lifetime spend on first
         # _persist_cost() after restart.
         self._last_persisted_usd = self.total_cost_usd
@@ -1298,8 +1334,8 @@ class LLMAgent(Actor):
             or (self.__class__.__doc__ or "").strip().split("\n")[0]
             or self.name
         )
-        capabilities  = getattr(self, "CAPABILITIES", [])
-        input_schema  = getattr(self, "INPUT_SCHEMA",  {})
+        capabilities = getattr(self, "CAPABILITIES", [])
+        input_schema = getattr(self, "INPUT_SCHEMA", {})
         output_schema = getattr(self, "OUTPUT_SCHEMA", {})
         await self.publish_manifest(
             description=description,
@@ -1313,8 +1349,7 @@ class LLMAgent(Actor):
         self.persist("history_summary", self._history_summary)
 
     async def _maybe_summarize(self):
-        """
-        If history exceeds summarize_threshold, compress the oldest half into a
+        """If history exceeds summarize_threshold, compress the oldest half into a
         rolling summary and keep only the most recent max_history messages.
         The summary is prepended as a system-style context message when sending
         to the LLM so no facts are lost.
@@ -1323,20 +1358,19 @@ class LLMAgent(Actor):
             return
         if self.llm is None:
             # No LLM — just truncate
-            self._conversation_history = self._conversation_history[-self.max_history:]
+            self._conversation_history = self._conversation_history[-self.max_history :]
             return
 
         # Split: compress the older half, keep the recent half
         split = len(self._conversation_history) // 2
         to_compress = self._conversation_history[:split]
-        to_keep     = self._conversation_history[split:]
+        to_keep = self._conversation_history[split:]
 
         # Build compression prompt
-        prior_summary = f"Previous summary:\n{self._history_summary}\n\n" if self._history_summary else ""
-        messages_text = "\n".join(
-            f"{m['role'].upper()}: {m['content'][:400]}"
-            for m in to_compress
+        prior_summary = (
+            f"Previous summary:\n{self._history_summary}\n\n" if self._history_summary else ""
         )
+        messages_text = "\n".join(f"{m['role'].upper()}: {m['content'][:400]}" for m in to_compress)
         prompt = (
             f"{prior_summary}"
             f"Summarize the following conversation segment concisely. "
@@ -1350,35 +1384,36 @@ class LLMAgent(Actor):
                 system="You are a conversation summarizer. Output a dense, factual summary. No preamble.",
                 max_tokens=400,
             )
-            self.total_input_tokens  += usage.get("input_tokens", 0)
+            self.total_input_tokens += usage.get("input_tokens", 0)
             self.total_output_tokens += usage.get("output_tokens", 0)
-            self.total_cost_usd      += usage.get("cost_usd", 0.0)
+            self.total_cost_usd += usage.get("cost_usd", 0.0)
             self._persist_cost()
             self._history_summary = summary.strip()
             self._conversation_history = to_keep
             self.persist("history_summary", self._history_summary)
             self.persist("conversation_history", self._conversation_history)
-            logger.info(f"[{self.name}] History summarized: {len(to_compress)} messages → summary ({len(summary)} chars), keeping {len(to_keep)}")
+            logger.info(
+                f"[{self.name}] History summarized: {len(to_compress)} messages → summary ({len(summary)} chars), keeping {len(to_keep)}"
+            )
         except Exception as e:
             logger.warning(f"[{self.name}] Summarization failed: {e} — truncating instead")
-            self._conversation_history = self._conversation_history[-self.max_history:]
+            self._conversation_history = self._conversation_history[-self.max_history :]
 
     def _build_messages_with_summary(self, n: int) -> list[dict]:
-        """
-        Build the message list to send to the LLM, prepending the rolling summary
+        """Build the message list to send to the LLM, prepending the rolling summary
         as context if one exists.
         """
         recent = self._conversation_history[-n:]
         if not self._history_summary:
             return recent
         # Inject summary as a user/assistant exchange so it fits the messages format
-        summary_ctx = [{
-            "role": "user",
-            "content": f"[Context from earlier in our conversation]\n{self._history_summary}"
-        }, {
-            "role": "assistant",
-            "content": "Understood, I have that context."
-        }]
+        summary_ctx = [
+            {
+                "role": "user",
+                "content": f"[Context from earlier in our conversation]\n{self._history_summary}",
+            },
+            {"role": "assistant", "content": "Understood, I have that context."},
+        ]
         return summary_ctx + recent
 
     async def handle_message(self, msg: Message):
@@ -1407,7 +1442,7 @@ class LLMAgent(Actor):
             _check_cost_limit()
         except RuntimeError as e:
             payload_dict = msg.payload if isinstance(msg.payload, dict) else {}
-            task_id  = payload_dict.get("_task_id")
+            task_id = payload_dict.get("_task_id")
             reply_to = payload_dict.get("_reply_to") or msg.reply_to or msg.sender_id
             if reply_to:
                 result = {"text": str(e), "task": task_text}
@@ -1422,7 +1457,7 @@ class LLMAgent(Actor):
 
             safe_history = [
                 {"role": m["role"], "content": str(m["content"])}
-                for m in self._conversation_history[-self.max_history:]
+                for m in self._conversation_history[-self.max_history :]
                 if isinstance(m, dict) and m.get("role") in ("user", "assistant")
             ]
             response, usage = await self.llm.complete(
@@ -1430,13 +1465,15 @@ class LLMAgent(Actor):
                 system=self._system_prompt_with_now(),
             )
 
-            self._conversation_history.append({"role": "assistant", "content": response, "ts": time.time()})
+            self._conversation_history.append(
+                {"role": "assistant", "content": response, "ts": time.time()}
+            )
             self.metrics.tasks_completed += 1
             duration = time.time() - start
 
-            self.total_input_tokens  += usage.get("input_tokens", 0)
+            self.total_input_tokens += usage.get("input_tokens", 0)
             self.total_output_tokens += usage.get("output_tokens", 0)
-            self.total_cost_usd      += usage.get("cost_usd", 0.0)
+            self.total_cost_usd += usage.get("cost_usd", 0.0)
 
             # Persist after each exchange
             self.persist("conversation_history", self._conversation_history)
@@ -1454,7 +1491,7 @@ class LLMAgent(Actor):
 
             # Reply to sender — echo _task_id so send_to() futures resolve
             payload_dict = msg.payload if isinstance(msg.payload, dict) else {}
-            task_id  = payload_dict.get("_task_id")
+            task_id = payload_dict.get("_task_id")
             reply_to = payload_dict.get("_reply_to") or msg.reply_to or msg.sender_id
             if reply_to:
                 result = {"text": response, "task": task_text, "duration": duration}
@@ -1495,15 +1532,17 @@ class LLMAgent(Actor):
             system=self._system_prompt_with_now(),
         )
         ts_reply = time.time()
-        self._conversation_history.append({"role": "assistant", "content": response, "ts": ts_reply})
+        self._conversation_history.append(
+            {"role": "assistant", "content": response, "ts": ts_reply}
+        )
         await self._maybe_summarize()
         self.persist("conversation_history", self._conversation_history)
         self._log_chat_turn(user_message, response, ts_user=ts_user, ts_reply=ts_reply)
 
         # Accumulate token usage and cost
-        self.total_input_tokens  += usage.get("input_tokens", 0)
+        self.total_input_tokens += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)
-        self.total_cost_usd      += usage.get("cost_usd", 0.0)
+        self.total_cost_usd += usage.get("cost_usd", 0.0)
         self._persist_cost()
 
         await self._mqtt_publish(
@@ -1513,8 +1552,7 @@ class LLMAgent(Actor):
         return response
 
     async def chat_stream(self, user_message: str):
-        """
-        Streaming version of chat(). Yields text chunks, then a final usage dict.
+        """Streaming version of chat(). Yields text chunks, then a final usage dict.
         The caller is responsible for printing chunks as they arrive.
 
         Usage:
@@ -1537,10 +1575,12 @@ class LLMAgent(Actor):
             return
 
         self.metrics.messages_processed += 1
-        self._conversation_history.append({"role": "user", "content": user_message, "ts": time.time()})
+        self._conversation_history.append(
+            {"role": "user", "content": user_message, "ts": time.time()}
+        )
 
         full_text = []
-        usage     = {}
+        usage = {}
 
         safe_history = [
             {"role": m["role"], "content": str(m["content"])}
@@ -1570,13 +1610,15 @@ class LLMAgent(Actor):
             raise
 
         response = "".join(full_text)
-        self._conversation_history.append({"role": "assistant", "content": response, "ts": time.time()})
+        self._conversation_history.append(
+            {"role": "assistant", "content": response, "ts": time.time()}
+        )
         await self._maybe_summarize()
         self.persist("conversation_history", self._conversation_history)
 
-        self.total_input_tokens  += usage.get("input_tokens", 0)
+        self.total_input_tokens += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)
-        self.total_cost_usd      += usage.get("cost_usd", 0.0)
+        self.total_cost_usd += usage.get("cost_usd", 0.0)
         self._persist_cost()
 
         await self._mqtt_publish(
@@ -1587,20 +1629,20 @@ class LLMAgent(Actor):
         # Yield final usage dict so caller can log it
         yield usage
 
-    def _log_chat_turn(self, user_msg: str, reply: str,
-                       ts_user: float, ts_reply: float) -> None:
+    def _log_chat_turn(self, user_msg: str, reply: str, ts_user: float, ts_reply: float) -> None:
         """Write both halves of a turn to SQLite chat_log and InfluxDB (if enabled)."""
         db = get_db()
         if db is not None:
             try:
-                db.log_chat(self.name, "user",      user_msg, ts=ts_user,  session_id=self.actor_id)
-                db.log_chat(self.name, "assistant",  reply,   ts=ts_reply, session_id=self.actor_id)
+                db.log_chat(self.name, "user", user_msg, ts=ts_user, session_id=self.actor_id)
+                db.log_chat(self.name, "assistant", reply, ts=ts_reply, session_id=self.actor_id)
             except Exception as exc:
                 logger.debug("[%s] chat_log SQLite write failed: %s", self.name, exc)
         try:
             from ..monitoring.influx import write_chat as _influx_chat
-            _influx_chat(self.name, "user",      user_msg, ts=ts_user)
-            _influx_chat(self.name, "assistant",  reply,   ts=ts_reply)
+
+            _influx_chat(self.name, "user", user_msg, ts=ts_user)
+            _influx_chat(self.name, "assistant", reply, ts=ts_reply)
         except Exception as exc:
             logger.debug("[%s] chat_log InfluxDB write failed: %s", self.name, exc)
 
@@ -1610,18 +1652,21 @@ class LLMAgent(Actor):
         if delta > 0:
             _accumulate_global_cost(delta)
             self._last_persisted_usd = self.total_cost_usd
-        self.persist("_final_cost", {
-            "input_tokens":  self.total_input_tokens,
-            "output_tokens": self.total_output_tokens,
-            "cost_usd":      round(self.total_cost_usd, 6),
-            "name":          self.name,
-        })
+        self.persist(
+            "_final_cost",
+            {
+                "input_tokens": self.total_input_tokens,
+                "output_tokens": self.total_output_tokens,
+                "cost_usd": round(self.total_cost_usd, 6),
+                "name": self.name,
+            },
+        )
 
     def _build_metrics(self) -> dict:
         m = super()._build_metrics()
-        m["input_tokens"]  = self.total_input_tokens
+        m["input_tokens"] = self.total_input_tokens
         m["output_tokens"] = self.total_output_tokens
-        m["cost_usd"]      = round(self.total_cost_usd, 6)
+        m["cost_usd"] = round(self.total_cost_usd, 6)
         return m
 
     def clear_history(self):

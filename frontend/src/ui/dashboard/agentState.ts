@@ -33,6 +33,18 @@ export function canDirectMessage(agent: { name: string; protected?: boolean }): 
     return !agent.protected;
 }
 
+/**
+ * Names of the agents the user may directly message. Single source for both the
+ * target `<select>` and the `@mention` suggestions, so a mention can never offer
+ * an agent the picker can't target (which would silently fail to switch target).
+ */
+export function messageableNames(agents: Iterable<{ name: string; protected?: boolean }>): string[] {
+    return [...agents]
+        .filter(canDirectMessage)
+        .map(a => a.name)
+        .filter(Boolean);
+}
+
 /** Accent colour for an agent state (object state = failed/red). */
 export function stateColor(state: AgentState): string {
     if (typeof state === "object") {
@@ -57,7 +69,7 @@ export function stateLabel(state: AgentState): string {
     if (typeof state === "object") {
         return "failed";
     }
-    return state as string;
+    return state;
 }
 
 /** Agents sorted with main-actor pinned first, then alphabetical. */
@@ -73,7 +85,7 @@ export function sortAgents<T extends { name: string }>(agents: Iterable<T>): T[]
     });
 }
 
-/** Compact relative time like "now", "12s ago", "3m ago". */
+/** Compact relative time like "now", "12s ago", "3m ago", "2h ago", "5d ago". */
 export function relTime(ms: number): string {
     const s = Math.round((Date.now() - ms) / 1000);
     if (s < 5) {
@@ -82,5 +94,11 @@ export function relTime(ms: number): string {
     if (s < 60) {
         return `${s}s ago`;
     }
-    return `${Math.floor(s / 60)}m ago`;
+    if (s < 3600) {
+        return `${Math.floor(s / 60)}m ago`;
+    }
+    if (s < 86400) {
+        return `${Math.floor(s / 3600)}h ago`;
+    }
+    return `${Math.floor(s / 86400)}d ago`;
 }

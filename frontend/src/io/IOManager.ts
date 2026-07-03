@@ -13,15 +13,17 @@
  * the content so IOAgent can route it.
  */
 
-import { HLCWidGen } from "@waldiez/wid";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { MQTTClient } from "../mqtt/MQTTClient";
 import type { WSChatClient } from "./WSChatClient";
 import { tts } from "./TTSManager";
 import { toast } from "../ui/ToastManager";
 import { emit } from "../events";
+import { uid } from "../ids";
 
-const _widGen = new HLCWidGen({ node: "browser", W: 4 });
+/** Ceiling on a single streamed reply's accumulated text, guarding against a
+ *  runaway/looping stream growing this without bound. */
+const MAX_STREAM_CHARS = 200_000;
 
 export class IOManager {
     private _lastStreamFrom = "";
@@ -37,7 +39,9 @@ export class IOManager {
 
         ws.onStreamChunk((chunk, from) => {
             this._lastStreamFrom = from;
-            this._streamText += chunk;
+            if (this._streamText.length < MAX_STREAM_CHARS) {
+                this._streamText += chunk;
+            }
             emit("af-stream-chunk", { chunk, from });
         });
 
@@ -59,6 +63,9 @@ export class IOManager {
     }
 
     /** Send `text` to the appropriate agent (direct_ws if available, else io/chat). */
+    // Async for the caller-facing contract; the transport calls (WS send / MQTT
+    // publish) are fire-and-forget, so there's nothing to await.
+    // eslint-disable-next-line @typescript-eslint/require-await
     async send(text: string, agent: AgentInfo | null): Promise<void> {
         let content = text;
         // Prepend @name if a specific agent is selected and no prefix given.
@@ -67,15 +74,17 @@ export class IOManager {
         }
 
         const msg: ChatMessage = {
-            id: _widGen.next(),
+            id: uid(),
             from: "user",
             to: agent?.name ?? "main-actor",
-            content: text, // original (without @-prefix) for the feed
+            content, // routed form (`@agent …`), mirroring what goes on the wire
             timestampMs: Date.now(),
         };
 
+        // Echo the routed form so the live feed row matches the persisted one
+        // shown after a refresh — the feed renders the `@agent` mention.
         emit("af-feed-push", {
-            item: { type: "chat", label: text, agentName: "user", timestamp: msg.timestampMs },
+            item: { type: "chat", label: content, agentName: "user", timestamp: msg.timestampMs },
         });
 
         // direct_ws mode: send over WebSocket only — never fall back to MQTT.
@@ -112,14 +121,13 @@ export class IOManager {
     /**
      * Handle an incoming agent→user chat message: read it aloud (TTS).
      *
-     * The dashboard renders the message from the `af-chat-message` event the
-     * caller dispatches; in direct_ws mode the WebSocket already delivered it,
-     * so this is a no-op there to avoid double TTS.
+     * One caller per transport — `wsChat.onChat` (direct_ws) and `mqtt.on("chat")`
+     * (mqtt) — and the backend delivers chat over exactly one of them per mode
+     * (WS frames are gated on a live registry; MQTT chat only otherwise), so there
+     * is no cross-transport double to guard against here. Streamed replies notify
+     * separately via `onStreamEnd`; this covers the non-streamed ones.
      */
     receiveAgentMessage(msg: ChatMessage): void {
-        if (this._ws?.chatMode === "direct_ws") {
-            return;
-        }
         // Ignore agent↔agent background chatter — only user-directed replies.
         if (msg.to && msg.to !== "user") {
             return;

@@ -124,6 +124,19 @@
       <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
     </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Catalogue agents</div>
+      <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
+      <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
+      <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
+      <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
+      <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
+      <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
+      <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
+    </div>
   </aside>
   <main class="content">
 <h1 id="installation">Installation</h1>
@@ -556,7 +569,7 @@ touch<span class="w"> </span>wactorz/catalogue_agents/my_agent.py
 
 <h3 id="running-tests">Running tests</h3>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[dev]&quot;</span>
-python<span class="w"> </span>-m<span class="w"> </span>unittest<span class="w"> </span>discover<span class="w"> </span>-s<span class="w"> </span>tests<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;test_*.py&#39;</span>
+make<span class="w"> </span>test-py<span class="w">          </span><span class="c1"># or: python -m pytest tests</span>
 </code></pre></div>
 
 <hr />

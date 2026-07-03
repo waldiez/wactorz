@@ -124,6 +124,19 @@
       <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
     </div>
+    <div class="sidebar-group">
+      <div class="sidebar-label">Catalogue agents</div>
+      <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
+      <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
+      <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
+      <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
+      <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
+      <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
+      <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
+    </div>
   </aside>
   <main class="content">
 <h1 id="agents">Agents</h1>
@@ -478,7 +491,11 @@
 </tr>
 <tr>
 <td><code>other</code></td>
-<td>Answer open-ended HA questions via a short LLM tool-call loop backed by <code>get_simplified_ha_data</code>, plus camera tools (see below)</td>
+<td>Answer open-ended HA questions via a short LLM tool-call loop backed by <code>get_simplified_ha_data</code>, plus camera and history tools (see below)</td>
+</tr>
+<tr>
+<td><code>get_history</code></td>
+<td>Structured A2A fetch of entity state history for explicit entity IDs, returned as CSV — see <a href="#history-tool">History tool</a></td>
 </tr>
 </tbody>
 </table>
@@ -514,6 +531,13 @@
 </code></pre></div>
 
 <p><code>get_camera_snapshot_url</code> returns only the URL (no HTTP fetch) — useful when a peer agent (e.g. PlannerAgent) needs to embed the URL in generated code rather than fetch the image itself. The response <code>data.snapshot_url</code> is the <code>/api/camera_proxy/{entity_id}</code> path and requires an <code>Authorization: Bearer &lt;HA_TOKEN&gt;</code> header to fetch.</p>
+<h4 id="history-tool">History tool</h4>
+<p>Also available through the <code>other</code> intent's LLM tool-call loop is <code>get_entity_history</code>, backed by <code>get_entity_history()</code> in <code>ha_helper.py</code> (calls HA's <code>/api/history/period</code> REST endpoint). The system prompt tells the LLM to first call <code>get_simplified_ha_data</code> to resolve friendly names to <code>entity_id</code>s, then call <code>get_entity_history</code> with those IDs. The user message is prefixed with the current local datetime so the LLM can convert relative times ("yesterday midnight", "Saturday at 17:00") into ISO-8601 timestamps with UTC offset; returned timestamps are localised back to the server's timezone (<code>localise_history_timestamps</code>) so they line up with what the user asked for.</p>
+<p>Like the camera tools, history also supports <strong>A2A structured dispatch</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;get_history&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;entity_ids&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;sensor.office_temperature&quot;</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;start_time&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-06-28T00:00:00&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;end_time&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-06-29T00:00:00&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<p>This path skips the LLM entirely and returns the raw history alongside a flattened CSV (<code>entity_id,last_changed,state,unit_of_measurement</code>) via <code>history_to_csv()</code>, for peer agents that want tabular data rather than JSON.</p>
 <h4 id="prompts">Prompts</h4>
 <p>All LLM system prompts used by this agent live in <code>wactorz/agents/prompts/home_assistant_prompts.py</code>.</p>
 <h4 id="configuration">Configuration</h4>
@@ -1071,6 +1095,12 @@ LLM_COST_LIMIT_PERIOD=daily   # daily | weekly | monthly | total
 <td><code>anomaly_detector_agent.py</code></td>
 <td>Learns normal patterns from time-series data (HA sensors and Sinergym), detects anomalies in real-time. Statistical z-score, percentile range, rate-of-change, and absence detection. Works with both real-world HA devices and simulated building data.</td>
 <td><code>aiomqtt</code>, <code>numpy</code></td>
+</tr>
+<tr>
+<td><code>smart-energy</code></td>
+<td><code>smart_energy_agent.py</code></td>
+<td>Conversational Home Assistant smart-plug helper. Imports power-reporting plugs, tracks live watts plus kWh/cost, publishes energy summaries, and only powers down plugs through explicit guarded rules.</td>
+<td>none</td>
 </tr>
 <tr>
 <td><code>manual-agent</code></td>

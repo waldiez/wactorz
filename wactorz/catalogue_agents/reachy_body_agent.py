@@ -420,18 +420,23 @@ Decision rules — CRITICAL:
 - ONLY add wake/sleep when the user asks for robot motion, an expression,
   or explicitly says wake/sleep. Pure HA requests do NOT need wake/sleep.
 
-Examples (pick the entity_id from the "Live HA inventory" section below — these
-examples use <LIGHT> / <SWITCH> as placeholders, substitute the real id):
+Examples:
 User: "turn on the light"
-  → [{"cmd":"ha","service":"light.turn_on","entity_id":"<LIGHT>"}]
+  -> [{"cmd":"ha","request":"turn on the light"}]
 
 User: "turn off the lamp"
-  → [{"cmd":"ha","service":"light.turn_off","entity_id":"<LIGHT>"}]
+  -> [{"cmd":"ha","request":"turn off the lamp"}]
 
 User: "wake up and turn on the light"
-  → [{"cmd":"wake"},
-     {"cmd":"ha","service":"light.turn_on","entity_id":"<LIGHT>"}]
+  -> [{"cmd":"wake"},
+     {"cmd":"ha","request":"turn on the light"}]
 
+User: "turn the light pink and act sleepy"
+  -> [{"cmd":"ha","request":"turn the light pink"},
+     {"cmd":"wake"},
+     {"cmd":"pose","pitch":25,"duration":1.5},
+     {"cmd":"antennas","left":-30,"right":-30,"duration":1.2},
+     {"cmd":"sleep"}]
 User: "when the light turns on, wake up"
   → [{"cmd":"bind","topic":"homeassistant/state_changes",
       "when":{"entity_id":"<LIGHT>","new_state.state":"on"},
@@ -500,6 +505,46 @@ def _parse_speak_compound(text):
             return [{"cmd": "volume", "preset": preset}, {"cmd": "say", "text": said}]
     return None
 
+
+
+def _extract_ha_request(text):
+    """Best-effort smart-home clause for malformed planner HA commands."""
+    import re
+
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    ha_words = (
+        "light", "lamp", "switch", "plug", "scene", "thermostat", "climate",
+        "fan", "cover", "blind", "curtain", "heater", "ac", "home assistant",
+    )
+    if not any(w in raw.lower() for w in ha_words):
+        return raw
+    split = re.split(
+        r"\b(?:and|then)\s+(?=(?:act|look|be|go|get|do|wiggle|wake|sleep|say|nod|shake|tilt|move)\b)",
+        raw,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )
+    return split[0].strip(" ,.;") or raw
+
+
+def _repair_ha_commands(cmds, original_text):
+    """Ensure planner-generated HA steps have something actionable to forward."""
+    if not isinstance(cmds, list):
+        return cmds
+    fallback = _extract_ha_request(original_text)
+    for c in cmds:
+        if not isinstance(c, dict):
+            continue
+        cmd = (c.get("cmd") or c.get("action") or "").lower().strip()
+        if cmd != "ha":
+            continue
+        has_request = any(c.get(k) for k in ("request", "text", "message", "query"))
+        has_legacy = c.get("service") and c.get("entity_id")
+        if not has_request and not has_legacy and fallback:
+            c["request"] = fallback
+    return cmds
 
 async def _nl_to_commands(agent, text):
     import json as _json
@@ -641,6 +686,7 @@ async def handle_task(agent, payload):
                     # the NL planner for everything else (60s budget — an LLM call +
                     # a few short motions fits comfortably).
                     cmds = _parse_speak_compound(stripped) or await _nl_to_commands(agent, stripped)
+                    cmds = _repair_ha_commands(cmds, stripped)
                     if not cmds:
                         # Return a clear 'result' message — NOT the raw input under
                         # 'text', or the io-agent's reply picker (reply→result→text)
@@ -663,26 +709,49 @@ async def handle_task(agent, payload):
                             continue
                         r = await _dispatch(agent, c_cmd, c, return_result=True)
                         steps.append(r)
-                    # Build a human-readable summary of what actually ran
+                    # Build a human-readable summary of what actually ran.
                     summary_parts = []
+                    failures = []
+                    step_iter = iter(steps)
                     for c in cmds:
                         if not isinstance(c, dict):
                             continue
                         cc = c.get("cmd") or c.get("action") or "?"
                         if cc == "ha":
-                            summary_parts.append(f"ha:{c.get('service','?')}")
+                            label = f"ha:{c.get('request') or c.get('service') or '?'}"
                         elif cc == "pose":
-                            summary_parts.append(f"pose(y={c.get('yaw',0)},p={c.get('pitch',0)})")
+                            label = f"pose(y={c.get('yaw',0)},p={c.get('pitch',0)})"
                         elif cc == "antennas":
-                            summary_parts.append(f"antennas(l={c.get('left','?')},r={c.get('right','?')})")
+                            label = f"antennas(l={c.get('left','?')},r={c.get('right','?')})"
                         else:
-                            summary_parts.append(cc)
-                    result_msg = f"ran {len(steps)} of {len(cmds)}: [{' → '.join(summary_parts)}]"
+                            label = str(cc)
+
+                        if cc in skipped:
+                            summary_parts.append(f"{label} SKIPPED")
+                            continue
+                        step = next(step_iter, None)
+                        if isinstance(step, dict) and step.get("ok") is False:
+                            error = step.get("error") or "failed"
+                            failures.append({"cmd": cc, "error": error})
+                            summary_parts.append(f"{label} FAILED ({error})")
+                        else:
+                            summary_parts.append(label)
+
+                    successes = sum(1 for s in steps if not (isinstance(s, dict) and s.get("ok") is False))
+                    result_msg = f"ran {successes} of {len(cmds)}: [{' -> '.join(summary_parts)}]"
                     if skipped:
                         result_msg += f"  (skipped {len(skipped)}: {link_reason})"
-                    return {"ok": True, "cmd": "nl", "steps_run": len(steps),
-                            "skipped": skipped, "plan": cmds, "result": result_msg,
-                            "_task_id": _tid, "task": _tid}
+                    return {
+                        "ok": not failures and not skipped,
+                        "cmd": "nl",
+                        "steps_run": successes,
+                        "failed": failures,
+                        "skipped": skipped,
+                        "plan": cmds,
+                        "result": result_msg,
+                        "_task_id": _tid,
+                        "task": _tid,
+                    }
     cmd = payload.get("cmd") or payload.get("action")
     # Friendly fail-fast for ROBOT commands when reachy isn't connected.
     # HA-only commands ("ha") still work — that's the whole point of the

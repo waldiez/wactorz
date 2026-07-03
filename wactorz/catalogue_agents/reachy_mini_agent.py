@@ -13,6 +13,8 @@ Publishes:
     custom/reachy/state          — retained: awake, busy, robot_host, bindings
     custom/reachy/events         — per-command success/failure
     custom/reachy/cmd_result/<id>— per-correlated-command ack
+    custom/reachy/camera         — one-shot camera frame (only when cmd=camera publish=true)
+    custom/reachy/audio          — one-shot mic clip   (only when cmd=listen publish=true)
 
 Reactive bindings are persisted so they survive /agents restart.
 
@@ -62,6 +64,16 @@ Look at a world point:
 
 Play recorded emotion:
     {"cmd": "emotion", "name": "curious1"}
+
+Capture a camera frame (base64 JPEG in the result; add "publish": true to also
+emit it on custom/reachy/camera, or "path": "/tmp/shot.jpg" to save it):
+    {"cmd": "camera"}
+
+Record a short mic clip (base64 WAV + direction of arrival in the result):
+    {"cmd": "listen", "duration": 3}
+
+Direction of arrival only (no recording):
+    {"cmd": "doa"}
 
 Reactive binding — robot looks curious when living-room lamp turns on:
     {"cmd": "bind",
@@ -288,7 +300,8 @@ async def setup(agent):
     # Convenience: per-verb topics rewrite payload through the same dispatcher.
     for verb in ("wake", "sleep", "pose", "antennas", "look_at",
                  "look_pixel", "emotion", "set_pose", "bind",
-                 "unbind", "list_emotions", "stop", "say", "volume"):
+                 "unbind", "list_emotions", "stop", "say", "volume",
+                 "camera", "listen", "doa"):
         def _make_cb(v):
             async def cb(payload):
                 p = dict(payload or {})
@@ -349,6 +362,8 @@ Robot commands:
   {"cmd":"pose","yaw":<deg>,"pitch":<deg>,"roll":<deg>,"duration":<sec>}
   {"cmd":"antennas","left":<deg>,"right":<deg>,"duration":<sec>}
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
+  {"cmd":"camera"}                         ← capture one still frame from the robot camera (returns an image)
+  {"cmd":"listen","duration":<sec>}        ← record a short mic clip (returns audio + direction of arrival)
   {"cmd":"say","text":"<what to say>"}
   {"cmd":"say","text":"<what to say>","voice":"<edge-tts voice name>"}
   {"cmd":"volume","preset":"whisper|normal|louder|presenter"}  ← human speaking modes (whisper=70, normal=85, louder=93, presenter=100)
@@ -660,6 +675,13 @@ async def handle_task(agent, payload):
                 elif low in ("sleep", "go to sleep"):      payload = {"cmd": "sleep"}
                 elif low in ("stop",):                     payload = {"cmd": "stop"}
                 elif low in ("list emotions", "emotions"): payload = {"cmd": "list_emotions"}
+                # Perception: grab a camera frame / a short mic clip (no LLM needed).
+                elif low in ("take a photo", "take a picture", "take a snapshot",
+                             "snapshot", "photo", "picture", "capture", "camera"):
+                    payload = {"cmd": "camera"}
+                elif low in ("listen", "record", "record audio", "take a listen",
+                             "what do you hear"):
+                    payload = {"cmd": "listen"}
                 # Common volume phrases — handled without an LLM round-trip.
                 elif low in ("mute", "silence", "be quiet", "quiet", "shut up", "stop talking"):
                     payload = {"cmd": "volume", "mute": True}
@@ -846,6 +868,9 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "antennas":      result = await _antennas(agent, payload)
         elif cmd == "look_at":       result = await _look_at(agent, payload)
         elif cmd == "look_pixel":    result = await _look_pixel(agent, payload)
+        elif cmd == "camera":        result = await _camera(agent, payload)
+        elif cmd == "listen":        result = await _listen(agent, payload)
+        elif cmd == "doa":           result = await _doa(agent, payload)
         elif cmd == "emotion":       result = await _emotion(agent, payload)
         elif cmd == "set_pose":      result = await _set_pose(agent, payload)
         elif cmd == "bind":          result = await _bind(agent, payload)
@@ -1532,6 +1557,227 @@ async def _ha_actuate(agent, request):
         return {"result": "Actuation timed out, please retry."}
     finally:
         actor._result_futures.pop(task_id, None)
+
+# ============================================================
+# Camera & microphone (onboard sensors)
+# ============================================================
+# These read the robot's perception hardware through the SDK MediaManager
+# (mini.media). The captured bytes travel ONLY in the command's own result and,
+# optionally, a one-shot event topic or a file on disk — they are NEVER written
+# into the retained custom/reachy/state heartbeat, which republishes every few
+# seconds and would balloon with image/audio blobs.
+
+def _media(agent):
+    """Return the SDK MediaManager (mini.media), or raise a clear error."""
+    mini = agent.state.get("mini")
+    if mini is None:
+        raise RuntimeError("reachy not connected")
+    media = getattr(mini, "media", None) or getattr(mini, "media_manager", None)
+    if media is None:
+        raise RuntimeError("reachy SDK exposes no media manager (mini.media)")
+    return media
+
+
+def _encode_frame(frame, fmt="jpeg", quality=85):
+    """Encode a BGR uint8 HxWx3 numpy frame to JPEG/PNG bytes via PIL.
+
+    The daemon delivers frames in BGR order (OpenCV convention); PIL expects RGB,
+    so we flip the channel axis before encoding. Returns (bytes, width, height).
+    """
+    import io as _io
+    from PIL import Image
+    arr = frame
+    # BGR -> RGB for correct colours (3-channel frames come out BGR).
+    if getattr(arr, "ndim", 0) == 3 and arr.shape[2] == 3:
+        arr = arr[:, :, ::-1]
+    img = Image.fromarray(arr)
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    fmt = (fmt or "jpeg").lower().lstrip(".")
+    if fmt == "jpg":
+        fmt = "jpeg"
+    buf = _io.BytesIO()
+    if fmt == "jpeg":
+        img.save(buf, format="JPEG", quality=int(quality))
+    else:
+        img.save(buf, format=fmt.upper())
+    w, h = img.size
+    return buf.getvalue(), w, h
+
+
+async def _camera(agent, payload):
+    """Grab one still frame from Reachy's onboard camera.
+
+    Returns it as base64 (JPEG by default) so it rides task results / MQTT and
+    can be chained into a vision agent — see also cmd=look_pixel for gaze.
+
+      {"cmd":"camera"}                        -> {"image_b64":.., "format":"jpeg", "width":.., "height":..}
+      {"cmd":"camera","format":"png"}
+      {"cmd":"camera","quality":60}           -> JPEG quality (default 85)
+      {"cmd":"camera","path":"/tmp/shot.jpg"} -> also save to disk
+      {"cmd":"camera","publish":true}         -> also publish b64 to custom/reachy/camera
+      {"cmd":"camera","include_b64":false}    -> omit the blob (pair with path/publish)
+    """
+    media = _media(agent)
+    frame = await _do(media.get_frame)
+    if frame is None:
+        raise RuntimeError(
+            "no camera frame available — this media backend has no video "
+            f"(media_backend='{agent.state.get('media_backend') or 'default'}'). "
+            "Use a video-capable backend and make sure the daemon holds the camera "
+            "(no HF app running on the robot).")
+    fmt = str(payload.get("format", "jpeg")).lower().lstrip(".")
+    data, w, h = await _do(_encode_frame, frame, fmt, int(payload.get("quality", 85)))
+    import base64 as _b64
+    b64 = _b64.b64encode(data).decode("ascii")
+    result = {"format": "jpeg" if fmt in ("jpg", "jpeg") else fmt,
+              "width": w, "height": h, "bytes": len(data)}
+    path = payload.get("path")
+    if path:
+        def _write():
+            with open(path, "wb") as f:
+                f.write(data)
+        await _do(_write)
+        result["path"] = path
+    if payload.get("publish"):
+        await agent.publish("custom/reachy/camera", {
+            "image_b64": b64, "format": result["format"],
+            "width": w, "height": h, "ts": _time.time()})
+        result["published"] = "custom/reachy/camera"
+    if payload.get("include_b64", True):
+        result["image_b64"] = b64
+    return result
+
+
+def _record_audio_blocking(media, duration, max_frames):
+    """Blocking: record ~`duration` seconds of mic audio off the event loop.
+
+    Runs the SDK start/get_sample/stop loop, accumulating float32 samples until
+    the deadline (or a defensive frame cap). Returns (ndarray, samplerate,
+    channels). ndarray is 1-D (mono) or 2-D (frames, channels).
+    """
+    import time as _t
+    import numpy as _np
+    media.start_recording()
+    chunks = []
+    total = 0
+    try:
+        deadline = _t.time() + max(0.05, float(duration))
+        while _t.time() < deadline:
+            s = media.get_audio_sample()
+            if s is None:
+                _t.sleep(0.005)
+                continue
+            chunks.append(s)
+            total += s.shape[0]
+            if max_frames and total >= max_frames:
+                break
+    finally:
+        try:
+            media.stop_recording()
+        except Exception:
+            pass
+    try:
+        sr = int(media.get_input_audio_samplerate())
+    except Exception:
+        sr = 16000
+    try:
+        ch = int(media.get_input_channels())
+    except Exception:
+        ch = 1
+    audio = _np.concatenate(chunks, axis=0) if chunks else _np.zeros((0,), dtype=_np.float32)
+    return audio, sr, ch
+
+
+def _pcm_to_wav_b64(audio, samplerate, channels):
+    """Encode a float32 [-1,1] (or int16) numpy array to a base64 WAV string.
+
+    Uses stdlib `wave` (no soundfile dependency): float samples are clipped and
+    scaled to signed 16-bit PCM. Returns (b64_str, frames_per_channel).
+    """
+    import base64 as _b64
+    import io as _io
+    import wave
+    import numpy as _np
+    arr = _np.asarray(audio)
+    if arr.dtype.kind == "f":
+        pcm = (_np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2")
+    else:
+        pcm = arr.astype("<i2")
+    if pcm.ndim == 2:
+        frames, ch = pcm.shape
+    else:
+        ch = max(1, int(channels or 1))
+        frames = pcm.shape[0] // ch if ch else pcm.shape[0]
+    buf = _io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(ch)
+        w.setsampwidth(2)
+        w.setframerate(int(samplerate) or 16000)
+        w.writeframes(pcm.tobytes())
+    return _b64.b64encode(buf.getvalue()).decode("ascii"), int(frames)
+
+
+async def _listen(agent, payload):
+    """Record a short clip from Reachy's microphone array.
+
+    Returns base64 WAV (16-bit PCM) plus samplerate / channels / duration, and a
+    best-effort direction-of-arrival snapshot. Like camera, the audio bytes go
+    only into this result / an optional event / a file — never the heartbeat.
+
+      {"cmd":"listen"}                        -> ~3 s clip: {"audio_b64":.., "samplerate":.., ...}
+      {"cmd":"listen","duration":5}           -> seconds (clamped 0.1–30)
+      {"cmd":"listen","path":"/tmp/clip.wav"} -> also save to disk
+      {"cmd":"listen","publish":true}         -> also publish to custom/reachy/audio
+      {"cmd":"listen","include_b64":false}    -> omit the blob (pair with path/publish)
+    """
+    media = _media(agent)
+    duration = max(0.1, min(30.0, float(payload.get("duration", 3.0))))
+    # Defensive frame cap: 30 s at 48 kHz.
+    audio, sr, ch = await _do(_record_audio_blocking, media, duration, 30 * 48000)
+    b64, frames = await _do(_pcm_to_wav_b64, audio, sr, ch)
+    actual = round(frames / sr, 3) if sr else 0.0
+    result = {"samplerate": sr, "channels": ch, "duration_s": actual,
+              "frames": frames, "format": "wav"}
+    try:
+        doa = await _do(media.get_DoA)
+        if doa is not None:
+            result["doa_deg"] = float(doa[0])
+            if len(doa) > 1:
+                result["voice_detected"] = bool(doa[1])
+    except Exception:
+        pass
+    path = payload.get("path")
+    if path:
+        import base64 as _b64
+        raw = _b64.b64decode(b64)
+        def _write():
+            with open(path, "wb") as f:
+                f.write(raw)
+        await _do(_write)
+        result["path"] = path
+    if payload.get("publish"):
+        await agent.publish("custom/reachy/audio", {
+            "audio_b64": b64, "format": "wav", "samplerate": sr,
+            "channels": ch, "duration_s": actual, "ts": _time.time()})
+        result["published"] = "custom/reachy/audio"
+    if payload.get("include_b64", True):
+        result["audio_b64"] = b64
+    return result
+
+
+async def _doa(agent, payload):
+    """Report the mic array's current direction of arrival: angle in degrees
+    plus whether a voice/source is presently detected."""
+    media = _media(agent)
+    doa = await _do(media.get_DoA)
+    if doa is None:
+        return {"detected": False}
+    result = {"angle_deg": float(doa[0]), "detected": True}
+    if len(doa) > 1:
+        result["voice_detected"] = bool(doa[1])
+    return result
+
 
 # ============================================================
 # Reactive bindings

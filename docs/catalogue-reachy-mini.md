@@ -91,6 +91,9 @@ For direct control, send a dict with `cmd`:
 | `pose` | Head yaw, pitch, roll, x/y/z |
 | `antennas` | Left and right antenna angles |
 | `look_at`, `look_pixel` | Gaze target |
+| `camera` | Capture one still frame from the onboard camera (base64 JPEG/PNG) |
+| `listen` | Record a short mic-array clip (base64 WAV) with direction of arrival |
+| `doa` | Report the mic array's current direction of arrival, no recording |
 | `emotion`, `list_emotions` | Recorded gesture clips |
 | `say`, `volume` | Speech and speaker volume |
 | `ha` | Home Assistant request |
@@ -109,6 +112,40 @@ Examples:
 ```json
 {"cmd": "antennas", "left": 45, "right": -45, "duration": 0.3}
 ```
+
+## Camera and microphone
+
+Reachy's onboard camera and microphone array are exposed as commands. The captured
+bytes come back in the command result (and, optionally, on a one-shot MQTT topic or
+saved to a file) — they are never written into the retained `custom/reachy/state`
+heartbeat.
+
+Capture a still frame (returns `image_b64`, plus `width`/`height`):
+
+```json
+{"cmd": "camera"}
+```
+
+```json
+{"cmd": "camera", "format": "png", "path": "/tmp/shot.png", "publish": true}
+```
+
+Record a short mic clip (returns `audio_b64` WAV, `samplerate`, `channels`,
+`duration_s`, and a best-effort `doa_deg`):
+
+```json
+{"cmd": "listen", "duration": 3}
+```
+
+Direction of arrival only, without recording:
+
+```json
+{"cmd": "doa"}
+```
+
+These require a video/audio-capable media backend and that the daemon holds the
+camera and microphone (no Hugging Face app running on the robot). Plain English
+also works: `take a photo`, `listen`.
 
 ## Troubleshooting
 

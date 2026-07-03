@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Reachy camera & microphone access** — new `camera`, `listen`, and `doa` commands on the
+  reachy-mini agent read the robot's onboard sensors through the SDK media manager. `camera`
+  returns one still frame as base64 (JPEG/PNG); `listen` records a short mic-array clip as base64
+  WAV with the current direction of arrival; `doa` reports the mic direction without recording.
+  Each can also save to a file (`path`) or emit a one-shot event (`publish` →
+  `custom/reachy/camera` / `custom/reachy/audio`); the blobs never enter the retained state
+  heartbeat. Plain English ("take a photo", "listen") and the NL planner both reach them.
 - **Named volume presets for reachy** - `whisper` (70), `normal` (85), `louder` (93)
   and `presenter` (100) speaking modes, mapped to the robot speaker's usable loudness band.
   Deterministic "whisper X" / "say X softly|loudly" set the level and speak aloud.

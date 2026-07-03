@@ -351,10 +351,13 @@ def _build_catalog() -> dict:
                 "- wiggle your antennas\n"
                 "- look left\n"
                 "- say hello\n"
+                "- take a photo\n"
+                "- listen\n"
                 "- turn on the light and nod\n"
                 "\n"
                 "For structured control, send a dict with cmd wake, sleep, pose, "
-                "antennas, look_at, emotion, say, volume, ha, bind, unbind, or stop."
+                "antennas, look_at, camera, listen, doa, emotion, say, volume, ha, "
+                "bind, unbind, or stop."
             ),
             "capabilities": [
                 "robot",
@@ -369,10 +372,16 @@ def _build_catalog() -> dict:
                 "actuator",
                 "expressive",
                 "human_robot_interaction",
+                "camera",
+                "vision",
+                "microphone",
+                "audio",
+                "perception",
+                "sensors",
             ],
-            "install": ["reachy-mini", "numpy", "edge-tts"],
+            "install": ["reachy-mini", "numpy", "edge-tts", "pillow"],
             "input_schema": {
-                "cmd": "str  — wake|sleep|pose|antennas|look_at|look_pixel|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
+                "cmd": "str  — wake|sleep|pose|antennas|look_at|look_pixel|camera|listen|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
                 "voice": "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
                 "gain_db": "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
@@ -395,6 +404,11 @@ def _build_catalog() -> dict:
                 "right": "float — antenna right (cmd=antennas convenience)",
                 "u": "int   — pixel u for look_pixel",
                 "v": "int   — pixel v for look_pixel",
+                "format": "str   — camera image format (cmd=camera): jpeg (default) or png",
+                "quality": "int   — camera JPEG quality 1-100 (cmd=camera), default 85",
+                "path": "str   — save the frame/clip to this file (cmd=camera|listen)",
+                "publish": "bool  — also emit on custom/reachy/camera|audio (cmd=camera|listen)",
+                "include_b64": "bool  — include the base64 blob in the result (cmd=camera|listen), default true",
                 "name": "str   — emotion clip name (e.g. curious1, success1)",
                 "topic": "str   — MQTT topic to bind/unbind",
                 "when": "dict  — dotted-path equality matcher for bindings",

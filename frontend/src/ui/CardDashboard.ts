@@ -363,7 +363,13 @@ export class CardDashboard {
     /** Sync the header view buttons, health line and target-select to the view. */
     private _syncViewChrome(): void {
         this.root.querySelectorAll<HTMLElement>(".af-view-btn[data-view]").forEach(btn => {
-            btn.classList.toggle("active", btn.dataset["view"] === this.view);
+            const active = btn.dataset["view"] === this.view;
+            btn.classList.toggle("active", active);
+            if (active) {
+                btn.setAttribute("aria-current", "page");
+            } else {
+                btn.removeAttribute("aria-current");
+            }
         });
         this._renderHealth();
         // Only show the agent-target dropdown in the chat view

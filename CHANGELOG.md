@@ -66,6 +66,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Frontend minor fixes** — synthesised chat/WS message ids now use collision-free
+  WIDs instead of `<prefix>-<ms>` (two messages in the same millisecond could collide and
+  be dedupe-dropped); the dashboard now asks not to be indexed (`robots: noindex, nofollow`
+  — it is an ops control surface); chat-history params renamed `agentId` to `agentName` to
+  match what they actually receive; a11y attributes added (lightbox `role="dialog"`/
+  `aria-modal`, popover `aria-haspopup`/`aria-expanded`/`aria-controls`, view tabs
+  `aria-current="page"`).
 - **Dashboard could fail to load in private-mode / storage-disabled browsers** —
   `localStorage` access during startup threw (Safari private mode, storage disabled,
   quota exceeded), aborting bootstrap with a blank page. All access now routes through

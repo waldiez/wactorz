@@ -45,6 +45,9 @@ def _load_recipe(filename: str) -> str | None:
         return None
     try:
         spec = importlib.util.spec_from_file_location("_recipe", path)
+        if spec is None or spec.loader is None:
+            logger.warning(f"[catalog] Could not build import spec for recipe: {path}")
+            return None
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return getattr(mod, "AGENT_CODE", None)

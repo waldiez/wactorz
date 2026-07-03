@@ -98,6 +98,7 @@ wactorz         = "wactorz.cli:main"
 wactorz-monitor = "wactorz.monitor_server:cli_main"
 wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
+wactorz-google-login = "wactorz.interfaces.google_login:main"
 
 [project.urls]
 Homepage      = "https://docs.waldiez.io/wactorz/"

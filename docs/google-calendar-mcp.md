@@ -1,6 +1,10 @@
 # Google Calendar MCP
 
-Wactorz uses Google's hosted Calendar MCP server for Google Calendar access. The catalogue-backed `google-calendar-agent` calls MCP tools such as `list_events`, `create_event`, and `delete_event`; it does not call the Google Calendar REST API directly.
+> **Setting it up?** See the step-by-step **[Google Calendar & Gmail agents guide](google-agents.md)**
+> (Cloud project, OAuth client, `wactorz-google-login`, example prompts). This page is the
+> Calendar MCP reference.
+
+Wactorz uses Google's hosted Calendar MCP server for Google Calendar access. The catalogue-backed `google-calendar-agent` calls MCP tools such as `list_events`, `create_event`, and `delete_event`. Google's hosted MCP is currently access-gated and denies tool execution for non-allowlisted projects, so Wactorz automatically falls back to the Google Calendar REST API (v3) using the same OAuth token — the agent keeps working, and the hosted MCP resumes automatically if your project is later granted access.
 
 Google's hosted MCP endpoint is:
 

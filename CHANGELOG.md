@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`wactorz-google-login` command** — one-time interactive OAuth login for the Calendar and
+  Gmail agents (`wactorz-google-login [calendar|gmail|both]`). Mints/refreshes the token with
+  the scopes Wactorz needs (no `gmail.metadata`) so the agents work without hand-running a
+  snippet. New setup guide: `docs/google-agents.md`; `.env.template` now documents the
+  `CALENDAR_MCP_*` / `GMAIL_MCP_*` keys.
 - **Global error surfacing** — uncaught exceptions and unhandled promise rejections
   now log with context and raise a toast, instead of failing silently to the console.
 - **Content-Security-Policy on the dashboard** — the monitor server sends an enforcing

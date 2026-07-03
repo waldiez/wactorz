@@ -139,6 +139,7 @@ def _clean_text(text: str) -> str:
 
 def _extract_body(payload: dict) -> str:
     """Pull readable, de-noised text from a Gmail message payload."""
+
     def find(part: dict, mime: str) -> str:
         if part.get("mimeType") == mime:
             data = (part.get("body") or {}).get("data")
@@ -215,7 +216,9 @@ class GmailMcpClient(GoogleMcpClient):
 
         Accepts an explicit message id, or a ``query`` whose top match is opened.
         """
-        message_id = arguments.get("id") or arguments.get("messageId") or arguments.get("message_id")
+        message_id = (
+            arguments.get("id") or arguments.get("messageId") or arguments.get("message_id")
+        )
         if not message_id:
             query = arguments.get("query") or arguments.get("q") or "in:inbox"
             status, data = await self._rest_request(
@@ -228,7 +231,9 @@ class GmailMcpClient(GoogleMcpClient):
                 return f"No email found for '{query}'."
             message_id = messages[0]["id"]
         status, data = await self._rest_request(
-            "GET", f"/users/me/messages/{quote(str(message_id), safe='')}", params={"format": "full"}
+            "GET",
+            f"/users/me/messages/{quote(str(message_id), safe='')}",
+            params={"format": "full"},
         )
         if status != 200:
             raise GoogleRestError(rest_error_message(data))
@@ -304,12 +309,12 @@ class GmailMcpClient(GoogleMcpClient):
 
 
 __all__ = [
-    "GOOGLE_GMAIL_MCP_URL",
-    "GOOGLE_GMAIL_API_URL",
     "DEFAULT_GMAIL_MCP_SCOPES",
     "GMAIL_CONFIG",
+    "GOOGLE_GMAIL_API_URL",
+    "GOOGLE_GMAIL_MCP_URL",
     "GmailMcpClient",
+    "format_mcp_content",
     "gmail_mcp_config_status",
     "gmail_mcp_url",
-    "format_mcp_content",
 ]

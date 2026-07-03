@@ -23,9 +23,10 @@ import secrets
 import stat
 import sys
 import webbrowser
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
@@ -54,13 +55,13 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 class GoogleMcpConfig:
     """Per-service configuration, all overridable via ``{PREFIX}_*`` env vars."""
 
-    prefix: str          # e.g. "CALENDAR_MCP" / "GMAIL_MCP"
-    label: str           # human label, e.g. "Calendar" / "Gmail"
+    prefix: str  # e.g. "CALENDAR_MCP" / "GMAIL_MCP"
+    label: str  # human label, e.g. "Calendar" / "Gmail"
     default_mcp_url: str  # hosted MCP endpoint
-    api_base: str        # REST API base, e.g. https://www.googleapis.com/calendar/v3
+    api_base: str  # REST API base, e.g. https://www.googleapis.com/calendar/v3
     default_scopes: str
     token_filename: str  # under ~/.wactorz/
-    login_tool: str      # a tool whose execution requires auth (used to trigger OAuth)
+    login_tool: str  # a tool whose execution requires auth (used to trigger OAuth)
     client_name: str = "Wactorz"
     default_redirect: str = "http://localhost:8765/oauth/callback"
 
@@ -377,8 +378,7 @@ class GoogleMcpClient:
                     await session.initialize()
                     tools = await session.list_tools()
                     return "\n".join(
-                        f"{tool.name}: {tool.description or ''}".rstrip()
-                        for tool in tools.tools
+                        f"{tool.name}: {tool.description or ''}".rstrip() for tool in tools.tools
                     )
         except Exception as exc:
             return f"{self.config.label} MCP error: {exc}"
@@ -419,21 +419,25 @@ class GoogleMcpClient:
             return f"{self.config.label}: no OAuth client configured"
         scopes = scopes or self.config.scopes()
         verifier = base64.urlsafe_b64encode(secrets.token_bytes(64)).rstrip(b"=").decode()
-        challenge = base64.urlsafe_b64encode(
-            hashlib.sha256(verifier.encode()).digest()
-        ).rstrip(b"=").decode()
+        challenge = (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+            .rstrip(b"=")
+            .decode()
+        )
         redirect = self.config.redirect_uri()
-        auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode({
-            "response_type": "code",
-            "client_id": client_id,
-            "redirect_uri": redirect,
-            "scope": scopes,
-            "state": secrets.token_urlsafe(16),
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "access_type": "offline",
-            "prompt": "consent",
-        })
+        auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(
+            {
+                "response_type": "code",
+                "client_id": client_id,
+                "redirect_uri": redirect,
+                "scope": scopes,
+                "state": secrets.token_urlsafe(16),
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "access_type": "offline",
+                "prompt": "consent",
+            }
+        )
         wait_task = asyncio.create_task(_make_callback_handler(self.config)())
         await asyncio.sleep(0.4)  # let the callback server bind before opening the browser
         await _make_redirect_handler(self.config)(auth_url)
@@ -441,14 +445,17 @@ class GoogleMcpClient:
         if not code:
             return f"{self.config.label}: authorization was cancelled"
         async with aiohttp.ClientSession() as sess:
-            async with sess.post(GOOGLE_TOKEN_URL, data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "redirect_uri": redirect,
-                "code_verifier": verifier,
-            }) as resp:
+            async with sess.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri": redirect,
+                    "code_verifier": verifier,
+                },
+            ) as resp:
                 token_data = await resp.json()
                 if resp.status != 200:
                     return f"{self.config.label} token exchange failed: {rest_error_message(token_data)}"
@@ -467,7 +474,9 @@ class GoogleMcpClient:
         result = await self._call_mcp(self.config.login_tool, {}, interactive=True)
         if self._access_token():
             if _looks_permission_denied(result):
-                return f"{self.config.label}: authorized. (MCP is gated; REST fallback will be used.)"
+                return (
+                    f"{self.config.label}: authorized. (MCP is gated; REST fallback will be used.)"
+                )
             return f"{self.config.label}: authorized."
         return f"{self.config.label} login did not complete: {result}"
 

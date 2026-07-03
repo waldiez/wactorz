@@ -10,7 +10,7 @@ import json
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 from ..core.actor import Message, MessageType
 from ..core.integrations.gmail_mcp import GmailMcpClient, gmail_mcp_config_status
@@ -49,8 +49,10 @@ This agent never sends email; it only drafts.
 class GmailAgent(LLMAgent):
     """Gmail agent for searching, reading, labeling, and drafting mail."""
 
-    DESCRIPTION = "Accesses Gmail: search/read mail, list labels and drafts, create drafts (never sends)"
-    CAPABILITIES = [
+    DESCRIPTION = (
+        "Accesses Gmail: search/read mail, list labels and drafts, create drafts (never sends)"
+    )
+    CAPABILITIES: ClassVar[list[str]] = [
         "gmail",
         "email",
         "mail",
@@ -60,7 +62,7 @@ class GmailAgent(LLMAgent):
         "create_draft",
         "labels",
     ]
-    INPUT_SCHEMA = {
+    INPUT_SCHEMA: ClassVar[dict[str, Any]] = {
         "text": "Natural language Gmail request, e.g. 'any unread email?' or 'draft a reply to bob@x.com'",
         "operation": "Optional structured action: status, search, unread, inbox, read, labels, drafts, create_draft",
         "query": "Gmail search query for search",
@@ -69,7 +71,7 @@ class GmailAgent(LLMAgent):
         "body": "Body text for create_draft",
         "thread_id": "Thread/message id for read",
     }
-    OUTPUT_SCHEMA = {
+    OUTPUT_SCHEMA: ClassVar[dict[str, Any]] = {
         "result": "Human-readable Gmail result",
         "status": "Sanitized Gmail configuration status",
     }
@@ -87,7 +89,9 @@ class GmailAgent(LLMAgent):
         self._conversation_history.append({"role": "user", "content": user_message, "ts": ts_user})
         result = await self._process({"text": user_message})
         response = str(result.get("result") or result)
-        self._conversation_history.append({"role": "assistant", "content": response, "ts": time.time()})
+        self._conversation_history.append(
+            {"role": "assistant", "content": response, "ts": time.time()}
+        )
         self.persist("conversation_history", self._conversation_history)
         self._log_chat_turn(user_message, response, ts_user=ts_user, ts_reply=time.time())
         return response
@@ -101,7 +105,9 @@ class GmailAgent(LLMAgent):
             return
         payload = msg.payload if isinstance(msg.payload, dict) else {"text": str(msg.payload or "")}
         result = await self._process(payload)
-        result.setdefault("task", payload.get("task") or payload.get("text") or payload.get("operation"))
+        result.setdefault(
+            "task", payload.get("task") or payload.get("text") or payload.get("operation")
+        )
         if payload.get("_task_id"):
             result["_task_id"] = payload["_task_id"]
         self.metrics.tasks_completed += 1
@@ -147,7 +153,9 @@ class GmailAgent(LLMAgent):
                 query = str(action_payload.get("query") or action_payload.get("q") or "").strip()
                 args = {"id": msg_id} if msg_id else {"query": query or "in:inbox"}
                 result = await self.client.call_tool("read_email", args)
-                if self.llm is not None and not result.lower().startswith(("gmail error", "no email")):
+                if self.llm is not None and not result.lower().startswith(
+                    ("gmail error", "no email")
+                ):
                     question = str(payload.get("text") or payload.get("message") or "").strip()
                     answer = await self._answer_from_email(result, question)
                     if answer:
@@ -167,7 +175,12 @@ class GmailAgent(LLMAgent):
                 if not to or not body:
                     self._pending_draft = {
                         k: v
-                        for k, v in {**self._pending_draft, "to": to, "subject": subject, "body": body}.items()
+                        for k, v in {
+                            **self._pending_draft,
+                            "to": to,
+                            "subject": subject,
+                            "body": body,
+                        }.items()
                         if v
                     }
                     self._awaiting_draft = True
@@ -196,10 +209,12 @@ class GmailAgent(LLMAgent):
                 "If there is no specific question, give a 1-2 sentence summary. Do not invent details."
             )
             response, usage = await self.llm.complete(
-                messages=[{
-                    "role": "user",
-                    "content": f"EMAIL:\n{email_text[:6000]}\n\nQUESTION: {question or 'Summarize this email.'}",
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"EMAIL:\n{email_text[:6000]}\n\nQUESTION: {question or 'Summarize this email.'}",
+                    }
+                ],
                 system=system,
                 max_tokens=300,
                 reasoning_effort="none",
@@ -220,7 +235,9 @@ class GmailAgent(LLMAgent):
             data["action"] = str(operation)
             return data
 
-        text = str(payload.get("text") or payload.get("message") or payload.get("query") or "").strip()
+        text = str(
+            payload.get("text") or payload.get("message") or payload.get("query") or ""
+        ).strip()
         if not text:
             return {"action": "inbox"}
         if _is_help_request(text):
@@ -296,13 +313,15 @@ def _query_for(action: str, payload: dict[str, Any]) -> str:
 
 def _parse_draft_details(text: str) -> dict[str, Any]:
     details: dict[str, Any] = {}
-    to_match = re.search(r"\bto\s+([\w.+-]+@[\w.-]+)", text, re.I)
+    to_match = re.search(r"\bto\s+([\w.+-]+@[\w.-]+)", text, re.IGNORECASE)
     if to_match:
         details["to"] = to_match.group(1)
-    subj_match = re.search(r"\b(?:subject|about|re)\s+(.+?)(?=\s+(?:saying|body|that says)\b|$)", text, re.I)
+    subj_match = re.search(
+        r"\b(?:subject|about|re)\s+(.+?)(?=\s+(?:saying|body|that says)\b|$)", text, re.IGNORECASE
+    )
     if subj_match:
         details["subject"] = subj_match.group(1).strip(" .")
-    body_match = re.search(r"\b(?:saying|body|that says|message)\s+(.+)$", text, re.I)
+    body_match = re.search(r"\b(?:saying|body|that says|message)\s+(.+)$", text, re.IGNORECASE)
     if body_match:
         details["body"] = body_match.group(1).strip()
     return details
@@ -313,7 +332,7 @@ def _extract_json(text: str) -> str:
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?", "", text).strip()
         text = re.sub(r"```$", "", text).strip()
-    match = re.search(r"\{.*\}", text, re.S)
+    match = re.search(r"\{.*\}", text, re.DOTALL)
     return match.group(0) if match else text
 
 
@@ -329,9 +348,19 @@ def _fallback_parse(text: str) -> dict[str, Any]:
 
     # Compose intent (verb) — distinct from listing drafts (noun).
     _compose_triggers = (
-        "compose", "write an email", "write email", "draft ", "make an email",
-        "make a draft", "make draft", "make email", "new email", "reply to",
-        "email to", "send an email", "send email",
+        "compose",
+        "write an email",
+        "write email",
+        "draft ",
+        "make an email",
+        "make a draft",
+        "make draft",
+        "make email",
+        "new email",
+        "reply to",
+        "email to",
+        "send an email",
+        "send email",
     )
     if any(w in lower for w in _compose_triggers):
         details = _parse_draft_details(text)
@@ -344,7 +373,7 @@ def _fallback_parse(text: str) -> dict[str, Any]:
         r"(?:the\s+|my\s+|latest\s+|last\s+)*(.+?)"
         r"(?:\s+(?:one|email|mail|says?|saying)\b|[?.!,]|$)",
         text,
-        re.I,
+        re.IGNORECASE,
     )
     if read_match:
         topic = read_match.group(1).strip(" ,.?")
@@ -358,11 +387,13 @@ def _fallback_parse(text: str) -> dict[str, Any]:
     if "label" in lower or "folder" in lower:
         return {"action": "labels"}
 
-    from_match = re.search(r"\bfrom\s+([\w.+-]+@[\w.-]+|\w[\w .'-]*)", text, re.I)
+    from_match = re.search(r"\bfrom\s+([\w.+-]+@[\w.-]+|\w[\w .'-]*)", text, re.IGNORECASE)
     if from_match:
         return {"action": "search", "query": f"from:{from_match.group(1).strip()}", "count": 10}
 
-    about_match = re.search(r"\b(?:about|regarding|find|search(?:\s+for)?|containing)\s+(.+)$", text, re.I)
+    about_match = re.search(
+        r"\b(?:about|regarding|find|search(?:\s+for)?|containing)\s+(.+)$", text, re.IGNORECASE
+    )
     if about_match:
         return {"action": "search", "query": about_match.group(1).strip(" ?."), "count": 10}
 

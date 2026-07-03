@@ -24,7 +24,11 @@ class FormatEventsTest(unittest.TestCase):
                     "start": {"dateTime": "2026-07-02T14:00:00+03:00"},
                     "end": {"dateTime": "2026-07-02T18:00:00+03:00"},
                 },
-                {"summary": "Holiday", "start": {"date": "2026-07-04"}, "end": {"date": "2026-07-05"}},
+                {
+                    "summary": "Holiday",
+                    "start": {"date": "2026-07-04"},
+                    "end": {"date": "2026-07-05"},
+                },
             ]
         )
         self.assertIn("Wactorz MCP", out)
@@ -43,12 +47,25 @@ class RestFallbackTest(unittest.IsolatedAsyncioTestCase):
         client._rest_request = mock.AsyncMock(
             return_value=(
                 200,
-                {"items": [{"summary": "Thesis", "start": {"dateTime": "2026-07-03T05:45:00+03:00"}, "end": {"dateTime": "2026-07-03T07:45:00+03:00"}}]},
+                {
+                    "items": [
+                        {
+                            "summary": "Thesis",
+                            "start": {"dateTime": "2026-07-03T05:45:00+03:00"},
+                            "end": {"dateTime": "2026-07-03T07:45:00+03:00"},
+                        }
+                    ]
+                },
             )
         )
 
         result = await client.call_tool(
-            "list_events", {"startTime": "2026-07-03T00:00:00+03:00", "endTime": "2026-07-04T00:00:00+03:00", "pageSize": 10}
+            "list_events",
+            {
+                "startTime": "2026-07-03T00:00:00+03:00",
+                "endTime": "2026-07-04T00:00:00+03:00",
+                "pageSize": 10,
+            },
         )
 
         self.assertIn("Thesis", result)
@@ -73,16 +90,26 @@ class RestFallbackTest(unittest.IsolatedAsyncioTestCase):
         client = GoogleCalendarMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="The caller does not have permission")
         client._rest_request = mock.AsyncMock(
-            return_value=(200, {"start": {"dateTime": "2026-07-03T08:00:00+03:00"}, "end": {"dateTime": "2026-07-03T14:00:00+03:00"}})
+            return_value=(
+                200,
+                {
+                    "start": {"dateTime": "2026-07-03T08:00:00+03:00"},
+                    "end": {"dateTime": "2026-07-03T14:00:00+03:00"},
+                },
+            )
         )
 
         result = await client.call_tool(
             "create_event",
-            {"summary": "sports", "startTime": "2026-07-03T08:00:00+03:00", "endTime": "2026-07-03T14:00:00+03:00"},
+            {
+                "summary": "sports",
+                "startTime": "2026-07-03T08:00:00+03:00",
+                "endTime": "2026-07-03T14:00:00+03:00",
+            },
         )
 
         self.assertIn("Created 'sports'", result)
-        method, path = client._rest_request.await_args.args
+        method, _ = client._rest_request.await_args.args
         self.assertEqual(method, "POST")
         body = client._rest_request.await_args.kwargs["json_body"]
         self.assertEqual(body["summary"], "sports")

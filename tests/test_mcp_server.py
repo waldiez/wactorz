@@ -65,7 +65,9 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(mcp_server, "CALENDAR_MCP_URL", "https://calendar.example/mcp"),
             mock.patch.object(mcp_server, "CALENDAR_MCP_TOKEN", ""),
             mock.patch.object(mcp_server, "CALENDAR_MCP_AUTHORIZATION", ""),
-            mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_ID", "client-id.apps.googleusercontent.com"),
+            mock.patch.object(
+                mcp_server, "CALENDAR_MCP_CLIENT_ID", "client-id.apps.googleusercontent.com"
+            ),
             mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_SECRET", "secret-client-secret"),
         ):
             payload = json.loads(await mcp_server.config_resource())
@@ -111,19 +113,27 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, error["error"])
 
     async def test_calendar_status_sanitizes_remote_mcp_auth(self):
-        with mock.patch.object(mcp_server, "CALENDAR_MCP_URL", "https://calendar.example/mcp"), \
-             mock.patch.object(mcp_server, "CALENDAR_MCP_TOKEN", ""), \
-             mock.patch.object(mcp_server, "CALENDAR_MCP_AUTHORIZATION", ""), \
-             mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_ID", "client-id.apps.googleusercontent.com"), \
-             mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_SECRET", "secret-client-secret"), \
-             mock.patch.object(mcp_server, "CALENDAR_MCP_REDIRECT_URI", "http://localhost:8765/oauth/callback"), \
-             mock.patch.object(mcp_server, "CALENDAR_MCP_TOKEN_FILE", "C:/tmp/calendar_token.json"):
+        with (
+            mock.patch.object(mcp_server, "CALENDAR_MCP_URL", "https://calendar.example/mcp"),
+            mock.patch.object(mcp_server, "CALENDAR_MCP_TOKEN", ""),
+            mock.patch.object(mcp_server, "CALENDAR_MCP_AUTHORIZATION", ""),
+            mock.patch.object(
+                mcp_server, "CALENDAR_MCP_CLIENT_ID", "client-id.apps.googleusercontent.com"
+            ),
+            mock.patch.object(mcp_server, "CALENDAR_MCP_CLIENT_SECRET", "secret-client-secret"),
+            mock.patch.object(
+                mcp_server, "CALENDAR_MCP_REDIRECT_URI", "http://localhost:8765/oauth/callback"
+            ),
+            mock.patch.object(mcp_server, "CALENDAR_MCP_TOKEN_FILE", "C:/tmp/calendar_token.json"),
+        ):
             payload = json.loads(await mcp_server.calendar_status())
 
         self.assertEqual(payload["calendar_mcp_url"], "https://calendar.example/mcp")
         self.assertTrue(payload["calendar_mcp_auth"])
         self.assertTrue(payload["calendar_mcp_oauth_client"])
-        self.assertEqual(payload["calendar_mcp_redirect_uri"], "http://localhost:8765/oauth/callback")
+        self.assertEqual(
+            payload["calendar_mcp_redirect_uri"], "http://localhost:8765/oauth/callback"
+        )
         self.assertEqual(payload["calendar_mcp_token_file"], "C:/tmp/calendar_token.json")
         self.assertNotIn("secret-client-secret", json.dumps(payload))
 

@@ -29,10 +29,11 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import aiohttp
+
 from wactorz.core.integrations.google_calendar_mcp import (
     DEFAULT_CALENDAR_MCP_SCOPES,
     GOOGLE_CALENDAR_MCP_URL,
@@ -65,9 +66,8 @@ CALENDAR_MCP_SCOPES = os.getenv(
     "CALENDAR_MCP_SCOPES",
     DEFAULT_CALENDAR_MCP_SCOPES,
 )
-CALENDAR_MCP_TOKEN_FILE = (
-    os.getenv("CALENDAR_MCP_TOKEN_FILE")
-    or str(Path.home() / ".wactorz" / "calendar_mcp_token.json")
+CALENDAR_MCP_TOKEN_FILE = os.getenv("CALENDAR_MCP_TOKEN_FILE") or str(
+    Path.home() / ".wactorz" / "calendar_mcp_token.json"
 )
 
 mcp = FastMCP("wactorz")
@@ -203,9 +203,7 @@ def _calendar_mcp_status_from_constants() -> dict[str, Any]:
     return {
         "calendar_mcp_url": CALENDAR_MCP_URL or None,
         "calendar_mcp_auth": bool(
-            CALENDAR_MCP_CLIENT_ID
-            or CALENDAR_MCP_TOKEN
-            or CALENDAR_MCP_AUTHORIZATION
+            CALENDAR_MCP_CLIENT_ID or CALENDAR_MCP_TOKEN or CALENDAR_MCP_AUTHORIZATION
         ),
         "calendar_mcp_oauth_client": bool(CALENDAR_MCP_CLIENT_ID),
         "calendar_mcp_redirect_uri": CALENDAR_MCP_REDIRECT_URI if CALENDAR_MCP_CLIENT_ID else None,
@@ -233,8 +231,7 @@ async def calendar_mcp_list_tools() -> str:
 
 @mcp.tool()
 async def calendar_mcp_call_tool(tool_name: str, arguments_json: str = "{}") -> str:
-    """
-    Call any tool exposed by the configured remote Calendar MCP server.
+    """Call any tool exposed by the configured remote Calendar MCP server.
 
     arguments_json must be a JSON object string. Use calendar_mcp_list_tools()
     to discover the exact tool names and schemas.
@@ -246,7 +243,6 @@ async def calendar_mcp_call_tool(tool_name: str, arguments_json: str = "{}") -> 
     if not isinstance(arguments, dict):
         return "arguments_json must encode a JSON object."
     return await _calendar_mcp_call(tool_name, arguments)
-
 
 
 @mcp.tool()

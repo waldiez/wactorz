@@ -92,6 +92,7 @@ def _build_native_catalog() -> dict:
 
     try:
         from .google_calendar_agent import GoogleCalendarAgent
+
         native["google-calendar-agent"] = {
             "name": "google-calendar-agent",
             "type": "native",
@@ -125,6 +126,7 @@ def _build_native_catalog() -> dict:
 
     try:
         from .gmail_agent import GmailAgent
+
         native["gmail-agent"] = {
             "name": "gmail-agent",
             "type": "native",

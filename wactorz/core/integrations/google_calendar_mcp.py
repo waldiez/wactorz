@@ -157,10 +157,10 @@ class GoogleCalendarMcpClient(GoogleMcpClient):
 
 
 __all__ = [
-    "GOOGLE_CALENDAR_MCP_URL",
-    "GOOGLE_CALENDAR_API_URL",
-    "DEFAULT_CALENDAR_MCP_SCOPES",
     "CALENDAR_CONFIG",
+    "DEFAULT_CALENDAR_MCP_SCOPES",
+    "GOOGLE_CALENDAR_API_URL",
+    "GOOGLE_CALENDAR_MCP_URL",
     "GoogleCalendarMcpClient",
     "calendar_mcp_config_status",
     "calendar_mcp_url",

@@ -56,13 +56,15 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
         agent.client.call_tool = mock.AsyncMock(return_value="created")
 
-        result = await agent._process({
-            "operation": "create_event",
-            "summary": "Dentist",
-            "start": "2026-07-03T15:00:00+03:00",
-            "end": "2026-07-03T16:00:00+03:00",
-            "location": "Athens",
-        })
+        result = await agent._process(
+            {
+                "operation": "create_event",
+                "summary": "Dentist",
+                "start": "2026-07-03T15:00:00+03:00",
+                "end": "2026-07-03T16:00:00+03:00",
+                "location": "Athens",
+            }
+        )
 
         self.assertEqual(result["result"], "created")
         agent.client.call_tool.assert_awaited_once_with(
@@ -118,7 +120,9 @@ class GoogleCalendarCatalogTest(unittest.TestCase):
     def test_google_calendar_agent_is_catalog_recipe(self):
         from wactorz.agents.catalog_agent import CatalogAgent
 
-        catalog = CatalogAgent(name="catalog-test", persistence_dir="state/test-google-calendar-catalog")
+        catalog = CatalogAgent(
+            name="catalog-test", persistence_dir="state/test-google-calendar-catalog"
+        )
         info = catalog._action_info("google-calendar-agent")
 
         self.assertTrue(info["ok"])

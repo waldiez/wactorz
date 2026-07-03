@@ -64,7 +64,9 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
     async def test_draft_followup_bare_reply_is_body(self):
         # "make an email to X" then a plain reply should become the body.
         agent = self._agent()
-        agent.client.call_tool = mock.AsyncMock(return_value="Draft to sam@x.com created: '(no subject)'.")
+        agent.client.call_tool = mock.AsyncMock(
+            return_value="Draft to sam@x.com created: '(no subject)'."
+        )
 
         first = await agent._process({"text": "make an email to sam@x.com"})
         self.assertIn("body", first["missing"])

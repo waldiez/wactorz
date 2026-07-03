@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Named volume presets for reachy** - `whisper` (70), `normal` (85), `louder` (93)
+  and `presenter` (100) speaking modes, mapped to the robot speaker's usable loudness band.
+  Deterministic "whisper X" / "say X softly|loudly" set the level and speak aloud.
 - **`wactorz-google-login` command** — one-time interactive OAuth login for the Calendar and
   Gmail agents (`wactorz-google-login [calendar|gmail|both]`). Mints/refreshes the token with
   the scopes Wactorz needs (no `gmail.metadata`) so the agents work without hand-running a
@@ -75,6 +78,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Reachy agent renamed `reachy-body` → `reachy-mini`** — the catalogue agent, its
+  recipe file, spawn command (`@catalog spawn reachy-mini`), planner references, and
+  documentation all use the new name. MQTT topics (`custom/reachy/*`) are unchanged.
+- **Reachy Home Assistant routed through the HA agent** - reachy-mini delegates all
+  device control and automations to `home-assistant-agent` (natural-language
+  `{cmd:ha, request}`) instead of calling HA's REST API directly; entity discovery for
+  reactive binds is routed through the HA agent too.
 - **Home Assistant "Devices" → direct link** — the dashboard's embedded device
   list/control panel was replaced with a "Devices" button that opens Home
   Assistant's own UI in a new tab (using the URL from `/api/config`). HA entity
@@ -103,6 +113,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Agent chat no longer appears twice** — in `direct_ws` mode the dashboard was rendering
+  every `notify_user` frame (e.g. reachy's spoken replies) twice: once from the monitor's
+  WebSocket relay and once from the browser's own `agents/#` MQTT subscription. The browser
+  now honours the single-transport-per-mode invariant and ignores the redundant MQTT copy.
+- **Reachy no longer echoes unparsed input** - when the planner can't turn a message
+  into a robot action, reachy returns a helpful hint instead of repeating the user's words.
 - **Frontend minor fixes** — synthesised chat/WS message ids now use collision-free
   WIDs instead of `<prefix>-<ms>` (two messages in the same millisecond could collide and
   be dedupe-dropped); the dashboard now asks not to be indexed (`robots: noindex, nofollow`

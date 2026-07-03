@@ -322,6 +322,96 @@ def _build_catalog() -> dict:
         }
         logger.info("[catalog] Loaded manual-agent recipe")
 
+    # ── reachy-mini ──────────────────────────────────────────────────────────
+    code = _load_recipe("reachy_mini_agent.py")
+    if code:
+        catalog["reachy-mini"] = {
+            "name": "reachy-mini",
+            "type": "dynamic",
+            "description": (
+                "Controls a Reachy Mini: wake/sleep, head pose, antennas, gaze, "
+                "speech, gestures, and optional Home Assistant actions."
+            ),
+            "docs": (
+                "Setup:\n"
+                "1. Install the recipe dependencies when prompted, or preinstall: "
+                "pip install reachy-mini numpy edge-tts.\n"
+                "2. For Reachy Mini Wireless, put the robot and Wactorz host on the "
+                "same WiFi network. Stop any Hugging Face app running on the robot.\n"
+                "3. For Reachy Mini Lite, start the local daemon first: "
+                "reachy-mini-daemon -p <serial_port>.\n"
+                "4. Spawn the agent: @catalog spawn reachy-mini.\n"
+                "5. If discovery is flaky, pin the Wireless host by publishing "
+                '{"robot_host": "192.168.1.42"} to custom/reachy/config, then restart '
+                "the agent.\n"
+                "\n"
+                "Try:\n"
+                "- wake up\n"
+                "- do a happy gesture\n"
+                "- wiggle your antennas\n"
+                "- look left\n"
+                "- say hello\n"
+                "- turn on the light and nod\n"
+                "\n"
+                "For structured control, send a dict with cmd wake, sleep, pose, "
+                "antennas, look_at, emotion, say, volume, ha, bind, unbind, or stop."
+            ),
+            "capabilities": [
+                "robot",
+                "reachy",
+                "reachy_mini",
+                "embodied",
+                "motion",
+                "head",
+                "antennas",
+                "gaze",
+                "emotion",
+                "actuator",
+                "expressive",
+                "human_robot_interaction",
+            ],
+            "install": ["reachy-mini", "numpy", "edge-tts"],
+            "input_schema": {
+                "cmd": "str  — wake|sleep|pose|antennas|look_at|look_pixel|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
+                "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
+                "voice": "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
+                "gain_db": "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
+                "loud": "bool  — cmd=say; default true (compress+limit file to max); false plays raw quiet TTS",
+                "preset": "str   — speaking mode (cmd=volume): whisper(70)|normal(85)|louder(93)|presenter(100)",
+                "level": "float — 0-100 robot speaker volume (cmd=volume); 100=loudest, 0=quietest (daemon /api/volume/set)",
+                "delta": "float — relative volume change in level points (cmd=volume), e.g. +15 / -25",
+                "mute": "bool  — cmd=volume; true silences (remembers level), false restores it",
+                "request": "str   — natural-language Home Assistant request (cmd=ha); routed through main for device control, home-assistant-agent for automations/info",
+                "duration": "float — motion duration in seconds (pose/antennas/look_at)",
+                "method": "str  — interpolation: linear|minjerk|ease_in_out|cartoon (default minjerk)",
+                "yaw": "float — head yaw, degrees by default",
+                "pitch": "float — head pitch, degrees by default",
+                "roll": "float — head roll, degrees by default",
+                "x": "float — head x (mm) or look_at world x (m)",
+                "y": "float — head y (mm) or look_at world y (m)",
+                "z": "float — head z (mm) or look_at world z (m)",
+                "antennas": "list  — [right, left] angles, degrees by default",
+                "left": "float — antenna left (cmd=antennas convenience)",
+                "right": "float — antenna right (cmd=antennas convenience)",
+                "u": "int   — pixel u for look_pixel",
+                "v": "int   — pixel v for look_pixel",
+                "name": "str   — emotion clip name (e.g. curious1, success1)",
+                "topic": "str   — MQTT topic to bind/unbind",
+                "when": "dict  — dotted-path equality matcher for bindings",
+                "do": "dict  — payload to dispatch when binding fires",
+                "id": "str   — optional correlation id; ack on custom/reachy/cmd_result/{id}",
+            },
+            "output_schema": {
+                "ok": "bool",
+                "cmd": "str",
+                "duration_s": "float — wall-clock motion time",
+                "error": "str|null",
+            },
+            "poll_interval": 5,
+            "code": code,
+        }
+        logger.info("[catalog] Loaded reachy-mini recipe")
+
     # ── timeseries-collector ───────────────────────────────────────────────
     code = _load_recipe("timeseries_collector_agent.py")
     if code:

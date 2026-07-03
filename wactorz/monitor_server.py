@@ -1346,8 +1346,7 @@ def _snapshot() -> dict:
     # live actor object, then the persisted _final_cost row — so the header has to
     # coalesce the same three sources per agent. Summing only state["cost_usd"]
     # (or only iterating the local registry) dropped any on-screen agent whose
-    # cost lives on the actor object / SQLite rather than in an MQTT metrics frame
-    # (the reachy-body case: header read main-only while two cards were visible).
+    # cost lives on the actor object / SQLite rather than in an MQTT metrics frame.
     actors_by_id: dict = {}
     actors_by_name: dict = {}
     if registry is not None:
@@ -1902,7 +1901,7 @@ def _best_cost(ag, actor, name: str) -> float:
     state first, then the live actor object, then the persisted _final_cost row.
     Returns 0.0 when nothing is known so it can be summed safely. The headline
     total must use this — summing only state["cost_usd"] dropped agents whose
-    cost lives on the actor object / SQLite (the reachy-body case).
+    cost lives on the actor object / SQLite.
     """
     if ag is not None:
         c = ag.get("cost_usd")

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Anomaly Detector agent — Wactorz</title>
+  <title>Reachy Mini agent — Wactorz</title>
   <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
   <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
@@ -134,63 +134,136 @@
       <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
       <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
       <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
-      <a href="../catalogue/catalogue-reachy-mini.html" class="">Reachy Mini</a>
-      <a href="../catalogue/catalogue-anomaly-detector.html" class="active">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="active">Reachy Mini</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
       <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
       <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
       <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
     </details>
   </aside>
   <main class="content">
-<h1 id="anomaly-detector-agent">Anomaly Detector agent</h1>
-<p><code>anomaly-detector</code> — learns normal patterns from time-series data (Home Assistant sensors
-and Sinergym) and flags anomalies in real time using statistical (z-score), percentile
-range, rate-of-change, and absence detection. Works with both real-world HA devices and
-simulated building data.</p>
-<p><strong>Dependencies</strong> (installed on first spawn): <code>aiomqtt</code>, <code>numpy</code>.</p>
+<h1 id="reachy-mini-agent">Reachy Mini agent</h1>
+<p><code>reachy-mini</code> controls a Reachy Mini from Wactorz. Use it for wake/sleep, head pose,
+antennas, gaze, speech, expressive gestures, and optional Home Assistant actions.</p>
+<h2 id="hardware-setup">Hardware setup</h2>
+<p>Reachy Mini Wireless:</p>
+<ol>
+<li>Power on the robot.</li>
+<li>Put the robot and the Wactorz host on the same WiFi network.</li>
+<li>Make sure the network does not block local device discovery.</li>
+<li>Stop any Hugging Face app running on the robot before Wactorz connects.</li>
+</ol>
+<p>Reachy Mini Lite:</p>
+<ol>
+<li>Connect the robot over USB.</li>
+<li>Start the local daemon before spawning the agent:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>reachy-mini-daemon<span class="w"> </span>-p<span class="w"> </span>&lt;serial_port&gt;
+</code></pre></div>
+
+<h2 id="install-dependencies">Install dependencies</h2>
+<p>The catalogue installer can install recipe dependencies on first spawn. To install them
+manually:</p>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>reachy-mini<span class="w"> </span>numpy<span class="w"> </span>edge-tts
+</code></pre></div>
+
 <h2 id="spawn">Spawn</h2>
-<div class="highlight"><pre><span></span><code>@catalog spawn anomaly-detector
+<div class="highlight"><pre><span></span><code>@catalog spawn reachy-mini
 </code></pre></div>
 
-<p>It subscribes to live data, builds baselines over a learning period, then reports anomalies.
-Pair it with the <a href="catalogue-timeseries.html">Time-Series Collector</a> if you want history
-retained for training.</p>
-<h2 id="commands">Commands</h2>
-<div class="highlight"><pre><span></span><code>@anomaly-detector status       # detection state + baseline readiness
-@anomaly-detector report       # recent anomalies
-@anomaly-detector baselines    # learned baselines
-@anomaly-detector train        # (re)build baselines from history
-@anomaly-detector reset
+<p>Confirm it is running:</p>
+<div class="highlight"><pre><span></span><code>/agents
 </code></pre></div>
 
-<h2 id="configuration">Configuration</h2>
+<p>If the robot was disconnected and reconnected:</p>
+<div class="highlight"><pre><span></span><code>/agents restart reachy-mini
+</code></pre></div>
+
+<h2 id="pin-a-wireless-host">Pin a Wireless host</h2>
+<p>The Reachy SDK usually auto-detects the robot. If discovery is unreliable, publish the host
+once and restart the agent:</p>
+<div class="highlight"><pre><span></span><code>topic: custom/reachy/config
+payload: {&quot;robot_host&quot;: &quot;192.168.1.42&quot;}
+</code></pre></div>
+
+<p>Use the robot's IP address or hostname. The current host is reported in
+<code>custom/reachy/state</code> as <code>robot_host</code>.</p>
+<h2 id="use-it">Use it</h2>
+<p>Plain English works for normal use:</p>
+<div class="highlight"><pre><span></span><code>wake up
+do a happy gesture
+wiggle your antennas
+look left
+say hello
+turn on the light and nod
+</code></pre></div>
+
+<p>Other agents can send the same requests directly:</p>
+<div class="highlight"><pre><span></span><code><span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">&quot;reachy-mini&quot;</span><span class="p">,</span> <span class="s2">&quot;do a happy gesture&quot;</span><span class="p">)</span>
+<span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">&quot;reachy-mini&quot;</span><span class="p">,</span> <span class="s2">&quot;say hello&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<h2 id="structured-commands">Structured commands</h2>
+<p>For direct control, send a dict with <code>cmd</code>:</p>
 <table>
 <thead>
 <tr>
-<th>Field</th>
-<th>Meaning</th>
+<th>Command</th>
+<th>Purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>baseline_hours</code></td>
-<td>history used for a baseline (default 720 = 30 days)</td>
+<td><code>wake</code>, <code>sleep</code>, <code>stop</code></td>
+<td>Basic robot state</td>
 </tr>
 <tr>
-<td><code>learning_period_hours</code></td>
-<td>minimum time before detection starts (default 168 = 1 week)</td>
+<td><code>pose</code></td>
+<td>Head yaw, pitch, roll, x/y/z</td>
 </tr>
 <tr>
-<td><code>sensitivity</code></td>
-<td>0–1, lower = more sensitive (default 0.3)</td>
+<td><code>antennas</code></td>
+<td>Left and right antenna angles</td>
 </tr>
 <tr>
-<td><code>entities</code></td>
-<td>entity IDs to monitor (default: auto-discover)</td>
+<td><code>look_at</code>, <code>look_pixel</code></td>
+<td>Gaze target</td>
+</tr>
+<tr>
+<td><code>emotion</code>, <code>list_emotions</code></td>
+<td>Recorded gesture clips</td>
+</tr>
+<tr>
+<td><code>say</code>, <code>volume</code></td>
+<td>Speech and speaker volume</td>
+</tr>
+<tr>
+<td><code>ha</code></td>
+<td>Home Assistant request</td>
+</tr>
+<tr>
+<td><code>bind</code>, <code>unbind</code></td>
+<td>Persistent reaction to an MQTT/HA event</td>
 </tr>
 </tbody>
 </table>
-<p>Returns <code>anomalies_detected</code>, <code>baselines_ready</code>, <code>detection_active</code>, and <code>last_anomaly</code>.</p>
+<p>Examples:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;wake&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pose&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;yaw&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;duration&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.6</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;minjerk&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;antennas&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;left&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">45</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;right&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">-45</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;duration&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="p">}</span>
+</code></pre></div>
+
+<h2 id="troubleshooting">Troubleshooting</h2>
+<ul>
+<li>If Wireless does not connect, check that the robot and Wactorz host are on the same LAN.</li>
+<li>If discovery fails, pin <code>robot_host</code> with <code>custom/reachy/config</code>.</li>
+<li>If motion commands do nothing, check that another app is not already controlling the robot.</li>
+<li>For Lite, restart <code>reachy-mini-daemon</code>, then restart <code>reachy-mini</code>.</li>
+</ul>
   </main>
 </div>
 

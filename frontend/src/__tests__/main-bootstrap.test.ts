@@ -13,7 +13,7 @@
  * covered by the agents/mapping + haConfig + haFeed unit tests.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { emit } from "../events";
+import { emit, listen } from "../events";
 import { toast } from "../ui/ToastManager";
 
 // Registries the mocked transports populate as main.ts wires them up.
@@ -38,8 +38,15 @@ vi.mock("../mqtt/MQTTClient", () => ({
     },
 }));
 
+// Mutable so a test can flip the active chat mode and exercise the
+// direct_ws early-return guard in the MQTT chat handler.
+let mockChatMode: "direct_ws" | "mqtt" = "mqtt";
+
 vi.mock("../io/WSChatClient", () => ({
     WSChatClient: class {
+        get chatMode() {
+            return mockChatMode;
+        }
         onChat(cb: (...a: any[]) => void) {
             mockWs["chat"] = cb;
         }
@@ -163,6 +170,21 @@ describe("main.ts bootstrap", () => {
         mqttHandler("connected")(); // first → seeds
         mqttHandler("connected")(); // again → seeded guard
         expect(true).toBe(true);
+    });
+
+    it("ignores MQTT agent chat in direct_ws mode (one transport per mode)", () => {
+        // In direct_ws the monitor relays agent chat over the WebSocket, and our
+        // `agents/#` MQTT subscription receives the same frame — the handler must
+        // early-return so speech bubbles (notify_user) aren't rendered twice.
+        let count = 0;
+        const handler = listen("af-chat-message", () => {
+            count += 1;
+        });
+        mockChatMode = "direct_ws";
+        mqttHandler("chat")({ id: "z", from: "A", to: "user", content: "dup", timestampMs: 1 });
+        mockChatMode = "mqtt"; // restore for subsequent tests
+        document.removeEventListener("af-chat-message", handler);
+        expect(count).toBe(0);
     });
 
     it("drives the telemetry + feed MQTT handlers, both guard branches", () => {

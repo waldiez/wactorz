@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Wactorz docs builder.
+"""Wactorz docs builder.
 
 Converts docs/*.md → static/docs/*.html using a custom dark template that matches
 the landing page (Chakra Petch + JetBrains Mono, #05080e background).
@@ -63,6 +62,7 @@ NAV = [
         ("Gmail",                  "catalogue-gmail.md"),
         ("Weather",                "catalogue-weather.md"),
         ("Smart Energy",           "catalogue-smart-energy.md"),
+        ("Reachy Mini",            "catalogue-reachy-mini.md"),
         ("Anomaly Detector",       "catalogue-anomaly-detector.md"),
         ("Device Manuals",         "catalogue-manual.md"),
         ("Doc → PPTX",             "catalogue-doc-to-pptx.md"),
@@ -373,7 +373,7 @@ def build(site_dir: Path = SITE) -> None:
     py_api_compat.mkdir(parents=True, exist_ok=True)
     compat_idx = py_api_compat / "index.html"
     compat_idx.write_text(_redirect("../../reference/python-api.html"))
-    print(f"  compat   → static/docs/api/python/ → ../../reference/python-api.html")
+    print("  compat   → static/docs/api/python/ → ../../reference/python-api.html")
 
     print(f"\n✓  site built → {site_dir}")
 
@@ -405,7 +405,7 @@ def build_jsdocs(site_dir: Path = SITE) -> None:
     js_src = ROOT / "site" / "api" / "js"
     if js_src.is_dir():
         shutil.copytree(js_src, out_dir, dirs_exist_ok=True)
-        print(f"  typedoc  → static/docs/api/js/")
+        print("  typedoc  → static/docs/api/js/")
     else:
         print(f"  [warn] typedoc output not found at {js_src.relative_to(ROOT)}")
 
@@ -577,7 +577,7 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
         print(f"  guide     → {url}guide/")
         print(f"  api/js    → {url}api/js/")
         print(f"  api/python→ {url}api/python/")
-        print(f"\nPress Ctrl-C to stop.\n")
+        print("\nPress Ctrl-C to stop.\n")
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
         try:
             httpd.serve_forever()

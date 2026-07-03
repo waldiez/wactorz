@@ -275,6 +275,13 @@ mqtt.on("alert", payload => {
 });
 
 mqtt.on("chat", msg => {
+    // Single chat transport per mode: in direct_ws the monitor already relays
+    // every `agents/{id}/chat` frame over the WebSocket (_push_chat → wsChat.onChat).
+    // Our own `agents/#` MQTT subscription receives the SAME frame, so honoring it
+    // here too would render agent chat — e.g. notify_user speech bubbles — twice.
+    if (wsChat.chatMode === "direct_ws") {
+        return;
+    }
     if (msg.from !== "user") {
         toast.show({ type: "chat", title: msg.from, message: msg.content.slice(0, 120) });
     }

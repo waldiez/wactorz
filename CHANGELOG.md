@@ -78,7 +78,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- **Reachy Home Assistant routed through the HA agent** - reachy-body delegates all
+- **Reachy agent renamed `reachy-body` → `reachy-mini`** — the catalogue agent, its
+  recipe file, spawn command (`@catalog spawn reachy-mini`), planner references, and
+  documentation all use the new name. MQTT topics (`custom/reachy/*`) are unchanged.
+- **Reachy Home Assistant routed through the HA agent** - reachy-mini delegates all
   device control and automations to `home-assistant-agent` (natural-language
   `{cmd:ha, request}`) instead of calling HA's REST API directly; entity discovery for
   reactive binds is routed through the HA agent too.
@@ -110,6 +113,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Agent chat no longer appears twice** — in `direct_ws` mode the dashboard was rendering
+  every `notify_user` frame (e.g. reachy's spoken replies) twice: once from the monitor's
+  WebSocket relay and once from the browser's own `agents/#` MQTT subscription. The browser
+  now honours the single-transport-per-mode invariant and ignores the redundant MQTT copy.
 - **Reachy no longer echoes unparsed input** - when the planner can't turn a message
   into a robot action, reachy returns a helpful hint instead of repeating the user's words.
 - **Frontend minor fixes** — synthesised chat/WS message ids now use collision-free

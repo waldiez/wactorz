@@ -1,6 +1,6 @@
-# Reachy Body agent
+# Reachy Mini agent
 
-`reachy-body` controls a Reachy Mini from Wactorz. Use it for wake/sleep, head pose,
+`reachy-mini` controls a Reachy Mini from Wactorz. Use it for wake/sleep, head pose,
 antennas, gaze, speech, expressive gestures, and optional Home Assistant actions.
 
 ## Hardware setup
@@ -33,7 +33,7 @@ pip install reachy-mini numpy edge-tts
 ## Spawn
 
 ```text
-@catalog spawn reachy-body
+@catalog spawn reachy-mini
 ```
 
 Confirm it is running:
@@ -45,7 +45,7 @@ Confirm it is running:
 If the robot was disconnected and reconnected:
 
 ```text
-/agents restart reachy-body
+/agents restart reachy-mini
 ```
 
 ## Pin a Wireless host
@@ -77,8 +77,8 @@ turn on the light and nod
 Other agents can send the same requests directly:
 
 ```python
-await agent.send_to("reachy-body", "do a happy gesture")
-await agent.send_to("reachy-body", "say hello")
+await agent.send_to("reachy-mini", "do a happy gesture")
+await agent.send_to("reachy-mini", "say hello")
 ```
 
 ## Structured commands
@@ -115,4 +115,4 @@ Examples:
 - If Wireless does not connect, check that the robot and Wactorz host are on the same LAN.
 - If discovery fails, pin `robot_host` with `custom/reachy/config`.
 - If motion commands do nothing, check that another app is not already controlling the robot.
-- For Lite, restart `reachy-mini-daemon`, then restart `reachy-body`.
+- For Lite, restart `reachy-mini-daemon`, then restart `reachy-mini`.

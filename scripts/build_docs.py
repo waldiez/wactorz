@@ -62,7 +62,7 @@ NAV = [
         ("Gmail",                  "catalogue-gmail.md"),
         ("Weather",                "catalogue-weather.md"),
         ("Smart Energy",           "catalogue-smart-energy.md"),
-        ("Reachy Body",            "catalogue-reachy-body.md"),
+        ("Reachy Mini",            "catalogue-reachy-mini.md"),
         ("Anomaly Detector",       "catalogue-anomaly-detector.md"),
         ("Device Manuals",         "catalogue-manual.md"),
         ("Doc → PPTX",             "catalogue-doc-to-pptx.md"),

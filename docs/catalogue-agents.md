@@ -27,7 +27,7 @@ A spawned agent is saved to the spawn registry and restored automatically on res
 | [Gmail](catalogue-gmail.html) | Search/read mail, labels, drafts (never sends) | OAuth |
 | [Weather](catalogue-weather.html) | Current conditions, forecast, history (Open-Meteo) | none |
 | [Smart Energy](catalogue-smart-energy.html) | Smart-plug monitoring, kWh/cost, guarded auto-off | Home Assistant |
-| [Reachy Body](catalogue-reachy-body.html) | Controls a Reachy Mini robot: motion, gaze, speech, gestures | Reachy Mini |
+| [Reachy Mini](catalogue-reachy-mini.html) | Controls a Reachy Mini robot: motion, gaze, speech, gestures | Reachy Mini |
 | [Anomaly Detector](catalogue-anomaly-detector.html) | Learns normal patterns, flags anomalies in real time | MQTT data |
 | [Device Manuals](catalogue-manual.html) | Finds a device manual and answers questions about it | none |
 | [Doc → PPTX](catalogue-doc-to-pptx.html) | Converts a PDF/TXT into a PowerPoint deck | none |

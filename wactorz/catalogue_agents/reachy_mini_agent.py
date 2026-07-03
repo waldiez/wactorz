@@ -1,4 +1,4 @@
-"""CATALOG RECIPE — reachy-body-agent
+"""CATALOG RECIPE — reachy-mini-agent
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Drives a Reachy Mini robot (Wireless over WiFi, or Lite over USB) as an
 embodied output channel for the wactorz fleet. Subscribes to:
@@ -31,9 +31,9 @@ Outside wactorz:
 
 SPAWN
 ─────
-    @catalog spawn reachy-body
-    /agents                    → confirms reachy-body is running
-    /agents restart reachy-body → re-runs setup() if connection dropped
+    @catalog spawn reachy-mini
+    /agents                    → confirms reachy-mini is running
+    /agents restart reachy-mini → re-runs setup() if connection dropped
 
 PINNING THE HOST (Wireless only — optional)
 ───────────────────────────────────────────
@@ -72,7 +72,7 @@ Reactive binding — robot looks curious when living-room lamp turns on:
 Unbind:
     {"cmd": "unbind", "topic": "home/state/light.living_room"}
 
-For full payload shapes, see reachy-body.README.md alongside this file.
+For full payload shapes, see reachy-mini.README.md alongside this file.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -316,7 +316,7 @@ async def setup(agent):
         "ts":            _time.time(),
     })
 
-    await agent.log("reachy-body ready")
+    await agent.log("reachy-mini ready")
 
 
 async def process(agent):
@@ -607,7 +607,7 @@ async def _nl_to_commands(agent, text):
 
 
 async def handle_task(agent, payload):
-    # Direct send_to(reachy-body, {...}) — same dispatch as MQTT.
+    # Direct send_to(reachy-mini, {...}) — same dispatch as MQTT.
     # IOAgent wraps user text as: {"text": "...", "_task_id": ..., "reply_to": ...}
     payload = payload or {}
     _tid = payload.get("_task_id") or payload.get("task")

@@ -322,11 +322,11 @@ def _build_catalog() -> dict:
         }
         logger.info("[catalog] Loaded manual-agent recipe")
 
-    # ── reachy-body ──────────────────────────────────────────────────────────
-    code = _load_recipe("reachy_body_agent.py")
+    # ── reachy-mini ──────────────────────────────────────────────────────────
+    code = _load_recipe("reachy_mini_agent.py")
     if code:
-        catalog["reachy-body"] = {
-            "name": "reachy-body",
+        catalog["reachy-mini"] = {
+            "name": "reachy-mini",
             "type": "dynamic",
             "description": (
                 "Controls a Reachy Mini: wake/sleep, head pose, antennas, gaze, "
@@ -340,7 +340,7 @@ def _build_catalog() -> dict:
                 "same WiFi network. Stop any Hugging Face app running on the robot.\n"
                 "3. For Reachy Mini Lite, start the local daemon first: "
                 "reachy-mini-daemon -p <serial_port>.\n"
-                "4. Spawn the agent: @catalog spawn reachy-body.\n"
+                "4. Spawn the agent: @catalog spawn reachy-mini.\n"
                 "5. If discovery is flaky, pin the Wireless host by publishing "
                 '{"robot_host": "192.168.1.42"} to custom/reachy/config, then restart '
                 "the agent.\n"
@@ -410,7 +410,7 @@ def _build_catalog() -> dict:
             "poll_interval": 5,
             "code": code,
         }
-        logger.info("[catalog] Loaded reachy-body recipe")
+        logger.info("[catalog] Loaded reachy-mini recipe")
 
     # ── timeseries-collector ───────────────────────────────────────────────
     code = _load_recipe("timeseries_collector_agent.py")

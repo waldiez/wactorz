@@ -371,7 +371,7 @@ class ResetActorCostTest(unittest.TestCase):
 class SnapshotTotalsTest(unittest.TestCase):
     """_snapshot() headline totals must match the cards the dashboard renders,
     including remote / spawned agents that live in state but not in this
-    process's registry (the reachy-body bug: headline < visible sum)."""
+    process's registry."""
 
     def setUp(self):
         import wactorz.monitor_server as ms
@@ -399,7 +399,7 @@ class SnapshotTotalsTest(unittest.TestCase):
         self._ms.registry = None
         self._ms.state["agents"] = {
             "main": {"name": "main", "cost_usd": 0.0381},
-            "reachy-body": {"name": "reachy-body", "cost_usd": 0.0213},
+            "reachy-mini": {"name": "reachy-mini", "cost_usd": 0.0213},
         }
         snap = self._ms._snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.0594, places=6)
@@ -416,7 +416,7 @@ class SnapshotTotalsTest(unittest.TestCase):
         self._ms.registry = types.SimpleNamespace(all_actors=lambda: [local_main])
         self._ms.state["agents"] = {
             "main": {"name": "main", "cost_usd": 0.0381, "messages_processed": 1},
-            "reachy-body": {"name": "reachy-body", "cost_usd": 0.0213, "messages_processed": 3},
+            "reachy-mini": {"name": "reachy-mini", "cost_usd": 0.0213, "messages_processed": 3},
         }
         snap = self._ms._snapshot()
         # Old behaviour summed only registry actors -> 0.0381. Must be the full sum.
@@ -424,9 +424,9 @@ class SnapshotTotalsTest(unittest.TestCase):
         self.assertEqual(snap["total_messages"], 4)
 
     def test_includes_cost_living_on_actor_object_only(self):
-        """The reachy-body bug: an agent's card shows cost from its live actor
-        object (total_cost_usd) but state["cost_usd"] was never set by an MQTT
-        metrics frame. The header must still count it."""
+        """An agent's card shows cost from its live actor object (total_cost_usd)
+        but state["cost_usd"] was never set by an MQTT metrics frame. The header
+        must still count it."""
         main_actor = types.SimpleNamespace(
             actor_id="main-id",
             name="main",
@@ -435,14 +435,14 @@ class SnapshotTotalsTest(unittest.TestCase):
         )
         reachy_actor = types.SimpleNamespace(
             actor_id="reachy-id",
-            name="reachy-body",
+            name="reachy-mini",
             total_cost_usd=0.021285,
             metrics=types.SimpleNamespace(messages_processed=3),
         )
         self._ms.registry = types.SimpleNamespace(all_actors=lambda: [main_actor, reachy_actor])
         self._ms.state["agents"] = {
             "main-id": {"name": "main", "cost_usd": 0.038124, "messages_processed": 1},
-            "reachy-id": {"name": "reachy-body", "messages_processed": 3},  # no cost_usd
+            "reachy-id": {"name": "reachy-mini", "messages_processed": 3},  # no cost_usd
         }
         snap = self._ms._snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.059409, places=6)
@@ -459,9 +459,9 @@ class SnapshotTotalsTest(unittest.TestCase):
                     "value": {"name": "main", "cost_usd": 0.038124},
                 },
                 {
-                    "agent": "reachy-body",
+                    "agent": "reachy-mini",
                     "key": "_final_cost",
-                    "value": {"name": "reachy-body", "cost_usd": 0.021285},
+                    "value": {"name": "reachy-mini", "cost_usd": 0.021285},
                 },
             ]
         )
@@ -473,12 +473,12 @@ class SnapshotTotalsTest(unittest.TestCase):
         )
         reachy_a = types.SimpleNamespace(
             actor_id="r",
-            name="reachy-body",
+            name="reachy-mini",
             total_cost_usd=0.0,
             metrics=types.SimpleNamespace(messages_processed=0),
         )
         self._ms.registry = types.SimpleNamespace(all_actors=lambda: [main_a, reachy_a])
-        self._ms.state["agents"] = {"m": {"name": "main"}, "r": {"name": "reachy-body"}}
+        self._ms.state["agents"] = {"m": {"name": "main"}, "r": {"name": "reachy-mini"}}
         snap = self._ms._snapshot()
         # Must NOT double-count: _final_cost is used for the live sum, and
         # historical (also _final_cost) must skip names already counted.

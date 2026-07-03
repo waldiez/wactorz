@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Reachy Body agent — Wactorz</title>
+  <title>Reachy Mini agent — Wactorz</title>
   <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
   <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
@@ -134,7 +134,7 @@
       <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
       <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
       <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
-      <a href="../catalogue/catalogue-reachy-body.html" class="active">Reachy Body</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="active">Reachy Mini</a>
       <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
       <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
       <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
@@ -142,8 +142,8 @@
     </details>
   </aside>
   <main class="content">
-<h1 id="reachy-body-agent">Reachy Body agent</h1>
-<p><code>reachy-body</code> controls a Reachy Mini from Wactorz. Use it for wake/sleep, head pose,
+<h1 id="reachy-mini-agent">Reachy Mini agent</h1>
+<p><code>reachy-mini</code> controls a Reachy Mini from Wactorz. Use it for wake/sleep, head pose,
 antennas, gaze, speech, expressive gestures, and optional Home Assistant actions.</p>
 <h2 id="hardware-setup">Hardware setup</h2>
 <p>Reachy Mini Wireless:</p>
@@ -168,7 +168,7 @@ manually:</p>
 </code></pre></div>
 
 <h2 id="spawn">Spawn</h2>
-<div class="highlight"><pre><span></span><code>@catalog spawn reachy-body
+<div class="highlight"><pre><span></span><code>@catalog spawn reachy-mini
 </code></pre></div>
 
 <p>Confirm it is running:</p>
@@ -176,7 +176,7 @@ manually:</p>
 </code></pre></div>
 
 <p>If the robot was disconnected and reconnected:</p>
-<div class="highlight"><pre><span></span><code>/agents restart reachy-body
+<div class="highlight"><pre><span></span><code>/agents restart reachy-mini
 </code></pre></div>
 
 <h2 id="pin-a-wireless-host">Pin a Wireless host</h2>
@@ -199,8 +199,8 @@ turn on the light and nod
 </code></pre></div>
 
 <p>Other agents can send the same requests directly:</p>
-<div class="highlight"><pre><span></span><code><span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">&quot;reachy-body&quot;</span><span class="p">,</span> <span class="s2">&quot;do a happy gesture&quot;</span><span class="p">)</span>
-<span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">&quot;reachy-body&quot;</span><span class="p">,</span> <span class="s2">&quot;say hello&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">&quot;reachy-mini&quot;</span><span class="p">,</span> <span class="s2">&quot;do a happy gesture&quot;</span><span class="p">)</span>
+<span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">&quot;reachy-mini&quot;</span><span class="p">,</span> <span class="s2">&quot;say hello&quot;</span><span class="p">)</span>
 </code></pre></div>
 
 <h2 id="structured-commands">Structured commands</h2>
@@ -262,7 +262,7 @@ turn on the light and nod
 <li>If Wireless does not connect, check that the robot and Wactorz host are on the same LAN.</li>
 <li>If discovery fails, pin <code>robot_host</code> with <code>custom/reachy/config</code>.</li>
 <li>If motion commands do nothing, check that another app is not already controlling the robot.</li>
-<li>For Lite, restart <code>reachy-mini-daemon</code>, then restart <code>reachy-body</code>.</li>
+<li>For Lite, restart <code>reachy-mini-daemon</code>, then restart <code>reachy-mini</code>.</li>
 </ul>
   </main>
 </div>

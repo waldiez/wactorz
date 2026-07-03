@@ -2,6 +2,8 @@
 
 from .catalog_agent import CatalogAgent
 from .dynamic_agent import DynamicAgent
+from .gmail_agent import GmailAgent
+from .google_calendar_agent import GoogleCalendarAgent
 from .home_assistant_actuator_agent import HomeAssistantActuatorAgent
 from .home_assistant_agent import HomeAssistantAgent
 from .home_assistant_map_agent import HomeAssistantMapAgent
@@ -19,6 +21,8 @@ __all__ = [
     "AnthropicProvider",
     "CatalogAgent",
     "DynamicAgent",
+    "GmailAgent",
+    "GoogleCalendarAgent",
     "HomeAssistantActuatorAgent",
     "HomeAssistantAgent",
     "HomeAssistantMapAgent",

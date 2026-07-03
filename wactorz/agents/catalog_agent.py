@@ -23,9 +23,14 @@ Or via main (natural language):
 
 import asyncio
 import logging
+import pathlib
 import time
+from typing import TYPE_CHECKING, cast
 
 from ..core.actor import Actor, Message, MessageType
+
+if TYPE_CHECKING:
+    from .main_actor import MainActor
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +42,6 @@ logger = logging.getLogger(__name__)
 
 def _load_recipe(filename: str) -> str | None:
     import importlib.util
-    import pathlib
 
     path = pathlib.Path(__file__).parent.parent / "catalogue_agents" / filename
     if not path.exists():
@@ -45,6 +49,9 @@ def _load_recipe(filename: str) -> str | None:
         return None
     try:
         spec = importlib.util.spec_from_file_location("_recipe", path)
+        if spec is None or spec.loader is None:
+            logger.warning(f"[catalog] Could not build import spec for recipe: {path}")
+            return None
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return getattr(mod, "AGENT_CODE", None)
@@ -89,6 +96,76 @@ def _build_native_catalog() -> dict:
         logger.info("[catalog] Loaded weather-agent recipe")
     except ImportError as e:
         logger.warning(f"[catalog] weather-agent unavailable: {e}")
+
+    try:
+        from .google_calendar_agent import GoogleCalendarAgent
+
+        native["google-calendar-agent"] = {
+            "name": "google-calendar-agent",
+            "type": "native",
+            "factory": GoogleCalendarAgent,
+            "description": "Accesses Google Calendar: list today/upcoming events, create events, and delete events.",
+            "capabilities": [
+                "google_calendar",
+                "calendar",
+                "schedule",
+                "events",
+                "list_events",
+                "create_event",
+                "delete_event",
+            ],
+            "input_schema": {
+                "text": "str - natural-language calendar request, e.g. 'what is on my calendar today?'",
+                "operation": "status | list_events | today | tomorrow | week | create_event | delete_event",
+                "summary": "str - event title for create_event",
+                "start": "str - ISO-8601 start datetime for create_event",
+                "event_id": "str - event id for delete_event",
+            },
+            "output_schema": {
+                "result": "str - human-readable calendar response",
+                "events": "list - returned events for list operations",
+                "event": "dict - created event for create_event",
+            },
+        }
+        logger.info("[catalog] Loaded google-calendar-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] google-calendar-agent unavailable: {e}")
+
+    try:
+        from .gmail_agent import GmailAgent
+
+        native["gmail-agent"] = {
+            "name": "gmail-agent",
+            "type": "native",
+            "factory": GmailAgent,
+            "description": "Accesses Gmail: search/read mail, list labels and drafts, and create drafts (never sends).",
+            "capabilities": [
+                "gmail",
+                "email",
+                "mail",
+                "inbox",
+                "search_email",
+                "read_email",
+                "create_draft",
+                "labels",
+            ],
+            "input_schema": {
+                "text": "str - natural-language Gmail request, e.g. 'any unread email?'",
+                "operation": "status | search | unread | inbox | read | labels | drafts | create_draft",
+                "query": "str - Gmail search query for search",
+                "to": "str - recipient for create_draft",
+                "subject": "str - subject for create_draft",
+                "body": "str - body text for create_draft",
+                "thread_id": "str - thread/message id for read",
+            },
+            "output_schema": {
+                "result": "str - human-readable Gmail response",
+                "status": "dict - sanitized Gmail configuration status",
+            },
+        }
+        logger.info("[catalog] Loaded gmail-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] gmail-agent unavailable: {e}")
 
     return native
 
@@ -329,9 +406,11 @@ class CatalogAgent(Actor):
         )
 
         # Inject recipe manifests directly into main's _agent_manifests dict
-        main = None
+        main: MainActor | None = None
         for _ in range(20):
-            main = self._registry.find_by_name("main") if self._registry else None
+            main = cast(
+                "MainActor | None", self._registry.find_by_name("main") if self._registry else None
+            )
             if main and hasattr(main, "_agent_manifests"):
                 break
             await asyncio.sleep(0.5)
@@ -495,7 +574,7 @@ class CatalogAgent(Actor):
 
         resolved = self._resolve_name(name)
         recipe = self._catalog.get(resolved) if resolved else None
-        if not recipe:
+        if not resolved or not recipe:
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
 
@@ -513,10 +592,12 @@ class CatalogAgent(Actor):
         )
 
         try:
-            main = self._registry.find_by_name("main")
+            main = cast("MainActor | None", self._registry.find_by_name("main"))
             llm_provider = getattr(main, "llm", None) if main else None
             persistence_dir = (
-                str(getattr(main, "_persistence_dir", "./state/main").parent) if main else "./state"
+                str(getattr(main, "_persistence_dir", pathlib.Path("./state/main")).parent)
+                if main
+                else "./state"
             )
 
             if recipe.get("type") == "native":
@@ -576,7 +657,10 @@ class CatalogAgent(Actor):
 
                         task_id = f"cat_install_{_uuid.uuid4().hex[:8]}"
                         future = asyncio.get_running_loop().create_future()
-                        main = self._registry.find_by_name("main") if self._registry else None
+                        main = cast(
+                            "MainActor | None",
+                            self._registry.find_by_name("main") if self._registry else None,
+                        )
                         if main:
                             main._result_futures[task_id] = future
                         # Send with reply_to=main.actor_id so the installer's RESULT goes

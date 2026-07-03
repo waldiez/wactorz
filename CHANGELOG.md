@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`wactorz-google-login` command** — one-time interactive OAuth login for the Calendar and
+  Gmail agents (`wactorz-google-login [calendar|gmail|both]`). Mints/refreshes the token with
+  the scopes Wactorz needs (no `gmail.metadata`) so the agents work without hand-running a
+  snippet. `.env.template` now documents the `CALENDAR_MCP_*` / `GMAIL_MCP_*` keys.
+- **Docs: "Catalogue agents" section** — a new documentation section with an overview and a
+  per-agent page for every catalogue recipe (Google Calendar, Gmail, Weather, Smart Energy,
+  Anomaly Detector, Device Manuals, Doc → PPTX, Time-Series Collector), plus a shared Google
+  setup/login page. Replaces the old standalone Calendar MCP page.
 - **Global error surfacing** — uncaught exceptions and unhandled promise rejections
   now log with context and raise a toast, instead of failing silently to the console.
 - **Content-Security-Policy on the dashboard** — the monitor server sends an enforcing
@@ -25,6 +33,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   vs "AC on") as a non-blocking "⚠️ Heads up" note at approval.
 - **Weather catalog agent** — `@catalog spawn weather-agent` adds an optional manual weather helper backed by Open-Meteo for current conditions, forecasts, historical weather, default locations, and weather-related natural-language questions.
 - **Smart energy catalog agent** — `@catalog spawn smart-energy` adds an optional Home Assistant smart-plug helper for plug discovery, live wattage, kWh/cost tracking, and guarded user-requested auto-off rules.
+- **Calendar & Gmail are optional catalogue agents** — `google-calendar-agent` and `gmail-agent` are spawned on demand from the catalogue and reached through normal agent delegation (so the main actor can combine them with other agents), not wired into the core message loop. Installs that don't add them are unaffected: everyday words like "meeting", "event", or "agenda" no longer get intercepted and routed to a Google agent that isn't there.
 - **Tests** — `test_spawning.py` (23) covering spawn routing, idempotency/replace,
   both install models, the `trusted` flag and TopicContract wiring; `test_memory.py`
   (12) covering fact extraction/namespacing and system-prompt assembly.
@@ -34,6 +43,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   endpoint. The current local datetime is injected into the LLM prompt so relative
   times resolve correctly, and returned timestamps are localised to the server's
   timezone. Also available as a structured `get_history` A2A operation for peer agents,
+  which returns the history as CSV alongside the raw JSON.
+- **Gmail agent (`gmail-agent`)** — new catalog-backed native agent that searches/reads
+  mail, lists labels and drafts, and creates drafts. Draft-first by design (like Google's
+  hosted Gmail MCP, it never sends). Hosted Gmail MCP primary with a Gmail REST v1 fallback
+  on `PERMISSION_DENIED`, mirroring the calendar agent.
+- **Gmail: read an email's full contents** — new `read` action opens one message (by id, or the
+  top match of a topic query) and returns its readable body — text/plain, or HTML stripped to
+  text — so "what does the trello one say?" / "content of the latest vodafone bill" return the
+  actual message instead of a search snippet list.
+- **Gmail read answers your question** — when an LLM is configured, `read` now returns a
+  concise answer to the asked question (or a short summary), quoting exact amounts/dates,
+  instead of dumping the raw email; bodies are also de-noised (tracking URLs → `[link]`,
+  collapsed blank lines). Without an LLM it returns the cleaned body.
+- **Direct OAuth login** (`GoogleMcpClient.authorize_direct`) — mints a REST token via a
+  direct Google OAuth flow with caller-chosen scopes, bypassing the MCP server's scope set.
+  Used to get a Gmail token **without** `gmail.metadata` (which blocks free-text `q` search),
+  so `find invoices` / `from:…` work; also guarantees a refresh token.
+- **Shared Google-MCP base** (`core/integrations/google_mcp.py`) — `GoogleMcpClient` +
+  `GoogleMcpConfig` factor out the OAuth token storage, MCP call, and REST-fallback plumbing;
+  Calendar and Gmail are now thin subclasses. MCP auth during tool calls is **non-interactive**
+  (silent refresh only, with a timeout) so a server-side agent fails fast to REST instead of
+  blocking on a browser OAuth window; interactive login is an explicit `login()`.
+- **Calendar REST fallback** — `GoogleCalendarMcpClient` now falls back to the
+  Google Calendar REST API (v3) with the same OAuth token when the hosted Calendar
+  MCP (`calendarmcp.googleapis.com`) returns `PERMISSION_DENIED` (it is access-gated
+  and denies tool execution even for fully-scoped tokens) or the `mcp` extra isn't
+  installed. MCP stays the primary path and resumes automatically once the project
+  is allowlisted. Events are rendered as readable lines instead of raw JSON.
   which returns the history as CSV alongside the raw JSON.
 
 ### Changed
@@ -103,6 +140,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `SpawnMixin`, so an agent behaves identically regardless of which one spawns it.
   ~550 lines of duplication removed.
 - **Headless `cli` interface self-shutdown** — `wactorz --interface cli` with no TTY (piped, Docker without `-it`, systemd) booted fully then tore the whole system down ~1s later: `input()` raised `EOFError` immediately, finishing the interactive loop, and with `run_forever()` already a no-op there was nothing left keeping the process alive. The `cli` interface now detects a non-interactive stdin and stays up via `run_forever()` instead of starting the interactive loop.
+- **Calendar agent "No time zone found with key UTC"** — every read (`today`,
+  `week`, `list_events`) crashed on systems without the IANA tz database (e.g.
+  Windows without `tzdata`), where even `ZoneInfo("UTC")` raises. Timezone
+  resolution now falls back to the system-local offset and only sends Google a
+  `timeZone` key when it's a valid IANA zone (a bare `UTC` is rejected too).
+- **OAuth refresh token wiped on first refresh** — the MCP token storage replaced the whole
+  token blob on every refresh, but Google omits `refresh_token` from refresh responses, so the
+  first silent refresh dropped it and permanently broke re-auth (surfaced once an access token
+  expired). Storage now preserves the initial refresh token. Affects Calendar and Gmail.
+- **Calendar "show events" flooded with recurring instances** — the upcoming-events list had no
+  time bound, so a yearly recurring event (e.g. a birthday) returned many past/future copies that
+  looked identical. It's now bounded to now → +1 year, and cross-year dates include the year.
+- **Gmail HTML entities not decoded** — message subjects and snippets showed raw entities
+  (`didn&#39;t`, `&quot;`, `&amp;`); they're now unescaped to real characters.
+- **Gmail draft follow-up dropped bare replies** — after "make an email to X" the agent asked
+  "what should the email say?" but a plain reply (e.g. "Bloop") wasn't captured as the body. It
+  now fills whichever field it just asked for (body if the recipient is known, or the recipient
+  if the reply is an email address). "make an email/draft …" phrasings are also recognised.
 
 ---
 

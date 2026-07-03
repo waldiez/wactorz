@@ -303,33 +303,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._pending_notifications.clear()
         return "\n".join(lines) + "\n\n---\n\n"
 
-    def _is_calendar_request(self, text: str) -> bool:
-        lowered = text.lower()
-        calendar_words = ("calendar", "agenda", "meeting", "appointment", "event")
-        return any(word in lowered for word in calendar_words)
-
-    async def _handle_calendar_intent(self, text: str) -> str:
-        target, spawnable = await self._resolve_or_spawn("google-calendar-agent")
-        if not target and self._registry:
-            catalog = self._registry.find_by_name("catalog")
-            if catalog and hasattr(catalog, "_action_spawn"):
-                spawn_result = await catalog._action_spawn("google-calendar-agent", {})
-                if spawn_result and spawn_result.get("ok"):
-                    await asyncio.sleep(0.5)
-                    target = self._registry.find_by_name("google-calendar-agent")
-
-        if not target:
-            if spawnable:
-                return "I found the Google Calendar catalog recipe, but could not spawn it right now. Please retry."
-            return "I could not find the Google Calendar catalog recipe. Check `/agents calendar`."
-
-        result = await self.delegate_task("google-calendar-agent", text, timeout=120.0)
-        if result and isinstance(result, dict) and result.get("result"):
-            return str(result["result"])
-        if result and isinstance(result, dict) and result.get("error"):
-            return f"Google Calendar error: {result['error']}"
-        return "I could not reach the Google Calendar agent right now. Please retry."
-
     async def process_user_input(self, text: str) -> str:
         note_prefix = self._drain_notifications()
 
@@ -1283,11 +1256,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             await self._record_external_exchange(text, response)
             return note_prefix + response
 
-        if self._is_calendar_request(text):
-            response = await self._handle_calendar_intent(text)
-            await self._record_external_exchange(text, response)
-            return note_prefix + response
-
         # Single LLM call classifies intent: ACTUATE, HA, PIPELINE (reactive rule), OTHER
         intent = await self._classify_intent(text)
         logger.info(f"[{self.name}] Intent: {intent} — {text[:60]}")
@@ -1462,13 +1430,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         ):
             result = await self._run_planner(text)
             response = result or "Planner did not return a result. Please retry."
-            await self._record_external_exchange(text, response)
-            yield response
-            yield {"done": True, "spawned": [], "system_msg": ""}
-            return
-
-        if self._is_calendar_request(text):
-            response = await self._handle_calendar_intent(text)
             await self._record_external_exchange(text, response)
             yield response
             yield {"done": True, "spawned": [], "system_msg": ""}

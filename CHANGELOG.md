@@ -33,6 +33,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   vs "AC on") as a non-blocking "⚠️ Heads up" note at approval.
 - **Weather catalog agent** — `@catalog spawn weather-agent` adds an optional manual weather helper backed by Open-Meteo for current conditions, forecasts, historical weather, default locations, and weather-related natural-language questions.
 - **Smart energy catalog agent** — `@catalog spawn smart-energy` adds an optional Home Assistant smart-plug helper for plug discovery, live wattage, kWh/cost tracking, and guarded user-requested auto-off rules.
+- **Calendar & Gmail are optional catalogue agents** — `google-calendar-agent` and `gmail-agent` are spawned on demand from the catalogue and reached through normal agent delegation (so the main actor can combine them with other agents), not wired into the core message loop. Installs that don't add them are unaffected: everyday words like "meeting", "event", or "agenda" no longer get intercepted and routed to a Google agent that isn't there.
 - **Tests** — `test_spawning.py` (23) covering spawn routing, idempotency/replace,
   both install models, the `trusted` flag and TopicContract wiring; `test_memory.py`
   (12) covering fact extraction/namespacing and system-prompt assembly.

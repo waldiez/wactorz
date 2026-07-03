@@ -23,6 +23,7 @@ Or via main (natural language):
 
 import asyncio
 import logging
+import pathlib
 import time
 
 from ..core.actor import Actor, Message, MessageType
@@ -37,7 +38,6 @@ logger = logging.getLogger(__name__)
 
 def _load_recipe(filename: str) -> str | None:
     import importlib.util
-    import pathlib
 
     path = pathlib.Path(__file__).parent.parent / "catalogue_agents" / filename
     if not path.exists():
@@ -589,7 +589,9 @@ class CatalogAgent(Actor):
             main = self._registry.find_by_name("main")
             llm_provider = getattr(main, "llm", None) if main else None
             persistence_dir = (
-                str(getattr(main, "_persistence_dir", "./state/main").parent) if main else "./state"
+                str(getattr(main, "_persistence_dir", pathlib.Path("./state/main")).parent)
+                if main
+                else "./state"
             )
 
             if recipe.get("type") == "native":

@@ -25,8 +25,12 @@ import asyncio
 import logging
 import pathlib
 import time
+from typing import TYPE_CHECKING, cast
 
 from ..core.actor import Actor, Message, MessageType
+
+if TYPE_CHECKING:
+    from .main_actor import MainActor
 
 logger = logging.getLogger(__name__)
 
@@ -402,9 +406,11 @@ class CatalogAgent(Actor):
         )
 
         # Inject recipe manifests directly into main's _agent_manifests dict
-        main = None
+        main: MainActor | None = None
         for _ in range(20):
-            main = self._registry.find_by_name("main") if self._registry else None
+            main = cast(
+                "MainActor | None", self._registry.find_by_name("main") if self._registry else None
+            )
             if main and hasattr(main, "_agent_manifests"):
                 break
             await asyncio.sleep(0.5)
@@ -568,7 +574,7 @@ class CatalogAgent(Actor):
 
         resolved = self._resolve_name(name)
         recipe = self._catalog.get(resolved) if resolved else None
-        if not recipe:
+        if not resolved or not recipe:
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
 
@@ -586,7 +592,7 @@ class CatalogAgent(Actor):
         )
 
         try:
-            main = self._registry.find_by_name("main")
+            main = cast("MainActor | None", self._registry.find_by_name("main"))
             llm_provider = getattr(main, "llm", None) if main else None
             persistence_dir = (
                 str(getattr(main, "_persistence_dir", pathlib.Path("./state/main")).parent)
@@ -651,7 +657,10 @@ class CatalogAgent(Actor):
 
                         task_id = f"cat_install_{_uuid.uuid4().hex[:8]}"
                         future = asyncio.get_running_loop().create_future()
-                        main = self._registry.find_by_name("main") if self._registry else None
+                        main = cast(
+                            "MainActor | None",
+                            self._registry.find_by_name("main") if self._registry else None,
+                        )
                         if main:
                             main._result_futures[task_id] = future
                         # Send with reply_to=main.actor_id so the installer's RESULT goes

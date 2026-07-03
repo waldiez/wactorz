@@ -78,6 +78,26 @@ describe("MetricsController", () => {
         vi.useRealTimers();
     });
 
+    it("skips the poll tick while hidden, resumes once visible again", async () => {
+        vi.useFakeTimers();
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ limit_usd: 5 }),
+        })) as unknown as typeof fetch;
+        const host = makeHost("overview");
+        const m = new MetricsController(host);
+        m.startPolling();
+        await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1)); // initial fetch on start
+        const hiddenSpy = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(fetch).toHaveBeenCalledTimes(1); // tick skipped while hidden
+        hiddenSpy.mockReturnValue(false);
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(fetch).toHaveBeenCalledTimes(2); // tick fires again once visible
+        m.stopPolling();
+        vi.useRealTimers();
+    });
+
     it("builds a settings view element", () => {
         const m = new MetricsController(makeHost("settings"));
         expect(m.buildSettingsView()).toBeInstanceOf(HTMLElement);

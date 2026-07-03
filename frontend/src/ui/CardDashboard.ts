@@ -117,7 +117,11 @@ export class CardDashboard {
         this.root.classList.add("cd-visible");
         this._wireEvents();
         this._renderView();
-        this.tickTimer = setInterval(() => this._refreshTimestamps(), 5000);
+        this.tickTimer = setInterval(() => {
+            if (!document.hidden) {
+                this._refreshTimestamps();
+            }
+        }, 5000);
         this._metrics.startPolling();
     }
 

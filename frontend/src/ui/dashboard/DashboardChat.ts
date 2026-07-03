@@ -561,7 +561,9 @@ export class DashboardChat {
                 this._streamTarget = this._lastSentTarget;
                 this._streamText = "";
             }
-            this._streamText += chunk;
+            // Cap accumulation so a runaway/looping stream can't grow this without bound.
+            this._streamText =
+                this._streamText.length < 200_000 ? this._streamText + chunk : this._streamText;
             if (this.host.getView() !== "chat") {
                 return;
             }
@@ -588,10 +590,8 @@ export class DashboardChat {
                 this._streamBody.textContent = "";
                 this._streamBody.appendChild(renderMarkdown(this._streamText));
             }
-            this._streamRow = null;
-            this._streamBody = null;
-            this._streamFrom = null;
-            this._streamTarget = null;
+            this._streamRow = this._streamBody = null;
+            this._streamFrom = this._streamTarget = null;
             this._streamText = "";
         });
     }

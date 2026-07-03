@@ -267,6 +267,16 @@ describe("DashboardChat — sending & live events", () => {
         expect(thread(host).textContent).toContain("Hello");
     });
 
+    it("caps accumulation on a runaway stream instead of growing without bound", () => {
+        const chunk = "x".repeat(10_000);
+        for (let i = 0; i < 30; i++) {
+            document.dispatchEvent(
+                new CustomEvent("af-stream-chunk", { detail: { chunk, from: "main-actor" } }),
+            );
+        }
+        expect((dc as unknown as { _streamText: string })._streamText.length).toBeLessThan(300_000);
+    });
+
     it("af-reset-chat clears the thread", () => {
         document.dispatchEvent(
             new CustomEvent("af-chat-message", {

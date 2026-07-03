@@ -238,6 +238,18 @@ describe("CardDashboard behaviour", () => {
             expect(spy).toHaveBeenCalled();
             fresh.destroy();
         });
+
+        it("the tick interval skips the refresh while the tab is hidden", () => {
+            vi.useFakeTimers();
+            const fresh = new CardDashboard() as any;
+            fresh.show([agent("main")]);
+            const spy = vi.spyOn(fresh, "_refreshTimestamps");
+            const hiddenSpy = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+            vi.advanceTimersByTime(5000);
+            expect(spy).not.toHaveBeenCalled();
+            hiddenSpy.mockRestore();
+            fresh.destroy();
+        });
     });
 
     describe("agent-map mutations across views/visibility", () => {

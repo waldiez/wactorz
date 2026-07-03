@@ -712,6 +712,7 @@ async def handle_task(agent, payload):
                     # Build a human-readable summary of what actually ran.
                     summary_parts = []
                     failures = []
+                    spoken_replies = []
                     step_iter = iter(steps)
                     for c in cmds:
                         if not isinstance(c, dict):
@@ -720,8 +721,7 @@ async def handle_task(agent, payload):
                         if cc == "ha":
                             label = f"ha:{c.get('request') or c.get('service') or '?'}"
                         elif cc == "say":
-                            said = c.get("text") or c.get("message") or c.get("say") or ""
-                            label = f"say:{said[:80]}" if said else "say"
+                            label = "say"
                         elif cc == "pose":
                             label = f"pose(y={c.get('yaw',0)},p={c.get('pitch',0)})"
                         elif cc == "antennas":
@@ -734,7 +734,7 @@ async def handle_task(agent, payload):
                             continue
                         step = next(step_iter, None)
                         if isinstance(step, dict) and cc == "say" and step.get("said"):
-                            label = f"say:{str(step['said'])[:80]}"
+                            spoken_replies.append(str(step["said"]))
                         if isinstance(step, dict) and cc == "ha" and step.get("ha_result"):
                             ha_text = str(step["ha_result"]).strip()
                             if ha_text:
@@ -750,6 +750,7 @@ async def handle_task(agent, payload):
                     result_msg = f"ran {successes} of {len(cmds)}: [{' -> '.join(summary_parts)}]"
                     if skipped:
                         result_msg += f"  (skipped {len(skipped)}: {link_reason})"
+                    _queue_spoken_replies(agent, spoken_replies)
                     return {
                         "ok": not failures and not skipped,
                         "cmd": "nl",
@@ -772,9 +773,24 @@ async def handle_task(agent, payload):
                     "cmd": cmd, "_task_id": _tid, "task": _tid}
     result = await _dispatch(agent, cmd, payload, return_result=True)
     if isinstance(result, dict):
+        if cmd == "say" and result.get("said"):
+            _queue_spoken_replies(agent, [str(result["said"])])
+            result["result"] = "ran 1 of 1: [say]"
         result.setdefault("_task_id", _tid)
         result.setdefault("task", _tid)
     return result
+
+
+def _queue_spoken_replies(agent, spoken_replies):
+    texts = [str(t).strip() for t in (spoken_replies or []) if str(t).strip()]
+    if not texts:
+        return
+
+    async def _send():
+        await asyncio.sleep(0.08)
+        await agent.notify_user("\n\n".join(texts))
+
+    agent.run_in_background(_send())
 
 
 async def cleanup(agent):
@@ -1458,9 +1474,12 @@ async def _ha(agent, payload):
             raise ValueError("ha requires a natural-language 'request' (or legacy service+entity_id)")
 
     delegate = _ha_delegate_for_request(request)
-    result = await agent.send_to(delegate, {"text": request}, timeout=60.0)
-    if result is None:
-        raise RuntimeError(f"{delegate} did not respond (not running / no reply)")
+    if delegate == "actuator":
+        result = await _ha_actuate(agent, request)
+    else:
+        result = await agent.send_to(delegate, {"text": request}, timeout=60.0)
+        if result is None:
+            raise RuntimeError(f"{delegate} did not respond (not running / no reply)")
     if isinstance(result, dict):
         if result.get("error") and not result.get("result"):
             raise RuntimeError(f"{delegate} error: {result['error']}")
@@ -1474,7 +1493,7 @@ async def _ha(agent, payload):
 
 
 def _ha_delegate_for_request(request):
-    """Pick main for one-shot control, home-assistant-agent for HA management/info."""
+    """Pick actuator for one-shot control, home-assistant-agent for HA management/info."""
     low = (request or "").lower()
     ha_agent_markers = (
         "automation", "automations", "list", "show", "what", "which", "who",
@@ -1482,7 +1501,37 @@ def _ha_delegate_for_request(request):
         "sensors", "entity", "entities", "area", "areas", "device", "devices",
         "camera", "snapshot", "stream", "recommend", "recommendation",
     )
-    return "home-assistant-agent" if any(marker in low for marker in ha_agent_markers) else "main"
+    return "home-assistant-agent" if any(marker in low for marker in ha_agent_markers) else "actuator"
+
+
+async def _ha_actuate(agent, request):
+    """Run the same one-off Home Assistant actuator used by main chat actuation."""
+    import uuid as _uuid
+    from wactorz.agents.dynamic_agent import _ensure_result_handler
+    from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
+
+    actor = agent._actor
+    if not hasattr(actor, "_result_futures"):
+        actor._result_futures = {}
+    _ensure_result_handler(actor)
+
+    task_id = f"reachy_ha_{_uuid.uuid4().hex[:8]}"
+    future = asyncio.get_running_loop().create_future()
+    actor._result_futures[task_id] = future
+    try:
+        await actor.spawn(
+            OneOffActuatorAgent,
+            request=request,
+            llm_provider=getattr(actor, "_llm_provider", None),
+            task_id=task_id,
+            reply_to_id=actor.actor_id,
+            persistence_dir=str(actor._persistence_dir.parent),
+        )
+        return await asyncio.wait_for(future, timeout=120.0)
+    except asyncio.TimeoutError:
+        return {"result": "Actuation timed out, please retry."}
+    finally:
+        actor._result_futures.pop(task_id, None)
 
 # ============================================================
 # Reactive bindings

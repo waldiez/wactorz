@@ -23,6 +23,9 @@ export interface AgentInfo {
     task?: string;
     messagesProcessed?: number;
     costUsd?: number;
+    /** Cumulative LLM tokens (absent for non-LLM agents). */
+    inputTokens?: number;
+    outputTokens?: number;
     uptime?: number;
     /** Set for remote-runner agents — the node name (e.g. "rpi"). */
     node?: string;
@@ -126,7 +129,7 @@ export interface Attachment {
 
 export interface ChatMessage {
     id: string;
-    from: "user" | string; // "user" or agent name
+    from: string; // "user" or agent name
     to: string; // agent name or "user"
     content: string;
     timestampMs: number;

@@ -48,32 +48,40 @@ describe("seedHaConfigFromServer", () => {
         vi.restoreAllMocks();
     });
 
-    it("seeds url and token from the server when localStorage is empty", async () => {
+    it("seeds the url from the server when localStorage is empty", async () => {
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ ha: { url: "http://ha.local" } }),
+        })) as unknown as typeof fetch;
+
+        expect(await seedHaConfigFromServer()).toBe(true);
+        expect(localStorage.getItem("wactorz-ha-url")).toBe("http://ha.local");
+    });
+
+    it("never persists a token, even if the server still sends one", async () => {
         globalThis.fetch = vi.fn(async () => ({
             ok: true,
             json: async () => ({ ha: { url: "http://ha.local", token: "tok" } }),
         })) as unknown as typeof fetch;
 
-        expect(await seedHaConfigFromServer()).toBe(true);
+        await seedHaConfigFromServer();
         expect(localStorage.getItem("wactorz-ha-url")).toBe("http://ha.local");
-        expect(localStorage.getItem("wactorz-ha-token")).toBe("tok");
+        expect(localStorage.getItem("wactorz-ha-token")).toBeNull(); // token is never stored
     });
 
-    it("preserves a local edit when the server value is unchanged, still seeds a new key", async () => {
-        localStorage.setItem("wactorz-ha-url", "http://manual");
+    it("leaves an unchanged url alone (no rewrite)", async () => {
+        localStorage.setItem("wactorz-ha-url", "http://server");
         localStorage.setItem("wactorz-ha-url__server", "http://server"); // already seeded once
         globalThis.fetch = vi.fn(async () => ({
             ok: true,
-            json: async () => ({ ha: { url: "http://server", token: "tok" } }),
+            json: async () => ({ ha: { url: "http://server" } }),
         })) as unknown as typeof fetch;
 
-        const changed = await seedHaConfigFromServer();
-        expect(localStorage.getItem("wactorz-ha-url")).toBe("http://manual"); // unchanged server → untouched
-        expect(localStorage.getItem("wactorz-ha-token")).toBe("tok"); // newly seeded
-        expect(changed).toBe(true);
+        expect(await seedHaConfigFromServer()).toBe(false);
+        expect(localStorage.getItem("wactorz-ha-url")).toBe("http://server");
     });
 
-    it("returns false when nothing needs seeding", async () => {
+    it("returns false when the server sends no url", async () => {
         globalThis.fetch = vi.fn(async () => ({
             ok: true,
             json: async () => ({ ha: {} }),

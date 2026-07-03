@@ -283,13 +283,18 @@ export class ChatInput {
         if (!name) {
             return;
         }
+        const opt = [...select.options].find(o => o.value === name || o.text === name);
+        if (!opt) {
+            // The mentioned agent isn't a valid target (left, or not messageable).
+            // Don't strip the query or fake a target switch — just dismiss the
+            // panel, so the placeholder never claims a target that wasn't set.
+            this.closePanel(panel);
+            return;
+        }
         // Replace the trailing @query with nothing (target is set via select).
         input.value = input.value.replace(/@\w*$/, "").trimEnd();
-        const opt = [...select.options].find(o => o.value === name || o.text === name);
-        if (opt) {
-            select.value = opt.value;
-            this.host.setTarget(opt.value);
-        }
+        select.value = opt.value;
+        this.host.setTarget(opt.value);
         input.placeholder = `Message @${name}…`;
         this.closePanel(panel);
         if (ghost) {

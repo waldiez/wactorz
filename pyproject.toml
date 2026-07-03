@@ -7,7 +7,10 @@ name = "wactorz"
 dynamic = ["version"]
 description = "Actor-model multi-agent framework — spawn, coordinate and monitor AI agents at runtime"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = [
+    "LICENSE"
+]
 requires-python = ">=3.10"
 authors = [{ name = "Wactorz Contributors" }]
 keywords = ["agents", "llm", "actor-model", "mqtt", "multi-agent", "orchestration"]
@@ -73,6 +76,8 @@ dev       = [
     "watchdog>=6.0.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
+    "ruff>=0.15.0",
+    "basedpyright>=1.20.0",
 ]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
@@ -93,6 +98,7 @@ wactorz         = "wactorz.cli:main"
 wactorz-monitor = "wactorz.monitor_server:cli_main"
 wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
+wactorz-google-login = "wactorz.interfaces.google_login:main"
 
 [project.urls]
 Homepage      = "https://docs.waldiez.io/wactorz/"
@@ -144,3 +150,85 @@ exclude = [
     "frontend/node_modules",
     ".git",
 ]
+
+# ── Ruff: linter + formatter ────────────────────────────────
+[tool.ruff]
+line-length = 100              # matches the former .flake8; the formatter owns width
+target-version = "py310"       # lowest supported runtime (requires-python = ">=3.10")
+extend-exclude = ["static", "frontend", "node_modules", "build", "dist", ".local"]
+
+[tool.ruff.lint]
+# Gated rules (fail pre-commit/CI) — high-signal, mostly auto-fixable:
+select = [
+    "E", "W",  # pycodestyle errors/warnings
+    "F",       # pyflakes — undefined names, unused imports/vars (real bugs)
+    "I",       # isort — import ordering (auto-fixed)
+    "UP",      # pyupgrade — modernise to 3.10+ syntax (auto-fixed)
+    "B",       # flake8-bugbear — likely-bug patterns (e.g. mutable arg defaults)
+    "C4",      # flake8-comprehensions — simpler/faster comprehensions
+    "SIM",     # flake8-simplify — redundant or convoluted logic
+    "RET",     # flake8-return — return-path hygiene
+    "PIE",     # flake8-pie — misc anti-patterns
+    "PGH",     # pygrep-hooks — no blanket noqa / type: ignore
+    "ASYNC",   # flake8-async — blocking calls inside async code (real bugs)
+    "FURB",    # refurb — modernise stdlib usage
+    "RUF",     # ruff-specific — mutable defaults, unused noqa, dead branches
+    "D",       # pydocstyle — docstring style (google convention)
+]
+ignore = [
+    "E501",    # line length is owned by the formatter
+    "B008",    # function call in arg defaults: intentional in async handler signatures
+    "B027",    # empty base-class methods are optional lifecycle hooks (on_start/on_stop)
+    # docstring presence is not yet required on every public symbol
+    "D100", "D101", "D102", "D103", "D104", "D105", "D107",
+    # docstring layout (summary line, blank-line-after, terminal punctuation) is not enforced
+    "D200", "D205", "D415",
+    "RUF006",  # dangling asyncio tasks are often intentional fire-and-forget
+    "RUF013",  # implicit Optional: off until annotations are complete
+    "RUF001", "RUF002", "RUF003",  # ambiguous-unicode: the glyphs are intentional
+    "SIM105",  # contextlib.suppress not required over try/except/pass
+    "SIM117",  # combined with-statements not required
+    # blocking I/O and idle-loop patterns in async code, confined to rare start/stop paths
+    "ASYNC110", "ASYNC230", "ASYNC240",
+]
+# Further families (logging, exception style, complexity, pathlib, security, datetime)
+# stay advisory via `make lint-py` until each is triaged and gated.
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]       # re-exports: imported here to expose the package's public API
+"tests/*" = ["B", "E402", "D"] # tests do odd things; docstrings not required in test code
+
+[tool.ruff.lint.pydocstyle]
+# options: google, numpy, pep257
+convention = "google"          # docstring style for the advisory `D` checks (most widely used)
+
+[tool.ruff.format]
+# Black-compatible defaults; owns line width so the linter need not nag E501.
+
+# ── basedpyright: type checking in BASIC mode (ADVISORY, not gated) ────────────
+# Basic, not strict: catches real errors (undefined attrs, bad calls, None misuse)
+# without demanding annotations on the ~half of functions that lack them today.
+# Run via `make lint-py`; ratchet toward strict as the codebase gets typed up.
+[tool.basedpyright]
+include = ["wactorz"]
+exclude = ["**/node_modules", "static", "frontend", "build", "dist", ".local", "**/__pycache__"]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["wactorz"]
+branch = true
+omit = ["wactorz/_version.py", "tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "\\.\\.\\.",               # ellipsis / stub bodies
+]
+# fail_under = 90
+precision = 2

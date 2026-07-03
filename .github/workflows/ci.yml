@@ -28,6 +28,44 @@ jobs:
       - name: Test
         run: python -m pytest tests
 
+  coverage-python:
+    name: Python coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        run: pip install -e ".[all,dev]"
+
+      - name: Coverage
+        run: make coverage-py
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage
+          path: coverage/python-coverage.xml
+
+  lint-python:
+    name: Python lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        run: pip install -e ".[all,dev]"
+
+      - name: Lint
+        run: make lint-py
+
   test-frontend:
     name: Frontend
     runs-on: ubuntu-latest
@@ -36,10 +74,18 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      - name: Install & build
+      - name: Install
         working-directory: frontend
-        run: bun install && bun run build
+        run: bun install
 
       - name: Lint
         working-directory: frontend
         run: bun run lint
+
+      - name: Test + coverage (gated)
+        working-directory: frontend
+        run: bun run coverage
+
+      - name: Build
+        working-directory: frontend
+        run: bun run build

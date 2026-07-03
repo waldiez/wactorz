@@ -23,8 +23,9 @@ class FakeLLM:
         self.decision = decision
         self.raises = raises
 
-    async def complete(self, messages=None, system=None, max_tokens=None,
-                       reasoning_effort=None, **_kw):
+    async def complete(
+        self, messages=None, system=None, max_tokens=None, reasoning_effort=None, **_kw
+    ):
         if self.raises is not None:
             raise self.raises
         return self.decision, {"input_tokens": 7, "output_tokens": 2, "cost_usd": 0.02}
@@ -70,6 +71,7 @@ class RoutingHost(RoutingMixin):
 
 # ── _classify_intent ─────────────────────────────────────────────────────────
 
+
 def test_classify_empty_is_other():
     assert run(RoutingHost(llm=FakeLLM("HA"))._classify_intent("")) == "OTHER"
 
@@ -82,14 +84,17 @@ def test_classify_no_llm_is_other():
     assert run(RoutingHost(llm=None)._classify_intent("turn on the light")) == "OTHER"
 
 
-@pytest.mark.parametrize("decision,expected", [
-    ("HA", "HA"),
-    ("PIPELINE", "PIPELINE"),
-    ("ACTUATE", "ACTUATE"),
-    ("OTHER", "OTHER"),
-    ("pipeline then extra words", "PIPELINE"),  # first token, upper-cased
-    ("nonsense", "OTHER"),                       # unknown label → OTHER
-])
+@pytest.mark.parametrize(
+    "decision,expected",
+    [
+        ("HA", "HA"),
+        ("PIPELINE", "PIPELINE"),
+        ("ACTUATE", "ACTUATE"),
+        ("OTHER", "OTHER"),
+        ("pipeline then extra words", "PIPELINE"),  # first token, upper-cased
+        ("nonsense", "OTHER"),  # unknown label → OTHER
+    ],
+)
 def test_classify_maps_llm_output(decision, expected):
     assert run(RoutingHost(llm=FakeLLM(decision))._classify_intent("do a thing")) == expected
 
@@ -106,10 +111,14 @@ def test_classify_exception_is_other():
 
 
 def test_classify_timeout_is_other():
-    assert run(RoutingHost(llm=FakeLLM(raises=asyncio.TimeoutError()))._classify_intent("x")) == "OTHER"
+    assert (
+        run(RoutingHost(llm=FakeLLM(raises=asyncio.TimeoutError()))._classify_intent("x"))
+        == "OTHER"
+    )
 
 
 # ── _is_home_automation_request ──────────────────────────────────────────────
+
 
 def test_is_ha_true():
     assert run(RoutingHost(llm=FakeLLM("HA"))._is_home_automation_request("x")) is True
@@ -120,6 +129,7 @@ def test_is_ha_false():
 
 
 # ── _handle_actuate_intent ───────────────────────────────────────────────────
+
 
 def test_actuate_unconfigured_returns_message(monkeypatch):
     # Force HA unconfigured so the test doesn't depend on the local .env.
@@ -136,7 +146,9 @@ def test_actuate_happy_path(monkeypatch):
         "wactorz.agents.mixins.routing.CONFIG",
         types.SimpleNamespace(ha_url="http://ha", ha_token="tok"),
     )
-    h = RoutingHost(llm=FakeLLM("ACTUATE"), registry=FakeRegistry())  # no HA agent → skip enrichment
+    h = RoutingHost(
+        llm=FakeLLM("ACTUATE"), registry=FakeRegistry()
+    )  # no HA agent → skip enrichment
     result = run(h._handle_actuate_intent("turn on the lamp"))
     assert result == "turned on"
     assert h.spawn_calls and h.spawn_calls[-1][0].__name__ == "OneOffActuatorAgent"

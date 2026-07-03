@@ -1,5 +1,4 @@
-"""
-OpenTelemetry integration for Wactorz.
+"""OpenTelemetry integration for Wactorz.
 
 Activated when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 Pushes the same per-actor metrics as the Prometheus collector via OTLP HTTP.
@@ -16,7 +15,8 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,7 @@ _export_warned = False  # suppress repeated connection-error log spam
 
 
 def setup_otel(registry_provider: RegistryProvider) -> bool:
-    """
-    Configure OTel SDK and start periodic metric export.
+    """Configure OTel SDK and start periodic metric export.
     Returns True if OTel was successfully set up, False if disabled or unavailable.
     Idempotent — safe to call multiple times.
     """
@@ -50,10 +49,7 @@ def setup_otel(registry_provider: RegistryProvider) -> bool:
         )
         from opentelemetry.sdk.resources import SERVICE_NAME, Resource
     except ImportError:
-        logger.warning(
-            "OpenTelemetry packages not installed — "
-            "run: pip install 'wactorz[otel]'"
-        )
+        logger.warning("OpenTelemetry packages not installed — run: pip install 'wactorz[otel]'")
         return False
 
     service_name = os.getenv("OTEL_SERVICE_NAME", "wactorz")
@@ -80,9 +76,7 @@ def setup_otel(registry_provider: RegistryProvider) -> bool:
                 return MetricExportResult.FAILURE
 
     exporter = _QuietExporter(endpoint=f"{endpoint}/v1/metrics")
-    reader = PeriodicExportingMetricReader(
-        exporter, export_interval_millis=export_interval_ms
-    )
+    reader = PeriodicExportingMetricReader(exporter, export_interval_millis=export_interval_ms)
     _provider = MeterProvider(resource=resource, metric_readers=[reader])
     meter = _provider.get_meter("wactorz", version="1.0")
 
@@ -96,6 +90,7 @@ def setup_otel(registry_provider: RegistryProvider) -> bool:
 
     def _per_actor(attr_fn):
         """Factory: returns a callback that yields one Observation per actor."""
+
         def _cb(options):
             registry = registry_provider()
             if registry is None or not hasattr(registry, "all_actors"):
@@ -105,6 +100,7 @@ def setup_otel(registry_provider: RegistryProvider) -> bool:
                 name = getattr(actor, "name", getattr(actor, "actor_id", "unknown"))
                 attrs = {"actor_name": name}
                 yield Observation(attr_fn(actor, now), attrs)
+
         return _cb
 
     def _up(actor, _now):

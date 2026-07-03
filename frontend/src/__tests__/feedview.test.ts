@@ -45,6 +45,15 @@ describe("feedItemEl", () => {
         expect(agent.classList.contains("af-feed-agent-user")).toBe(true);
     });
 
+    it("keeps the @mention on the user's own turn as a styled token", () => {
+        const c = document.createElement("div");
+        feedItemEl(c, item({ role: "user", label: "@researcher find the docs" }));
+        const text = c.querySelector<HTMLElement>(".af-feed-text")!;
+        const mention = text.querySelector<HTMLElement>(".af-feed-mention")!;
+        expect(mention.textContent).toBe("@researcher"); // routed agent as its own token
+        expect(text.textContent).toBe("@researcher find the docs"); // line reads naturally
+    });
+
     it("strips the @agent prefix and truncates long labels", () => {
         const c = document.createElement("div");
         const long = "@main " + "x".repeat(200);

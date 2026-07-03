@@ -22,6 +22,8 @@
  */
 
 import "./app.css";
+import { safeStorage } from "./safeStorage";
+import { uid } from "./ids";
 import { AgentStore } from "./agents/AgentStore";
 import { MQTTClient } from "./mqtt/MQTTClient";
 import { IOManager } from "./io/IOManager";
@@ -54,6 +56,7 @@ import {
     logFeedItem,
     completedFeedItem,
     nodeHeartbeatFeedItem,
+    rawFeedItem,
 } from "./agents/mapping";
 import { createDeletionGuard } from "./agents/deletionGuard";
 
@@ -72,7 +75,7 @@ import { createDeletionGuard } from "./agents/deletionGuard";
 // webview that host is the HA instance itself, not the addon backend.
 
 // Clear any stale persisted theme from older builds.
-localStorage.removeItem("wactorz-theme");
+safeStorage.remove("wactorz-theme");
 
 const _ingressPath: string = window.__WACTORZ_INGRESS_PATH ?? "";
 
@@ -100,11 +103,25 @@ const _mqttDefault = `${_wsBase}/mqtt`;
 // Self-heal browsers that cached a URL under old builds (incl. the hardcoded :8888
 // value). Removing it on load means existing users recover automatically on the
 // next page load — no manual localStorage clearing required.
-localStorage.removeItem("wactorz-mqtt-url");
+safeStorage.remove("wactorz-mqtt-url");
 
 const MQTT_BROKER = (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) || _mqttDefault;
 
 // ═══ 2 · Core services & shared state ════════════════════════════════════════
+
+// Global safety net — surface otherwise-silent failures (uncaught exceptions and
+// unhandled promise rejections) to the log and a toast; without this they reach
+// only the console.
+function reportGlobalError(context: string, detail: unknown): void {
+    log.error(`[${context}]`, detail);
+    toast.show({
+        type: "alert-error",
+        title: "Unexpected error",
+        message: "Something went wrong — see the console for details.",
+    });
+}
+window.addEventListener("error", e => reportGlobalError("uncaught", e.error ?? e.message));
+window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
 
 const agentStore = new AgentStore();
 const mqtt = new MQTTClient(MQTT_BROKER);
@@ -138,7 +155,11 @@ function refreshLiveActors(): void {
         return;
     }
     liveSyncInFlight = true;
-    fetch(`${_apiBase}/api/actors`)
+    // Bound the request so a hung fetch can't pin liveSyncInFlight and wedge every
+    // future refresh (the browser's default timeout is ~90s).
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => ctrl.abort(), 10_000);
+    fetch(`${_apiBase}/api/actors`, { signal: ctrl.signal })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((actors: AgentInfo[]) => {
             agentStore.reconcileAgents(reconcileActorList(actors, isDeleted));
@@ -150,6 +171,7 @@ function refreshLiveActors(): void {
             log.debug("[Dashboard] live actor refresh failed:", err);
         })
         .finally(() => {
+            window.clearTimeout(timer);
             liveSyncInFlight = false;
         });
 }
@@ -160,7 +182,7 @@ function refreshLiveActors(): void {
 wsChat.onChat((content, from, timestampMs) => {
     toast.show({ type: "chat", title: from, message: content.slice(0, 120) });
     const msg = {
-        id: `ws-${timestampMs}`,
+        id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
         from,
         to: "user",
         content,
@@ -341,20 +363,22 @@ mqtt.on("error", err => {
 });
 
 // ═══ 5 · Wiring — Home Assistant feed ════════════════════════════════════════
-// HA entity state arrives over two transports; one pusher de-duplicates. See ui/haFeed.
+// HA entity state reaches the activity feed via the ha-state-bridge-agent over
+// MQTT (homeassistant/state_changes/{domain}/{entity_id}). The browser no longer
+// talks to HA directly — the Devices nav button just links out to the HA UI.
 const pushHaFeed = createHaFeedPusher(pushFeed);
 
-// Path 1: direct HA WebSocket via HAClient (always works when HA is configured in frontend)
-listen("af-ha-state-change", detail => {
-    const { entityId, state, friendlyName } = detail;
-    pushHaFeed(entityId, state, friendlyName);
-});
-
-// Path 2: ha-state-bridge-agent → MQTT ha/state/{domain}/{entity_id}
 mqtt.on("raw", ({ topic, payload }) => {
     const ev = parseHaRawEvent(topic, payload);
     if (ev) {
         pushHaFeed(ev.entityId, ev.state, ev.friendlyName);
+        return;
+    }
+    // Other feed-only agent topics (actuations, anomaly, …) via the extensible
+    // registry in mapping.ts — resolve the friendly name from the live store.
+    const item = rawFeedItem(topic, payload, id => agentStore.getAgents().find(a => a.id === id)?.name);
+    if (item) {
+        pushFeed(item);
     }
 });
 
@@ -405,7 +429,10 @@ listen("af-clear-feed", () => {
 
 wsChat.connect(`${_wsBase}/ws`);
 refreshLiveActors();
-window.setInterval(() => {
+const _liveActorsTimer = window.setInterval(() => {
+    if (document.hidden) {
+        return;
+    }
     refreshLiveActors();
     agentStore.pruneStaleRemoteAgents();
 }, 15000);
@@ -422,21 +449,22 @@ fetch(`${_apiBase}/api/feed`)
     )
     .catch(err => log.debug("[feed] /api/feed seed failed:", err));
 
-// HA credentials are seeded from /api/config by CardDashboard (see
-// ui/dashboard/haConfig) — the single source of truth. The MQTT URL is
-// deliberately never seeded: the frontend always uses the same-origin /mqtt
-// proxy (see _mqttDefault), so the broker address never belongs in the browser.
+// The HA URL is seeded from /api/config by CardDashboard (see ui/dashboard/haConfig)
+// for the Devices link; no token ever reaches the browser. The MQTT URL is
+// likewise never seeded: the frontend always uses the same-origin /mqtt proxy
+// (see _mqttDefault), so the broker address never belongs in the browser.
 
 // Probe server TTS availability + load voice list (base must be set first so
 // the request stays inside the ingress prefix instead of bare "/api").
 tts.setApiBase(_apiBase);
-tts.init();
+void tts.init();
 
 mqtt.connect();
 
 // ═══ 8 · Teardown ════════════════════════════════════════════════════════════
 
 window.addEventListener("beforeunload", () => {
+    window.clearInterval(_liveActorsTimer);
     mqtt.disconnect();
     wsChat.disconnect();
     agentStore.dispose();

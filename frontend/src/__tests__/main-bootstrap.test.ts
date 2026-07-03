@@ -14,6 +14,7 @@
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { emit } from "../events";
+import { toast } from "../ui/ToastManager";
 
 // Registries the mocked transports populate as main.ts wires them up.
 const mockMqtt: Record<string, (...a: any[]) => void> = {};
@@ -179,7 +180,7 @@ describe("main.ts bootstrap", () => {
 
     it("routes HA raw events through the feed (and ignores non-HA topics)", () => {
         mqttHandler("raw")({
-            topic: "ha/state/light/x",
+            topic: "homeassistant/state_changes/light/x",
             payload: { new_state: { state: "on", attributes: { friendly_name: "Lamp" } } },
         });
         mqttHandler("raw")({ topic: "not-ha", payload: {} }); // parses to null
@@ -205,7 +206,6 @@ describe("main.ts bootstrap", () => {
     });
 
     it("handles the app-event listeners", () => {
-        emit("af-ha-state-change", { entityId: "e", state: "on", friendlyName: "E" });
         emit("af-stream-end", { text: "done", from: "A" });
         emit("af-stream-end", { text: "", from: "A" }); // !text → return
         emit("af-agent-command", { command: "pause", agentId: "a" }); // non-delete
@@ -215,5 +215,15 @@ describe("main.ts bootstrap", () => {
         emit("af-clear-feed");
         window.dispatchEvent(new Event("beforeunload"));
         expect(true).toBe(true);
+    });
+
+    it("routes uncaught errors and unhandled rejections to a toast", () => {
+        vi.mocked(toast.show).mockClear();
+        window.dispatchEvent(
+            Object.assign(new Event("error"), { error: new Error("boom"), message: "boom" }),
+        );
+        expect(toast.show).toHaveBeenCalledTimes(1);
+        window.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: new Error("nope") }));
+        expect(toast.show).toHaveBeenCalledTimes(2);
     });
 });

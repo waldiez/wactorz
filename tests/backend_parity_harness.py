@@ -7,7 +7,6 @@ import sys
 import types
 from dataclasses import dataclass
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIXTURE_PATH = ROOT / "tests" / "parity_fixtures" / "backend_supervisor_parity.json"
 
@@ -35,6 +34,7 @@ class _FakeProc:
 
 
 _psutil.Process = lambda: _FakeProc()
+
 
 def _load(name: str, path: pathlib.Path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -120,10 +120,7 @@ async def _run_scenario(scenario: dict) -> dict:
     await system.supervisor.start()
     await asyncio.sleep(0.35)
 
-    status_rows = {
-        row["name"]: row
-        for row in system.supervisor.status()
-    }
+    status_rows = {row["name"]: row for row in system.supervisor.status()}
     registry_rows = {actor.name: actor for actor in system.registry.all_actors()}
 
     result = {

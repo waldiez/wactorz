@@ -34,7 +34,7 @@ export function pickChatTarget(agents: AgentInfo[], current: string): string {
 /**
  * A leading `@name` mention overrides the picker target. Falls back to the picker
  * when there's no mention or it names no known agent. Without this a message
- * shows under the picked agent while the @mentioned one actually replies.
+ * shows under the picked agent while the mentioned one actually replies.
  */
 export function resolveSendTarget(content: string, agentNames: string[], fallback: string): string {
     const mention = /^@([A-Za-z0-9_-]+)/.exec(content.trimStart())?.[1];

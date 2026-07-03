@@ -1,5 +1,4 @@
-"""
-MLAgent - Base class for non-LLM ML/DL agents.
+"""MLAgent - Base class for non-LLM ML/DL agents.
 Example: YOLO object detection, anomaly detection, forecasting models.
 These actors run 24/7 processing data streams.
 """
@@ -8,16 +7,15 @@ import asyncio
 import logging
 import time
 from abc import abstractmethod
-from typing import Any, Optional
+from typing import Any
 
-from ..core.actor import Actor, Message, MessageType, ActorState
+from ..core.actor import Actor, ActorState, Message, MessageType
 
 logger = logging.getLogger(__name__)
 
 
 class MLAgent(Actor):
-    """
-    Base for ML/DL agents that don't use LLMs.
+    """Base for ML/DL agents that don't use LLMs.
     Override `load_model()` and `predict()`.
     Can run in continuous loop mode (e.g. anomaly detection 24/7).
     """
@@ -45,12 +43,10 @@ class MLAgent(Actor):
     @abstractmethod
     def load_model(self) -> Any:
         """Load and return the ML model (runs in thread executor)."""
-        pass
 
     @abstractmethod
     async def predict(self, input_data: Any) -> Any:
         """Run inference. Override this."""
-        pass
 
     async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:
@@ -85,20 +81,22 @@ class MLAgent(Actor):
                 logger.error(f"[{self.name}] Continuous loop error: {e}")
             await asyncio.sleep(self.poll_interval)
 
-    async def fetch_data(self) -> Optional[Any]:
+    async def fetch_data(self) -> Any | None:
         """Override to provide data for continuous mode."""
         return None
 
     async def _on_continuous_result(self, result: Any):
         """Override to handle continuous results (e.g. publish alert)."""
-        await self._mqtt_publish(f"agents/{self.actor_id}/result", {"result": str(result), "timestamp": time.time()})
+        await self._mqtt_publish(
+            f"agents/{self.actor_id}/result", {"result": str(result), "timestamp": time.time()}
+        )
 
 
 # ─── Example: YOLO Object Detection Agent ────────────────────────────────────
 
+
 class YOLOAgent(MLAgent):
-    """
-    Example ML agent using YOLO for object detection.
+    """Example ML agent using YOLO for object detection.
     Plug in any YOLO variant (ultralytics, yolov5, etc.)
     """
 
@@ -111,6 +109,7 @@ class YOLOAgent(MLAgent):
     def load_model(self):
         try:
             from ultralytics import YOLO
+
             return YOLO(self.model_path)
         except ImportError:
             logger.warning("[YOLOAgent] ultralytics not installed. pip install ultralytics")
@@ -123,25 +122,26 @@ class YOLOAgent(MLAgent):
 
         loop = asyncio.get_event_loop()
         results = await loop.run_in_executor(
-            None,
-            lambda: self._model(input_data, conf=self.confidence)
+            None, lambda: self._model(input_data, conf=self.confidence)
         )
         detections = []
         for r in results:
             for box in r.boxes:
-                detections.append({
-                    "class": r.names[int(box.cls)],
-                    "confidence": float(box.conf),
-                    "bbox": box.xyxy[0].tolist(),
-                })
+                detections.append(
+                    {
+                        "class": r.names[int(box.cls)],
+                        "confidence": float(box.conf),
+                        "bbox": box.xyxy[0].tolist(),
+                    }
+                )
         return {"detections": detections, "count": len(detections)}
 
 
 # ─── Example: Anomaly Detection Agent ────────────────────────────────────────
 
+
 class AnomalyDetectorAgent(MLAgent):
-    """
-    Simple statistical anomaly detection agent.
+    """Simple statistical anomaly detection agent.
     Runs 24/7 in continuous mode watching a data stream.
     """
 
@@ -157,7 +157,9 @@ class AnomalyDetectorAgent(MLAgent):
         return {"type": "zscore", "threshold": self.threshold}
 
     async def predict(self, input_data: Any) -> dict:
-        value = float(input_data) if not isinstance(input_data, dict) else input_data.get("value", 0.0)
+        value = (
+            float(input_data) if not isinstance(input_data, dict) else input_data.get("value", 0.0)
+        )
         self._values.append(value)
         if len(self._values) > self.window_size:
             self._values.pop(0)
@@ -166,6 +168,7 @@ class AnomalyDetectorAgent(MLAgent):
             return {"anomaly": False, "value": value, "reason": "warming up"}
 
         import statistics
+
         mean = statistics.mean(self._values)
         stdev = statistics.stdev(self._values) or 1e-9
         zscore = abs(value - mean) / stdev

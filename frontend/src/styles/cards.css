@@ -103,6 +103,12 @@
   color: rgba(255, 255, 255, 0.6);
   margin-top: 2px;
 }
+.af-card-tokens {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
 .af-card-cpu {
   color: rgba(251, 191, 36, 0.75);
 }

@@ -1,5 +1,4 @@
-"""
-PlannerAgent — On-demand task orchestrator with plan caching and auto-spawning.
+"""PlannerAgent — On-demand task orchestrator with plan caching and auto-spawning.
 
 Spawned by MainActor when a task is too complex for a single agent.
 Pipeline:
@@ -21,44 +20,50 @@ import hashlib
 import json
 import logging
 import time
-from typing import Optional
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.mqtt import mqtt_client
 from .llm_agent import LLMProvider, _accumulate_global_cost
-from .mixins import SpawnMixin
+from .mixins.spawning import SpawnMixin
 
 logger = logging.getLogger(__name__)
 
-_SKIP_AGENTS    = {"main", "monitor", "installer", "home-assistant-agent", "home-assistant-hardware", "home-assistant-automation", "anomaly-detector", "code-agent"}
+_SKIP_AGENTS = {
+    "main",
+    "monitor",
+    "installer",
+    "home-assistant-agent",
+    "home-assistant-hardware",
+    "home-assistant-automation",
+    "anomaly-detector",
+    "code-agent",
+}
 _PLAN_CACHE_KEY = "_plan_cache"
-_CACHE_TTL_S    = 86400   # 24 hours
+_CACHE_TTL_S = 86400  # 24 hours
 
 
 class PlannerAgent(Actor, SpawnMixin):
-    """
-    On-demand orchestrator. Spawned per complex task, self-terminates when done.
-    """
+    """On-demand orchestrator. Spawned per complex task, self-terminates when done."""
 
     def __init__(
         self,
-        llm_provider:   Optional[LLMProvider] = None,
-        task:           str = "",
-        reply_to_id:    str = "",
-        reply_task_id:  str = "",
+        llm_provider: LLMProvider | None = None,
+        task: str = "",
+        reply_to_id: str = "",
+        reply_task_id: str = "",
         auto_terminate: bool = True,
-        plan_only:      bool = False,
-        approved_plan:  Optional[dict] = None,
+        plan_only: bool = False,
+        approved_plan: dict | None = None,
         max_lifetime_s: float = 90.0,
         **kwargs,
     ):
         kwargs.setdefault("name", "planner")
         super().__init__(**kwargs)
-        self.llm              = llm_provider
-        self._task            = task
-        self._reply_to_id     = reply_to_id
-        self._reply_task_id   = reply_task_id
-        self._auto_terminate  = auto_terminate
+        self.llm = llm_provider
+        self._task = task
+        self._reply_to_id = reply_to_id
+        self._reply_task_id = reply_task_id
+        self._auto_terminate = auto_terminate
         # Dry-run support:
         #   plan_only=True       → produce a plan, return it as JSON, do NOT spawn.
         #   approved_plan=<dict> → skip planning, execute the supplied plan directly.
@@ -66,10 +71,10 @@ class PlannerAgent(Actor, SpawnMixin):
         # approved_plan takes precedence (it is checked first in _run_plan) and
         # the plan is executed; plan_only is ignored. on_start() enforces this
         # and logs it so the behaviour is never silent.
-        self._plan_only       = plan_only
-        self._approved_plan   = approved_plan
+        self._plan_only = plan_only
+        self._approved_plan = approved_plan
         self._result_futures: dict[str, asyncio.Future] = {}
-        self._spawned_by_planner: list[str] = []   # agents we created this run
+        self._spawned_by_planner: list[str] = []  # agents we created this run
         # Per-agent spawn outcome: name → {"ok": bool, "error": str|None}
         # Sent back to main in the RESULT payload so it knows what actually happened.
         self._spawn_results: dict[str, dict] = {}
@@ -81,12 +86,12 @@ class PlannerAgent(Actor, SpawnMixin):
         # holds the watchdog so normal completion can cancel it.
         self._max_lifetime_s: float = max_lifetime_s
         self._terminated: bool = False
-        self._lifetime_task: Optional[asyncio.Task] = None
+        self._lifetime_task: asyncio.Task | None = None
 
         # Cost tracking — accumulated across all llm.complete() calls this session
-        self.total_input_tokens:  int   = 0
-        self.total_output_tokens: int   = 0
-        self.total_cost_usd:      float = 0.0
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_cost_usd: float = 0.0
         self._last_period_cost_usd: float = 0.0
 
     def _current_task_description(self) -> str:
@@ -114,13 +119,16 @@ class PlannerAgent(Actor, SpawnMixin):
     async def on_stop(self):
         """Persist final cost metrics so lifetime spend survives agent termination."""
         if self.total_cost_usd > 0:
-            self.persist("_final_cost", {
-                "input_tokens":  self.total_input_tokens,
-                "output_tokens": self.total_output_tokens,
-                "cost_usd":      round(self.total_cost_usd, 6),
-                "name":          self.name,
-                "stopped_at":    time.time(),
-            })
+            self.persist(
+                "_final_cost",
+                {
+                    "input_tokens": self.total_input_tokens,
+                    "output_tokens": self.total_output_tokens,
+                    "cost_usd": round(self.total_cost_usd, 6),
+                    "name": self.name,
+                    "stopped_at": time.time(),
+                },
+            )
         try:
             await self._mqtt_publish(
                 f"agents/{self.actor_id}/metrics",
@@ -131,24 +139,23 @@ class PlannerAgent(Actor, SpawnMixin):
 
     def _build_metrics(self) -> dict:
         m = super()._build_metrics()
-        m["input_tokens"]  = self.total_input_tokens
+        m["input_tokens"] = self.total_input_tokens
         m["output_tokens"] = self.total_output_tokens
-        m["cost_usd"]      = round(self.total_cost_usd, 6)
+        m["cost_usd"] = round(self.total_cost_usd, 6)
         return m
 
     def _accrue_usage(self, usage: dict) -> None:
         """Accumulate token/cost usage returned by any llm.complete() call."""
-        self.total_input_tokens  += usage.get("input_tokens", 0)
+        self.total_input_tokens += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)
-        self.total_cost_usd      += usage.get("cost_usd", 0.0)
+        self.total_cost_usd += usage.get("cost_usd", 0.0)
         delta = self.total_cost_usd - self._last_period_cost_usd
         if delta > 0:
             _accumulate_global_cost(delta)
             self._last_period_cost_usd = self.total_cost_usd
 
     def _now_context(self) -> str:
-        """
-        Live date/time block for planning prompts. Resolves the user's timezone
+        """Live date/time block for planning prompts. Resolves the user's timezone
         from main's facts (same source the scheduler uses) so a "tomorrow at 3pm"
         request is decomposed against the correct calendar date and zone.
         """
@@ -161,16 +168,19 @@ class PlannerAgent(Actor, SpawnMixin):
                 except Exception:
                     pass
         from .llm_agent import current_time_context
+
         return current_time_context(user_tz)
 
     # ── Message handling ───────────────────────────────────────────────────
 
     async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:
-            payload   = msg.payload if isinstance(msg.payload, dict) else {"text": str(msg.payload)}
+            payload = msg.payload if isinstance(msg.payload, dict) else {"text": str(msg.payload)}
             task_text = payload.get("text") or payload.get("task") or str(msg.payload)
-            self._reply_to_id = payload.get("_reply_to") or msg.reply_to or msg.sender_id or self._reply_to_id
-            task_id           = payload.get("_task_id")
+            self._reply_to_id = (
+                payload.get("_reply_to") or msg.reply_to or msg.sender_id or self._reply_to_id
+            )
+            task_id = payload.get("_task_id")
             await self._log(f"Received task: {task_text[:80]}")
             result = await self._run_plan(task_text)
             if self._reply_to_id:
@@ -199,9 +209,9 @@ class PlannerAgent(Actor, SpawnMixin):
         result = await self._run_plan(task)
         if self._reply_to_id:
             reply = {
-                "result":        result,
-                "text":          result,
-                "spawn_results": self._spawn_results,   # per-agent outcome dict
+                "result": result,
+                "text": result,
+                "spawn_results": self._spawn_results,  # per-agent outcome dict
             }
             if self._reply_task_id:
                 reply["_task_id"] = self._reply_task_id
@@ -236,8 +246,7 @@ class PlannerAgent(Actor, SpawnMixin):
 
     @staticmethod
     def _is_pipeline_request(task: str) -> bool:
-        """
-        Detect reactive/persistent pipeline requests vs one-shot tasks.
+        """Detect reactive/persistent pipeline requests vs one-shot tasks.
         Pipelines use conditional/temporal language: if/when/whenever/monitor/watch/notify.
         Also catches explicit spawn/continuous-agent requests like:
           "spawn an agent to log the mean..."
@@ -245,10 +254,11 @@ class PlannerAgent(Actor, SpawnMixin):
           "I want an agent to send to a topic random temp..."
         """
         import re
+
         lowered = task.lower()
 
         # Explicit pipeline prefix always wins
-        if lowered.startswith("pipeline:") or lowered.startswith("pipeline "):
+        if lowered.startswith(("pipeline:", "pipeline ")):
             return True
 
         patterns = [
@@ -256,14 +266,21 @@ class PlannerAgent(Actor, SpawnMixin):
             r"\bif\b.*\b(send|notify|alert|turn|open|close|post|message|say|tell|warn|log|print|publish|emit)\b",
             r"\bwhen\b.*\b(detect|open|turn|send|notify|alert|is|becomes|goes|changes|say|warn|log)\b",
             r"\bwhenever\b",
-            r"\bmonitor\b", r"\bwatch\b", r"\bcheck\b.*\b(every|continuously|periodically|if|when)\b",
-            r"\balert me\b", r"\bnotify me\b", r"\btell me\b.*\bif\b",
+            r"\bmonitor\b",
+            r"\bwatch\b",
+            r"\bcheck\b.*\b(every|continuously|periodically|if|when)\b",
+            r"\balert me\b",
+            r"\bnotify me\b",
+            r"\btell me\b.*\bif\b",
             r"\bsend me\b.*\b(when|if|discord|message|notification)\b",
             r"\bsend me a\b",
             r"\bautomatically\b",
-            r"\bevery time\b", r"\bon detection\b",
-            r"\bis turned on\b", r"\bis turned off\b",
-            r"\bturns on\b", r"\bturns off\b",
+            r"\bevery time\b",
+            r"\bon detection\b",
+            r"\bis turned on\b",
+            r"\bis turned off\b",
+            r"\bturns on\b",
+            r"\bturns off\b",
             r"\bopens\b.*\b(send|notify|alert|light|turn)\b",
             r"\b(door|window|sensor|lamp|light|temperature|humidity|motion)\b.*\b(send|notify|discord|message)\b",
             # camera/detect + action = pipeline
@@ -277,18 +294,23 @@ class PlannerAgent(Actor, SpawnMixin):
             r"\b(i\s+want|i\s+need|i'd\s+like)\b.*\b(agent|app|bot|service|rule|something)\b.*\b(to|that|which)\b",
             # Periodic / continuous language
             r"\bevery\s+\d+\s*(sec|min|hour|s\b|m\b|h\b)",
-            r"\bcontinuously\b", r"\bconstantly\b", r"\bperiodically\b",
+            r"\bcontinuously\b",
+            r"\bconstantly\b",
+            r"\bperiodically\b",
             r"\bkeep\s+(running|publishing|logging|sending|checking)\b",
             r"\b(subscribe|listen)\s+(to|for|on)\b",
             r"\blog\s+(the|every|each|all)\b",
             # ── Clock-time triggers (5pm, 7am, 17:00, every weekday, etc.) ──
             # These should always be pipelines because they need a ScheduledAgent.
-            r"\bat\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b",   # 'at 5pm', 'at 09:30', 'at 7 am'
+            r"\bat\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b",  # 'at 5pm', 'at 09:30', 'at 7 am'
             r"\b(every|each)\s+(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
             r"\b(every|each)\s+(weekday|weekend|day|morning|evening|night|afternoon|hour|minute)\b",
-            r"\bdaily\b.*\b(at|on|when)\b", r"\bweekly\b", r"\bnightly\b",
+            r"\bdaily\b.*\b(at|on|when)\b",
+            r"\bweekly\b",
+            r"\bnightly\b",
             r"\btomorrow\b.*\b(at|morning|evening|night)\b",
-            r"\bremind\s+me\b", r"\bschedule\b.*\b(to|for|every|at)\b",
+            r"\bremind\s+me\b",
+            r"\bschedule\b.*\b(to|for|every|at)\b",
         ]
         return any(re.search(p, lowered) for p in patterns)
 
@@ -304,6 +326,7 @@ class PlannerAgent(Actor, SpawnMixin):
         # must NOT be pruned.
         try:
             from ..core.topic_bus import get_topic_bus
+
             bus = get_topic_bus()
             if bus and self._registry:
                 live = {a.name for a in self._registry.all_actors()}
@@ -311,6 +334,7 @@ class PlannerAgent(Actor, SpawnMixin):
                 main = self._registry.find_by_name("main")
                 if main and hasattr(main, "_known_nodes"):
                     import time as _pt
+
                     for nd in main._known_nodes.values():
                         if _pt.time() - nd.get("last_seen", 0) < 30:
                             live.update(nd.get("agents", []))
@@ -342,12 +366,14 @@ class PlannerAgent(Actor, SpawnMixin):
         # bypassing approval. Force the pipeline path so we get the same
         # approval flow regardless of which heuristic branch was taken.
         if self._plan_only:
-            await self._log("plan_only=True on one-shot path — routing through pipeline planner for approval flow")
+            await self._log(
+                "plan_only=True on one-shot path — routing through pipeline planner for approval flow"
+            )
             return await self._run_pipeline(task, workers)
 
         # ── 1. Check cache ─────────────────────────────────────────────────
-        cache_key  = _task_hash(task)
-        cached     = self._load_cached_plan(cache_key, workers)
+        cache_key = _task_hash(task)
+        cached = self._load_cached_plan(cache_key, workers)
         if cached:
             await self._log(f"Cache hit — reusing plan ({len(cached)} steps)")
             plan = cached
@@ -381,10 +407,8 @@ class PlannerAgent(Actor, SpawnMixin):
 
     # ── Pipeline mode (persistent reactive agents) ─────────────────────────
 
-
     async def _run_pipeline(self, task: str, workers: list[dict]) -> str:
-        """
-        Builds and spawns persistent reactive agents for if/when/wherever rules.
+        """Builds and spawns persistent reactive agents for if/when/wherever rules.
 
         Two modes governed by constructor flags (set by main):
           - plan_only=True: build the plan, return it as a JSON string, do NOT spawn.
@@ -440,10 +464,10 @@ class PlannerAgent(Actor, SpawnMixin):
             # from a normal answer string.
             envelope = {
                 "_plan_proposal": True,
-                "task":           task,
+                "task": task,
                 "resolution_note": resolution_note or "",
-                "plan":           plan,
-                "warnings":       conflict_note,   # "" when nothing notable
+                "plan": plan,
+                "warnings": conflict_note,  # "" when nothing notable
             }
             return json.dumps(envelope)
 
@@ -454,9 +478,10 @@ class PlannerAgent(Actor, SpawnMixin):
             summary = f"⚠️ Heads up — {conflict_note}\n\n{summary}"
         return summary
 
-    async def _execute_pipeline_plan(self, plan: list[dict], task: str, resolution_note: str = "") -> str:
-        """
-        Spawn each agent in the plan, register with main, build the final summary.
+    async def _execute_pipeline_plan(
+        self, plan: list[dict], task: str, resolution_note: str = ""
+    ) -> str:
+        """Spawn each agent in the plan, register with main, build the final summary.
         Extracted from _run_pipeline so dry-run can reuse the same execution path
         after a user approval.
 
@@ -465,7 +490,7 @@ class PlannerAgent(Actor, SpawnMixin):
         the resolution step was skipped (note is carried in the envelope instead).
         """
         spawned: list[str] = []
-        wired:   list[str] = []
+        wired: list[str] = []
         rule_agents: list[str] = []
 
         for step in plan:
@@ -486,7 +511,11 @@ class PlannerAgent(Actor, SpawnMixin):
 
             if not spawn_cfg:
                 await self._log(f"Step '{name}' has no spawn_config — skipping")
-                self._spawn_results[name] = {"ok": False, "status": "no_config", "error": "missing spawn_config"}
+                self._spawn_results[name] = {
+                    "ok": False,
+                    "status": "no_config",
+                    "error": "missing spawn_config",
+                }
                 continue
 
             spawn_cfg = dict(spawn_cfg)
@@ -539,6 +568,7 @@ class PlannerAgent(Actor, SpawnMixin):
         # Persist this rule into main's pipeline rules registry
         if rule_agents:
             import hashlib as _hl
+
             rule_id = _hl.md5(task.encode()).hexdigest()[:8]
             rule = {
                 "rule_id": rule_id,
@@ -561,7 +591,7 @@ class PlannerAgent(Actor, SpawnMixin):
         out = ["Pipeline active! Here's what I set up:\n"]
         if resolution_note:
             out.insert(0, f"📡 **Data source resolved:** {resolution_note}\n")
-        out += [f"{i+1}. {w}" for i, w in enumerate(wired)]
+        out += [f"{i + 1}. {w}" for i, w in enumerate(wired)]
         out.append("\nThese agents run continuously and react to events automatically.")
         out.append("Use `/rules` to see all active pipeline rules.")
         if spawned:
@@ -599,7 +629,7 @@ class PlannerAgent(Actor, SpawnMixin):
 
         existing_lines = []
         by_id: dict[str, dict] = {}
-        for r in existing[:30]:   # cap prompt size
+        for r in existing[:30]:  # cap prompt size
             rid = r.get("rule_id", "?")
             rtask = (r.get("task") or "").strip().replace("\n", " ")[:160]
             if rtask:
@@ -646,11 +676,11 @@ class PlannerAgent(Actor, SpawnMixin):
         for it in items[:5]:
             if not isinstance(it, dict):
                 continue
-            kind   = (it.get("kind") or "overlap").lower()
-            rid    = it.get("rule_id", "?")
+            kind = (it.get("kind") or "overlap").lower()
+            rid = it.get("rule_id", "?")
             reason = (it.get("reason") or "").strip()
-            rtask  = (by_id.get(rid, {}).get("task") or "").strip().replace("\n", " ")[:120]
-            label  = "Duplicate of" if kind.startswith("dup") else "May contradict"
+            rtask = (by_id.get(rid, {}).get("task") or "").strip().replace("\n", " ")[:120]
+            label = "Duplicate of" if kind.startswith("dup") else "May contradict"
             bit = f"{label} rule [{rid}]"
             if rtask:
                 bit += f' ("{rtask}")'
@@ -659,12 +689,12 @@ class PlannerAgent(Actor, SpawnMixin):
             lines.append(bit)
         if not lines:
             return ""
-        return ("This pipeline may overlap with existing rules:\n"
-                + "\n".join(f"  • {l}" for l in lines))
+        return "This pipeline may overlap with existing rules:\n" + "\n".join(
+            f"  • {ln}" for ln in lines
+        )
 
     async def _resolve_data_references(self, task: str) -> tuple[str, str]:
-        """
-        Resolve vague data references in a task to concrete MQTT topics or HA entities.
+        """Resolve vague data references in a task to concrete MQTT topics or HA entities.
 
         Examples:
           "log when temperature > 22"
@@ -693,23 +723,23 @@ class PlannerAgent(Actor, SpawnMixin):
         # ── Data concept keywords → search terms ──────────────────────────
         # Maps natural language concepts to TopicRegistry search keywords
         CONCEPT_MAP = {
-            r"\btemp(erature)?\b":   ["temperature", "temp", "thermal"],
-            r"\bhumid(ity)?\b":      ["humidity", "humid"],
-            r"\bmotion\b":           ["motion", "pir", "presence", "detect"],
-            r"\bpresence\b":         ["presence", "motion", "occupancy"],
-            r"\benergy\b":           ["energy", "power", "kwh", "watt"],
-            r"\bcpu\b":              ["cpu", "processor"],
-            r"\bmemory\b":           ["memory", "ram"],
-            r"\bco2\b":              ["co2", "carbon"],
-            r"\bair quality\b":      ["air", "quality", "voc", "pm25"],
-            r"\blight level\b":      ["light", "lux", "illumin"],
-            r"\bnoise\b":            ["noise", "sound", "db"],
-            r"\bdetect(ion)?\b":     ["detect", "yolo", "camera", "vision"],
-            r"\bdoor\b":             ["door", "entry", "contact"],
-            r"\bwindow\b":           ["window", "contact"],
-            r"\bwater\b":            ["water", "flood", "leak"],
-            r"\bgas\b":              ["gas", "methane", "smoke"],
-            r"\bvoltage\b":          ["voltage", "power", "electric"],
+            r"\btemp(erature)?\b": ["temperature", "temp", "thermal"],
+            r"\bhumid(ity)?\b": ["humidity", "humid"],
+            r"\bmotion\b": ["motion", "pir", "presence", "detect"],
+            r"\bpresence\b": ["presence", "motion", "occupancy"],
+            r"\benergy\b": ["energy", "power", "kwh", "watt"],
+            r"\bcpu\b": ["cpu", "processor"],
+            r"\bmemory\b": ["memory", "ram"],
+            r"\bco2\b": ["co2", "carbon"],
+            r"\bair quality\b": ["air", "quality", "voc", "pm25"],
+            r"\blight level\b": ["light", "lux", "illumin"],
+            r"\bnoise\b": ["noise", "sound", "db"],
+            r"\bdetect(ion)?\b": ["detect", "yolo", "camera", "vision"],
+            r"\bdoor\b": ["door", "entry", "contact"],
+            r"\bwindow\b": ["window", "contact"],
+            r"\bwater\b": ["water", "flood", "leak"],
+            r"\bgas\b": ["gas", "methane", "smoke"],
+            r"\bvoltage\b": ["voltage", "power", "electric"],
         }
 
         task_lower = task.lower()
@@ -726,6 +756,7 @@ class PlannerAgent(Actor, SpawnMixin):
         # ── Search TopicRegistry first ─────────────────────────────────────
         try:
             from ..core.topic_bus import get_topic_bus
+
             bus = get_topic_bus()
             if bus:
                 # Deduplicate and search
@@ -738,13 +769,15 @@ class PlannerAgent(Actor, SpawnMixin):
                     for contract in bus.registry.find_by_capability(kw):
                         for topic in contract.publishes:
                             if not any(c["topic"] == topic for c in candidates):
-                                candidates.append({
-                                    "topic":   topic,
-                                    "agent":   contract.name,
-                                    "node":    contract.node,
-                                    "schema":  contract.produces_schema,
-                                    "source":  "topic_registry",
-                                })
+                                candidates.append(
+                                    {
+                                        "topic": topic,
+                                        "agent": contract.name,
+                                        "node": contract.node,
+                                        "schema": contract.produces_schema,
+                                        "source": "topic_registry",
+                                    }
+                                )
 
                 if len(candidates) == 1:
                     # Unambiguous — auto-resolve
@@ -764,9 +797,7 @@ class PlannerAgent(Actor, SpawnMixin):
 
                 if len(candidates) > 1:
                     # Multiple matches — give all to LLM, let it pick best
-                    sources = ", ".join(
-                        f"'{c['topic']}' ({c['agent']})" for c in candidates[:5]
-                    )
+                    sources = ", ".join(f"'{c['topic']}' ({c['agent']})" for c in candidates[:5])
                     enriched = (
                         f"{task} "
                         f"[MULTIPLE DATA SOURCES FOUND: {sources}. "
@@ -791,14 +822,19 @@ class PlannerAgent(Actor, SpawnMixin):
                 ha_agent = self._registry.find_by_name("home-assistant-agent")
                 if ha_agent:
                     import uuid as _uuid
+
                     task_id = f"resolve_{_uuid.uuid4().hex[:6]}"
                     future = asyncio.get_running_loop().create_future()
                     self._result_futures[task_id] = future
-                    await self.send(ha_agent.actor_id, MessageType.TASK, {
-                        "text":     "list entities",
-                        "_task_id": task_id,
-                        "task":     task_id,
-                    })
+                    await self.send(
+                        ha_agent.actor_id,
+                        MessageType.TASK,
+                        {
+                            "text": "list entities",
+                            "_task_id": task_id,
+                            "task": task_id,
+                        },
+                    )
                     try:
                         result = await asyncio.wait_for(future, timeout=8.0)
                         # home-assistant-agent returns {"entities": [...]} — a flat list
@@ -824,31 +860,35 @@ class PlannerAgent(Actor, SpawnMixin):
                         # Handle both flat entity format and nested device format
                         if "entity_id" in entity:
                             # Flat format: {"entity_id": "sensor.temp", "name": "..."}
-                            eid   = entity.get("entity_id", "")
+                            eid = entity.get("entity_id", "")
                             ename = entity.get("friendly_name", "") or entity.get("name", "")
                             state = entity.get("state", "")
                             combined = (eid + " " + ename).lower()
                             if any(kw in combined for kw in matched_concepts):
-                                ha_candidates.append({
-                                    "entity_id": eid,
-                                    "name":      ename,
-                                    "state":     state,
-                                    "source":    "home_assistant",
-                                })
+                                ha_candidates.append(
+                                    {
+                                        "entity_id": eid,
+                                        "name": ename,
+                                        "state": state,
+                                        "source": "home_assistant",
+                                    }
+                                )
                         elif "entities" in entity:
                             # Nested device format (legacy): {"entities": [...]}
                             for sub in entity.get("entities", []):
-                                eid   = sub.get("entity_id", "")
+                                eid = sub.get("entity_id", "")
                                 ename = sub.get("friendly_name", "") or sub.get("name", "")
                                 state = sub.get("state", "")
                                 combined = (eid + " " + ename).lower()
                                 if any(kw in combined for kw in matched_concepts):
-                                    ha_candidates.append({
-                                        "entity_id": eid,
-                                        "name":      ename,
-                                        "state":     state,
-                                        "source":    "home_assistant",
-                                    })
+                                    ha_candidates.append(
+                                        {
+                                            "entity_id": eid,
+                                            "name": ename,
+                                            "state": state,
+                                            "source": "home_assistant",
+                                        }
+                                    )
 
                     if len(ha_candidates) == 1:
                         c = ha_candidates[0]
@@ -868,8 +908,7 @@ class PlannerAgent(Actor, SpawnMixin):
 
                     if len(ha_candidates) > 1:
                         sources = ", ".join(
-                            f"'{c['entity_id']}' ({c['name']})"
-                            for c in ha_candidates[:4]
+                            f"'{c['entity_id']}' ({c['name']})" for c in ha_candidates[:4]
                         )
                         enriched = (
                             f"{task} "
@@ -904,8 +943,7 @@ class PlannerAgent(Actor, SpawnMixin):
         return enriched, note
 
     async def _sample_live_topics(self, bus) -> list[str]:
-        """
-        Peek at one live MQTT message from each registered publish topic.
+        """Peek at one live MQTT message from each registered publish topic.
         Returns formatted lines with actual field names and an example value.
 
         This is the fallback when observed_samples haven't been captured yet
@@ -918,7 +956,7 @@ class PlannerAgent(Actor, SpawnMixin):
         import json as _json
 
         try:
-            import aiomqtt
+            import aiomqtt  # noqa: F401
         except ImportError:
             return []
 
@@ -936,11 +974,11 @@ class PlannerAgent(Actor, SpawnMixin):
             return []
 
         broker = getattr(self, "_mqtt_broker", "localhost")
-        port   = getattr(self, "_mqtt_port", 1883)
+        port = getattr(self, "_mqtt_port", 1883)
 
         # Subscribe to ALL topics on one connection, collect first message per topic
         # with a global timeout so we never hang.
-        received: dict[str, dict] = {}   # topic → payload
+        received: dict[str, dict] = {}  # topic → payload
 
         async def _collect():
             try:
@@ -971,14 +1009,10 @@ class PlannerAgent(Actor, SpawnMixin):
             pass  # we'll use whatever we collected so far
 
         # Build sample lines and store back into contracts
-        topic_to_agent = {t: a for t, a in topics_to_sample}
+        topic_to_agent = dict(topics_to_sample)
         for topic, payload in received.items():
             agent_name = topic_to_agent.get(topic, "?")
-            fields = {
-                k: type(v).__name__
-                for k, v in payload.items()
-                if not k.startswith("_")
-            }
+            fields = {k: type(v).__name__ for k, v in payload.items() if not k.startswith("_")}
             # Persist into contract for future calls (no repeated sampling)
             for contract in bus.registry.all_contracts():
                 if topic in (contract.publishes or []):
@@ -997,8 +1031,7 @@ class PlannerAgent(Actor, SpawnMixin):
         return sample_lines
 
     async def _decompose_pipeline(self, task: str, workers: list[dict]) -> list[dict]:
-        """
-        Decomposes a reactive pipeline request into persistent agent spawn configs.
+        """Decomposes a reactive pipeline request into persistent agent spawn configs.
 
         Flow:
           1. Query HomeAssistantAgent for live entities (delegates — no duplication)
@@ -1051,11 +1084,16 @@ class PlannerAgent(Actor, SpawnMixin):
         if not ha_available:
             try:
                 from ..config import CONFIG
-                from ..core.integrations.home_assistant.ha_helper import fetch_devices_entities_with_location
+                from ..core.integrations.home_assistant.ha_helper import (
+                    fetch_devices_entities_with_location,
+                )
+
                 ha_url = (CONFIG.ha_url or "").rstrip("/")
                 ha_token = (CONFIG.ha_token or "").strip()
                 if ha_url and ha_token:
-                    devices = await fetch_devices_entities_with_location(ha_url, ha_token, include_states=True)
+                    devices = await fetch_devices_entities_with_location(
+                        ha_url, ha_token, include_states=True
+                    )
                     lines = []
                     # Same rationale as above — don't truncate. Iterate ALL devices.
                     for device in devices:
@@ -1066,9 +1104,12 @@ class PlannerAgent(Actor, SpawnMixin):
                             state = entity.get("state", "")
                             if eid:
                                 parts = [eid]
-                                if ename: parts.append(f"name={ename}")
-                                if area: parts.append(f"area={area}")
-                                if state: parts.append(f"state={state}")
+                                if ename:
+                                    parts.append(f"name={ename}")
+                                if area:
+                                    parts.append(f"area={area}")
+                                if state:
+                                    parts.append(f"state={state}")
                                 lines.append("  " + "  ".join(parts))
                     ha_entities_text = "\n".join(lines)
                     ha_available = bool(lines)
@@ -1076,8 +1117,9 @@ class PlannerAgent(Actor, SpawnMixin):
             except Exception as e:
                 logger.warning(f"[{self.name}] Direct HA fetch failed: {e}")
 
-        ha_section = ha_entities_text if ha_entities_text else \
-            "  (HA not reachable — use entity IDs provided by the user)"
+        ha_section = (
+            ha_entities_text or "  (HA not reachable — use entity IDs provided by the user)"
+        )
 
         # ── Resolve real camera stream URLs via home-assistant-agent ───────
         # Mirrors the entity-list delegation above: ground PATTERN 3 (camera
@@ -1087,6 +1129,7 @@ class PlannerAgent(Actor, SpawnMixin):
         camera_snapshot_urls: dict[str, str] = {}
         try:
             import re as _re_cam
+
             camera_entity_ids = []
             camera_lines = []
             for line in ha_entities_text.splitlines():
@@ -1099,10 +1142,11 @@ class PlannerAgent(Actor, SpawnMixin):
             if camera_entity_ids:
                 task_words = {w for w in _re_cam.findall(r"[a-z0-9]+", task.lower()) if len(w) >= 3}
                 candidates = [
-                    eid for eid in camera_entity_ids
-                    if any(w in eid.lower() for w in task_words)
+                    eid for eid in camera_entity_ids if any(w in eid.lower() for w in task_words)
                 ]
-                if not candidates and any(kw in task.lower() for kw in ("camera", "webcam", "stream")):
+                if not candidates and any(
+                    kw in task.lower() for kw in ("camera", "webcam", "stream")
+                ):
                     candidates = camera_entity_ids[:5]
 
                 logger.debug(f"[{self.name}] Camera candidates for '{task[:60]}': {candidates}")
@@ -1117,7 +1161,11 @@ class PlannerAgent(Actor, SpawnMixin):
                     if not result or result.get("error"):
                         continue
                     streams = (result.get("data") or {}).get("streams", {})
-                    url = streams.get("camera_source") or streams.get("mjpeg_proxy") or streams.get("hls")
+                    url = (
+                        streams.get("camera_source")
+                        or streams.get("mjpeg_proxy")
+                        or streams.get("hls")
+                    )
                     if url:
                         camera_stream_urls[eid] = url
 
@@ -1133,14 +1181,20 @@ class PlannerAgent(Actor, SpawnMixin):
                             camera_snapshot_urls[eid] = snap_url
 
                 if camera_stream_urls:
-                    logger.debug(f"[{self.name}] Resolved {len(camera_stream_urls)} camera stream URL(s)")
+                    logger.debug(
+                        f"[{self.name}] Resolved {len(camera_stream_urls)} camera stream URL(s)"
+                    )
                 if camera_snapshot_urls:
-                    logger.debug(f"[{self.name}] Resolved {len(camera_snapshot_urls)} camera snapshot URL(s)")
+                    logger.debug(
+                        f"[{self.name}] Resolved {len(camera_snapshot_urls)} camera snapshot URL(s)"
+                    )
         except Exception as e:
             logger.warning(f"[{self.name}] Could not resolve camera stream/snapshot URLs: {e}")
 
         if camera_stream_urls:
-            cam_lines = ["CAMERA STREAM URLS (use these directly in code — do not invent /dev/video0 or proxy paths):"]
+            cam_lines = [
+                "CAMERA STREAM URLS (use these directly in code — do not invent /dev/video0 or proxy paths):"
+            ]
             for eid, url in camera_stream_urls.items():
                 cam_lines.append(f"  {eid}: {url}")
             camera_section = "\n".join(cam_lines)
@@ -1176,10 +1230,13 @@ class PlannerAgent(Actor, SpawnMixin):
         topic_samples_section = ""
         try:
             from ..core.topic_bus import get_topic_bus
+
             bus = get_topic_bus()
             if bus and bus.registry.all_contracts():
                 topic_bus_section = bus.to_planner_context()
-                logger.info(f"[{self.name}] TopicBus: {len(bus.registry.all_contracts())} contracts")
+                logger.info(
+                    f"[{self.name}] TopicBus: {len(bus.registry.all_contracts())} contracts"
+                )
 
                 # ── Sample live payloads from registered topics ────────────
                 # Captures ACTUAL field names so the LLM uses "temp" not "temperature"
@@ -1189,7 +1246,7 @@ class PlannerAgent(Actor, SpawnMixin):
                     if samples:
                         for topic, info in samples.items():
                             example = info.get("example", {})
-                            fields  = info.get("fields", {})
+                            fields = info.get("fields", {})
                             sample_lines.append(
                                 f"  Topic: {topic}  (published by {contract.name})\n"
                                 f"    Fields: {fields}\n"
@@ -1225,9 +1282,9 @@ class PlannerAgent(Actor, SpawnMixin):
 
         # Also extract any URL directly mentioned in the task
         import re as _re
+
         _url_match = _re.search(
-            r'https?://(?:discord\.com/api/webhooks|hooks\.slack\.com|api\.telegram\.org)/\S+',
-            task
+            r"https?://(?:discord\.com/api/webhooks|hooks\.slack\.com|api\.telegram\.org)/\S+", task
         )
         if _url_match:
             url = _url_match.group(0).rstrip(".,;!)'\"")
@@ -1264,17 +1321,38 @@ class PlannerAgent(Actor, SpawnMixin):
         # (Discord/Slack/Telegram URLs — also don't touch HA), and pure-
         # observability tasks where no HA service call is implied.
         _non_ha_kw = (
-            "camera", "webcam", "laptop camera", "yolo", "cv2", "opencv",
-            "discord", "telegram", "slack", "webhook",
+            "camera",
+            "webcam",
+            "laptop camera",
+            "yolo",
+            "cv2",
+            "opencv",
+            "discord",
+            "telegram",
+            "slack",
+            "webhook",
         )
         # HA service-call verbs — if the task contains one of these, feasibility
         # MUST run, because the LLM will try to emit an ha_actuator and we need
         # to confirm a real entity exists.
         _ha_action_verbs = (
-            "turn on", "turn off", "open", "close", "lock", "unlock",
-            "set temperature", "set brightness", "set color", "play", "pause",
-            "start", "stop", "activate", "trigger ",
-            "switch on", "switch off",
+            "turn on",
+            "turn off",
+            "open",
+            "close",
+            "lock",
+            "unlock",
+            "set temperature",
+            "set brightness",
+            "set color",
+            "play",
+            "pause",
+            "start",
+            "stop",
+            "activate",
+            "trigger ",
+            "switch on",
+            "switch off",
         )
         task_lower = task.lower()
         has_ha_verb = any(v in task_lower for v in _ha_action_verbs)
@@ -1289,7 +1367,7 @@ class PlannerAgent(Actor, SpawnMixin):
                 "You are checking whether a reactive HA automation can be built with the available entities.\n\n"
                 f"USER REQUEST: {task}\n\n"
                 f"AVAILABLE HA ENTITIES:\n{ha_section}\n\n"
-                'Return JSON only:\n'
+                "Return JSON only:\n"
                 '{"feasible": true/false, "reason": "<one sentence if not feasible>", "relevant_entities": ["entity_id", ...]}\n\n'
                 "Rules — be PERMISSIVE, default to feasible=true:\n"
                 "- Match by FUZZY SUBSTRING. 'lamp' matches 'light.wiz_rgbw_*' or "
@@ -1315,17 +1393,19 @@ class PlannerAgent(Actor, SpawnMixin):
                 self._accrue_usage(_usage)
                 clean = feas_resp.strip()
                 for fence in ("```json", "```"):
-                    if clean.startswith(fence):
-                        clean = clean[len(fence):]
-                    if clean.endswith("```"):
-                        clean = clean[:-3]
+                    clean = clean.removeprefix(fence)
+                    clean = clean.removesuffix("```")
                 clean = clean.strip()
                 feas = json.loads(clean)
                 if not feas.get("feasible", True):
-                    reason = feas.get("reason", "Cannot fulfill request with available HA entities.")
+                    reason = feas.get(
+                        "reason", "Cannot fulfill request with available HA entities."
+                    )
                     logger.warning(f"[{self.name}] Feasibility failed: {reason}")
                     return [{"_feasibility_error": reason}]
-                logger.info(f"[{self.name}] Feasibility OK — relevant: {feas.get('relevant_entities', [])}")
+                logger.info(
+                    f"[{self.name}] Feasibility OK — relevant: {feas.get('relevant_entities', [])}"
+                )
             except Exception as e:
                 logger.warning(f"[{self.name}] Feasibility check error (continuing): {e}")
 
@@ -1375,10 +1455,10 @@ class PlannerAgent(Actor, SpawnMixin):
             "    NEVER write a dynamic agent that polls datetime.now() in a loop.",
             "    NEVER write a dynamic agent with `while True: asyncio.sleep(60)` to check time.",
             "  Schedule spec — dict with one of these shapes:",
-            "    Daily:    {\"type\": \"daily\",    \"at\": \"17:00\"}",
-            "    Weekly:   {\"type\": \"weekly\",   \"at\": \"07:30\", \"days\": [\"mon\",\"tue\",\"wed\",\"thu\",\"fri\"]}",
-            "    Interval: {\"type\": \"interval\", \"seconds\": 1800}",
-            "    Once:     {\"type\": \"once\",     \"at\": \"2026-12-25T09:00:00\"}",
+            '    Daily:    {"type": "daily",    "at": "17:00"}',
+            '    Weekly:   {"type": "weekly",   "at": "07:30", "days": ["mon","tue","wed","thu","fri"]}',
+            '    Interval: {"type": "interval", "seconds": 1800}',
+            '    Once:     {"type": "once",     "at": "2026-12-25T09:00:00"}',
             "  spawn_config schema:",
             '    "type": "scheduled"',
             '    "description": "<what this fires>"',
@@ -1401,12 +1481,12 @@ class PlannerAgent(Actor, SpawnMixin):
             '    await agent.send_to("name", payload)              — delegate to agent (ASYNC, must await)',
             '    await agent.mqtt_get("topic")                     — one-shot MQTT read (ASYNC, must await)',
             '    agent.subscribe("topic", async_callback)          — subscribe to MQTT (SYNC, NO await!)',
-            '                                                        callback(payload_dict) per message',
-            '                                                        runs as background task, setup() returns immediately',
+            "                                                        callback(payload_dict) per message",
+            "                                                        runs as background task, setup() returns immediately",
             '    agent.window("topic", seconds=N)                  — sliding window (SYNC, NO await!)',
             '    agent.recall("key")                               — load persisted value (SYNC, NO await!)',
             '    agent.persist("key", value)                       — save persisted value (SYNC, NO await!)',
-            '    agent.declare_contract(...)                        — register topic contract (SYNC, NO await!)',
+            "    agent.declare_contract(...)                        — register topic contract (SYNC, NO await!)",
             '    agent.state["key"]                                — in-memory dict (cleared on restart)',
             "  CRITICAL RULES FOR DYNAMIC AGENT CODE:",
             "    NEVER use await on agent.subscribe(), agent.window(), agent.persist(), agent.recall(), agent.declare_contract()",
@@ -1495,7 +1575,7 @@ class PlannerAgent(Actor, SpawnMixin):
             "PATTERN 5 — Time-based trigger (clock time, recurring, or once):",
             "  ALWAYS use type=scheduled for ANY clock-time trigger. Two-agent pattern:",
             "  Agent 1 (scheduled, name: '<slug>-trigger'):",
-            "    schedule: {\"type\": \"daily\", \"at\": \"17:00\"} (or weekly/interval/once)",
+            '    schedule: {"type": "daily", "at": "17:00"} (or weekly/interval/once)',
             "    publish_topic: 'schedule/<slug>-trigger/fired'  (or omit for default)",
             "  Agent 2 (ha_actuator OR dynamic, name: '<slug>-action'):",
             "    Subscribes to 'schedule/<slug>-trigger/fired'",
@@ -1617,7 +1697,8 @@ class PlannerAgent(Actor, SpawnMixin):
                     "samples are authoritative.",
                     "",
                 ]
-                if topic_samples_section else []
+                if topic_samples_section
+                else []
             ),
             "═══ HOME ASSISTANT ENTITIES ═══",
             ha_section,
@@ -1643,7 +1724,8 @@ class PlannerAgent(Actor, SpawnMixin):
         try:
             response, _usage = await self.llm.complete(
                 messages=[{"role": "user", "content": prompt}],
-                system=self._now_context() + "\nYou are a JSON-only pipeline architect. Output only a valid JSON array. No markdown, no explanation.",
+                system=self._now_context()
+                + "\nYou are a JSON-only pipeline architect. Output only a valid JSON array. No markdown, no explanation.",
                 max_tokens=4000,
             )
             self._accrue_usage(_usage)
@@ -1666,8 +1748,7 @@ class PlannerAgent(Actor, SpawnMixin):
     # ── Pipeline code validator ────────────────────────────────────────────
 
     def _validate_pipeline_code(self, plan: list[dict]) -> list[dict]:
-        """
-        Scan generated dynamic agent code for common LLM mistakes and fix them.
+        """Scan generated dynamic agent code for common LLM mistakes and fix them.
         Currently catches:
           - Raw aiomqtt.Client() usage (should use agent.subscribe() instead)
           - Hardcoded MQTT broker hostnames
@@ -1678,9 +1759,17 @@ class PlannerAgent(Actor, SpawnMixin):
 
         # Synchronous agent API methods that must NOT be awaited
         _SYNC_METHODS = (
-            "subscribe", "window", "persist", "recall",
-            "declare_contract", "agents", "nodes", "topics",
-            "capabilities", "increment_processed", "increment_errors",
+            "subscribe",
+            "window",
+            "persist",
+            "recall",
+            "declare_contract",
+            "agents",
+            "nodes",
+            "topics",
+            "capabilities",
+            "increment_processed",
+            "increment_errors",
         )
         _sync_pat = r"\bawait\s+(agent\.(?:" + "|".join(_SYNC_METHODS) + r")\s*\()"
 
@@ -1714,15 +1803,17 @@ class PlannerAgent(Actor, SpawnMixin):
                     if fixed:
                         sc["code"] = fixed
                         code = fixed
-                        logger.info(f"[{self.name}] Auto-fixed raw aiomqtt in '{step.get('name')}' → agent.subscribe('{topic}')")
+                        logger.info(
+                            f"[{self.name}] Auto-fixed raw aiomqtt in '{step.get('name')}' → agent.subscribe('{topic}')"
+                        )
 
             # Detect direct HA REST API calls — should use ha_actuator instead
             _ha_api_patterns = [
-                r'/api/services/',
-                r'/api/states/',
-                r'httpx.*api/services',
-                r'requests\.(post|put|get).*api/services',
-                r'aiohttp.*api/services',
+                r"/api/services/",
+                r"/api/states/",
+                r"httpx.*api/services",
+                r"requests\.(post|put|get).*api/services",
+                r"aiohttp.*api/services",
             ]
             for pat in _ha_api_patterns:
                 if _re.search(pat, code):
@@ -1746,8 +1837,7 @@ class PlannerAgent(Actor, SpawnMixin):
 
     @staticmethod
     def _rewrite_aiomqtt_to_subscribe(code: str, topic: str) -> str:
-        """
-        Best-effort rewrite of raw aiomqtt MQTT subscription code to use agent.subscribe().
+        """Best-effort rewrite of raw aiomqtt MQTT subscription code to use agent.subscribe().
         Extracts the message handling callback and rewires it.
         Returns empty string if rewrite fails (original code kept).
         """
@@ -1756,7 +1846,7 @@ class PlannerAgent(Actor, SpawnMixin):
         # Try to extract the callback body — look for the inner async for loop body
         # Pattern: async for msg/message in client.messages: ... payload handling ...
         match = _re.search(
-            r'async\s+for\s+\w+\s+in\s+client\.messages:\s*\n(.*?)(?=\n\s*except|\n\s*$)',
+            r"async\s+for\s+\w+\s+in\s+client\.messages:\s*\n(.*?)(?=\n\s*except|\n\s*$)",
             code,
             _re.DOTALL,
         )
@@ -1772,15 +1862,23 @@ class PlannerAgent(Actor, SpawnMixin):
 
         # Strip leading indentation from callback body
         lines = callback_body.splitlines()
-        min_indent = min((len(l) - len(l.lstrip()) for l in lines if l.strip()), default=4)
-        dedented = "\n".join("    " + l[min_indent:] for l in lines if l.strip())
+        min_indent = min((len(ln) - len(ln.lstrip()) for ln in lines if ln.strip()), default=4)
+        dedented = "\n".join("    " + ln[min_indent:] for ln in lines if ln.strip())
 
         # Extract any setup code before the aiomqtt block
-        pre_match = _re.split(r'async\s+with\s+aiomqtt\.Client', code)[0]
-        pre_lines = [l for l in pre_match.splitlines()
-                     if l.strip() and not l.strip().startswith("import aiomqtt")
-                     and not l.strip().startswith("async def setup")]
-        pre_code = "\n".join("    " + l.strip() for l in pre_lines if l.strip()) + "\n" if pre_lines else ""
+        pre_match = _re.split(r"async\s+with\s+aiomqtt\.Client", code)[0]
+        pre_lines = [
+            ln
+            for ln in pre_match.splitlines()
+            if ln.strip()
+            and not ln.strip().startswith("import aiomqtt")
+            and not ln.strip().startswith("async def setup")
+        ]
+        pre_code = (
+            "\n".join("    " + ln.strip() for ln in pre_lines if ln.strip()) + "\n"
+            if pre_lines
+            else ""
+        )
 
         rewritten = (
             f"async def setup(agent):\n"
@@ -1794,17 +1892,18 @@ class PlannerAgent(Actor, SpawnMixin):
 
         # Preserve any process() or handle_task() that existed
         import re as _re2
+
         for fn in ("process", "handle_task"):
-            fn_match = _re2.search(rf'async\s+def\s+{fn}\s*\(', code)
+            fn_match = _re2.search(rf"async\s+def\s+{fn}\s*\(", code)
             if fn_match:
-                rewritten += "\n" + code[fn_match.start():]
+                rewritten += "\n" + code[fn_match.start() :]
                 break
 
         return rewritten
 
     # ── Plan cache ─────────────────────────────────────────────────────────
 
-    def _load_cached_plan(self, cache_key: str, workers: list[dict]) -> Optional[list]:
+    def _load_cached_plan(self, cache_key: str, workers: list[dict]) -> list | None:
         """Load a cached plan if it exists, is fresh, and all required agents are alive."""
         raw = self.recall(_PLAN_CACHE_KEY) or {}
         entry = raw.get(cache_key)
@@ -1814,7 +1913,7 @@ class PlannerAgent(Actor, SpawnMixin):
         # TTL check
         age = time.time() - entry.get("timestamp", 0)
         if age > _CACHE_TTL_S:
-            logger.info(f"[{self.name}] Cache expired ({age/3600:.1f}h old)")
+            logger.info(f"[{self.name}] Cache expired ({age / 3600:.1f}h old)")
             return None
 
         plan = entry.get("plan", [])
@@ -1838,8 +1937,8 @@ class PlannerAgent(Actor, SpawnMixin):
         now = time.time()
         raw = {k: v for k, v in raw.items() if now - v.get("timestamp", 0) < _CACHE_TTL_S}
         raw[cache_key] = {
-            "task":      task[:200],
-            "plan":      plan,
+            "task": task[:200],
+            "plan": plan,
             "timestamp": now,
         }
         self.persist(_PLAN_CACHE_KEY, raw)
@@ -1857,7 +1956,7 @@ class PlannerAgent(Actor, SpawnMixin):
                 manifest_map[cap["name"]] = cap
 
         workers = []
-        seen    = set()
+        seen = set()
 
         # ── Local actors ──────────────────────────────────────────────────────
         for actor in self._registry.all_actors():
@@ -1867,47 +1966,54 @@ class PlannerAgent(Actor, SpawnMixin):
                 continue
             seen.add(actor.name)
             manifest = manifest_map.get(actor.name, {})
-            workers.append({
-                "name":             actor.name,
-                "type":             type(actor).__name__,
-                "node":             None,
-                "remote":           False,
-                "description":      (
-                    manifest.get("description")
-                    or getattr(actor, "description", "")
-                    or getattr(actor, "system_prompt", "")[:100]
-                    or type(actor).__name__
-                ),
-                "capabilities":     manifest.get("capabilities", []),
-                "input_schema":     manifest.get("input_schema",  {}),
-                "output_schema":    manifest.get("output_schema", {}),
-                "publishes":        manifest.get("publishes", []),
-                "observed_samples": manifest.get("observed_samples", {}),
-            })
+            workers.append(
+                {
+                    "name": actor.name,
+                    "type": type(actor).__name__,
+                    "node": None,
+                    "remote": False,
+                    "description": (
+                        manifest.get("description")
+                        or getattr(actor, "description", "")
+                        or getattr(actor, "system_prompt", "")[:100]
+                        or type(actor).__name__
+                    ),
+                    "capabilities": manifest.get("capabilities", []),
+                    "input_schema": manifest.get("input_schema", {}),
+                    "output_schema": manifest.get("output_schema", {}),
+                    "publishes": manifest.get("publishes", []),
+                    "observed_samples": manifest.get("observed_samples", {}),
+                }
+            )
 
         # ── Remote agents from live node heartbeats ───────────────────────────
         if main and hasattr(main, "_known_nodes"):
             import time as _dt
+
             for node_name, nd in main._known_nodes.items():
                 if _dt.time() - nd.get("last_seen", 0) > 30:
-                    continue   # node offline — skip
+                    continue  # node offline — skip
                 for aname in nd.get("agents", []):
                     if aname in seen or aname in _SKIP_AGENTS:
                         continue
                     seen.add(aname)
                     manifest = manifest_map.get(aname, {})
-                    workers.append({
-                        "name":             aname,
-                        "type":             "RemoteAgent",
-                        "node":             node_name,
-                        "remote":           True,
-                        "description":      manifest.get("description", f"Remote agent on {node_name}"),
-                        "capabilities":     manifest.get("capabilities", []),
-                        "input_schema":     manifest.get("input_schema",  {}),
-                        "output_schema":    manifest.get("output_schema", {}),
-                        "publishes":        manifest.get("publishes", []),
-                        "observed_samples": manifest.get("observed_samples", {}),
-                    })
+                    workers.append(
+                        {
+                            "name": aname,
+                            "type": "RemoteAgent",
+                            "node": node_name,
+                            "remote": True,
+                            "description": manifest.get(
+                                "description", f"Remote agent on {node_name}"
+                            ),
+                            "capabilities": manifest.get("capabilities", []),
+                            "input_schema": manifest.get("input_schema", {}),
+                            "output_schema": manifest.get("output_schema", {}),
+                            "publishes": manifest.get("publishes", []),
+                            "observed_samples": manifest.get("observed_samples", {}),
+                        }
+                    )
 
         return workers
 
@@ -1928,12 +2034,12 @@ class PlannerAgent(Actor, SpawnMixin):
             clean = clean.split("\n", 1)[1] if "\n" in clean else ""
         # Drop everything from a trailing fence onward.
         if "```" in clean:
-            clean = clean[:clean.rfind("```")]
+            clean = clean[: clean.rfind("```")]
         # Slice to the outermost array.
         start = clean.find("[")
         end = clean.rfind("]")
         if start != -1 and end != -1 and end > start:
-            clean = clean[start:end + 1]
+            clean = clean[start : end + 1]
         return clean.strip()
 
     @staticmethod
@@ -1943,11 +2049,11 @@ class PlannerAgent(Actor, SpawnMixin):
         if clean.startswith("```"):
             clean = clean.split("\n", 1)[1] if "\n" in clean else ""
         if "```" in clean:
-            clean = clean[:clean.rfind("```")]
+            clean = clean[: clean.rfind("```")]
         start = clean.find("{")
         end = clean.rfind("}")
         if start != -1 and end != -1 and end > start:
-            clean = clean[start:end + 1]
+            clean = clean[start : end + 1]
         return clean.strip()
 
     async def _decompose(self, task: str, workers: list[dict]) -> list[dict]:
@@ -1970,7 +2076,9 @@ class PlannerAgent(Actor, SpawnMixin):
                 for topic, info in w["observed_samples"].items():
                     fields = info.get("fields", {})
                     example = info.get("example", {})
-                    lines.append(f"    topic '{topic}' payload fields: {fields}  example: {example}")
+                    lines.append(
+                        f"    topic '{topic}' payload fields: {fields}  example: {example}"
+                    )
             return "\n".join(lines)
 
         workers_desc = "\n".join(_fmt_worker(w) for w in workers)
@@ -1979,6 +2087,7 @@ class PlannerAgent(Actor, SpawnMixin):
         topic_schema_ctx = ""
         try:
             from ..core.topic_bus import get_topic_bus
+
             bus = get_topic_bus()
             if bus:
                 sample_lines = []
@@ -1986,7 +2095,7 @@ class PlannerAgent(Actor, SpawnMixin):
                     samples = contract.observed_samples or {}
                     for topic, info in samples.items():
                         example = info.get("example", {})
-                        fields  = info.get("fields", {})
+                        fields = info.get("fields", {})
                         sample_lines.append(
                             f"  {topic} (by {contract.name}): fields={fields}  example={example}"
                         )
@@ -2112,7 +2221,8 @@ Example:
         try:
             response, _usage = await self.llm.complete(
                 messages=[{"role": "user", "content": prompt}],
-                system=self._now_context() + "\nYou are a JSON-only task planner. Output only valid JSON arrays, nothing else.",
+                system=self._now_context()
+                + "\nYou are a JSON-only task planner. Output only valid JSON arrays, nothing else.",
                 max_tokens=1500,
             )
             self._accrue_usage(_usage)
@@ -2126,8 +2236,7 @@ Example:
     # ── Missing agent spawning ─────────────────────────────────────────────
 
     async def _ensure_agents(self, plan: list[dict]) -> list[dict]:
-        """
-        For any step with a spawn_config, spawn the agent if it's not running.
+        """For any step with a spawn_config, spawn the agent if it's not running.
         Updates the plan with the actual agent name once spawned.
 
         Continuous agents (those with a process() loop or subscribe-based setup)
@@ -2143,7 +2252,7 @@ Example:
                 continue
 
             agent_name = spawn_config.get("name") or step.get("agent")
-            existing   = self._registry.find_by_name(agent_name)
+            existing = self._registry.find_by_name(agent_name)
 
             if existing:
                 await self._log(f"Agent '{agent_name}' already running — skipping spawn")
@@ -2191,7 +2300,9 @@ Example:
                     await asyncio.sleep(1.0)
                     await self._log(f"'{agent_name}' ready.")
                 else:
-                    await self._log(f"Failed to spawn '{agent_name}' — step will use main as fallback")
+                    await self._log(
+                        f"Failed to spawn '{agent_name}' — step will use main as fallback"
+                    )
                     step["agent"] = "main"
             except Exception as e:
                 logger.error(f"[{self.name}] Spawn of '{agent_name}' failed: {e}")
@@ -2199,22 +2310,20 @@ Example:
 
         return plan
 
-    async def _spawn_agent(self, config: dict) -> Optional[Actor]:
+    async def _spawn_agent(self, config: dict) -> Actor | None:
         """Spawn an agent for a plan step. Delegates to the shared SpawnMixin.
 
         Uses the BLOCKING install path: a pipeline's next step may depend on
         this agent being live, so we wait for any package install to finish
         rather than returning a placeholder.
         """
-        return await self._spawn_local_from_config(
-            config, register=True, blocking_install=True
-        )
+        return await self._spawn_local_from_config(config, register=True, blocking_install=True)
 
     # ── Execution ──────────────────────────────────────────────────────────
 
     async def _execute(self, plan: list[dict]) -> dict:
-        results:   dict       = {}
-        completed: set[int]   = set()
+        results: dict = {}
+        completed: set[int] = set()
         remaining: list[dict] = list(plan)
 
         # ── Validate dependency references up front ────────────────────────
@@ -2230,16 +2339,13 @@ Example:
                     f"[{self.name}] Step {s.get('step')} depends on missing "
                     f"step(s) {bad} — marking failed"
                 )
-                results[s.get("step")] = {
-                    "error": f"unsatisfiable dependency on step(s) {bad}"
-                }
+                results[s.get("step")] = {"error": f"unsatisfiable dependency on step(s) {bad}"}
                 completed.add(s.get("step"))
                 remaining.remove(s)
 
         while remaining:
             ready = [
-                s for s in remaining
-                if all(d in completed for d in (s.get("depends_on") or []))
+                s for s in remaining if all(d in completed for d in (s.get("depends_on") or []))
             ]
             if not ready:
                 # Cyclic or otherwise unschedulable. Don't silently drop work —
@@ -2253,11 +2359,11 @@ Example:
                 for s in remaining:
                     results[s.get("step")] = {
                         "error": f"skipped — circular/unschedulable dependency "
-                                 f"(step {s.get('step')})"
+                        f"(step {s.get('step')})"
                     }
                 break
 
-            parallel   = [s for s in ready if s.get("parallel", False)]
+            parallel = [s for s in ready if s.get("parallel", False)]
             sequential = [s for s in ready if not s.get("parallel", False)]
 
             if parallel:
@@ -2266,8 +2372,10 @@ Example:
                     *[self._execute_step(s, results) for s in parallel],
                     return_exceptions=True,
                 )
-                for step, out in zip(parallel, outputs):
-                    results[step["step"]] = out if not isinstance(out, Exception) else {"error": str(out)}
+                for step, out in zip(parallel, outputs, strict=False):
+                    results[step["step"]] = (
+                        out if not isinstance(out, Exception) else {"error": str(out)}
+                    )
                     completed.add(step["step"])
                     remaining.remove(step)
 
@@ -2281,7 +2389,7 @@ Example:
 
     async def _execute_step(self, step: dict, prior: dict) -> dict:
         agent_name = step.get("agent", "main")
-        task_text  = step.get("task", "")
+        task_text = step.get("task", "")
         depends_on = step.get("depends_on") or []
 
         # Continuous agents (process loop / subscribe-based) were already started
@@ -2317,7 +2425,7 @@ Example:
                 f"  ⚠ @{agent_name} failed ({result['error_phase']}): {result['error'][:80]}"
             )
             # Try main as fallback synthesizer
-            await self._log(f"  → falling back to @main for this step")
+            await self._log("  → falling back to @main for this step")
             fallback = await self._llm_answer(
                 f"The agent '{agent_name}' failed. Do your best to answer: {task_text}"
             )
@@ -2326,10 +2434,12 @@ Example:
 
     # ── Delegation ─────────────────────────────────────────────────────────
 
-    async def _delegate(self, agent_name: str, task: str, timeout: float = 60.0) -> Optional[dict]:
+    async def _delegate(self, agent_name: str, task: str, timeout: float = 60.0) -> dict | None:
         return await self._delegate_with_payload(agent_name, {"text": task}, timeout=timeout)
 
-    async def _delegate_with_payload(self, agent_name: str, payload: dict, timeout: float = 60.0) -> Optional[dict]:
+    async def _delegate_with_payload(
+        self, agent_name: str, payload: dict, timeout: float = 60.0
+    ) -> dict | None:
         if not self._registry:
             return None
         target = self._registry.find_by_name(agent_name)
@@ -2338,13 +2448,16 @@ Example:
             return {"error": f"Agent '{agent_name}' not found"}
 
         import uuid
+
         task_id = str(uuid.uuid4())[:8]
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._result_futures[task_id] = future
 
-        await self.send(target.actor_id, MessageType.TASK, {
-            **payload, "_task_id": task_id, "_reply_to": self.actor_id
-        })
+        await self.send(
+            target.actor_id,
+            MessageType.TASK,
+            {**payload, "_task_id": task_id, "_reply_to": self.actor_id},
+        )
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
@@ -2359,8 +2472,7 @@ Example:
         # If every step was a spawn-only continuous agent, skip LLM synthesis
         # and return a clean confirmation — no need to "summarize" spawns.
         all_spawned = all(
-            isinstance(results.get(s["step"]), dict)
-            and results[s["step"]].get("spawned")
+            isinstance(results.get(s["step"]), dict) and results[s["step"]].get("spawned")
             for s in plan
         )
         if all_spawned:
@@ -2391,8 +2503,9 @@ Example:
         prompt = (
             f"You collected results from multiple agents for this task:\n\n"
             f"ORIGINAL TASK: {task}\n\n"
-            f"RESULTS:\n" + "\n\n".join(results_text) +
-            "\n\nSynthesize into a single, clear, well-structured answer for the user. "
+            f"RESULTS:\n"
+            + "\n\n".join(results_text)
+            + "\n\nSynthesize into a single, clear, well-structured answer for the user. "
             "Do not mention agent names, step numbers, or internal system details."
         )
         try:
@@ -2424,8 +2537,7 @@ Example:
     # ── Helpers ────────────────────────────────────────────────────────────
 
     async def _bootstrap_ha_entity_states(self, task: str, plan: list[dict] | None = None) -> None:
-        """
-        After pipeline agents are spawned they sit idle until the next MQTT
+        """After pipeline agents are spawned they sit idle until the next MQTT
         change arrives.  If the relevant HA entity is *already* in the desired
         state (e.g. lights are already on) that change never comes, so the
         agents never fire.
@@ -2445,12 +2557,35 @@ Example:
         import uuid
 
         HA_DOMAINS = {
-            "sensor", "binary_sensor", "light", "switch", "climate", "cover",
-            "media_player", "input_boolean", "input_number", "input_select",
-            "automation", "script", "scene", "group", "person", "zone",
-            "device_tracker", "alarm_control_panel", "camera", "fan",
-            "vacuum", "lock", "humidifier", "water_heater", "number",
-            "select", "button", "update", "event",
+            "sensor",
+            "binary_sensor",
+            "light",
+            "switch",
+            "climate",
+            "cover",
+            "media_player",
+            "input_boolean",
+            "input_number",
+            "input_select",
+            "automation",
+            "script",
+            "scene",
+            "group",
+            "person",
+            "zone",
+            "device_tracker",
+            "alarm_control_panel",
+            "camera",
+            "fan",
+            "vacuum",
+            "lock",
+            "humidifier",
+            "water_heater",
+            "number",
+            "select",
+            "button",
+            "update",
+            "event",
         }
         HA_ENTITY_RE = re.compile(r"\b([a-z_][a-z0-9_]*\.[a-z0-9_]+)\b")
 
@@ -2463,7 +2598,7 @@ Example:
                 seen.add(eid)
                 entity_ids.append(eid)
 
-        for step in (plan or []):
+        for step in plan or []:
             cfg = step.get("spawn_config") or {}
 
             # Source 1: generated agent code — the LLM embeds the real entity_id
@@ -2510,11 +2645,15 @@ Example:
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._result_futures[task_id] = future
         try:
-            await self.send(ha_actor.actor_id, MessageType.TASK, {
-                "text": f"get_entities_state {entity_list}",
-                "_task_id": task_id,
-                "_reply_to": self.actor_id,
-            })
+            await self.send(
+                ha_actor.actor_id,
+                MessageType.TASK,
+                {
+                    "text": f"get_entities_state {entity_list}",
+                    "_task_id": task_id,
+                    "_reply_to": self.actor_id,
+                },
+            )
             result = await asyncio.wait_for(future, timeout=15.0)
             await self._log(f"Bootstrap — HA agent responded: {result.get('result', '')[:120]}")
         except asyncio.TimeoutError:
@@ -2551,9 +2690,11 @@ Example:
         self._terminated = True
 
         # Cancel the watchdog unless we are being invoked *from* it.
-        if (self._lifetime_task
-                and not self._lifetime_task.done()
-                and self._lifetime_task is not asyncio.current_task()):
+        if (
+            self._lifetime_task
+            and not self._lifetime_task.done()
+            and self._lifetime_task is not asyncio.current_task()
+        ):
             self._lifetime_task.cancel()
 
         # Fail any in-flight delegations so nothing awaits a dead planner.
@@ -2604,6 +2745,7 @@ Example:
 
 
 # ── Utility ────────────────────────────────────────────────────────────────
+
 
 def _task_hash(task: str) -> str:
     """Stable short hash of a normalized task string for cache keying."""

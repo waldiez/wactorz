@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from aiohttp import web
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
 from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.platform_collector import PlatformCollector
 from prometheus_client.process_collector import ProcessCollector
-
 
 RegistryProvider = Callable[[], Any | None]
 
@@ -121,7 +121,9 @@ class ActorMetricsCollector:
             tasks_failed = float(getattr(metrics, "tasks_failed", 0))
             restart_count = float(getattr(metrics, "restart_count", 0))
             uptime = float(getattr(metrics, "uptime", 0.0)) if metrics is not None else 0.0
-            last_heartbeat = float(getattr(metrics, "last_heartbeat", 0.0)) if metrics is not None else 0.0
+            last_heartbeat = (
+                float(getattr(metrics, "last_heartbeat", 0.0)) if metrics is not None else 0.0
+            )
             heartbeat_age = max(0.0, now - last_heartbeat) if last_heartbeat else 0.0
 
             actor_info.add_metric([actor_name, actor_class, protected], 1)
@@ -135,8 +137,12 @@ class ActorMetricsCollector:
             actor_uptime.add_metric([actor_name], uptime)
             actor_heartbeat_age.add_metric([actor_name], heartbeat_age)
 
-            llm_input_tokens.add_metric([actor_name], float(getattr(actor, "total_input_tokens", 0)))
-            llm_output_tokens.add_metric([actor_name], float(getattr(actor, "total_output_tokens", 0)))
+            llm_input_tokens.add_metric(
+                [actor_name], float(getattr(actor, "total_input_tokens", 0))
+            )
+            llm_output_tokens.add_metric(
+                [actor_name], float(getattr(actor, "total_output_tokens", 0))
+            )
             llm_cost.add_metric([actor_name], float(getattr(actor, "total_cost_usd", 0.0)))
             state_counts[state_value] = state_counts.get(state_value, 0) + 1
 

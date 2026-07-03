@@ -19,10 +19,12 @@
  */
 export interface DeletionGuard {
     /** Mark `id` as just-deleted (starts the guard window). */
-    markDeleted(id: string): void;
+    // Arrow-property (not method) types: these are closures over the guard's map,
+    // safe to destructure — the type shape tells eslint's unbound-method so.
+    markDeleted: (id: string) => void;
     /** True while `id` should be suppressed. A `msgTs` newer than the deletion
      *  (+grace) re-admits it (and clears the entry); the failsafe also clears it. */
-    isDeleted(id: string, msgTs?: number): boolean;
+    isDeleted: (id: string, msgTs?: number) => boolean;
 }
 
 /**

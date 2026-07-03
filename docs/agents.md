@@ -196,7 +196,8 @@ Wraps the Home Assistant REST API. Uses multiple internal LLM calls to classify 
 | `edit_automation` | Identify and update an existing automation |
 | `delete_automation` | Remove an automation |
 | `get_entities_state` | Fetch current state for explicit entity IDs and re-publish to MQTT — used by PlannerAgent bootstrap |
-| `other` | Answer open-ended HA questions via a short LLM tool-call loop backed by `get_simplified_ha_data`, plus camera tools (see below) |
+| `other` | Answer open-ended HA questions via a short LLM tool-call loop backed by `get_simplified_ha_data`, plus camera and history tools (see below) |
+| `get_history` | Structured A2A fetch of entity state history for explicit entity IDs, returned as CSV — see [History tool](#history-tool) |
 
 #### Camera tools
 
@@ -218,6 +219,18 @@ Camera tools also support **A2A structured dispatch** — a peer agent can send 
 ```
 
 `get_camera_snapshot_url` returns only the URL (no HTTP fetch) — useful when a peer agent (e.g. PlannerAgent) needs to embed the URL in generated code rather than fetch the image itself. The response `data.snapshot_url` is the `/api/camera_proxy/{entity_id}` path and requires an `Authorization: Bearer <HA_TOKEN>` header to fetch.
+
+#### History tool
+
+Also available through the `other` intent's LLM tool-call loop is `get_entity_history`, backed by `get_entity_history()` in `ha_helper.py` (calls HA's `/api/history/period` REST endpoint). The system prompt tells the LLM to first call `get_simplified_ha_data` to resolve friendly names to `entity_id`s, then call `get_entity_history` with those IDs. The user message is prefixed with the current local datetime so the LLM can convert relative times ("yesterday midnight", "Saturday at 17:00") into ISO-8601 timestamps with UTC offset; returned timestamps are localised back to the server's timezone (`localise_history_timestamps`) so they line up with what the user asked for.
+
+Like the camera tools, history also supports **A2A structured dispatch**:
+
+```json
+{"operation": "get_history", "entity_ids": ["sensor.office_temperature"], "start_time": "2026-06-28T00:00:00", "end_time": "2026-06-29T00:00:00"}
+```
+
+This path skips the LLM entirely and returns the raw history alongside a flattened CSV (`entity_id,last_changed,state,unit_of_measurement`) via `history_to_csv()`, for peer agents that want tabular data rather than JSON.
 
 #### Prompts
 
@@ -567,6 +580,7 @@ Recipes live in `wactorz/catalogue_agents/` as plain Python files exporting an `
 | `sinergym-collector` | `sinergym_collector_agent.py` | Collects Sinergym episode data via MQTT for RL/Bayesian training. Listens on `sinergym/env/{env_id}/observation`, buffers transitions per-episode, persists episode blobs, and signals the optimizer on collection complete. | `aiomqtt`, `numpy` |
 | `sinergym-optimizer` | `sinergym_optimizer_agent.py` | Env-aware GP-UCB Q(s,a) optimizer with RBC warm-start. Trains from collected episodes (RL PPO/SAC or Bayesian GP), then publishes actions to `sinergym/env/{env_id}/action` during deployment. Auto-introspects obs/action variable names and comfort models. | `stable-baselines3`, `scikit-learn`, `numpy`, `torch`, `aiomqtt`, `gymnasium` |
 | `anomaly-detector` | `anomaly_detector_agent.py` | Learns normal patterns from time-series data (HA sensors and Sinergym), detects anomalies in real-time. Statistical z-score, percentile range, rate-of-change, and absence detection. Works with both real-world HA devices and simulated building data. | `aiomqtt`, `numpy` |
+| `smart-energy` | `smart_energy_agent.py` | Conversational Home Assistant smart-plug helper. Imports power-reporting plugs, tracks live watts plus kWh/cost, publishes energy summaries, and only powers down plugs through explicit guarded rules. | none |
 | `manual-agent` | `manual_agent.py` | Searches the web for device manuals, downloads PDFs, extracts text, and answers questions about them using the agent's LLM. | `httpx`, `pdfplumber`, `duckduckgo_search` |
 
 > **💡 Adding a recipe** — Create `wactorz/catalogue_agents/my_agent.py` exporting `AGENT_CODE = r'''...'''`, then add an entry to `_build_catalog()` in `wactorz/agents/catalog_agent.py`. The recipe is available on the next restart without any other changes.

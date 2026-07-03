@@ -13,6 +13,7 @@
  *   {"type":"chat","from":"io-gateway","content":"...","timestamp":...}
  */
 import { log } from "./logger";
+import { toMs } from "../mqtt/MQTTClient";
 import { emit } from "../events";
 import type { StatePatchAgent, SnapshotStats, LogFeedItem } from "../types/ws";
 
@@ -20,6 +21,10 @@ export type ChatHandler = (content: string, from: string, timestampMs: number) =
 export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number) => void;
 export type StreamEndHandler = (from: string) => void;
 export type ModeHandler = (mode: "direct_ws" | "mqtt") => void;
+
+/** Coerce an untrusted JSON field to a string; non-strings fall back (so a
+ *  hostile object can't stringify to "[object Object]"). */
+const asStr = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
 
 /**
  * Called whenever the server broadcasts a state patch over the WebSocket.
@@ -191,13 +196,13 @@ export class WSChatClient {
         }
         if (type === "delete_agent") {
             // Server explicitly deleted an agent — remove it and apply rest of patch
-            this._applyStatePatch(data["state"] as StatePatch | undefined, String(data["agent_id"] ?? ""));
+            this._applyStatePatch(data["state"] as StatePatch | undefined, asStr(data["agent_id"]));
             return;
         }
         // Any message with a "state" field is a state patch broadcast; it may
         // ALSO carry chat/stream content, so fall through after applying it.
         if (data["state"]) {
-            this._applyStatePatch(data["state"] as StatePatch);
+            this._applyStatePatch(data["state"]);
         }
         this._dispatchContent(data);
     }
@@ -211,7 +216,7 @@ export class WSChatClient {
 
     /** State reset broadcast — apply the state patch then clear UI as needed. */
     private _handleReset(data: Record<string, unknown>): void {
-        const scope = String(data["scope"] ?? "");
+        const scope = asStr(data["scope"]);
         if (scope === "all") {
             emit("af-wipe-all");
             return;
@@ -250,15 +255,14 @@ export class WSChatClient {
         // agent the user addressed. Re-attribute it to that agent so the thread,
         // feed and toasts are consistent live and after a reload. The proper fix
         // is server-side — the reply frame should carry the real agent name.
-        const rawFrom = String(data["from"] ?? "io-gateway");
+        const rawFrom = asStr(data["from"], "io-gateway");
         const from = rawFrom === "io-gateway" ? this._lastAgentName : rawFrom;
-        const rawTs = data["timestamp"] as number | undefined;
-        const ts = rawTs ? (rawTs < 1e10 ? rawTs * 1000 : rawTs) : Date.now();
+        const ts = toMs(data["timestamp"]);
 
         if (data["type"] === "chat") {
-            this._onChat?.(String(data["content"] ?? ""), from, ts);
+            this._onChat?.(asStr(data["content"]), from, ts);
         } else if (data["type"] === "stream_chunk") {
-            this._onStreamChunk?.(String(data["content"] ?? ""), from, ts);
+            this._onStreamChunk?.(asStr(data["content"]), from, ts);
         } else if (data["type"] === "stream_end") {
             this._onStreamEnd?.(from);
         }

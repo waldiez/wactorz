@@ -10,6 +10,7 @@
  * reconciling optimistic user echoes with their persisted copies.
  */
 import type { ChatMessage } from "../../types/agent";
+import { toMs } from "../../mqtt/MQTTClient";
 
 function ingressBase(): string {
     return window.__WACTORZ_INGRESS_PATH ?? "";
@@ -49,44 +50,45 @@ function stripInternalTurns<T extends { role: string; content: string }>(rows: T
 }
 
 /** Primary source: chat_log table — carries real persisted timestamps. */
-async function fromChatLog(agentId: string): Promise<ChatMessage[]> {
-    const res = await fetch(`${ingressBase()}/api/chats?agent=${encodeURIComponent(agentId)}&limit=200`);
+async function fromChatLog(agentName: string): Promise<ChatMessage[]> {
+    const res = await fetch(`${ingressBase()}/api/chats?agent=${encodeURIComponent(agentName)}&limit=200`);
     if (!res.ok) {
         return [];
     }
-    const rows: { id: number; ts: number; role: string; content: string }[] = await res.json();
+    const rows = (await res.json()) as { id: number; ts: number; role: string; content: string }[];
     return stripInternalTurns(rows.reverse()).map(r => ({
-        id: `hist-${agentId}-${r.id}`,
-        from: r.role === "user" ? "user" : agentId,
-        to: r.role === "user" ? agentId : "user",
+        id: `hist-${agentName}-${r.id}`,
+        from: r.role === "user" ? "user" : agentName,
+        to: r.role === "user" ? agentName : "user",
         content: r.content,
-        timestampMs: r.ts < 1e10 ? r.ts * 1000 : r.ts,
+        timestampMs: toMs(r.ts),
     }));
 }
 
 /** Fallback: actor kv_store history — no timestamps, so synthesise them. */
-async function fromKvStore(agentId: string): Promise<ChatMessage[]> {
-    const res = await fetch(`${ingressBase()}/api/actors/${encodeURIComponent(agentId)}/history`);
+async function fromKvStore(agentName: string): Promise<ChatMessage[]> {
+    const res = await fetch(`${ingressBase()}/api/actors/${encodeURIComponent(agentName)}/history`);
     if (!res.ok) {
         return [];
     }
-    const rawAll: { role: string; content: string }[] = await res.json();
+    const rawAll = (await res.json()) as { role: string; content: string }[];
     const raw = stripInternalTurns(rawAll);
     const base = Date.now() - raw.length * 2000 - 5000;
     return raw.map((m, i) => ({
-        id: `hist-${agentId}-${i}`,
-        from: m.role === "user" ? "user" : agentId,
-        to: m.role === "user" ? agentId : "user",
+        id: `hist-${agentName}-${i}`,
+        from: m.role === "user" ? "user" : agentName,
+        to: m.role === "user" ? agentName : "user",
         content: m.content,
         timestampMs: base + i * 2000,
     }));
 }
 
-/** Fetch an agent's persisted chat history (best-effort; [] on any failure). */
-export async function fetchChatHistory(agentId: string): Promise<ChatMessage[]> {
+/** Fetch an agent's persisted chat history by NAME — history is keyed by agent
+ *  name (the chat target), not the actor id (best-effort; [] on any failure). */
+export async function fetchChatHistory(agentName: string): Promise<ChatMessage[]> {
     try {
-        const primary = await fromChatLog(agentId);
-        return primary.length ? primary : await fromKvStore(agentId);
+        const primary = await fromChatLog(agentName);
+        return primary.length ? primary : await fromKvStore(agentName);
     } catch {
         return [];
     }

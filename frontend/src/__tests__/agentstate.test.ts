@@ -3,7 +3,14 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { canDirectMessage, stateColor, stateLabel, sortAgents, relTime } from "../ui/dashboard/agentState";
+import {
+    canDirectMessage,
+    messageableNames,
+    stateColor,
+    stateLabel,
+    sortAgents,
+    relTime,
+} from "../ui/dashboard/agentState";
 import type { AgentState } from "../types/agent";
 
 describe("canDirectMessage", () => {
@@ -18,6 +25,20 @@ describe("canDirectMessage", () => {
     it("allows normal agents unless they are protected", () => {
         expect(canDirectMessage({ name: "worker" })).toBe(true);
         expect(canDirectMessage({ name: "worker", protected: true })).toBe(false);
+    });
+});
+
+describe("messageableNames", () => {
+    it("keeps only messageable agents and drops empty names", () => {
+        expect(
+            messageableNames([
+                { name: "main", protected: true }, // pinned → kept
+                { name: "io-agent" }, // system → dropped
+                { name: "worker" }, // normal → kept
+                { name: "locked", protected: true }, // protected → dropped
+                { name: "" }, // empty → dropped
+            ]),
+        ).toEqual(["main", "worker"]);
     });
 });
 
@@ -54,5 +75,7 @@ describe("relTime", () => {
         expect(relTime(100_000)).toBe("now"); // 0s
         expect(relTime(100_000 - 12_000)).toBe("12s ago");
         expect(relTime(100_000 - 180_000)).toBe("3m ago");
+        expect(relTime(100_000 - 7_200_000)).toBe("2h ago"); // ≥1h → hours
+        expect(relTime(100_000 - 259_200_000)).toBe("3d ago"); // ≥24h → days
     });
 });

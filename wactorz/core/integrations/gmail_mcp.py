@@ -10,8 +10,10 @@ never sends.
 
 from __future__ import annotations
 
-import base64
 import asyncio
+import base64
+import html
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -84,15 +86,55 @@ def _header(headers: list[dict], name: str) -> str:
 def _format_message_line(msg: dict) -> str:
     headers = (msg.get("payload") or {}).get("headers", [])
     sender = _header(headers, "From") or "(unknown sender)"
-    subject = _header(headers, "Subject") or "(no subject)"
+    subject = html.unescape(_header(headers, "Subject") or "(no subject)")
     # Trim a display name's angle-bracketed address for brevity.
     if "<" in sender:
         sender = sender.split("<")[0].strip().strip('"') or sender
-    snippet = (msg.get("snippet") or "").strip()
+    snippet = html.unescape((msg.get("snippet") or "").strip())
     line = f"• {sender} — {subject}"
     if snippet:
         line += f"\n   {snippet[:140]}"
     return line
+
+
+def _decode_b64(data: str) -> str:
+    try:
+        padded = data + "=" * (-len(data) % 4)
+        return base64.urlsafe_b64decode(padded).decode("utf-8", "replace")
+    except Exception:
+        return ""
+
+
+def _strip_html(raw: str) -> str:
+    raw = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", raw)
+    raw = re.sub(r"(?i)<br\s*/?>", "\n", raw)
+    raw = re.sub(r"<[^>]+>", " ", raw)
+    raw = html.unescape(raw)
+    raw = re.sub(r"[ \t ]+", " ", raw)
+    raw = re.sub(r"\n\s*\n\s*\n+", "\n\n", raw)
+    return raw.strip()
+
+
+def _extract_body(payload: dict) -> str:
+    """Pull readable text from a Gmail message payload, preferring text/plain."""
+    def find(part: dict, mime: str) -> str:
+        if part.get("mimeType") == mime:
+            data = (part.get("body") or {}).get("data")
+            if data:
+                return _decode_b64(data)
+        for sub in part.get("parts") or []:
+            found = find(sub, mime)
+            if found:
+                return found
+        return ""
+
+    plain = find(payload, "text/plain")
+    if plain.strip():
+        return plain.strip()
+    html_body = find(payload, "text/html")
+    if html_body.strip():
+        return _strip_html(html_body)
+    return ""
 
 
 class GmailMcpClient(GoogleMcpClient):
@@ -106,6 +148,8 @@ class GmailMcpClient(GoogleMcpClient):
             "search_threads": self._rest_search,
             "list_messages": self._rest_search,
             "get_thread": self._rest_get_thread,
+            "read_email": self._rest_read_email,
+            "get_message": self._rest_read_email,
             "list_labels": self._rest_list_labels,
             "list_drafts": self._rest_list_drafts,
             "create_draft": self._rest_create_draft,
@@ -143,6 +187,41 @@ class GmailMcpClient(GoogleMcpClient):
             ],
         )
         return data if status == 200 else None
+
+    async def _rest_read_email(self, arguments: dict) -> str:
+        """Return the full readable body of a single email.
+
+        Accepts an explicit message id, or a ``query`` whose top match is opened.
+        """
+        message_id = arguments.get("id") or arguments.get("messageId") or arguments.get("message_id")
+        if not message_id:
+            query = arguments.get("query") or arguments.get("q") or "in:inbox"
+            status, data = await self._rest_request(
+                "GET", "/users/me/messages", params=_search_params(query, 1)
+            )
+            if status != 200:
+                raise GoogleRestError(rest_error_message(data))
+            messages = data.get("messages", [])
+            if not messages:
+                return f"No email found for '{query}'."
+            message_id = messages[0]["id"]
+        status, data = await self._rest_request(
+            "GET", f"/users/me/messages/{quote(str(message_id), safe='')}", params={"format": "full"}
+        )
+        if status != 200:
+            raise GoogleRestError(rest_error_message(data))
+        headers = (data.get("payload") or {}).get("headers", [])
+        sender = _header(headers, "From") or "(unknown sender)"
+        subject = html.unescape(_header(headers, "Subject") or "(no subject)")
+        date = _header(headers, "Date")
+        body = _extract_body(data.get("payload") or {}) or html.unescape(data.get("snippet", ""))
+        body = body.strip()
+        if len(body) > 1800:
+            body = body[:1800].rstrip() + "\n… (truncated)"
+        head = f"From: {sender}\nSubject: {subject}"
+        if date:
+            head += f"\nDate: {date}"
+        return f"{head}\n\n{body}" if body else f"{head}\n\n(no readable text content)"
 
     async def _rest_get_thread(self, arguments: dict) -> str:
         thread_id = arguments.get("threadId") or arguments.get("id") or arguments.get("thread_id")

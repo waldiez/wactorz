@@ -17,6 +17,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   mail, lists labels and drafts, and creates drafts. Draft-first by design (like Google's
   hosted Gmail MCP, it never sends). Hosted Gmail MCP primary with a Gmail REST v1 fallback
   on `PERMISSION_DENIED`, mirroring the calendar agent.
+- **Gmail: read an email's full contents** — new `read` action opens one message (by id, or the
+  top match of a topic query) and returns its readable body — text/plain, or HTML stripped to
+  text — so "what does the trello one say?" / "content of the latest vodafone bill" return the
+  actual message instead of a search snippet list.
 - **Direct OAuth login** (`GoogleMcpClient.authorize_direct`) — mints a REST token via a
   direct Google OAuth flow with caller-chosen scopes, bypassing the MCP server's scope set.
   Used to get a Gmail token **without** `gmail.metadata` (which blocks free-text `q` search),
@@ -38,6 +42,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Calendar "show events" flooded with recurring instances** — the upcoming-events list had no
   time bound, so a yearly recurring event (e.g. a birthday) returned many past/future copies that
   looked identical. It's now bounded to now → +1 year, and cross-year dates include the year.
+- **Gmail HTML entities not decoded** — message subjects and snippets showed raw entities
+  (`didn&#39;t`, `&quot;`, `&amp;`); they're now unescaped to real characters.
 - **Gmail draft follow-up dropped bare replies** — after "make an email to X" the agent asked
   "what should the email say?" but a plain reply (e.g. "Bloop") wasn't captured as the body. It
   now fills whichever field it just asked for (body if the recipient is known, or the recipient

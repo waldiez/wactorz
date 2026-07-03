@@ -23,8 +23,9 @@ GMAIL_PARSE_PROMPT = """You convert a user Gmail request into JSON only.
 
 Return exactly one JSON object with:
 - action: one of status, search, unread, inbox, read, labels, drafts, create_draft, help
-- query: a Gmail search query for the 'search' action (e.g. 'from:bank', 'subject:invoice', 'is:important')
-- thread_id: message/thread id for the 'read' action
+- query: a Gmail search query. For 'search' it filters the list (e.g. 'from:bank',
+  'subject:invoice'); for 'read' it is the topic/sender of the single email to open.
+- id: message id for the 'read' action (optional; if absent, the top match of query is opened)
 - to: recipient email for create_draft
 - subject: subject line for create_draft
 - body: body text for create_draft
@@ -34,6 +35,10 @@ Guidance:
 - "unread", "any new mail" -> unread
 - "inbox", "recent emails", "what's in my inbox" -> inbox
 - "emails from X", "mail about Y", "find ..." -> search with an appropriate Gmail query
+- "what does the X (one) say", "content of the X", "read/open the X email",
+  "what do I have to pay on the X bill" -> read, query=X (the sender/topic, e.g.
+  'trello', 'vodafone bill'). Use read (not search) when the user wants the contents
+  of one specific email.
 - "draft/compose/write an email to X ..." -> create_draft (never send)
 - "my drafts" -> drafts
 - "labels/folders" -> labels
@@ -132,10 +137,16 @@ class GmailAgent(LLMAgent):
                 return {"result": result}
 
             if action == "read":
-                thread_id = str(action_payload.get("thread_id") or action_payload.get("threadId") or "").strip()
-                if not thread_id:
-                    return {"result": "Which email? Give me the thread/message id.", "missing": ["thread_id"]}
-                result = await self.client.call_tool("get_thread", {"threadId": thread_id})
+                msg_id = str(
+                    action_payload.get("id")
+                    or action_payload.get("message_id")
+                    or action_payload.get("thread_id")
+                    or action_payload.get("threadId")
+                    or ""
+                ).strip()
+                query = str(action_payload.get("query") or action_payload.get("q") or "").strip()
+                args = {"id": msg_id} if msg_id else {"query": query or "in:inbox"}
+                result = await self.client.call_tool("read_email", args)
                 return {"result": result}
 
             if action == "labels":
@@ -295,6 +306,19 @@ def _fallback_parse(text: str) -> dict[str, Any]:
         details = _parse_draft_details(text)
         details["action"] = "create_draft"
         return details
+
+    # Read one specific email's contents (distinct from listing/search).
+    read_match = re.search(
+        r"\b(?:what does|what'?s in|content[s]? of|read|open)\b\s+"
+        r"(?:the\s+|my\s+|latest\s+|last\s+)*(.+?)"
+        r"(?:\s+(?:one|email|mail|says?|saying)\b|[?.!,]|$)",
+        text,
+        re.I,
+    )
+    if read_match:
+        topic = read_match.group(1).strip(" ,.?")
+        if topic:
+            return {"action": "read", "query": topic}
 
     if "unread" in lower or "new mail" in lower or "new email" in lower:
         return {"action": "unread", "count": 10}

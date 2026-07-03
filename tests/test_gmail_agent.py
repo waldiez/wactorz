@@ -77,6 +77,17 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args["to"], "sam@x.com")
         self.assertEqual(args["body"], "Bloop")
 
+    async def test_read_intent_routes_to_read_email(self):
+        agent = self._agent()
+        agent.client.call_tool = mock.AsyncMock(return_value="From: Trello …\n\nbody text")
+
+        result = await agent._process({"text": "what does the trello one say?"})
+
+        self.assertIn("body text", result["result"])
+        tool, args = agent.client.call_tool.await_args.args
+        self.assertEqual(tool, "read_email")
+        self.assertEqual(args["query"], "trello")
+
     async def test_structured_search_operation(self):
         agent = self._agent()
         agent.client.call_tool = mock.AsyncMock(return_value="found")

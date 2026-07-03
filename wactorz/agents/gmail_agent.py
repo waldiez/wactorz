@@ -184,14 +184,20 @@ class GmailAgent(LLMAgent):
         if _is_help_request(text):
             return {"action": "help"}
 
-        # Merge a follow-up reply into a pending draft (e.g. "to sam@x.com saying ...").
+        # Merge a follow-up reply into a pending draft. A bare reply answers the
+        # field we just asked for: the body if we already have a recipient, or the
+        # recipient if the reply looks like an email address.
         if self._awaiting_draft:
-            parsed = _parse_draft_details(text)
-            if parsed:
-                merged = {**self._pending_draft, **parsed, "action": "create_draft"}
-                return {k: v for k, v in merged.items() if v or k == "action"}
-            # Not draft details — treat as a fresh request.
-            self._awaiting_draft = False
+            had_to = bool(self._pending_draft.get("to"))
+            merged = {**self._pending_draft, **_parse_draft_details(text), "action": "create_draft"}
+            if not merged.get("to"):
+                email = re.search(r"[\w.+-]+@[\w.-]+", text)
+                if email:
+                    merged["to"] = email.group(0)
+            # We already had the recipient and were waiting on the body → the reply is the body.
+            if had_to and not merged.get("body"):
+                merged["body"] = text.strip()
+            return {k: v for k, v in merged.items() if v or k == "action"}
 
         if self.llm is not None:
             try:
@@ -280,7 +286,12 @@ def _fallback_parse(text: str) -> dict[str, Any]:
         return {"action": "help"}
 
     # Compose intent (verb) — distinct from listing drafts (noun).
-    if any(w in lower for w in ("compose", "write an email", "write email", "draft ", "reply to", "send ")):
+    _compose_triggers = (
+        "compose", "write an email", "write email", "draft ", "make an email",
+        "make a draft", "make draft", "make email", "new email", "reply to",
+        "email to", "send an email", "send email",
+    )
+    if any(w in lower for w in _compose_triggers):
         details = _parse_draft_details(text)
         details["action"] = "create_draft"
         return details

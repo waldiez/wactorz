@@ -98,6 +98,19 @@ class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("INBOX", result)
         self.assertIn("Work", result)
 
+    def test_store_token_response_preserves_refresh(self):
+        import json, os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "tok.json")
+            with mock.patch.dict(os.environ, {"GMAIL_MCP_TOKEN_FILE": path}):
+                client = GmailMcpClient()
+                client._store_token_response({"access_token": "a1", "refresh_token": "r1", "scope": "s"})
+                # A refresh response without a refresh_token must not wipe the stored one.
+                client._store_token_response({"access_token": "a2"})
+                tokens = json.loads(open(path).read())["tokens"]
+        self.assertEqual(tokens["access_token"], "a2")
+        self.assertEqual(tokens["refresh_token"], "r1")
+
     async def test_no_fallback_when_mcp_ok(self):
         client = GmailMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="thread details here")

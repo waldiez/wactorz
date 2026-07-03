@@ -17,6 +17,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   mail, lists labels and drafts, and creates drafts. Draft-first by design (like Google's
   hosted Gmail MCP, it never sends). Hosted Gmail MCP primary with a Gmail REST v1 fallback
   on `PERMISSION_DENIED`, mirroring the calendar agent.
+- **Direct OAuth login** (`GoogleMcpClient.authorize_direct`) — mints a REST token via a
+  direct Google OAuth flow with caller-chosen scopes, bypassing the MCP server's scope set.
+  Used to get a Gmail token **without** `gmail.metadata` (which blocks free-text `q` search),
+  so `find invoices` / `from:…` work; also guarantees a refresh token.
 - **Shared Google-MCP base** (`core/integrations/google_mcp.py`) — `GoogleMcpClient` +
   `GoogleMcpConfig` factor out the OAuth token storage, MCP call, and REST-fallback plumbing;
   Calendar and Gmail are now thin subclasses. MCP auth during tool calls is **non-interactive**
@@ -31,6 +35,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Gmail draft follow-up dropped bare replies** — after "make an email to X" the agent asked
+  "what should the email say?" but a plain reply (e.g. "Bloop") wasn't captured as the body. It
+  now fills whichever field it just asked for (body if the recipient is known, or the recipient
+  if the reply is an email address). "make an email/draft …" phrasings are also recognised.
 - **OAuth refresh token wiped on first refresh** — the MCP token storage replaced the whole
   token blob on every refresh, but Google omits `refresh_token` from refresh responses, so the
   first silent refresh dropped it and permanently broke re-auth (surfaced once an access token

@@ -14,16 +14,19 @@ project is granted access.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import logging
 import os
+import secrets
 import stat
 import sys
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import aiohttp
 from aiohttp import web
@@ -379,6 +382,78 @@ class GoogleMcpClient:
                     )
         except Exception as exc:
             return f"{self.config.label} MCP error: {exc}"
+
+    def _store_token_response(self, td: dict) -> None:
+        path = Path(self.config.token_file()).expanduser()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        tokens = data.get("tokens", {}) or {}
+        if td.get("access_token"):
+            tokens["access_token"] = td["access_token"]
+        if td.get("refresh_token"):
+            tokens["refresh_token"] = td["refresh_token"]
+        if td.get("scope"):
+            tokens["scope"] = td["scope"]
+        tokens["token_type"] = td.get("token_type", "Bearer")
+        data["tokens"] = tokens
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        except Exception:
+            logger.debug("Could not store %s token", self.config.label)
+
+    async def authorize_direct(self, scopes: str | None = None) -> str:
+        """Mint a token via a direct Google OAuth flow (bypassing the MCP server).
+
+        Lets us request exactly the scopes we want for the REST fallback — e.g. a
+        Gmail token *without* ``gmail.metadata`` (which otherwise blocks free-text
+        ``q`` search) — and guarantees a refresh token (``access_type=offline`` +
+        ``prompt=consent``).
+        """
+        client_id = self.config.client_id()
+        client_secret = self.config.client_secret()
+        if not (client_id and client_secret):
+            return f"{self.config.label}: no OAuth client configured"
+        scopes = scopes or self.config.scopes()
+        verifier = base64.urlsafe_b64encode(secrets.token_bytes(64)).rstrip(b"=").decode()
+        challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(verifier.encode()).digest()
+        ).rstrip(b"=").decode()
+        redirect = self.config.redirect_uri()
+        auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode({
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": redirect,
+            "scope": scopes,
+            "state": secrets.token_urlsafe(16),
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "access_type": "offline",
+            "prompt": "consent",
+        })
+        wait_task = asyncio.create_task(_make_callback_handler(self.config)())
+        await asyncio.sleep(0.4)  # let the callback server bind before opening the browser
+        await _make_redirect_handler(self.config)(auth_url)
+        code, _state = await wait_task
+        if not code:
+            return f"{self.config.label}: authorization was cancelled"
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(GOOGLE_TOKEN_URL, data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect,
+                "code_verifier": verifier,
+            }) as resp:
+                token_data = await resp.json()
+                if resp.status != 200:
+                    return f"{self.config.label} token exchange failed: {rest_error_message(token_data)}"
+        self._store_token_response(token_data)
+        return f"{self.config.label}: authorized (direct REST)."
 
     async def login(self) -> str:
         """Run the interactive browser OAuth flow once to mint/refresh a token.

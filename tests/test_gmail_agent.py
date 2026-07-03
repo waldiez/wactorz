@@ -61,6 +61,22 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args["to"], "sam@x.com")
         self.assertIn("running 10 min late", args["body"])
 
+    async def test_draft_followup_bare_reply_is_body(self):
+        # "make an email to X" then a plain reply should become the body.
+        agent = self._agent()
+        agent.client.call_tool = mock.AsyncMock(return_value="Draft to sam@x.com created: '(no subject)'.")
+
+        first = await agent._process({"text": "make an email to sam@x.com"})
+        self.assertIn("body", first["missing"])
+
+        second = await agent._process({"text": "Bloop"})
+
+        self.assertIn("created", second["result"])
+        tool, args = agent.client.call_tool.await_args.args
+        self.assertEqual(tool, "create_draft")
+        self.assertEqual(args["to"], "sam@x.com")
+        self.assertEqual(args["body"], "Bloop")
+
     async def test_structured_search_operation(self):
         agent = self._agent()
         agent.client.call_tool = mock.AsyncMock(return_value="found")

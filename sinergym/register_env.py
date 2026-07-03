@@ -38,8 +38,8 @@ N_ALL = len(ALL_ZONES)            # 18
 
 # Action bounds with guaranteed 2°C deadband
 HTG_LOW = 15.0
-HTG_HIGH = 22.0
-CLG_LOW = 24.0
+HTG_HIGH = 22.5
+CLG_LOW = 22.5
 CLG_HIGH = 30.0
 
 WEATHER_FILES = {

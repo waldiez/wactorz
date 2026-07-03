@@ -40,6 +40,12 @@
     .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
     .sidebar-group{margin-bottom:1.25rem}
     .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{display:none}
+    details.sidebar-group > summary.sidebar-label::after{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}
+    details.sidebar-group[open] > summary.sidebar-label::after{content:'▾'}
+    details.sidebar-group > summary.sidebar-label:hover{color:var(--muted-hi)}
     .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
     .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
     .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
@@ -112,8 +118,8 @@
 
 <div class="layout">
   <aside class="sidebar">
-    <div class="sidebar-group">
-      <div class="sidebar-label">Guide</div>
+    <details class="sidebar-group">
+      <summary class="sidebar-label">Guide</summary>
       <a href="../guide/development.html" class="">Installation</a>
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
@@ -123,9 +129,9 @@
       <a href="../guide/pipelines.html" class="">Pipelines</a>
       <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
-    </div>
-    <div class="sidebar-group">
-      <div class="sidebar-label">Catalogue agents</div>
+    </details>
+    <details class="sidebar-group" open>
+      <summary class="sidebar-label">Catalogue agents</summary>
       <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
       <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
       <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
@@ -136,7 +142,7 @@
       <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
       <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
       <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
-    </div>
+    </details>
   </aside>
   <main class="content">
 <h1 id="anomaly-detector-agent">Anomaly Detector agent</h1>

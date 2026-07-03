@@ -381,7 +381,7 @@ def _build_catalog() -> dict:
                 "level": "float — 0-100 robot speaker volume (cmd=volume); 100=loudest, 0=quietest (daemon /api/volume/set)",
                 "delta": "float — relative volume change in level points (cmd=volume), e.g. +15 / -25",
                 "mute": "bool  — cmd=volume; true silences (remembers level), false restores it",
-                "request": "str   — natural-language Home Assistant request (cmd=ha); delegated to home-assistant-agent for device control + automations (no direct HA REST)",
+                "request": "str   — natural-language Home Assistant request (cmd=ha); routed through main for device control, home-assistant-agent for automations/info",
                 "duration": "float — motion duration in seconds (pose/antennas/look_at)",
                 "method": "str  — interpolation: linear|minjerk|ease_in_out|cartoon (default minjerk)",
                 "yaw": "float — head yaw, degrees by default",

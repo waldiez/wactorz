@@ -371,15 +371,15 @@ Speech & volume rules:
 - MUTE: "mute" / "silence" / "be quiet" / "stop talking" -> mute true;
   "unmute" / "speak up again" / "sound back on" -> mute false.
 
-Home Assistant — DELEGATED to the home-assistant-agent (you NEVER call HA directly):
+Home Assistant - DELEGATED through Wactorz (you NEVER call HA directly):
   {"cmd":"ha","request":"<the smart-home request in plain natural language>"}
-Use this for ANY smart-home thing — lights, switches, plugs, climate, scenes, sensors —
+Use this for ANY smart-home thing - lights, switches, plugs, climate, scenes, sensors -
 AND for creating / editing / listing / deleting Home Assistant AUTOMATIONS. Put the user's
-full intent in 'request' (keep the room/device names they said). The home-assistant-agent
-resolves the real entities and automations itself, so you do NOT pass entity_ids or HA
-service names. Examples of 'request' values: "turn on the kitchen light",
+full intent in 'request' (keep the room/device names they said). One-shot device control
+is routed through main's actuator path; automations/listing/info are routed to the
+home-assistant-agent. Do NOT pass entity_ids or HA service names. Examples of 'request'
+values: "turn on the kitchen light", "turn the Tapo light pink",
 "create an automation that turns the porch light off at sunrise", "list my automations".
-
 Reactive bindings — "WHEN X happens, do Y". SPLIT by what Y is:
 - Y is a ROBOT action (wake / sleep / say / emotion / pose / antennas) → reachy-side bind:
   {"cmd":"bind",
@@ -407,7 +407,7 @@ Conventions:
 
 Decision rules — CRITICAL:
 - ANY smart-home / Home Assistant request — control OR automation — becomes a single
-  {"cmd":"ha","request":"..."} that forwards the user's words to the home-assistant-agent.
+  {"cmd":"ha","request":"..."} that forwards the user's words to the right Wactorz HA route.
   Never emit entity_ids or HA service names yourself; never call HA directly.
 - "turn on/off the light", "open/close the lamp", "lights on", "switch on", "set the
   thermostat", "list/create/delete an automation" → all are {"cmd":"ha","request":"..."}.
@@ -1427,22 +1427,16 @@ async def _ha_entities_via_agent(agent):
 
 
 async def _ha(agent, payload):
-    """Delegate any Home Assistant request to the home-assistant-agent.
+    """Delegate Home Assistant work to the right Wactorz route.
 
-    reachy NO LONGER talks to HA's REST API directly. The home-assistant-agent owns
-    all HA logic — it resolves entities, controls devices, and creates/edits/lists/
-    deletes automations from a natural-language request. We just forward the ask and
-    relay its answer.
-
-    Accepts (first non-empty wins):
-      {"cmd":"ha","request":"turn on the living room light"}                  ← preferred
-      {"cmd":"ha","request":"create an automation: when the door opens, turn on the porch light"}
-      {"cmd":"ha","service":"light.turn_on","entity_id":"light.x"}            ← legacy, rendered to NL
+    Reachy never calls Home Assistant directly. One-shot device control goes to
+    main so it can use the OneOffActuatorAgent. HA metadata, questions, and
+    automation CRUD go to home-assistant-agent.
     """
     request = (payload.get("request") or payload.get("text")
                or payload.get("message") or payload.get("query") or "").strip()
     if not request:
-        # Legacy structured form -> natural language so the HA agent can act on it.
+        # Legacy structured form -> natural language for the actuator route.
         service   = payload.get("service")
         entity_id = payload.get("entity_id")
         if service and "." in service:
@@ -1454,19 +1448,32 @@ async def _ha(agent, payload):
         else:
             raise ValueError("ha requires a natural-language 'request' (or legacy service+entity_id)")
 
-    # send_to waits for the HA agent's RESULT. Cap at 45s to stay inside reachy's
-    # 60s handle_task budget (automation creation can take a couple of LLM calls).
-    result = await agent.send_to("home-assistant-agent", {"text": request}, timeout=45.0)
+    delegate = _ha_delegate_for_request(request)
+    result = await agent.send_to(delegate, {"text": request}, timeout=60.0)
     if result is None:
-        raise RuntimeError("home-assistant-agent did not respond (not running / no reply)")
+        raise RuntimeError(f"{delegate} did not respond (not running / no reply)")
     if isinstance(result, dict):
-        # send_to surfaces routing failures as {"error": ...} with no 'result'.
         if result.get("error") and not result.get("result"):
-            raise RuntimeError(f"home-assistant-agent error: {result['error']}")
-        return {"delegated_to": "home-assistant-agent", "request": request,
-                "ha_result": result.get("result"), "data": result.get("data")}
-    return {"delegated_to": "home-assistant-agent", "request": request, "ha_result": str(result)}
+            raise RuntimeError(f"{delegate} error: {result['error']}")
+        return {
+            "delegated_to": delegate,
+            "request": request,
+            "ha_result": result.get("result") or result.get("response") or str(result),
+            "data": result.get("data"),
+        }
+    return {"delegated_to": delegate, "request": request, "ha_result": str(result)}
 
+
+def _ha_delegate_for_request(request):
+    """Pick main for one-shot control, home-assistant-agent for HA management/info."""
+    low = (request or "").lower()
+    ha_agent_markers = (
+        "automation", "automations", "list", "show", "what", "which", "who",
+        "where", "history", "historical", "state", "status", "sensor",
+        "sensors", "entity", "entities", "area", "areas", "device", "devices",
+        "camera", "snapshot", "stream", "recommend", "recommendation",
+    )
+    return "home-assistant-agent" if any(marker in low for marker in ha_agent_markers) else "main"
 
 # ============================================================
 # Reactive bindings

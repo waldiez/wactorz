@@ -108,15 +108,37 @@ def _decode_b64(data: str) -> str:
 def _strip_html(raw: str) -> str:
     raw = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", raw)
     raw = re.sub(r"(?i)<br\s*/?>", "\n", raw)
+    raw = re.sub(r"(?i)</p>", "\n", raw)
     raw = re.sub(r"<[^>]+>", " ", raw)
-    raw = html.unescape(raw)
-    raw = re.sub(r"[ \t ]+", " ", raw)
-    raw = re.sub(r"\n\s*\n\s*\n+", "\n\n", raw)
-    return raw.strip()
+    return html.unescape(raw)
+
+
+_ZERO_WIDTH = ("‌", "​", "­", "﻿", "‍")
+
+
+def _clean_text(text: str) -> str:
+    """Trim email noise: tracking URLs, zero-width chars, and blank-line runs."""
+    for zw in _ZERO_WIDTH:
+        text = text.replace(zw, "")
+    text = re.sub(r"https?://\S+", "[link]", text)  # tracking/CDN URLs are noise
+    text = re.sub(r"\[?\s*\[link\]\s*\]?", "[link]", text)  # drop brackets around [link]
+    text = re.sub(r"(?:\[link\]\s*){2,}", "[link] ", text)
+    text = re.sub(r"[^\S\n]+", " ", text)  # collapse runs of spaces/tabs (not newlines)
+    out: list[str] = []
+    blank = False
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            out.append(line)
+            blank = False
+        elif not blank:
+            out.append("")
+            blank = True
+    return "\n".join(out).strip()
 
 
 def _extract_body(payload: dict) -> str:
-    """Pull readable text from a Gmail message payload, preferring text/plain."""
+    """Pull readable, de-noised text from a Gmail message payload."""
     def find(part: dict, mime: str) -> str:
         if part.get("mimeType") == mime:
             data = (part.get("body") or {}).get("data")
@@ -130,10 +152,10 @@ def _extract_body(payload: dict) -> str:
 
     plain = find(payload, "text/plain")
     if plain.strip():
-        return plain.strip()
+        return _clean_text(plain)
     html_body = find(payload, "text/html")
     if html_body.strip():
-        return _strip_html(html_body)
+        return _clean_text(_strip_html(html_body))
     return ""
 
 

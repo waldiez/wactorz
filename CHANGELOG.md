@@ -17,6 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   mail, lists labels and drafts, and creates drafts. Draft-first by design (like Google's
   hosted Gmail MCP, it never sends). Hosted Gmail MCP primary with a Gmail REST v1 fallback
   on `PERMISSION_DENIED`, mirroring the calendar agent.
+- **Gmail read answers your question** — when an LLM is configured, `read` now returns a concise answer to the asked question (or a short summary), quoting exact amounts/dates, instead of dumping the raw email; bodies are also de-noised (tracking URLs → `[link]`, collapsed blank lines). Without an LLM it returns the cleaned body.
 - **Gmail: read an email's full contents** — new `read` action opens one message (by id, or the
   top match of a topic query) and returns its readable body — text/plain, or HTML stripped to
   text — so "what does the trello one say?" / "content of the latest vodafone bill" return the

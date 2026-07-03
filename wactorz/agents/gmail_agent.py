@@ -147,6 +147,11 @@ class GmailAgent(LLMAgent):
                 query = str(action_payload.get("query") or action_payload.get("q") or "").strip()
                 args = {"id": msg_id} if msg_id else {"query": query or "in:inbox"}
                 result = await self.client.call_tool("read_email", args)
+                if self.llm is not None and not result.lower().startswith(("gmail error", "no email")):
+                    question = str(payload.get("text") or payload.get("message") or "").strip()
+                    answer = await self._answer_from_email(result, question)
+                    if answer:
+                        return {"result": answer, "email": result}
                 return {"result": result}
 
             if action == "labels":
@@ -181,6 +186,32 @@ class GmailAgent(LLMAgent):
             self.metrics.tasks_failed += 1
             logger.warning("[%s] Gmail request failed: %s", self.name, exc)
             return {"result": f"Gmail error: {exc}", "error": str(exc)}
+
+    async def _answer_from_email(self, email_text: str, question: str) -> str:
+        """Use the LLM to answer the user's question about a single email, or summarize it."""
+        try:
+            system = (
+                "You are shown ONE email (headers + body). Answer the user's question about it "
+                "concisely (1-3 sentences), quoting key facts — amounts, dates, names — exactly. "
+                "If there is no specific question, give a 1-2 sentence summary. Do not invent details."
+            )
+            response, usage = await self.llm.complete(
+                messages=[{
+                    "role": "user",
+                    "content": f"EMAIL:\n{email_text[:6000]}\n\nQUESTION: {question or 'Summarize this email.'}",
+                }],
+                system=system,
+                max_tokens=300,
+                reasoning_effort="none",
+            )
+            self.total_input_tokens += usage.get("input_tokens", 0)
+            self.total_output_tokens += usage.get("output_tokens", 0)
+            self.total_cost_usd += usage.get("cost_usd", 0.0)
+            self._persist_cost()
+            return response.strip()
+        except Exception as exc:
+            logger.debug("[%s] email summarize failed: %s", self.name, exc)
+            return ""
 
     async def _resolve_action(self, payload: dict[str, Any]) -> dict[str, Any]:
         operation = payload.get("operation") or payload.get("action")

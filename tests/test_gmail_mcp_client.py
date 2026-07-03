@@ -1,7 +1,16 @@
 import unittest
 from unittest import mock
 
-from wactorz.core.integrations.gmail_mcp import GmailMcpClient, _format_message_line
+from wactorz.core.integrations.gmail_mcp import GmailMcpClient, _clean_text, _format_message_line
+
+
+class CleanTextTest(unittest.TestCase):
+    def test_strips_urls_and_collapses_blanks(self):
+        out = _clean_text("Hi\n\n\n\nSee https://track.example.com/abc?x=1 now\n\n\n")
+        self.assertIn("[link]", out)
+        self.assertNotIn("track.example.com", out)
+        self.assertNotIn("\n\n\n", out)
+        self.assertTrue(out.startswith("Hi"))
 
 
 def _fake_rest(mapping):

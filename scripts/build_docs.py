@@ -108,9 +108,7 @@ TEMPLATE = """\
 
     /* ── Nav bar ── */
     .topbar{{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}}
-    .topbar-logo{{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}}
-    .logo-mark{{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}}
-    .logo-mark::before{{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}}
+    .topbar-logo{{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}}
     .topbar-links{{display:flex;gap:.1rem}}
     .topbar-links a{{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}}
     .topbar-links a:hover,.topbar-links a.active{{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}}
@@ -189,9 +187,7 @@ TEMPLATE = """\
 </head>
 <body>
 <header class="topbar">
-  <a href="{root}index.html" class="topbar-logo">
-    <div class="logo-mark"></div>Wactorz
-  </a>
+  <a href="{root}index.html" class="topbar-logo">Wactorz</a>
   <nav class="topbar-links">
     <a href="https://github.com/waldiez/wactorz">GitHub</a>
     <a href="https://pypi.org/project/wactorz/">PyPI</a>

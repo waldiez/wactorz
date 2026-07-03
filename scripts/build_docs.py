@@ -56,6 +56,18 @@ NAV = [
         ("Remote Nodes",      "remote-nodes.md"),
         ("Prometheus",       "prometheus.md"),
     ]),
+    ("Catalogue agents", "catalogue", [
+        ("Overview",               "catalogue-agents.md"),
+        ("Google — setup & login", "catalogue-google-setup.md"),
+        ("Google Calendar",        "catalogue-google-calendar.md"),
+        ("Gmail",                  "catalogue-gmail.md"),
+        ("Weather",                "catalogue-weather.md"),
+        ("Smart Energy",           "catalogue-smart-energy.md"),
+        ("Anomaly Detector",       "catalogue-anomaly-detector.md"),
+        ("Device Manuals",         "catalogue-manual.md"),
+        ("Doc → PPTX",             "catalogue-doc-to-pptx.md"),
+        ("Time-Series Collector",  "catalogue-timeseries.md"),
+    ]),
     #("Reference", "reference", [
     #    ("REST & WebSocket API", "api.md"),
     #    ("Prometheus Monitoring", "prometheus.md"),

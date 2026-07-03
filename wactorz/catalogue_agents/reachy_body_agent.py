@@ -719,6 +719,9 @@ async def handle_task(agent, payload):
                         cc = c.get("cmd") or c.get("action") or "?"
                         if cc == "ha":
                             label = f"ha:{c.get('request') or c.get('service') or '?'}"
+                        elif cc == "say":
+                            said = c.get("text") or c.get("message") or c.get("say") or ""
+                            label = f"say:{said[:80]}" if said else "say"
                         elif cc == "pose":
                             label = f"pose(y={c.get('yaw',0)},p={c.get('pitch',0)})"
                         elif cc == "antennas":
@@ -730,6 +733,12 @@ async def handle_task(agent, payload):
                             summary_parts.append(f"{label} SKIPPED")
                             continue
                         step = next(step_iter, None)
+                        if isinstance(step, dict) and cc == "say" and step.get("said"):
+                            label = f"say:{str(step['said'])[:80]}"
+                        if isinstance(step, dict) and cc == "ha" and step.get("ha_result"):
+                            ha_text = str(step["ha_result"]).strip()
+                            if ha_text:
+                                label = f"{label} ({ha_text[:100]})"
                         if isinstance(step, dict) and step.get("ok") is False:
                             error = step.get("error") or "failed"
                             failures.append({"cmd": cc, "error": error})

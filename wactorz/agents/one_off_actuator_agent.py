@@ -45,10 +45,17 @@ Rules:
 - Only include service_data keys that are needed.
 - Common examples:
   - turn on/off light or switch -> light.turn_on / light.turn_off or switch.turn_on / switch.turn_off
+  - set a light color -> light.turn_on with service_data containing rgb_color
   - set heating/thermostat temperature -> climate.set_temperature with {"temperature": number}
   - lock/unlock door -> lock.lock / lock.unlock
   - open/close cover/blinds -> cover.open_cover / cover.close_cover
   - brightness percent -> use {"brightness_pct": number}
+- Color requests:
+  - For "blue", use {"rgb_color": [0, 0, 255]}.
+  - For "pink", use {"rgb_color": [255, 105, 180]}.
+  - For "red", use {"rgb_color": [255, 0, 0]}; "green" -> [0, 255, 0]; "purple" -> [128, 0, 128]; "white" -> [255, 255, 255].
+  - If the user says just "my light" / "the light" and a color is requested, prefer a color-capable light entity over a color-temperature-only light. Color-capable entities usually have state attributes such as supported_color_modes containing hs, rgb, rgbw, rgbww, or xy, or current color_mode hs/rgb/xy.
+  - Do not send color service_data to a light that only supports color_temp.
 - Do not invent entity IDs.
 - Do not return markdown or explanation.
 """

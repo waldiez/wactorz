@@ -329,37 +329,32 @@ def _build_catalog() -> dict:
             "name": "reachy-body",
             "type": "dynamic",
             "description": (
-                "Reachy Mini embodied output channel. Drives head/antenna/body motion, "
-                "look_at gaze, and Home Assistant lights/switches. Has an internal LLM "
-                "planner that converts plain English into the right motion+HA command "
-                "sequence with correct params and entity IDs.\n"
+                "Controls a Reachy Mini: wake/sleep, head pose, antennas, gaze, "
+                "speech, gestures, and optional Home Assistant actions."
+            ),
+            "docs": (
+                "Setup:\n"
+                "1. Install the recipe dependencies when prompted, or preinstall: "
+                "pip install reachy-mini numpy edge-tts.\n"
+                "2. For Reachy Mini Wireless, put the robot and Wactorz host on the "
+                "same WiFi network. Stop any Hugging Face app running on the robot.\n"
+                "3. For Reachy Mini Lite, start the local daemon first: "
+                "reachy-mini-daemon -p <serial_port>.\n"
+                "4. Spawn the agent: @catalog spawn reachy-body.\n"
+                "5. If discovery is flaky, pin the Wireless host by publishing "
+                '{"robot_host": "192.168.1.42"} to custom/reachy/config, then restart '
+                "the agent.\n"
                 "\n"
-                "PREFERRED interface for planner-generated agents — ONE call, NL in:\n"
-                "  await agent.send_to('reachy-body', 'wiggle antennas like youre bored')\n"
-                "  await agent.send_to('reachy-body', 'do a happy gesture')\n"
-                "  await agent.send_to('reachy-body', 'turn on the light and nod')\n"
-                "  await agent.send_to('reachy-body', 'random silly gesture')\n"
-                "Reachy-body's internal LLM picks the verbs, fills in motion params\n"
-                "(yaw/pitch/antennas/duration), resolves HA entity IDs, and runs the\n"
-                "whole sequence. Use this when you don't want to hand-craft motion args.\n"
+                "Try:\n"
+                "- wake up\n"
+                "- do a happy gesture\n"
+                "- wiggle your antennas\n"
+                "- look left\n"
+                "- say hello\n"
+                "- turn on the light and nod\n"
                 "\n"
-                "STANDING RULES (when X event, do Y) — also handled by NL:\n"
-                "  await agent.send_to('reachy-body', 'when the light turns on, wake up')\n"
-                "Don't spawn a separate filter agent for this — reachy-body has built-in\n"
-                "persistent bindings on HA state changes.\n"
-                "\n"
-                "PERIODIC TASKS — set poll_interval in spawn_config (seconds between\n"
-                "process() calls). Do NOT asyncio.sleep inside process(). Example:\n"
-                '  spawn_config: {..., "poll_interval": 120}   # every 2 minutes\n'
-                "\n"
-                "Raw MQTT (only if you really need structured control):\n"
-                '  publish to:  custom/reachy/cmd        payload: {"cmd":"pose","yaw":30,"duration":0.8}\n'
-                "  events on:   custom/reachy/events     {type, ok, ts}\n"
-                "  state on:    custom/reachy/state      {connected, awake, busy, ...}\n"
-                "Never invent topics like 'reachy/cmd/wake' — the only valid prefix is\n"
-                '\'custom/reachy/cmd\'. A bare {"cmd":"antennas"} with no left/right/duration\n'
-                "is a no-op (robot won't visibly move) — always include motion params or\n"
-                "use the NL channel instead."
+                "For structured control, send a dict with cmd wake, sleep, pose, "
+                "antennas, look_at, emotion, say, volume, ha, bind, unbind, or stop."
             ),
             "capabilities": [
                 "robot",

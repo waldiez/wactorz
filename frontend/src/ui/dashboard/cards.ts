@@ -22,16 +22,20 @@ function fmtTokens(n: number): string {
     return String(n);
 }
 
-/** Build the host CPU/memory resource bar (gracefully blank when a stat is null). */
-export function buildHostBar(
+export interface HostBarValues {
+    cpuPct: number;
+    cpuText: string;
+    memPct: number;
+    memText: string;
+}
+
+/** Clamp/format CPU + memory into host-bar display values, shared by the
+ *  initial build and the live-patch paint so the two can't drift apart. */
+export function hostBarValues(
     cpu: number | null,
     memUsed: number | null,
     memTotal: number | null,
-): HTMLElement {
-    const bar = document.createElement("div");
-    bar.id = "af-host-bar";
-    bar.className = "af-host-bar";
-
+): HostBarValues {
     const cpuPct = cpu != null ? Math.max(0, Math.min(100, cpu)) : 0;
     const cpuText = cpu != null ? `${cpu.toFixed(1)}%` : "—";
     const memPct =
@@ -44,6 +48,20 @@ export function buildHostBar(
                 ? `${(memUsed / 1024).toFixed(1)} / ${(memTotal / 1024).toFixed(1)} GB`
                 : `${memUsed.toFixed(0)} MB`
             : "—";
+    return { cpuPct, cpuText, memPct, memText };
+}
+
+/** Build the host CPU/memory resource bar (gracefully blank when a stat is null). */
+export function buildHostBar(
+    cpu: number | null,
+    memUsed: number | null,
+    memTotal: number | null,
+): HTMLElement {
+    const bar = document.createElement("div");
+    bar.id = "af-host-bar";
+    bar.className = "af-host-bar";
+
+    const { cpuPct, cpuText, memPct, memText } = hostBarValues(cpu, memUsed, memTotal);
 
     bar.innerHTML = `
       <div class="af-host-label">APP</div>

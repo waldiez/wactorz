@@ -79,6 +79,9 @@ function buildVoiceRow(): HTMLElement {
     };
 
     populateVoices();
+    // Page-lifetime listener: buildVoiceRow runs once (single audio popover,
+    // never rebuilt), so this is intentionally not removed. A second call here
+    // would double-populate the select on every future voice-list load.
     listen("tts-voices-loaded", () => populateVoices());
     voiceSel.addEventListener("change", () => tts.setVoice(voiceSel.value));
 

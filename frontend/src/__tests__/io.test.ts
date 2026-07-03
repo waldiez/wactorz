@@ -151,6 +151,20 @@ describe("IOManager streaming", () => {
         ws.endCb!();
         expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "two", from: "beta" });
     });
+
+    it("caps accumulation on a runaway stream instead of growing without bound", () => {
+        const io = new IOManager(makeMqtt());
+        const ws = makeWS("direct_ws");
+        io.setWSClient(ws as unknown as WSChatClient);
+        const chunk = "x".repeat(10_000);
+        for (let i = 0; i < 30; i++) {
+            ws.chunkCb!(chunk, "alpha");
+        }
+        ws.endCb!();
+        const text = lastEvent("af-stream-end")?.detail.text as string;
+        expect(text.length).toBeLessThan(300_000);
+        expect(text.length).toBeGreaterThan(0);
+    });
 });
 
 describe("IOManager.receiveAgentMessage", () => {

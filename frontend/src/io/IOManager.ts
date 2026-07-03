@@ -21,6 +21,10 @@ import { toast } from "../ui/ToastManager";
 import { emit } from "../events";
 import { uid } from "../ids";
 
+/** Ceiling on a single streamed reply's accumulated text, guarding against a
+ *  runaway/looping stream growing this without bound. */
+const MAX_STREAM_CHARS = 200_000;
+
 export class IOManager {
     private _lastStreamFrom = "";
     /** Accumulates the current streamed reply so stream-end can emit the full text. */
@@ -35,7 +39,9 @@ export class IOManager {
 
         ws.onStreamChunk((chunk, from) => {
             this._lastStreamFrom = from;
-            this._streamText += chunk;
+            if (this._streamText.length < MAX_STREAM_CHARS) {
+                this._streamText += chunk;
+            }
             emit("af-stream-chunk", { chunk, from });
         });
 

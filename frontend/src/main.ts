@@ -430,6 +430,9 @@ listen("af-clear-feed", () => {
 wsChat.connect(`${_wsBase}/ws`);
 refreshLiveActors();
 const _liveActorsTimer = window.setInterval(() => {
+    if (document.hidden) {
+        return;
+    }
     refreshLiveActors();
     agentStore.pruneStaleRemoteAgents();
 }, 15000);

@@ -261,7 +261,10 @@ def _list_events_arguments(action: str, count: int) -> dict[str, Any]:
         start = now
         end = now + timedelta(days=7)
     else:
-        return args
+        # Upcoming events: from now, bounded to a year so a yearly recurring
+        # event (e.g. a birthday) shows once instead of flooding the list.
+        start = now
+        end = now + timedelta(days=365)
     args.update({"startTime": start.isoformat(), "endTime": end.isoformat()})
     if tz_name:
         args["timeZone"] = tz_name

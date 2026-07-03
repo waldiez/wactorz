@@ -35,6 +35,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Calendar "show events" flooded with recurring instances** — the upcoming-events list had no
+  time bound, so a yearly recurring event (e.g. a birthday) returned many past/future copies that
+  looked identical. It's now bounded to now → +1 year, and cross-year dates include the year.
 - **Gmail draft follow-up dropped bare replies** — after "make an email to X" the agent asked
   "what should the email say?" but a plain reply (e.g. "Bloop") wasn't captured as the body. It
   now fills whichever field it just asked for (body if the recipient is known, or the recipient

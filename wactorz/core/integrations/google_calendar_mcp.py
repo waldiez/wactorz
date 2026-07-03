@@ -52,13 +52,18 @@ def _parse_iso(value: str) -> datetime | None:
 
 
 def _format_when(start: dict, end: dict) -> str:
+    now_year = datetime.now().year
     if start.get("date") and not start.get("dateTime"):
         day = _parse_iso(start["date"])
-        return f"{day:%a %b %d} (all day)" if day else ""
+        if not day:
+            return ""
+        year = f" {day.year}" if day.year != now_year else ""
+        return f"{day:%a %b %d}{year} (all day)"
     sd = _parse_iso(start.get("dateTime", ""))
     if not sd:
         return ""
-    label = f"{sd:%a %b %d, %I:%M %p}".replace(" 0", " ")
+    year = f" {sd.year}" if sd.year != now_year else ""
+    label = f"{sd:%a %b %d}{year}, {sd:%I:%M %p}".replace(" 0", " ")
     ed = _parse_iso(end.get("dateTime", "")) if end else None
     if ed:
         label += f"–{ed:%I:%M %p}".replace("–0", "–")

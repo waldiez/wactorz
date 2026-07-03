@@ -326,9 +326,9 @@ def _build_catalog() -> dict:
     code = _load_recipe("reachy_body_agent.py")
     if code:
         catalog["reachy-body"] = {
-            "name":         "reachy-body",
-            "type":         "dynamic",
-            "description":  (
+            "name": "reachy-body",
+            "type": "dynamic",
+            "description": (
                 "Reachy Mini embodied output channel. Drives head/antenna/body motion, "
                 "look_at gaze, and Home Assistant lights/switches. Has an internal LLM "
                 "planner that converts plain English into the right motion+HA command "
@@ -350,59 +350,70 @@ def _build_catalog() -> dict:
                 "\n"
                 "PERIODIC TASKS — set poll_interval in spawn_config (seconds between\n"
                 "process() calls). Do NOT asyncio.sleep inside process(). Example:\n"
-                "  spawn_config: {..., \"poll_interval\": 120}   # every 2 minutes\n"
+                '  spawn_config: {..., "poll_interval": 120}   # every 2 minutes\n'
                 "\n"
                 "Raw MQTT (only if you really need structured control):\n"
-                "  publish to:  custom/reachy/cmd        payload: {\"cmd\":\"pose\",\"yaw\":30,\"duration\":0.8}\n"
+                '  publish to:  custom/reachy/cmd        payload: {"cmd":"pose","yaw":30,"duration":0.8}\n'
                 "  events on:   custom/reachy/events     {type, ok, ts}\n"
                 "  state on:    custom/reachy/state      {connected, awake, busy, ...}\n"
                 "Never invent topics like 'reachy/cmd/wake' — the only valid prefix is\n"
-                "'custom/reachy/cmd'. A bare {\"cmd\":\"antennas\"} with no left/right/duration\n"
+                '\'custom/reachy/cmd\'. A bare {"cmd":"antennas"} with no left/right/duration\n'
                 "is a no-op (robot won't visibly move) — always include motion params or\n"
                 "use the NL channel instead."
             ),
-            "capabilities": ["robot", "reachy", "reachy_mini", "embodied", "motion",
-                             "head", "antennas", "gaze", "emotion", "actuator",
-                             "expressive", "human_robot_interaction"],
-            "install":      ["reachy-mini", "numpy", "edge-tts"],
+            "capabilities": [
+                "robot",
+                "reachy",
+                "reachy_mini",
+                "embodied",
+                "motion",
+                "head",
+                "antennas",
+                "gaze",
+                "emotion",
+                "actuator",
+                "expressive",
+                "human_robot_interaction",
+            ],
+            "install": ["reachy-mini", "numpy", "edge-tts"],
             "input_schema": {
-                "cmd":         "str  — wake|sleep|pose|antennas|look_at|look_pixel|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
-                "text":        "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
-                "voice":       "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
-                "gain_db":     "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
-                "loud":        "bool  — cmd=say; default true (compress+limit file to max); false plays raw quiet TTS",
-                "preset":      "str   — speaking mode (cmd=volume): whisper(70)|normal(85)|louder(93)|presenter(100)",
-                "level":       "float — 0-100 robot speaker volume (cmd=volume); 100=loudest, 0=quietest (daemon /api/volume/set)",
-                "delta":       "float — relative volume change in level points (cmd=volume), e.g. +15 / -25",
-                "mute":        "bool  — cmd=volume; true silences (remembers level), false restores it",
-                "request":     "str   — natural-language Home Assistant request (cmd=ha); delegated to home-assistant-agent for device control + automations (no direct HA REST)",
-                "duration":    "float — motion duration in seconds (pose/antennas/look_at)",
-                "method":      "str  — interpolation: linear|minjerk|ease_in_out|cartoon (default minjerk)",
-                "yaw":         "float — head yaw, degrees by default",
-                "pitch":       "float — head pitch, degrees by default",
-                "roll":        "float — head roll, degrees by default",
-                "x":           "float — head x (mm) or look_at world x (m)",
-                "y":           "float — head y (mm) or look_at world y (m)",
-                "z":           "float — head z (mm) or look_at world z (m)",
-                "antennas":    "list  — [right, left] angles, degrees by default",
-                "left":        "float — antenna left (cmd=antennas convenience)",
-                "right":       "float — antenna right (cmd=antennas convenience)",
-                "u":           "int   — pixel u for look_pixel",
-                "v":           "int   — pixel v for look_pixel",
-                "name":        "str   — emotion clip name (e.g. curious1, success1)",
-                "topic":       "str   — MQTT topic to bind/unbind",
-                "when":        "dict  — dotted-path equality matcher for bindings",
-                "do":          "dict  — payload to dispatch when binding fires",
-                "id":          "str   — optional correlation id; ack on custom/reachy/cmd_result/{id}",
+                "cmd": "str  — wake|sleep|pose|antennas|look_at|look_pixel|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
+                "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
+                "voice": "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
+                "gain_db": "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
+                "loud": "bool  — cmd=say; default true (compress+limit file to max); false plays raw quiet TTS",
+                "preset": "str   — speaking mode (cmd=volume): whisper(70)|normal(85)|louder(93)|presenter(100)",
+                "level": "float — 0-100 robot speaker volume (cmd=volume); 100=loudest, 0=quietest (daemon /api/volume/set)",
+                "delta": "float — relative volume change in level points (cmd=volume), e.g. +15 / -25",
+                "mute": "bool  — cmd=volume; true silences (remembers level), false restores it",
+                "request": "str   — natural-language Home Assistant request (cmd=ha); delegated to home-assistant-agent for device control + automations (no direct HA REST)",
+                "duration": "float — motion duration in seconds (pose/antennas/look_at)",
+                "method": "str  — interpolation: linear|minjerk|ease_in_out|cartoon (default minjerk)",
+                "yaw": "float — head yaw, degrees by default",
+                "pitch": "float — head pitch, degrees by default",
+                "roll": "float — head roll, degrees by default",
+                "x": "float — head x (mm) or look_at world x (m)",
+                "y": "float — head y (mm) or look_at world y (m)",
+                "z": "float — head z (mm) or look_at world z (m)",
+                "antennas": "list  — [right, left] angles, degrees by default",
+                "left": "float — antenna left (cmd=antennas convenience)",
+                "right": "float — antenna right (cmd=antennas convenience)",
+                "u": "int   — pixel u for look_pixel",
+                "v": "int   — pixel v for look_pixel",
+                "name": "str   — emotion clip name (e.g. curious1, success1)",
+                "topic": "str   — MQTT topic to bind/unbind",
+                "when": "dict  — dotted-path equality matcher for bindings",
+                "do": "dict  — payload to dispatch when binding fires",
+                "id": "str   — optional correlation id; ack on custom/reachy/cmd_result/{id}",
             },
             "output_schema": {
-                "ok":          "bool",
-                "cmd":         "str",
-                "duration_s":  "float — wall-clock motion time",
-                "error":       "str|null",
+                "ok": "bool",
+                "cmd": "str",
+                "duration_s": "float — wall-clock motion time",
+                "error": "str|null",
             },
             "poll_interval": 5,
-            "code":          code,
+            "code": code,
         }
         logger.info("[catalog] Loaded reachy-body recipe")
 

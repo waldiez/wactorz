@@ -1,5 +1,4 @@
-"""
-CATALOG RECIPE — reachy-body-agent
+"""CATALOG RECIPE — reachy-body-agent
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Drives a Reachy Mini robot (Wireless over WiFi, or Lite over USB) as an
 embodied output channel for the wactorz fleet. Subscribes to:

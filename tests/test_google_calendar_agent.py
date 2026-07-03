@@ -19,6 +19,30 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("startTime", arguments)
         self.assertIn("endTime", arguments)
 
+    async def test_today_survives_missing_tz_database(self):
+        # On systems without the IANA tz database (e.g. Windows without tzdata),
+        # even ZoneInfo("UTC") raises. The read path must not crash, and must
+        # not send an unusable timeZone key to Google.
+        agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
+        agent.client.call_tool = mock.AsyncMock(return_value="Standup at 10:00")
+
+        with mock.patch.dict("os.environ", {}, clear=False) as env:
+            env.pop("CALENDAR_MCP_TIMEZONE", None)
+            env.pop("TZ", None)
+            with mock.patch(
+                "wactorz.agents.google_calendar_agent.ZoneInfo",
+                side_effect=Exception("No time zone found with key UTC"),
+            ):
+                result = await agent._process({"operation": "today", "count": 5})
+
+        self.assertIn("Standup", result["result"])
+        self.assertNotIn("error", result)
+        tool_name, arguments = agent.client.call_tool.await_args.args
+        self.assertEqual(tool_name, "list_events")
+        self.assertIn("startTime", arguments)
+        self.assertIn("endTime", arguments)
+        self.assertNotIn("timeZone", arguments)
+
     async def test_structured_create_event_requires_start_and_end_when_title_present(self):
         agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
 

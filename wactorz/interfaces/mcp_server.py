@@ -28,7 +28,7 @@ Claude Desktop config (~/.claude/claude_desktop_config.json):
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any
@@ -162,16 +162,27 @@ async def ask_agent(agent_name: str, message: str) -> str:
 # ─── Remote Calendar MCP tools ──────────────────────────────────────────────
 
 
-def _calendar_timezone() -> ZoneInfo:
-    tz = os.getenv("CALENDAR_MCP_TIMEZONE") or os.getenv("TZ") or "UTC"
-    try:
-        return ZoneInfo(tz)
-    except Exception:
-        return ZoneInfo("UTC")
+def _calendar_timezone() -> tuple[Any, str | None]:
+    """Return ``(tzinfo, iana_name)`` for calendar math.
+
+    ``iana_name`` is only set when it's a zone we can hand to the Google Calendar
+    API; otherwise it's ``None`` and callers omit ``timeZone`` (the offset-aware
+    ISO timestamps already pin the window). Keeps the tools working on systems
+    without the IANA tz database (e.g. Windows without ``tzdata``), where even
+    ``ZoneInfo("UTC")`` raises — and the API rejects a bare ``UTC`` key anyway.
+    """
+    name = os.getenv("CALENDAR_MCP_TIMEZONE") or os.getenv("TZ")
+    if name:
+        try:
+            return ZoneInfo(name), name
+        except Exception:
+            logger.debug("Unknown calendar timezone %r; using local time", name)
+    local = datetime.now().astimezone().tzinfo or timezone.utc
+    return local, getattr(local, "key", None)
 
 
 def _calendar_range_arguments(range_name: str, count: int = 10) -> dict[str, Any]:
-    tz = _calendar_timezone()
+    tz, tz_name = _calendar_timezone()
     now = datetime.now(tz)
     if range_name == "today":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -182,13 +193,15 @@ def _calendar_range_arguments(range_name: str, count: int = 10) -> dict[str, Any
     else:
         start = now
         end = now + timedelta(days=1)
-    return {
+    args = {
         "pageSize": count,
         "orderBy": "startTime",
         "startTime": start.isoformat(),
         "endTime": end.isoformat(),
-        "timeZone": tz.key,
     }
+    if tz_name:
+        args["timeZone"] = tz_name
+    return args
 
 
 def _calendar_mcp_status_from_constants() -> dict[str, Any]:

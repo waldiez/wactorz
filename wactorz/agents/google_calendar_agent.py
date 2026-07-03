@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -227,17 +227,29 @@ class GoogleCalendarAgent(LLMAgent):
         return {key: value for key, value in merged.items() if value}
 
 
-def _calendar_timezone() -> ZoneInfo:
-    tz = os.getenv("CALENDAR_MCP_TIMEZONE") or os.getenv("TZ") or "UTC"
-    try:
-        return ZoneInfo(tz)
-    except Exception:
-        return ZoneInfo("UTC")
+def _calendar_timezone() -> tuple[Any, str | None]:
+    """Return ``(tzinfo, iana_name)`` for calendar math.
+
+    ``iana_name`` is only set when it's a zone we can safely hand to the Google
+    Calendar API; otherwise it's ``None`` and callers omit the ``timeZone``
+    argument (the offset-aware ISO timestamps already pin the window). This
+    keeps the agent working on systems without the IANA tz database installed
+    (e.g. Windows without the ``tzdata`` package), where even ``ZoneInfo("UTC")``
+    raises. Note that the Calendar API rejects a bare ``"UTC"`` key too.
+    """
+    name = os.getenv("CALENDAR_MCP_TIMEZONE") or os.getenv("TZ")
+    if name:
+        try:
+            return ZoneInfo(name), name
+        except Exception:
+            logger.debug("Unknown calendar timezone %r; using local time", name)
+    local = datetime.now().astimezone().tzinfo or timezone.utc
+    return local, getattr(local, "key", None)
 
 
 def _list_events_arguments(action: str, count: int) -> dict[str, Any]:
     args: dict[str, Any] = {"pageSize": count, "orderBy": "startTime"}
-    tz = _calendar_timezone()
+    tz, tz_name = _calendar_timezone()
     now = datetime.now(tz)
     if action == "today":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -250,7 +262,9 @@ def _list_events_arguments(action: str, count: int) -> dict[str, Any]:
         end = now + timedelta(days=7)
     else:
         return args
-    args.update({"startTime": start.isoformat(), "endTime": end.isoformat(), "timeZone": tz.key})
+    args.update({"startTime": start.isoformat(), "endTime": end.isoformat()})
+    if tz_name:
+        args["timeZone"] = tz_name
     return args
 
 
@@ -288,7 +302,7 @@ def _parse_create_details(text: str) -> dict[str, Any]:
     if title_match:
         details["summary"] = title_match.group(1).strip(" .")
 
-    tz = _calendar_timezone()
+    tz, _ = _calendar_timezone()
     now = datetime.now(tz).replace(microsecond=0)
     day = now
     if "tomorrow" in lower:

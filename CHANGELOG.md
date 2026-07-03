@@ -11,8 +11,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   against active ones and flags duplicates and contradictions (e.g. "over 25° AC off"
   vs "AC on") as a non-blocking "⚠️ Heads up" note at approval.
 
+### Added
+
+- **Gmail agent (`gmail-agent`)** — new catalog-backed native agent that searches/reads
+  mail, lists labels and drafts, and creates drafts. Draft-first by design (like Google's
+  hosted Gmail MCP, it never sends). Hosted Gmail MCP primary with a Gmail REST v1 fallback
+  on `PERMISSION_DENIED`, mirroring the calendar agent.
+- **Shared Google-MCP base** (`core/integrations/google_mcp.py`) — `GoogleMcpClient` +
+  `GoogleMcpConfig` factor out the OAuth token storage, MCP call, and REST-fallback plumbing;
+  Calendar and Gmail are now thin subclasses. MCP auth during tool calls is **non-interactive**
+  (silent refresh only, with a timeout) so a server-side agent fails fast to REST instead of
+  blocking on a browser OAuth window; interactive login is an explicit `login()`.
+- **Calendar REST fallback** — `GoogleCalendarMcpClient` now falls back to the
+  Google Calendar REST API (v3) with the same OAuth token when the hosted Calendar
+  MCP (`calendarmcp.googleapis.com`) returns `PERMISSION_DENIED` (it is access-gated
+  and denies tool execution even for fully-scoped tokens) or the `mcp` extra isn't
+  installed. MCP stays the primary path and resumes automatically once the project
+  is allowlisted. Events are rendered as readable lines instead of raw JSON.
+
 ### Fixed
 
+- **OAuth refresh token wiped on first refresh** — the MCP token storage replaced the whole
+  token blob on every refresh, but Google omits `refresh_token` from refresh responses, so the
+  first silent refresh dropped it and permanently broke re-auth (surfaced once an access token
+  expired). Storage now preserves the initial refresh token. Affects Calendar and Gmail.
+- **Calendar agent "No time zone found with key UTC"** — every read (`today`,
+  `week`, `list_events`) crashed on systems without the IANA tz database (e.g.
+  Windows without `tzdata`), where even `ZoneInfo("UTC")` raises. Timezone
+  resolution now falls back to the system-local offset and only sends Google a
+  `timeZone` key when it's a valid IANA zone (a bare `UTC` is rejected too).
 - **Planners leaked until restart** — proposal/pipeline planners never stopped and
   stayed pinned by both the registry and the Supervisor. Added a lifetime watchdog
   (`max_lifetime_s`, 10 min) + idempotent `_terminate()` doing `release()` →

@@ -121,6 +121,41 @@ def _build_native_catalog() -> dict:
     except ImportError as e:
         logger.warning(f"[catalog] google-calendar-agent unavailable: {e}")
 
+    try:
+        from .gmail_agent import GmailAgent
+        native["gmail-agent"] = {
+            "name": "gmail-agent",
+            "type": "native",
+            "factory": GmailAgent,
+            "description": "Accesses Gmail: search/read mail, list labels and drafts, and create drafts (never sends).",
+            "capabilities": [
+                "gmail",
+                "email",
+                "mail",
+                "inbox",
+                "search_email",
+                "read_email",
+                "create_draft",
+                "labels",
+            ],
+            "input_schema": {
+                "text": "str - natural-language Gmail request, e.g. 'any unread email?'",
+                "operation": "status | search | unread | inbox | read | labels | drafts | create_draft",
+                "query": "str - Gmail search query for search",
+                "to": "str - recipient for create_draft",
+                "subject": "str - subject for create_draft",
+                "body": "str - body text for create_draft",
+                "thread_id": "str - thread/message id for read",
+            },
+            "output_schema": {
+                "result": "str - human-readable Gmail response",
+                "status": "dict - sanitized Gmail configuration status",
+            },
+        }
+        logger.info("[catalog] Loaded gmail-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] gmail-agent unavailable: {e}")
+
     return native
 
 def _build_catalog() -> dict:

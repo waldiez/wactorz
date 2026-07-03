@@ -5,6 +5,7 @@ from .home_assistant_agent import HomeAssistantAgent
 from .home_assistant_map_agent import HomeAssistantMapAgent
 from .home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
 from .google_calendar_agent import GoogleCalendarAgent
+from .gmail_agent import GmailAgent
 from .io_agent import IOAgent
 
 
@@ -21,4 +22,5 @@ __all__ = [
     "HomeAssistantAgent",
     "HomeAssistantStateBridgeAgent",
     "GoogleCalendarAgent",
+    "GmailAgent",
 ]

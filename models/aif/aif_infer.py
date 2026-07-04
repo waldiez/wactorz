@@ -1,14 +1,14 @@
 """
 aif_infer.py — training-free, per-zone inference for the Factored Active
-Inference OfficeMedium policy (pymdp_office_v7_torch).
+Inference OfficeMedium policy (pymdp_office_v14_torch).
 
 This is the AIF analog of maddpg_infer.py. Deploy it on the wactorz process's
-import path ALONGSIDE pymdp_office_v7_torch.py and the trained checkpoint
+import path ALONGSIDE pymdp_office_v14_torch.py and the trained checkpoint
 (aif_model.pkl).
 
 Why per-zone slicing is exact
 -----------------------------
-pymdp_office_v7_torch runs all 15 agents as ONE tensor batch, but only for
+pymdp_office_v14_torch runs all 15 agents as ONE tensor batch, but only for
 vectorization: there is NO cross-agent coupling in _infer / _plan / _learn —
 every einsum keeps N as a pure batch dimension. Each row n depends solely on
 its own beliefs (qT, qO, qW, qH) and its own B_T[n] / struct_ctx[n]. So one
@@ -63,17 +63,17 @@ import torch
 
 
 # ---------------------------------------------------------------------------
-# Locate pymdp_office_v7_torch.py before importing it.
+# Locate pymdp_office_v14_torch.py before importing it.
 # Unlike maddpg_infer.py (self-contained), this module imports the AIF model
-# from pymdp_office_v7_torch. When run inside a spawned child agent, only
+# from pymdp_office_v14_torch. When run inside a spawned child agent, only
 # `infer_dir` is guaranteed on sys.path — so we add the likely locations of
-# pymdp_office_v7_torch.py here, making "drop both files in the same folder"
+# pymdp_office_v14_torch.py here, making "drop both files in the same folder"
 # (or "run wactorz from the repo root") work without further wiring.
 #   Override search explicitly with $WACTORZ_AIF_SRC (a dir or the file itself).
 # ---------------------------------------------------------------------------
 def _ensure_pymdp_on_path():
     import importlib.util as _ilu
-    if _ilu.find_spec("pymdp_office_v7_torch") is not None:
+    if _ilu.find_spec("pymdp_office_v14_torch") is not None:
         return
     here = _os.path.dirname(_os.path.abspath(__file__))
     env  = _os.environ.get("WACTORZ_AIF_SRC", "")
@@ -81,7 +81,7 @@ def _ensure_pymdp_on_path():
         env = _os.path.dirname(env)
     candidates = [here, _os.getcwd(), env, _os.path.dirname(here)]
     for d in candidates:
-        if d and _os.path.exists(_os.path.join(d, "pymdp_office_v7_torch.py")):
+        if d and _os.path.exists(_os.path.join(d, "pymdp_office_v14_torch.py")):
             if d not in _sys.path:
                 _sys.path.insert(0, d)
             return
@@ -89,21 +89,22 @@ def _ensure_pymdp_on_path():
 
 _ensure_pymdp_on_path()
 
-# pymdp_office_v7_torch only does light top-level imports (numpy/torch/stdlib);
+# pymdp_office_v14_torch only does light top-level imports (numpy/torch/stdlib);
 # the Sinergym/MADDPG imports live inside run_simulation(), so importing the
 # model here pulls in NO simulation dependencies.
 try:
-    from pymdp_office_v7_torch import (
+    from pymdp_office_v14_torch import (
         BatchedFactoredAgents,
         ZONE_META,
+        ZONE_NEIGHBORS,
         ObsIndex,
         get_agent_occupancy_state,
         N_ZONES,
     )
 except ModuleNotFoundError as _e:  # pragma: no cover - clearer deploy error
     raise ModuleNotFoundError(
-        "aif_infer.py could not import 'pymdp_office_v7_torch'. Put "
-        "pymdp_office_v7_torch.py next to aif_infer.py (e.g. in your infer_dir / "
+        "aif_infer.py could not import 'pymdp_office_v14_torch'. Put "
+        "pymdp_office_v14_torch.py next to aif_infer.py (e.g. in your infer_dir / "
         "state/maddpg_office), or set $WACTORZ_AIF_SRC to the directory holding "
         "it, or pass aif_src_dir in the aif-fleet launch params."
     ) from _e
@@ -151,7 +152,14 @@ class AIFZonePolicy:
                  comfort_weight=1.0, energy_weight=0.5, policy_len=4,
                  lr_pB=1.0, pB_prior_scale=2.0, epistemic_weight=0.2,
                  unocc_gate=0.1, deadband_weight=4.0, freeze_B=False,
+                 tou_weight=0.0, congestion_weight=0.0,
+                 couple=False, energy_w_min=0.0, energy_w_max=1.0,
                  override="safety", device="cpu", dtype="float"):
+        if couple:
+            raise ValueError(
+                "AIFZonePolicy (N=1 fleet agent) cannot use coupling: an N=1 "
+                "batch has no neighbours. Deploy a NO-COUPLE checkpoint via the "
+                "fleet, or use aif-controller (full batch) for a coupled model.")
         self.zone_index = int(zone_index)
         self.heat_low,  self.heat_high = float(heat_low),  float(heat_high)
         self.cool_low,  self.cool_high = float(cool_low),  float(cool_high)
@@ -198,6 +206,12 @@ class AIFZonePolicy:
             unocc_gate=unocc_gate,
             deadband_weight=deadband_weight,
             freeze_B=freeze_B,
+            tou_weight=tou_weight,
+            congestion_weight=congestion_weight,
+            action_temp=0.0,
+            learn_C=True, c_lr=0.0,
+            energy_w_min=energy_w_min, energy_w_max=energy_w_max,
+            couple=False,
             override=override,
             device=device,
             dtype=dtype,
@@ -210,6 +224,9 @@ class AIFZonePolicy:
             "pB_T": np.asarray(state["pB_T"])[self.zone_index:self.zone_index + 1],
             "transition_counts":
                 np.asarray(state["transition_counts"])[self.zone_index:self.zone_index + 1],
+            "energy_w": (np.asarray(state["energy_w"])[self.zone_index:self.zone_index + 1]
+                         if state.get("energy_w") is not None else None),
+            "kc": None,
             "step_count": int(state.get("step_count", 0)),
             "b_updates":  int(state.get("b_updates", 0)),
         })
@@ -284,6 +301,9 @@ class AIFBatchController:
                  comfort_weight=1.0, energy_weight=0.5, policy_len=4,
                  lr_pB=1.0, pB_prior_scale=2.0, epistemic_weight=0.2,
                  unocc_gate=0.1, deadband_weight=4.0, freeze_B=False,
+                 tou_weight=0.0, congestion_weight=0.0,
+                 couple=True, couple_k=0.12,
+                 energy_w_min=0.0, energy_w_max=1.0,
                  override="safety", device="cpu", dtype="float"):
         self.heat_low,  self.heat_high = float(heat_low),  float(heat_high)
         self.cool_low,  self.cool_high = float(cool_low),  float(cool_high)
@@ -310,9 +330,17 @@ class AIFBatchController:
             policy_len=policy_len, lr_pB=lr_pB, pB_prior_scale=pB_prior_scale,
             epistemic_weight=epistemic_weight, unocc_gate=unocc_gate,
             deadband_weight=deadband_weight, freeze_B=freeze_B,
+            tou_weight=tou_weight, congestion_weight=congestion_weight,
+            action_temp=0.0,
+            learn_C=True, c_lr=0.0,                    # use loaded energy_w, frozen
+            energy_w_min=energy_w_min, energy_w_max=energy_w_max,
+            couple=couple, couple_learn=False,         # use loaded kc, frozen
+            couple_k=couple_k,
+            couple_neighbors=([ZONE_NEIGHBORS[i] for i in range(self.n)]
+                              if couple else None),
             override=override, device=device, dtype=dtype,
         )
-        # Load the full checkpoint, no slicing — identical to PyMDPOffice.load.
+        # Load the full checkpoint (incl. learned energy_w + kc), no slicing.
         self.batch.set_state(state)
 
     def reset(self):

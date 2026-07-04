@@ -157,15 +157,15 @@ DEFAULTS = {
     "heat_high":    22.0,
     "cool_low":     24.0,
     "cool_high":    30.0,
-    "policy_len":   4,           # AIF planning horizon (match training!)
+    "policy_len":   8,           # AIF planning horizon (match training!)
     "comfort_weight":  1.0,      # EFE comfort term scale (match training)
-    "energy_weight":   0.5,      # EFE energy term scale  (match training!)
+    "energy_weight":   0.2,      # EFE energy term scale  (match training!)
     "epistemic_weight":0.2,      # EFE info-gain term scale (match training)
     "unocc_gate":      0.1,      # unoccupied comfort gate (match training)
-    "deadband_weight": 4.0,      # deadband penalty scale  (match training)
+    "deadband_weight": 8.0,      # deadband penalty scale  (match training)
     "pB_prior_scale":  2.0,      # init pseudo-counts (overwritten by checkpoint)
     "override":     "safety",    # reactive safety-net mode: safety | aggressive
-    "freeze_B":     False,       # False = keep adapting B_T online (matches v7
+    "freeze_B":     True,       # False = keep adapting B_T online (matches v7
                                  # run_simulation default / the deploy baseline);
                                  # True = frozen inference (B_T fixed as trained)
     "lr_pB":        1.0,         # Dirichlet learning rate when freeze_B is False

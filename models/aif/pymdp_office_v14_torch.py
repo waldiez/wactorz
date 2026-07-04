@@ -1,5 +1,10 @@
 """
-Factored Active Inference Agent — PyTorch batched version (v7)
+Factored Active Inference Agent — PyTorch batched version (v10)
+  v9  adds TOU-aware energy preference (time-of-use price in the C/DRIVE term)
+  v10 adds congestion inference: each agent infers a latent 'others are
+      peaking' signal from the shared per-floor power, penalises its own
+      HVAC drive when congestion is high, and selects actions stochastically
+      so identical floors can desynchronise (lower coincidence factor).
 ===============================================================
 
 Same generative model and behaviour as pymdp_office_v6 (numpy), rewritten so
@@ -17,8 +22,8 @@ the numpy v6 implementation to ~1e-4; action choices are identical except for
 exact EFE ties.
 
 Usage:
-  python pymdp_office_v7_torch.py --mode zone --device cuda
-  python pymdp_office_v7_torch.py --mode zone --device cpu     # fallback
+  python pymdp_office_v10_torch.py --mode zone --congestion_weight 0.5 --action_temp 0.3
+  python pymdp_office_v9_torch.py --mode zone --device cpu     # fallback
 """
 
 import argparse
@@ -81,6 +86,17 @@ FLOOR_ZONES = {
 }
 FLOORS = ["bottom", "mid", "top"]
 
+# Ground-truth intra-floor adjacency (from the epJSON surfaces): each core
+# couples to its 4 perimeter zones; each perimeter to the core + 2 ring
+# neighbours. Floors are coupled only via return-air plenums (not controlled),
+# so the occupied zones form three independent per-floor cliques.
+ZONE_NEIGHBORS = {
+    0:[3,4,5,6], 1:[7,8,9,10], 2:[11,12,13,14],
+    3:[0,4,6], 4:[0,3,5], 5:[0,4,6], 6:[0,3,5],
+    7:[1,8,10], 8:[1,7,9], 9:[1,8,10], 10:[1,7,9],
+    11:[2,12,14], 12:[2,11,13], 13:[2,12,14], 14:[2,11,13],
+}
+
 COMFORT_WINTER = (20.0, 23.5)
 COMFORT_SUMMER = (23.0, 26.0)
 
@@ -89,6 +105,23 @@ def get_seasonal_comfort(month: int, day: int) -> tuple:
     is_summer = ((month > 6) or (month == 6 and day >= 1)) and \
                 ((month < 10) or (month == 9 and day <= 30))
     return COMFORT_SUMMER if is_summer else COMFORT_WINTER
+
+
+def tou_multiplier(month: int, day: int, hour: int) -> float:
+    """Time-of-use price multiplier (PG&E B-19 style), matches metrics_utils.
+    on-peak 16-21 weekday = 3.0, mid-peak 9-16 & 21-23 weekday = 1.5, else 1.0."""
+    try:
+        is_weekend = date(2024, int(month), int(day)).weekday() >= 5
+    except Exception:
+        is_weekend = False
+    if is_weekend:
+        return 1.0
+    h = int(hour)
+    if 16 <= h < 21:
+        return 3.0
+    if (9 <= h < 16) or (21 <= h < 23):
+        return 1.5
+    return 1.0
 
 
 class ObsIndex:
@@ -160,6 +193,20 @@ class BatchedFactoredAgents:
                  struct_ctxs: list,
                  comfort_weight: float = 1.0,
                  energy_weight:  float = 0.5,
+                 tou_weight:     float = 1.0,
+                 congestion_weight: float = 0.0,
+                 action_temp:    float = 0.0,
+                 cong_alpha:     float = 0.3,
+                 learn_C:        bool  = False,
+                 c_lr:           float = 0.02,
+                 energy_w_min:   float = 0.0,
+                 energy_w_max:   float = 1.5,
+                 couple:         bool  = False,
+                 couple_k:       float = 0.12,
+                 couple_learn:   bool  = True,
+                 couple_lr:      float = 0.01,
+                 couple_k_max:   float = 0.6,
+                 couple_neighbors=None,
                  policy_len:     int   = 4,
                  lr_pB:          float = 1.0,
                  pB_prior_scale: float = 2.0,
@@ -180,6 +227,57 @@ class BatchedFactoredAgents:
         self.struct_ctxs = [c or {} for c in struct_ctxs]
         self.comfort_weight = comfort_weight
         self.energy_weight  = energy_weight
+        self.tou_weight     = float(tou_weight)   # 0 => TOU off, 1 => full TOU
+        self.tou_mult       = 1.0                 # updated each step in update_context
+        # v10 congestion inference: latent "others are peaking" belief in [0,1]
+        # per agent, filtered (EMA = 1-D Bayesian posterior mean) from the shared
+        # per-floor power. congestion_weight gates an extra drive penalty so the
+        # agent defers its own load when it infers the others are ramping.
+        self.congestion_weight = float(congestion_weight)
+        self.action_temp       = float(action_temp)   # 0 => argmax, >0 => sample
+        self.cong_alpha        = float(cong_alpha)     # belief filter rate
+        self.cong              = torch.zeros(self.N, dtype=self.dt, device=self.device)
+        # v12: learnable per-agent energy/comfort tradeoff. energy_w starts equal
+        # for all agents and is adapted online toward each agent's own comfort
+        # outcome (slow integral control). Heterogeneous weights break the shared-C
+        # symmetry, so drive desynchronises without a hand-set congestion term.
+        self.learn_C        = bool(learn_C)
+        self.c_lr           = float(c_lr)
+        self.c_beta         = 0.05          # comfort-error EMA rate
+        self.c_tol          = 0.20          # degC: 'comfortable' threshold
+        self.energy_w_min   = float(energy_w_min)
+        self.energy_w_max   = float(energy_w_max)
+        self.energy_w       = torch.full((self.N,), float(energy_weight),
+                                         dtype=self.dt, device=self.device)
+        self.cerr_ema       = torch.zeros(self.N, dtype=self.dt, device=self.device)
+        # v14: inter-zone thermal coupling. Each agent folds a learned
+        # conductance k against the mean neighbour temperature into its temp
+        # prediction. Neighbours are agent (=zone) indices; coupling is
+        # prediction-only (no communication) and zone-mode only.
+        self.couple = bool(couple) and (couple_neighbors is not None)
+        self.couple_h = 0.5      # interp bandwidth (degC) for the temp-space shift
+        self._cpl_delta = torch.zeros(self.N, dtype=self.dt, device=self.device)
+        self._cpl_g = torch.zeros(self.N, dtype=self.dt, device=self.device)
+        self._cpl_mu0 = None
+        if self.couple:
+            maxnb = max(len(x) for x in couple_neighbors)
+            nb = np.zeros((self.N, maxnb), dtype=np.int64)
+            mk = np.zeros((self.N, maxnb), dtype=np.float32)
+            for i, lst in enumerate(couple_neighbors):
+                for j, z in enumerate(lst):
+                    nb[i, j] = z; mk[i, j] = 1.0
+            self.nb_idx  = torch.as_tensor(nb, device=self.device)
+            self.nb_mask = torch.as_tensor(mk, dtype=self.dt, device=self.device)
+            self.kc = torch.full((self.N,), float(couple_k),
+                                 dtype=self.dt, device=self.device)
+            self.couple_learn = bool(couple_learn)
+            self.couple_lr    = float(couple_lr)
+            self.couple_k_max = float(couple_k_max)
+            # v14: per-zone prediction-error accumulators (coupled vs no-coupling
+            # prediction of the same step) to show the conductance earns its place.
+            self._pred_err_couple   = torch.zeros(self.N, dtype=self.dt, device=self.device)
+            self._pred_err_nocouple = torch.zeros(self.N, dtype=self.dt, device=self.device)
+            self._pred_count = 0
         self.policy_len     = max(1, int(policy_len))
         self.lr_pB          = lr_pB
         self.epistemic_weight = epistemic_weight
@@ -335,6 +433,19 @@ class BatchedFactoredAgents:
             self.is_weekend = False
         self.outdoor_temp = outdoor_temp
         self.direct_solar = direct_solar
+        # Time-of-use price signal for the energy preference (see _plan). The
+        # effective multiplier is 1 + tou_weight*(tou_mult-1), so tou_weight=0
+        # disables TOU and tou_weight=1 applies the full 1.0/1.5/3.0 schedule.
+        self.tou_mult = tou_multiplier(month, day, hour)
+
+    def observe_congestion(self, cong_obs):
+        """Update the latent congestion belief from a noisy per-agent observation
+        of how loaded the *other* floors are (normalised to [0,1]). The EMA is
+        the posterior mean of a slow random-walk latent under Gaussian noise --
+        i.e. a 1-D Bayesian filter, the partially-observed analogue of the other
+        belief states. cong_obs: array-like (N,) in [0,1]."""
+        c = torch.as_tensor(cong_obs, dtype=self.dt, device=self.device).clamp(0.0, 1.0)
+        self.cong = (1.0 - self.cong_alpha) * self.cong + self.cong_alpha * c
 
     # ------------------------------------------------------------------ #
     def _C_T_pair_t(self):
@@ -355,6 +466,45 @@ class BatchedFactoredAgents:
                 C_un[s] = -self.comfort_weight * self.unocc_gate * (1.5*v + v*v)
         t = lambda x: torch.as_tensor(x, dtype=self.dt, device=self.device)
         return t(C_occ), t(C_un)
+
+    @torch.no_grad()
+    def _adapt_C(self, T_arr, is_occ_actual):
+        """v12: slow integral control on each agent's energy weight, driven by
+        its OWN comfort error (only while occupied). Comfortable agents raise the
+        weight (save more); agents drifting out of band lower it (protect comfort).
+        Bounded, so it cannot run away; lr 0 / learn_C False recovers v10."""
+        if not is_occ_actual:
+            return
+        T = torch.as_tensor(T_arr, dtype=self.dt, device=self.device)
+        err = (self.comfort_low - T).clamp_min(0.0) + (T - self.comfort_high).clamp_min(0.0)
+        self.cerr_ema = (1 - self.c_beta) * self.cerr_ema + self.c_beta * err
+        # delta > 0 when comfortable (cerr < tol) -> weight rises; < 0 otherwise
+        delta = self.c_lr * (self.c_tol - self.cerr_ema)
+        self.energy_w = (self.energy_w + delta).clamp(self.energy_w_min,
+                                                       self.energy_w_max)
+
+    @torch.no_grad()
+    def _couple_prep(self, T_arr):
+        """v14: compute the per-agent coupling drift (degC) for this step from
+        the observed neighbour temperatures and current belief mean."""
+        T = torch.as_tensor(T_arr, dtype=self.dt, device=self.device)
+        T_self = (self.qT * self.TC).sum(1)
+        T_nb = (T[self.nb_idx] * self.nb_mask).sum(1) \
+               / self.nb_mask.sum(1).clamp_min(1e-6)
+        self._cpl_g = T_nb - T_self
+        self._cpl_delta = self.kc * self._cpl_g
+
+    @torch.no_grad()
+    def _couple_shift(self, P):
+        """Drift a temp distribution P (N,X) or (N,X,A) by self._cpl_delta degC,
+        in TEMPERATURE space (handles the non-uniform TEMP_CENTERS grid)."""
+        xt = self.TC.view(1, self.N_TEMP, 1)
+        xs = self.TC.view(1, 1, self.N_TEMP) + self._cpl_delta.view(self.N, 1, 1)
+        S = (1.0 - (xt - xs).abs() / self.couple_h).clamp_min(0.0)   # (N,Xt,Xs)
+        S = S / S.sum(1, keepdim=True).clamp_min(1e-8)
+        if P.dim() == 2:
+            return torch.einsum('nts,ns->nt', S, P)
+        return torch.einsum('nts,nsa->nta', S, P)
 
     # ------------------------------------------------------------------ #
     # INFERENCE — batched over agents
@@ -394,6 +544,9 @@ class BatchedFactoredAgents:
 
         # temperature: predict-then-correct
         prior_T = torch.einsum('nxh,nh->nx', pred, self.qH)
+        if self.couple:
+            self._cpl_mu0 = (prior_T * self.TC).sum(1)   # no-coupling prediction
+            prior_T = self._couple_shift(prior_T)
         qT = prior_T * like_T
         self.qT = qT / qT.sum(1, keepdim=True).clamp_min(1e-12)
 
@@ -448,9 +601,23 @@ class BatchedFactoredAgents:
             M = torch.bmm(q_ctx, B_flat).reshape(
                 self.N, self.N_TEMP, self.N_TEMP, self.N_ACTIONS)     # (N,X,T,A)
             qT_a = (M * qT_a.unsqueeze(1)).sum(2)                     # (N,X,A)
+            if self.couple:
+                qT_a = self._couple_shift(qT_a)
             Ck = qO[:, 1:2] * C_occ.unsqueeze(0) + (1 - qO[:, 1:2]) * C_un.unsqueeze(0)
             G += torch.einsum('nx,nxa->na', Ck, qT_a)
-            G -= self.energy_weight * torch.einsum('nxa,xa->na', qT_a, self.DRIVE)
+            # TOU-aware energy preference: HVAC drive is penalised more during
+            # expensive hours, so the agent pre-conditions off-peak and coasts
+            # on-peak. eff_tou = 1 + tou_weight*(tou_mult - 1).
+            eff_tou = 1.0 + self.tou_weight * (self.tou_mult - 1.0)
+            ew = self.energy_w.view(self.N, 1) if self.learn_C else self.energy_weight
+            G -= (ew * eff_tou) * torch.einsum('nxa,xa->na', qT_a, self.DRIVE)
+            # v10: congestion-gated drive penalty. When the agent infers the
+            # other floors are peaking (self.cong high), its own high-drive
+            # actions become less preferred, so it defers load and the floors
+            # desynchronise. Gated per-agent by the congestion belief.
+            if self.congestion_weight > 0.0:
+                G -= (self.congestion_weight * self.cong.view(self.N, 1)) \
+                     * torch.einsum('nxa,xa->na', qT_a, self.DRIVE)
 
         if self.epistemic_weight > 0:
             q_ow = (self.qO[:, :, None] * self.qW[:, None, :]).reshape(
@@ -507,12 +674,26 @@ class BatchedFactoredAgents:
         qT_prev, qH_prev = self.qT.clone(), self.qH.clone()
         a_prev = self.prev_action
 
+        if self.couple:
+            self._couple_prep(T_arr)
         t_idx, o_prev_idx, w_prev_idx = self._infer(T_arr, is_occ_actual)
+        if self.couple and self.couple_learn and self._cpl_mu0 is not None:
+            T_obs = self.TC[t_idx]
+            resid = T_obs - (self._cpl_mu0 + self._cpl_delta)  # vs coupled pred
+            self.kc = (self.kc + self.couple_lr * self._cpl_g * resid)\
+                          .clamp(0.0, self.couple_k_max)
+        if self.couple and self._cpl_mu0 is not None:
+            T_obs = self.TC[t_idx]
+            self._pred_err_nocouple += (T_obs - self._cpl_mu0).abs()
+            self._pred_err_couple   += (T_obs - (self._cpl_mu0 + self._cpl_delta)).abs()
+            self._pred_count += 1
         if a_prev is not None and not self.freeze_B and self.lr_pB > 0:
             # context indices of the PREVIOUS step were stored alongside
             self._learn(qT_prev, qH_prev, a_prev,
                         t_idx, self._o_prev, self._w_prev)
 
+        if self.learn_C:
+            self._adapt_C(T_arr, is_occ_actual)
         self.occ_belief_sum += self.qO[:, 1].cpu().numpy()
         EH = (self.qH @ torch.as_tensor(self.H_CENTERS, dtype=self.dt,
                                         device=self.device)).cpu().numpy()
@@ -521,7 +702,14 @@ class BatchedFactoredAgents:
         self.belief_count += 1
 
         G = self._plan()
-        a = G.argmax(1)                                               # (N,)
+        if self.action_temp > 0.0:
+            # Stochastic selection: sample each agent's action from softmax(G/temp).
+            # Independent per-agent draws break the symmetry of identical floors,
+            # so they can desynchronise instead of all picking the same action.
+            probs = torch.softmax(G / self.action_temp, dim=1)            # (N,A)
+            a = torch.multinomial(probs, 1).squeeze(1)                    # (N,)
+        else:
+            a = G.argmax(1)                                               # (N,)
 
         # safety-net override (tiny CPU loop — N is 15 at most)
         a_np = a.cpu().numpy()
@@ -569,6 +757,8 @@ class BatchedFactoredAgents:
             'transition_counts': self.transition_counts.copy(),
             'step_count': self.step_count,
             'b_updates':  self.b_updates,
+            'energy_w': self.energy_w.cpu().numpy(),                  # v12 learned tradeoff
+            'kc': (self.kc.cpu().numpy() if getattr(self, 'couple', False) else None),  # v14 conductance
         }
 
     def set_state(self, state: dict):
@@ -577,6 +767,10 @@ class BatchedFactoredAgents:
         self.transition_counts = state['transition_counts']
         self.step_count = state['step_count']
         self.b_updates  = state['b_updates']
+        if state.get('energy_w') is not None:
+            self.energy_w = torch.as_tensor(state['energy_w'], dtype=self.dt, device=self.device)
+        if state.get('kc') is not None and getattr(self, 'couple', False):
+            self.kc = torch.as_tensor(state['kc'], dtype=self.dt, device=self.device)
 
     def get_stats(self) -> dict:
         b_change = float((self.B_T - self.initial_B_T).abs().mean().cpu())
@@ -597,7 +791,11 @@ class PyMDPOffice:
     MODES = ('zone', 'floor', 'single')
 
     def __init__(self, env, mode='zone', structural=True,
-                 comfort_weight=1.0, energy_weight=0.5, policy_len=4,
+                 comfort_weight=1.0, energy_weight=0.5, tou_weight=1.0,
+                 congestion_weight=0.0, action_temp=0.0, cong_alpha=0.3, policy_len=4,
+                 learn_C=False, c_lr=0.02, energy_w_min=0.0, energy_w_max=1.5,
+                 couple=False, couple_k=0.12, couple_learn=True,
+                 couple_lr=0.01, couple_k_max=0.6,
                  lr_pB=1.0, pB_prior_scale=2.0, epistemic_weight=0.2,
                  unocc_gate=0.1, deadband_weight=4.0, freeze_B=False,
                  override="safety", device="auto", dtype="float"):
@@ -611,17 +809,22 @@ class PyMDPOffice:
         cool_low  = float(env.action_space.low[N_ZONES])
         cool_high = float(env.action_space.high[N_ZONES])
 
+        _floor_idx = {"bottom": 0, "mid": 1, "top": 2}
         if mode == 'zone':
             self.agent_to_zones = [[i] for i in range(N_ZONES)]
             ctxs = [dict(ZONE_META[i]) if structural else {} for i in range(N_ZONES)]
+            # which of the 3 air-loop floors each agent sits on (for congestion)
+            self.agent_floor = [_floor_idx[ZONE_META[i]["floor"]] for i in range(N_ZONES)]
         elif mode == 'floor':
             self.agent_to_zones = [FLOOR_ZONES[f] for f in FLOORS]
             ctxs = [({"floor": f, "type": "perimeter", "orient": "mixed"}
                      if structural else {}) for f in FLOORS]
+            self.agent_floor = [_floor_idx.get(f, 1) for f in FLOORS]
         else:
             self.agent_to_zones = [list(range(N_ZONES))]
             ctxs = [({"floor": "mid", "type": "perimeter", "orient": "mixed"}
                      if structural else {})]
+            self.agent_floor = None   # single agent spans all floors -> no congestion
 
         self.batch = BatchedFactoredAgents(
             n_agents=len(self.agent_to_zones),
@@ -629,6 +832,15 @@ class PyMDPOffice:
             cool_low=cool_low, cool_high=cool_high,
             struct_ctxs=ctxs,
             comfort_weight=comfort_weight, energy_weight=energy_weight,
+            tou_weight=tou_weight,
+            congestion_weight=congestion_weight, action_temp=action_temp,
+            cong_alpha=cong_alpha,
+            learn_C=learn_C, c_lr=c_lr,
+            energy_w_min=energy_w_min, energy_w_max=energy_w_max,
+            couple=couple, couple_k=couple_k, couple_learn=couple_learn,
+            couple_lr=couple_lr, couple_k_max=couple_k_max,
+            couple_neighbors=([ZONE_NEIGHBORS[i] for i in range(N_ZONES)]
+                              if (couple and mode == 'zone') else None),
             policy_len=policy_len, lr_pB=lr_pB,
             pB_prior_scale=pB_prior_scale,
             epistemic_weight=epistemic_weight, unocc_gate=unocc_gate,
@@ -637,6 +849,25 @@ class PyMDPOffice:
 
         self.htg_sp = np.full(N_ZONES, 21.0, dtype=np.float32)
         self.clg_sp = np.full(N_ZONES, 24.0, dtype=np.float32)
+        self._cong_ref = 1e-6   # running peak of total floor power (normaliser)
+
+    def observe_floor_power(self, floor_power):
+        """Feed the 3 per-floor powers [bot,mid,top]. For each agent we form a
+        congestion observation = (load of the OTHER floors) / (running peak
+        total), i.e. how hard the floors this agent does NOT control are pushing
+        the shared electric service right now. High => others are peaking =>
+        defer. No direct view of others' actions; only the shared power signal."""
+        if self.agent_floor is None:
+            return
+        fp = np.asarray(floor_power, dtype=np.float64)
+        total = float(fp.sum())
+        self._cong_ref = max(self._cong_ref, total)
+        others = total - fp                      # (3,) load of the other two floors
+        denom = max(self._cong_ref, 1e-6)
+        cong_by_floor = np.clip(others / denom, 0.0, 1.0)   # (3,)
+        cong_per_agent = np.array([cong_by_floor[f] for f in self.agent_floor],
+                                  dtype=np.float32)
+        self.batch.observe_congestion(cong_per_agent)
 
     def get_action(self, obs, info=None) -> np.ndarray:
         month = int(obs[ObsIndex.MONTH]); day = int(obs[ObsIndex.DAY])
@@ -730,11 +961,15 @@ def robust_reset(env, seed, first_obs_timeout=120.0):
 
 
 def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
-                   comfort_weight=1.0, energy_weight=0.5, policy_len=4,
+                   comfort_weight=1.0, energy_weight=0.5, tou_weight=1.0,
+                   congestion_weight=0.0, action_temp=0.0, cong_alpha=0.3, policy_len=4,
+                   learn_C=False, c_lr=0.02, energy_w_min=0.0, energy_w_max=1.5,
+                   couple=False, couple_k=0.12, couple_learn=True,
+                   couple_lr=0.01, couple_k_max=0.6,
                    lr_pB=1.0, pB_prior_scale=2.0, epistemic_weight=0.2,
                    unocc_gate=0.1, deadband_weight=4.0, freeze_B=False,
                    override="safety", device="auto", dtype="float",
-                   checkpoint=None) -> dict:
+                   checkpoint=None, floor_power_idx=None, floor_power_scale=1.0) -> dict:
 
     from register_env import make_custom_env
     # NOTE: metrics + CustomRewardWrapper now come from metrics_utils (the SAME
@@ -749,7 +984,21 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
         compute_zone_comfort_rate as maddpg_compute_zone_comfort_rate,
         compute_mean_deviation as maddpg_compute_mean_deviation,
         compute_hourly_linear_reward,
+        load_factor,
+        floor_coincidence_factor,
     )
+
+    # Per-floor power obs indices for the game-theoretic coincidence factor.
+    # The 3 floors share the building electric service (the demand charge), so
+    # the coincidence factor measures whether they peak together. Requires the
+    # per-floor power outputs (see OfficeMedium_MultiAgent_perfloor.epJSON) to
+    # be surfaced in the observation; pass their obs indices as [bot, mid, top].
+    if isinstance(floor_power_idx, str):
+        floor_power_idx = [int(x) for x in floor_power_idx.split(",") if x.strip()]
+    if floor_power_idx is not None and len(floor_power_idx) != 3:
+        print(f"[coincidence] WARNING: expected 3 floor-power indices, got "
+              f"{floor_power_idx}; disabling coincidence metric.")
+        floor_power_idx = None
 
     def compute_zone_comfort_rate(obs):
         return maddpg_compute_zone_comfort_rate(obs, occupied_only=True)
@@ -763,7 +1012,14 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
 
     agent = PyMDPOffice(env, mode=mode, structural=structural,
                         comfort_weight=comfort_weight,
-                        energy_weight=energy_weight, policy_len=policy_len,
+                        energy_weight=energy_weight, tou_weight=tou_weight,
+                        congestion_weight=congestion_weight, action_temp=action_temp,
+                        cong_alpha=cong_alpha,
+                        learn_C=learn_C, c_lr=c_lr,
+                        energy_w_min=energy_w_min, energy_w_max=energy_w_max,
+                        couple=couple, couple_k=couple_k, couple_learn=couple_learn,
+                        couple_lr=couple_lr, couple_k_max=couple_k_max,
+                        policy_len=policy_len,
                         lr_pB=lr_pB, pB_prior_scale=pB_prior_scale,
                         epistemic_weight=epistemic_weight,
                         unocc_gate=unocc_gate,
@@ -774,7 +1030,7 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
 
     dev = agent.batch.device
     print(f"{'=' * 80}")
-    print(f"Factored AIF Office v7 (PyTorch) | Weather: {weather} | Mode: {mode}")
+    print(f"Factored AIF Office v10 (PyTorch) | Weather: {weather} | Mode: {mode}")
     print(f"  Device:       {dev}  ({torch.cuda.get_device_name(dev) if dev.type=='cuda' else 'CPU'})")
     print(f"  dtype:        {agent.batch.dt}")
     print(f"  Agents:       {agent.batch.N} (batched)   B_T: {tuple(agent.batch.B_T.shape)}")
@@ -784,8 +1040,24 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
     print(f"  Episodes:     {episodes}   Checkpoint: {checkpoint or 'disabled'}")
     print(f"{'=' * 80}\n")
 
-    all_rewards=[]; all_energy=[]; all_zcr=[]; all_dev=[]; all_custom=[]
+    all_rewards=[]; all_energy=[]; all_zcr=[]; all_dev=[]; all_custom=[]; all_cost=[]
     all_orig=[]; all_db=[]; all_cs=[]; all_cs_occ=[]; all_hlr=[]
+
+    # --- clean per-zone (state, action) log -----------------------------------
+    # One row per timestep: the temperature each zone was at when the agent
+    # decided, plus the heating/cooling setpoint it commanded for that zone.
+    # Truncated fresh each run (unlike actions_v7.csv/obs_v7.csv which append),
+    # with a labelled header so it drops straight into pandas.
+    import csv as _csv
+    ZONE_LOG_PATH = "zone_temps_actions_v7.csv"
+    _zlog_f = open(ZONE_LOG_PATH, "w", newline="")
+    _zlog = _csv.writer(_zlog_f)
+    _zlog.writerow(
+        ["episode", "step", "month", "day", "hour", "outdoor_temp"]
+        + [f"T_{z}"   for z in OCCUPIED_ZONES]
+        + [f"HTG_{z}" for z in OCCUPIED_ZONES]
+        + [f"CLG_{z}" for z in OCCUPIED_ZONES])
+    print(f"[log] per-zone temps+actions -> {ZONE_LOG_PATH}")
 
     RUN_SEED = 0  # fixed base seed -> reproducible across machines/runs
     for ep in range(episodes):
@@ -796,7 +1068,21 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
         # OS-entropy random. Deterministic weather is unaffected; this only pins
         # the fallback RNG so the two machines start from the same obs.
         obs, info = robust_reset(env, seed=RUN_SEED + ep)
-        rewards=[]; energy_list=[]
+        if floor_power_idx is not None and max(floor_power_idx) >= len(obs):
+            print(f"[coincidence] WARNING: floor_power_idx {floor_power_idx} exceeds "
+                  f"observation size {len(obs)} (valid indices 0-{len(obs)-1}). "
+                  f"The per-floor power is NOT in the observation yet -- add the "
+                  f"per-floor meters/variables to the Sinergym variables/meters "
+                  f"config first, then pass their real obs indices. "
+                  f"Disabling the coincidence metric for this run.")
+            floor_power_idx = None
+        rewards=[]; energy_list=[]; step_idx=0
+        if getattr(agent.batch, "couple", False):
+            agent.batch._pred_err_couple.zero_()
+            agent.batch._pred_err_nocouple.zero_()
+            agent.batch._pred_count = 0
+        floor_power_rows=[]   # (T,3) per-floor power for the coincidence factor
+        _diag_rows=[]   # [month,day,hour,Pbot_kW,Pmid_kW,Ptop_kW] for peak_diagnostic
         terminated=truncated=False; current_month=0
         total_zok=total_zc=0; total_dev=total_dc=0.0
         total_custom_r=0.0; total_orig_r=0.0
@@ -804,6 +1090,8 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
         cs_ep=CSAccumulator(); cs_m=CSAccumulator()
         m_energy=m_zok=m_zc=m_dev=m_dc=0.0
         m_custom_r=0.0; m_orig_r=0.0; m_hlr=0.0
+        m_cost_energy=0.0; m_cost_demand=0.0          # per-month $ cost
+        prev_ce=0.0; prev_cd=0.0                       # last cumulative $ seen
         m_t_min=np.full(N_ZONES,999.0); m_t_max=np.full(N_ZONES,-999.0)
 
         print(f"Episode {ep + 1}/{episodes}")
@@ -811,7 +1099,22 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
         t0=time.time()
 
         while not (terminated or truncated):
+            if floor_power_idx is not None and congestion_weight > 0.0:
+                agent.observe_floor_power([float(obs[i]) * floor_power_scale
+                                           for i in floor_power_idx])
             action = agent.get_action(obs, info)
+            # --- clean per-zone (state, action) row -----------------------
+            # obs here is the observation the agent reacted to (pre-step), so
+            # T_<zone> is the temperature that produced this action. action is
+            # [15 heating setpoints, 15 cooling setpoints] in OCCUPIED_ZONES order.
+            step_idx += 1
+            _zlog.writerow(
+                [ep + 1, step_idx,
+                 int(obs[ObsIndex.MONTH]), int(obs[ObsIndex.DAY]),
+                 int(obs[ObsIndex.HOUR]), f"{float(obs[ObsIndex.OUTDOOR_TEMP]):.3f}"]
+                + [f"{ObsIndex.get_zone_temp(obs, i):.3f}" for i in range(N_ZONES)]
+                + [f"{float(action[i]):.3f}"          for i in range(N_ZONES)]
+                + [f"{float(action[N_ZONES + i]):.3f}" for i in range(N_ZONES)])
             # --- ACTION LOG (for cross-machine / cross-pipeline diffing) ---
             with open("actions_v7.csv", "a") as _f:
                 _o = np.asarray(obs).ravel(); _a = np.asarray(action).ravel()
@@ -826,6 +1129,10 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
             custom_r=info.get('custom_reward',0.0); orig_r=info.get('original_reward',0.0)
             total_custom_r+=custom_r; m_custom_r+=custom_r
             total_orig_r+=orig_r; m_orig_r+=orig_r
+            # --- $ cost: info carries cumulative totals; take per-step deltas --
+            ce=info.get('cost_energy_usd',0.0); cd=info.get('cost_demand_usd',0.0)
+            m_cost_energy+=ce-prev_ce; prev_ce=ce
+            m_cost_demand+=cd-prev_cd; prev_cd=cd
             cs_ep.update(obs); cs_m.update(obs)
             hlr,_=compute_hourly_linear_reward(obs)
             total_hlr+=hlr; m_hlr+=hlr
@@ -833,6 +1140,12 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
                 db_total+=1
                 if action[i]>=action[N_ZONES+i]-2.0: db_violations+=1
             pwr=float(obs[ObsIndex.HVAC_DEMAND]); energy_list.append(pwr); m_energy+=pwr
+            if floor_power_idx is not None:
+                floor_power_rows.append([float(obs[i]) * floor_power_scale for i in floor_power_idx])
+                _diag_rows.append(
+                    [float(obs[ObsIndex.MONTH]), float(obs[ObsIndex.DAY]),
+                     float(obs[ObsIndex.HOUR])]
+                    + [float(obs[i]) * floor_power_scale / 1000.0 for i in floor_power_idx])
             zok,zc=compute_zone_comfort_rate(obs)
             total_zok+=zok; total_zc+=zc; m_zok+=zok; m_zc+=zc
             dv,dn=compute_mean_deviation(obs)
@@ -851,10 +1164,12 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
                     season="S" if get_seasonal_comfort(current_month,15)==COMFORT_SUMMER else "W"
                     m_zcr=m_zok/m_zc*100 if m_zc>0 else float('nan')
                     m_dv=m_dev/m_dc if m_dc>0 else 0.0
+                    m_cost=m_cost_energy+m_cost_demand
                     stats=agent.get_stats()
                     print(f"  Month {current_month:2d} [{season}] | "
                           f"CR: {m_custom_r:8.2f} | OR: {m_orig_r:10.0f} | "
                           f"HLR: {m_hlr:9.2f} | E: {ekwh:7.0f}kWh | "
+                          f"Cost: ${m_cost:8,.0f} (en ${m_cost_energy:,.0f}/dem ${m_cost_demand:,.0f}) | "
                           f"CS: {cs_m.mean:.3f} (occ: {cs_m.mean_occ:.3f}) | "
                           f"ZCR(occ): {m_zcr:5.1f}% | Dev: {m_dv:.3f}C | "
                           f"T: {avg_t:.1f}C [{t_min:.1f}-{t_max:.1f}] | "
@@ -865,6 +1180,7 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
                 current_month=month_now
                 m_energy=m_zok=m_zc=m_dev=m_dc=0.0
                 m_custom_r=0.0; m_orig_r=0.0; m_hlr=0.0
+                m_cost_energy=0.0; m_cost_demand=0.0
                 cs_m.reset()
                 m_t_min=np.full(N_ZONES,999.0); m_t_max=np.full(N_ZONES,-999.0)
                 agent.reset_occ_stats()
@@ -886,6 +1202,32 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
         print(f"    Original Reward:     {total_orig_r:.2f}")
         print(f"    Hourly Reward:       {total_hlr:.2f}")
         print(f"    Total Energy:        {ekwh:,.0f} kWh")
+        _peak_kW = (max(energy_list) / 1000.0) if energy_list else float('nan')
+        _lf = load_factor(energy_list)
+        print(f"    Peak Demand:         {_peak_kW:,.1f} kW")
+        print(f"    Load Factor:         {_lf:.3f}   (avg/peak; higher=flatter=cheaper demand)")
+        if floor_power_idx is not None and len(floor_power_rows) > 0:
+            _fp = np.asarray(floor_power_rows, dtype=np.float64)        # (T,3)
+            _cf = floor_coincidence_factor(_fp)
+            _floor_peaks = _fp.max(axis=0) / 1000.0                     # kW per floor
+            _coincident = _fp.sum(axis=1).max() / 1000.0               # kW summed peak
+            print(f"    Floor Peaks (kW):    bot={_floor_peaks[0]:.1f}  "
+                  f"mid={_floor_peaks[1]:.1f}  top={_floor_peaks[2]:.1f}  "
+                  f"(Σ individual={_floor_peaks.sum():.1f})")
+            print(f"    Coincident Peak:     {_coincident:.1f} kW")
+            print(f"    Coincidence Factor:  {_cf:.3f}   "
+                  f"(1=floors peak together/expensive, lower=staggered/cheaper)")
+            if floor_power_idx is not None and len(_diag_rows) > 0:
+                _dpath = f"floorlog_ep{ep+1}.npy"
+                np.save(_dpath, np.asarray(_diag_rows, dtype=np.float64))
+                print(f"    [diag] saved {_dpath}  ({len(_diag_rows)} steps)")
+        ep_cost_energy=info.get('cost_energy_usd',0.0)
+        ep_cost_demand=info.get('cost_demand_usd',0.0)
+        ep_cost_total =info.get('cost_total_usd', ep_cost_energy+ep_cost_demand)
+        print(f"    Energy Cost:         ${ep_cost_energy:,.2f}")
+        print(f"    Demand Cost:         ${ep_cost_demand:,.2f}")
+        print(f"    Total Cost:          ${ep_cost_total:,.2f}")
+        all_cost.append(ep_cost_total)
         print(f"    CS (weighted/occ):   {cs_ep.mean:.4f} / {cs_ep.mean_occ:.4f}")
         print(f"    Zone-Comfort Rate:   {zcr:.1f}%")
         print(f"    Mean Deviation:      {mean_dev:.3f} C")
@@ -894,9 +1236,29 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
               f"E[H]: {stats['mean_H']:+.3f}")
         print(f"    Per-agent E[H]:      "
               + " ".join(f"{h:+.2f}" for h in stats['per_agent_H']))
+        if getattr(agent.batch, "couple", False):
+            kc = agent.batch.kc.detach().cpu().numpy()
+            print(f"    Per-zone conductance k: "
+                  + " ".join(f"{v:.3f}" for v in kc))
+            _cores = [0, 1, 2]
+            _perim = [i for i in range(N_ZONES) if i not in _cores]
+            print(f"      core k (4 neighbours): {kc[_cores].mean():.3f}   "
+                  f"perimeter k (3 neighbours): {kc[_perim].mean():.3f}")
+            if agent.batch._pred_count > 0:
+                en = agent.batch._pred_err_nocouple.cpu().numpy() / agent.batch._pred_count
+                ec = agent.batch._pred_err_couple.cpu().numpy() / agent.batch._pred_count
+                print(f"    Pred-err degC (no-cpl/cpl): "
+                      f"{en.mean():.4f} / {ec.mean():.4f}")
+                _hi = kc > 0.05
+                if _hi.any():
+                    print(f"      coupled zones (k>0.05, n={int(_hi.sum())}): "
+                          f"{en[_hi].mean():.4f} / {ec[_hi].mean():.4f}  "
+                          f"(improvement {(en[_hi]-ec[_hi]).mean():+.4f})")
         print()
 
     env.close()
+    _zlog_f.close()
+    print(f"[log] wrote per-zone temps+actions -> {ZONE_LOG_PATH}")
     if checkpoint:
         agent.save(checkpoint)
 
@@ -908,6 +1270,9 @@ def run_simulation(weather="mixed", episodes=1, mode='zone', structural=True,
     print(f"  Hourly Reward (sched): {sum(all_hlr):.2f}")
     print(f"  Env reward (mean):     {np.mean(all_rewards):.4f}")
     print(f"  Total Energy:          {sum(all_energy):,.0f} kWh")
+    print(f"  Total Cost:            ${sum(all_cost):,.2f}")
+    if episodes>1:
+        print(f"  Cost per episode:      ${np.mean(all_cost):,.2f} (mean)")
     print(f"  CS (active, weighted): {np.nanmean(all_cs):.4f}")
     print(f"  CS (occupied only):    {np.nanmean(all_cs_occ):.4f}")
     print(f"  Zone-Comfort Rate:     {np.mean(all_zcr):.1f}%")
@@ -945,6 +1310,46 @@ if __name__ == "__main__":
     parser.add_argument("--lr_pB", type=float, default=1.0)
     parser.add_argument("--comfort_weight", type=float, default=1.0)
     parser.add_argument("--energy_weight", type=float, default=0.5)
+    parser.add_argument("--tou_weight", type=float, default=1.0,
+        help="Time-of-use strength for the energy preference. 0 = TOU off, "
+             "1 = full PG&E B-19 schedule (energy up to 3x less preferred on-peak).")
+    parser.add_argument("--floor_power_idx", type=str, default=None,
+        help="Comma-separated obs indices of per-floor HVAC power [bot,mid,top] "
+             "(e.g. '92,93,94'). Enables the per-floor coincidence-factor metric. "
+             "Also required for congestion inference (--congestion_weight).")
+    parser.add_argument("--congestion_weight", type=float, default=0.0,
+        help="v10: weight on the congestion-gated drive penalty. 0 = off (= v9). "
+             ">0 makes an agent defer its HVAC load when it infers the OTHER "
+             "floors are peaking. Requires --floor_power_idx.")
+    parser.add_argument("--action_temp", type=float, default=0.0,
+        help="v10: softmax temperature for stochastic action selection. 0 = argmax "
+             "(deterministic). >0 lets identical floors desynchronise (e.g. 0.3).")
+    parser.add_argument("--cong_alpha", type=float, default=0.3,
+        help="v10: congestion belief filter rate (EMA). Higher = faster, noisier.")
+    parser.add_argument("--learn_C", action="store_true",
+        help="v12: adapt each agent's energy/comfort tradeoff online from its own "
+             "comfort error. Off => identical to v10.")
+    parser.add_argument("--c_lr", type=float, default=0.02,
+        help="v12: learning rate for the per-agent energy-weight integral control.")
+    parser.add_argument("--energy_w_min", type=float, default=0.0,
+        help="v12: lower bound on a per-agent adapted energy weight.")
+    parser.add_argument("--energy_w_max", type=float, default=1.5,
+        help="v12: upper bound on a per-agent adapted energy weight.")
+    parser.add_argument("--couple", action="store_true",
+        help="v14: inter-zone thermal coupling -- each agent folds a learned "
+             "conductance against neighbour temps into its prediction. zone mode only.")
+    parser.add_argument("--couple_k", type=float, default=0.12,
+        help="v14: initial per-agent conductance (per-step gain on T_nb - T_self).")
+    parser.add_argument("--no_couple_learn", action="store_true",
+        help="v14: freeze the conductance at --couple_k (no online adaptation).")
+    parser.add_argument("--couple_lr", type=float, default=0.01,
+        help="v14: learning rate for the online conductance update.")
+    parser.add_argument("--couple_k_max", type=float, default=0.6,
+        help="v14: upper bound on the learned conductance.")
+    parser.add_argument("--floor_power_scale", type=float, default=1.0,
+        help="Multiplier applied to the per-floor obs values. Sinergym meters "
+             "report Joules/timestep, so pass 0.0011111 (=1/900s) to display kW. "
+             "The coincidence factor is scale-invariant (unaffected by this).")
     parser.add_argument("--pB_prior_scale", type=float, default=2.0)
     parser.add_argument("--epistemic_weight", type=float, default=0.2)
     parser.add_argument("--unocc_gate", type=float, default=0.1)
@@ -963,12 +1368,20 @@ if __name__ == "__main__":
     checkpoint = args.checkpoint
     if checkpoint is None and not args.no_save:
         struct_tag = "struct" if args.structural else "nostruct"
-        checkpoint = f"pymdp_office_v7_{args.mode}_{struct_tag}_{args.weather}.pkl"
+        checkpoint = f"pymdp_office_v10_{args.mode}_{struct_tag}_{args.weather}.pkl"
 
     run_simulation(weather=args.weather, episodes=args.episodes,
                    mode=args.mode, structural=args.structural,
                    comfort_weight=args.comfort_weight,
                    energy_weight=args.energy_weight,
+                   tou_weight=args.tou_weight,
+                   congestion_weight=args.congestion_weight,
+                   action_temp=args.action_temp, cong_alpha=args.cong_alpha,
+                   learn_C=args.learn_C, c_lr=args.c_lr,
+                   energy_w_min=args.energy_w_min, energy_w_max=args.energy_w_max,
+                   couple=args.couple, couple_k=args.couple_k,
+                   couple_learn=not args.no_couple_learn,
+                   couple_lr=args.couple_lr, couple_k_max=args.couple_k_max,
                    policy_len=args.policy_len, lr_pB=args.lr_pB,
                    pB_prior_scale=args.pB_prior_scale,
                    epistemic_weight=args.epistemic_weight,
@@ -977,4 +1390,6 @@ if __name__ == "__main__":
                    freeze_B=args.freeze_B,
                    override=args.override, device=args.device,
                    dtype=args.dtype,
+                   floor_power_idx=args.floor_power_idx,
+                   floor_power_scale=args.floor_power_scale,
                    checkpoint=checkpoint if not args.no_save else None)

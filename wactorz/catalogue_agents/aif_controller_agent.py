@@ -43,10 +43,13 @@ DEFAULTS = {
     "infer_dir":    None,
     "aif_src_dir":  None,
     "heat_low":     15.0, "heat_high": 22.0, "cool_low": 24.0, "cool_high": 30.0,
-    "policy_len":   4,
-    "comfort_weight":  1.0, "energy_weight": 0.5, "epistemic_weight": 0.2,
-    "unocc_gate":      0.1, "deadband_weight": 4.0, "pB_prior_scale": 2.0,
-    "override":     "safety", "freeze_B": False, "lr_pB": 1.0,
+    "policy_len":   8,
+    "comfort_weight":  1.0, "energy_weight": 0.2, "epistemic_weight": 0.2,
+    "unocc_gate":      0.1, "deadband_weight": 8.0, "pB_prior_scale": 2.0,
+    "override":     "safety", "freeze_B": True, "lr_pB": 1.0,
+    "tou_weight":   0.0, "congestion_weight": 0.0,
+    "couple":       True, "couple_k": 0.12,
+    "energy_w_min": 0.0, "energy_w_max": 1.0,
     "publish_mode": "normalized",
 }
 
@@ -107,6 +110,11 @@ def _build_controller(cfg, zones, bounds):
         pB_prior_scale=float(cfg["pB_prior_scale"]),
         epistemic_weight=cfg["epistemic_weight"], unocc_gate=cfg["unocc_gate"],
         deadband_weight=cfg["deadband_weight"], freeze_B=bool(cfg["freeze_B"]),
+        tou_weight=cfg.get("tou_weight", 0.0),
+        congestion_weight=cfg.get("congestion_weight", 0.0),
+        couple=bool(cfg.get("couple", True)), couple_k=float(cfg.get("couple_k", 0.12)),
+        energy_w_min=float(cfg.get("energy_w_min", 0.0)),
+        energy_w_max=float(cfg.get("energy_w_max", 1.0)),
         override=cfg["override"],
     )
 

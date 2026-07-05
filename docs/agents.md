@@ -74,6 +74,12 @@ Spawned by MainActor for every `PIPELINE`-classified request. The planner querie
 
 After spawning, the planner fires a background `_bootstrap_ha_entity_states()` task that extracts HA entity IDs from the plan (generated code, `ha_actuator` actions, MQTT topics, and the enriched task string) and sends a `get_entities_state` request to `home-assistant-agent`. This re-publishes the current HA state over MQTT so freshly-spawned agents that subscribe to `homeassistant/state_changes/#` fire immediately — without waiting for the next real HA state change.
 
+#### Camera URL resolution
+
+Before generating the plan, the planner resolves real stream and snapshot URLs for any camera entities mentioned in the task by sending `get_camera_stream_url` and `get_camera_snapshot_url` A2A requests to `home-assistant-agent`. Resolved URLs are injected into the LLM prompt so generated agents use exact, working URLs rather than guessing `/dev/video0` or inventing proxy paths.
+
+MJPEG proxy URLs (`/api/camera_proxy_stream/…`) require an `Authorization: Bearer` header; the planner injects an `OPENCV_FFMPEG_CAPTURE_OPTIONS` hint into the PATTERN 3 template so OpenCV passes the header automatically.
+
 #### Supported patterns
 
 | Pattern | Trigger | Action | Agents spawned |
@@ -84,6 +90,7 @@ After spawning, the planner fires a background `_bootstrap_ha_entity_states()` t
 | 4 | Webcam detection (YOLO) | Discord/webhook notification | dynamic YOLO + dynamic notify |
 | 5 | Timer/schedule | HA service call OR notification | `scheduled` + `ha_actuator` (or `scheduled` + `dynamic` notify) |
 | 6 | MQTT sensor + condition | HA service call | dynamic monitor + `ha_actuator` |
+| 7 | One-shot camera snapshot | Process/save still image | single dynamic agent (`httpx`) |
 
 #### Code validation
 
@@ -189,7 +196,41 @@ Wraps the Home Assistant REST API. Uses multiple internal LLM calls to classify 
 | `edit_automation` | Identify and update an existing automation |
 | `delete_automation` | Remove an automation |
 | `get_entities_state` | Fetch current state for explicit entity IDs and re-publish to MQTT — used by PlannerAgent bootstrap |
-| `other` | Answer open-ended HA questions via a short LLM tool-call loop backed by `get_simplified_ha_data` |
+| `other` | Answer open-ended HA questions via a short LLM tool-call loop backed by `get_simplified_ha_data`, plus camera and history tools (see below) |
+| `get_history` | Structured A2A fetch of entity state history for explicit entity IDs, returned as CSV — see [History tool](#history-tool) |
+
+#### Camera tools
+
+Camera requests route through the `other` intent path. The LLM tool-call loop has access to three camera-specific tools:
+
+| Tool | Description |
+|------|-------------|
+| `list_camera_entities` | Returns all `camera.*` entities with state and friendly name |
+| `get_camera_snapshot` | Fetches a JPEG from `/api/camera_proxy/{entity_id}` and returns it base64-encoded. The agent appends an inline markdown image tag (`![…](data:image/jpeg;base64,…)`) so the chat panel renders it. |
+| `get_camera_stream_url` | Aggregates stream URLs from three sources: MJPEG proxy (always present), [Expose Camera Stream Source](https://github.com/felipecrs/hass-expose-camera-stream-source) custom integration (skipped silently if 404), and HLS/other formats via HA WebSocket `camera/capabilities` + `camera/stream`. |
+
+Camera tools also support **A2A structured dispatch** — a peer agent can send a payload directly to `home-assistant-agent` without any LLM call:
+
+```json
+{"operation": "list_cameras"}
+{"operation": "get_camera_snapshot", "camera_entity_id": "camera.front_door"}
+{"operation": "get_camera_stream_url", "camera_entity_id": "camera.backyard"}
+{"operation": "get_camera_snapshot_url", "camera_entity_id": "camera.backyard"}
+```
+
+`get_camera_snapshot_url` returns only the URL (no HTTP fetch) — useful when a peer agent (e.g. PlannerAgent) needs to embed the URL in generated code rather than fetch the image itself. The response `data.snapshot_url` is the `/api/camera_proxy/{entity_id}` path and requires an `Authorization: Bearer <HA_TOKEN>` header to fetch.
+
+#### History tool
+
+Also available through the `other` intent's LLM tool-call loop is `get_entity_history`, backed by `get_entity_history()` in `ha_helper.py` (calls HA's `/api/history/period` REST endpoint). The system prompt tells the LLM to first call `get_simplified_ha_data` to resolve friendly names to `entity_id`s, then call `get_entity_history` with those IDs. The user message is prefixed with the current local datetime so the LLM can convert relative times ("yesterday midnight", "Saturday at 17:00") into ISO-8601 timestamps with UTC offset; returned timestamps are localised back to the server's timezone (`localise_history_timestamps`) so they line up with what the user asked for.
+
+Like the camera tools, history also supports **A2A structured dispatch**:
+
+```json
+{"operation": "get_history", "entity_ids": ["sensor.office_temperature"], "start_time": "2026-06-28T00:00:00", "end_time": "2026-06-29T00:00:00"}
+```
+
+This path skips the LLM entirely and returns the raw history alongside a flattened CSV (`entity_id,last_changed,state,unit_of_measurement`) via `history_to_csv()`, for peer agents that want tabular data rather than JSON.
 
 #### Prompts
 
@@ -382,37 +423,6 @@ TS_BATCH_INTERVAL=5.0      # flush to SQLite every N seconds (default: 5)
 
 ---
 
-### FusekiAgent `[optional]`
-
-**File:** `wactorz/agents/fuseki_agent.py`
-
-| | |
-|---|---|
-| **name** | `fern-agent` |
-| **protected** | `false` — can be stopped/deleted from the dashboard |
-
-SPARQL interface to Apache Jena Fuseki. Executes `SELECT`, `CONSTRUCT`, `DESCRIBE`, and `ASK` queries against the configured triplestore. No LLM involved — pure graph query agent.
-
-#### Configuration
-
-```bash
-FUSEKI_URL=http://localhost:3030   # default
-FUSEKI_DATASET=wactorz             # default
-```
-
-#### Commands
-
-```
-@fern-agent query SELECT * WHERE { ?s ?p ?o } LIMIT 5
-@fern-agent ask ASK { <http://example.org/foo> a owl:Class }
-@fern-agent prefixes           — list common RDF prefix bindings
-@fern-agent datasets           — list available Fuseki datasets
-```
-
-The Wactorz ontology (`infra/fuseki/ontology/wactorz.ttl`) models the running agent topology as RDF: each agent is an `af:Agent` with `af:publishesTo` / `af:subscribesTo` links to `af:Channel` nodes. Live agent metrics (`messagesProcessed`, `errorsCount`, `costUsd`, etc.) are updated continuously by `MetricsBridge`, which subscribes to `agents/+/metrics` MQTT and writes each heartbeat payload to Fuseki via `FusekiClient.upsert_agent_metrics()`.
-
----
-
 ## DynamicAgent
 
 **File:** `wactorz/agents/dynamic_agent.py`
@@ -570,6 +580,7 @@ Recipes live in `wactorz/catalogue_agents/` as plain Python files exporting an `
 | `sinergym-collector` | `sinergym_collector_agent.py` | Collects Sinergym episode data via MQTT for RL/Bayesian training. Listens on `sinergym/env/{env_id}/observation`, buffers transitions per-episode, persists episode blobs, and signals the optimizer on collection complete. | `aiomqtt`, `numpy` |
 | `sinergym-optimizer` | `sinergym_optimizer_agent.py` | Env-aware GP-UCB Q(s,a) optimizer with RBC warm-start. Trains from collected episodes (RL PPO/SAC or Bayesian GP), then publishes actions to `sinergym/env/{env_id}/action` during deployment. Auto-introspects obs/action variable names and comfort models. | `stable-baselines3`, `scikit-learn`, `numpy`, `torch`, `aiomqtt`, `gymnasium` |
 | `anomaly-detector` | `anomaly_detector_agent.py` | Learns normal patterns from time-series data (HA sensors and Sinergym), detects anomalies in real-time. Statistical z-score, percentile range, rate-of-change, and absence detection. Works with both real-world HA devices and simulated building data. | `aiomqtt`, `numpy` |
+| `smart-energy` | `smart_energy_agent.py` | Conversational Home Assistant smart-plug helper. Imports power-reporting plugs, tracks live watts plus kWh/cost, publishes energy summaries, and only powers down plugs through explicit guarded rules. | none |
 | `manual-agent` | `manual_agent.py` | Searches the web for device manuals, downloads PDFs, extracts text, and answers questions about them using the agent's LLM. | `httpx`, `pdfplumber`, `duckduckgo_search` |
 
 > **💡 Adding a recipe** — Create `wactorz/catalogue_agents/my_agent.py` exporting `AGENT_CODE = r'''...'''`, then add an entry to `_build_catalog()` in `wactorz/agents/catalog_agent.py`. The recipe is available on the next restart without any other changes.

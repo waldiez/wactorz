@@ -26,9 +26,7 @@
 
     /* ── Nav bar ── */
     .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
-    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
-    .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
-    .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}
     .topbar-links{display:flex;gap:.1rem}
     .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
     .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
@@ -40,6 +38,12 @@
     .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
     .sidebar-group{margin-bottom:1.25rem}
     .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{display:none}
+    details.sidebar-group > summary.sidebar-label::after{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}
+    details.sidebar-group[open] > summary.sidebar-label::after{content:'▾'}
+    details.sidebar-group > summary.sidebar-label:hover{color:var(--muted-hi)}
     .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
     .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
     .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
@@ -101,9 +105,7 @@
 </head>
 <body>
 <header class="topbar">
-  <a href="../index.html" class="topbar-logo">
-    <div class="logo-mark"></div>Wactorz
-  </a>
+  <a href="../index.html" class="topbar-logo">Wactorz</a>
   <nav class="topbar-links">
     <a href="https://github.com/waldiez/wactorz">GitHub</a>
     <a href="https://pypi.org/project/wactorz/">PyPI</a>
@@ -112,12 +114,10 @@
 
 <div class="layout">
   <aside class="sidebar">
-    <div class="sidebar-group">
-      <div class="sidebar-label">Guide</div>
+    <details class="sidebar-group" open>
+      <summary class="sidebar-label">Guide</summary>
       <a href="../guide/development.html" class="">Installation</a>
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
-      <a href="../guide/deployment.html" class="">Deployment</a>
-      <a href="../guide/windows.html" class="">Windows</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
@@ -125,7 +125,21 @@
       <a href="../guide/pipelines.html" class="active">Pipelines</a>
       <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
-    </div>
+    </details>
+    <details class="sidebar-group">
+      <summary class="sidebar-label">Catalogue agents</summary>
+      <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
+      <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
+      <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
+      <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
+      <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="">Reachy Mini</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
+      <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
+      <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
+    </details>
   </aside>
   <main class="content">
 <h1 id="pipelines">Pipelines</h1>
@@ -167,7 +181,7 @@
 </blockquote>
 <hr />
 <h2 id="canonical-patterns">Canonical patterns</h2>
-<p>PlannerAgent uses six canonical wiring patterns. Every pipeline request maps to one of these.</p>
+<p>PlannerAgent uses seven canonical wiring patterns. Every pipeline request maps to one of these.</p>
 <hr />
 <h3 id="pattern-1-ha-sensor-ha-action">Pattern 1 — HA sensor → HA action</h3>
 <p>A Home Assistant sensor triggers a Home Assistant service call — e.g. motion sensor turns on a light, door sensor locks a switch, temperature sensor activates AC.</p>
@@ -211,9 +225,11 @@
 </blockquote>
 <hr />
 <h3 id="pattern-3-webcam-camera-detection-ha-action">Pattern 3 — Webcam / camera detection → HA action</h3>
-<p>Object detection on a local webcam triggers a Home Assistant service call — e.g. person detected unlocks the door, cat detected turns on the pet feeder.</p>
+<p>Object detection on a live camera stream triggers a Home Assistant service call — e.g. person detected unlocks the door, cat detected turns on the pet feeder.</p>
+<p>Camera stream URLs are resolved from Home Assistant before the plan is generated and injected into the prompt. MJPEG proxy URLs (<code>/api/camera_proxy_stream/…</code>) require a Bearer token; the planner sets <code>OPENCV_FFMPEG_CAPTURE_OPTIONS</code> so OpenCV passes the header automatically.</p>
 <div class="highlight"><pre><span></span><code><span class="n">Agent</span><span class="w"> </span><span class="mi">1</span><span class="w">  </span><span class="p">(</span><span class="n">dynamic</span><span class="p">)</span><span class="w">  </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="o">&lt;</span><span class="n">slug</span><span class="o">&gt;-</span><span class="n">camera</span><span class="o">-</span><span class="n">detect</span>
-<span class="w">  </span><span class="n">setup</span><span class="p">():</span><span class="w"> </span><span class="nb">load</span><span class="w"> </span><span class="n">YOLO</span><span class="w"> </span><span class="n">model</span><span class="p">,</span><span class="w"> </span><span class="n">open</span><span class="w"> </span><span class="n">camera</span>
+<span class="w">  </span><span class="n">setup</span><span class="p">():</span><span class="w"> </span><span class="n">set</span><span class="w"> </span><span class="n">OPENCV_FFMPEG_CAPTURE_OPTIONS</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">HA</span><span class="w"> </span><span class="n">Bearer</span><span class="w"> </span><span class="n">token</span>
+<span class="w">           </span><span class="nb">load</span><span class="w"> </span><span class="n">YOLO</span><span class="w"> </span><span class="n">model</span><span class="p">,</span><span class="w"> </span><span class="n">open</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="n">with</span><span class="w"> </span><span class="n">exact</span><span class="w"> </span><span class="n">URL</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">CAMERA</span><span class="w"> </span><span class="n">STREAM</span><span class="w"> </span><span class="n">URLS</span>
 <span class="w">  </span><span class="n">process</span><span class="p">():</span><span class="w"> </span><span class="n">capture</span><span class="w"> </span><span class="n">frame</span><span class="p">,</span><span class="w"> </span><span class="n">run</span><span class="w"> </span><span class="n">inference</span>
 <span class="w">             </span><span class="n">publish</span><span class="w"> </span><span class="n">custom</span><span class="o">/</span><span class="n">detections</span><span class="o">/&lt;</span><span class="n">slug</span><span class="o">&gt;</span>
 <span class="w">             </span><span class="p">{</span><span class="s2">&quot;detected&quot;</span><span class="p">:</span><span class="w"> </span><span class="nb nb-Type">bool</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;target&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;person&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;objects&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="o">...</span><span class="p">]}</span>
@@ -227,7 +243,7 @@
 </code></pre></div>
 
 <h4 id="example_1">Example</h4>
-<div class="highlight"><pre><span></span><code>&quot;unlock the front door when a person is detected on the webcam&quot;
+<div class="highlight"><pre><span></span><code><span class="s2">&quot;unlock the front door when a person is detected on the front camera&quot;</span>
 </code></pre></div>
 
 <hr />
@@ -296,6 +312,27 @@
 
 <h4 id="example_3">Example</h4>
 <div class="highlight"><pre><span></span><code><span class="s2">&quot;if the lamp is on and the temperature goes above 20, turn off the lamp&quot;</span>
+</code></pre></div>
+
+<hr />
+<h3 id="pattern-7-one-shot-camera-snapshot">Pattern 7 — One-shot camera snapshot</h3>
+<p>Fetches a single still image from a camera — e.g. "take a snapshot of the office camera". Use this instead of Pattern 3 when the task needs a single image, not a continuous detection loop.</p>
+<p>Snapshot URLs are resolved from Home Assistant before the plan is generated. The URL (<code>/api/camera_proxy/{entity_id}</code>) requires an <code>Authorization: Bearer</code> header; always read the token from <code>os.environ['HA_TOKEN']</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="n">Agent</span>  <span class="p">(</span><span class="n">dynamic</span><span class="p">)</span>  <span class="n">name</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">slug</span><span class="o">&gt;-</span><span class="n">snapshot</span>
+  <span class="n">setup</span><span class="p">(</span><span class="n">agent</span><span class="p">)</span> <span class="ow">or</span> <span class="n">process</span><span class="p">(</span><span class="n">agent</span><span class="p">):</span>
+      <span class="kn">import</span><span class="w"> </span><span class="nn">httpx</span><span class="o">,</span><span class="w"> </span><span class="nn">os</span>
+      <span class="n">headers</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;Bearer </span><span class="si">{</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s1">&#39;HA_TOKEN&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">}</span>
+      <span class="k">async</span> <span class="k">with</span> <span class="n">httpx</span><span class="o">.</span><span class="n">AsyncClient</span><span class="p">()</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+          <span class="n">resp</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;&lt;url-from-CAMERA-SNAPSHOT-URLS&gt;&quot;</span><span class="p">,</span> <span class="n">headers</span><span class="o">=</span><span class="n">headers</span><span class="p">)</span>
+          <span class="n">image_bytes</span> <span class="o">=</span> <span class="n">resp</span><span class="o">.</span><span class="n">content</span>
+      <span class="c1"># process image_bytes (save to disk, run YOLO once, etc.)</span>
+  <span class="n">install</span><span class="p">:</span> <span class="n">httpx</span>
+</code></pre></div>
+
+<p>If the result feeds an HA action (e.g. "if a desk is visible, turn on the light"), publish the detection result to a topic and pair with an <code>ha_actuator</code> (same second-agent wiring as Pattern 3).</p>
+<h4 id="example_4">Example</h4>
+<div class="highlight"><pre><span></span><code><span class="s2">&quot;take a snapshot of the garden camera and save it to /tmp/garden.jpg&quot;</span>
+<span class="s2">&quot;check if the office camera shows anyone sitting at a desk&quot;</span>
 </code></pre></div>
 
 <hr />

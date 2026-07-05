@@ -1,23 +1,26 @@
 # Wactorz on Windows
 
-Covers x86-64 (Intel/AMD) and **ARM64** (Snapdragon X, Surface Pro X, Copilot+ PCs).
+This guide covers x86-64 and ARM64 Windows machines, including Snapdragon X,
+Surface Pro X, and Copilot+ PCs.
 
 ---
 
 ## Which option fits you?
 
-| Option | Docker needed | Node.js needed | ARM64 native | Best for |
-|---|---|---|---|---|
-| **A — Full Docker** | ✅ | ✗ | ✅ via emulation | Fastest start, production-like |
-| **B — Dev mode** | ✅ | ✅ | ✅ | Frontend development |
+| Option | Docker needed | Node.js needed | Best for |
+|---|---|---|---|
+| **A - Docker Compose** | yes | no | Full local stack from a repo clone |
+| **B - Docker Hub image** | yes | no | Fastest run without building locally |
+| **C - Frontend dev mode** | yes | yes | Dashboard development with mock agents |
 
-**Recommended starting point**: Option A for a working dashboard in under 5 minutes.
+Start with Option A if you are working from the repository. Use Option B if you
+only want to run Wactorz. Use Option C when you are editing the frontend.
 
 ---
 
 ## Prerequisites
 
-### Install Windows Terminal (highly recommended)
+### Install Windows Terminal
 
 ```powershell
 winget install Microsoft.WindowsTerminal
@@ -29,8 +32,8 @@ winget install Microsoft.WindowsTerminal
 winget install Git.Git
 ```
 
-Includes **Git Bash** — a minimal Unix shell that can run `.sh` scripts.
-After install: open Git Bash from the Start menu or Windows Terminal.
+Git for Windows includes Git Bash, which is useful for shell scripts and Unix-like
+commands.
 
 ### Install Docker Desktop
 
@@ -38,68 +41,89 @@ After install: open Git Bash from the Start menu or Windows Terminal.
 winget install Docker.DockerDesktop
 ```
 
-Requires Windows 10 22H2+ or Windows 11.
 After install, open Docker Desktop and wait for the engine to start.
 
-**ARM64 note:** Docker Desktop on ARM64 Windows (Snapdragon X, Surface Pro) runs
-`linux/arm64` containers natively and `linux/amd64` via QEMU emulation.
+ARM64 Windows can run `linux/arm64` containers natively and `linux/amd64`
+containers through emulation. Prefer the published multi-arch images when they
+are available.
 
-### Install Node.js (needed for Option B)
+### Install Node.js for frontend development
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
 ```
 
-ARM64 native builds are available and installed automatically by `winget`.
+Node.js is only needed for Option C.
 
 ---
 
-## Option A — Full Docker (simplest)
+## Option A - Docker Compose from the repository
 
 ```powershell
 git clone https://github.com/waldiez/wactorz
 cd wactorz
-
-# Copy the example env and set your LLM key
 copy .env.template .env
-notepad .env   # set LLM_API_KEY at minimum
+notepad .env
 ```
 
+Set `LLM_API_KEY` for cloud providers, or configure Ollama in `.env`.
+
+Start the Python stack:
+
 ```powershell
-docker compose --profile python-full up -d
+docker compose --profile python up -d
 ```
 
-Open **http://localhost:8888/** — the monitor dashboard. All agents should appear
-within a few seconds. (The `python-full` profile also starts Fuseki on `:3030` and
-Home Assistant on `:8123`; use `--profile python` for the app + MQTT only.)
+Open:
 
-To stop:
+- Dashboard: http://localhost:8888
+- REST API: http://localhost:8000
+- Prometheus: http://localhost:9090
+
+Stop the stack:
 
 ```powershell
-docker compose --profile python-full down
+docker compose down
+```
+
+To include the bundled Home Assistant dev container:
+
+```powershell
+docker compose --profile full up -d
 ```
 
 ---
 
-## Option B — Dev mode (no LLM key)
+## Option B - Docker Hub image
 
-The mock simulator publishes realistic MQTT events so you can develop the frontend
-without a running backend.
+Use the Docker Hub quickstart when you do not need a repo clone:
+
+[Quickstart: Docker Hub](dockerhub.md)
+
+This is the simplest option for trying Wactorz on Windows.
+
+---
+
+## Option C - Frontend dev mode
+
+The mock stack publishes realistic MQTT activity so you can develop the dashboard
+without a live LLM key or Home Assistant instance.
+
+Terminal 1:
 
 ```powershell
-# Terminal 1 — MQTT broker + mock agents
 docker compose -f compose.dev.yaml up -d
+```
 
-# Terminal 2 — Vite dev server (hot-reload)
+Terminal 2:
+
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-Open **http://localhost:3000**.
-
-Agents appear immediately (main-actor, monitor-agent, io-agent, qa-agent, nautilus,
-weather, news). Chat, heartbeats, alerts, and dynamic spawns are all simulated.
+Open http://localhost:3000.
 
 To stop the mock stack:
 
@@ -109,31 +133,32 @@ docker compose -f compose.dev.yaml down
 
 ---
 
-## Running bash scripts on Windows
+## Running Shell Scripts on Windows
 
-The `scripts/` directory contains bash (`.sh`) scripts. On Windows, run them via:
+Use Git Bash or WSL2 for repository scripts that expect a Unix shell.
 
-### Git Bash (simplest)
+Git Bash:
 
 ```bash
-# Open Git Bash terminal, then:
 cd /c/Users/<your-name>/wactorz
-bash scripts/<script>.sh
+./run.sh
 ```
 
-### WSL2 (best compatibility)
+WSL2:
 
 ```bash
-# Inside WSL2 Ubuntu:
 cd /mnt/c/Users/<your-name>/wactorz
-bash scripts/<script>.sh
+./run.sh
 ```
+
+PowerShell can run Docker and npm commands directly, but it does not execute
+`.sh` scripts without a shell.
 
 ---
 
-## SSH keys (NautilusAgent + deploy)
+## SSH Keys for NautilusAgent
 
-Windows 10/11 includes OpenSSH Client. Generate a deploy key:
+Windows 10 and 11 include OpenSSH Client. Generate a dedicated key:
 
 ```powershell
 ssh-keygen -t ed25519 -C "wactorz-deploy" -f "$env:USERPROFILE\.ssh\wactorz_deploy" -N '""'
@@ -145,44 +170,37 @@ Copy the public key to the remote host:
 type "$env:USERPROFILE\.ssh\wactorz_deploy.pub" | ssh user@host "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
 ```
 
-Set in `.env`:
+Set the key path in `.env`:
 
 ```env
 NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy
 ```
 
-**NautilusAgent `rsync` command**: `rsync` is not available natively on Windows.
-Options:
-- Use WSL2 (rsync is installed by default)
-- Install `rsync` via Chocolatey: `choco install rsync`
-- Use Git for Windows rsync: `C:\Program Files\Git\usr\bin\rsync.exe`
-
-For the last option, ensure Git Bash's `bin` is on `PATH` or point `NAUTILUS_RSYNC_PATH`
-to the binary.
+`rsync` is not available natively on Windows. For NautilusAgent file sync, use
+WSL2, install `rsync` with Chocolatey, or point `NAUTILUS_RSYNC_PATH` at Git for
+Windows' rsync binary if installed.
 
 ---
 
-## Environment variable gotchas
+## Environment Variable Gotchas
 
-**`.env` file encoding**: save as **UTF-8 without BOM**. Notepad on Windows 11 defaults
-to UTF-8; older Notepad may default to ANSI. Use VS Code or Notepad++ if unsure.
+Save `.env` as UTF-8 without BOM. VS Code and modern Notepad are usually fine.
 
-**Path separators**: in `.env`, always use forward slashes or escaped backslashes:
+Use forward slashes or escaped backslashes for paths:
 
 ```env
-# ✅ Works on all platforms
 NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy
-
-# ✅ Also works
 NAUTILUS_SSH_KEY=C:/Users/alice/.ssh/wactorz_deploy
+```
 
-# ❌ Will fail — backslash is escape character in some parsers
+Avoid unescaped Windows backslashes:
+
+```env
 NAUTILUS_SSH_KEY=C:\Users\alice\.ssh\wactorz_deploy
 ```
 
-**Line endings**: the `.env` file should use LF (Unix) endings. If you edit with
-Notepad, it may add CRLF (`\r\n`) which can break the parser. In VS Code:
-click the `CRLF` indicator in the bottom-right status bar → change to `LF`.
+If a shell script reads `.env`, LF line endings are safest. In VS Code, click the
+line-ending indicator in the status bar and choose `LF`.
 
 ---
 
@@ -190,76 +208,75 @@ click the `CRLF` indicator in the bottom-right status bar → change to `LF`.
 
 ### `docker: command not found` in Git Bash
 
-Docker Desktop adds itself to PATH for PowerShell and CMD but not always Git Bash.
-Run Docker commands in PowerShell, or add Docker to Git Bash's PATH:
+Docker Desktop may be available in PowerShell but not Git Bash. Run Docker
+commands in PowerShell, or add Docker to Git Bash's `PATH`:
 
 ```bash
 export PATH="$PATH:/c/Program Files/Docker/Docker/resources/bin"
 ```
 
-### Monitor port 8888 already in use
+### Docker Desktop is not running
 
-Change the published port in `.env`:
+Open Docker Desktop from the Start menu and wait for the engine to start. Then
+rerun the Docker command.
+
+### Port already in use
+
+Change the host port in `.env` or stop the process using that port. For example:
 
 ```env
-MONITOR_EXTERNAL_PORT=8889
+DASHBOARD_EXTERNAL_PORT=8080
 ```
 
-Then open **http://localhost:8889/**.
+Then open http://localhost:8080.
 
 ### `MQTT_HOST` connection refused
 
-Ensure Mosquitto is running:
+For Docker Compose, use the service name inside the Docker network:
 
-```powershell
-docker compose --profile python ps
+```env
+MQTT_HOST=mosquitto
 ```
 
-When running the app inside Docker, `MQTT_HOST` should be `mosquitto`; when running
-the Python app directly on the host against a containerised broker, use `localhost`.
+For a local Python process talking to a broker published on the host, use:
 
-### ARM64: Docker image `exec format error`
-
-The pulled image is `linux/amd64`; enable QEMU emulation in Docker Desktop
-(Settings → Docker Engine → add `"experimental": true`), or pull/build a native
-`linux/arm64` image.
-
-### `rsync: command not found` (NautilusAgent)
-
-Install via Chocolatey:
-
-```powershell
-# Install Chocolatey first if needed:
-Set-ExecutionPolicy Bypass -Scope Process -Force
-[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-
-# Then install rsync:
-choco install rsync
+```env
+MQTT_HOST=localhost
 ```
 
-Or use WSL2 where rsync comes pre-installed.
+Check the broker container:
+
+```powershell
+docker compose ps
+```
+
+### ARM64 image issues
+
+If Docker reports an architecture error, update Docker Desktop and make sure it
+can run emulated Linux containers. Prefer published multi-arch images where
+possible.
 
 ---
 
-## Recommended setup for ARM64 Windows (Copilot+ / Snapdragon X)
+## Recommended ARM64 Windows Setup
 
 ```powershell
-# 1. Install prerequisites
 winget install Git.Git Microsoft.WindowsTerminal OpenJS.NodeJS.LTS Docker.DockerDesktop
+wsl --install
 
-# 2. Enable WSL2 (for bash scripts and rsync)
-wsl --install   # installs Ubuntu by default; reboot when prompted
-
-# 3. Clone the repo
 git clone https://github.com/waldiez/wactorz
 cd wactorz
 copy .env.template .env
-notepad .env   # set LLM_API_KEY
+notepad .env
 
-# 4. Start the mock dev stack
+docker compose --profile python up -d
+```
+
+For frontend work:
+
+```powershell
 docker compose -f compose.dev.yaml up -d
-cd frontend && npm install && npm run dev
-
-# → http://localhost:3000  ✓
+cd frontend
+npm install
+npm run dev
 ```

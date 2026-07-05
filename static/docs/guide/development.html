@@ -26,9 +26,7 @@
 
     /* ── Nav bar ── */
     .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
-    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}
-    .logo-mark{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}
-    .logo-mark::before{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}
     .topbar-links{display:flex;gap:.1rem}
     .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
     .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
@@ -40,6 +38,12 @@
     .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
     .sidebar-group{margin-bottom:1.25rem}
     .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{display:none}
+    details.sidebar-group > summary.sidebar-label::after{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}
+    details.sidebar-group[open] > summary.sidebar-label::after{content:'▾'}
+    details.sidebar-group > summary.sidebar-label:hover{color:var(--muted-hi)}
     .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
     .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
     .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
@@ -101,9 +105,7 @@
 </head>
 <body>
 <header class="topbar">
-  <a href="../index.html" class="topbar-logo">
-    <div class="logo-mark"></div>Wactorz
-  </a>
+  <a href="../index.html" class="topbar-logo">Wactorz</a>
   <nav class="topbar-links">
     <a href="https://github.com/waldiez/wactorz">GitHub</a>
     <a href="https://pypi.org/project/wactorz/">PyPI</a>
@@ -112,12 +114,10 @@
 
 <div class="layout">
   <aside class="sidebar">
-    <div class="sidebar-group">
-      <div class="sidebar-label">Guide</div>
+    <details class="sidebar-group" open>
+      <summary class="sidebar-label">Guide</summary>
       <a href="../guide/development.html" class="active">Installation</a>
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
-      <a href="../guide/deployment.html" class="">Deployment</a>
-      <a href="../guide/windows.html" class="">Windows</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
@@ -125,7 +125,21 @@
       <a href="../guide/pipelines.html" class="">Pipelines</a>
       <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
-    </div>
+    </details>
+    <details class="sidebar-group">
+      <summary class="sidebar-label">Catalogue agents</summary>
+      <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
+      <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
+      <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
+      <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
+      <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="">Reachy Mini</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
+      <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
+      <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
+    </details>
   </aside>
   <main class="content">
 <h1 id="installation">Installation</h1>
@@ -288,6 +302,9 @@ HA_STATE_BRIDGE_PER_ENTITY=0 # 0 = flat topic (default), 1 = per-entity topics
 <div class="highlight"><pre><span></span><code><span class="gh">#</span> Only needed if using an external broker instead of the embedded one
 MQTT_HOST=localhost
 MQTT_PORT=1883
+<span class="gh">#</span> Optional — set for a broker with allow_anonymous false; blank = anonymous
+MQTT_USERNAME=
+MQTT_PASSWORD=
 </code></pre></div>
 
 <h4 id="web-dashboard">Web dashboard</h4>
@@ -368,22 +385,19 @@ ha_list_entities, ha_get_state, ha_call_service
 <li>A <code>.env</code> file copied from <code>.env.template</code> with your secrets filled in</li>
 </ul>
 <div class="highlight"><pre><span></span><code>cp<span class="w"> </span>.env.template<span class="w"> </span>.env
-<span class="c1"># edit .env and set LLM_API_KEY, FUSEKI_PASSWORD, etc.</span>
+<span class="c1"># edit .env and set LLM_API_KEY, etc.</span>
 </code></pre></div>
 
 <h3 id="production-stack-profiles">Production stack (profiles)</h3>
 <p>The main <code>compose.yaml</code> uses profiles so you only start what you need:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Python agents + MQTT + Fuseki (recommended)</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>up<span class="w"> </span>-d
-
-<span class="c1"># Python agents + MQTT only (no Fuseki)</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># Python agents + MQTT</span>
 docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
 
 <span class="c1"># MQTT broker only (default)</span>
 docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
 
-<span class="c1"># Everything (app + Fuseki + Home Assistant)</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>up<span class="w"> </span>-d
+<span class="c1"># Everything (Python + Home Assistant)</span>
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
 <table>
@@ -406,9 +420,9 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <td>+ :8000, :8888</td>
 </tr>
 <tr>
-<td><code>python-full</code></td>
-<td>+ wactorz-python, fuseki, homeassistant</td>
-<td>+ :8000, :8888, :3030, :8123</td>
+<td><code>full</code></td>
+<td>+ wactorz-python, homeassistant</td>
+<td>+ :8000, :8888, :8123</td>
 </tr>
 </tbody>
 </table>
@@ -432,32 +446,27 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <td>http://localhost:8000</td>
 <td>—</td>
 </tr>
-<tr>
-<td>Fuseki</td>
-<td>http://localhost:3030</td>
-<td>admin / <code>FUSEKI_PASSWORD</code> from <code>.env</code></td>
-</tr>
 </tbody>
 </table>
 <h3 id="stopping-and-teardown">Stopping and teardown</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># Stop services</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>down
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>down
 
 <span class="c1"># Stop and remove all volumes and persisted data</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>down<span class="w"> </span>-v
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>down<span class="w"> </span>-v
 </code></pre></div>
 
 <h3 id="rebuilding-after-code-changes-or-a-fresh-start">Rebuilding after code changes or a fresh start</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># Rebuild and restart just the Python app</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build<span class="w"> </span>wactorz-python
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build<span class="w"> </span>wactorz-python
 
 <span class="c1"># Full teardown and clean rebuild</span>
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>down<span class="w"> </span>-v
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python-full<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>down<span class="w"> </span>-v
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
 </code></pre></div>
 
 <h3 id="development-stack">Development stack</h3>
-<p>For local development, <code>compose.dev.yaml</code> starts MQTT + Fuseki + the Python app together with a single command:</p>
+<p>For local development, <code>compose.dev.yaml</code> starts MQTT + the Python app together with a single command:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Start everything</span>
 docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
 
@@ -484,11 +493,6 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 <td>Python agent system (REST API + Web UI)</td>
 </tr>
 <tr>
-<td><code>wactorz-fuseki</code></td>
-<td>:3030</td>
-<td>Apache Jena Fuseki (knowledge graph)</td>
-</tr>
-<tr>
 <td><code>wactorz-dev-mosquitto</code></td>
 <td>:1883, :9001</td>
 <td>MQTT broker (TCP + WebSocket)</td>
@@ -499,16 +503,8 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 <p>Your <code>.env</code> file is loaded automatically via <code>env_file</code>. The compose files override a few values so services can reach each other by container name instead of <code>localhost</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="gh">#</span> These are set automatically by compose — do not override in .env
 MQTT_HOST=mosquitto         # container name, not localhost
-FUSEKI_URL=http://fuseki:3030
 </code></pre></div>
 
-<blockquote>
-<p><strong>Warning (Windows line endings):</strong> If Fuseki fails with <code>exec /entrypoint.sh: no such file or directory</code>, the shell script has Windows CRLF line endings. Fix with:
-<code>bash
-docker run --rm -v "$PWD/config/fuseki-container:/work" alpine sh -c "sed -i 's/\r//' /work/entrypoint.sh"</code>
-Then rebuild: <code>docker compose --profile python-full up -d --build fuseki</code></p>
-<p><strong>Fuseki admin UI:</strong> After starting Fuseki, the admin UI is at <code>http://localhost:3030</code>. Default credentials: <strong>admin / admin</strong> (set via <code>FUSEKI_ADMIN_PASSWORD</code> in your <code>.env</code>).</p>
-</blockquote>
 <hr />
 <h2 id="project-structure">Project structure</h2>
 <div class="highlight"><pre><span></span><code><span class="n">wactorz</span>/                         ← <span class="n">repo</span> <span class="n">root</span>
@@ -576,7 +572,7 @@ touch<span class="w"> </span>wactorz/catalogue_agents/my_agent.py
 
 <h3 id="running-tests">Running tests</h3>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[dev]&quot;</span>
-python<span class="w"> </span>-m<span class="w"> </span>unittest<span class="w"> </span>discover<span class="w"> </span>-s<span class="w"> </span>tests<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;test_*.py&#39;</span>
+make<span class="w"> </span>test-py<span class="w">          </span><span class="c1"># or: python -m pytest tests</span>
 </code></pre></div>
 
 <hr />

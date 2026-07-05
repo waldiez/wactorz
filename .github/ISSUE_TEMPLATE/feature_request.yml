@@ -27,7 +27,6 @@ body:
         - MQTT / messaging
         - Web dashboard
         - REST / CLI interface
-        - Rust bridge
         - Documentation
         - DevEx / tooling
         - Other

@@ -20,8 +20,8 @@ if [ "${1:-}" = "--dev" ]; then
   exec bun run dev
 fi
 
-# production: build static once, then serve app + api from the python server
-if [ ! -d dist ]; then
+# production: build static once (or when sources changed), then serve app + api
+if [ ! -d dist ] || [ -n "$(find src package.json -type f -newer dist/index.html 2>/dev/null | head -1)" ]; then
   [ -d node_modules ] || bun install
   bun run build
 fi

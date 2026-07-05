@@ -6,6 +6,7 @@
 // SPARQL it generated, which we render in a code block. When the WS isn't reachable
 // (pure-viz deployment, no wactorz/LLM) the panel shows a clear "needs wactorz" hint.
 const GATEWAY = "io-gateway";
+const AGENT = "sinergym-hsml";
 
 // Suggested questions are templated from the actual building's zone names (passed in
 // from the loaded geometry) so they stay relevant for ANY building, not just this one.
@@ -64,7 +65,7 @@ export class AskPanel {
   private onMessage(raw: string) {
     let m: any; try { m = JSON.parse(raw); } catch { return; }
     if (m.type === "config") { this.chatMode = m.chat_mode ?? ""; if (this.chatMode !== "direct_ws") this.setMqttNote(); return; }
-    if (m.from && m.from !== GATEWAY) return;   // only gateway replies
+    if (m.from && m.from !== GATEWAY && m.from !== AGENT) return;
     if (m.type === "stream_chunk") { this.appendStream(m.content ?? ""); }
     else if (m.type === "stream_end") { this.endStream(); }
     else if (m.type === "chat") { this.endStream(); this.addAgent(m.content ?? ""); }

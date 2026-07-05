@@ -649,6 +649,9 @@ class FusekiClient:
         self._session = session
         self._auth = auth
 
+    def _query_url(self) -> str:
+        return f"{self._base}/{self._ds}/sparql"
+
     def _gsp_url(self, graph: str) -> str:
         return f"{self._base}/{self._ds}/data?graph={quote(graph, safe='')}"
 
@@ -691,6 +694,38 @@ class FusekiClient:
             if resp.status not in (200, 204):
                 body = await resp.text()
                 log.warning("SPARQL Update → %s: %s", resp.status, body[:300])
+
+    async def sparql_select(self, query: str) -> list[dict[str, str]]:
+        """Run a SPARQL SELECT; return rows as ``{var: value}`` string dicts.
+
+        Bindings are flattened to their string ``value`` (RDF term type/datatype
+        is dropped) which is all the SWID registry needs. Returns ``[]`` on any
+        non-200 response rather than raising.
+        """
+        params = {"query": query, "format": "json"}
+        headers = {"Accept": "application/sparql-results+json,application/json"}
+        async with self._session.get(
+            self._query_url(), params=params, headers=headers, auth=self._auth
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                log.warning("SPARQL SELECT - %s: %s", resp.status, body[:300])
+                return []
+            data = await resp.json(content_type=None)
+        bindings = data.get("results", {}).get("bindings", [])
+        return [{var: cell.get("value") for var, cell in row.items()} for row in bindings]
+
+    async def sparql_ask(self, query: str) -> bool:
+        """Run a SPARQL ASK; return the boolean (``False`` on any error)."""
+        params = {"query": query, "format": "json"}
+        headers = {"Accept": "application/sparql-results+json,application/json"}
+        async with self._session.get(
+            self._query_url(), params=params, headers=headers, auth=self._auth
+        ) as resp:
+            if resp.status != 200:
+                return False
+            data = await resp.json(content_type=None)
+        return bool(data.get("boolean", False))
 
     async def compact(self) -> bool:
         """
@@ -895,7 +930,7 @@ WHERE {{
             await self.append_graph(graph, ttl)
 
     async def upsert_agent_metrics(
-        self, graph: str, actor_id: str, metrics: dict
+        self, graph: str, actor_id: str, metrics: dict[str, Any]
     ) -> None:
         """Atomically replace metrics properties for one agent."""
         full_iri = f"urn:wactorz:agent:{_safe(actor_id)}"

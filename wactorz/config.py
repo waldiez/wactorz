@@ -72,6 +72,11 @@ class AppConfig:
     llm_cost_limit_usd: float
     llm_cost_limit_period: str
     openai_url: str
+    # Stable deployment/site domain used as the SWID namespace. Kept separate
+    # from a device's room/area on purpose: a device that is moved between rooms
+    # must keep the same SWID, so location is modelled as an hsml relationship in
+    # the graph rather than being encoded into the identifier.
+    swid_namespace: str
 
 
 CONFIG = AppConfig(
@@ -108,4 +113,5 @@ CONFIG = AppConfig(
     llm_cost_limit_usd=_env_float("LLM_COST_LIMIT_USD", 0.0),
     llm_cost_limit_period=os.getenv("LLM_COST_LIMIT_PERIOD", "monthly"),
     openai_url=os.getenv("OPENAI_URL", ""),
+    swid_namespace=os.getenv("SWID_NAMESPACE", "home"),
 )

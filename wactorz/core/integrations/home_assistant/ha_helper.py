@@ -2,30 +2,24 @@ from __future__ import annotations
 
 from typing import Any
 from urllib.parse import urlparse
-import hashlib
 import re
 import time
 
 import aiohttp
 
+from ...swid import legacy_home_swid, normalize_segment
 from .ha_web_socket_client import HAWebSocketClient
 
 
 # ── SWID ────────────────────────────────────────────────────────
-def _normalize_swid_segment(text: str) -> str:
-    """Normalize a text segment for use in a SWID path.
+# SWID logic now lives in :mod:`wactorz.core.swid`. These thin wrappers keep the
+# Home Assistant call sites (and their tests) stable while the incumbent
+# ``did:swid:home:<area>:...`` format is preserved via ``legacy_home_swid``.
 
-    Lowercases, replaces whitespace/underscores with hyphens,
-    strips unsafe characters, and collapses repeated hyphens.
-    """
-    segment = text.strip().lower()
-    # Replace whitespace and underscores with hyphens
-    segment = re.sub(r"[\s_]+", "-", segment)
-    # Keep only alphanumeric, hyphens, and dots
-    segment = re.sub(r"[^a-z0-9\-\.]", "", segment)
-    # Collapse repeated hyphens and strip leading/trailing hyphens
-    segment = re.sub(r"-{2,}", "-", segment).strip("-")
-    return segment
+
+def _normalize_swid_segment(text: str) -> str:
+    """Normalize a text segment for use in a SWID path (delegates to core)."""
+    return normalize_segment(text)
 
 
 def generate_swid(
@@ -33,37 +27,14 @@ def generate_swid(
     name: str | None = None,
     area: str | None = None,
 ) -> str:
-    """Generate an internal did:swid: identifier for a Home Assistant device.
+    """Generate the internal did:swid identifier for a Home Assistant device.
 
-    This is a project-specific identifier in ``did:swid:`` format, designed
-    to be spatial and human-readable.  It is NOT an official Spatial Web DID
-    implementation — treat it as a stable internal label that can be replaced
-    later if an official method becomes available.
-
-    Format:  did:swid:home:<area>:<device-name>-<short-hash>
-
-    * *area* — normalised area/room name, or ``unassigned`` when unknown.
-    * *device-name* — normalised device display name, or ``device`` as fallback.
-    * *short-hash* — first 6 hex chars of the SHA-256 of the stable HA device
-      registry ``id``, appended to guarantee uniqueness even if two devices
-      share the same human-readable path.
-
-    The value is deterministic: the same inputs always produce the same SWID.
+    Delegates to :func:`wactorz.core.swid.legacy_home_swid`, preserving the
+    incumbent ``did:swid:home:<area>:<device-name>-<short-hash>`` string exactly.
+    This format encodes the room/area into the identifier; the room-independent
+    replacement is :func:`wactorz.core.swid.device_swid`.
     """
-    # --- area segment ---
-    area_segment = _normalize_swid_segment(area) if area else ""
-    if not area_segment:
-        area_segment = "unassigned"
-
-    # --- device-name segment ---
-    name_segment = _normalize_swid_segment(name) if name else ""
-    if not name_segment:
-        name_segment = "device"
-
-    # --- short deterministic hash from the stable device registry id ---
-    stable_hash = hashlib.sha256(device_id.encode("utf-8")).hexdigest()[:6]
-
-    return f"did:swid:home:{area_segment}:{name_segment}-{stable_hash}"
+    return legacy_home_swid(device_id, name=name, area=area)
 
 
 # ── URL Helpers ────────────────────────────────────────────────────────

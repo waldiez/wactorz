@@ -1846,6 +1846,35 @@ async def ha_sync_handler(request):
     return web.json_response({"status": "restarted"})
 
 
+# ── SWID resolution (W3C DID-Resolution shape; pilot swid: scheme) ──────────
+# The routes themselves live in wactorz.core.swid.resolver.aiohttp_routes; the
+# monitor only supplies a per-request registry. Kept as one self-contained block.
+from contextlib import asynccontextmanager  # noqa: E402
+
+
+@asynccontextmanager
+async def _open_swid_registry():
+    """Yield a SWID registry for one request: Fuseki-backed, or empty when unset.
+
+    A short-lived Fuseki session per request (matching the pattern used
+    elsewhere). When no triplestore is configured, an empty in-memory registry
+    makes every lookup resolve to ``notFound`` — the desired behaviour.
+    """
+    import aiohttp as _aiohttp
+    from .config import CONFIG
+    from .core.swid import FusekiSwidRegistry, InMemoryRegistry
+    from .fuseki import FusekiClient
+
+    if not CONFIG.fuseki_url:
+        yield InMemoryRegistry()
+        return
+    auth = _aiohttp.BasicAuth(CONFIG.fuseki_user, CONFIG.fuseki_password)
+    async with _aiohttp.ClientSession() as session:
+        yield FusekiSwidRegistry(
+            FusekiClient(CONFIG.fuseki_url, CONFIG.fuseki_dataset, session, auth)
+        )
+
+
 async def _warm_tts_voices(_app=None) -> None:
     """Load edge-tts voice list once at startup and cache it."""
     global _tts_voices_cache
@@ -2125,6 +2154,9 @@ async def main(exit_on_failure: bool = False):
     from .fuseki_proxy import fuseki_proxy_handler
     app.router.add_post("/api/fuseki/{dataset}/sparql",  fuseki_proxy_handler)
     app.router.add_post("/api/fuseki/{dataset}/update",  fuseki_proxy_handler)
+    # SWID resolver (W3C DID Resolution): /1.0/identifiers/{swid}[/profile].
+    from .core.swid import aiohttp_routes as _swid_routes
+    app.add_routes(_swid_routes(_open_swid_registry))
     app.router.add_get("/docs",  lambda r: web.HTTPFound("/docs/"))
     app.router.add_get("/docs/",             docs_handler)
     app.router.add_get("/docs/{path:.+}",    docs_handler)

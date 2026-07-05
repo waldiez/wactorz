@@ -448,6 +448,310 @@ def _build_catalog() -> dict:
         }
         logger.info("[catalog] Loaded timeseries-collector recipe")
 
+    # ── maddpg-fleet ───────────────────────────────────────────────────
+    code = _load_recipe("maddpg_fleet_agent.py")
+    if code:
+        catalog["maddpg-fleet"] = {
+            "name": "maddpg-fleet",
+            "type": "dynamic",
+            "description": "Deploys the trained MADDPG OfficeMedium policy as a fleet of per-zone inference agents (one per zone). Inference only — loads model.pt + normalizer.npz, no retraining.",
+            "capabilities": [
+                "sinergym",
+                "maddpg",
+                "rl_inference",
+                "multi_agent",
+                "building_control",
+                "energy_optimization",
+            ],
+            "install": ["torch", "numpy", "aiomqtt"],
+            "input_schema": {
+                "action": "str  — launch | stop | status",
+                "env_id": "str  — Sinergym env ID (must match the bridge)",
+                "model_path": "str  — absolute path to trained model.pt",
+                "normalizer_path": "str  — absolute path to normalizer.npz",
+                "zones": "list — optional explicit zone names in bridge order",
+                "info_timeout": "float — seconds to wait for env_info, default 30",
+                "infer_dir": "str  — dir holding maddpg_infer.py; default = model.pt dir",
+            },
+            "output_schema": {
+                "ok": "bool",
+                "children": "list — spawned zone agent names",
+                "zones": "list",
+                "message": "str",
+            },
+            "poll_interval": 3600,
+            "code": code,
+        }
+        logger.info("[catalog] Loaded maddpg-fleet recipe")
+
+    # ── aif-fleet ──────────────────────────────────────────────────────
+    code = _load_recipe("aif_fleet_agent.py")
+    if code:
+        catalog["aif-fleet"] = {
+            "name": "aif-fleet",
+            "type": "dynamic",
+            "description": "Deploys the trained Factored Active Inference OfficeMedium policy as a fleet of per-zone inference agents (one per zone). Inference only — slices aif_model.pkl per zone (freeze_B), no retraining. Publishes normalized [-1,1] actions, so it is wire-compatible with the MADDPG bridge.",
+            "capabilities": [
+                "sinergym",
+                "active_inference",
+                "pymdp",
+                "aif",
+                "rl_inference",
+                "multi_agent",
+                "building_control",
+                "energy_optimization",
+            ],
+            "install": ["torch", "numpy", "aiomqtt"],
+            "input_schema": {
+                "action": "str  — launch | stop | status",
+                "env_id": "str  — Sinergym env ID (must match the bridge)",
+                "model_path": "str  — absolute path to trained aif_model.pkl",
+                "zones": "list — optional explicit zone names in bridge order",
+                "info_timeout": "float — seconds to wait for env_info, default 30",
+                "infer_dir": "str  — dir with aif_infer.py + pymdp_office_v7_torch.py; default = aif_model.pkl dir",
+                "aif_src_dir": "str  — dir holding pymdp_office_v7_torch.py if not next to aif_infer.py; default = infer_dir",
+                "heat_low": "float — htg action min (must match trained env)",
+                "heat_high": "float — htg action max (must match trained env)",
+                "cool_low": "float — clg action min (must match trained env)",
+                "cool_high": "float — clg action max (must match trained env)",
+                "policy_len": "int  — AIF planning horizon, default 4",
+                "freeze_B": "bool — False keeps adapting B_T online (matches v7 eval default, reproduces the deploy baseline); True = frozen inference",
+                "lr_pB": "float — Dirichlet learning rate when freeze_B is False, default 1.0",
+                "publish_mode": "str  — normalized | setpoints, default normalized",
+            },
+            "output_schema": {
+                "ok": "bool",
+                "children": "list — spawned zone agent names",
+                "zones": "list",
+                "message": "str",
+            },
+            "poll_interval": 3600,
+            "code": code,
+        }
+        logger.info("[catalog] Loaded aif-fleet recipe")
+
+    # ── aif-controller (single-batch, exact v7 parity) ─────────────────
+    code = _load_recipe("aif_controller_agent.py")
+    if code:
+        catalog["aif-controller"] = {
+            "name": "aif-controller",
+            "type": "dynamic",
+            "description": "Single-agent AIF OfficeMedium controller: runs all zones as one batch (exact v7 parity) and publishes per-zone normalized actions. Use instead of aif-fleet when bit-exact parity with a full-batch v7 run matters.",
+            "capabilities": [
+                "sinergym",
+                "active_inference",
+                "pymdp",
+                "aif",
+                "rl_inference",
+                "building_control",
+                "energy_optimization",
+            ],
+            "install": ["torch", "numpy", "aiomqtt"],
+            "input_schema": {
+                "action": "str  — launch | stop | status",
+                "env_id": "str  — Sinergym env ID (must match the bridge)",
+                "model_path": "str  — absolute path to trained aif_model.pkl",
+                "zones": "list — explicit zone names in bridge order",
+                "infer_dir": "str  — dir with aif_infer.py + pymdp_office_v7_torch.py",
+                "aif_src_dir": "str  — dir holding pymdp_office_v7_torch.py if separate",
+                "heat_low": "float",
+                "heat_high": "float",
+                "cool_low": "float",
+                "cool_high": "float",
+                "policy_len": "int  — AIF planning horizon (match training!)",
+                "energy_weight": "float — EFE energy scale (match training!)",
+                "comfort_weight": "float",
+                "epistemic_weight": "float",
+                "unocc_gate": "float",
+                "deadband_weight": "float",
+                "pB_prior_scale": "float",
+                "override": "str",
+                "freeze_B": "bool — match v7 run (default eval = False)",
+                "lr_pB": "float",
+                "publish_mode": "str — normalized | setpoints",
+            },
+            "output_schema": {"ok": "bool", "zones": "list", "message": "str"},
+            "poll_interval": 3600,
+            "code": code,
+        }
+        logger.info("[catalog] Loaded aif-controller recipe")
+
+    code = _load_recipe("sinergym_hsml_agent.py")
+    if code:
+        catalog["sinergym-hsml"] = {
+            "name": "sinergym-hsml",
+            "type": "dynamic",
+            "description": "Answers natural-language questions about the Sinergym "
+            "simulation (agent decisions, setpoints, zone temperatures, "
+            "occupancy, outdoor conditions) by generating SPARQL over the "
+            "Fuseki/HSML store and replying in plain language.",
+            "capabilities": [
+                "sinergym",
+                "fuseki",
+                "sparql",
+                "question_answering",
+                "hsml",
+                "provenance",
+                "building_analytics",
+            ],
+            "install": [],  # uses stdlib urllib + main's LLM provider
+            "input_schema": {
+                "question": "str — a plain-English question about the building",
+                "action": "str — optional: refresh | config",
+                "fuseki_url": "str — optional override (default host.docker.internal:3030)",
+                "fuseki_dataset": "str — optional (default 'sinergym')",
+                "fuseki_user": "str — optional",
+                "fuseki_password": "str — optional",
+            },
+            "output_schema": {
+                "ok": "bool",
+                "answer": "str — natural-language answer",
+                "sparql": "str — the query that was run (for transparency)",
+                "rows": "int — number of result rows",
+            },
+            "poll_interval": 3600,
+            "code": code,
+        }
+        logger.info("[catalog] Loaded sinergym-hsml recipe")
+
+    code = _load_recipe("sinergym_schema_agent.py")
+    if code:
+        catalog["sinergym-schema"] = {
+            "name": "sinergym-schema",
+            "type": "dynamic",
+            "description": "Authoritative map of the Sinergym I/O layout: which "
+            "observation index is which variable, per-zone observation "
+            "indices, action variables and their bounds, reward "
+            "components, and info-dict keys. Consult this agent before "
+            "interpreting raw obs/action arrays from MQTT or Fuseki.",
+            "capabilities": [
+                "sinergym",
+                "schema",
+                "observation_layout",
+                "observation_indices",
+                "action_space",
+                "reward_components",
+                "introspection",
+                "metadata",
+            ],
+            "install": [],  # stdlib only; learns the schema from env_info
+            "input_schema": {
+                "action": "str — optional: obs | zone | actions | reward | info",
+                "zone": "str — zone name (with action 'zone')",
+                "text": "str — or a plain question, e.g. 'what is obs index 12?'",
+                "env_id": "str — optional, which env to listen to",
+            },
+            "output_schema": {"answer": "str — the requested schema info"},
+            "poll_interval": 3600,
+            "code": code,
+        }
+        logger.info("[catalog] Loaded sinergym-schema recipe")
+
+    code = _load_recipe("sinergym_labeler_agent.py")
+    if code:
+        catalog["sinergym-labeler"] = {
+            "name": "sinergym-labeler",
+            "type": "dynamic",
+            "description": "Republishes Sinergym observations as name-keyed dicts on "
+            "MQTT (sinergym/env/officeMedium-multiagent/observation/labeled) so other agents can read obs "
+            "by variable name instead of array index. Pure data-plane; "
+            "no task delegation needed.",
+            "capabilities": [
+                "sinergym",
+                "observation",
+                "labeled_observation",
+                "mqtt",
+                "schema",
+                "data_plane",
+            ],
+            "install": [],
+            "input_schema": {
+                "env_id": "str — optional, which env to label",
+                "action": "str — optional: status",
+            },
+            "output_schema": {"status": "str"},
+            "poll_interval": 3600,
+            "code": code,
+        }
+        logger.info("[catalog] Loaded sinergym-labeler recipe")
+
+    code = _load_recipe("sinergym_anomaly_agent.py")
+    if code:
+        catalog["sinergym-anomaly"] = {
+            "name": "sinergym-anomaly",
+            "type": "dynamic",
+            "description": "Live anomaly detection on the Sinergym observation stream "
+            "using a pre-trained forecast detector. Subscribes to the "
+            "global obs topic, flags hvac_fault / sensor_drift (and occ / "
+            "weather) events, publishes alerts on .../anomaly, and records "
+            "them in Fuseki with provenance for precision/recall analysis.",
+            "capabilities": [
+                "sinergym",
+                "anomaly_detection",
+                "fault_detection",
+                "monitoring",
+                "forecast",
+                "hvac_fault",
+                "sensor_drift",
+            ],
+            "install": ["torch", "numpy"],  # detector requires PyTorch
+            "input_schema": {
+                "action": "str — optional: status | reset | config",
+                "detector_path": "str — path to the trained .pkl",
+                "infer_dir": "str — dir containing forecast_anomaly_detector.py + .pkl",
+                "env_id": "str — optional",
+                "fuseki_url": "str — optional",
+            },
+            "output_schema": {"status": "str"},
+            "poll_interval": 3600,
+            "code": code,
+        }
+        logger.info("[catalog] Loaded sinergym-anomaly recipe")
+
+    # ── aif-anomaly ────────────────────────────────────────────────────
+    code = _load_recipe("aif_anomaly_agent.py")
+    if code:
+        catalog["aif-anomaly"] = {
+            "name": "aif-anomaly",
+            "type": "dynamic",
+            "description": "Live anomaly detection on the Sinergym observation "
+            "stream using the AIF-trained detector "
+            "(detector_aif_v6.pkl). Collapses consecutive alerts "
+            "into episodes (burst window) and labels each TP/FP "
+            "live from the bridge's injector ground-truth, "
+            "publishing episode events on .../anomaly_episode with "
+            "a running precision/recall scoreboard, plus Fuseki "
+            "records. '@aif-anomaly report' dumps the scoreboard.",
+            "capabilities": [
+                "sinergym",
+                "anomaly_detection",
+                "fault_detection",
+                "monitoring",
+                "active_inference",
+                "aif",
+                "hvac_fault",
+                "sensor_drift",
+            ],
+            "install": ["torch", "numpy"],
+            "input_schema": {
+                "action": "str — optional: status | report | reset | config",
+                "detector_path": "str — path to detector_aif_v6.pkl",
+                "detector_module": "str — module exposing the detector class",
+                "detector_class": "str — detector class name (has .load/.update)",
+                "infer_dir": "str — dir with the detector module + .pkl",
+                "env_id": "str — optional",
+                "fuseki_url": "str — optional",
+                "burst_steps": "int — alerts within this gap collapse into one episode (default 16)",
+                "gt_grace": "int — steps after a GT window a detection still counts TP (default 12)",
+                "publish_raw": "bool — also publish every raw per-step alert (default False)",
+                "score_live": "bool — label episodes TP/FP from injector ground-truth (default True)",
+            },
+            "output_schema": {"status": "str"},
+            "poll_interval": 3600,
+            "code": code,
+        }
+        logger.info("[catalog] Loaded aif-anomaly recipe")
+
     return catalog
 
 

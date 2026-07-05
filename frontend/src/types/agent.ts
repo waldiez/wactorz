@@ -23,6 +23,9 @@ export interface AgentInfo {
     task?: string;
     messagesProcessed?: number;
     costUsd?: number;
+    /** Cumulative LLM tokens (absent for non-LLM agents). */
+    inputTokens?: number;
+    outputTokens?: number;
     uptime?: number;
     /** Set for remote-runner agents — the node name (e.g. "rpi"). */
     node?: string;
@@ -69,14 +72,6 @@ export interface NodeHeartbeatPayload {
     nodeId?: string;
 }
 
-/** WizAgent coin economy event. */
-export interface CoinPayload {
-    balance: number;
-    event?: string;
-    amount?: number;
-    reason?: string;
-}
-
 /** Status update payload. */
 export interface StatusPayload {
     agentId: string;
@@ -106,6 +101,18 @@ export interface SpawnPayload {
     protected?: boolean;
 }
 
+/** QA safety flag raised by the QAAgent. */
+export interface QaFlagPayload {
+    agentId: string;
+    agentName: string;
+    from: string;
+    category: string;
+    severity: string;
+    excerpt: string;
+    message: string;
+    timestampMs: number;
+}
+
 /** Chat message (user → agent or agent → user). */
 /** A file the user attached to a chat turn (image / document / …). */
 export interface Attachment {
@@ -122,7 +129,7 @@ export interface Attachment {
 
 export interface ChatMessage {
     id: string;
-    from: "user" | string; // "user" or agent name
+    from: string; // "user" or agent name
     to: string; // agent name or "user"
     content: string;
     timestampMs: number;

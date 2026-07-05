@@ -16,31 +16,22 @@
  */
 
 import mqtt, { type MqttClient } from "mqtt";
+import { log } from "../io/logger";
+import { uid } from "../ids";
 import { nameFromWid, resolveAgentName } from "../agents/naming";
 import type {
+    AgentState,
     AlertPayload,
     ChatMessage,
-    CoinPayload,
     HeartbeatPayload,
     HostStats,
     LogPayload,
     MetricsPayload,
     NodeHeartbeatPayload,
+    QaFlagPayload,
     SpawnPayload,
     StatusPayload,
 } from "../types/agent";
-
-/** QA safety flag raised by the QAAgent. */
-export interface QaFlagPayload {
-    agentId: string;
-    agentName: string;
-    from: string;
-    category: string;
-    severity: string;
-    excerpt: string;
-    message: string;
-    timestampMs: number;
-}
 
 export interface MQTTEvents {
     connected: void;
@@ -64,8 +55,6 @@ export interface MQTTEvents {
     "system-health": unknown;
     /** Host-level CPU + memory stats from the backend. */
     "host-stats": HostStats;
-    /** WizAgent coin economy event. */
-    coin: CoinPayload;
     /** Catch-all for raw messages not matching a known pattern. */
     raw: { topic: string; payload: unknown };
 }
@@ -91,13 +80,21 @@ export class MQTTClient {
         });
 
         this.client.on("connect", () => {
-            console.info("[MQTT] Connected to", this.brokerUrl);
+            log.info("[MQTT] Connected to", this.brokerUrl);
             // Cancel any pending disconnected notification from a brief close/reconnect cycle.
             if (this._disconnectTimer !== null) {
                 clearTimeout(this._disconnectTimer);
                 this._disconnectTimer = null;
             }
-            this.client?.subscribe("#", { qos: 1 });
+            // Scope to the prefixes the dashboard actually routes (see
+            // handleMessage: agents/system/nodes + homeassistant/state_changes via
+            // the raw→parseHaRawEvent path) instead of "#", so unrelated broker
+            // topics never reach the browser to be parsed. All dynamic ids live
+            // under these prefixes. Subscribe narrowly to state_changes (not all of
+            // homeassistant/#) to skip the large chunked map payloads we don't use.
+            this.client?.subscribe(["agents/#", "system/#", "nodes/#", "homeassistant/state_changes/#"], {
+                qos: 1,
+            });
             this.emit("connected", undefined);
         });
 
@@ -121,7 +118,7 @@ export class MQTTClient {
         });
 
         this.client.on("error", err => {
-            console.error("[MQTT] Error:", err);
+            log.error("[MQTT] Error:", err);
             this.emit("error", err);
         });
 
@@ -149,6 +146,7 @@ export class MQTTClient {
         return true;
     }
 
+    /** Register a listener for a typed event. Chainable. */
     on<K extends keyof MQTTEvents>(event: K, listener: Listener<MQTTEvents[K]>): this {
         if (!this.listeners[event]) {
             (this.listeners as Listeners)[event] = [];
@@ -157,8 +155,9 @@ export class MQTTClient {
         return this;
     }
 
+    /** Remove a previously registered listener. Chainable. */
     off<K extends keyof MQTTEvents>(event: K, listener: Listener<MQTTEvents[K]>): this {
-        const arr = this.listeners[event] as Array<Listener<MQTTEvents[K]>> | undefined;
+        const arr = this.listeners[event];
         if (arr) {
             const idx = arr.indexOf(listener);
             if (idx !== -1) {
@@ -169,12 +168,12 @@ export class MQTTClient {
     }
 
     private emit<K extends keyof MQTTEvents>(event: K, data: MQTTEvents[K]): void {
-        const arr = this.listeners[event] as Array<Listener<MQTTEvents[K]>> | undefined;
+        const arr = this.listeners[event];
         arr?.forEach(fn => {
             try {
                 fn(data);
             } catch (err) {
-                console.error(`[MQTT] listener error on "${event}":`, err);
+                log.error(`[MQTT] listener error on "${event}":`, err);
             }
         });
     }
@@ -184,6 +183,14 @@ export class MQTTClient {
         try {
             payload = JSON.parse(raw.toString());
         } catch {
+            return;
+        }
+
+        // Structured routing needs an object. A null/primitive payload can't match
+        // any known shape and would throw on property access inside the routers,
+        // so surface it as `raw` instead of letting it escape the message handler.
+        if (payload === null || typeof payload !== "object") {
+            this.emit("raw", { topic, payload });
             return;
         }
 
@@ -219,7 +226,7 @@ export class MQTTClient {
     /** Exact system/* topics. */
     private _routeSystemEvent(topic: string, payload: unknown): boolean {
         if (topic === "system/qa-flag") {
-            this.emit("qa-flag", payload as QaFlagPayload);
+            this.emit("qa-flag", normaliseQaFlag(payload));
         } else if (topic === "system/spawn") {
             // legacy / alternate spawn topic
             this.emit("spawn", normaliseSpawn(payload));
@@ -227,8 +234,6 @@ export class MQTTClient {
             this.emit("system-health", payload);
         } else if (topic === "system/host") {
             this.emit("host-stats", this._toHostStats(payload as Record<string, unknown>));
-        } else if (topic === "system/coin") {
-            this.emit("coin", payload as CoinPayload);
         } else {
             return false;
         }
@@ -247,7 +252,7 @@ export class MQTTClient {
 
         const logs = topic.match(/^agents\/(.+)\/logs$/);
         if (logs?.[1]) {
-            const message = (p["message"] ?? p["text"]) as string | undefined;
+            const message = optStr(p["message"] ?? p["text"]);
             this.emit("logs", {
                 agentId: logs[1],
                 agentName: this._agentName(p, logs[1]),
@@ -267,10 +272,10 @@ export class MQTTClient {
 
         const node = topic.match(/^nodes\/([^/]+)\/heartbeat$/);
         if (node?.[1]) {
-            const nodeId = p["node_id"] as string | undefined;
+            const nodeId = optStr(p["node_id"]);
             this.emit("node-heartbeat", {
                 node: node[1],
-                agents: (p["agents"] as string[]) ?? [],
+                agents: strArray(p["agents"]),
                 ...(nodeId !== undefined && { nodeId }),
             });
             return true;
@@ -298,11 +303,11 @@ export class MQTTClient {
     }
 
     private _emitMetrics(agentId: string, p: Record<string, unknown>): void {
-        const costUsd = (p["costUsd"] ?? p["cost_usd"]) as number | undefined;
-        const inputTokens = (p["inputTokens"] ?? p["input_tokens"]) as number | undefined;
-        const outputTokens = (p["outputTokens"] ?? p["output_tokens"]) as number | undefined;
-        const messagesProcessed = (p["messagesProcessed"] ?? p["messages_processed"]) as number | undefined;
-        const uptime = p["uptime"] as number | undefined;
+        const costUsd = num(p["costUsd"] ?? p["cost_usd"]);
+        const inputTokens = num(p["inputTokens"] ?? p["input_tokens"]);
+        const outputTokens = num(p["outputTokens"] ?? p["output_tokens"]);
+        const messagesProcessed = num(p["messagesProcessed"] ?? p["messages_processed"]);
+        const uptime = num(p["uptime"]);
         this.emit("metrics", {
             agentId,
             agentName: this._agentName(p, agentId),
@@ -316,7 +321,7 @@ export class MQTTClient {
 
     /** Resolve a display name from the payload, falling back to a short id. */
     private _agentName(p: Record<string, unknown>, agentId: string): string {
-        return (p["agentName"] as string) ?? (p["name"] as string) ?? agentId.slice(0, 8);
+        return str(p["agentName"] ?? p["name"]) || agentId.slice(0, 8);
     }
 }
 
@@ -336,30 +341,93 @@ function str(v: unknown, fallback = ""): string {
     return typeof v === "string" ? v : fallback;
 }
 
-// Agent-name resolution is single-sourced in agents/naming. Re-exported here
-// (with the historical `nameFromId` alias) so existing importers/tests keep working.
-export { nameFromWid as nameFromId, resolveAgentName };
+// --- Field validators ---------------------------------------------------------
+// Every MQTT payload is untrusted external JSON. These coerce individual fields
+// to their declared types so a malformed or hostile value (e.g. a number where a
+// string is expected, or an unknown key) can't be laundered into a typed payload.
 
-export function normaliseHeartbeat(p: unknown): HeartbeatPayload {
-    const o = (p ?? {}) as RawObj;
-    const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
-    const agentName = resolveAgentName(str(o["agentName"] ?? o["name"]), agentId);
-    const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
-    return {
-        ...(o as unknown as HeartbeatPayload),
-        agentId,
-        agentName,
-        timestampMs,
-        sequence: (o["sequence"] as number) ?? 0,
-    };
+/** Coerce to a plain object; null/primitive payloads become `{}`. */
+function asObj(p: unknown): RawObj {
+    return p !== null && typeof p === "object" ? (p as RawObj) : {};
 }
 
+/** A string value, or undefined when not a string. */
+function optStr(v: unknown): string | undefined {
+    return typeof v === "string" ? v : undefined;
+}
+
+/** A finite number, or undefined otherwise. */
+function num(v: unknown): number | undefined {
+    return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/** A boolean, or undefined when not a boolean. */
+function bool(v: unknown): boolean | undefined {
+    return typeof v === "boolean" ? v : undefined;
+}
+
+/** Validate an untrusted value into an {@link AgentState}, defaulting to "running". */
+function coerceState(v: unknown): AgentState {
+    if (v === "initializing" || v === "running" || v === "paused" || v === "stopped") {
+        return v;
+    }
+    if (v !== null && typeof v === "object" && typeof (v as { failed?: unknown }).failed === "string") {
+        return { failed: (v as { failed: string }).failed };
+    }
+    return "running";
+}
+
+/** Validate an untrusted alert severity, defaulting to "info". */
+function coerceSeverity(v: unknown): AlertPayload["severity"] {
+    return v === "info" || v === "warning" || v === "error" || v === "critical" ? v : "info";
+}
+
+/** Keep only the string entries of an untrusted array. */
+function strArray(v: unknown): string[] {
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
+// Agent-name resolution is single-sourced in agents/naming; re-exported here,
+// with `nameFromId` as an alias of nameFromWid, for callers that import it from
+// the MQTT module.
+export { nameFromWid as nameFromId, resolveAgentName };
+
+/** Normalise a raw heartbeat payload, tolerating snake_case/camelCase keys and resolving id + name. */
+export function normaliseHeartbeat(p: unknown): HeartbeatPayload {
+    const o = asObj(p);
+    const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
+    const out: HeartbeatPayload = {
+        agentId,
+        agentName: resolveAgentName(str(o["agentName"] ?? o["name"]), agentId),
+        state: coerceState(o["state"]),
+        sequence: num(o["sequence"]) ?? 0,
+        timestampMs: toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]),
+    };
+    const cpu = num(o["cpu"]);
+    if (cpu !== undefined) {
+        out.cpu = cpu;
+    }
+    const memoryMb = num(o["memory_mb"]);
+    if (memoryMb !== undefined) {
+        out.memory_mb = memoryMb;
+    }
+    const task = optStr(o["task"]);
+    if (task !== undefined) {
+        out.task = task;
+    }
+    const node = optStr(o["node"]);
+    if (node !== undefined) {
+        out.node = node;
+    }
+    return out;
+}
+
+/** Normalise a raw chat payload; defaults `to` to "user" and synthesises an id when absent. */
 export function normaliseChat(p: unknown): ChatMessage {
-    const o = (p ?? {}) as RawObj;
+    const o = asObj(p);
     const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
     return {
-        ...(o as unknown as ChatMessage),
-        id: str(o["id"]) || `chat-${timestampMs}`,
+        id: str(o["id"]) || uid("chat"), // WID, not `chat-${ms}`: same-ms ids collide and dedupe-drop
         from: str(o["from"] ?? o["agentName"] ?? o["name"]),
         to: str(o["to"]) || "user", // default to "user" when field absent
         content: str(o["content"]),
@@ -367,37 +435,67 @@ export function normaliseChat(p: unknown): ChatMessage {
     };
 }
 
+/** Normalise a raw status payload, resolving agent id + display name. */
 export function normaliseStatus(p: unknown): StatusPayload {
-    const o = (p ?? {}) as RawObj;
+    const o = asObj(p);
     const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
-    const agentName = resolveAgentName(str(o["agentName"] ?? o["name"]), agentId);
-    return {
-        ...(o as unknown as StatusPayload),
+    const out: StatusPayload = {
         agentId,
-        agentName,
+        agentName: resolveAgentName(str(o["agentName"] ?? o["name"]), agentId),
+        state: coerceState(o["state"]),
+        messagesReceived: num(o["messagesReceived"] ?? o["messages_received"]) ?? 0,
+        messagesProcessed: num(o["messagesProcessed"] ?? o["messages_processed"]) ?? 0,
+        messagesFailed: num(o["messagesFailed"] ?? o["messages_failed"]) ?? 0,
     };
+    const prot = bool(o["protected"]);
+    if (prot !== undefined) {
+        out.protected = prot;
+    }
+    return out;
 }
 
+/** Normalise a raw spawn payload, resolving id + name and coercing the timestamp to ms. */
 export function normaliseSpawn(p: unknown): SpawnPayload {
-    const o = (p ?? {}) as RawObj;
+    const o = asObj(p);
     const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
-    const agentName = resolveAgentName(str(o["agentName"] ?? o["name"]), agentId);
-    return {
-        ...(o as unknown as SpawnPayload),
+    const out: SpawnPayload = {
         agentId,
-        agentName,
+        agentName: resolveAgentName(str(o["agentName"] ?? o["name"]), agentId),
+        agentType: str(o["agentType"] ?? o["agent_type"]),
+        timestampMs: toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]),
+    };
+    const prot = bool(o["protected"]);
+    if (prot !== undefined) {
+        out.protected = prot;
+    }
+    return out;
+}
+
+/** Normalise a raw alert payload, resolving id + name and coercing the timestamp to ms. */
+export function normaliseAlert(p: unknown): AlertPayload {
+    const o = asObj(p);
+    const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
+    return {
+        agentId,
+        agentName: resolveAgentName(str(o["agentName"] ?? o["name"]), agentId),
+        severity: coerceSeverity(o["severity"]),
+        message: str(o["message"]),
         timestampMs: toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]),
     };
 }
 
-export function normaliseAlert(p: unknown): AlertPayload {
-    const o = (p ?? {}) as RawObj;
+/** Normalise a raw QA-flag payload, resolving id + name and coercing each field to its type. */
+export function normaliseQaFlag(p: unknown): QaFlagPayload {
+    const o = asObj(p);
     const agentId = str(o["agentId"] ?? o["actor_id"] ?? o["agent_id"]);
-    const agentName = resolveAgentName(str(o["agentName"] ?? o["name"]), agentId);
     return {
-        ...(o as unknown as AlertPayload),
         agentId,
-        agentName,
+        agentName: resolveAgentName(str(o["agentName"] ?? o["name"]), agentId),
+        from: str(o["from"]),
+        category: str(o["category"]),
+        severity: str(o["severity"]),
+        excerpt: str(o["excerpt"]),
+        message: str(o["message"]),
         timestampMs: toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]),
     };
 }

@@ -13,6 +13,7 @@ import { SpeechToText as Stt, STT_ENABLED } from "../../io/SpeechToText";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { UPLOADS_ENABLED, uploadFile } from "./uploads";
+import { emit, listen } from "../../events";
 
 export interface IobarDeps {
     chatInput: ChatInput;
@@ -25,6 +26,8 @@ export interface IobarDeps {
     populateSelect(select: HTMLSelectElement): void;
     /** Send the current message. */
     send(input: HTMLTextAreaElement, select: HTMLSelectElement): void;
+    /** Stop the in-flight generation (POST /chat/stop). */
+    stop(): void;
 }
 
 function buildTextarea(
@@ -36,14 +39,27 @@ function buildTextarea(
     const input = document.createElement("textarea");
     input.className = "af-iobar-input";
     input.id = "af-iobar-input";
+    input.name = "chat-message";
+    input.setAttribute("aria-label", "Chat message");
     input.rows = 1;
     input.placeholder = `Message @${deps.target()}…`;
 
+    // Auto-expand up to MAX_ROWS lines, then scroll. The cap is derived from
+    // the computed line-height + padding/border so it tracks the CSS.
+    const MAX_ROWS = 10;
     const autoGrow = () => {
         input.style.height = "1px";
-        const h = Math.min(input.scrollHeight, 140);
+        const cs = getComputedStyle(input);
+        const line = parseFloat(cs.lineHeight) || 18;
+        const extra =
+            parseFloat(cs.paddingTop) +
+            parseFloat(cs.paddingBottom) +
+            parseFloat(cs.borderTopWidth) +
+            parseFloat(cs.borderBottomWidth);
+        const max = line * MAX_ROWS + extra;
+        const h = Math.min(input.scrollHeight, max);
         input.style.height = h + "px";
-        input.style.overflowY = h >= 140 ? "auto" : "hidden";
+        input.style.overflowY = input.scrollHeight > max ? "auto" : "hidden";
     };
 
     input.addEventListener("input", () => {
@@ -69,7 +85,9 @@ function buildSendBtn(
 ): HTMLButtonElement {
     const sendBtn = document.createElement("button");
     sendBtn.className = "af-send-btn";
-    sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`;
+    sendBtn.title = "Send message";
+    sendBtn.setAttribute("aria-label", "Send message");
+    sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`;
     sendBtn.addEventListener("click", () => {
         deps.chatInput.closePanel(mentionPanel);
         deps.send(input, select); // recordSent() clears the ghost
@@ -77,11 +95,49 @@ function buildSendBtn(
     return sendBtn;
 }
 
+/** Stop button: shown only while a turn is streaming; cancels generation. */
+function buildStopBtn(deps: IobarDeps): HTMLButtonElement {
+    const stopBtn = document.createElement("button");
+    stopBtn.className = "af-stop-btn";
+    stopBtn.title = "Stop generating";
+    stopBtn.setAttribute("aria-label", "Stop generating");
+    stopBtn.style.display = "none";
+    stopBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>`;
+    stopBtn.addEventListener("click", () => deps.stop());
+    return stopBtn;
+}
+
+/**
+ * Toggle the send/stop buttons across a turn: reveal stop (and disable send) the
+ * moment the user sends, restore it once the turn completes. Showing on send —
+ * rather than on the first stream chunk — gives a usable stop window even when
+ * the model "thinks" for a while before any tokens arrive. A turn ends with
+ * `af-stream-end` (streamed reply) or `af-chat-message` (non-streamed reply,
+ * e.g. slash commands), both dispatched in direct_ws and mqtt modes.
+ */
+function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButtonElement): void {
+    const busy = () => {
+        sendBtn.disabled = true;
+        stopBtn.style.display = "flex";
+    };
+    const idle = () => {
+        sendBtn.disabled = false;
+        stopBtn.style.display = "none";
+    };
+    // Page-lifetime listeners: buildIobar runs once (CardDashboard is a single
+    // instance never remounted), so these are intentionally not removed. If that
+    // assumption ever changes, a second call here double-fires busy/idle.
+    listen("af-send-message", busy);
+    listen("af-stream-end", idle);
+    listen("af-chat-message", idle);
+}
+
 async function startMic(stt: SpeechToText, btn: HTMLButtonElement): Promise<void> {
     try {
         await stt.start();
         btn.classList.add("recording");
         btn.title = "Stop & transcribe";
+        btn.setAttribute("aria-label", "Stop & transcribe");
     } catch {
         toast.show({ type: "alert-error", title: "Mic blocked", message: "Microphone permission denied." });
     }
@@ -94,6 +150,7 @@ async function finishMic(
 ): Promise<void> {
     btn.classList.remove("recording");
     btn.title = "Voice input";
+    btn.setAttribute("aria-label", "Voice input");
     try {
         const text = await stt.stopAndTranscribe();
         if (text) {
@@ -129,6 +186,7 @@ function buildMicBtn(stt: SpeechToText, input: HTMLTextAreaElement): HTMLButtonE
     const btn = document.createElement("button");
     btn.className = "af-mic-btn";
     btn.title = "Voice input";
+    btn.setAttribute("aria-label", "Voice input");
     btn.innerHTML = iconMarkup("mic", 16);
     btn.addEventListener("click", () => void toggleMic(stt, input, btn));
     return btn;
@@ -171,11 +229,11 @@ async function handlePaste(e: ClipboardEvent): Promise<void> {
         return;
     }
     e.preventDefault();
-    const apiBase: string = (window as any).__WACTORZ_INGRESS_PATH ?? "";
+    const apiBase: string = window.__WACTORZ_INGRESS_PATH ?? "";
     for (const file of files) {
         try {
             const attachment = await uploadFile(file, apiBase);
-            document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment } }));
+            emit("af-attachment-added", { attachment });
         } catch (err) {
             toast.show({ type: "alert-error", title: "Upload failed", message: String(err) });
         }
@@ -190,6 +248,8 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
     const select = document.createElement("select");
     select.className = "af-target-select";
     select.id = "af-target-select";
+    select.name = "chat-target";
+    select.setAttribute("aria-label", "Chat target agent");
     deps.populateSelect(select);
 
     const { inputWrap, input, mentionPanel } = buildInputArea(deps, select);
@@ -197,6 +257,9 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
     if (micAvailable()) {
         bar.appendChild(buildMicBtn(deps.stt, input));
     }
-    bar.appendChild(buildSendBtn(deps, input, select, mentionPanel));
+    const sendBtn = buildSendBtn(deps, input, select, mentionPanel);
+    const stopBtn = buildStopBtn(deps);
+    wireGenerationLifecycle(sendBtn, stopBtn);
+    bar.append(sendBtn, stopBtn);
     return bar;
 }

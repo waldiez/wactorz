@@ -108,7 +108,6 @@ flowchart LR
 | Discord | `python -m wactorz --interface discord` |
 | Telegram | `python -m wactorz --interface telegram` |
 | MCP server | `wactorz-mcp` |
-| Flutter app | iOS/Android companion app for agents, chat, and activity feed |
 | Home Assistant addon | One-click install inside the HA Supervisor |
 
 ---
@@ -142,11 +141,10 @@ LLM_API_KEY=your-key-here
 | Path | What lives there |
 |---|---|
 | `wactorz/` | Python actor runtime, built-in agents, interfaces, monitoring, HA integration |
-| `frontend/` | Vite + TypeScript dashboard |
-| `mobile/` | Flutter companion app |
+| `frontend/` | Vite + TypeScript card dashboard |
 | `ha-addon/` | Home Assistant Supervisor addon |
 | `docs/` | Markdown docs source |
-| `infra/` | Mosquitto, Prometheus, OpenTelemetry, Fuseki, nginx, and HA configs |
+| `infra/` | Mosquitto, Prometheus, OpenTelemetry, nginx, and HA configs |
 | `tests/` | Python test suite |
 
 ---
@@ -163,7 +161,7 @@ LLM_API_KEY=your-key-here
 | [Remote nodes](https://docs.waldiez.io/wactorz/guide/remote-nodes.html) | Edge deployment over SSH |
 | [Interfaces](https://docs.waldiez.io/wactorz/guide/interfaces.html) | CLI, REST, chat platforms, dashboard, MCP |
 | [API reference](https://github.com/waldiez/wactorz/blob/main/docs/api.md) | REST endpoints and payloads |
-| [Deployment](https://docs.waldiez.io/wactorz/guide/deployment.html) | Docker, native binary, systemd, staging, HA addon |
+| [Deployment](https://docs.waldiez.io/wactorz/guide/deployment.html) | Docker, Home Assistant add-on, environment setup |
 | [Prometheus](https://docs.waldiez.io/wactorz/guide/prometheus.html) | Metrics and monitoring |
 | [Technical reference](https://github.com/waldiez/wactorz/blob/main/docs/reference.md) | Deeper internals |
 

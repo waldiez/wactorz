@@ -3,6 +3,208 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — pending
+
+### Added
+
+- **Named volume presets for reachy** - `whisper` (70), `normal` (85), `louder` (93)
+  and `presenter` (100) speaking modes, mapped to the robot speaker's usable loudness band.
+  Deterministic "whisper X" / "say X softly|loudly" set the level and speak aloud.
+- **`wactorz-google-login` command** — one-time interactive OAuth login for the Calendar and
+  Gmail agents (`wactorz-google-login [calendar|gmail|both]`). Mints/refreshes the token with
+  the scopes Wactorz needs (no `gmail.metadata`) so the agents work without hand-running a
+  snippet. `.env.template` now documents the `CALENDAR_MCP_*` / `GMAIL_MCP_*` keys.
+- **Docs: "Catalogue agents" section** — a new documentation section with an overview and a
+  per-agent page for every catalogue recipe (Google Calendar, Gmail, Weather, Smart Energy,
+  Anomaly Detector, Device Manuals, Doc → PPTX, Time-Series Collector), plus a shared Google
+  setup/login page. Replaces the old standalone Calendar MCP page.
+- **Global error surfacing** — uncaught exceptions and unhandled promise rejections
+  now log with context and raise a toast, instead of failing silently to the console.
+- **Content-Security-Policy on the dashboard** — the monitor server sends an enforcing
+  CSP with a per-request nonce for inline scripts and `frame-ancestors 'self'`, restricting
+  script/connect/worker/style/img sources. Works behind Home Assistant ingress (the header is
+  forwarded and framing is same-origin); rolled out via a report-only pass verified on both
+  standalone and ingress before enforcing.
+- **Per-agent token counts** — LLM agents' cumulative input/output tokens now show on
+  their card next to cost (compact `12.5k↑ 900↓`); non-LLM agents show nothing, as
+  before. The counts were already on the wire but previously parsed and dropped.
+- **More activity-feed sources** — the dashboard feed now surfaces agent actuations
+  (what an agent actually changed) and anomaly events, via an extensible topic
+  registry so further feed-only topics are a one-line addition.
+- **Pipeline-rule conflict advisory** — planner now semantically checks a new rule
+  against active ones and flags duplicates and contradictions (e.g. "over 25° AC off"
+  vs "AC on") as a non-blocking "⚠️ Heads up" note at approval.
+- **Weather catalog agent** — `@catalog spawn weather-agent` adds an optional manual weather helper backed by Open-Meteo for current conditions, forecasts, historical weather, default locations, and weather-related natural-language questions.
+- **Smart energy catalog agent** — `@catalog spawn smart-energy` adds an optional Home Assistant smart-plug helper for plug discovery, live wattage, kWh/cost tracking, and guarded user-requested auto-off rules.
+- **Calendar & Gmail are optional catalogue agents** — `google-calendar-agent` and `gmail-agent` are spawned on demand from the catalogue and reached through normal agent delegation (so the main actor can combine them with other agents), not wired into the core message loop. Installs that don't add them are unaffected: everyday words like "meeting", "event", or "agenda" no longer get intercepted and routed to a Google agent that isn't there.
+- **Tests** — `test_spawning.py` (23) covering spawn routing, idempotency/replace,
+  both install models, the `trusted` flag and TopicContract wiring; `test_memory.py`
+  (12) covering fact extraction/namespacing and system-prompt assembly.
+- **Home Assistant entity history** — `home-assistant-agent` can now answer questions
+  about past entity states (e.g. "what was the office temperature yesterday at 17:00?"),
+  backed by a new `get_entity_history` helper against HA's `/api/history/period` REST
+  endpoint. The current local datetime is injected into the LLM prompt so relative
+  times resolve correctly, and returned timestamps are localised to the server's
+  timezone. Also available as a structured `get_history` A2A operation for peer agents,
+  which returns the history as CSV alongside the raw JSON.
+- **Gmail agent (`gmail-agent`)** — new catalog-backed native agent that searches/reads
+  mail, lists labels and drafts, and creates drafts. Draft-first by design (like Google's
+  hosted Gmail MCP, it never sends). Hosted Gmail MCP primary with a Gmail REST v1 fallback
+  on `PERMISSION_DENIED`, mirroring the calendar agent.
+- **Gmail: read an email's full contents** — new `read` action opens one message (by id, or the
+  top match of a topic query) and returns its readable body — text/plain, or HTML stripped to
+  text — so "what does the trello one say?" / "content of the latest vodafone bill" return the
+  actual message instead of a search snippet list.
+- **Gmail read answers your question** — when an LLM is configured, `read` now returns a
+  concise answer to the asked question (or a short summary), quoting exact amounts/dates,
+  instead of dumping the raw email; bodies are also de-noised (tracking URLs → `[link]`,
+  collapsed blank lines). Without an LLM it returns the cleaned body.
+- **Direct OAuth login** (`GoogleMcpClient.authorize_direct`) — mints a REST token via a
+  direct Google OAuth flow with caller-chosen scopes, bypassing the MCP server's scope set.
+  Used to get a Gmail token **without** `gmail.metadata` (which blocks free-text `q` search),
+  so `find invoices` / `from:…` work; also guarantees a refresh token.
+- **Shared Google-MCP base** (`core/integrations/google_mcp.py`) — `GoogleMcpClient` +
+  `GoogleMcpConfig` factor out the OAuth token storage, MCP call, and REST-fallback plumbing;
+  Calendar and Gmail are now thin subclasses. MCP auth during tool calls is **non-interactive**
+  (silent refresh only, with a timeout) so a server-side agent fails fast to REST instead of
+  blocking on a browser OAuth window; interactive login is an explicit `login()`.
+- **Calendar REST fallback** — `GoogleCalendarMcpClient` now falls back to the
+  Google Calendar REST API (v3) with the same OAuth token when the hosted Calendar
+  MCP (`calendarmcp.googleapis.com`) returns `PERMISSION_DENIED` (it is access-gated
+  and denies tool execution even for fully-scoped tokens) or the `mcp` extra isn't
+  installed. MCP stays the primary path and resumes automatically once the project
+  is allowlisted. Events are rendered as readable lines instead of raw JSON.
+  which returns the history as CSV alongside the raw JSON.
+
+### Changed
+
+- **Reachy agent renamed `reachy-body` → `reachy-mini`** — the catalogue agent, its
+  recipe file, spawn command (`@catalog spawn reachy-mini`), planner references, and
+  documentation all use the new name. MQTT topics (`custom/reachy/*`) are unchanged.
+- **Reachy Home Assistant routed through the HA agent** - reachy-mini delegates all
+  device control and automations to `home-assistant-agent` (natural-language
+  `{cmd:ha, request}`) instead of calling HA's REST API directly; entity discovery for
+  reactive binds is routed through the HA agent too.
+- **Home Assistant "Devices" → direct link** — the dashboard's embedded device
+  list/control panel was replaced with a "Devices" button that opens Home
+  Assistant's own UI in a new tab (using the URL from `/api/config`). HA entity
+  activity still appears in the activity feed via the MQTT state bridge.
+- **`main_actor.py` decomposed** (6113 → ~4400 lines) with no behaviour change:
+  prompts → `agents/prompts/main_actor_prompts.py`, constants + pure helpers →
+  `agents/helpers/main_actor_helpers.py`, and two behaviour mixins →
+  `agents/mixins/{spawning,memory}.py`. `planner_agent.py` lost ~200 lines of
+  duplicated spawn code. New `agents/mixins/` and `agents/helpers/` subpackages
+  keep `agents/` to actual agents only.
+- **Unified planner JSON parsing** — both decomposition paths share
+  `_extract_json_array` instead of fragile fence-stripping.
+- **Continuous agents declarable** — `_ensure_agents` honours
+  `spawn_config["continuous"]` before falling back to code substring-matching.
+- **ha_actuator name collisions** now keyed on agent name (was `automation_id`);
+  a colliding actuator may get a different suffixed name.
+- **`type: "manual"` spawn configs** now route correctly through `MainActor`
+  (previously fell through to a no-op).
+- **`_is_pipeline_request`** is now a proper `@staticmethod`.
+
+### Removed
+
+- **Flutter companion app** — the `mobile/` Flutter project (iOS/Android companion
+  app) and its `test-mobile` CI job were removed. The web dashboard and REST/WS
+  API remain the supported clients.
+
+### Fixed
+
+- **Agent chat no longer appears twice** — in `direct_ws` mode the dashboard was rendering
+  every `notify_user` frame (e.g. reachy's spoken replies) twice: once from the monitor's
+  WebSocket relay and once from the browser's own `agents/#` MQTT subscription. The browser
+  now honours the single-transport-per-mode invariant and ignores the redundant MQTT copy.
+- **Reachy no longer echoes unparsed input** - when the planner can't turn a message
+  into a robot action, reachy returns a helpful hint instead of repeating the user's words.
+- **Frontend minor fixes** — synthesised chat/WS message ids now use collision-free
+  WIDs instead of `<prefix>-<ms>` (two messages in the same millisecond could collide and
+  be dedupe-dropped); the dashboard now asks not to be indexed (`robots: noindex, nofollow`
+  — it is an ops control surface); chat-history params renamed `agentId` to `agentName` to
+  match what they actually receive; a11y attributes added (lightbox `role="dialog"`/
+  `aria-modal`, popover `aria-haspopup`/`aria-expanded`/`aria-controls`, view tabs
+  `aria-current="page"`).
+- **Dashboard could fail to load in private-mode / storage-disabled browsers** —
+  `localStorage` access during startup threw (Safari private mode, storage disabled,
+  quota exceeded), aborting bootstrap with a blank page. All access now routes through
+  a `safeStorage` wrapper that degrades to `null`/no-ops, so the dashboard loads and
+  persistence is best-effort.
+- **Dashboard reliability nits** — the live-actor refresh now times out after 10s (a
+  hung request could otherwise wedge every later refresh); chat/upload message ids use
+  collision-free WIDs instead of `Date.now()`; loaded chat history is capped like the
+  live feed; and the service worker no longer skips caching sibling paths like `/wsfoo`.
+- **@mention could silently fail to switch target** — the mention list offered every
+  agent, but only messageable agents are in the target picker, so mentioning a
+  non-messageable one left the placeholder claiming a target that was never set.
+  Suggestions now mirror the picker (messageable only), and accepting an untargetable
+  name is a clean no-op.
+- **Planners leaked until restart** — proposal/pipeline planners never stopped and
+  stayed pinned by both the registry and the Supervisor. Added a lifetime watchdog
+  (`max_lifetime_s`, 10 min) + idempotent `_terminate()` doing `release()` →
+  `unregister()` → `stop()`.
+- **Plan steps silently dropped** — bad/cyclic `depends_on` aborted the plan with no
+  trace; references are now validated and failures surfaced per-step.
+- **`plan_only` could spawn agents** — `approved_plan` was checked first despite the
+  docs; precedence is now enforced in `on_start`.
+- **Planner-spawned agents silently missing setup** — `PlannerAgent` carried its
+  own drifted copy of the spawn logic, so dynamic agents it spawned skipped
+  migrated-state injection, TopicContract auto-wiring, and the `trusted` flag
+  (catalog agents were needlessly re-run through the safety validator). Spawn and
+  install logic for `MainActor` and `PlannerAgent` is now a single shared
+  `SpawnMixin`, so an agent behaves identically regardless of which one spawns it.
+  ~550 lines of duplication removed.
+- **Headless `cli` interface self-shutdown** — `wactorz --interface cli` with no TTY (piped, Docker without `-it`, systemd) booted fully then tore the whole system down ~1s later: `input()` raised `EOFError` immediately, finishing the interactive loop, and with `run_forever()` already a no-op there was nothing left keeping the process alive. The `cli` interface now detects a non-interactive stdin and stays up via `run_forever()` instead of starting the interactive loop.
+- **Calendar agent "No time zone found with key UTC"** — every read (`today`,
+  `week`, `list_events`) crashed on systems without the IANA tz database (e.g.
+  Windows without `tzdata`), where even `ZoneInfo("UTC")` raises. Timezone
+  resolution now falls back to the system-local offset and only sends Google a
+  `timeZone` key when it's a valid IANA zone (a bare `UTC` is rejected too).
+- **OAuth refresh token wiped on first refresh** — the MCP token storage replaced the whole
+  token blob on every refresh, but Google omits `refresh_token` from refresh responses, so the
+  first silent refresh dropped it and permanently broke re-auth (surfaced once an access token
+  expired). Storage now preserves the initial refresh token. Affects Calendar and Gmail.
+- **Calendar "show events" flooded with recurring instances** — the upcoming-events list had no
+  time bound, so a yearly recurring event (e.g. a birthday) returned many past/future copies that
+  looked identical. It's now bounded to now → +1 year, and cross-year dates include the year.
+- **Gmail HTML entities not decoded** — message subjects and snippets showed raw entities
+  (`didn&#39;t`, `&quot;`, `&amp;`); they're now unescaped to real characters.
+- **Gmail draft follow-up dropped bare replies** — after "make an email to X" the agent asked
+  "what should the email say?" but a plain reply (e.g. "Bloop") wasn't captured as the body. It
+  now fills whichever field it just asked for (body if the recipient is known, or the recipient
+  if the reply is an email address). "make an email/draft …" phrasings are also recognised.
+
+---
+
+## [0.5.0] - 2026-06-22
+
+### Added
+
+- **`WACTORZ_TZ` env var** — optional override for the timezone used in agents' date/time context. Precedence: a user's `pref_timezone` fact > `WACTORZ_TZ` > standard `TZ` env var > host local zone. Blank = unchanged (falls through to `TZ` / system local), and any unknown zone value falls through to the next candidate rather than erroring.
+- **MQTT broker authentication** — optional `MQTT_USERNAME` / `MQTT_PASSWORD` (add-on options `mqtt_username` / `mqtt_password`) inject broker credentials into every in-process MQTT connection via a central `mqtt_client()` factory. Blank = anonymous, so the embedded/anonymous broker is unchanged; auth only engages when set. Fixes external brokers with `allow_anonymous false` — e.g. the official Home Assistant Mosquitto add-on — which previously rejected every connection. The dashboard's MQTT WebSocket proxy injects the same credentials into the browser's CONNECT server-side, so the live monitor keeps working under an authenticated broker without exposing credentials to the browser.
+
+### Changed
+
+- **TimeSeriesCollector** — moved from an auto-started supervised actor to an on-demand catalog agent (`@catalog spawn timeseries-collector`); no longer started at boot.
+
+### Removed
+
+- **Rust, Node, and Tauri backend surfaces** — removed the Rust workspace/backend, Node backend, Tauri desktop shell, native packaging scripts, desktop release workflow, and backend parity harness. Wactorz now ships the Python runtime, web dashboard, Docker/Compose paths, and Home Assistant add-on path.
+- **Apache Jena Fuseki / SPARQL — removed entirely** across the whole product. Gone are: the Python `fuseki.py` / `fuseki_proxy.py` / `fuseki_agent.py` / `sparql_context.py` / `smart_cities_agent.py` and their wiring (HA→Fuseki bridge, `/api/fuseki` proxy, `/api/ha/sync`, planner SPARQL enrichment, `config.py` fuseki fields, `wactorz-fuseki` entry point); the Rust `FusekiAgent`, the `/api/fuseki` proxy + its tests, the `--fuseki-*` CLI args, and the Fuseki RDF writes in the HA→state bridge (now HA→MQTT only); the Node `FusekiAgent`; the UI **Graph** tab + its HUD link/CSS; the embedded Fuseki in the HA add-on; the `fuseki` Docker services (`compose.yaml` / `compose.dev.yaml`) + image (`config/fuseki-container/`), the ontology (`infra/fuseki/`), the nginx `/fuseki/` proxy, the Prometheus Fuseki probe, and all `FUSEKI_*` env/docs. Wactorz no longer ships or depends on a triplestore.
+- **Stale `wactorz/main.py`** — removed the unused 5.6k-line embedded entry point (no longer importable, referenced nowhere). Internal cleanup; no runtime behaviour change.
+- **Babylon.js 3D dashboard layer** — removed the unused 3D scene engine and the disabled social/theme-switcher (graph/galaxy themes, `SocialDashboard`, `ThemeSwitcher`). The dashboard is cards-only; this drops the `@babylonjs/*` dependencies and the 6 MB `babylon-core` bundle, cutting the frontend from 2204 → 27 modules and the cold build from ~19s → ~2s. `SceneManager` is retained as a plain agent-state/dashboard coordinator (public API unchanged).
+
+### Fixed
+
+- **Agents now anchored to the real current date/time** — every LLM-backed agent receives a live "current date & time" block at the top of its system prompt on each turn, so requests like "notify me tomorrow at 3pm" resolve against today's actual date instead of the model's training-cutoff guess (which defaulted to 2025 and silently produced wrong schedule dates). Injected in three previously-static spots: `LLMAgent`'s `complete`/`stream` calls (covers main and every base-class agent), `PlannerAgent`'s feasibility / pipeline-architect / task-planner calls (where a request is decomposed into a `schedule_spec`), and the synthesized remote LLM-agent bridge. The timezone resolves from the user's `pref_timezone` fact — the same source `ScheduledAgent` already fires against — for main and the planner, so what the model thinks "tomorrow" means now matches what actually gets scheduled.
+- **HA add-on blank page on boot** — the monitor web UI now binds *before* the supervisor starts, so a slow, unreachable, or auth-rejecting MQTT broker no longer leaves the add-on serving a blank page; the dashboard is reachable immediately and the overview fills in as agents register. `run.sh` also probes an external (non-embedded) broker for up to 15s before launch so wactorz doesn't churn against an unreachable broker at boot.
+- **Headline cost total** — the dashboard's total no longer drops below the visible cards. It now resolves each agent's cost from the same three sources the cards use (MQTT state → live actor → persisted `_final_cost`), and a durable, monotonic per-`actor_id` ledger (fed by each agent's heartbeat `cost_usd`, persisted under `_system`) keeps deletions and hard kills from ever lowering the total. A full metrics reset clears the ledger so the total can still be zeroed deliberately.
+- **Headline cost total drops on agent deletion** — follow-up to the headline-total fix above. The total could still read *lower* than the "this period" spend shown beside it (an impossible state) because it derived from delete-fragile sources: per-agent `_final_cost` rows are purged on delete, and the heartbeat-fed per-`actor_id` lifetime ledger can miss/lose short-lived agents. A new durable `_global_cost_alltime` counter is accrued at call time via the same path as the per-period spend buckets — so it is never reduced by a single agent's deletion or per-agent metrics reset — and is used as a third floor for the headline total (`max(live + historical, lifetime ledger, all-time counter)`). Deleted agents' spend is now retained and `this period ≤ all-time` always holds. The counter is seeded once from existing durable totals on upgrade and zeroed by a full cost/metrics reset; cap enforcement is unchanged (it still reads the per-period counter).
+- **HA add-on ingress URL escaping** — TTS, agent-avatar, and PWA-manifest requests now stay inside HA's `/api/hassio_ingress/<token>/` prefix. `TTSManager` fetched bare `/api/tts/voices` and `/api/tts`, and `AgentImageGen` returned root-absolute `/avatars/*.webp` — all of which resolve against HA core and 404 under ingress (server edge-tts silently fell back to browser voices; agent avatars failed to load). TTS now uses the same ingress-aware `_apiBase` as the rest of the UI, avatars use relative `./avatars/*` paths, and the `<link rel="manifest">` gained `crossorigin="use-credentials"` so the browser sends the ingress auth cookie (was a 401 on `site.webmanifest`).
+- **Dashboard XSS hardening** — agent names, tasks, and bios (set by spawned/LLM agents over MQTT) were interpolated raw into `innerHTML` in the social-card and chat-list views. A new `escapeHtml()` helper now escapes them, so an agent named `<img onerror=…>` can no longer execute script in the dashboard.
+- **Duplicate user message after history load** — a user's chat message could render twice: the optimistic echo used id `user-<ts>` while the persisted copy from `/api/chats` used `hist-<agent>-<rowid>`, so `_loadHistory`'s id-based de-dup never matched them. The persisted copy is now reconciled with its pending optimistic echo (same target + content + a tight timestamp window), adopting the persisted id instead of appending a second bubble. The window avoids collapsing a new message that merely repeats an older identical one, and when no optimistic copy exists the persisted message is still added — so a message that wasn't on screen is never hidden.
+
 ---
 
 ## [0.4.4] - 2026-06-08
@@ -13,6 +215,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Agent → UI notifications** — `Actor.notify_user(text)` pushes a message to the chat panel (via `agents/{id}/chat`); the monitor bridges it to a live chat frame. Previously agent messages only hit the dashboard.
 - **`agent.run_in_background(coro)`** — schedules a coroutine tracked on the actor, for long work that shouldn't block `handle_task`.
 - **`<delegate>` blocks** — `main` can delegate via `<delegate>{"agent": "...", "task": "..."}</delegate>`, alongside `@mentions`.
+- **HomeAssistantAgent — camera tools** — three new tools exposed to the LLM tool-call loop and to A2A structured dispatch:
+  - `list_camera_entities` — returns all `camera.*` entities with their current state and friendly name.
+  - `get_camera_snapshot` — fetches a JPEG from `/api/camera_proxy/{entity_id}`, returns it base64-encoded; the agent appends an inline `![…](data:image/jpeg;base64,…)` markdown tag to the final reply so the chat panel renders the image.
+  - `get_camera_stream_url` — aggregates stream URLs from three sources: the always-available MJPEG proxy (`/api/camera_proxy_stream/{entity_id}`), the [Expose Camera Stream Source](https://github.com/felipecrs/hass-expose-camera-stream-source) custom integration if installed (`/api/camera_stream_source/{entity_id}`, returns plain-text URL, silently skipped on 404), and HLS/other formats via HA WebSocket `camera/capabilities` + `camera/stream` (relative URLs are resolved to absolute).
+- **HomeAssistantAgent — A2A camera dispatch** — a peer agent can send a structured payload to `home-assistant-agent` without triggering any LLM call: `{"operation": "list_cameras"}`, `{"operation": "get_camera_snapshot", "camera_entity_id": "camera.x"}`, `{"operation": "get_camera_stream_url", "camera_entity_id": "camera.x"}`, or `{"operation": "get_camera_snapshot_url", "camera_entity_id": "camera.x"}` (returns only the URL, no HTTP fetch).
+- **ha_helper — camera helpers** — five new functions: `get_camera_entities`, `get_camera_snapshot`, `get_camera_stream_url` (sync, MJPEG proxy URL only), `get_camera_stream_urls` (async, all sources), `get_camera_snapshot_url` (sync, returns `/api/camera_proxy/{entity_id}` URL without fetching).
+- **PlannerAgent — camera URL resolution** — before generating a plan, the planner resolves real stream and snapshot URLs for camera entities mentioned in the task via A2A requests to `home-assistant-agent`. Resolved URLs are injected into the LLM prompt so generated agents never guess `/dev/video0` or invent proxy paths. MJPEG proxy URLs require a Bearer token; the planner injects an `OPENCV_FFMPEG_CAPTURE_OPTIONS` hint into PATTERN 3 so OpenCV passes the header automatically.
+- **PlannerAgent — PATTERN 7** — new plan pattern for one-shot camera snapshots (e.g. "take a snapshot of the office camera"). Uses `httpx` to fetch the snapshot URL with an `Authorization: Bearer` header rather than opening a continuous `cv2.VideoCapture` stream.
 
 ### Changed
 
@@ -38,6 +248,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Tests** — `mqtt.test.ts`: updated stale assertion for the 6 s disconnect-debounce introduced in a prior PR.
 - **Tests** — `test_persistence_writes.py`: new coverage for the real `WactorzDB` write path (the suite previously only used an in-memory fake), including a guard against reintroducing version-gated SQLite functions in the schema.
+- **Tests** — `test_ha_helper.py`: 17 new tests in `HomeAssistantHelperCameraTest` covering all four camera helper functions, including URL normalisation, relative-URL resolution, silent 404 skip, web_rtc stream-call exclusion, and exception fallbacks.
+- **Tests** — `test_home_assistant_agent.py`: 23 new tests in `HomeAssistantAgentCameraTest` covering the LLM tool loop, A2A structured dispatch, heuristic routing, and snapshot image appending for all three camera tools (plus the `get_camera_snapshot_url` A2A operation added in the follow-up commit).
 
 ## [0.4.3] - 2026-06-01
 
@@ -703,7 +915,11 @@ One round-trip instead of zero, live state every time.
 - Docker Compose stacks (dev and production)
 - `pyproject.toml` with optional dependency groups
 
-[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/waldiez/wactorz/compare/v0.4.4...v0.5.0
+[0.4.4]: https://github.com/waldiez/wactorz/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/waldiez/wactorz/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/waldiez/wactorz/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/waldiez/wactorz/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/waldiez/wactorz/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/waldiez/wactorz/compare/v0.2.0...v0.3.0

@@ -1,5 +1,4 @@
-"""
-CatalogAgent — Pre-built Agent Recipe Library
+"""CatalogAgent — Pre-built Agent Recipe Library
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Holds a catalog of ready-made DynamicAgent recipes (name → full spawn config).
 On request it spawns any catalog agent by sending its full config to main,
@@ -12,22 +11,26 @@ This means:
   - The spawned agent is saved in main's spawn registry (persists across restarts)
 
 USAGE (from CLI or any agent):
-  @catalog spawn image-gen-agent
-  @catalog spawn sinergym-collector
+  @catalog spawn anomaly-detector
+  @catalog spawn timeseries-collector
   @catalog list
-  @catalog info sinergym-optimizer
+  @catalog info manual-agent
 
 Or via main (natural language):
-  "spawn the image generation agent"   → main finds catalog → catalog spawns it
+  "spawn the anomaly detector agent"   → main finds catalog → catalog spawns it
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import asyncio
 import logging
+import pathlib
 import time
-from typing import Optional
+from typing import TYPE_CHECKING, cast
 
 from ..core.actor import Actor, Message, MessageType
+
+if TYPE_CHECKING:
+    from .main_actor import MainActor
 
 logger = logging.getLogger(__name__)
 
@@ -36,15 +39,20 @@ logger = logging.getLogger(__name__)
 # RECIPE IMPORTS
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _load_recipe(filename: str) -> Optional[str]:
-    import importlib.util, pathlib
+
+def _load_recipe(filename: str) -> str | None:
+    import importlib.util
+
     path = pathlib.Path(__file__).parent.parent / "catalogue_agents" / filename
     if not path.exists():
         logger.warning(f"[catalog] Recipe file not found: {path}")
         return None
     try:
         spec = importlib.util.spec_from_file_location("_recipe", path)
-        mod  = importlib.util.module_from_spec(spec)
+        if spec is None or spec.loader is None:
+            logger.warning(f"[catalog] Could not build import spec for recipe: {path}")
+            return None
+        mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return getattr(mod, "AGENT_CODE", None)
     except Exception as e:
@@ -56,143 +64,149 @@ def _load_recipe(filename: str) -> Optional[str]:
 # CATALOG
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _build_catalog() -> dict:
-    catalog = {}
 
-    # ── image-gen-agent ───────────────────────────────────────────────────────
-    code = _load_recipe("image_gen_agent.py")
-    if code:
-        catalog["image-gen-agent"] = {
-            "name":         "image-gen-agent",
-            "type":         "dynamic",
-            "description":  "Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns absolute PNG path.",
-            "capabilities": ["image_generation", "text_to_image", "nvidia_nim", "flux"],
-            "install":      ["requests"],
+def _build_native_catalog() -> dict:
+    """Native Actor subclasses spawned directly by the catalog."""
+    native = {}
+
+    try:
+        from ..catalogue_agents.weather_agent import WeatherAgent
+
+        native["weather-agent"] = {
+            "name": "weather-agent",
+            "type": "native",
+            "factory": WeatherAgent,
+            "description": "Natural-language weather: current conditions, forecast, and history via Open-Meteo. No API key required.",
+            "capabilities": ["weather.current", "weather.forecast", "weather.history"],
             "input_schema": {
-                "prompt":      "str  — what to generate",
-                "output_path": "str  — absolute path to save PNG",
-                "width":       "int  — pixels wide, default 1024",
-                "height":      "int  — pixels tall, default 576 (16:9)",
-                "steps":       "int  — inference steps, default 20",
-                "api_key":     "str  — optional, overrides persisted nim_api_key",
+                "action": "current | forecast | history | set-default",
+                "location": "str - city name or lat,lon (optional, falls back to default)",
+                "days": "int - forecast horizon 1-16 (forecast only, default 3)",
+                "date": "str - ISO date or 'yesterday' (history only)",
             },
             "output_schema": {
-                "image_path": "str       — saved PNG path, or null",
-                "width":      "int",
-                "height":     "int",
-                "size_kb":    "int",
-                "error":      "str|null",
+                "location": "str",
+                "temp_c": "float",
+                "feels_like_c": "float",
+                "condition": "str",
+                "humidity": "int",
+                "wind_kph": "float",
             },
-            "poll_interval": 3600,
-            "code":          code,
         }
+        logger.info("[catalog] Loaded weather-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] weather-agent unavailable: {e}")
+
+    try:
+        from .google_calendar_agent import GoogleCalendarAgent
+
+        native["google-calendar-agent"] = {
+            "name": "google-calendar-agent",
+            "type": "native",
+            "factory": GoogleCalendarAgent,
+            "description": "Accesses Google Calendar: list today/upcoming events, create events, and delete events.",
+            "capabilities": [
+                "google_calendar",
+                "calendar",
+                "schedule",
+                "events",
+                "list_events",
+                "create_event",
+                "delete_event",
+            ],
+            "input_schema": {
+                "text": "str - natural-language calendar request, e.g. 'what is on my calendar today?'",
+                "operation": "status | list_events | today | tomorrow | week | create_event | delete_event",
+                "summary": "str - event title for create_event",
+                "start": "str - ISO-8601 start datetime for create_event",
+                "event_id": "str - event id for delete_event",
+            },
+            "output_schema": {
+                "result": "str - human-readable calendar response",
+                "events": "list - returned events for list operations",
+                "event": "dict - created event for create_event",
+            },
+        }
+        logger.info("[catalog] Loaded google-calendar-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] google-calendar-agent unavailable: {e}")
+
+    try:
+        from .gmail_agent import GmailAgent
+
+        native["gmail-agent"] = {
+            "name": "gmail-agent",
+            "type": "native",
+            "factory": GmailAgent,
+            "description": "Accesses Gmail: search/read mail, list labels and drafts, and create drafts (never sends).",
+            "capabilities": [
+                "gmail",
+                "email",
+                "mail",
+                "inbox",
+                "search_email",
+                "read_email",
+                "create_draft",
+                "labels",
+            ],
+            "input_schema": {
+                "text": "str - natural-language Gmail request, e.g. 'any unread email?'",
+                "operation": "status | search | unread | inbox | read | labels | drafts | create_draft",
+                "query": "str - Gmail search query for search",
+                "to": "str - recipient for create_draft",
+                "subject": "str - subject for create_draft",
+                "body": "str - body text for create_draft",
+                "thread_id": "str - thread/message id for read",
+            },
+            "output_schema": {
+                "result": "str - human-readable Gmail response",
+                "status": "dict - sanitized Gmail configuration status",
+            },
+        }
+        logger.info("[catalog] Loaded gmail-agent recipe")
+    except ImportError as e:
+        logger.warning(f"[catalog] gmail-agent unavailable: {e}")
+
+    return native
+
+
+def _build_catalog() -> dict:
+    catalog = _build_native_catalog()
 
     # ── doc-to-pptx-agent ─────────────────────────────────────────────────────
     code = _load_recipe("doc_to_pptx_agent.py")
     if code:
         catalog["doc-to-pptx-agent"] = {
-            "name":         "doc-to-pptx-agent",
-            "type":         "dynamic",
-            "description":  "Converts PDF or TXT documents into PowerPoint presentations. Extracts real embedded images from PDF; falls back to NIM FLUX for slides without images.",
-            "capabilities": ["document_to_pptx", "pdf_to_presentation", "pptx_generation", "document_conversion"],
-            "install":      ["pymupdf", "pdfplumber", "pillow"],
+            "name": "doc-to-pptx-agent",
+            "type": "dynamic",
+            "description": "Converts PDF or TXT documents into PowerPoint presentations. Extracts real embedded images from PDF; falls back to NIM FLUX for slides without images.",
+            "capabilities": [
+                "document_to_pptx",
+                "pdf_to_presentation",
+                "pptx_generation",
+                "document_conversion",
+            ],
+            "install": ["pymupdf", "pdfplumber", "pillow"],
             "input_schema": {
-                "file_path":      "str  — absolute path to source PDF or TXT",
-                "output_path":    "str  — where to save the .pptx",
-                "slide_count":    "int  — target slides, default 8",
-                "theme":          "str  — e.g. 'dark executive', 'minimal light'",
-                "nim_fallback":   "bool — NIM images for slides without PDF image, default true",
-                "min_img_width":  "int  — min px width to accept PDF image, default 200",
+                "file_path": "str  — absolute path to source PDF or TXT",
+                "output_path": "str  — where to save the .pptx",
+                "slide_count": "int  — target slides, default 8",
+                "theme": "str  — e.g. 'dark executive', 'minimal light'",
+                "nim_fallback": "bool — NIM images for slides without PDF image, default true",
+                "min_img_width": "int  — min px width to accept PDF image, default 200",
                 "min_img_height": "int  — min px height to accept PDF image, default 150",
             },
             "output_schema": {
-                "pptx_path":        "str       — saved .pptx path, or null",
-                "slide_count":      "int",
-                "title":            "str",
+                "pptx_path": "str       — saved .pptx path, or null",
+                "slide_count": "int",
+                "title": "str",
                 "images_extracted": "int       — images pulled from PDF",
                 "images_generated": "int       — images from NIM",
-                "error":            "str|null",
+                "error": "str|null",
             },
             "poll_interval": 3600,
-            "code":          code,
+            "code": code,
         }
-
-   
-    # # ── discord-notify-agent ──────────────────────────────────────────────────
-    # code = _load_recipe("discord_notify_agent.py")
-    # if code:
-    #     catalog["discord-notify-agent"] = {
-    #         "name":         "discord-notify-agent",
-    #         "type":         "dynamic",
-    #         "description":  "Subscribes to MQTT events and posts notifications to a Discord webhook.",
-    #         "capabilities": ["discord", "notifications", "mqtt_subscriber", "webhook", "alerting"],
-    #         "install":      ["aiohttp", "aiomqtt"],
-    #         "input_schema": {
-    #             "mqtt_topic":    "str — MQTT topic to subscribe to",
-    #             "message_tpl":   "str — message template, use {data} for payload",
-    #             "trigger_key":   "str — optional: only trigger when this key exists",
-    #             "trigger_value": "str — optional: only trigger when trigger_key equals this",
-    #             "cooldown_s":    "int — seconds between notifications, default 10",
-    #             "webhook_url":   "str — Discord webhook URL (overrides persisted value)",
-    #         },
-    #         "output_schema": {"sent": "int — number of notifications sent"},
-    #         "poll_interval": 3600,
-    #         "code":          code,
-    #     }
-
-    # ── sinergym-collector ────────────────────────────────────────────────────
-    code = _load_recipe("sinergym_collector_agent.py")
-    if code:
-        catalog["sinergym-collector"] = {
-            "name":         "sinergym-collector",
-            "type":         "dynamic",
-            "description":  "Collects Sinergym episode data via MQTT for RL/Bayesian training. Listens on sinergym/env/{env_id}/observation and persists (obs, action, reward) tuples.",
-            "capabilities": ["sinergym", "data_collection", "rl_training", "energy_optimization", "building_simulation"],
-            "install":      ["aiomqtt", "numpy"],
-            "input_schema": {
-                "env_id":          "str  — Sinergym env ID, e.g. Eplus-5zone-hot-continuous-v1",
-                "obs_topic":       "str  — MQTT topic for observations",
-                "target_episodes": "int  — episodes to collect before triggering optimizer, default 10",
-                "chunk_size":      "int  — persist every N episodes, default 5",
-                "optimizer_name":  "str  — optimizer agent to notify on completion, default sinergym-optimizer",
-            },
-            "output_schema": {
-                "episodes_collected": "int",
-                "total_steps":        "int",
-                "data_key":           "str — episode_{N} recall keys",
-            },
-            "poll_interval": 3600,
-            "code":          code,
-        }
-        logger.info("[catalog] Loaded sinergym-collector recipe")
-
-    # ── sinergym-optimizer ────────────────────────────────────────────────────
-    code = _load_recipe("sinergym_optimizer_agent.py")
-    if code:
-        catalog["sinergym-optimizer"] = {
-            "name":         "sinergym-optimizer",
-            "type":         "dynamic",
-            "description":  "Energy optimization agent for Sinergym: trains RL (PPO) or Bayesian (GP) policy from collected episodes, then publishes actions to sinergym/env/{env_id}/action.",
-            "capabilities": ["sinergym", "rl", "bayesian_optimization", "energy_optimization", "policy_training", "building_control"],
-            "install":      ["stable-baselines3", "scikit-learn", "numpy", "torch", "aiomqtt", "gymnasium"],
-            "input_schema": {
-                "env_id":          "str  — Sinergym env ID, e.g. Eplus-5zone-hot-continuous-v1",
-                "strategy":        "str  — rl | bayesian | rulebased | combined, default rl",
-                "collector_name":  "str  — collector agent name, default sinergym-collector",
-                "obs_dim":         "int  — observation vector length, default 35",
-                "action_dim":      "int  — action vector length, default 2",
-                "training_steps":  "int  — RL training timesteps, default 50000",
-                "deploy_on_train": "bool — start publishing actions after training, default true",
-            },
-            "output_schema": {
-                "mean_reward": "float",
-                "strategy":    "str",
-                "phase":       "str — idle | training | deploying",
-            },
-            "poll_interval": 3600,
-            "code":          code,
-        }
-        logger.info("[catalog] Loaded sinergym-optimizer recipe")
 
     # ── ADD NEW RECIPES HERE ──────────────────────────────────────────────────
     # code = _load_recipe("my_new_agent.py")
@@ -204,302 +218,235 @@ def _build_catalog() -> dict:
     code = _load_recipe("anomaly_detector_agent.py")
     if code:
         catalog["anomaly-detector"] = {
-            "name":         "anomaly-detector",
-            "type":         "dynamic",
-            "description":  "Learns normal patterns from time-series data (HA sensors + Sinergym), detects anomalies in real-time. Statistical, range, rate-of-change, and absence detection.",
-            "capabilities": ["anomaly_detection", "time_series", "monitoring", "building_analytics",
-                             "sinergym", "energy_monitoring", "comfort_monitoring", "ml"],
-            "install":      ["aiomqtt", "numpy"],
+            "name": "anomaly-detector",
+            "type": "dynamic",
+            "description": "Learns normal patterns from time-series data (HA sensors + Sinergym), detects anomalies in real-time. Statistical, range, rate-of-change, and absence detection.",
+            "capabilities": [
+                "anomaly_detection",
+                "time_series",
+                "monitoring",
+                "building_analytics",
+                "sinergym",
+                "energy_monitoring",
+                "comfort_monitoring",
+                "ml",
+            ],
+            "install": ["aiomqtt", "numpy"],
             "input_schema": {
-                "action":                "str  — status|report|train|reset|configure|baselines|entities",
-                "baseline_hours":        "int  — hours of history for baseline (default: 720 = 30 days)",
+                "action": "str  — status|report|train|reset|configure|baselines|entities",
+                "baseline_hours": "int  — hours of history for baseline (default: 720 = 30 days)",
                 "learning_period_hours": "int  — min hours before detection starts (default: 168 = 1 week)",
-                "sensitivity":           "float — 0-1, lower=more sensitive (default: 0.3)",
-                "entities":              "list  — entity IDs to monitor (default: auto-discover)",
+                "sensitivity": "float — 0-1, lower=more sensitive (default: 0.3)",
+                "entities": "list  — entity IDs to monitor (default: auto-discover)",
             },
             "output_schema": {
-                "anomalies_detected":  "int",
-                "baselines_ready":     "int",
-                "detection_active":    "bool",
-                "last_anomaly":        "dict|null",
+                "anomalies_detected": "int",
+                "baselines_ready": "int",
+                "detection_active": "bool",
+                "last_anomaly": "dict|null",
             },
             "poll_interval": 3600,
-            "code":          code,
+            "code": code,
         }
         logger.info("[catalog] Loaded anomaly-detector recipe")
+
+    # ── smart-energy ───────────────────────────────────────────────────
+    code = _load_recipe("smart_energy_agent.py")
+    if code:
+        catalog["smart-energy"] = {
+            "name": "smart-energy",
+            "type": "dynamic",
+            "description": "LLM-powered energy brain for smart plugs via Home Assistant (brand-agnostic). "
+            "Talk to it in plain English: say 'import my plugs' and it scans HA, shows what "
+            "it found with live wattage, and asks which to monitor — no JSON needed. "
+            "Monitors live wattage, tracks per-plug kWh and cost (today/week/month), and can "
+            "conditionally power down plugs via user-requested rules. Plugs marked 'locked' "
+            "(AC, servers, AI rigs) are NEVER turned off — hard-guarded in code.",
+            "capabilities": [
+                "energy_monitoring",
+                "smart_plug",
+                "cost_tracking",
+                "home_assistant",
+                "power_monitoring",
+                "tapo",
+                "shelly",
+            ],
+            "install": [],
+            "input_schema": {
+                "text": "str  — PRIMARY interface: plain-English request. 'import my plugs' "
+                "starts conversational onboarding; 'how much did the AC cost today?' "
+                "asks a question; 'status' shows an overview.",
+                "action": "str  — optional structured command for power users: status|cost|report|"
+                "add_plug|list_plugs|remove_plug|add_rule|list_rules|remove_rule|set_rate",
+                "plug": "dict — plug config: {name, ha_entity_switch, ha_entity_power, "
+                "protection: locked|auto_off_on_idle|manual} (for add_plug)",
+                "rule": "dict — rule config, e.g. {type: auto_off_on_idle, plug, "
+                "idle_threshold_watts, idle_delay_s} (for add_rule)",
+                "rate": "float — €/kWh (for set_rate, default 0.138)",
+            },
+            "output_schema": {
+                "plugs_monitored": "int",
+                "active_rules": "int",
+                "total_watts": "float",
+            },
+            "poll_interval": 30,
+            "code": code,
+        }
+        logger.info("[catalog] Loaded smart-energy recipe")
 
     # ── manual-agent ───────────────────────────────────────────────────
     code = _load_recipe("manual_agent.py")
     if code:
         catalog["manual-agent"] = {
-            "name":         "manual-agent",
-            "type":         "dynamic",
-            "description":  "Searches the internet for device manuals, downloads PDFs, extracts text, and answers questions using the agent's LLM.",
+            "name": "manual-agent",
+            "type": "dynamic",
+            "description": "Searches the internet for device manuals, downloads PDFs, extracts text, and answers questions using the agent's LLM.",
             "capabilities": ["web_search", "pdf_extraction", "qa_assistant", "device_manuals"],
-            "install":      ["httpx", "pdfplumber", "duckduckgo_search"],
+            "install": ["httpx", "pdfplumber", "duckduckgo_search"],
             "input_schema": {
-                "action":   "str  — load_manual|ask|status|clear",
-                "device":   "str  — The device model name or query (for load_manual)",
+                "action": "str  — load_manual|ask|status|clear",
+                "device": "str  — The device model name or query (for load_manual)",
                 "question": "str  — The question to ask about the loaded manual (for ask)",
             },
             "output_schema": {
-                "success":  "bool — True if operation succeeded",
-                "device":   "str  — Device model name",
-                "url":      "str  — URL of the downloaded manual PDF",
-                "pages":    "int  — Number of pages in the PDF",
-                "chars":    "int  — Character count of extracted text",
-                "preview":  "str  — Preview snippet of text",
-                "answer":   "str  — LLM generated answer to your question",
+                "success": "bool — True if operation succeeded",
+                "device": "str  — Device model name",
+                "url": "str  — URL of the downloaded manual PDF",
+                "pages": "int  — Number of pages in the PDF",
+                "chars": "int  — Character count of extracted text",
+                "preview": "str  — Preview snippet of text",
+                "answer": "str  — LLM generated answer to your question",
             },
-            "poll_interval": 3600, # Event-driven via direct actions/messages
-            "code":          code,
+            "poll_interval": 3600,  # Event-driven via direct actions/messages
+            "code": code,
         }
         logger.info("[catalog] Loaded manual-agent recipe")
 
-    # ── maddpg-fleet ───────────────────────────────────────────────────
-    code = _load_recipe("maddpg_fleet_agent.py")
+    # ── reachy-mini ──────────────────────────────────────────────────────────
+    code = _load_recipe("reachy_mini_agent.py")
     if code:
-        catalog["maddpg-fleet"] = {
-            "name":         "maddpg-fleet",
-            "type":         "dynamic",
-            "description":  "Deploys the trained MADDPG OfficeMedium policy as a fleet of per-zone inference agents (one per zone). Inference only — loads model.pt + normalizer.npz, no retraining.",
-            "capabilities": ["sinergym", "maddpg", "rl_inference", "multi_agent",
-                             "building_control", "energy_optimization"],
-            "install":      ["torch", "numpy", "aiomqtt"],
+        catalog["reachy-mini"] = {
+            "name": "reachy-mini",
+            "type": "dynamic",
+            "description": (
+                "Controls a Reachy Mini: wake/sleep, head pose, antennas, gaze, "
+                "speech, gestures, and optional Home Assistant actions."
+            ),
+            "docs": (
+                "Setup:\n"
+                "1. Install the recipe dependencies when prompted, or preinstall: "
+                "pip install reachy-mini numpy edge-tts.\n"
+                "2. For Reachy Mini Wireless, put the robot and Wactorz host on the "
+                "same WiFi network. Stop any Hugging Face app running on the robot.\n"
+                "3. For Reachy Mini Lite, start the local daemon first: "
+                "reachy-mini-daemon -p <serial_port>.\n"
+                "4. Spawn the agent: @catalog spawn reachy-mini.\n"
+                "5. If discovery is flaky, pin the Wireless host by publishing "
+                '{"robot_host": "192.168.1.42"} to custom/reachy/config, then restart '
+                "the agent.\n"
+                "\n"
+                "Try:\n"
+                "- wake up\n"
+                "- do a happy gesture\n"
+                "- wiggle your antennas\n"
+                "- look left\n"
+                "- say hello\n"
+                "- turn on the light and nod\n"
+                "\n"
+                "For structured control, send a dict with cmd wake, sleep, pose, "
+                "antennas, look_at, emotion, say, volume, ha, bind, unbind, or stop."
+            ),
+            "capabilities": [
+                "robot",
+                "reachy",
+                "reachy_mini",
+                "embodied",
+                "motion",
+                "head",
+                "antennas",
+                "gaze",
+                "emotion",
+                "actuator",
+                "expressive",
+                "human_robot_interaction",
+            ],
+            "install": ["reachy-mini", "numpy", "edge-tts"],
             "input_schema": {
-                "action":          "str  — launch | stop | status",
-                "env_id":          "str  — Sinergym env ID (must match the bridge)",
-                "model_path":      "str  — absolute path to trained model.pt",
-                "normalizer_path": "str  — absolute path to normalizer.npz",
-                "zones":           "list — optional explicit zone names in bridge order",
-                "info_timeout":    "float — seconds to wait for env_info, default 30",
-                "infer_dir":       "str  — dir holding maddpg_infer.py; default = model.pt dir",
+                "cmd": "str  — wake|sleep|pose|antennas|look_at|look_pixel|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
+                "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
+                "voice": "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
+                "gain_db": "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
+                "loud": "bool  — cmd=say; default true (compress+limit file to max); false plays raw quiet TTS",
+                "preset": "str   — speaking mode (cmd=volume): whisper(70)|normal(85)|louder(93)|presenter(100)",
+                "level": "float — 0-100 robot speaker volume (cmd=volume); 100=loudest, 0=quietest (daemon /api/volume/set)",
+                "delta": "float — relative volume change in level points (cmd=volume), e.g. +15 / -25",
+                "mute": "bool  — cmd=volume; true silences (remembers level), false restores it",
+                "request": "str   — natural-language Home Assistant request (cmd=ha); routed through main for device control, home-assistant-agent for automations/info",
+                "duration": "float — motion duration in seconds (pose/antennas/look_at)",
+                "method": "str  — interpolation: linear|minjerk|ease_in_out|cartoon (default minjerk)",
+                "yaw": "float — head yaw, degrees by default",
+                "pitch": "float — head pitch, degrees by default",
+                "roll": "float — head roll, degrees by default",
+                "x": "float — head x (mm) or look_at world x (m)",
+                "y": "float — head y (mm) or look_at world y (m)",
+                "z": "float — head z (mm) or look_at world z (m)",
+                "antennas": "list  — [right, left] angles, degrees by default",
+                "left": "float — antenna left (cmd=antennas convenience)",
+                "right": "float — antenna right (cmd=antennas convenience)",
+                "u": "int   — pixel u for look_pixel",
+                "v": "int   — pixel v for look_pixel",
+                "name": "str   — emotion clip name (e.g. curious1, success1)",
+                "topic": "str   — MQTT topic to bind/unbind",
+                "when": "dict  — dotted-path equality matcher for bindings",
+                "do": "dict  — payload to dispatch when binding fires",
+                "id": "str   — optional correlation id; ack on custom/reachy/cmd_result/{id}",
             },
             "output_schema": {
-                "ok":       "bool",
-                "children": "list — spawned zone agent names",
-                "zones":    "list",
-                "message":  "str",
+                "ok": "bool",
+                "cmd": "str",
+                "duration_s": "float — wall-clock motion time",
+                "error": "str|null",
             },
-            "poll_interval": 3600,
-            "code":          code,
+            "poll_interval": 5,
+            "code": code,
         }
-        logger.info("[catalog] Loaded maddpg-fleet recipe")
+        logger.info("[catalog] Loaded reachy-mini recipe")
 
-    # ── aif-fleet ──────────────────────────────────────────────────────
-    code = _load_recipe("aif_fleet_agent.py")
+    # ── timeseries-collector ───────────────────────────────────────────────
+    code = _load_recipe("timeseries_collector_agent.py")
     if code:
-        catalog["aif-fleet"] = {
-            "name":         "aif-fleet",
-            "type":         "dynamic",
-            "description":  "Deploys the trained Factored Active Inference OfficeMedium policy as a fleet of per-zone inference agents (one per zone). Inference only — slices aif_model.pkl per zone (freeze_B), no retraining. Publishes normalized [-1,1] actions, so it is wire-compatible with the MADDPG bridge.",
-            "capabilities": ["sinergym", "active_inference", "pymdp", "aif",
-                             "rl_inference", "multi_agent", "building_control",
-                             "energy_optimization"],
-            "install":      ["torch", "numpy", "aiomqtt"],
+        catalog["timeseries-collector"] = {
+            "name": "timeseries-collector",
+            "type": "dynamic",
+            "description": "Collects device data from MQTT (sensors, detections, HA state changes, Sinergym) and writes it to SQLite time-series tables for historical queries and ML training. Batched writes, auto-pruned by retention window. No LLM.",
+            "capabilities": [
+                "timeseries",
+                "data_collection",
+                "sensor_history",
+                "ml_data",
+                "mqtt_subscriber",
+                "monitoring",
+            ],
+            "install": ["aiomqtt"],
             "input_schema": {
-                "action":       "str  — launch | stop | status",
-                "env_id":       "str  — Sinergym env ID (must match the bridge)",
-                "model_path":   "str  — absolute path to trained aif_model.pkl",
-                "zones":        "list — optional explicit zone names in bridge order",
-                "info_timeout": "float — seconds to wait for env_info, default 30",
-                "infer_dir":    "str  — dir with aif_infer.py + pymdp_office_v7_torch.py; default = aif_model.pkl dir",
-                "aif_src_dir":  "str  — dir holding pymdp_office_v7_torch.py if not next to aif_infer.py; default = infer_dir",
-                "heat_low":     "float — htg action min (must match trained env)",
-                "heat_high":    "float — htg action max (must match trained env)",
-                "cool_low":     "float — clg action min (must match trained env)",
-                "cool_high":    "float — clg action max (must match trained env)",
-                "policy_len":   "int  — AIF planning horizon, default 4",
-                "freeze_B":     "bool — False keeps adapting B_T online (matches v7 eval default, reproduces the deploy baseline); True = frozen inference",
-                "lr_pB":        "float — Dirichlet learning rate when freeze_B is False, default 1.0",
-                "publish_mode": "str  — normalized | setpoints, default normalized",
+                "action": "str  — stats|prune|flush",
+                "topics": "list  — MQTT topic patterns to collect (default: sensors/#, detections, HA state, sinergym)",
+                "batch_interval": "float — seconds between SQLite flushes (default: 5.0)",
+                "batch_size": "int  — buffered-row hint before flush (default: 200)",
+                "retention_days": "int  — auto-prune data older than N days (default: 90)",
+                "prune_interval_hours": "float — hours between prune passes (default: 6.0)",
             },
             "output_schema": {
-                "ok":       "bool",
-                "children": "list — spawned zone agent names",
-                "zones":    "list",
-                "message":  "str",
+                "total_received": "int  — MQTT messages seen",
+                "total_written": "int  — rows written to SQLite",
+                "buffer_sizes": "dict — pending rows per buffer",
+                "table_rows": "dict — row counts per table",
+                "retention_days": "int",
             },
             "poll_interval": 3600,
-            "code":          code,
+            "code": code,
         }
-        logger.info("[catalog] Loaded aif-fleet recipe")
-
-    # ── aif-controller (single-batch, exact v7 parity) ─────────────────
-    code = _load_recipe("aif_controller_agent.py")
-    if code:
-        catalog["aif-controller"] = {
-            "name":         "aif-controller",
-            "type":         "dynamic",
-            "description":  "Single-agent AIF OfficeMedium controller: runs all zones as one batch (exact v7 parity) and publishes per-zone normalized actions. Use instead of aif-fleet when bit-exact parity with a full-batch v7 run matters.",
-            "capabilities": ["sinergym", "active_inference", "pymdp", "aif",
-                             "rl_inference", "building_control", "energy_optimization"],
-            "install":      ["torch", "numpy", "aiomqtt"],
-            "input_schema": {
-                "action":          "str  — launch | stop | status",
-                "env_id":          "str  — Sinergym env ID (must match the bridge)",
-                "model_path":      "str  — absolute path to trained aif_model.pkl",
-                "zones":           "list — explicit zone names in bridge order",
-                "infer_dir":       "str  — dir with aif_infer.py + pymdp_office_v7_torch.py",
-                "aif_src_dir":     "str  — dir holding pymdp_office_v7_torch.py if separate",
-                "heat_low":        "float", "heat_high": "float",
-                "cool_low":        "float", "cool_high": "float",
-                "policy_len":      "int  — AIF planning horizon (match training!)",
-                "energy_weight":   "float — EFE energy scale (match training!)",
-                "comfort_weight":  "float", "epistemic_weight": "float",
-                "unocc_gate":      "float", "deadband_weight": "float",
-                "pB_prior_scale":  "float", "override": "str",
-                "freeze_B":        "bool — match v7 run (default eval = False)",
-                "lr_pB":           "float", "publish_mode": "str — normalized | setpoints",
-            },
-            "output_schema": {"ok": "bool", "zones": "list", "message": "str"},
-            "poll_interval": 3600,
-            "code":          code,
-        }
-        logger.info("[catalog] Loaded aif-controller recipe")
-
-    code = _load_recipe("sinergym_hsml_agent.py")
-    if code:
-        catalog["sinergym-hsml"] = {
-            "name":         "sinergym-hsml",
-            "type":         "dynamic",
-            "description":  "Answers natural-language questions about the Sinergym "
-                            "simulation (agent decisions, setpoints, zone temperatures, "
-                            "occupancy, outdoor conditions) by generating SPARQL over the "
-                            "Fuseki/HSML store and replying in plain language.",
-            "capabilities": ["sinergym", "fuseki", "sparql", "question_answering",
-                            "hsml", "provenance", "building_analytics"],
-            "install":      [],   # uses stdlib urllib + main's LLM provider
-            "input_schema": {
-                "question":        "str — a plain-English question about the building",
-                "action":          "str — optional: refresh | config",
-                "fuseki_url":      "str — optional override (default host.docker.internal:3030)",
-                "fuseki_dataset":  "str — optional (default 'sinergym')",
-                "fuseki_user":     "str — optional",
-                "fuseki_password": "str — optional",
-            },
-            "output_schema": {
-                "ok":     "bool",
-                "answer": "str — natural-language answer",
-                "sparql": "str — the query that was run (for transparency)",
-                "rows":   "int — number of result rows",
-            },
-            "poll_interval": 3600,
-            "code":          code,
-        }
-        logger.info("[catalog] Loaded sinergym-hsml recipe")
-        
-    code = _load_recipe("sinergym_schema_agent.py")
-    if code:
-      catalog["sinergym-schema"] = {
-          "name":         "sinergym-schema",
-          "type":         "dynamic",
-          "description":  "Authoritative map of the Sinergym I/O layout: which "
-                          "observation index is which variable, per-zone observation "
-                          "indices, action variables and their bounds, reward "
-                          "components, and info-dict keys. Consult this agent before "
-                          "interpreting raw obs/action arrays from MQTT or Fuseki.",
-          "capabilities": ["sinergym", "schema", "observation_layout",
-                           "observation_indices", "action_space", "reward_components",
-                           "introspection", "metadata"],
-          "install":      [],   # stdlib only; learns the schema from env_info
-          "input_schema": {
-              "action": "str — optional: obs | zone | actions | reward | info",
-              "zone":   "str — zone name (with action 'zone')",
-              "text":   "str — or a plain question, e.g. 'what is obs index 12?'",
-              "env_id": "str — optional, which env to listen to",
-          },
-          "output_schema": {"answer": "str — the requested schema info"},
-          "poll_interval": 3600,
-          "code":          code,
-      }
-      logger.info("[catalog] Loaded sinergym-schema recipe")
-
-
-    code = _load_recipe("sinergym_labeler_agent.py")
-    if code:
-        catalog["sinergym-labeler"] = {
-            "name":         "sinergym-labeler",
-            "type":         "dynamic",
-            "description":  "Republishes Sinergym observations as name-keyed dicts on "
-                            "MQTT (sinergym/env/officeMedium-multiagent/observation/labeled) so other agents can read obs "
-                            "by variable name instead of array index. Pure data-plane; "
-                            "no task delegation needed.",
-            "capabilities": ["sinergym", "observation", "labeled_observation",
-                            "mqtt", "schema", "data_plane"],
-            "install":      [],
-            "input_schema": {
-                "env_id": "str — optional, which env to label",
-                "action": "str — optional: status",
-            },
-            "output_schema": {"status": "str"},
-            "poll_interval": 3600,
-            "code":          code,
-        }
-        logger.info("[catalog] Loaded sinergym-labeler recipe")
-    
-    code = _load_recipe("sinergym_anomaly_agent.py")
-    if code:
-        catalog["sinergym-anomaly"] = {
-            "name":         "sinergym-anomaly",
-            "type":         "dynamic",
-            "description":  "Live anomaly detection on the Sinergym observation stream "
-                            "using a pre-trained forecast detector. Subscribes to the "
-                            "global obs topic, flags hvac_fault / sensor_drift (and occ / "
-                            "weather) events, publishes alerts on .../anomaly, and records "
-                            "them in Fuseki with provenance for precision/recall analysis.",
-            "capabilities": ["sinergym", "anomaly_detection", "fault_detection",
-                            "monitoring", "forecast", "hvac_fault", "sensor_drift"],
-            "install":      ["torch", "numpy"],   # detector requires PyTorch
-            "input_schema": {
-                "action":        "str — optional: status | reset | config",
-                "detector_path": "str — path to the trained .pkl",
-                "infer_dir":     "str — dir containing forecast_anomaly_detector.py + .pkl",
-                "env_id":        "str — optional",
-                "fuseki_url":    "str — optional",
-            },
-            "output_schema": {"status": "str"},
-            "poll_interval": 3600,
-            "code":          code,
-        }
-        logger.info("[catalog] Loaded sinergym-anomaly recipe")
-
-    # ── aif-anomaly ────────────────────────────────────────────────────
-    code = _load_recipe("aif_anomaly_agent.py")
-    if code:
-        catalog["aif-anomaly"] = {
-            "name":         "aif-anomaly",
-            "type":         "dynamic",
-            "description":  "Live anomaly detection on the Sinergym observation "
-                            "stream using the AIF-trained detector "
-                            "(detector_aif_v6.pkl). Collapses consecutive alerts "
-                            "into episodes (burst window) and labels each TP/FP "
-                            "live from the bridge's injector ground-truth, "
-                            "publishing episode events on .../anomaly_episode with "
-                            "a running precision/recall scoreboard, plus Fuseki "
-                            "records. '@aif-anomaly report' dumps the scoreboard.",
-            "capabilities": ["sinergym", "anomaly_detection", "fault_detection",
-                            "monitoring", "active_inference", "aif", "hvac_fault",
-                            "sensor_drift"],
-            "install":      ["torch", "numpy"],
-            "input_schema": {
-                "action":          "str — optional: status | report | reset | config",
-                "detector_path":   "str — path to detector_aif_v6.pkl",
-                "detector_module": "str — module exposing the detector class",
-                "detector_class":  "str — detector class name (has .load/.update)",
-                "infer_dir":       "str — dir with the detector module + .pkl",
-                "env_id":          "str — optional",
-                "fuseki_url":      "str — optional",
-                "burst_steps":     "int — alerts within this gap collapse into one episode (default 16)",
-                "gt_grace":        "int — steps after a GT window a detection still counts TP (default 12)",
-                "publish_raw":     "bool — also publish every raw per-step alert (default False)",
-                "score_live":      "bool — label episodes TP/FP from injector ground-truth (default True)",
-            },
-            "output_schema": {"status": "str"},
-            "poll_interval": 3600,
-            "code":          code,
-        }
-        logger.info("[catalog] Loaded aif-anomaly recipe")
+        logger.info("[catalog] Loaded timeseries-collector recipe")
 
     return catalog
 
@@ -508,9 +455,9 @@ def _build_catalog() -> dict:
 # CATALOG AGENT
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class CatalogAgent(Actor):
-    """
-    Pre-built agent recipe library.
+    """Pre-built agent recipe library.
     Spawns any catalog agent on request by delegating to main's spawn pipeline.
     """
 
@@ -518,7 +465,7 @@ class CatalogAgent(Actor):
         kwargs.setdefault("name", "catalog")
         super().__init__(**kwargs)
         self.protected = True
-        self._catalog  = _build_catalog()
+        self._catalog = _build_catalog()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -527,9 +474,11 @@ class CatalogAgent(Actor):
         logger.info(f"[{self.name}] Catalog ready — {len(names)} recipe(s): {names}")
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
-            {"type": "log",
-             "message": f"Catalog ready: {', '.join(names)}",
-             "timestamp": time.time()},
+            {
+                "type": "log",
+                "message": f"Catalog ready: {', '.join(names)}",
+                "timestamp": time.time(),
+            },
         )
 
         await self.publish_manifest(
@@ -539,39 +488,44 @@ class CatalogAgent(Actor):
                 f"Available: {', '.join(names)}"
             ),
             capabilities=["spawn_catalog_agent", "list_catalog_agents", "agent_catalog"],
-            input_schema={"action": "str — 'spawn' | 'list' | 'info'",
-                          "agent":  "str — agent name for spawn/info actions"},
-            output_schema={"ok": "bool", "message": "str",
-                           "agents": "list", "recipe": "dict"},
+            input_schema={
+                "action": "str — 'spawn' | 'list' | 'info'",
+                "agent": "str — agent name for spawn/info actions",
+            },
+            output_schema={"ok": "bool", "message": "str", "agents": "list", "recipe": "dict"},
         )
 
         # Inject recipe manifests directly into main's _agent_manifests dict
-        main = None
+        main: MainActor | None = None
         for _ in range(20):
-            main = self._registry.find_by_name("main") if self._registry else None
+            main = cast(
+                "MainActor | None", self._registry.find_by_name("main") if self._registry else None
+            )
             if main and hasattr(main, "_agent_manifests"):
                 break
             await asyncio.sleep(0.5)
 
         for name, recipe in self._catalog.items():
             manifest = {
-                "name":          name,
-                "actor_id":      f"catalog.{name}",
-                "description":   recipe.get("description", ""),
-                "capabilities":  recipe.get("capabilities", []),
-                "input_schema":  recipe.get("input_schema",  {}),
+                "name": name,
+                "actor_id": f"catalog.{name}",
+                "description": recipe.get("description", ""),
+                "capabilities": recipe.get("capabilities", []),
+                "input_schema": recipe.get("input_schema", {}),
                 "output_schema": recipe.get("output_schema", {}),
-                "publishes":     [],
-                "spawnable":     True,
-                "catalog":       self.name,
-                "timestamp":     time.time(),
+                "publishes": [],
+                "spawnable": True,
+                "catalog": self.name,
+                "timestamp": time.time(),
             }
 
             if main and hasattr(main, "_agent_manifests"):
                 main._agent_manifests[name] = manifest
                 logger.info(f"[{self.name}] Injected manifest for '{name}' into main")
             else:
-                logger.warning(f"[{self.name}] main not ready — could not inject manifest for '{name}'")
+                logger.warning(
+                    f"[{self.name}] main not ready — could not inject manifest for '{name}'"
+                )
 
     def _current_task_description(self) -> str:
         return f"catalog ({len(self._catalog)} recipes)"
@@ -583,11 +537,13 @@ class CatalogAgent(Actor):
             return
 
         payload = msg.payload if msg.payload is not None else {}
-        result  = await self._handle(payload)
+        result = await self._handle(payload)
 
-        task_id = payload.get("task") or payload.get("_task_id") if isinstance(payload, dict) else None
+        task_id = (
+            payload.get("task") or payload.get("_task_id") if isinstance(payload, dict) else None
+        )
         if task_id:
-            result["task"]     = task_id
+            result["task"] = task_id
             result["_task_id"] = task_id
 
         target = msg.reply_to or msg.sender_id
@@ -611,14 +567,16 @@ class CatalogAgent(Actor):
         if isinstance(payload, str):
             text = payload.strip()
         elif isinstance(payload, dict):
-            text = (payload.get("text") or payload.get("message") or payload.get("query") or "").strip()
+            text = (
+                payload.get("text") or payload.get("message") or payload.get("query") or ""
+            ).strip()
         else:
             text = ""
 
         if text:
             parts = text.split(None, 1)
-            cmd   = parts[0].lower()
-            arg   = parts[1].strip() if len(parts) > 1 else ""
+            cmd = parts[0].lower()
+            arg = parts[1].strip() if len(parts) > 1 else ""
             if cmd == "list":
                 return self._action_list()
             if cmd == "info":
@@ -655,7 +613,7 @@ class CatalogAgent(Actor):
             return norm
 
         # 3. Strip trailing '-agent' suffix
-        stripped = norm[:-6] if norm.endswith("-agent") else norm
+        stripped = norm.removesuffix("-agent")
         if stripped and stripped in self._catalog:
             return stripped
 
@@ -676,15 +634,17 @@ class CatalogAgent(Actor):
     def _action_list(self) -> dict:
         agents = []
         for name, recipe in self._catalog.items():
-            agents.append({
-                "name":         name,
-                "description":  recipe.get("description", ""),
-                "capabilities": recipe.get("capabilities", []),
-            })
+            agents.append(
+                {
+                    "name": name,
+                    "description": recipe.get("description", ""),
+                    "capabilities": recipe.get("capabilities", []),
+                }
+            )
         return {
-            "ok":      True,
+            "ok": True,
             "message": f"{len(agents)} agent(s) available in catalog",
-            "agents":  agents,
+            "agents": agents,
         }
 
     def _action_info(self, name: str) -> dict:
@@ -695,7 +655,7 @@ class CatalogAgent(Actor):
         if not recipe:
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
-        safe = {k: v for k, v in recipe.items() if k != "code"}
+        safe = {k: v for k, v in recipe.items() if k not in {"code", "factory"}}
         return {"ok": True, "message": f"Recipe for '{resolved}'", "recipe": safe}
 
     async def _action_spawn(self, name: str, payload: dict) -> dict:
@@ -704,7 +664,7 @@ class CatalogAgent(Actor):
 
         resolved = self._resolve_name(name)
         recipe = self._catalog.get(resolved) if resolved else None
-        if not recipe:
+        if not resolved or not recipe:
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
 
@@ -722,6 +682,32 @@ class CatalogAgent(Actor):
         )
 
         try:
+            main = cast("MainActor | None", self._registry.find_by_name("main"))
+            llm_provider = getattr(main, "llm", None) if main else None
+            persistence_dir = (
+                str(getattr(main, "_persistence_dir", pathlib.Path("./state/main")).parent)
+                if main
+                else "./state"
+            )
+
+            if recipe.get("type") == "native":
+                factory = recipe.get("factory")
+                if not factory:
+                    return {"ok": False, "message": f"Native recipe '{resolved}' has no factory"}
+                native_kwargs = {"name": resolved, "persistence_dir": persistence_dir}
+                if llm_provider:
+                    native_kwargs["llm_provider"] = llm_provider
+                actor = await self.spawn(factory, **native_kwargs)
+                if actor:
+                    msg = f"'{resolved}' spawned and running"
+                    logger.info(f"[{self.name}] {msg}")
+                    await self._mqtt_publish(
+                        f"agents/{self.actor_id}/logs",
+                        {"type": "log", "message": msg, "timestamp": time.time()},
+                    )
+                    return {"ok": True, "message": msg, "agent": resolved}
+                return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
+
             from .dynamic_agent import DynamicAgent
 
             install = recipe.get("install", [])
@@ -730,22 +716,23 @@ class CatalogAgent(Actor):
                 # Avoids a 120s installer wait when deps were installed in a
                 # previous session — same logic as main._spawn_dynamic_agent.
                 import importlib as _importlib
+
                 # Map pip package names to their actual import names where they differ.
                 _IMPORT_NAME_MAP = {
-                    "scikit-learn":      "sklearn",
+                    "scikit-learn": "sklearn",
                     "stable-baselines3": "stable_baselines3",
-                    "pillow":            "PIL",
-                    "pyyaml":            "yaml",
-                    "pymupdf":           "fitz",
-                    "beautifulsoup4":    "bs4",
-                    "python-dateutil":   "dateutil",
+                    "pillow": "PIL",
+                    "pyyaml": "yaml",
+                    "pymupdf": "fitz",
+                    "beautifulsoup4": "bs4",
+                    "python-dateutil": "dateutil",
                     "typing-extensions": "typing_extensions",
-                    "opencv-python":     "cv2",
-                    "scikit-image":      "skimage",
+                    "opencv-python": "cv2",
+                    "scikit-image": "skimage",
                 }
                 needed = []
                 for pkg in install:
-                    pip_name    = pkg.split("[")[0].lower()
+                    pip_name = pkg.split("[")[0].lower()
                     import_name = _IMPORT_NAME_MAP.get(pip_name) or pip_name.replace("-", "_")
                     try:
                         _importlib.import_module(import_name)
@@ -757,21 +744,25 @@ class CatalogAgent(Actor):
                     if installer:
                         logger.info(f"[{self.name}] Installing missing deps for '{name}': {needed}")
                         import uuid as _uuid
+
                         task_id = f"cat_install_{_uuid.uuid4().hex[:8]}"
-                        future  = asyncio.get_running_loop().create_future()
-                        main = self._registry.find_by_name("main") if self._registry else None
+                        future = asyncio.get_running_loop().create_future()
+                        main = cast(
+                            "MainActor | None",
+                            self._registry.find_by_name("main") if self._registry else None,
+                        )
                         if main:
                             main._result_futures[task_id] = future
                         # Send with reply_to=main.actor_id so the installer's RESULT goes
                         # directly to main where the future is registered.
                         install_msg = Message(
-                            type      = MessageType.TASK,
-                            sender_id = self.actor_id,
-                            reply_to  = main.actor_id if main else self.actor_id,
-                            payload   = {
-                                "action":   "install",
+                            type=MessageType.TASK,
+                            sender_id=self.actor_id,
+                            reply_to=main.actor_id if main else self.actor_id,
+                            payload={
+                                "action": "install",
                                 "packages": needed,
-                                "task":     task_id,
+                                "task": task_id,
                                 "_task_id": task_id,
                             },
                         )
@@ -779,27 +770,29 @@ class CatalogAgent(Actor):
                         try:
                             await asyncio.wait_for(future, timeout=120.0)
                         except asyncio.TimeoutError:
-                            logger.warning(f"[{self.name}] Install timeout for '{name}' — proceeding anyway")
+                            logger.warning(
+                                f"[{self.name}] Install timeout for '{name}' — proceeding anyway"
+                            )
                     else:
-                        logger.warning(f"[{self.name}] installer not found — skipping dep install for '{name}'")
+                        logger.warning(
+                            f"[{self.name}] installer not found — skipping dep install for '{name}'"
+                        )
                 else:
-                    logger.info(f"[{self.name}] All deps for '{resolved}' already installed — skipping installer")
-
-            main = self._registry.find_by_name("main")
-            llm_provider    = getattr(main, "llm", None) if main else None
-            persistence_dir = str(getattr(main, "_persistence_dir", "./state/main").parent) if main else "./state"
+                    logger.info(
+                        f"[{self.name}] All deps for '{resolved}' already installed — skipping installer"
+                    )
 
             actor = await self.spawn(
                 DynamicAgent,
-                name            = resolved,
-                code            = recipe["code"],
-                poll_interval   = float(recipe.get("poll_interval", 3600)),
-                description     = recipe.get("description", ""),
-                input_schema    = recipe.get("input_schema", {}),
-                output_schema   = recipe.get("output_schema", {}),
-                llm_provider    = llm_provider,
-                persistence_dir = persistence_dir,
-                trusted         = True,   # catalog agents are pre-built — skip safety validator
+                name=resolved,
+                code=recipe["code"],
+                poll_interval=float(recipe.get("poll_interval", 3600)),
+                description=recipe.get("description", ""),
+                input_schema=recipe.get("input_schema", {}),
+                output_schema=recipe.get("output_schema", {}),
+                llm_provider=llm_provider,
+                persistence_dir=persistence_dir,
+                trusted=True,  # catalog agents are pre-built — skip safety validator
             )
 
             if actor:
@@ -816,18 +809,17 @@ class CatalogAgent(Actor):
                     {"type": "log", "message": msg, "timestamp": time.time()},
                 )
                 return {"ok": True, "message": msg, "agent": resolved}
-            else:
-                return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
+            return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
         except Exception as e:
             msg = f"Failed to spawn '{resolved}': {e}"
             logger.error(f"[{self.name}] {msg}")
             return {"ok": False, "message": msg}
 
-    # ── Public API ─────────────────────────────────────────────────────────────
+    # Public API ─────────────────────────────────────────────────────────────
 
     def list_recipes(self) -> list[str]:
         return list(self._catalog.keys())
 
-    def get_recipe(self, name: str) -> Optional[dict]:
+    def get_recipe(self, name: str) -> dict | None:
         return self._catalog.get(name)

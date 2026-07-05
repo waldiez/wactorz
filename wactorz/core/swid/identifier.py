@@ -14,9 +14,9 @@ self-certifying DID whose id is a base58 hash of a signed Cryptographic Event
 Log, with a mandatory HSTP service endpoint and Multikey verification. This
 module is the SYNAPSE pilot's *pragmatic, human-readable, registry-authoritative*
 identifier -- deliberately a different scheme. Spec for the eventual real thing:
-https://spatial-web-foundation.github.io/swf-std-5-did-swid-spec/documents/document.html 
-So it uses its own ``swid:`` prefix and does **not** claim the ``did:swid:`` namespace, 
-which stays reserved for a future conformant implementation. A real ``did:swid:z<scid>`` 
+https://spatial-web-foundation.github.io/swf-std-5-did-swid-spec/documents/document.html
+So it uses its own ``swid:`` prefix and does **not** claim the ``did:swid:`` namespace,
+which stays reserved for a future conformant implementation. A real ``did:swid:z<scid>``
 therefore does not parse here (single segment, not three) -- by design, so the two can
 coexist. Migration seam: entities keep their stable ``natural_key`` and mint
 deterministically, so real SCIDs can be minted alongside later without a churn.
@@ -105,13 +105,10 @@ def normalize_segment(text: str) -> str:
     segment = text.strip().lower()
     segment = re.sub(r"[\s_]+", "-", segment)
     segment = re.sub(r"[^a-z0-9\-.]", "", segment)
-    segment = re.sub(r"-{2,}", "-", segment).strip("-")
-    return segment
+    return re.sub(r"-{2,}", "-", segment).strip("-")
 
 
-def fingerprint(
-    namespace: str, natural_key: str, length: int = DEFAULT_FINGERPRINT_LEN
-) -> str:
+def fingerprint(namespace: str, natural_key: str, length: int = DEFAULT_FINGERPRINT_LEN) -> str:
     """Deterministic base32-lower fingerprint of a stable natural key.
 
     Scoped by ``namespace`` so the same key in two domains cannot collide.
@@ -119,10 +116,7 @@ def fingerprint(
     Home Assistant device id) -- never a display name.
     """
     if not (_MIN_FINGERPRINT_LEN <= length <= _MAX_FINGERPRINT_LEN):
-        msg = (
-            "fingerprint length must be in "
-            f"[{_MIN_FINGERPRINT_LEN}, {_MAX_FINGERPRINT_LEN}]"
-        )
+        msg = f"fingerprint length must be in [{_MIN_FINGERPRINT_LEN}, {_MAX_FINGERPRINT_LEN}]"
         raise ValueError(msg)
     material = f"{namespace}\x00{natural_key}".encode()
     digest = hashlib.blake2s(material).digest()
@@ -131,9 +125,7 @@ def fingerprint(
 
 def _require_segment(value: str, field: str) -> str:
     if not value or not _SEGMENT_RE.match(value):
-        raise InvalidSwidError(
-            f"{field} must match [a-z0-9][a-z0-9._-]* (got {value!r})"
-        )
+        raise InvalidSwidError(f"{field} must match [a-z0-9][a-z0-9._-]* (got {value!r})")
     return value
 
 
@@ -190,9 +182,7 @@ def user_swid(namespace: str, user_key: str, *, name: str | None = None) -> Swid
     return generate_swid("user", namespace, user_key, name=name)
 
 
-def legacy_home_swid(
-    device_id: str, *, name: str | None = None, area: str | None = None
-) -> str:
+def legacy_home_swid(device_id: str, *, name: str | None = None, area: str | None = None) -> str:
     """Reproduce the incumbent Home Assistant SWID string byte-for-byte.
 
     Format: ``did:swid:home:<area>:<name>-<sha256(device_id)[:6]>`` with

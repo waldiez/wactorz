@@ -14,7 +14,7 @@ The registry is storage only; idempotent onboarding lives in
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Protocol, final, runtime_checkable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol, final, runtime_checkable
 
 if TYPE_CHECKING:
     from wactorz.fuseki import FusekiClient
@@ -63,9 +63,7 @@ class InMemoryRegistry:
     async def put(self, record: Record) -> None:
         existing = self._by_swid.get(record.swid)
         if existing is not None and existing.natural_key != record.natural_key:
-            raise SwidCollisionError(
-                f"{record.swid} already bound to {existing.natural_key!r}"
-            )
+            raise SwidCollisionError(f"{record.swid} already bound to {existing.natural_key!r}")
         self._by_swid[record.swid] = record
         self._by_key[record.natural_key] = record
 
@@ -130,9 +128,7 @@ class FusekiSwidRegistry:
         existing = await self.get(record.swid)
         if existing is not None:
             if existing.natural_key != record.natural_key:
-                raise SwidCollisionError(
-                    f"{record.swid} already bound to {existing.natural_key!r}"
-                )
+                raise SwidCollisionError(f"{record.swid} already bound to {existing.natural_key!r}")
             return  # idempotent: same swid + same key already stored
         insert = (
             f"PREFIX swid: <{self._ns}>\n"

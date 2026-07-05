@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Wactorz docs builder.
+"""Wactorz docs builder.
 
 Converts docs/*.md → static/docs/*.html using a custom dark template that matches
 the landing page (Chakra Petch + JetBrains Mono, #05080e background).
@@ -11,6 +10,7 @@ Usage:
     python3 scripts/build_docs.py --serve 8002  # custom port
     python3 scripts/build_docs.py --reload      # serve + watch docs/ for changes
 """
+
 import argparse
 import http.server
 import os
@@ -26,13 +26,14 @@ from pathlib import Path
 try:
     from watchdog.events import FileSystemEvent, FileSystemEventHandler
     from watchdog.observers import Observer
+
     HAS_WATCHDOG = True
 except ImportError:
     HAS_WATCHDOG = False
 
-ROOT   = Path(__file__).resolve().parents[1]
-DOCS   = ROOT / "docs"
-SITE   = ROOT / "static" / "docs"
+ROOT = Path(__file__).resolve().parents[1]
+DOCS = ROOT / "docs"
+SITE = ROOT / "static" / "docs"
 STATIC = ROOT / "static"
 
 
@@ -41,31 +42,51 @@ def _get_version() -> str:
     m = re.search(r'__version__\s*=\s*"([^"]+)"', version_file.read_text(encoding="utf-8"))
     return m.group(1) if m else "0.0.0"
 
+
 # ── Navigation definition ──────────────────────────────────────────────────────
 # Each section maps to a subdirectory under site/
 # Format: (label, subdir, [(page_label, md_filename), ...]) or (label, url)
 NAV = [
-    ("Guide", "guide", [
-        ("Installation", "development.md"),
-        ("Docker Hub",   "dockerhub.md"),
-        ("Deployment",   "deployment.md"),
-        ("Windows",      "windows.md"),
-        ("Architecture", "architecture.md"),
-        ("Agents",       "agents.md"),
-        ("Auto-Wiring",       "mqtt_auto_wiring.md"),
-        ("Interfaces",   "interfaces.md"),
-        ("Pipelines",      "pipelines.md"),
-        ("Remote Nodes",      "remote-nodes.md"),
-        ("Prometheus",       "prometheus.md"),
-    ]),
-    #("Reference", "reference", [
+    (
+        "Guide",
+        "guide",
+        [
+            ("Installation", "development.md"),
+            ("Docker Hub", "dockerhub.md"),
+            ("Architecture", "architecture.md"),
+            ("Agents", "agents.md"),
+            ("Auto-Wiring", "mqtt_auto_wiring.md"),
+            ("Interfaces", "interfaces.md"),
+            ("Pipelines", "pipelines.md"),
+            ("Remote Nodes", "remote-nodes.md"),
+            ("Prometheus", "prometheus.md"),
+        ],
+    ),
+    (
+        "Catalogue agents",
+        "catalogue",
+        [
+            ("Overview", "catalogue-agents.md"),
+            ("Google — setup & login", "catalogue-google-setup.md"),
+            ("Google Calendar", "catalogue-google-calendar.md"),
+            ("Gmail", "catalogue-gmail.md"),
+            ("Weather", "catalogue-weather.md"),
+            ("Smart Energy", "catalogue-smart-energy.md"),
+            ("Reachy Mini", "catalogue-reachy-mini.md"),
+            ("Anomaly Detector", "catalogue-anomaly-detector.md"),
+            ("Device Manuals", "catalogue-manual.md"),
+            ("Doc → PPTX", "catalogue-doc-to-pptx.md"),
+            ("Time-Series Collector", "catalogue-timeseries.md"),
+        ],
+    ),
+    # ("Reference", "reference", [
     #    ("REST & WebSocket API", "api.md"),
     #    ("Prometheus Monitoring", "prometheus.md"),
     #    ("MQTT Topics",          "mqtt_topics.md"),
     #    ("Python API",           "python-api.md"),
-    #]),
-    #("JS/TS Docs ↗",  "https://waldiez.github.io/wactorz/api/js/"),
-    #("Python Docs ↗", "https://waldiez.github.io/wactorz/api/python/"),
+    # ]),
+    # ("JS/TS Docs ↗",  "https://waldiez.github.io/wactorz/api/js/"),
+    # ("Python Docs ↗", "https://waldiez.github.io/wactorz/api/python/"),
 ]
 
 # ── HTML template ──────────────────────────────────────────────────────────────
@@ -98,9 +119,7 @@ TEMPLATE = """\
 
     /* ── Nav bar ── */
     .topbar{{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}}
-    .topbar-logo{{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}}
-    .logo-mark{{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}}
-    .logo-mark::before{{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}}
+    .topbar-logo{{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}}
     .topbar-links{{display:flex;gap:.1rem}}
     .topbar-links a{{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}}
     .topbar-links a:hover,.topbar-links a.active{{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}}
@@ -112,6 +131,12 @@ TEMPLATE = """\
     .sidebar{{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}}
     .sidebar-group{{margin-bottom:1.25rem}}
     .sidebar-label{{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{{display:none}}
+    details.sidebar-group > summary.sidebar-label::after{{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}}
+    details.sidebar-group[open] > summary.sidebar-label::after{{content:'▾'}}
+    details.sidebar-group > summary.sidebar-label:hover{{color:var(--muted-hi)}}
     .sidebar a{{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}}
     .sidebar a:hover{{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}}
     .sidebar a.active{{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}}
@@ -173,9 +198,7 @@ TEMPLATE = """\
 </head>
 <body>
 <header class="topbar">
-  <a href="{root}index.html" class="topbar-logo">
-    <div class="logo-mark"></div>Wactorz
-  </a>
+  <a href="{root}index.html" class="topbar-logo">Wactorz</a>
   <nav class="topbar-links">
     <a href="https://github.com/waldiez/wactorz">GitHub</a>
     <a href="https://pypi.org/project/wactorz/">PyPI</a>
@@ -202,32 +225,39 @@ TEMPLATE = """\
 
 # ── Markdown renderer ──────────────────────────────────────────────────────────
 
+
 def _ensure_markdown():
     try:
         import markdown  # noqa: F401
+
         return True
     except ImportError:
         print("[build_docs] installing markdown + pygments …")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
-                               "markdown", "pygments"])
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "-q", "markdown", "pygments"]
+        )
         return True
 
 
 def render_md(text: str) -> str:
     import markdown
     from markdown.extensions.codehilite import CodeHiliteExtension
-    md = markdown.Markdown(extensions=[
-        "fenced_code",
-        "tables",
-        "toc",
-        "admonition",
-        "attr_list",
-        CodeHiliteExtension(css_class="highlight", guess_lang=True, noclasses=False),
-    ])
+
+    md = markdown.Markdown(
+        extensions=[
+            "fenced_code",
+            "tables",
+            "toc",
+            "admonition",
+            "attr_list",
+            CodeHiliteExtension(css_class="highlight", guess_lang=True, noclasses=False),
+        ]
+    )
     return md.convert(text)
 
 
 # ── Nav helpers ───────────────────────────────────────────────────────────────
+
 
 def _md_to_html_path(md_file: str) -> str:
     """'development.md' → 'development.html'"""
@@ -240,16 +270,24 @@ def build_sidebar(active_md: str, active_subdir: str, root: str = "../") -> str:
         label = item[0]
         if len(item) == 2:
             url = item[1]
-            lines.append(f'    <a href="{url}" class="external" target="_blank" rel="noopener">{label}</a>')
+            lines.append(
+                f'    <a href="{url}" class="external" target="_blank" rel="noopener">{label}</a>'
+            )
         else:
             subdir, children = item[1], item[2]
-            lines.append('    <div class="sidebar-group">')
-            lines.append(f'      <div class="sidebar-label">{label}</div>')
+            # A collapsible group; only the section containing the current page
+            # is open by default, so the sidebar stays uncluttered for newcomers.
+            is_active_group = any(
+                child_md == active_md and subdir == active_subdir for _, child_md in children
+            )
+            open_attr = " open" if is_active_group else ""
+            lines.append(f'    <details class="sidebar-group"{open_attr}>')
+            lines.append(f'      <summary class="sidebar-label">{label}</summary>')
             for child_label, child_md in children:
                 href = f"{root}{subdir}/{_md_to_html_path(child_md)}"
                 cls = "active" if child_md == active_md and subdir == active_subdir else ""
                 lines.append(f'      <a href="{href}" class="{cls}">{child_label}</a>')
-            lines.append("    </div>")
+            lines.append("    </details>")
     return "\n".join(lines)
 
 
@@ -259,6 +297,7 @@ def extract_title(md_text: str, fallback: str) -> str:
 
 
 # ── Build ─────────────────────────────────────────────────────────────────────
+
 
 def collect_pages() -> list[tuple[str, str, Path]]:
     """Return (subdir, md_filename, path) for all pages referenced in NAV."""
@@ -294,12 +333,90 @@ def build(site_dir: Path = SITE) -> None:
             front_icon = frontend_dir / "public" / "favicon.ico"
         if not front_icon.exists:
             # Minimal valid ICO file (1x1 transparent)
-            favicon.write_bytes(bytes([
-                0,0,1,0,1,0,1,1,0,0,1,0,1,0,48,0,0,0,22,0,0,0,
-                40,0,0,0,1,0,0,0,2,0,0,0,1,0,1,0,0,0,0,0,8,0,0,0,
-                0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,255,255,255,0,
-                0,0,0,0,0,0,0,0,
-            ]))
+            favicon.write_bytes(
+                bytes(
+                    [
+                        0,
+                        0,
+                        1,
+                        0,
+                        1,
+                        0,
+                        1,
+                        1,
+                        0,
+                        0,
+                        1,
+                        0,
+                        1,
+                        0,
+                        48,
+                        0,
+                        0,
+                        0,
+                        22,
+                        0,
+                        0,
+                        0,
+                        40,
+                        0,
+                        0,
+                        0,
+                        1,
+                        0,
+                        0,
+                        0,
+                        2,
+                        0,
+                        0,
+                        0,
+                        1,
+                        0,
+                        1,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        8,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        2,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        255,
+                        255,
+                        255,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                    ]
+                )
+            )
         else:
             shutil.copy(front_icon, favicon)
 
@@ -314,6 +431,7 @@ def build(site_dir: Path = SITE) -> None:
 
     # Write versions.json with the current release
     import json
+
     versions = [
         {"version": "latest", "title": "latest", "aliases": ["stable"]},
         {"version": version, "title": version},
@@ -355,12 +473,13 @@ def build(site_dir: Path = SITE) -> None:
     py_api_compat.mkdir(parents=True, exist_ok=True)
     compat_idx = py_api_compat / "index.html"
     compat_idx.write_text(_redirect("../../reference/python-api.html"))
-    print(f"  compat   → static/docs/api/python/ → ../../reference/python-api.html")
+    print("  compat   → static/docs/api/python/ → ../../reference/python-api.html")
 
     print(f"\n✓  site built → {site_dir}")
 
 
-# ── JS/TS docs ──────────────────────────────────────────────────────────────────
+# ── JS/TS docs ─────────────────────────────────────────────────────────────────
+
 
 def build_jsdocs(site_dir: Path = SITE) -> None:
     frontend_dir = ROOT / "frontend"
@@ -373,7 +492,8 @@ def build_jsdocs(site_dir: Path = SITE) -> None:
     try:
         r = subprocess.run(
             ["bun", "run", "docs"],
-            cwd=frontend_dir, check=False,
+            cwd=frontend_dir,
+            check=False,
             env={**os.environ, "FORCE_COLOR": "0"},
         )
     except FileNotFoundError:
@@ -387,7 +507,7 @@ def build_jsdocs(site_dir: Path = SITE) -> None:
     js_src = ROOT / "site" / "api" / "js"
     if js_src.is_dir():
         shutil.copytree(js_src, out_dir, dirs_exist_ok=True)
-        print(f"  typedoc  → static/docs/api/js/")
+        print("  typedoc  → static/docs/api/js/")
     else:
         print(f"  [warn] typedoc output not found at {js_src.relative_to(ROOT)}")
 
@@ -409,8 +529,8 @@ def build_pydocs(site_dir: Path = SITE) -> None:
     # Force dark mode: pdoc uses Bootstrap 5.3 data-bs-theme; also inject a
     # fallback CSS rule for older Bootstrap versions that use prefers-color-scheme.
     _dark_inject = (
-        '<style>:root{color-scheme:dark!important}'
-        'body,[data-bs-theme]{--bs-body-bg:#0d1117;--bs-body-color:#e6edf3}</style>'
+        "<style>:root{color-scheme:dark!important}"
+        "body,[data-bs-theme]{--bs-body-bg:#0d1117;--bs-body-color:#e6edf3}</style>"
     )
     for html_file in out_dir.rglob("*.html"):
         text = html_file.read_text(encoding="utf-8")
@@ -425,9 +545,8 @@ def build_pydocs(site_dir: Path = SITE) -> None:
 # ── Watcher ────────────────────────────────────────────────────────────────────
 
 WATCH_PATTERNS = {".py", ".md", ".html", ".css", ".json", ".yaml", ".yml"}
-WATCH_IGNORE   = {"__pycache__", ".git", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
-WATCH_DIRS     = [DOCS, ROOT / "wactorz"]
-
+WATCH_IGNORE = {"__pycache__", ".git", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
+WATCH_DIRS = [DOCS, ROOT / "wactorz"]
 
 
 def _start_watcher() -> None:
@@ -522,6 +641,7 @@ def _start_watchdog_watcher() -> None:
 
 # ── Serve ──────────────────────────────────────────────────────────────────────
 
+
 def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
     build()
     if full:
@@ -546,6 +666,7 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
             result = super().translate_path(path)
             # serve index.html for bare directory paths
             from pathlib import Path as P
+
             p = P(result)
             if p.is_dir():
                 idx = p / "index.html"
@@ -559,7 +680,7 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
         print(f"  guide     → {url}guide/")
         print(f"  api/js    → {url}api/js/")
         print(f"  api/python→ {url}api/python/")
-        print(f"\nPress Ctrl-C to stop.\n")
+        print("\nPress Ctrl-C to stop.\n")
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
         try:
             httpd.serve_forever()
@@ -571,12 +692,18 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Wactorz docs builder")
-    parser.add_argument("--serve", nargs="?", const=8001, type=int, metavar="PORT",
-                        help="serve after building (default port 8001)")
-    parser.add_argument("--full", action="store_true",
-                        help="also build typedoc and python API docs")
-    parser.add_argument("--reload", action="store_true",
-                        help="watch docs/ and rebuild on changes (implies --serve)")
+    parser.add_argument(
+        "--serve",
+        nargs="?",
+        const=8001,
+        type=int,
+        metavar="PORT",
+        help="serve after building (default port 8001)",
+    )
+    parser.add_argument("--full", action="store_true", help="also build typedoc and pydoc")
+    parser.add_argument(
+        "--reload", action="store_true", help="watch docs/ and rebuild on changes (implies --serve)"
+    )
     args = parser.parse_args()
 
     if args.reload:

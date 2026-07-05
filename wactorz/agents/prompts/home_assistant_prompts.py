@@ -35,15 +35,22 @@ Decision rule:
 - Use other for existence, count, lookup, or state questions about specific HA devices, sensors, entities, rooms, or device types.
 - "Do I have any thermometers?" is other, not list_devices.
 - "What is the state of my thermometer?" is other, not list_entities.
+- Use other for camera/snapshot/stream questions, e.g. "show me the kitchen camera", "take a snapshot of the front door", "give me the stream for camera.backyard", "do you have any cameras?", "can you show a camera snapshot?".
 - Use unknown for non-Home-Assistant requests.
 """
 
 HA_OTHER_PROMPT = """You answer Home Assistant questions using tool data.
 
 You may call get_simplified_ha_data when you need current Home Assistant floors, areas, devices, entities, or states.
+You may call list_camera_entities to discover available cameras.
+You may call get_camera_snapshot to capture a still image from a camera.
+You may call get_camera_stream_url to get all available stream URLs for a camera (MJPEG proxy, direct source via Expose Camera Stream Source if installed, HLS/other formats from HA WebSocket).
+You may call get_entity_history to retrieve past state values for one or more entities. The current date/time is provided at the start of the user message — use it to convert relative times like "yesterday midnight" or "Saturday at 17:00" into ISO-8601 timestamps. Include the UTC offset from [Current datetime] in start_time/end_time (e.g. "2026-06-28T17:00:00+02:00"). For a point-in-time question, use a short window (e.g. 2–5 minutes) around the requested time and report the nearest recorded reading. Timestamps in the returned history are already in the same local timezone as [Current datetime].
+When answering questions that require historical data, first call get_simplified_ha_data to resolve friendly names to entity_ids, then call get_entity_history with those entity_ids.
 Answer the user's request directly and concisely.
 Do not invent Home Assistant entities, states, rooms, devices, or automations.
 If the available data cannot answer the request, say what is missing.
+When get_camera_snapshot succeeds, confirm which camera was captured. Do NOT say the image is shown, displayed, or attached — the caller handles rendering.
 """
 
 HA_OTHER_TOOL = {
@@ -52,6 +59,77 @@ HA_OTHER_TOOL = {
     "parameters": {
         "type": "object",
         "properties": {},
+        "additionalProperties": False,
+    },
+}
+
+HA_CAMERA_LIST_TOOL = {
+    "name": "list_camera_entities",
+    "description": "List all camera entities exposed in Home Assistant with their current state.",
+    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+}
+
+HA_CAMERA_SNAPSHOT_TOOL = {
+    "name": "get_camera_snapshot",
+    "description": "Capture a still image (JPEG snapshot) from a Home Assistant camera entity.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "camera_entity_id": {
+                "type": "string",
+                "description": "The entity_id of the camera, e.g. camera.front_door",
+            }
+        },
+        "required": ["camera_entity_id"],
+        "additionalProperties": False,
+    },
+}
+
+HA_CAMERA_STREAM_TOOL = {
+    "name": "get_camera_stream_url",
+    "description": "Get all available stream URLs for a Home Assistant camera (MJPEG proxy, direct source via Expose Camera Stream Source integration if installed, and HLS/other formats from HA WebSocket).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "camera_entity_id": {
+                "type": "string",
+                "description": "The entity_id of the camera, e.g. camera.backyard",
+            }
+        },
+        "required": ["camera_entity_id"],
+        "additionalProperties": False,
+    },
+}
+
+HA_HISTORY_TOOL = {
+    "name": "get_entity_history",
+    "description": (
+        "Fetch historical state changes for one or more Home Assistant entities. "
+        "Use get_simplified_ha_data first to resolve friendly names to entity_ids. "
+        "Provide ISO-8601 timestamps with UTC offset for start_time/end_time "
+        "(e.g. '2026-06-28T17:00:00+02:00'); convert relative times "
+        "(e.g. 'yesterday midnight', 'Saturday at 17:00') using the current datetime "
+        "supplied at the start of the user message. "
+        "Returned timestamps are in the same local timezone as [Current datetime]."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "entity_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of entity_ids to query, e.g. ['sensor.office_temperature'].",
+            },
+            "start_time": {
+                "type": "string",
+                "description": "ISO-8601 start of history window, e.g. '2026-06-28T17:00:00'. Omit to use HA default (1 day before end_time).",
+            },
+            "end_time": {
+                "type": "string",
+                "description": "ISO-8601 end of history window. Omit to use HA default (now).",
+            },
+        },
+        "required": ["entity_ids"],
         "additionalProperties": False,
     },
 }

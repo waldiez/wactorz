@@ -17,12 +17,7 @@ HSML_CONTEXT = "https://spatialwebfoundation.org/ns/hsml/v1"
 
 def utc_now_iso() -> str:
     """Current UTC time as ``YYYY-MM-DDTHH:MM:SSZ`` (second precision)."""
-    return (
-        datetime.now(tz=timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def build_did_document(

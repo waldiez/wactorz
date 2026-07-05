@@ -2,8 +2,5 @@
   "scripts": {
     "dev": "cd frontend && bun run dev",
     "build": "cd frontend && bun run build"
-  },
-  "devDependencies": {
-    "typescript": "^6.0.3"
   }
 }

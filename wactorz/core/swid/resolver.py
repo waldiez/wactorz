@@ -87,15 +87,13 @@ def aiohttp_routes(provider: RegistryProvider):
     routes = web.RouteTableDef()
 
     @routes.get("/1.0/identifiers/{swid}")
-    async def _resolve(request: web.Request) -> web.Response:  # noqa: ANN001 - aiohttp handler  # pyright: ignore[reportUnusedFunction]
+    async def _resolve(request: web.Request) -> web.Response:
         async with provider() as registry:
             result = await resolve(request.match_info["swid"], registry)
-        return web.json_response(
-            result, status=status_for(result), content_type=DID_LD_JSON
-        )
+        return web.json_response(result, status=status_for(result), content_type=DID_LD_JSON)
 
     @routes.get("/1.0/identifiers/{swid}/profile")
-    async def _profile(request: web.Request) -> web.Response:  # noqa: ANN001 - aiohttp handler  # pyright: ignore[reportUnusedFunction]
+    async def _profile(request: web.Request) -> web.Response:
         async with provider() as registry:
             record = await registry.get(request.match_info["swid"])
         if record is None:

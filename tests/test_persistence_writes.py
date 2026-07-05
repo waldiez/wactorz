@@ -14,7 +14,7 @@ import tempfile
 import time
 import unittest
 
-from wactorz.core.persistence import WactorzDB, _SCHEMA_SQL
+from wactorz.core.persistence import _SCHEMA_SQL, WactorzDB
 
 
 class WactorzDBWritePathTest(unittest.TestCase):

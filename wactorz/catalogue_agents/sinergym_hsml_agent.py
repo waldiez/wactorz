@@ -1,5 +1,4 @@
-"""
-sinergym_hsml_agent.py — natural-language Q&A over the Sinergym/HSML Fuseki store.
+"""sinergym_hsml_agent.py — natural-language Q&A over the Sinergym/HSML Fuseki store.
 
 Place in catalogue_agents/ and register in catalog_agent.py _build_catalog()
 (see REGISTER block at the bottom).

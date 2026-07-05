@@ -1,5 +1,4 @@
-"""
-aif_fleet_agent.py — catalogue recipe for deploying the trained Factored Active
+"""aif_fleet_agent.py — catalogue recipe for deploying the trained Factored Active
 Inference policy (pymdp_office_v7_torch) as a fleet of per-zone inference agents
 (decentralized execution), exactly mirroring maddpg_fleet_agent.py.
 
@@ -47,7 +46,7 @@ Control (via @aif-fleet or main natural language)
 # ENV_ID / OBS_TOPIC / ACTION_TOPIC / INFER_DIR / action bounds / POLICY_LEN /
 # PUBLISH_MODE before spawning each child.
 # ──────────────────────────────────────────────────────────────────────────────
-ZONE_AGENT_CODE = r'''
+ZONE_AGENT_CODE = r"""
 import sys as _sys
 # INFER_DIR is injected by the launcher header; ensure aif_infer +
 # pymdp_office_v7_torch are importable regardless of how wactorz was started.
@@ -128,7 +127,7 @@ async def handle_task(agent, payload):
         "publish_mode": PUBLISH_MODE,
         "freeze_B":     FREEZE_B,
     }
-'''
+"""
 
 
 # ──────────────────────────────────────────────────────────────────────────────

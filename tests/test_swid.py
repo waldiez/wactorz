@@ -81,9 +81,7 @@ class TestGeneration(unittest.TestCase):
         # A real SWF-STD-5 ``did:swid:z<scid>`` is a single segment, so our
         # structured parser rejects it -- by design, so the two schemes coexist.
         self.assertFalse(
-            swid.is_valid_swid(
-                "did:swid:zQmQoeG7u6XBtdXoek5p3aPoTjaSRemHAKrMcY2Hcjpe3jv"
-            )
+            swid.is_valid_swid("did:swid:zQmQoeG7u6XBtdXoek5p3aPoTjaSRemHAKrMcY2Hcjpe3jv")
         )
 
     def test_new_generator_rejects_unknown_class(self):
@@ -119,9 +117,7 @@ class TestServiceAndRegistry(unittest.IsolatedAsyncioTestCase):
     async def test_area_is_context_not_identity(self):
         reg = InMemoryRegistry()
         svc = SwidService(reg)
-        rec = await svc.onboard_device(
-            "home", "dev-1", name="Lamp", area_iri="haarea:hall"
-        )
+        rec = await svc.onboard_device("home", "dev-1", name="Lamp", area_iri="haarea:hall")
         self.assertNotIn("hall", rec.swid)  # room not baked into the id
         self.assertEqual(rec.document["alsoKnownAs"], ["haarea:hall"])
 
@@ -169,9 +165,7 @@ class TestResolver(unittest.IsolatedAsyncioTestCase):
         # runs even when the HTTP routing tests are skipped (aiohttp stubbed).
         reg, rec = await self._seed()
         self.assertEqual(status_for(await resolve(rec.swid, reg)), 200)
-        self.assertEqual(
-            status_for(await resolve("swid:device:home:ghost-00000000", reg)), 404
-        )
+        self.assertEqual(status_for(await resolve("swid:device:home:ghost-00000000", reg)), 404)
         self.assertEqual(status_for(await resolve("did:web:example.com", reg)), 400)
 
 

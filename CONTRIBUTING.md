@@ -28,29 +28,31 @@ cd frontend && bun install && bun run build && cd ..
 # by CI and published to https://waldiez.github.io/wactorz/api/
 ```
 
-Run the tests:
+Run the tests and linters:
 
 ```bash
-make test-py        # Python unit tests
+make test           # Python + frontend tests
+make lint-py        # Python format + lint gate
+make lint           # frontend lint gate
 ```
 
 ## Pull Request Process
 
 1. Fork the repo and create a branch: `git checkout -b feat/my-feature`
 2. Make your changes — keep commits focused and atomic
-3. Run tests: `make test-py`
+3. Run tests: `make test`
 4. Update docs if your change affects public API or behaviour
-5. Open a PR against `main` — fill in the PR template
+5. Open a PR against `dev` — fill in the PR template
 
 **PR title format:** `type: short description`
 Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 
 ## Code Style
 
-- **Python**: unit tests via pre-commit hooks
-- **TypeScript**: Prettier formatting and `bun run typecheck`
+- **Python**: `make lint-py` — ruff format + lint gate (advisory typing via basedpyright)
+- **TypeScript**: `make lint` — Prettier, ESLint and `tsc` typecheck
 
-Install pre-commit hooks: `pre-commit install`
+Install pre-commit hooks to run these on commit: `pre-commit install`
 
 ## Commit Messages
 
@@ -70,7 +72,7 @@ wactorz/          Python package source
 ├── core/           Actor base, registry, supervisor
 └── interfaces/     CLI, REST, Discord, WhatsApp, Telegram interfaces
 
-frontend/           Web dashboard (TypeScript + Vite)
+frontend/           Web card dashboard (TypeScript + Vite)
 docs/               Documentation (MkDocs + custom landing page)
 tests/              Python test suite
 ```

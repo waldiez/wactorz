@@ -10,7 +10,6 @@ Covers:
 
 from __future__ import annotations
 
-import sqlite3
 import sys
 import tempfile
 import types
@@ -18,8 +17,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
 # ── Minimal stubs so aiohttp / mqtt deps are not required ────────────────────
+
 
 def _install_stubs() -> None:
     for mod in ("aiomqtt", "openai", "websockets"):
@@ -62,9 +61,11 @@ def _make_aiohttp_mod() -> types.ModuleType:
 # 1. reset_logs — offline file truncation
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class ResetLogsTest(unittest.TestCase):
     def test_truncates_wactorz_log(self):
         from wactorz.reset import reset_logs
+
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "wactorz.log"
             log.write_text("some log content\nmore content\n")
@@ -73,6 +74,7 @@ class ResetLogsTest(unittest.TestCase):
 
     def test_truncates_monitor_log(self):
         from wactorz.reset import reset_logs
+
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "monitor.log"
             log.write_text("monitor output\n")
@@ -81,12 +83,14 @@ class ResetLogsTest(unittest.TestCase):
 
     def test_skips_missing_files_silently(self):
         from wactorz.reset import reset_logs
+
         with tempfile.TemporaryDirectory() as tmp:
             # Neither file exists — should not raise
             reset_logs(log_dir=tmp)
 
     def test_truncates_both_logs_when_both_present(self):
         from wactorz.reset import reset_logs
+
         with tempfile.TemporaryDirectory() as tmp:
             for name in ("wactorz.log", "monitor.log"):
                 (Path(tmp) / name).write_text("data")
@@ -96,7 +100,9 @@ class ResetLogsTest(unittest.TestCase):
 
     def test_truncates_open_file_handler(self):
         import logging
+
         from wactorz.reset import reset_logs
+
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "wactorz.log"
             handler = logging.FileHandler(str(log_path))
@@ -119,6 +125,7 @@ class ResetLogsTest(unittest.TestCase):
 # 2 & 3. reset_handler — scope validation and response shape
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _make_request(body: dict):
     req = MagicMock()
     req.json = AsyncMock(return_value=body)
@@ -135,6 +142,7 @@ class ResetHandlerScopeValidationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_scope_returns_400(self):
         import wactorz.monitor_server as ms
+
         req = _make_request({"scope": "invalid"})
         resp = await ms.reset_handler(req)
         self.assertEqual(resp.status, 400)
@@ -142,18 +150,21 @@ class ResetHandlerScopeValidationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_empty_scope_returns_400(self):
         import wactorz.monitor_server as ms
+
         req = _make_request({"scope": ""})
         resp = await ms.reset_handler(req)
         self.assertEqual(resp.status, 400)
 
     async def test_missing_scope_returns_400(self):
         import wactorz.monitor_server as ms
+
         req = _make_request({})
         resp = await ms.reset_handler(req)
         self.assertEqual(resp.status, 400)
 
     async def test_invalid_json_returns_400(self):
         import wactorz.monitor_server as ms
+
         req = MagicMock()
         req.json = AsyncMock(side_effect=Exception("bad json"))
         resp = await ms.reset_handler(req)
@@ -168,6 +179,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         self._aiohttp_patcher = patch.dict(sys.modules, {"aiohttp": _make_aiohttp_mod()})
         self._aiohttp_patcher.start()
         import wactorz.monitor_server as ms
+
         self._ms = ms
         self._orig_state = {
             "alerts": list(ms.state.get("alerts", [])),
@@ -181,20 +193,23 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
 
     async def _call(self, scope: str, agent: str | None = None) -> object:
         import wactorz.monitor_server as ms
+
         body: dict = {"scope": scope}
         if agent is not None:
             body["agent"] = agent
         req = _make_request(body)
 
         # Patch the individual reset functions so no FS/DB access is needed
-        with patch("wactorz.reset.reset_chat"), \
-             patch("wactorz.reset.reset_agent_state"), \
-             patch("wactorz.reset.reset_metrics"), \
-             patch("wactorz.reset.reset_spawns"), \
-             patch("wactorz.reset.reset_logs"), \
-             patch("wactorz.reset.reset_all"), \
-             patch("wactorz.reset._reset_all_pickles"), \
-             patch.object(ms, "broadcast", new=AsyncMock()):
+        with (
+            patch("wactorz.reset.reset_chat"),
+            patch("wactorz.reset.reset_agent_state"),
+            patch("wactorz.reset.reset_metrics"),
+            patch("wactorz.reset.reset_spawns"),
+            patch("wactorz.reset.reset_logs"),
+            patch("wactorz.reset.reset_all"),
+            patch("wactorz.reset._reset_all_pickles"),
+            patch.object(ms, "broadcast", new=AsyncMock()),
+        ):
             return await ms.reset_handler(req)
 
     async def test_chat_scope_returns_200(self):
@@ -250,7 +265,9 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         # the running actors' in-memory counters so the dashboard updates live
         # instead of waiting for a restart.
         import types
+
         import wactorz.monitor_server as ms
+
         actor = types.SimpleNamespace(
             name="alpha",
             metrics=types.SimpleNamespace(messages_processed=42),
@@ -264,9 +281,11 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         orig_registry = ms.registry
         ms.registry = fake_registry
         try:
-            with patch("wactorz.reset.reset_metrics"), \
-                 patch.object(ms, "broadcast", new=AsyncMock()), \
-                 patch.object(ms, "_snapshot", return_value={}):
+            with (
+                patch("wactorz.reset.reset_metrics"),
+                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch.object(ms, "_snapshot", return_value={}),
+            ):
                 resp = await ms.reset_handler(req)
             self.assertEqual(resp.status, 200)
             self.assertEqual(actor.metrics.messages_processed, 0)
@@ -276,21 +295,113 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         finally:
             ms.registry = orig_registry
 
+    async def test_metrics_scope_clears_inmemory_lifetime_ledger(self):
+        # The headline total is max(live+historical, lifetime ledger). The kv
+        # ledger is cleared by reset_metrics, but the in-memory _lifetime_cost
+        # high-water survives in-process and pins the headline — the handler must
+        # clear it too, or the total only drops by the live component.
+        import wactorz.monitor_server as ms
+
+        orig_registry = ms.registry
+        orig_ledger = dict(ms._lifetime_cost)
+        ms.registry = None
+        ms._lifetime_cost.clear()
+        ms._lifetime_cost.update({"id1": 5.0, "id2": 2.0})
+        try:
+            req = _make_request({"scope": "metrics"})
+            with (
+                patch("wactorz.reset.reset_metrics"),
+                patch("wactorz.agents.llm_agent.reset_global_cost"),
+                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch.object(ms, "_snapshot", return_value={}),
+            ):
+                resp = await ms.reset_handler(req)
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(ms._lifetime_cost, {})
+        finally:
+            ms.registry = orig_registry
+            ms._lifetime_cost.clear()
+            ms._lifetime_cost.update(orig_ledger)
+
+    async def test_chat_scope_clears_live_conversation(self):
+        # reset_chat only clears persisted chat; the handler must also wipe the
+        # running actor's in-memory conversation so the agent stops "remembering"
+        # without a restart.
+        import types
+
+        import wactorz.monitor_server as ms
+
+        actor = types.SimpleNamespace(
+            name="alpha",
+            _conversation_history=[{"role": "user", "content": "hi"}],
+            _history_summary="prior summary",
+        )
+        fake_registry = MagicMock()
+        fake_registry.all_actors.return_value = [actor]
+        req = _make_request({"scope": "chat"})
+        orig_registry = ms.registry
+        ms.registry = fake_registry
+        try:
+            with (
+                patch("wactorz.reset.reset_chat"),
+                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch.object(ms, "_snapshot", return_value={}),
+            ):
+                resp = await ms.reset_handler(req)
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(actor._conversation_history, [])
+            self.assertEqual(actor._history_summary, "")
+        finally:
+            ms.registry = orig_registry
+
+    async def test_chat_scope_respects_agent_filter(self):
+        import types
+
+        import wactorz.monitor_server as ms
+
+        alpha = types.SimpleNamespace(name="alpha", _conversation_history=[1], _history_summary="a")
+        beta = types.SimpleNamespace(name="beta", _conversation_history=[2], _history_summary="b")
+        fake_registry = MagicMock()
+        fake_registry.all_actors.return_value = [alpha, beta]
+        req = _make_request({"scope": "chat", "agent": "alpha"})
+        orig_registry = ms.registry
+        ms.registry = fake_registry
+        try:
+            with (
+                patch("wactorz.reset.reset_chat"),
+                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch.object(ms, "_snapshot", return_value={}),
+            ):
+                resp = await ms.reset_handler(req)
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(alpha._conversation_history, [])
+            self.assertEqual(beta._conversation_history, [2])
+        finally:
+            ms.registry = orig_registry
+
     async def test_metrics_scope_respects_agent_filter(self):
         # With an agent filter, only the matching actor's counters reset.
         import types
+
         import wactorz.monitor_server as ms
-        alpha = types.SimpleNamespace(name="alpha", metrics=types.SimpleNamespace(messages_processed=10))
-        beta  = types.SimpleNamespace(name="beta",  metrics=types.SimpleNamespace(messages_processed=20))
+
+        alpha = types.SimpleNamespace(
+            name="alpha", metrics=types.SimpleNamespace(messages_processed=10)
+        )
+        beta = types.SimpleNamespace(
+            name="beta", metrics=types.SimpleNamespace(messages_processed=20)
+        )
         fake_registry = MagicMock()
         fake_registry.all_actors.return_value = [alpha, beta]
         req = _make_request({"scope": "metrics", "agent": "alpha"})
         orig_registry = ms.registry
         ms.registry = fake_registry
         try:
-            with patch("wactorz.reset.reset_metrics"), \
-                 patch.object(ms, "broadcast", new=AsyncMock()), \
-                 patch.object(ms, "_snapshot", return_value={}):
+            with (
+                patch("wactorz.reset.reset_metrics"),
+                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch.object(ms, "_snapshot", return_value={}),
+            ):
                 resp = await ms.reset_handler(req)
             self.assertEqual(resp.status, 200)
             self.assertEqual(alpha.metrics.messages_processed, 0)
@@ -315,6 +426,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
 # 4. reset_handler calls the right reset function per scope
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class ResetHandlerDispatchTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         # Pre-import wactorz.reset before patch.dict snapshots sys.modules.
@@ -323,6 +435,7 @@ class ResetHandlerDispatchTest(unittest.IsolatedAsyncioTestCase):
         # a stale package attribute.  Subsequent patch() calls then target the stale
         # module while the handler imports a fresh one, so mocks are never seen.
         import wactorz.reset  # noqa: F401
+
         self._aiohttp_patcher = patch.dict(sys.modules, {"aiohttp": _make_aiohttp_mod()})
         self._aiohttp_patcher.start()
 
@@ -331,16 +444,17 @@ class ResetHandlerDispatchTest(unittest.IsolatedAsyncioTestCase):
 
     async def _call_with_mocks(self, scope: str, agent: str | None = None):
         import wactorz.monitor_server as ms
+
         req = _make_request({"scope": scope, "agent": agent})
         mocks = {}
         targets = {
-            "reset_chat":        "wactorz.reset.reset_chat",
+            "reset_chat": "wactorz.reset.reset_chat",
             "reset_agent_state": "wactorz.reset.reset_agent_state",
-            "reset_metrics":     "wactorz.reset.reset_metrics",
-            "reset_spawns":      "wactorz.reset.reset_spawns",
-            "reset_logs":        "wactorz.reset.reset_logs",
-            "reset_all":         "wactorz.reset.reset_all",
-            "_reset_all_pickles":"wactorz.reset._reset_all_pickles",
+            "reset_metrics": "wactorz.reset.reset_metrics",
+            "reset_spawns": "wactorz.reset.reset_spawns",
+            "reset_logs": "wactorz.reset.reset_logs",
+            "reset_all": "wactorz.reset.reset_all",
+            "_reset_all_pickles": "wactorz.reset._reset_all_pickles",
         }
         patches = [patch(t) for t in targets.values()]
         with patch.object(ms, "broadcast", new=AsyncMock()):
@@ -372,6 +486,189 @@ class ResetHandlerDispatchTest(unittest.IsolatedAsyncioTestCase):
     async def test_all_scope_calls_reset_all(self):
         mocks = await self._call_with_mocks("all")
         mocks["reset_all"].assert_called_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. reset_spawns clears the AUTHORITATIVE kv-backed registry
+#    (regression: "deleted agents keep coming back" after a wipe)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ResetSpawnsKvRegistryTest(unittest.TestCase):
+    """main reads its spawn registry from kv_store("main", "_spawned_agents").
+
+    reset_spawns must clear THAT, not only the vestigial spawn_registry table,
+    or _restore_spawned_agents() re-spawns every deleted agent on restart.
+    """
+
+    def _db(self, tmp: str):
+        from wactorz.core.persistence import WactorzDB
+
+        return WactorzDB(str(Path(tmp) / "wactorz.db"))
+
+    def test_all_clears_kv_spawn_registry(self):
+        from wactorz.reset import reset_spawns
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            db = self._db(tmp)
+            db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
+            reset_spawns(db_path=db_path)
+            self.assertIsNone(db.kv_get("main", "_spawned_agents", None))
+
+    def test_single_agent_pops_only_that_entry(self):
+        from wactorz.reset import reset_spawns
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            db = self._db(tmp)
+            db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
+            reset_spawns(agent_name="a", db_path=db_path)
+            reg = db.kv_get("main", "_spawned_agents", None)
+            self.assertEqual(reg, {"b": {"node": "n1"}})
+
+    def test_restart_read_sees_empty_registry_after_wipe(self):
+        """End-to-end of the actual symptom: after a wipe, the registry read
+        that main._restore_spawned_agents() performs on the NEXT startup must
+        return empty — i.e. recall("_spawned_agents") via a fresh PersistenceAPI
+        bound to the same db file sees nothing, so nothing is re-spawned.
+        """
+        from wactorz.core.persistence import (
+            PersistenceAPI,
+            PickleStore,
+            RedisStore,
+        )
+        from wactorz.reset import reset_all
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            db = self._db(tmp)
+            api = PersistenceAPI(db, RedisStore(), PickleStore(tmp), "main")
+            api.set("_spawned_agents", {"ghost1": {"node": ""}, "ghost2": {"node": "n1"}})
+            self.assertTrue(api.get("_spawned_agents"))  # sanity
+
+            reset_all(db_path=db_path, state_dir=tmp)
+
+            fresh = PersistenceAPI(self._db(tmp), RedisStore(), PickleStore(tmp), "main")
+            self.assertFalse(fresh.get("_spawned_agents") or {})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. reset_handler "all" purges retained nodes/{node}/desired_state
+#    (regression: a reconnecting runner reconciles deleted agents back)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._aiohttp_patcher = patch.dict(sys.modules, {"aiohttp": _make_aiohttp_mod()})
+        self._aiohttp_patcher.start()
+
+    def tearDown(self):
+        self._aiohttp_patcher.stop()
+
+    async def test_all_scope_clears_desired_state_for_all_nodes(self):
+        import wactorz.monitor_server as ms
+
+        main = MagicMock()
+        main.protected = True
+        main.name = "main"
+        main._get_spawn_registry.return_value = {"agentX": {"node": "n1"}}
+        main.recall.return_value = None  # no in-memory registry attr to clear
+
+        fake_registry = MagicMock()
+        fake_registry.all_actors.return_value = [main]
+        fake_registry.find_by_name.return_value = main
+        fake_registry._supervisor_ref = None
+
+        mqtt = AsyncMock()
+
+        orig_registry, orig_mqtt = ms.registry, ms.mqtt_client_ref
+        orig_nodes = dict(ms.state["nodes"])
+        ms.registry = fake_registry
+        ms.mqtt_client_ref = mqtt
+        ms.state["nodes"] = {"n2": {"node": "n2"}}
+        try:
+            req = _make_request({"scope": "all"})
+            with (
+                patch("wactorz.reset.reset_all"),
+                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch.object(ms, "_snapshot", return_value={}),
+            ):
+                resp = await ms.reset_handler(req)
+            self.assertEqual(resp.status, 200)
+
+            desired_topics = {
+                c.args[0]
+                for c in mqtt.publish.call_args_list
+                if c.args and str(c.args[0]).endswith("/desired_state")
+            }
+            self.assertIn("nodes/n1/desired_state", desired_topics)
+            self.assertIn("nodes/n2/desired_state", desired_topics)
+            for c in mqtt.publish.call_args_list:
+                if c.args and str(c.args[0]).endswith("/desired_state"):
+                    self.assertEqual(c.args[1], b"")
+                    self.assertTrue(c.kwargs.get("retain"))
+        finally:
+            ms.registry = orig_registry
+            ms.mqtt_client_ref = orig_mqtt
+            ms.state["nodes"] = orig_nodes
+
+    async def test_all_scope_never_touches_protected_agents(self):
+        # Regression: the dashboard entry's "protected" flag is only set when a
+        # heartbeat carried it, so trusting it tore down system agents (main /
+        # monitor / installer / catalog). The registry's protected flag is
+        # authoritative and must shield them — no retained purge, no tombstone.
+        import wactorz.monitor_server as ms
+
+        main = MagicMock()
+        main.protected = True
+        main.name = "main"
+        main.actor_id = "main-id"
+        main.recall.return_value = None
+        main._get_spawn_registry.return_value = {}
+        io = MagicMock()
+        io.protected = False
+        io.name = "io-agent"
+        io.actor_id = "io-id"
+        io.stop = AsyncMock()
+
+        fake_registry = MagicMock()
+        fake_registry.all_actors.return_value = [main, io]
+        fake_registry.find_by_name.return_value = main
+        fake_registry.unregister = AsyncMock()
+        fake_registry._supervisor_ref = None
+
+        orig_registry, orig_mqtt = ms.registry, ms.mqtt_client_ref
+        orig_nodes, orig_agents = dict(ms.state["nodes"]), dict(ms.state["agents"])
+        orig_deleted = list(ms._deleted_agent_ids)
+        ms.registry = fake_registry
+        ms.mqtt_client_ref = AsyncMock()
+        ms.state["nodes"] = {}
+        # Dashboard entries WITHOUT the protected flag — the exact bug condition.
+        ms.state["agents"] = {"main-id": {"name": "main"}, "io-id": {"name": "io-agent"}}
+        ms._deleted_agent_ids = []
+        try:
+            with (
+                patch("wactorz.reset.reset_all"),
+                patch.object(ms, "_purge_agent_retained", new=AsyncMock()) as purge,
+                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch.object(ms, "_snapshot", return_value={}),
+            ):
+                resp = await ms.reset_handler(_make_request({"scope": "all"}))
+            self.assertEqual(resp.status, 200)
+            purged = {c.args[0] for c in purge.call_args_list}
+            self.assertIn("io-id", purged)
+            self.assertNotIn("main-id", purged)  # protected: never purged
+            tombstoned = {aid for aid, _ in ms._deleted_agent_ids}
+            self.assertIn("io-id", tombstoned)
+            self.assertNotIn("main-id", tombstoned)  # protected: never tombstoned
+        finally:
+            ms.registry = orig_registry
+            ms.mqtt_client_ref = orig_mqtt
+            ms.state["nodes"] = orig_nodes
+            ms.state["agents"] = orig_agents
+            ms._deleted_agent_ids = orig_deleted
 
 
 if __name__ == "__main__":

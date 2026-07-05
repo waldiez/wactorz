@@ -1,6 +1,7 @@
-import websockets
 import json
 from typing import Any
+
+import websockets
 
 
 class HAWebSocketClient:

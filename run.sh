@@ -1,5 +1,5 @@
 #!/bin/bash
-# Wactorz Unified Entry Point — starts the Python backend.
+# Wactorz entry point — starts the Python backend.
 
 set -e
 

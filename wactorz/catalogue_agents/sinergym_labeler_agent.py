@@ -1,5 +1,4 @@
-"""
-sinergym_labeler_agent.py — republish observations as keyed {name: value} dicts.
+"""sinergym_labeler_agent.py — republish observations as keyed {name: value} dicts.
 
 Place in catalogue_agents/ and register in catalog_agent.py _build_catalog()
 (see REGISTER block at the bottom).
@@ -40,7 +39,7 @@ Control (optional, via @sinergym-labeler)
   {"env_id": "..."}        -> set which env to label (default officeMedium-multiagent)
 """
 
-AGENT_CODE = r'''
+AGENT_CODE = r"""
 import asyncio
 import json
 
@@ -161,7 +160,7 @@ async def handle_task(agent, payload):
             f"  per-zone output: {t['base']}/zone/<zone>/observation{SUFFIX}\n"
             f"Subscribe to the output topic and read variables at the top level, e.g. "
             f"payload['air_temperature_Core_mid'].")
-'''
+"""
 
 
 # ──────────────────────────────────────────────────────────────────────────────

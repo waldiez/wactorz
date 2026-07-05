@@ -1,10 +1,6 @@
 # .gitattributes
 * text=auto
 *.sh text eol=lf
-config/fuseki-container/entrypoint.sh text eol=lf
 
 # Generated docs bundled into the wheel — collapse in GitHub PR diffs
 static/docs/**        linguist-generated=true
-site/guide/**         linguist-generated=true
-site/reference/**     linguist-generated=true
-site/index.html       linguist-generated=true

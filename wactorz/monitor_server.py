@@ -348,7 +348,7 @@ async def broadcast(msg: dict):
         return
     payload = json.dumps(msg)
     dead = set()
-    for ws in ws_clients:
+    for ws in list(ws_clients):
         try:
             await ws.send_str(payload)
         except Exception as e:
@@ -1486,21 +1486,33 @@ async def mqtt_listener():
 # ── Startup checks ─────────────────────────────────────────────────────────
 
 
-async def _check_mqtt() -> bool:
-    """Return True if MQTT broker is reachable."""
-    try:
-        _, writer = await asyncio.wait_for(
-            asyncio.open_connection(MQTT_BROKER, MQTT_PORT), timeout=3
-        )
-        writer.close()
+async def _check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
+    """Return True if MQTT broker is reachable.
+
+    Retries briefly so a transient blip (or a broker mid-restart) does not fatally
+    abort startup: the aiomqtt client itself reconnects, so this pre-flight probe
+    must be at least as tolerant, or it aborts a server whose MQTT is actually fine.
+    """
+    last = ""
+    for i in range(attempts):
         try:
-            await writer.wait_closed()
-        except Exception:
-            pass
-        return True
-    except Exception as exc:
-        logger.error(f"[startup] MQTT broker {MQTT_BROKER}:{MQTT_PORT} unreachable — {exc}")
-        return False
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(MQTT_BROKER, MQTT_PORT), timeout=3
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True
+        except Exception as exc:
+            last = repr(exc)
+            if i < attempts - 1:
+                await asyncio.sleep(delay)
+    logger.error(
+        f"[startup] MQTT broker {MQTT_BROKER}:{MQTT_PORT} unreachable after {attempts} tries — {last}"
+    )
+    return False
 
 
 async def _check_ws_port() -> bool:

@@ -7,15 +7,11 @@ for the Linux/Docker specifics see [`docker/LOCAL_SETUP.md`](docker/LOCAL_SETUP.
 
 - **wactorz** running (the `@…` lines below go in its **chat**, not a shell)
 - **mosquitto** (MQTT :1883, WS :9001) and **Fuseki** (:3030, `sinergym` dataset)
-- Model/detector files staged in `state/maddpg_office/` — the host-side fleet
-  loads them from there. The committed copies live under `sinergym/maddpg_office/`;
-  stage them once (run from this `sinergym/` dir):
-
-```sh
-mkdir -p ../state/maddpg_office
-cp -a maddpg_office/. ../state/maddpg_office/   # model.pt, aif_model.pkl, detectors, anomaly_injector.py
-```
-
+- Model/detector files live in [`../models/`](../models/) (`models/maddpg/` and
+  `models/aif/`). The fleet loads them **straight from there** — no staging step.
+  The launch payloads below reference `models/maddpg/…` / `models/aif/…` relative
+  to the repo root (the wactorz working dir). See
+  [`../models/README.md`](../models/README.md) for what each file is.
 - Bridge image built (one-time, from this `sinergym/` dir):
 
 ```sh
@@ -45,24 +41,24 @@ For AIF:
 ```
 
 Launch the 15-zone fleet — **one line**, no spaces inside keys/zone names,
-`env_id` must equal the bridge's `--env`.
+`env_id` must equal the bridge's `--env`. The 15 zones must be in **this exact
+order** (the actor index order the policy expects).
 
-> **Replace `<WACTORZ_DIR>`** with your absolute wactorz path (the dir holding
-> `state/`), e.g. `/Users/you/Projects/waldiez/wactorz` or `C:/Users/you/wactorz`.
-> The `model_path` (and `normalizer_path` for DRL) must point at the files you
-> staged into `state/maddpg_office/` in step 0.
+> Paths are **relative to the repo root** (the wactorz working dir), so
+> `models/maddpg/…` / `models/aif/…` work as-is — no `<WACTORZ_DIR>` prefix and
+> no staging. Use an absolute path only if you run wactorz from elsewhere.
 
 DRL (MADDPG):
 
 ```
-@maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"<WACTORZ_DIR>/state/maddpg_office/model.pt","normalizer_path":"<WACTORZ_DIR>/state/maddpg_office/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+@maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"models/maddpg/model.pt","normalizer_path":"models/maddpg/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
 ```
 
-OR — AIF (custom active inference):
+OR — AIF (custom active inference). `model_path` is the `.pkl` (no
+`normalizer_path`); the band/weight fields must match training:
 
 ```
-@aif-fleet
-{"action":"launch","env_id":"officeMedium-multiagent","model_path":"<WACTORZ_DIR>/state/maddpg_office/aif_model.pkl","heat_low":15.0,"heat_high":22.0,"cool_low":24.0,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":4.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+@aif-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"models/aif/aif_model.pkl","heat_low":15.0,"heat_high":22.5,"cool_low":22.5,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":8.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
 ```
 
 Sanity check (after the bridge starts, `env_info_seen` should be `true`):

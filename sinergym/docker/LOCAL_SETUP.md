@@ -16,7 +16,7 @@ environment plumbing differs.
 | EnergyPlus + Sinergym | hand-built devcontainer: 3.11.0 source, Dockerfile edited to force EnergyPlus 24.1.0 (§3a/§3b) | `docker/Dockerfile.bridge`: base `sailugr/sinergym:v3.12.0-lite` (already Sinergym 3.12.0 + EnergyPlus 25.1.0) — no from-source EnergyPlus build |
 | Image size | full devcontainer | `-lite` base (0.7 GB pull) — the DRL/torch stack is dropped because inference runs host-side in wactorz |
 | MQTT + Fuseki | three Docker services started by hand | already running via repo `compose.yaml` (`wactorz-mosquitto`, `wactorz-fuseki`); only the `sinergym` dataset had to be created |
-| Model/detector dir | `C:/Users/yuu/.../state/maddpg_office/` | `state/maddpg_office/` (host paths; relative paths work in the launch payload) |
+| Model/detector dir | `C:/Users/yuu/.../state/maddpg_office/` | `models/maddpg/` & `models/aif/` (loaded straight from the repo; relative paths work in the launch payload — no staging copy) |
 | Host Python deps | n/a (host = Windows GUI) | `torch==2.12.0+cpu` + `numpy` added to the wactorz `.venv` (py3.14) |
 | `host.docker.internal` | automatic on Docker Desktop | mapped explicitly on Linux via `--add-host=host.docker.internal:host-gateway` (in `run-bridge.sh`) |
 | Bridge `--env` / topics | unchanged | unchanged (`officeMedium-multiagent`) |
@@ -41,8 +41,8 @@ curl -s -u "${FUSEKI_USER}":"${FUSEKI_PASSWORD}" -X POST "http://localhost:3030/
 .venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu \
   --extra-index-url https://pypi.org/simple "torch==2.12.0+cpu" numpy
 
-# 3. Model/detector files where the fleet expects them
-mkdir -p state/maddpg_office && cp sinergym/maddpg_office/* state/maddpg_office/
+# 3. (nothing to stage) — the fleet loads models straight from models/maddpg/ and
+#    models/aif/ in the repo. The bridge gets anomaly_injector.py from sinergym/.
 
 # 4. Build the bridge image (from wactorz/sinergym/)
 cd sinergym
@@ -81,10 +81,9 @@ In the wactorz console:
 @sinergym-anomaly {"action":"config","fuseki_url":"http://localhost:3030"}
 ```
 
-> **Replace `<WACTORZ_DIR>`** with your absolute wactorz path (the dir holding
-> `state/`), e.g. `/Users/you/Projects/waldiez/wactorz` or `C:/Users/you/wactorz`.
-> The `model_path` (and `normalizer_path` for DRL) must point at the files you
-> staged into `state/maddpg_office/` in step 0.
+> Paths are **relative to the repo root** (the wactorz working dir), so
+> `models/maddpg/…` / `models/aif/…` work as-is — no `<WACTORZ_DIR>` prefix and
+> no staging copy. Use an absolute path only if you run wactorz from elsewhere.
 
 Launch the controller you chose. **Every controller needs an explicit `launch`** — `maddpg-fleet`,
 `aif-fleet`, or `aif-anomaly` — and for each, `env_id` MUST be explicit (the recipe default is a
@@ -94,15 +93,15 @@ repo root; `infer_dir` is auto-derived from `model_path`. The detector `sinergym
 
 ```text
 # DRL (MADDPG):
-@maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"<WACTORZ_DIR>/state/maddpg_office/model.pt","normalizer_path":"state/maddpg_office/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+@maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"models/maddpg/model.pt","normalizer_path":"models/maddpg/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
 
 # AIF (custom active inference) — model_path is the .pkl; no normalizer:
-@aif-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"<WACTORZ_DIR>/state/maddpg_office/aif_model.pkl","heat_low":15.0,"heat_high":22.0,"cool_low":24.0,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":4.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+@aif-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"models/aif/aif_model.pkl","heat_low":15.0,"heat_high":22.5,"cool_low":22.5,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":8.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
 
 # aif-anomaly is an ALTERNATIVE AIF controller (single batched N=15, exact v7 parity), NOT a
 # detector despite the name. Launch it INSTEAD of aif-fleet, never both — they publish to the same
 # action topics and would fight. Launch exactly one controller (same env_id + zones):
-@aif-anomaly {"action":"launch","env_id":"officeMedium-multiagent","model_path":"<WACTORZ_DIR>/state/maddpg_office/aif_model.pkl","heat_low":15.0,"heat_high":22.0,"cool_low":24.0,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":4.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+@aif-anomaly {"action":"launch","env_id":"officeMedium-multiagent","model_path":"models/aif/aif_model.pkl","heat_low":15.0,"heat_high":22.5,"cool_low":22.5,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":8.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
 ```
 
 Start the bridge **last** (env_info + first obs at episode start are not retained):

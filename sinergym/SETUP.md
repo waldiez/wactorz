@@ -128,16 +128,29 @@ pip show sinergym        # expect: Version: 3.11.0
 > The bridge run command below uses the name `sinergym_bridge_anomalies.py`. That is the
 > patched bridge — rename `sinergym_bridge_mas.py` to that, or adjust the command.
 
-### 4b. Model/detector directory — `…/state/maddpg_office/`
-`<WACTORZ_DIR>/state/maddpg_office/` (replace `<WACTORZ_DIR>` with your absolute wactorz path)
+### 4b. Model/detector directory — `models/` (repo root)
+The fleet loads these **straight from `models/`** — no staging/copy step. Paths in
+the launch payload are relative to the repo root (the wactorz working dir). See
+[`../models/README.md`](../models/README.md) for the full inventory.
+
+`models/maddpg/` (DRL backend):
 | File | Used by |
 |---|---|
 | `model.pt` | maddpg-fleet (the trained actor checkpoint) |
 | `normalizer.npz` | maddpg-fleet (frozen obs normalizer) |
 | `maddpg_infer.py` | maddpg-fleet (training-free inference module) |
 | `forecast_anomaly_detector.py` | sinergym-anomaly (detector class) |
-| `detector_forecast_v9_mixed.pkl` | sinergym-anomaly (trained detector, version `forecast_v8`) |
-| `anomaly_injector.py` | *(also here is fine; the bridge needs it container-side)* |
+| `detector_forecast_v9_mixed.pkl` | sinergym-anomaly (trained detector) |
+
+`models/aif/` (Active-Inference backend — alternative to MADDPG):
+| File | Used by |
+|---|---|
+| `aif_model.pkl` | aif-fleet (trained AIF checkpoint) |
+| `aif_infer.py` + `pymdp_office_v14_torch.py` | aif-fleet (per-zone inference + generative model — keep them together) |
+| `forecast_anomaly_detector.py` | aif-anomaly (detector class) |
+| `detector_aif_v6.pkl` | aif-anomaly (trained AIF detector) |
+
+`anomaly_injector.py` lives in `sinergym/` (the bridge needs it container-side).
 
 ### 4c. wactorz package
 | File | Location |
@@ -182,9 +195,11 @@ alternatives to `maddpg-fleet` / `sinergym-anomaly` — see §11.
    ```
 5. Launch the MADDPG fleet (15 children):
    ```
-   @maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"<WACTORZ_DIR>/state/maddpg_office/model.pt","normalizer_path":"<WACTORZ_DIR>/state/maddpg_office/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+   @maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"models/maddpg/model.pt","normalizer_path":"models/maddpg/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
    ```
    The 15 zones must be in **this order** (it is the actor index order the policy expects).
+   For the AIF backend, spawn `aif-fleet` instead and use the AIF launch line (§11 /
+   [`../models/README.md`](../models/README.md)).
 6. Run the bridge inside the Sinergym container (Part 7).
 
 > **Why this order?** The agents must be subscribed *before* the bridge starts an episode,
@@ -421,8 +436,9 @@ The default URL has a `-WithDSOASpaceListFixes` suffix and an `Ubuntu24.04` file
 don't exist for 24.1.0. Apply the §3b edits (drop suffix, use `Ubuntu22.04`).
 
 **`ModuleNotFoundError: No module named 'maddpg_infer'`** (fleet children)
-`maddpg_infer.py` must sit in the model folder (`…/state/maddpg_office/`) next to `model.pt`.
-Optionally pass `"infer_dir":"…/state/maddpg_office"` in the launch payload.
+`maddpg_infer.py` must sit in the model folder (`models/maddpg/`) next to `model.pt`.
+Optionally pass `"infer_dir":"models/maddpg"` in the launch payload. (AIF analog:
+`aif_infer.py` + `pymdp_office_v14_torch.py` next to `aif_model.pkl` in `models/aif/`.)
 
 **`[CUSTOM-REWARD] Disabled (could not import training code)`**
 The bridge couldn't import `maddpg_v3`. Place them in
@@ -459,7 +475,7 @@ on (`--inject-anomalies`), a different `--weather`, or the wrong env/zone order.
 - [ ] MQTT, Fuseki (`sinergym` dataset), Sinergym container running
 - [ ] EnergyPlus `24.1.0-9d7789a3ac` and Sinergym `3.11.0` verified in the container
 - [ ] epJSON, yaml, `register_env.py`, bridge, `maddpg_v3/v2`, `ensemble_controller` in container
-- [ ] `model.pt`, `normalizer.npz`, `maddpg_infer.py`, detector `.py` + `.pkl`, injector in `state/maddpg_office/`
+- [ ] `models/maddpg/` (DRL) and/or `models/aif/` (AIF) present; `anomaly_injector.py` in `sinergym/`
 - [ ] Recipes in `catalogue_agents/`, REGISTER blocks pasted into `catalog_agent.py`
 - [ ] wactorz restarted; agents spawned; host-side agents configured to `localhost:3030`
 - [ ] Fleet launched (15 zones, correct order)

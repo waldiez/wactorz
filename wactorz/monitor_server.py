@@ -12,6 +12,7 @@ so the frontend knows whether to send chat over /ws or publish to io/chat.
 import asyncio
 import secrets
 import sys
+from typing import Any
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -1414,6 +1415,17 @@ def _snapshot() -> dict:
     }
 
 
+async def _broadcast_mqtt_msg(topic: str, payload: str) -> None:
+    """Broadcast a received mqtt message."""
+    parsed: Any = payload
+    try:
+        parsed = json.loads(payload)
+    except Exception:
+        # non-JSON: pass the string through
+        pass
+    await broadcast({"type": "server_event", "topic": topic, "payload": parsed})
+
+
 async def mqtt_listener():
     global mqtt_client_ref
     logger.info(f"Connecting to MQTT {MQTT_BROKER}:{MQTT_PORT}...")
@@ -1452,8 +1464,8 @@ async def mqtt_listener():
                                     logger.error(f"[io/chat] error: {exc}")
                             continue
 
-                        event = parse_topic(topic, payload)
-                        await broadcast({"type": "mqtt", "topic": topic, "payload": payload})
+                        event: dict[str, Any] | None = parse_topic(topic, payload)
+                        await _broadcast_mqtt_msg(topic, payload)
                         if event and not _hard_resetting:
                             metric = event.get("metric", "")
                             log_event = None if metric == "heartbeat" else event

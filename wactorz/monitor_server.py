@@ -2272,7 +2272,7 @@ async def rest_chat_stop_handler(request):
 
     # legacy MQTT: tell the IOAgent to stop whatever it is generating.
     published = False
-    if mqtt_client_ref:
+    if registry is None and mqtt_client_ref:
         try:
             await mqtt_client_ref.publish(
                 "io/chat/control",

@@ -5,8 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+## [0.5.1] - 2026-07-06
+
 ### Added
 
+- **`openai_url` add-on option** — surfaces the existing OpenAI-compatible endpoint support in the
+  Home Assistant add-on settings, so the `openai` provider can be pointed at a LiteLLM proxy or any
+  compatible API (Groq, Together, vLLM, LM Studio) without editing env vars.
 - **Named volume presets for reachy** - `whisper` (70), `normal` (85), `louder` (93)
   and `presenter` (100) speaking modes, mapped to the robot speaker's usable loudness band.
   Deterministic "whisper X" / "say X softly|loudly" set the level and speak aloud.

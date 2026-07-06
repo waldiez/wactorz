@@ -51,7 +51,13 @@ MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_WS_PORT = 9001
 WS_PORT = 8888
-MQTT_TOPICS = ["agents/#", "system/#", "nodes/#", "io/chat"]
+MQTT_TOPICS = [
+    "agents/#",
+    "system/#",
+    "nodes/#",
+    "io/chat",
+    "homeassistant/state_changes/#",
+]
 
 # Injected by cli.py after the actor system is built.
 # None  → legacy MQTT/IOAgent mode
@@ -1447,6 +1453,7 @@ async def mqtt_listener():
                             continue
 
                         event = parse_topic(topic, payload)
+                        await broadcast({"type": "mqtt", "topic": topic, "payload": payload})
                         if event and not _hard_resetting:
                             metric = event.get("metric", "")
                             log_event = None if metric == "heartbeat" else event

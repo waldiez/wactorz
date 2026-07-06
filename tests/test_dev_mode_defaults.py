@@ -13,6 +13,7 @@ class DevModeDefaultsTest(unittest.TestCase):
             os.environ["WACTORZ_DEV_MODE"] = "1"
             with patch("dotenv.load_dotenv"), patch("dotenv.find_dotenv", return_value=""):
                 import wactorz.config as config
+
                 importlib.reload(config)
             self.assertEqual(config.CONFIG.interface, "rest")
             self.assertEqual(config.CONFIG.port, 8080)
@@ -21,4 +22,5 @@ class DevModeDefaultsTest(unittest.TestCase):
             os.environ.update(original)
             with patch("dotenv.load_dotenv"), patch("dotenv.find_dotenv", return_value=""):
                 import wactorz.config as config
+
                 importlib.reload(config)

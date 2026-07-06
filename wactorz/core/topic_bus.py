@@ -1,5 +1,4 @@
-"""
-TopicBus — Reactive Pub/Sub Coordination Layer
+"""TopicBus — Reactive Pub/Sub Coordination Layer
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 This module is the core of Wactorz's shift from name-based RPC to
 topic-based reactive coordination.
@@ -55,17 +54,17 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 # ── Topic Contract ─────────────────────────────────────────────────────────────
 
+
 @dataclass
 class TopicContract:
-    """
-    Declares what an agent produces and consumes via MQTT topics.
+    """Declares what an agent produces and consumes via MQTT topics.
 
     Included in spawn config:
         {
@@ -87,15 +86,16 @@ class TopicContract:
     {"temperature": "float"}). This is authoritative over produces_schema
     when wiring consumers.
     """
-    name:            str
-    publishes:       list[str]       = field(default_factory=list)
-    subscribes:      list[str]       = field(default_factory=list)
-    triggers_when:   dict            = field(default_factory=dict)
-    produces_schema: dict            = field(default_factory=dict)
-    consumes_schema: dict            = field(default_factory=dict)
-    node:            Optional[str]   = None
-    actor_id:        Optional[str]   = None
-    timestamp:       float           = field(default_factory=time.time)
+
+    name: str
+    publishes: list[str] = field(default_factory=list)
+    subscribes: list[str] = field(default_factory=list)
+    triggers_when: dict = field(default_factory=dict)
+    produces_schema: dict = field(default_factory=dict)
+    consumes_schema: dict = field(default_factory=dict)
+    node: str | None = None
+    actor_id: str | None = None
+    timestamp: float = field(default_factory=time.time)
 
     # ── Observed payload schemas ───────────────────────────────────────────
     # Auto-captured from real publish() calls. Maps topic → {fields, example}.
@@ -107,32 +107,40 @@ class TopicContract:
     #       "fields":  {"temp": "float", "humidity": "float"},
     #       "example": {"temp": 30.5, "humidity": 47.7}
     #   }}
-    observed_samples: dict           = field(default_factory=dict)
+    observed_samples: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        """
-        Guard against LLM mistakes:
-          - Coerce bare strings to single-element lists
-          - Filter out bogus entries like literal "publishes"/"subscribes" that
-            leak from LLM code passing kwarg names as values
+        """Guard against LLM mistakes:
+        - Coerce bare strings to single-element lists
+        - Filter out bogus entries like literal "publishes"/"subscribes" that
+          leak from LLM code passing kwarg names as values
         """
         if isinstance(self.publishes, str):
             self.publishes = [self.publishes]
         if isinstance(self.subscribes, str):
             self.subscribes = [self.subscribes]
         # Strip entries that are clearly kwarg names, not real topics
-        _BOGUS = {"publishes", "subscribes", "publish", "subscribe",
-                  "topics", "topic", "produces_schema", "consumes_schema",
-                  "schema", "triggers_when", "name", "description", "type"}
-        self.publishes  = [t for t in self.publishes  if t not in _BOGUS]
+        _BOGUS = {
+            "publishes",
+            "subscribes",
+            "publish",
+            "subscribe",
+            "topics",
+            "topic",
+            "produces_schema",
+            "consumes_schema",
+            "schema",
+            "triggers_when",
+            "name",
+            "description",
+            "type",
+        }
+        self.publishes = [t for t in self.publishes if t not in _BOGUS]
         self.subscribes = [t for t in self.subscribes if t not in _BOGUS]
 
     def matches_topic(self, topic: str) -> bool:
         """Check if this agent subscribes to a given topic (supports # and + wildcards)."""
-        for pattern in self.subscribes:
-            if _topic_matches(pattern, topic):
-                return True
-        return False
+        return any(_topic_matches(pattern, topic) for pattern in self.subscribes)
 
     def produces_topic(self, topic: str) -> bool:
         """Check if this agent publishes to a given topic pattern."""
@@ -142,8 +150,7 @@ class TopicContract:
         return False
 
     def update_observed(self, topic: str, payload: dict):
-        """
-        Record the actual field names and types from a real published message.
+        """Record the actual field names and types from a real published message.
         Called automatically by _AgentAPI.publish() — agents don't need to
         call this themselves.
 
@@ -152,67 +159,60 @@ class TopicContract:
         """
         if not isinstance(payload, dict):
             return
-        fields = {
-            k: type(v).__name__
-            for k, v in payload.items()
-            if not k.startswith("_")
-        }
+        fields = {k: type(v).__name__ for k, v in payload.items() if not k.startswith("_")}
         self.observed_samples[topic] = {
-            "fields":  fields,
-            "example": {k: v for k, v in payload.items()
-                        if not k.startswith("_")},
+            "fields": fields,
+            "example": {k: v for k, v in payload.items() if not k.startswith("_")},
         }
 
     def to_dict(self) -> dict:
         return {
-            "name":             self.name,
-            "publishes":        self.publishes,
-            "subscribes":       self.subscribes,
-            "triggers_when":    self.triggers_when,
-            "produces_schema":  self.produces_schema,
-            "consumes_schema":  self.consumes_schema,
-            "node":             self.node,
-            "actor_id":         self.actor_id,
-            "timestamp":        self.timestamp,
+            "name": self.name,
+            "publishes": self.publishes,
+            "subscribes": self.subscribes,
+            "triggers_when": self.triggers_when,
+            "produces_schema": self.produces_schema,
+            "consumes_schema": self.consumes_schema,
+            "node": self.node,
+            "actor_id": self.actor_id,
+            "timestamp": self.timestamp,
             "observed_samples": self.observed_samples,
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "TopicContract":
+    def from_dict(cls, d: dict) -> TopicContract:
         return cls(
-            name             = d.get("name", ""),
-            publishes        = d.get("publishes", []),
-            subscribes       = d.get("subscribes", []),
-            triggers_when    = d.get("triggers_when", {}),
-            produces_schema  = d.get("produces_schema", {}),
-            consumes_schema  = d.get("consumes_schema", {}),
-            node             = d.get("node"),
-            actor_id         = d.get("actor_id"),
-            timestamp        = d.get("timestamp", time.time()),
-            observed_samples = d.get("observed_samples", {}),
+            name=d.get("name", ""),
+            publishes=d.get("publishes", []),
+            subscribes=d.get("subscribes", []),
+            triggers_when=d.get("triggers_when", {}),
+            produces_schema=d.get("produces_schema", {}),
+            consumes_schema=d.get("consumes_schema", {}),
+            node=d.get("node"),
+            actor_id=d.get("actor_id"),
+            timestamp=d.get("timestamp", time.time()),
+            observed_samples=d.get("observed_samples", {}),
         )
 
     @classmethod
-    def from_spawn_config(cls, config: dict) -> "TopicContract":
+    def from_spawn_config(cls, config: dict) -> TopicContract:
         """Extract a TopicContract from a spawn config dict."""
         return cls(
-            name            = config.get("name", ""),
-            publishes       = config.get("publishes", []),
-            subscribes      = config.get("subscribes", []),
-            triggers_when   = config.get("triggers_when", {}),
-            produces_schema = config.get("produces_schema",
-                              config.get("output_schema", {})),
-            consumes_schema = config.get("consumes_schema",
-                              config.get("input_schema", {})),
-            node            = config.get("node"),
+            name=config.get("name", ""),
+            publishes=config.get("publishes", []),
+            subscribes=config.get("subscribes", []),
+            triggers_when=config.get("triggers_when", {}),
+            produces_schema=config.get("produces_schema", config.get("output_schema", {})),
+            consumes_schema=config.get("consumes_schema", config.get("input_schema", {})),
+            node=config.get("node"),
         )
 
 
 # ── MQTT wildcard matching ──────────────────────────────────────────────────────
 
+
 def _topic_matches(pattern: str, topic: str) -> bool:
-    """
-    Match an MQTT topic against a pattern with # and + wildcards.
+    """Match an MQTT topic against a pattern with # and + wildcards.
     # matches any number of levels. + matches exactly one level.
     """
     if pattern == topic:
@@ -236,9 +236,9 @@ def _match_parts(p: list[str], t: list[str]) -> bool:
 
 # ── Topic Registry ─────────────────────────────────────────────────────────────
 
+
 class TopicRegistry:
-    """
-    Global index of all live TopicContracts, queryable by topic pattern.
+    """Global index of all live TopicContracts, queryable by topic pattern.
 
     Agents register their contracts on startup. The planner and other agents
     query the registry to discover what data is available and who produces it —
@@ -260,18 +260,21 @@ class TopicRegistry:
 
     def register(self, contract: TopicContract):
         self._contracts[contract.name] = contract
-        logger.debug(f"[TopicRegistry] Registered '{contract.name}' | "
-                     f"pub={contract.publishes} sub={contract.subscribes}")
+        logger.debug(
+            f"[TopicRegistry] Registered '{contract.name}' | "
+            f"pub={contract.publishes} sub={contract.subscribes}"
+        )
 
     def unregister(self, name: str):
         removed = self._contracts.pop(name, None)
         if removed:
-            logger.info(f"[TopicRegistry] Unregistered '{name}' | "
-                        f"pub={removed.publishes} sub={removed.subscribes}")
+            logger.info(
+                f"[TopicRegistry] Unregistered '{name}' | "
+                f"pub={removed.publishes} sub={removed.subscribes}"
+            )
 
     def prune_stale(self, live_agent_names: set[str]) -> list[str]:
-        """
-        Remove contracts for agents that are no longer running.
+        """Remove contracts for agents that are no longer running.
 
         Call this before plan generation to ensure the planner doesn't wire
         against topics from stopped/deleted/replaced agents. Returns the
@@ -282,17 +285,14 @@ class TopicRegistry:
                 live = {a.name for a in registry.all_actors()}
                 pruned = bus.registry.prune_stale(live)
         """
-        stale = [
-            name for name in self._contracts
-            if name not in live_agent_names
-        ]
+        stale = [name for name in self._contracts if name not in live_agent_names]
         for name in stale:
             self.unregister(name)
         if stale:
             logger.info(f"[TopicRegistry] Pruned {len(stale)} stale contract(s): {stale}")
         return stale
 
-    def get(self, name: str) -> Optional[TopicContract]:
+    def get(self, name: str) -> TopicContract | None:
         return self._contracts.get(name)
 
     def all_contracts(self) -> list[TopicContract]:
@@ -309,13 +309,14 @@ class TopicRegistry:
     def find_by_capability(self, keyword: str) -> list[TopicContract]:
         """Find contracts whose published topics contain keyword."""
         kw = keyword.lower()
-        return [c for c in self._contracts.values()
-                if any(kw in t.lower() for t in c.publishes + c.subscribes)
-                or kw in c.name.lower()]
+        return [
+            c
+            for c in self._contracts.values()
+            if any(kw in t.lower() for t in c.publishes + c.subscribes) or kw in c.name.lower()
+        ]
 
     def find_wiring_opportunities(self) -> list[tuple[TopicContract, TopicContract, str]]:
-        """
-        Find pairs of agents that can be automatically wired together:
+        """Find pairs of agents that can be automatically wired together:
         agent A publishes topic X, agent B subscribes to X.
         Returns list of (producer, consumer, matching_topic).
         """
@@ -333,16 +334,15 @@ class TopicRegistry:
     def summary(self) -> dict:
         """Return a human-readable summary of the registry."""
         return {
-            "total_agents":    len(self._contracts),
-            "total_published": sum(len(c.publishes)  for c in self._contracts.values()),
-            "total_subscribed":sum(len(c.subscribes) for c in self._contracts.values()),
-            "wiring_pairs":    len(self.find_wiring_opportunities()),
-            "agents":          [c.to_dict() for c in self._contracts.values()],
+            "total_agents": len(self._contracts),
+            "total_published": sum(len(c.publishes) for c in self._contracts.values()),
+            "total_subscribed": sum(len(c.subscribes) for c in self._contracts.values()),
+            "wiring_pairs": len(self.find_wiring_opportunities()),
+            "agents": [c.to_dict() for c in self._contracts.values()],
         }
 
     def to_planner_context(self) -> str:
-        """
-        Format the registry as context for the planner LLM prompt.
+        """Format the registry as context for the planner LLM prompt.
         Shows what data flows are available, who can be wired to whom,
         and the ACTUAL payload schemas observed from real messages.
         """
@@ -363,12 +363,9 @@ class TopicRegistry:
             # ── Observed payload samples (authoritative field names) ────
             if c.observed_samples:
                 for topic, info in c.observed_samples.items():
-                    fields  = info.get("fields", {})
+                    fields = info.get("fields", {})
                     example = info.get("example", {})
-                    lines.append(
-                        f"    OBSERVED on '{topic}': "
-                        f"fields={fields}  example={example}"
-                    )
+                    lines.append(f"    OBSERVED on '{topic}': fields={fields}  example={example}")
 
         pairs = self.find_wiring_opportunities()
         if pairs:
@@ -381,9 +378,9 @@ class TopicRegistry:
 
 # ── Shared State Hub ───────────────────────────────────────────────────────────
 
+
 class SharedStateHub:
-    """
-    Maintains retained MQTT topics for shared world state.
+    """Maintains retained MQTT topics for shared world state.
 
     Instead of agents asking each other for state, they read from retained
     topics that are always up to date. Any agent can read current state
@@ -397,10 +394,10 @@ class SharedStateHub:
     """
 
     # Standard shared state topics
-    PRESENCE_TOPIC  = "home/presence/{zone}"
-    ENERGY_TOPIC    = "home/energy/current"
-    HA_STATE_TOPIC  = "home/state/{domain}/{entity_id}"
-    AGENT_DATA_TOPIC= "agents/{name}/data/{key}"
+    PRESENCE_TOPIC = "home/presence/{zone}"
+    ENERGY_TOPIC = "home/energy/current"
+    HA_STATE_TOPIC = "home/state/{domain}/{entity_id}"
+    AGENT_DATA_TOPIC = "agents/{name}/data/{key}"
 
     def __init__(self, mqtt_client):
         self._mqtt = mqtt_client
@@ -411,59 +408,70 @@ class SharedStateHub:
         self._cache[topic] = data
         if self._mqtt:
             import json as _json
+
             payload = _json.dumps(data) if not isinstance(data, (str, bytes)) else data
             await self._mqtt.publish(topic, payload, retain=retain, qos=1)
 
-    async def publish_presence(self, zone: str, present: bool,
-                               people: list[str] = None, source: str = ""):
+    async def publish_presence(
+        self, zone: str, present: bool, people: list[str] = None, source: str = ""
+    ):
         """Publish occupancy state for a zone."""
         topic = self.PRESENCE_TOPIC.format(zone=zone)
-        await self.publish_state(topic, {
-            "zone":    zone,
-            "present": present,
-            "people":  people or [],
-            "source":  source,
-            "ts":      time.time(),
-        })
+        await self.publish_state(
+            topic,
+            {
+                "zone": zone,
+                "present": present,
+                "people": people or [],
+                "source": source,
+                "ts": time.time(),
+            },
+        )
 
-    async def publish_energy(self, kwh: float, cost_per_hour: float = 0.0,
-                             source: str = ""):
+    async def publish_energy(self, kwh: float, cost_per_hour: float = 0.0, source: str = ""):
         """Publish current energy consumption."""
-        await self.publish_state(self.ENERGY_TOPIC, {
-            "kwh":           kwh,
-            "cost_per_hour": cost_per_hour,
-            "source":        source,
-            "ts":            time.time(),
-        })
+        await self.publish_state(
+            self.ENERGY_TOPIC,
+            {
+                "kwh": kwh,
+                "cost_per_hour": cost_per_hour,
+                "source": source,
+                "ts": time.time(),
+            },
+        )
 
-    async def publish_ha_state(self, entity_id: str, state: str,
-                                domain: str = "", attributes: dict = None):
+    async def publish_ha_state(
+        self, entity_id: str, state: str, domain: str = "", attributes: dict = None
+    ):
         """Mirror an HA entity state to a shared retained topic."""
         if not domain:
             domain = entity_id.split(".")[0] if "." in entity_id else "sensor"
         topic = self.HA_STATE_TOPIC.format(domain=domain, entity_id=entity_id)
-        await self.publish_state(topic, {
-            "entity_id":  entity_id,
-            "state":      state,
-            "attributes": attributes or {},
-            "ts":         time.time(),
-        })
+        await self.publish_state(
+            topic,
+            {
+                "entity_id": entity_id,
+                "state": state,
+                "attributes": attributes or {},
+                "ts": time.time(),
+            },
+        )
 
     async def publish_agent_data(self, agent_name: str, key: str, data: Any):
         """Publish a named piece of world state from an agent."""
         topic = self.AGENT_DATA_TOPIC.format(name=agent_name, key=key)
         await self.publish_state(topic, data)
 
-    def get_cached(self, topic: str) -> Optional[Any]:
+    def get_cached(self, topic: str) -> Any | None:
         """Return locally cached value for a topic (may be stale)."""
         return self._cache.get(topic)
 
 
 # ── Stream Window ──────────────────────────────────────────────────────────────
 
+
 class StreamWindow:
-    """
-    Sliding time window over an MQTT topic stream.
+    """Sliding time window over an MQTT topic stream.
 
     Allows agents to reason about temporal patterns without implementing
     their own ring buffers. The window is updated every time a message
@@ -481,11 +489,11 @@ class StreamWindow:
     """
 
     def __init__(self, topic: str, seconds: float = 300, max_size: int = 1000):
-        self.topic    = topic
-        self.seconds  = seconds
+        self.topic = topic
+        self.seconds = seconds
         self.max_size = max_size
         self._buffer: deque = deque(maxlen=max_size)
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
 
     def _trim(self):
         """Remove entries older than the window duration."""
@@ -507,21 +515,21 @@ class StreamWindow:
         self._trim()
         return [e[key] for e in self._buffer if key in e]
 
-    def latest(self) -> Optional[dict]:
+    def latest(self) -> dict | None:
         """Return the most recent entry."""
         self._trim()
         return self._buffer[-1] if self._buffer else None
 
-    def mean(self, key: str = "value") -> Optional[float]:
+    def mean(self, key: str = "value") -> float | None:
         """Compute mean of a numeric field over the window."""
         vals = self.values(key)
         return sum(vals) / len(vals) if vals else None
 
-    def min(self, key: str = "value") -> Optional[float]:
+    def min(self, key: str = "value") -> float | None:
         vals = self.values(key)
         return min(vals) if vals else None
 
-    def max(self, key: str = "value") -> Optional[float]:
+    def max(self, key: str = "value") -> float | None:
         vals = self.values(key)
         return max(vals) if vals else None
 
@@ -558,8 +566,7 @@ class StreamWindow:
             return True
         return (time.time() - latest["_ts"]) >= seconds
 
-    def event_count(self, key: str = None, value: Any = None,
-                    seconds: float = None) -> int:
+    def event_count(self, key: str = None, value: Any = None, seconds: float = None) -> int:
         """Count events matching optional key=value in the last N seconds."""
         self._trim()
         cutoff = time.time() - (seconds or self.seconds)
@@ -567,26 +574,23 @@ class StreamWindow:
         for e in self._buffer:
             if e["_ts"] < cutoff:
                 continue
-            if key is None:
-                count += 1
-            elif key in e and (value is None or e[key] == value):
+            if key is None or (key in e and (value is None or e[key] == value)):
                 count += 1
         return count
 
     def start(self, mqtt_broker: str, mqtt_port: int):
         """Start the background MQTT listener for this window."""
-        self._task = asyncio.create_task(
-            self._listen(mqtt_broker, mqtt_port)
-        )
+        self._task = asyncio.create_task(self._listen(mqtt_broker, mqtt_port))
         return self
 
     async def _listen(self, broker: str, port: int):
         try:
-            import aiomqtt
+            import aiomqtt  # noqa: F401
         except ImportError:
             logger.error("[StreamWindow] aiomqtt not installed")
             return
         from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
+
         while True:
             try:
                 async with mqtt_client(broker, port) as client:
@@ -599,7 +603,7 @@ class StreamWindow:
                         self.push(payload)
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except Exception:
                 await asyncio.sleep(5)
 
     def stop(self):
@@ -609,9 +613,9 @@ class StreamWindow:
 
 # ── Topic Bus ──────────────────────────────────────────────────────────────────
 
+
 class TopicBus:
-    """
-    Central coordination hub — ties together TopicRegistry, SharedStateHub,
+    """Central coordination hub — ties together TopicRegistry, SharedStateHub,
     and StreamWindow. Injected into ActorSystem at startup.
 
     Responsible for:
@@ -621,13 +625,12 @@ class TopicBus:
       4. Publishing wiring opportunities to the planner
     """
 
-    def __init__(self, mqtt_client=None, mqtt_broker: str = "localhost",
-                 mqtt_port: int = 1883):
-        self.registry    = TopicRegistry()
-        self.state_hub   = SharedStateHub(mqtt_client)
+    def __init__(self, mqtt_client=None, mqtt_broker: str = "localhost", mqtt_port: int = 1883):
+        self.registry = TopicRegistry()
+        self.state_hub = SharedStateHub(mqtt_client)
         self._mqtt_broker = mqtt_broker
-        self._mqtt_port   = mqtt_port
-        self._mqtt        = mqtt_client
+        self._mqtt_port = mqtt_port
+        self._mqtt = mqtt_client
 
     def register_contract(self, contract: TopicContract):
         """Register an agent's topic contract."""
@@ -638,8 +641,7 @@ class TopicBus:
         """Remove an agent's contract when it stops."""
         self.registry.unregister(agent_name)
 
-    def make_window(self, topic: str, seconds: float = 300,
-                    max_size: int = 1000) -> StreamWindow:
+    def make_window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> StreamWindow:
         """Create and start a StreamWindow for an agent."""
         window = StreamWindow(topic, seconds=seconds, max_size=max_size)
         window.start(self._mqtt_broker, self._mqtt_port)
@@ -666,9 +668,9 @@ class TopicBus:
 
     def summary(self) -> dict:
         return {
-            "registry":     self.registry.summary(),
-            "mqtt_broker":  self._mqtt_broker,
-            "mqtt_port":    self._mqtt_port,
+            "registry": self.registry.summary(),
+            "mqtt_broker": self._mqtt_broker,
+            "mqtt_port": self._mqtt_port,
         }
 
     def to_planner_context(self) -> str:
@@ -679,17 +681,16 @@ class TopicBus:
 # ── Module-level singleton ──────────────────────────────────────────────────────
 # Accessed via get_topic_bus() from anywhere in the codebase
 
-_topic_bus: Optional[TopicBus] = None
+_topic_bus: TopicBus | None = None
 
 
-def init_topic_bus(mqtt_client=None, mqtt_broker: str = "localhost",
-                   mqtt_port: int = 1883) -> TopicBus:
+def init_topic_bus(
+    mqtt_client=None, mqtt_broker: str = "localhost", mqtt_port: int = 1883
+) -> TopicBus:
     global _topic_bus
-    _topic_bus = TopicBus(mqtt_client=mqtt_client,
-                          mqtt_broker=mqtt_broker,
-                          mqtt_port=mqtt_port)
+    _topic_bus = TopicBus(mqtt_client=mqtt_client, mqtt_broker=mqtt_broker, mqtt_port=mqtt_port)
     return _topic_bus
 
 
-def get_topic_bus() -> Optional[TopicBus]:
+def get_topic_bus() -> TopicBus | None:
     return _topic_bus

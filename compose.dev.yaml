@@ -47,6 +47,10 @@ services:
 
   # ── Wactorz Python app ───────────────────────────────────────────────────────
   wactorz:
+    # Opt-in: `docker compose -f compose.dev.yaml --profile app up`. Default `up`
+    # brings only mosquitto, so a host-run backend (`make dev-full`) owns :8888
+    # without a port clash. Use this profile to exercise the actual container.
+    profiles: [app]
     build:
       context: .
       dockerfile: Dockerfile
@@ -79,6 +83,8 @@ services:
       retries: 5
 
   prometheus:
+    # depends_on wactorz, so it shares the `app` profile (can't run without it).
+    profiles: [app]
     image: prom/prometheus:v2.54.1
     container_name: wactorz-prometheus
     restart: unless-stopped
@@ -115,6 +121,8 @@ services:
     networks:
       - wactorz-net
   blackbox-exporter:
+    # Feeds prometheus; shares the `app` profile.
+    profiles: [app]
     image: prom/blackbox-exporter:v0.25.0
     container_name: wactorz-blackbox
     restart: unless-stopped

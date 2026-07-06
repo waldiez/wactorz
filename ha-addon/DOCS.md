@@ -25,6 +25,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `llm_cost_limit_usd` | `0` | Spend cap in USD. `0` disables enforcement; resets automatically each period. |
 | `llm_cost_limit_period` | `monthly` | Period for the spend cap: `daily`, `weekly`, or `monthly`. |
 | `ollama_url` | `http://localhost:11434` | Ollama base URL (only used when `llm_provider: ollama`) |
+| `openai_url` | *(blank)* | OpenAI-compatible base URL (only used when `llm_provider: openai`). Leave blank for the real OpenAI API, or point to a LiteLLM proxy, Groq, Together, vLLM, LM Studio, etc. |
 | `mqtt_host` | `core-mosquitto` | MQTT broker hostname — use `core-mosquitto` for the official Mosquitto addon |
 | `mqtt_port` | `1883` | MQTT broker port |
 | `mqtt_ws_port` | `8083` | MQTT WebSocket broker port |

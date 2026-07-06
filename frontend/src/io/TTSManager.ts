@@ -17,16 +17,13 @@
  */
 
 import { ambient } from "./AmbientManager";
+import { safeStorage } from "../safeStorage";
+import { emit } from "../events";
+import type { TTSVoice } from "../types/tts";
 
 const LS_BEEP = "wactorz.beep";
 const LS_TTS = "wactorz.tts";
 const LS_VOICE = "wactorz.ttsVoice";
-
-export interface TTSVoice {
-    name: string;
-    locale: string;
-    gender: string;
-}
 
 export class TTSManager {
     private _beepEnabled: boolean;
@@ -40,8 +37,8 @@ export class TTSManager {
     private _apiBase = "";
 
     constructor() {
-        this._beepEnabled = localStorage.getItem(LS_BEEP) !== "0";
-        this._ttsEnabled = localStorage.getItem(LS_TTS) === "1";
+        this._beepEnabled = safeStorage.get(LS_BEEP) !== "0";
+        this._ttsEnabled = safeStorage.get(LS_TTS) === "1";
     }
 
     /** Set the API base (plain-relative or ingress prefix). Call before init(). */
@@ -65,7 +62,7 @@ export class TTSManager {
         try {
             const res = await fetch(`${this._apiBase}/api/tts/voices`);
             if (res.ok) {
-                const data = await res.json();
+                const data: unknown = await res.json();
                 if (Array.isArray(data) && data.length > 0) {
                     this._voices = data as TTSVoice[];
                     this._serverAvailable = true;
@@ -107,39 +104,47 @@ export class TTSManager {
     }
 
     private _emitVoices(): void {
-        document.dispatchEvent(new CustomEvent("tts-voices-loaded", { detail: { voices: this._voices } }));
+        emit("tts-voices-loaded", { voices: this._voices });
     }
 
+    /** Whether the notification beep is on. */
     get beepEnabled(): boolean {
         return this._beepEnabled;
     }
+    /** Whether spoken TTS is on. */
     get ttsEnabled(): boolean {
         return this._ttsEnabled;
     }
+    /** True once the server edge-tts endpoint has been confirmed available. */
     get serverAvailable(): boolean {
         return this._serverAvailable === true;
     }
+    /** Available voices (server edge-tts list, or browser voices as a fallback). */
     get voices(): TTSVoice[] {
         return this._voices;
     }
 
+    /** The persisted selected voice name, or "" for the default. */
     get selectedVoice(): string {
-        return localStorage.getItem(LS_VOICE) ?? "";
+        return safeStorage.get(LS_VOICE) ?? "";
     }
 
+    /** Persist the selected voice name. */
     setVoice(name: string): void {
-        localStorage.setItem(LS_VOICE, name);
+        safeStorage.set(LS_VOICE, name);
     }
 
+    /** Toggle the notification beep (persisted); returns the new state. */
     toggleBeep(): boolean {
         this._beepEnabled = !this._beepEnabled;
-        localStorage.setItem(LS_BEEP, this._beepEnabled ? "1" : "0");
+        safeStorage.set(LS_BEEP, this._beepEnabled ? "1" : "0");
         return this._beepEnabled;
     }
 
+    /** Toggle spoken TTS (persisted), cancelling any in-progress speech when turning off; returns the new state. */
     toggleTTS(): boolean {
         this._ttsEnabled = !this._ttsEnabled;
-        localStorage.setItem(LS_TTS, this._ttsEnabled ? "1" : "0");
+        safeStorage.set(LS_TTS, this._ttsEnabled ? "1" : "0");
         if (!this._ttsEnabled) {
             window.speechSynthesis?.cancel();
         }
@@ -204,8 +209,11 @@ export class TTSManager {
     }
 
     private _speakServer(text: string): void {
-        // duck ambient while server audio plays
+        // Duck ambient while server audio plays; release it the instant we know the
+        // audio won't play (any failure/fallback below) or when it finishes. Every
+        // early-return path must call unduck() or ambient stays pinned at DUCK_VOLUME.
         ambient.duck(true);
+        const unduck = () => ambient.duck(false);
         const params = new URLSearchParams({ text });
         const voice = this.selectedVoice;
         if (voice) {
@@ -216,10 +224,12 @@ export class TTSManager {
             .then(res => {
                 if (res.status === 503 || res.status === 404) {
                     this._serverAvailable = false;
+                    unduck();
                     this._speakBrowser(text);
                     return null;
                 }
                 if (!res.ok) {
+                    unduck();
                     return null;
                 }
                 this._serverAvailable = true;
@@ -232,6 +242,7 @@ export class TTSManager {
                 // Decode + play through AudioContext (already unlocked by beep gesture)
                 const ctx = this._ctx();
                 if (!ctx) {
+                    unduck();
                     this._speakBrowser(text);
                     return;
                 }
@@ -240,18 +251,17 @@ export class TTSManager {
                         const src = ctx.createBufferSource();
                         src.buffer = decoded;
                         src.connect(ctx.destination);
-                        src.onended = () => {
-                            ambient.duck(false);
-                        };
+                        src.onended = unduck;
                         src.start();
                     })
                     .catch(() => {
-                        ambient.duck(false);
+                        unduck();
                         this._speakBrowser(text);
                     });
             })
             .catch(() => {
                 this._serverAvailable = false;
+                unduck();
                 this._speakBrowser(text);
             });
     }
@@ -276,4 +286,5 @@ export class TTSManager {
     }
 }
 
+/** Shared TTSManager singleton. */
 export const tts = new TTSManager();

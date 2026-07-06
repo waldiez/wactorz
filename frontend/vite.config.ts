@@ -23,13 +23,19 @@ export default defineConfig({
     build: {
         outDir: "../static/app",
         emptyOutDir: true,
-        sourcemap: true,
+        sourcemap: false,
         target: "es2022",
         rollupOptions: {
             output: {
                 manualChunks: id => {
-                    // mqtt.js + ws deps
-                    if (id.includes("mqtt") || id.includes("node_modules")) {
+                    // Split third-party deps into cacheable chunks. Match on the
+                    // node_modules package path, never a bare "mqtt" substring —
+                    // that would also catch the app's own src/mqtt/ modules, which
+                    // must stay in the entry chunk.
+                    if (id.includes("node_modules")) {
+                        if (id.includes("node_modules/mqtt/") || id.includes("node_modules/mqtt-packet/")) {
+                            return "mqtt";
+                        }
                         return "vendor";
                     }
                 },

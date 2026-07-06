@@ -59,7 +59,7 @@ def _parse_connect(pkt: bytes) -> dict:
         if not b & 0x80:
             break
         mult *= 128
-    body = pkt[i:i + rem]
+    body = pkt[i : i + rem]
     assert len(body) == rem, "remaining length does not match body"
     pn = (body[0] << 8) | body[1]
     pos = 2 + pn
@@ -81,7 +81,7 @@ def _parse_connect(pkt: bytes) -> dict:
 
     def rd(p):
         ln = (body[p] << 8) | body[p + 1]
-        return body[p + 2:p + 2 + ln].decode("utf-8"), p + 2 + ln
+        return body[p + 2 : p + 2 + ln].decode("utf-8"), p + 2 + ln
 
     cid, pos = rd(pos)
     user = pwd = None

@@ -18,23 +18,17 @@
  */
 
 import type { AgentInfo } from "../types/agent";
-import type { FeedItem } from "./ActivityFeed";
-import { HAClient, type HAEntity } from "../io/HAClient";
-import { buildHeader, buildBottomNav } from "./dashboard/header";
-import { renderHADevices, areaIconText } from "./dashboard/haDevices";
-import { stateLabel, relTime, sortAgents } from "./dashboard/agentState";
-import { buildFeedView, appendFeedItemToView, feedItemEl, feedKey } from "./dashboard/feedView";
-import { buildHAView } from "./dashboard/haView";
+import { safeStorage } from "../safeStorage";
+import type { FeedItem } from "../types/feed";
+import { buildHeader, buildBottomNav, setHaNavUrl } from "./dashboard/header";
+import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
+import type { View, ConnState } from "./dashboard/types";
+import { buildFeedView, appendFeedItemToView, feedKey } from "./dashboard/feedView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import { MetricsController } from "./dashboard/metrics";
 import { seedHaConfigFromServer } from "./dashboard/haConfig";
-
-// Re-exported for tests; implemented in dashboard/haDevices.
-export { areaIconText };
-
-type View = "overview" | "feed" | "chat" | "ha" | "settings";
-type ConnState = "live" | "connecting" | "demo";
+import { emit, listen } from "../events";
 
 export class CardDashboard {
     private root: HTMLElement;
@@ -52,10 +46,6 @@ export class CardDashboard {
     private tickTimer: ReturnType<typeof setInterval> | null = null;
     private hideHeartbeats: boolean = true;
 
-    private haClient: HAClient | null = null;
-    private _haEntities: import("../io/HAClient").HAEntity[] = [];
-    private _haRegistries: import("../io/HAClient").HARegistries | null = null;
-
     private _remoteNodes = new Map<string, { agents: string[]; lastSeen: number }>();
     private _removingIds = new Set<string>();
 
@@ -68,12 +58,9 @@ export class CardDashboard {
     private _wipeAll: ((e: Event) => void) | null = null;
     private _clearFeed: ((e: Event) => void) | null = null;
 
+    /** HA base URL (seeded from /api/config) — the Devices nav button links to it. */
     private get haUrl(): string | null {
-        return localStorage.getItem("wactorz-ha-url") || null;
-    }
-
-    private get haToken(): string | null {
-        return localStorage.getItem("wactorz-ha-token") || null;
+        return safeStorage.get("wactorz-ha-url") || null;
     }
 
     constructor() {
@@ -113,66 +100,36 @@ export class CardDashboard {
         });
         this.root.appendChild(this._chat.buildIobar());
         document.body.appendChild(this.root);
-        this._initHAClient();
         void this._loadServerConfig();
     }
 
+    /** Seed the HA URL from /api/config and point the Devices nav link at it. */
     private async _loadServerConfig(): Promise<void> {
         if (!(await seedHaConfigFromServer())) {
             return;
         }
-        if (!this.haClient) {
-            this._initHAClient();
-        }
-        if (this.root.classList.contains("cd-visible")) {
-            this._renderView();
-        }
+        setHaNavUrl(this.root, this.haUrl);
     }
 
-    private _initHAClient(): void {
-        const url = this.haUrl;
-        const token = this.haToken;
-        if (url && token) {
-            this.haClient = new HAClient(url, token);
-            this.haClient.onRegistriesUpdate = r => {
-                this._haRegistries = r;
-                if (this.view === "ha" && this._haEntities.length) {
-                    this._renderHADevices(this._haEntities);
-                }
-            };
-        } else {
-            this.haClient = null;
-            this._haRegistries = null;
-        }
-    }
-
+    /** Reveal the dashboard, seed it with `agents`, wire events, and start the refresh timers. */
     show(agents: AgentInfo[]): void {
         agents.forEach(a => this.agents.set(a.id, a));
         this.root.classList.add("cd-visible");
-        this._hideFloatingUI();
         this._wireEvents();
         this._renderView();
-        this.tickTimer = setInterval(() => this._refreshTimestamps(), 5000);
+        this.tickTimer = setInterval(() => {
+            if (!document.hidden) {
+                this._refreshTimestamps();
+            }
+        }, 5000);
         this._metrics.startPolling();
-        // Connect HA once for the session — stays connected across sub-view changes
-        // so state_changed events flow to the activity feed at all times.
-        if (this.haClient && !this.haClient.connected) {
-            this.haClient.connect(entities => {
-                this._haEntities = entities;
-                if (this.view === "ha") {
-                    this._renderHADevices(entities);
-                }
-            });
-        }
     }
 
+    /** Hide the dashboard, unwire events, release the mic, and stop timers. */
     hide(): void {
         this.root.classList.remove("cd-visible");
-        this._showFloatingUI();
         this._unwireEvents();
-        this.haClient?.disconnect();
         this._chat.cancelMic(); // release the mic if a recording was in progress
-        this._haEntities = [];
         if (this.tickTimer) {
             clearInterval(this.tickTimer);
             this.tickTimer = null;
@@ -180,23 +137,28 @@ export class CardDashboard {
         this._metrics.stopPolling();
     }
 
+    /** Hide and remove the dashboard from the DOM. */
     destroy(): void {
         this.hide();
         this.root.remove();
     }
 
+    /** Set the aggregate cost figure. */
     setTotalCostUsd(usd: number): void {
         this._metrics.setTotalCostUsd(usd);
     }
 
+    /** Set the aggregate message count. */
     setTotalMessages(count: number): void {
         this._metrics.setTotalMessages(count);
     }
 
+    /** Set host CPU/memory telemetry. */
     setHostStats(cpu: number, memUsedMb: number, memTotalMb?: number): void {
         this._metrics.setHostStats(cpu, memUsedMb, memTotalMb);
     }
 
+    /** Add an agent and refresh the affected views. */
     addAgent(agent: AgentInfo): void {
         this.agents.set(agent.id, agent);
         if (!this.root.classList.contains("cd-visible")) {
@@ -213,6 +175,7 @@ export class CardDashboard {
         this._chat.updateTargetSelect();
     }
 
+    /** Update an agent in place and refresh the affected views. */
     updateAgent(agent: AgentInfo): void {
         this.agents.set(agent.id, agent);
         if (!this.root.classList.contains("cd-visible")) {
@@ -227,9 +190,11 @@ export class CardDashboard {
         }
     }
 
+    /** Remove an agent (with exit animation) and forget its chat history. */
     removeAgent(id: string): void {
         const removed = this.agents.get(id);
         this.agents.delete(id);
+        this.lastHb.delete(id); // else churned agents leak dead entries _refreshTimestamps scans
         // history is keyed by agent NAME, not UUID — look up name before deleting
         if (removed) {
             this._chat.forgetHistory(removed.name);
@@ -256,6 +221,7 @@ export class CardDashboard {
         this._chat.updateTargetSelect();
     }
 
+    /** Record a remote node's agent list and refresh the nodes panel. */
     updateRemoteNode(name: string, agents: string[]): void {
         this._remoteNodes.set(name, { agents, lastSeen: Date.now() });
         if (this.view === "overview") {
@@ -263,6 +229,7 @@ export class CardDashboard {
         }
     }
 
+    /** Record a heartbeat timestamp and pulse the agent's card. */
     onHeartbeat(agentId: string, timestampMs: number, _cpu?: number, _mem?: number): void {
         this.lastHb.set(agentId, timestampMs);
         if (!this.root.classList.contains("cd-visible")) {
@@ -287,6 +254,7 @@ export class CardDashboard {
         }
     }
 
+    /** Briefly flash an alert class (error/warning) on the agent's card. */
     showAlert(agentId: string, severity: string): void {
         const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
         if (!card) {
@@ -298,6 +266,7 @@ export class CardDashboard {
         setTimeout(() => card.classList.remove(cls, "af-card-alert-error", "af-card-alert-warn"), 900);
     }
 
+    /** Briefly flash the sender's card to signal chat activity. */
     onChat(fromId: string, _toId: string): void {
         const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(fromId)}"]`);
         if (!card) {
@@ -310,17 +279,16 @@ export class CardDashboard {
     private _wireEvents(): void {
         this._wireFeedEvents();
         this._chat.wire();
-        this._evConn = e => {
-            this.connState = (e as CustomEvent<{ status: ConnState }>).detail.status;
+        this._evConn = listen("af-connection-status", detail => {
+            this.connState = detail.status;
             this._renderConnBadge();
             this._renderHealth();
-        };
-        document.addEventListener("af-connection-status", this._evConn);
+        });
     }
 
     private _wireFeedEvents(): void {
-        this._evFeed = e => {
-            const item = (e as CustomEvent<{ item: FeedItem }>).detail.item;
+        this._evFeed = listen("af-feed-push", detail => {
+            const item = detail.item;
             // The same event can arrive from several sources (SQLite seed, WS
             // log_feed replay, live MQTT/chat); drop exact duplicates so the feed
             // doesn't double up or render out of order on rebuild.
@@ -339,26 +307,22 @@ export class CardDashboard {
             if (this.view === "feed") {
                 this._appendFeedItemToView(item);
             }
-        };
-        document.addEventListener("af-feed-push", this._evFeed);
+        });
 
-        this._wipeAll = (_e: Event) => {
+        this._wipeAll = listen("af-wipe-all", () => {
             this.feedItems = [];
             this._feedKeys.clear();
             this._chat.clearAll();
             this._renderView();
-        };
-        document.addEventListener("af-wipe-all", this._wipeAll);
+        });
 
         // A metrics/logs reset cleared the server-side activity log — drop this
-        // dashboard's own feed too. (The slide-out ActivityFeed in main.ts is a
-        // SEPARATE component with its own handler; this clears the in-card feed.)
-        this._clearFeed = (_e: Event) => {
+        // dashboard's own in-card feed too.
+        this._clearFeed = listen("af-clear-feed", () => {
             this.feedItems = [];
             this._feedKeys.clear();
             this._renderView();
-        };
-        document.addEventListener("af-clear-feed", this._clearFeed);
+        });
     }
 
     private _unwireEvents(): void {
@@ -377,29 +341,6 @@ export class CardDashboard {
         this._evFeed = this._evConn = this._wipeAll = this._clearFeed = null;
     }
 
-    private _hideFloatingUI(): void {
-        ["hud", "hud-stats", "chat-panel"].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) {
-                el.style.display = "none";
-            }
-        });
-    }
-
-    private _showFloatingUI(): void {
-        ["hud", "hud-stats", "feed-toggle"].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) {
-                el.style.display = "";
-            }
-        });
-        // Restore feed panel if it was open before the dashboard was shown
-        const feedPanel = document.getElementById("activity-feed");
-        if (feedPanel) {
-            feedPanel.style.display = "";
-        }
-    }
-
     private _renderView(): void {
         const body = this.root.querySelector<HTMLElement>(".af-body")!;
         body.innerHTML = "";
@@ -413,8 +354,6 @@ export class CardDashboard {
             body.appendChild(this._overview.build());
         } else if (this.view === "feed") {
             body.appendChild(this._buildFeedView());
-        } else if (this.view === "ha") {
-            body.appendChild(this._buildHAView());
         } else if (this.view === "settings") {
             body.appendChild(this._buildSettingsView());
         } else if (this.view === "chat") {
@@ -428,7 +367,13 @@ export class CardDashboard {
     /** Sync the header view buttons, health line and target-select to the view. */
     private _syncViewChrome(): void {
         this.root.querySelectorAll<HTMLElement>(".af-view-btn[data-view]").forEach(btn => {
-            btn.classList.toggle("active", btn.dataset["view"] === this.view);
+            const active = btn.dataset["view"] === this.view;
+            btn.classList.toggle("active", active);
+            if (active) {
+                btn.setAttribute("aria-current", "page");
+            } else {
+                btn.removeAttribute("aria-current");
+            }
         });
         this._renderHealth();
         // Only show the agent-target dropdown in the chat view
@@ -447,22 +392,6 @@ export class CardDashboard {
         }
         this.view = v;
         this._renderView();
-
-        if (this.view === "ha") {
-            if (this.haClient?.connected) {
-                // Already connected — just re-render with cached entities
-                if (this._haEntities.length) {
-                    this._renderHADevices(this._haEntities);
-                }
-            } else {
-                this.haClient?.connect(entities => {
-                    this._haEntities = entities;
-                    if (this.view === "ha") {
-                        this._renderHADevices(entities);
-                    }
-                });
-            }
-        }
     }
 
     private _buildFeedView(): HTMLElement {
@@ -476,10 +405,6 @@ export class CardDashboard {
 
     private _appendFeedItemToView(item: FeedItem): void {
         appendFeedItemToView(this.root, item, this.hideHeartbeats);
-    }
-
-    private _feedItemEl(container: HTMLElement, item: FeedItem): void {
-        feedItemEl(container, item);
     }
 
     private _renderConnBadge(): void {
@@ -519,33 +444,11 @@ export class CardDashboard {
                 btn.classList.remove("sending");
             }, 600);
         }
-        document.dispatchEvent(
-            new CustomEvent("af-agent-command", {
-                detail: { command: action, agentId: id },
-            }),
-        );
-    }
-
-    private _buildHAView(): HTMLElement {
-        return buildHAView(this.haUrl, this.haToken, {
-            onApply: () => {
-                this._initHAClient();
-                this._setView("ha");
-            },
-        });
-    }
-
-    private _renderHADevices(entities: HAEntity[]): void {
-        const container = this.root.querySelector<HTMLElement>("#ha-devices-container");
-        if (!container) {
-            return;
-        }
-        renderHADevices(container, entities, this._haRegistries, this.haClient);
+        emit("af-agent-command", { command: action, agentId: id });
     }
 
     private _refreshTimestamps(): void {
         const now = Date.now();
-        const STALE_MS = 180_000; // matches nodes panel threshold
         this.lastHb.forEach((ms, id) => {
             const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
             if (!card) {
@@ -572,10 +475,11 @@ export class CardDashboard {
 
         // The iobar is owned by the chat controller and appended in the constructor.
         const onSetView = (v: View) => this._setView(v);
+        const haUrl = this.haUrl;
         root.append(
-            buildHeader({ view: this.view, connState: this.connState, onSetView }),
+            buildHeader({ view: this.view, connState: this.connState, onSetView, haUrl }),
             body,
-            buildBottomNav({ view: this.view, onSetView }),
+            buildBottomNav({ view: this.view, onSetView, haUrl }),
         );
         return root;
     }

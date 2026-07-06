@@ -1,5 +1,4 @@
-"""
-CATALOG AGENT — anomaly-detector
+"""CATALOG AGENT — anomaly-detector
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Learns "normal" patterns from historical time-series data (SQLite), then
 detects anomalies in real-time (MQTT). Works with both real-world Home

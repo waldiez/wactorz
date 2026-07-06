@@ -13,17 +13,23 @@
  * the endpoint and `UPLOADS_ENABLED` go live and `STUB_UPLOADS` stays off.
  */
 import type { Attachment } from "../../types/agent";
+import { uid } from "../../ids";
 
-/** Whether the attachment UI is shown (needs the `/api/upload` backend). */
-export const UPLOADS_ENABLED = false;
+/**
+ * Whether the attachment UI (drag-drop + paste) is shown. Off by default;
+ * enable per-deploy at build time with `VITE_UPLOADS_ENABLED=true` once the
+ * `/api/upload` backend is live.
+ */
+export const UPLOADS_ENABLED = import.meta.env["VITE_UPLOADS_ENABLED"] === "true";
 
 /** Dev-only: set `true` to keep attachments client-side (object URL) instead of
  *  POSTing them, so the compose/preview UX can be demoed with no backend. Ships
  *  as `false`; flip it locally alongside `UPLOADS_ENABLED` when demoing offline. */
 const STUB_UPLOADS = false;
 
-/** Accepted MIME prefixes and file extensions. */
-export const ACCEPTED_MIME = ["image/", "audio/", "video/", "text/", "application/pdf"];
+/** Accepted MIME-type prefixes. */
+export const ACCEPTED_MIME = ["image/", "audio/", "text/", "application/pdf"];
+/** Accepted file extensions (checked when the MIME prefix doesn't match). */
 export const ACCEPTED_EXT = [
     ".pdf",
     ".txt",
@@ -37,8 +43,10 @@ export const ACCEPTED_EXT = [
     ".xlsx",
     ".json",
 ];
-export const MAX_BYTES = 25 * 1024 * 1024; // 25 MB per file
+/** Maximum accepted file size (25 MB per file). */
+export const MAX_BYTES = 25 * 1024 * 1024;
 
+/** True when a file's MIME prefix or extension is in the accept-list. */
 export function isAccepted(file: File): boolean {
     if (ACCEPTED_MIME.some(prefix => file.type.startsWith(prefix))) {
         return true;
@@ -47,6 +55,7 @@ export function isAccepted(file: File): boolean {
     return ACCEPTED_EXT.some(ext => name.endsWith(ext));
 }
 
+/** Format a byte count compactly as B / KB / MB. */
 export function humanSize(bytes: number): string {
     if (bytes < 1024) {
         return `${bytes} B`;
@@ -61,8 +70,6 @@ export function humanSize(bytes: number): string {
 export function isImage(att: Attachment): boolean {
     return att.mime.startsWith("image/");
 }
-
-let _localSeq = 0;
 
 /**
  * Validate and upload `file`, resolving to its {@link Attachment}. Throws on a
@@ -79,7 +86,7 @@ export async function uploadFile(file: File, apiBase = ""): Promise<Attachment> 
     }
     if (STUB_UPLOADS) {
         return {
-            id: `local-${Date.now()}-${_localSeq++}`,
+            id: uid("local"),
             name: file.name,
             mime: file.type,
             size: file.size,

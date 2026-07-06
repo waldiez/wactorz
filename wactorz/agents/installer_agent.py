@@ -1,5 +1,4 @@
-"""
-InstallerAgent — pre-defined agent that installs Python packages on demand.
+"""InstallerAgent — pre-defined agent that installs Python packages on demand.
 Always uses sys.executable so packages land in the active venv (e.g. myenv),
 not the system Python.
 """
@@ -17,69 +16,68 @@ logger = logging.getLogger(__name__)
 
 # pip package name → importable module name
 PACKAGE_TO_IMPORT = {
-    "opencv-python":     "cv2",
-    "pillow":            "PIL",
-    "scikit-learn":      "sklearn",
-    "beautifulsoup4":    "bs4",
-    "pymupdf":           "fitz",
-    "python-docx":       "docx",
-    "python-pptx":       "pptx",
-    "pdfplumber":        "pdfplumber",
-    "httpx":             "httpx",
-    "requests":          "requests",
-    "numpy":             "numpy",
-    "pandas":            "pandas",
-    "torch":             "torch",
-    "transformers":      "transformers",
-    "ultralytics":       "ultralytics",
-    "pyserial":          "serial",
+    "opencv-python": "cv2",
+    "pillow": "PIL",
+    "scikit-learn": "sklearn",
+    "beautifulsoup4": "bs4",
+    "pymupdf": "fitz",
+    "python-docx": "docx",
+    "python-pptx": "pptx",
+    "pdfplumber": "pdfplumber",
+    "httpx": "httpx",
+    "requests": "requests",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "torch": "torch",
+    "transformers": "transformers",
+    "ultralytics": "ultralytics",
+    "pyserial": "serial",
     "duckduckgo-search": "duckduckgo_search",
-    "ddgs":              "duckduckgo_search",
-    "asyncssh":          "asyncssh",
-    "rich":              "rich",
-    "tqdm":              "tqdm",
-    "lxml":              "lxml",
-    "aiohttp":           "aiohttp",
+    "ddgs": "duckduckgo_search",
+    "asyncssh": "asyncssh",
+    "rich": "rich",
+    "tqdm": "tqdm",
+    "lxml": "lxml",
+    "aiohttp": "aiohttp",
 }
 
 # importable module name → pip package name (for when user gives import names)
 IMPORT_TO_PACKAGE = {
-    "cv2":               "opencv-python",
-    "PIL":               "pillow",
-    "sklearn":           "scikit-learn",
-    "bs4":               "beautifulsoup4",
-    "fitz":              "pymupdf",
-    "docx":              "python-docx",
-    "pptx":              "python-pptx",
-    "pdfplumber":        "pdfplumber",
-    "httpx":             "httpx",
-    "requests":          "requests",
-    "numpy":             "numpy",
-    "pandas":            "pandas",
-    "torch":             "torch",
-    "transformers":      "transformers",
-    "ultralytics":       "ultralytics",
-    "serial":            "pyserial",
+    "cv2": "opencv-python",
+    "PIL": "pillow",
+    "sklearn": "scikit-learn",
+    "bs4": "beautifulsoup4",
+    "fitz": "pymupdf",
+    "docx": "python-docx",
+    "pptx": "python-pptx",
+    "pdfplumber": "pdfplumber",
+    "httpx": "httpx",
+    "requests": "requests",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "torch": "torch",
+    "transformers": "transformers",
+    "ultralytics": "ultralytics",
+    "serial": "pyserial",
     "duckduckgo_search": "duckduckgo-search",
-    "ddgs":              "duckduckgo-search",
-    "asyncssh":          "asyncssh",
-    "rich":              "rich",
-    "tqdm":              "tqdm",
-    "lxml":              "lxml",
-    "aiohttp":           "aiohttp",
+    "ddgs": "duckduckgo-search",
+    "asyncssh": "asyncssh",
+    "rich": "rich",
+    "tqdm": "tqdm",
+    "lxml": "lxml",
+    "aiohttp": "aiohttp",
 }
 
 
 class InstallerAgent(Actor):
-    """
-    Pre-defined agent that installs Python packages on demand.
+    """Pre-defined agent that installs Python packages on demand.
     Uses sys.executable so packages are installed into the active venv.
     """
 
     def __init__(self, **kwargs):
         kwargs.setdefault("name", "installer")
         super().__init__(**kwargs)
-        self.protected    = True
+        self.protected = True
         self._install_log: list[dict] = []
 
     def _current_task_description(self) -> str:
@@ -89,7 +87,11 @@ class InstallerAgent(Actor):
         logger.info(f"[{self.name}] Installer ready — using: {sys.executable}")
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
-            {"type": "log", "message": f"Installer ready ({sys.executable})", "timestamp": time.time()},
+            {
+                "type": "log",
+                "message": f"Installer ready ({sys.executable})",
+                "timestamp": time.time(),
+            },
         )
         await self.publish_manifest(
             description="Installs Python packages on demand via pip",
@@ -111,7 +113,7 @@ class InstallerAgent(Actor):
 
     async def _handle_install(self, msg: Message) -> dict:
         payload = msg.payload if isinstance(msg.payload, dict) else {}
-        action  = payload.get("action", "install")
+        action = payload.get("action", "install")
 
         if action == "install":
             packages = payload.get("packages", [])
@@ -160,7 +162,7 @@ class InstallerAgent(Actor):
             return {"error": "No packages specified"}
 
         results = {}
-        failed  = []
+        failed = []
 
         for pkg in packages:
             pkg = pkg.strip()
@@ -204,12 +206,14 @@ class InstallerAgent(Actor):
             if not success:
                 failed.append(pip_name)
 
-            self._install_log.append({
-                "package":   pip_name,
-                "success":   success,
-                "timestamp": time.time(),
-                "output":    output[-500:],
-            })
+            self._install_log.append(
+                {
+                    "package": pip_name,
+                    "success": success,
+                    "timestamp": time.time(),
+                    "output": output[-500:],
+                }
+            )
 
             if success:
                 status = f"✓ {pip_name} installed"
@@ -225,7 +229,7 @@ class InstallerAgent(Actor):
 
         return {
             "results": results,
-            "failed":  failed,
+            "failed": failed,
             "success": len(failed) == 0,
             "message": f"Installed {len(results) - len(failed)}/{len(results)} packages",
         }
@@ -251,8 +255,7 @@ class InstallerAgent(Actor):
             try:
                 result = subprocess.run(
                     cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                     timeout=180,
                 )
                 output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
@@ -265,7 +268,7 @@ class InstallerAgent(Actor):
                 return False, f"{type(e).__name__}: {e}"
 
         try:
-            loop    = asyncio.get_event_loop()
+            loop = asyncio.get_event_loop()
             success, output = await loop.run_in_executor(None, _run_pip)
 
             if success:
@@ -291,7 +294,7 @@ class InstallerAgent(Actor):
     def _check_packages(self, packages: list[str]) -> dict:
         status = {}
         for pkg in packages:
-            pip_name    = IMPORT_TO_PACKAGE.get(pkg, pkg)
+            pip_name = IMPORT_TO_PACKAGE.get(pkg, pkg)
             import_name = PACKAGE_TO_IMPORT.get(pip_name, pip_name)
             status[pkg] = "installed" if self._is_installed(import_name) else "missing"
         return {"status": status}
@@ -302,20 +305,19 @@ class InstallerAgent(Actor):
     # ── Remote node helpers (SSH via asyncssh) ──────────────────────────────
 
     def _ssh_kwargs(self, payload: dict) -> dict:
-        """
-        Build asyncssh connection kwargs from a task payload.
+        """Build asyncssh connection kwargs from a task payload.
         Falls back to persisted credentials from a previous node_deploy
         so callers don't need to pass password/key_path every time.
         """
-        host      = payload["host"]
-        user      = payload.get("user", "pi")
-        password  = payload.get("password")
-        key_path  = payload.get("key_path")
+        host = payload["host"]
+        user = payload.get("user", "pi")
+        password = payload.get("password")
+        key_path = payload.get("key_path")
 
         # Fall back to persisted credentials if not in payload
         # Try to find node_name from host
         if not password and not key_path:
-            for key in self._state.keys() if hasattr(self, "_state") else []:
+            for _key in self._state.keys() if hasattr(self, "_state") else []:
                 pass
             # Scan persisted node credentials by matching host
             node_name = payload.get("node_name") or payload.get("node")
@@ -326,29 +328,30 @@ class InstallerAgent(Actor):
                         node_name = k
                         break
             if node_name:
-                creds    = (self.recall("_node_credentials") or {}).get(node_name, {})
+                creds = (self.recall("_node_credentials") or {}).get(node_name, {})
                 password = password or creds.get("password")
                 key_path = key_path or creds.get("key_path")
-                user     = user or creds.get("user", "pi")
+                user = user or creds.get("user", "pi")
 
-        kwargs = dict(
-            host        = host,
-            username    = user,
-            known_hosts = None,   # disable host key checking for LAN deploys
-        )
+        kwargs = {
+            "host": host,
+            "username": user,
+            "known_hosts": None,  # disable host key checking for LAN deploys
+        }
         if password:
             kwargs["password"] = password
         if key_path:
             kwargs["client_keys"] = [key_path]
         return kwargs
 
-    def _persist_node_credentials(self, node_name: str, host: str, user: str,
-                                   password: str = None, key_path: str = None):
+    def _persist_node_credentials(
+        self, node_name: str, host: str, user: str, password: str = None, key_path: str = None
+    ):
         """Store SSH credentials for a node so future connections don't need them passed explicitly."""
         creds = self.recall("_node_credentials") or {}
         creds[node_name] = {
-            "host":     host,
-            "user":     user,
+            "host": host,
+            "user": user,
             "password": password or "",
             "key_path": key_path or "",
         }
@@ -366,14 +369,15 @@ class InstallerAgent(Actor):
 
     def _log_remote(self, message: str):
         logger.info(f"[{self.name}] {message}")
-        asyncio.create_task(self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
-            {"type": "log", "message": message, "timestamp": time.time()},
-        ))
+        asyncio.create_task(
+            self._mqtt_publish(
+                f"agents/{self.actor_id}/logs",
+                {"type": "log", "message": message, "timestamp": time.time()},
+            )
+        )
 
     async def _node_install(self, payload: dict) -> dict:
-        """
-        Install pip packages on a remote node via SSH.
+        """Install pip packages on a remote node via SSH.
 
         payload keys:
           host      — IP or hostname of the remote machine
@@ -387,7 +391,7 @@ class InstallerAgent(Actor):
         except ImportError:
             return {"error": "asyncssh not installed. Run: pip install asyncssh"}
 
-        host     = payload.get("host")
+        host = payload.get("host")
         packages = payload.get("packages", [])
         if isinstance(packages, str):
             packages = [p.strip() for p in packages.replace(",", " ").split()]
@@ -409,11 +413,13 @@ class InstallerAgent(Actor):
                 )
                 if venv_check.strip() == "yes":
                     pip_cmd = f"~/wactorz/venv/bin/pip install {pkg_str} -q 2>&1"
-                    self._log_remote(f"Using venv pip at ~/wactorz/venv/bin/pip")
+                    self._log_remote("Using venv pip at ~/wactorz/venv/bin/pip")
                 else:
                     # No venv — try to create one first
                     self._log_remote("No venv found — creating ~/wactorz/venv first...")
-                    await self._ssh_run(conn, "mkdir -p ~/wactorz && python3 -m venv ~/wactorz/venv")
+                    await self._ssh_run(
+                        conn, "mkdir -p ~/wactorz && python3 -m venv ~/wactorz/venv"
+                    )
                     ok, venv_check2 = await self._ssh_run(
                         conn, "test -f ~/wactorz/venv/bin/pip && echo yes || echo no"
                     )
@@ -421,23 +427,28 @@ class InstallerAgent(Actor):
                         pip_cmd = f"~/wactorz/venv/bin/pip install {pkg_str} -q 2>&1"
                         self._log_remote("Venv created successfully")
                     else:
-                        pip_cmd = f"python3 -m pip install {pkg_str} --break-system-packages -q 2>&1"
+                        pip_cmd = (
+                            f"python3 -m pip install {pkg_str} --break-system-packages -q 2>&1"
+                        )
                         self._log_remote("Venv creation failed — falling back to system pip")
 
                 ok, output = await self._ssh_run(conn, pip_cmd)
                 if ok:
                     self._log_remote(f"✓ {pkg_str} installed on {host}")
-                    return {"success": True, "host": host, "packages": packages, "output": output[-300:]}
-                else:
-                    self._log_remote(f"✗ Install failed on {host}: {output[-200:]}")
-                    return {"success": False, "host": host, "error": output[-400:]}
+                    return {
+                        "success": True,
+                        "host": host,
+                        "packages": packages,
+                        "output": output[-300:],
+                    }
+                self._log_remote(f"✗ Install failed on {host}: {output[-200:]}")
+                return {"success": False, "host": host, "error": output[-400:]}
 
         except Exception as e:
             return {"success": False, "host": host, "error": str(e)}
 
     async def _node_deploy(self, payload: dict) -> dict:
-        """
-        Full bootstrap of a new Wactorz edge node via SSH.
+        """Full bootstrap of a new Wactorz edge node via SSH.
 
         Steps:
           1. Create ~/wactorz/ directory
@@ -461,10 +472,10 @@ class InstallerAgent(Actor):
         except ImportError:
             return {"error": "asyncssh not installed. Run: pip install asyncssh"}
 
-        host      = payload.get("host")
-        user      = payload.get("user", "pi")
+        host = payload.get("host")
+        user = payload.get("user", "pi")
         node_name = payload.get("node_name", "remote-node")
-        broker    = payload.get("broker", "localhost")
+        broker = payload.get("broker", "localhost")
         mqtt_port = payload.get("port", 1883)
 
         if not host:
@@ -472,6 +483,7 @@ class InstallerAgent(Actor):
 
         # Find remote_runner.py relative to this file
         import pathlib
+
         candidates = [
             pathlib.Path(__file__).parent.parent / "remote_runner.py",
             pathlib.Path("remote_runner.py"),
@@ -485,7 +497,6 @@ class InstallerAgent(Actor):
 
         try:
             async with asyncssh.connect(**self._ssh_kwargs(payload)) as conn:
-
                 # 1. Create directory
                 await self._ssh_run(conn, "mkdir -p ~/wactorz")
                 self._log_remote(f"[{node_name}] Directory created.")
@@ -497,7 +508,8 @@ class InstallerAgent(Actor):
 
                 # 3. Create venv if it doesn't exist — avoids all --break-system-packages issues
                 ok, out = await self._ssh_run(
-                    conn, "test -d ~/wactorz/venv && echo exists || python3 -m venv ~/wactorz/venv && echo created"
+                    conn,
+                    "test -d ~/wactorz/venv && echo exists || python3 -m venv ~/wactorz/venv && echo created",
                 )
                 self._log_remote(f"[{node_name}] venv: {out.strip()}")
 
@@ -512,8 +524,7 @@ class InstallerAgent(Actor):
 
                 # 5. Kill any existing instance with this node name
                 await self._ssh_run(
-                    conn,
-                    f"pkill -f 'remote_runner.py.*--name {node_name}' 2>/dev/null; true"
+                    conn, f"pkill -f 'remote_runner.py.*--name {node_name}' 2>/dev/null; true"
                 )
 
                 # 6. Start runner using venv python in the background
@@ -530,18 +541,18 @@ class InstallerAgent(Actor):
             )
             # Persist SSH credentials so future installs don't need them passed again
             self._persist_node_credentials(
-                node_name = node_name,
-                host      = host,
-                user      = user,
-                password  = payload.get("password"),
-                key_path  = payload.get("key_path"),
+                node_name=node_name,
+                host=host,
+                user=user,
+                password=payload.get("password"),
+                key_path=payload.get("key_path"),
             )
             return {
-                "success":   True,
+                "success": True,
                 "node_name": node_name,
-                "host":      host,
-                "broker":    broker,
-                "message":   (
+                "host": host,
+                "broker": broker,
+                "message": (
                     f"Node '{node_name}' deployed to {user}@{host}. "
                     f"It will appear in /nodes within ~15 seconds."
                 ),
@@ -553,8 +564,7 @@ class InstallerAgent(Actor):
             return {"success": False, "node_name": node_name, "host": host, "error": str(e)}
 
     async def _node_run(self, payload: dict) -> dict:
-        """
-        Run an arbitrary shell command on a remote node via SSH.
+        """Run an arbitrary shell command on a remote node via SSH.
 
         payload keys:
           host     — IP or hostname
@@ -567,7 +577,7 @@ class InstallerAgent(Actor):
         except ImportError:
             return {"error": "asyncssh not installed. Run: pip install asyncssh"}
 
-        host    = payload.get("host")
+        host = payload.get("host")
         command = payload.get("command", "echo hello")
         if not host:
             return {"error": "Missing 'host' in payload"}
@@ -577,10 +587,10 @@ class InstallerAgent(Actor):
             async with asyncssh.connect(**self._ssh_kwargs(payload)) as conn:
                 ok, output = await self._ssh_run(conn, command)
                 return {
-                    "success":   ok,
-                    "host":      host,
-                    "command":   command,
-                    "output":    output,
+                    "success": ok,
+                    "host": host,
+                    "command": command,
+                    "output": output,
                     "exit_code": 0 if ok else 1,
                 }
         except Exception as e:

@@ -1,5 +1,4 @@
-"""
-QAAgent - Passive safety observer.
+"""QAAgent - Passive safety observer.
 
 Receives a copy of every chat message and publishes `system/qa-flag` on
 policy violations. Rule-based only — no LLM required, zero latency.
@@ -17,7 +16,7 @@ import json
 import logging
 import time
 
-from ..core.actor import Actor, ActorState, Message, MessageType
+from ..core.actor import Actor, ActorState, Message
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +63,7 @@ class QAAgent(Actor):
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
             {
-                "agentId":   self.actor_id,
+                "agentId": self.actor_id,
                 "agentName": self.name,
                 "agentType": "guardian",
                 "timestamp": time.time(),
@@ -91,7 +90,7 @@ class QAAgent(Actor):
                 if pat in lower:
                     return f"agent-error-exposed ({pat})", "error"
             trimmed = content.strip()
-            if (trimmed.startswith("{") or trimmed.startswith("[")) and len(trimmed) > 20:
+            if (trimmed.startswith(("{", "["))) and len(trimmed) > 20:
                 try:
                     json.loads(trimmed)
                     return "raw-data-bleed", "warning"
@@ -103,7 +102,7 @@ class QAAgent(Actor):
                 continue
             at_pos = word.find("@")
             if at_pos != -1:
-                after = word[at_pos + 1:]
+                after = word[at_pos + 1 :]
                 if "." in after and len(after) >= 4 and "/" not in after:
                     return "pii-possible-email", "info"
 
@@ -115,13 +114,13 @@ class QAAgent(Actor):
             self._mqtt_publish(
                 "system/qa-flag",
                 {
-                    "agentId":   self.actor_id,
+                    "agentId": self.actor_id,
                     "agentName": self.name,
-                    "from":      from_,
-                    "category":  category,
-                    "severity":  severity,
-                    "excerpt":   snippet,
-                    "message":   f"[QA/{category}] from={from_}: {snippet}",
+                    "from": from_,
+                    "category": category,
+                    "severity": severity,
+                    "excerpt": snippet,
+                    "message": f"[QA/{category}] from={from_}: {snippet}",
                     "timestamp": time.time(),
                 },
             )

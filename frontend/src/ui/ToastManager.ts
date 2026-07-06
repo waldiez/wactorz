@@ -10,6 +10,8 @@
  * stack in the bottom-right corner and auto-dismiss after a configurable delay.
  */
 
+import { escapeHtml } from "./escapeHtml";
+
 export type ToastType = "chat" | "spawn" | "alert-error" | "alert-warning" | "welcome" | "system";
 
 export interface ToastAction {
@@ -255,6 +257,7 @@ const CSS = `
 }
 `;
 
+/** Two-letter avatar initials: first letters of the first two words, else the first two chars. */
 export function initials(name: string): string {
     const parts = name.trim().split(/[\s\-_]+/);
     if (parts.length >= 2) {
@@ -270,7 +273,7 @@ function timeLabel(): string {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-class ToastManager {
+export class ToastManager {
     private container!: HTMLElement;
     private active: HTMLElement[] = [];
     private readonly MAX = 4;
@@ -296,9 +299,14 @@ class ToastManager {
     private createContainer(): void {
         this.container = document.createElement("div");
         this.container.className = "wz-toasts";
+        // Announce new toasts to screen readers as they're added (not the whole
+        // stack), so audible-only cues (TTS replies, alerts) have a text equivalent.
+        this.container.setAttribute("aria-live", "polite");
+        this.container.setAttribute("aria-atomic", "false");
         document.body.appendChild(this.container);
     }
 
+    /** Display a toast (evicting the oldest at capacity); auto-dismisses after `durationMs`. */
     show(opts: ToastOptions): void {
         const type: ToastType = opts.type ?? "system";
         const theme = THEME[type];
@@ -315,14 +323,14 @@ class ToastManager {
         el.innerHTML = `
       <div class="wz-toast__strip" style="background:${theme.strip}"></div>
       <div class="wz-toast__body">
-        <div class="wz-toast__avatar" style="background:${theme.avatar}">${initials(opts.title)}</div>
+        <div class="wz-toast__avatar" style="background:${theme.avatar}">${escapeHtml(initials(opts.title))}</div>
         <div class="wz-toast__content">
           <div class="wz-toast__header">
-            <span class="wz-toast__name">${escHtml(opts.title)}</span>
+            <span class="wz-toast__name">${escapeHtml(opts.title)}</span>
             <span class="wz-toast__badge" style="color:${theme.badge};background:${theme.badgeBg}">${theme.label}</span>
             <span class="wz-toast__time">${timeLabel()}</span>
           </div>
-          <div class="wz-toast__message">${escHtml(opts.message)}</div>
+          <div class="wz-toast__message">${escapeHtml(opts.message)}</div>
         </div>
       </div>
       ${opts.actions?.length ? `<div class="wz-toast__actions"></div>` : ""}
@@ -399,8 +407,5 @@ class ToastManager {
     }
 }
 
-export function escHtml(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
+/** Shared ToastManager singleton. */
 export const toast = new ToastManager();

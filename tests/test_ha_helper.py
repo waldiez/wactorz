@@ -1,12 +1,13 @@
 import hashlib
 import unittest
+from typing import ClassVar
 from unittest.mock import patch
 
 from wactorz.core.integrations.home_assistant import ha_helper
 
 
 class _FakeHAWebSocketClient:
-    instances = []
+    instances: ClassVar[list] = []
 
     def __init__(self, ws_url: str, token: str):
         self.ws_url = ws_url
@@ -14,6 +15,9 @@ class _FakeHAWebSocketClient:
         self.calls = []
         self.responses = dict(_FakeHAWebSocketClient.responses)
         self.exceptions = dict(_FakeHAWebSocketClient.exceptions)
+        self.response_queues = {
+            k: list(v) for k, v in _FakeHAWebSocketClient.response_queues.items()
+        }
         _FakeHAWebSocketClient.instances.append(self)
 
     async def __aenter__(self):
@@ -22,24 +26,31 @@ class _FakeHAWebSocketClient:
     async def __aexit__(self, exc_type, exc, tb):
         return None
 
-    async def call(self, command: str):
+    async def call(self, command: str, **kwargs):
         self.calls.append(command)
         if command in self.exceptions:
             raise self.exceptions[command]
+        if self.response_queues.get(command):
+            return self.response_queues[command].pop(0)
         return self.responses.get(command)
 
 
 _FakeHAWebSocketClient.responses = {}
 _FakeHAWebSocketClient.exceptions = {}
+_FakeHAWebSocketClient.response_queues = {}
 
 
 class _FakeResponse:
-    def __init__(self, status=200, json_data=None, text_data="", headers=None, json_exc=None):
+    def __init__(
+        self, status=200, json_data=None, text_data="", headers=None, json_exc=None, read_data=b""
+    ):
         self.status = status
         self._json_data = json_data
         self._text_data = text_data
         self.headers = headers or {"Content-Type": "application/json"}
         self._json_exc = json_exc
+        self._read_data = read_data
+        self.content_type = self.headers.get("Content-Type", "application/json")
 
     async def __aenter__(self):
         return self
@@ -55,12 +66,15 @@ class _FakeResponse:
     async def text(self):
         return self._text_data
 
+    async def read(self):
+        return self._read_data
+
 
 class _FakeClientSession:
-    instances = []
-    get_results = []
-    post_results = []
-    delete_results = []
+    instances: ClassVar[list] = []
+    get_results: ClassVar[list] = []
+    post_results: ClassVar[list] = []
+    delete_results: ClassVar[list] = []
 
     def __init__(self):
         self.get_calls = []
@@ -104,6 +118,7 @@ def _reset_fakes():
     _FakeHAWebSocketClient.instances = []
     _FakeHAWebSocketClient.responses = {}
     _FakeHAWebSocketClient.exceptions = {}
+    _FakeHAWebSocketClient.response_queues = {}
     _FakeClientSession.instances = []
     _FakeClientSession.get_results = []
     _FakeClientSession.post_results = []
@@ -268,6 +283,124 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(ha_helper.normalize_ha_base_url(value), expected)
 
+    def test_history_to_csv_normal(self):
+        history = {
+            "sensor.temp": [
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-28T17:00:00",
+                    "attributes": {"unit_of_measurement": "°C"},
+                },
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.8",
+                    "last_changed": "2026-06-28T17:05:00",
+                    "attributes": {"unit_of_measurement": "°C"},
+                },
+            ],
+            "sensor.humidity": [
+                {
+                    "entity_id": "sensor.humidity",
+                    "state": "55",
+                    "last_changed": "2026-06-28T17:00:00",
+                    "attributes": {},
+                },
+            ],
+        }
+        csv_str = ha_helper.history_to_csv(history)
+        lines = csv_str.strip().splitlines()
+        self.assertEqual(lines[0], "entity_id,last_changed,state,unit_of_measurement")
+        self.assertEqual(len(lines), 4)
+        self.assertIn("sensor.temp,2026-06-28T17:00:00,21.5,°C", csv_str)
+        self.assertIn("sensor.humidity,2026-06-28T17:00:00,55,", csv_str)
+
+    def test_history_to_csv_empty_series_skipped(self):
+        history = {"sensor.temp": [], "sensor.humidity": []}
+        csv_str = ha_helper.history_to_csv(history)
+        lines = csv_str.strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0], "entity_id,last_changed,state,unit_of_measurement")
+
+    def test_history_to_csv_error_dict_skipped(self):
+        history = {"error": "HTTP 401", "status": 401, "detail": "unauthorized"}
+        csv_str = ha_helper.history_to_csv(history)
+        lines = csv_str.strip().splitlines()
+        self.assertEqual(len(lines), 1)
+
+    def test_history_to_csv_missing_unit(self):
+        history = {
+            "sensor.temp": [
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-28T17:00:00",
+                    "attributes": {},
+                },
+            ],
+        }
+        csv_str = ha_helper.history_to_csv(history)
+        self.assertIn("sensor.temp,2026-06-28T17:00:00,21.5,", csv_str)
+
+    def test_to_utc_offset_aware_string_converted(self):
+        result = ha_helper.to_utc("2026-06-27T17:00:00+02:00")
+        self.assertEqual(result, "2026-06-27T15:00:00+00:00")
+
+    def test_to_utc_naive_treated_as_local(self):
+        from datetime import datetime, timezone
+
+        naive = "2026-06-27T17:00:00"
+        result = ha_helper.to_utc(naive)
+        dt = datetime.fromisoformat(naive).astimezone().astimezone(timezone.utc)
+        self.assertEqual(result, dt.isoformat())
+
+    def test_to_utc_unparseable_passes_through(self):
+        self.assertEqual(ha_helper.to_utc("not-a-date"), "not-a-date")
+        self.assertEqual(ha_helper.to_utc(""), "")
+
+    def test_localise_history_timestamps_converts_utc(self):
+        history = {
+            "sensor.temp": [
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-27T15:00:00+00:00",
+                    "attributes": {},
+                },
+            ]
+        }
+        result = ha_helper.localise_history_timestamps(history)
+        ts = result["sensor.temp"][0]["last_changed"]
+        # Converted to local tz — must no longer be UTC (+00:00) if local offset is non-zero,
+        # but always a valid ISO string parseable by fromisoformat.
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(ts)
+        self.assertIsNotNone(dt.tzinfo)
+
+    def test_localise_history_timestamps_handles_z_suffix(self):
+        history = {
+            "sensor.temp": [
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-27T15:00:00Z",
+                    "attributes": {},
+                },
+            ]
+        }
+        result = ha_helper.localise_history_timestamps(history)
+        ts = result["sensor.temp"][0]["last_changed"]
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(ts)
+        self.assertIsNotNone(dt.tzinfo)
+
+    def test_localise_history_timestamps_skips_error_dicts(self):
+        history = {"error": "HTTP 401", "status": 401, "detail": ""}
+        result = ha_helper.localise_history_timestamps(history)
+        self.assertEqual(result["error"], "HTTP 401")
+
 
 class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -317,7 +450,9 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
                 "config/entity_registry/list",
             ],
         )
-        self.assertEqual([device["name"] for device in result], ["Kitchen Light", "Temperature Sensor"])
+        self.assertEqual(
+            [device["name"] for device in result], ["Kitchen Light", "Temperature Sensor"]
+        )
         kitchen = result[0]
         self.assertEqual(kitchen["area"], "Kitchen")
         self.assertEqual(kitchen["entities"][0]["entity_id"], "light.kitchen")
@@ -371,7 +506,9 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
             "get_states": None,
         }
         result = await ha_helper.get_full_ha_data("http://ha.local:8123", "token")
-        self.assertEqual(result, {"floors": [], "areas": [], "devices": [], "entities": [], "states": []})
+        self.assertEqual(
+            result, {"floors": [], "areas": [], "devices": [], "entities": [], "states": []}
+        )
 
     async def test_get_simplified_ha_data_shapes_prompt_friendly_payload(self):
         self._set_fixture_responses()
@@ -381,7 +518,13 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(result), {"floors", "areas", "devices", "entities"})
         self.assertNotIn("states", result)
         self.assertEqual(result["floors"], [{"floor_id": "floor1", "name": "Ground Floor"}])
-        self.assertEqual(result["areas"], [{"area_id": "kitchen", "name": "Kitchen"}, {"area_id": "living", "name": "Living Room"}])
+        self.assertEqual(
+            result["areas"],
+            [
+                {"area_id": "kitchen", "name": "Kitchen"},
+                {"area_id": "living", "name": "Living Room"},
+            ],
+        )
         self.assertEqual(
             result["devices"],
             [
@@ -417,12 +560,15 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entities["light.kitchen"]["area_id"], "living")
 
     async def test_simple_registry_helpers_call_expected_commands(self):
-        floors, areas, devices, entities, states = self._set_fixture_responses()
+        floors, areas, _devices, entities, states = self._set_fixture_responses()
 
         self.assertEqual(await ha_helper.get_floors("http://ha.local:8123", "token"), floors)
         self.assertEqual(await ha_helper.get_areas("http://ha.local:8123", "token"), areas)
         self.assertEqual(await ha_helper.get_entities("http://ha.local:8123", "token"), entities)
-        self.assertEqual(await ha_helper.get_entities_for_display("http://ha.local:8123", "token"), {"entities": [{"ei": "light.kitchen"}]})
+        self.assertEqual(
+            await ha_helper.get_entities_for_display("http://ha.local:8123", "token"),
+            {"entities": [{"ei": "light.kitchen"}]},
+        )
         self.assertEqual(
             await ha_helper.get_exposed_entities("http://ha.local:8123", "token"),
             {
@@ -434,7 +580,10 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(await ha_helper.get_states("http://ha.local:8123", "token"), states)
-        self.assertEqual(await ha_helper.get_config_entries("http://ha.local:8123", "token"), [{"entry_id": "entry-1", "domain": "mqtt"}])
+        self.assertEqual(
+            await ha_helper.get_config_entries("http://ha.local:8123", "token"),
+            [{"entry_id": "entry-1", "domain": "mqtt"}],
+        )
 
         command_by_call = [client.calls[0] for client in _FakeHAWebSocketClient.instances]
         self.assertIn("config/floor_registry/list", command_by_call)
@@ -541,8 +690,12 @@ class HomeAssistantHelperAutomationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_fetch_automation_config_success_and_fallbacks(self):
         session = _FakeClientSession()
-        _FakeClientSession.get_results = [_FakeResponse(json_data={"id": "auto-1", "alias": "Lights"})]
-        result = await ha_helper._fetch_automation_config("http://ha.local", "auto-1", "token", session)
+        _FakeClientSession.get_results = [
+            _FakeResponse(json_data={"id": "auto-1", "alias": "Lights"})
+        ]
+        result = await ha_helper._fetch_automation_config(
+            "http://ha.local", "auto-1", "token", session
+        )
         self.assertEqual(result, {"id": "auto-1", "alias": "Lights"})
         self.assertEqual(
             session.get_calls[0],
@@ -566,7 +719,9 @@ class HomeAssistantHelperAutomationTest(unittest.IsolatedAsyncioTestCase):
             with self.subTest(fake_result=type(fake_result).__name__):
                 _FakeClientSession.get_results = [fake_result]
                 self.assertIsNone(
-                    await ha_helper._fetch_automation_config("http://ha.local", "auto-1", "token", session)
+                    await ha_helper._fetch_automation_config(
+                        "http://ha.local", "auto-1", "token", session
+                    )
                 )
 
     async def test_post_automation_config_success_json_text_and_error(self):
@@ -592,7 +747,9 @@ class HomeAssistantHelperAutomationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, {"automation_id": "auto-1", "status": 201, "result": {"ok": True}})
         first_session = _FakeClientSession.instances[0]
-        self.assertEqual(first_session.post_calls[0][0], "http://ha.local/api/config/automation/config/auto-1")
+        self.assertEqual(
+            first_session.post_calls[0][0], "http://ha.local/api/config/automation/config/auto-1"
+        )
         self.assertEqual(
             first_session.post_calls[0][1],
             {
@@ -629,7 +786,9 @@ class HomeAssistantHelperAutomationTest(unittest.IsolatedAsyncioTestCase):
             _FakeResponse(status=200, json_data={"ok": True}),
         ]
 
-        with patch("wactorz.core.integrations.home_assistant.ha_helper.time.time", return_value=12345):
+        with patch(
+            "wactorz.core.integrations.home_assistant.ha_helper.time.time", return_value=12345
+        ):
             result = await ha_helper.create_automation_via_rest(
                 "http://ha.local",
                 "token",
@@ -695,7 +854,9 @@ class HomeAssistantHelperAutomationTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(await ha_helper.delete_automation("http://ha.local", "token", "auto-1"))
-        self.assertFalse(await ha_helper.delete_automation("http://ha.local", "token", "auto-missing"))
+        self.assertFalse(
+            await ha_helper.delete_automation("http://ha.local", "token", "auto-missing")
+        )
         delete_call = _FakeClientSession.instances[1].delete_calls[0]
         self.assertEqual(delete_call[0], "http://ha.local/api/config/automation/config/auto-1")
         self.assertEqual(
@@ -731,7 +892,8 @@ class HomeAssistantHelperLiveContextTest(unittest.IsolatedAsyncioTestCase):
                 {"state": "on", "attributes": {"friendly_name": "Missing Entity"}},
             ],
             "config/area_registry/list": areas,
-            "config/entity_registry/list": entities + [
+            "config/entity_registry/list": [
+                *entities,
                 {"entity_id": "switch.hidden", "area_id": "kitchen"},
             ],
             "homeassistant/expose_entity/list": exposed
@@ -751,7 +913,10 @@ class HomeAssistantHelperLiveContextTest(unittest.IsolatedAsyncioTestCase):
         result = await ha_helper.get_live_context("http://ha.local:8123", "token")
 
         self.assertTrue(result["success"])
-        self.assertEqual([item["entity_id"] for item in result["entities"]], ["light.kitchen", "sensor.temperature"])
+        self.assertEqual(
+            [item["entity_id"] for item in result["entities"]],
+            ["light.kitchen", "sensor.temperature"],
+        )
         self.assertEqual(result["entities"][0]["name"], "Kitchen Ceiling")
         self.assertEqual(result["entities"][0]["area"], "Living Room")
         self.assertEqual(result["entities"][0]["attributes"], {"brightness": 128})
@@ -771,17 +936,25 @@ class HomeAssistantHelperLiveContextTest(unittest.IsolatedAsyncioTestCase):
         by_name = await ha_helper.get_live_context("http://ha.local:8123", "token", name="ceiling")
         self.assertEqual([item["entity_id"] for item in by_name["entities"]], ["light.kitchen"])
 
-        by_domain = await ha_helper.get_live_context("http://ha.local:8123", "token", domain="sensor")
-        self.assertEqual([item["entity_id"] for item in by_domain["entities"]], ["sensor.temperature"])
+        by_domain = await ha_helper.get_live_context(
+            "http://ha.local:8123", "token", domain="sensor"
+        )
+        self.assertEqual(
+            [item["entity_id"] for item in by_domain["entities"]], ["sensor.temperature"]
+        )
 
         by_domain_list = await ha_helper.get_live_context(
             "http://ha.local:8123",
             "token",
             domain=["light", "switch"],
         )
-        self.assertEqual([item["entity_id"] for item in by_domain_list["entities"]], ["light.kitchen"])
+        self.assertEqual(
+            [item["entity_id"] for item in by_domain_list["entities"]], ["light.kitchen"]
+        )
 
-        by_area = await ha_helper.get_live_context("http://ha.local:8123", "token", area="Living Room")
+        by_area = await ha_helper.get_live_context(
+            "http://ha.local:8123", "token", area="Living Room"
+        )
         self.assertEqual([item["entity_id"] for item in by_area["entities"]], ["light.kitchen"])
 
         by_alias = await ha_helper.get_live_context("http://ha.local:8123", "token", area="Lounge")
@@ -799,15 +972,487 @@ class HomeAssistantHelperLiveContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_get_live_context_failure_results(self):
         self._set_live_context_responses()
 
-        unknown_area = await ha_helper.get_live_context("http://ha.local:8123", "token", area="Garage")
+        unknown_area = await ha_helper.get_live_context(
+            "http://ha.local:8123", "token", area="Garage"
+        )
         self.assertEqual(unknown_area, {"success": False, "error": "Area 'Garage' does not exist"})
 
         no_match = await ha_helper.get_live_context("http://ha.local:8123", "token", name="attic")
-        self.assertEqual(no_match, {"success": False, "error": "No entities matched the provided filter"})
+        self.assertEqual(
+            no_match, {"success": False, "error": "No entities matched the provided filter"}
+        )
 
         self._set_live_context_responses(exposed={"switch.hidden": {"conversation": False}})
         no_entities = await ha_helper.get_live_context("http://ha.local:8123", "token")
         self.assertEqual(no_entities, {"success": False, "error": "No entities found"})
+
+
+class HomeAssistantHelperCameraTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        _reset_fakes()
+        self.ws_patch = patch(
+            "wactorz.core.integrations.home_assistant.ha_helper.HAWebSocketClient",
+            _FakeHAWebSocketClient,
+        )
+        self.session_patch = patch(
+            "wactorz.core.integrations.home_assistant.ha_helper.aiohttp.ClientSession",
+            _FakeClientSession,
+            create=True,
+        )
+        self.client_error_patch = patch(
+            "wactorz.core.integrations.home_assistant.ha_helper.aiohttp.ClientError",
+            _FakeClientError,
+            create=True,
+        )
+        self.ws_patch.start()
+        self.session_patch.start()
+        self.client_error_patch.start()
+        self.addCleanup(self.ws_patch.stop)
+        self.addCleanup(self.session_patch.stop)
+        self.addCleanup(self.client_error_patch.stop)
+
+    async def test_get_camera_entities_filters_camera_prefix(self):
+        _FakeHAWebSocketClient.responses = {
+            "get_states": [
+                {
+                    "entity_id": "camera.front_door",
+                    "state": "idle",
+                    "attributes": {"friendly_name": "Front Door"},
+                },
+                {"entity_id": "camera.backyard", "state": "streaming", "attributes": {}},
+                {
+                    "entity_id": "light.kitchen",
+                    "state": "on",
+                    "attributes": {"friendly_name": "Kitchen"},
+                },
+                {"entity_id": "sensor.temp", "state": "21.5", "attributes": {}},
+            ]
+        }
+
+        result = await ha_helper.get_camera_entities("http://ha.local:8123", "token")
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(
+            result[0],
+            {"entity_id": "camera.front_door", "state": "idle", "friendly_name": "Front Door"},
+        )
+        self.assertEqual(
+            result[1], {"entity_id": "camera.backyard", "state": "streaming", "friendly_name": None}
+        )
+        client = _FakeHAWebSocketClient.instances[0]
+        self.assertEqual(client.calls, ["get_states"])
+
+    async def test_get_camera_entities_empty_when_no_cameras(self):
+        _FakeHAWebSocketClient.responses = {
+            "get_states": [
+                {"entity_id": "light.kitchen", "state": "on", "attributes": {}},
+            ]
+        }
+        result = await ha_helper.get_camera_entities("ws://ha.local", "token")
+        self.assertEqual(result, [])
+
+    def test_get_camera_stream_url_pure_function(self):
+        url = ha_helper.get_camera_stream_url("http://ha.local:8123", "camera.front_door")
+        self.assertEqual(url, "http://ha.local:8123/api/camera_proxy_stream/camera.front_door")
+
+        url_https = ha_helper.get_camera_stream_url("https://ha.example.com", "camera.backyard")
+        self.assertEqual(
+            url_https, "https://ha.example.com/api/camera_proxy_stream/camera.backyard"
+        )
+
+    async def test_get_camera_snapshot_success(self):
+        import base64
+
+        image_bytes = b"\xff\xd8\xff" + b"\x00" * 10  # minimal fake JPEG
+        _FakeClientSession.get_results = [
+            _FakeResponse(
+                status=200,
+                headers={"Content-Type": "image/jpeg"},
+                read_data=image_bytes,
+            )
+        ]
+
+        result = await ha_helper.get_camera_snapshot(
+            "http://ha.local:8123", "token", "camera.front_door"
+        )
+
+        self.assertEqual(result["entity_id"], "camera.front_door")
+        self.assertEqual(result["content_type"], "image/jpeg")
+        self.assertEqual(result["image_base64"], base64.b64encode(image_bytes).decode("ascii"))
+        self.assertNotIn("error", result)
+        session = _FakeClientSession.instances[0]
+        self.assertEqual(
+            session.get_calls[0][0], "http://ha.local:8123/api/camera_proxy/camera.front_door"
+        )
+        self.assertEqual(session.get_calls[0][1]["headers"]["Authorization"], "Bearer token")
+
+    async def test_get_camera_snapshot_http_error_returns_error_dict(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404, text_data="404: Not Found")]
+
+        result = await ha_helper.get_camera_snapshot(
+            "http://ha.local:8123", "token", "camera.missing"
+        )
+
+        self.assertEqual(result["entity_id"], "camera.missing")
+        self.assertEqual(result["error"], "HTTP 404")
+        self.assertEqual(result["status"], 404)
+        self.assertIn("Not Found", result["detail"])
+        self.assertNotIn("image_base64", result)
+
+    async def test_get_camera_snapshot_http_error_no_body(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=503, text_data="")]
+
+        result = await ha_helper.get_camera_snapshot(
+            "http://ha.local:8123", "token", "camera.offline"
+        )
+
+        self.assertEqual(result["error"], "HTTP 503")
+        self.assertEqual(result["status"], 503)
+        self.assertEqual(result["detail"], "")
+
+    async def test_get_camera_snapshot_exception_returns_error_dict(self):
+        _FakeClientSession.get_results = [_FakeClientError("network timeout")]
+
+        result = await ha_helper.get_camera_snapshot(
+            "http://ha.local:8123", "token", "camera.front_door"
+        )
+
+        self.assertEqual(result["entity_id"], "camera.front_door")
+        self.assertIn("error", result)
+        self.assertNotIn("image_base64", result)
+
+    async def test_get_camera_stream_urls_mjpeg_always_present(self):
+        # No REST session, no WS capabilities
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("unsupported")}
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+
+        result = await ha_helper.get_camera_stream_urls(
+            "http://ha.local:8123", "token", "camera.front_door"
+        )
+
+        self.assertEqual(result["entity_id"], "camera.front_door")
+        self.assertIn("mjpeg_proxy", result["streams"])
+        self.assertEqual(
+            result["streams"]["mjpeg_proxy"],
+            "http://ha.local:8123/api/camera_proxy_stream/camera.front_door",
+        )
+
+    async def test_get_camera_stream_urls_404_camera_source_silently_skipped(self):
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("no ws")}
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.x")
+
+        self.assertNotIn("camera_source", result["streams"])
+        self.assertEqual(list(result["streams"].keys()), ["mjpeg_proxy"])
+
+    async def test_get_camera_stream_urls_camera_source_plain_text(self):
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("no ws")}
+        _FakeClientSession.get_results = [
+            _FakeResponse(status=200, text_data="rtsp://cam.local/stream\n")
+        ]
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.x")
+
+        self.assertEqual(result["streams"]["camera_source"], "rtsp://cam.local/stream")
+        session = _FakeClientSession.instances[0]
+        self.assertEqual(
+            session.get_calls[0][0],
+            "http://ha.local:8123/api/camera_stream_source/camera.x",
+        )
+
+    async def test_get_camera_stream_urls_ws_hls_absolute_url(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.response_queues = {
+            "camera/capabilities": [{"frontend_stream_types": ["hls"]}],
+            "camera/stream": [{"url": "http://ha.local:8123/api/hls/abc123/index.m3u8"}],
+        }
+
+        result = await ha_helper.get_camera_stream_urls(
+            "http://ha.local:8123", "token", "camera.front_door"
+        )
+
+        self.assertIn("hls", result["streams"])
+        self.assertEqual(result["streams"]["hls"], "http://ha.local:8123/api/hls/abc123/index.m3u8")
+        self.assertEqual(result["capabilities"], ["hls"])
+
+    async def test_get_camera_stream_urls_ws_relative_url_resolved(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.response_queues = {
+            "camera/capabilities": [{"frontend_stream_types": ["hls"]}],
+            "camera/stream": [{"url": "/api/hls/relative/index.m3u8"}],
+        }
+
+        result = await ha_helper.get_camera_stream_urls(
+            "http://ha.local:8123", "token", "camera.back"
+        )
+
+        self.assertEqual(
+            result["streams"]["hls"], "http://ha.local:8123/api/hls/relative/index.m3u8"
+        )
+
+    async def test_get_camera_stream_urls_web_rtc_skipped_for_stream_call(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.response_queues = {
+            "camera/capabilities": [{"frontend_stream_types": ["hls", "web_rtc"]}],
+            "camera/stream": [{"url": "http://ha.local/hls.m3u8"}],
+        }
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.x")
+
+        client = _FakeHAWebSocketClient.instances[0]
+        stream_calls = [c for c in client.calls if c == "camera/stream"]
+        self.assertEqual(len(stream_calls), 1, "web_rtc must not trigger a camera/stream call")
+        self.assertIn("hls", result["streams"])
+        self.assertNotIn("web_rtc", result["streams"])
+        self.assertIn("web_rtc", result["capabilities"])
+
+    async def test_get_camera_stream_urls_all_sources_combined(self):
+        _FakeClientSession.get_results = [
+            _FakeResponse(status=200, text_data="rtsp://cam.local/stream")
+        ]
+        _FakeHAWebSocketClient.response_queues = {
+            "camera/capabilities": [{"frontend_stream_types": ["hls"]}],
+            "camera/stream": [{"url": "/api/hls/abc.m3u8"}],
+        }
+
+        result = await ha_helper.get_camera_stream_urls(
+            "http://ha.local:8123", "token", "camera.combo"
+        )
+
+        self.assertEqual(set(result["streams"].keys()), {"mjpeg_proxy", "camera_source", "hls"})
+        self.assertEqual(result["streams"]["camera_source"], "rtsp://cam.local/stream")
+        self.assertEqual(result["streams"]["hls"], "http://ha.local:8123/api/hls/abc.m3u8")
+
+    async def test_get_camera_stream_urls_ws_capabilities_exception_skipped(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("WS error")}
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.x")
+
+        self.assertEqual(result["capabilities"], [])
+        self.assertEqual(list(result["streams"].keys()), ["mjpeg_proxy"])
+
+    async def test_get_camera_stream_urls_ws_stream_format_exception_skipped(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.response_queues = {
+            "camera/capabilities": [{"frontend_stream_types": ["hls"]}],
+        }
+        _FakeHAWebSocketClient.exceptions = {"camera/stream": RuntimeError("format error")}
+
+        result = await ha_helper.get_camera_stream_urls("http://ha.local:8123", "token", "camera.x")
+
+        self.assertNotIn("hls", result["streams"])
+        self.assertEqual(list(result["streams"].keys()), ["mjpeg_proxy"])
+
+    async def test_get_camera_stream_urls_ws_url_normalised(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("skip")}
+
+        await ha_helper.get_camera_stream_urls("https://ha.example.com", "token", "camera.x")
+
+        ws_client = _FakeHAWebSocketClient.instances[0]
+        self.assertEqual(ws_client.ws_url, "wss://ha.example.com/api/websocket")
+
+    async def test_get_camera_stream_urls_rest_url_normalised(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=404)]
+        _FakeHAWebSocketClient.exceptions = {"camera/capabilities": RuntimeError("skip")}
+
+        result = await ha_helper.get_camera_stream_urls(
+            "wss://ha.example.com/api/websocket", "token", "camera.x"
+        )
+
+        self.assertEqual(
+            result["streams"]["mjpeg_proxy"],
+            "https://ha.example.com/api/camera_proxy_stream/camera.x",
+        )
+
+
+class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        _reset_fakes()
+        self._patch_session = patch(
+            "wactorz.core.integrations.home_assistant.ha_helper.aiohttp.ClientSession",
+            _FakeClientSession,
+        )
+        self._patch_session.start()
+
+    def tearDown(self):
+        self._patch_session.stop()
+
+    # -- helpers -----------------------------------------------------------
+
+    def _state(self, entity_id: str, state: str = "on") -> dict:
+        return {"entity_id": entity_id, "state": state, "last_changed": "2024-01-01T00:00:00+00:00"}
+
+    # -- single entity -----------------------------------------------------
+
+    async def test_single_entity_returns_dict_keyed_by_entity_id(self):
+        states = [self._state("light.kitchen")]
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[states])]
+
+        result = await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.kitchen")
+
+        self.assertIn("light.kitchen", result)
+        self.assertEqual(result["light.kitchen"], states)
+
+    async def test_multiple_entities_comma_joined_in_params(self):
+        k_states = [self._state("light.kitchen")]
+        l_states = [self._state("light.lounge")]
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[k_states, l_states])]
+
+        result = await ha_helper.get_entity_history(
+            "http://ha.local:8123", "tok", ["light.kitchen", "light.lounge"]
+        )
+
+        session = _FakeClientSession.instances[0]
+        params = session.get_calls[0][1]["params"]
+        self.assertEqual(params["filter_entity_id"], "light.kitchen,light.lounge")
+        self.assertIn("light.kitchen", result)
+        self.assertIn("light.lounge", result)
+        self.assertEqual(result["light.kitchen"], k_states)
+        self.assertEqual(result["light.lounge"], l_states)
+
+    # -- entity with no history stays in result ----------------------------
+
+    async def test_entity_with_no_history_present_with_empty_list(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[[]])]
+
+        result = await ha_helper.get_entity_history("http://ha.local:8123", "tok", "sensor.temp")
+
+        self.assertIn("sensor.temp", result)
+        self.assertEqual(result["sensor.temp"], [])
+
+    # -- start_time / end_time as datetime ---------------------------------
+
+    async def test_start_time_datetime_appears_in_url_path(self):
+        from datetime import datetime, timezone
+
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+        dt = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x", start_time=dt)
+
+        session = _FakeClientSession.instances[0]
+        called_url = session.get_calls[0][0]
+        self.assertIn(dt.isoformat(), called_url)
+
+    async def test_end_time_datetime_appears_in_params(self):
+        from datetime import datetime, timezone
+
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+        dt = datetime(2024, 6, 2, 0, 0, 0, tzinfo=timezone.utc)
+
+        await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x", end_time=dt)
+
+        session = _FakeClientSession.instances[0]
+        params = session.get_calls[0][1]["params"]
+        self.assertEqual(params["end_time"], dt.isoformat())
+
+    # -- start_time / end_time as pre-formatted strings --------------------
+
+    async def test_start_time_string_passed_through(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history(
+            "http://ha.local:8123", "tok", "light.x", start_time="2024-06-01T12:00:00+00:00"
+        )
+
+        session = _FakeClientSession.instances[0]
+        self.assertIn("2024-06-01T12:00:00+00:00", session.get_calls[0][0])
+
+    async def test_end_time_string_passed_through(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history(
+            "http://ha.local:8123", "tok", "light.x", end_time="2024-06-02T00:00:00+00:00"
+        )
+
+        session = _FakeClientSession.instances[0]
+        params = session.get_calls[0][1]["params"]
+        self.assertEqual(params["end_time"], "2024-06-02T00:00:00+00:00")
+
+    # -- omitted times generate no extra path or params --------------------
+
+    async def test_no_times_no_path_segment_no_time_params(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x")
+
+        session = _FakeClientSession.instances[0]
+        url, kwargs = session.get_calls[0]
+        params = kwargs["params"]
+        self.assertTrue(url.endswith("/api/history/period"))
+        self.assertNotIn("end_time", params)
+
+    # -- minimal_response / significant_changes_only defaults -------------
+
+    async def test_defaults_minimal_true_significant_false(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x")
+
+        session = _FakeClientSession.instances[0]
+        params = session.get_calls[0][1]["params"]
+        self.assertEqual(params.get("minimal_response"), "true")
+        self.assertNotIn("significant_changes_only", params)
+
+    async def test_explicit_overrides_sent_correctly(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history(
+            "http://ha.local:8123",
+            "tok",
+            "light.x",
+            minimal_response=False,
+            significant_changes_only=True,
+        )
+
+        session = _FakeClientSession.instances[0]
+        params = session.get_calls[0][1]["params"]
+        self.assertNotIn("minimal_response", params)
+        self.assertEqual(params.get("significant_changes_only"), "true")
+
+    # -- authorization header ----------------------------------------------
+
+    async def test_auth_header_sent(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history("http://ha.local:8123", "mytoken", "light.x")
+
+        session = _FakeClientSession.instances[0]
+        headers = session.get_calls[0][1]["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer mytoken")
+
+    # -- error shapes ------------------------------------------------------
+
+    async def test_non_200_returns_error_dict(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=401, text_data="Unauthorized")]
+
+        result = await ha_helper.get_entity_history("http://ha.local:8123", "bad", "light.x")
+
+        self.assertEqual(result["error"], "HTTP 401")
+        self.assertEqual(result["status"], 401)
+        self.assertIn("Unauthorized", result["detail"])
+
+    async def test_exception_returns_error_dict(self):
+        _FakeClientSession.get_results = [ConnectionError("refused")]
+
+        result = await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x")
+
+        self.assertIn("error", result)
+        self.assertIn("refused", result["error"])
+
+    # -- URL normalisation -------------------------------------------------
+
+    async def test_ws_url_normalised_to_http(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history("wss://ha.example.com/api/websocket", "tok", "light.x")
+
+        session = _FakeClientSession.instances[0]
+        url = session.get_calls[0][0]
+        self.assertTrue(url.startswith("https://ha.example.com/api/history/period"))
 
 
 if __name__ == "__main__":

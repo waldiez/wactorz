@@ -72,4 +72,50 @@ describe("fusekiView", () => {
         expect(results?.textContent).toContain("isn't configured on the server");
         expect(results?.innerHTML).toContain("FUSEKI_URL");
     });
+
+    it("renders a results table for a SELECT with bindings", async () => {
+        mockFetch(() => ({
+            ok: true,
+            json: async () => ({
+                head: { vars: ["s", "p"] },
+                results: {
+                    bindings: [
+                        { s: { type: "uri", value: "urn:a" }, p: { type: "literal", value: "hi" } },
+                    ],
+                },
+            }),
+            text: async () => "",
+        }));
+        const el = buildFusekiView(() => {});
+        await flush();
+        const table = el.querySelector(".af-fuseki-table");
+        expect(table).not.toBeNull();
+        expect(table!.querySelectorAll("tbody tr").length).toBe(1);
+        expect(el.querySelector(".af-fuseki-status")?.textContent).toContain("1 row");
+        expect(table!.querySelector(".af-fuseki-uri")?.textContent).toContain("urn:a");
+    });
+
+    it("shows the boolean for an ASK query", async () => {
+        mockFetch(() => ({
+            ok: true,
+            json: async () => ({ head: { vars: [] }, boolean: true }),
+            text: async () => "",
+        }));
+        const el = buildFusekiView(() => {});
+        await flush();
+        expect(el.querySelector(".af-fuseki-status")?.textContent).toContain("Result: true");
+    });
+
+    it("renders the error body on a failed query", async () => {
+        mockFetch(() => ({
+            ok: false,
+            status: 400,
+            text: async () => "syntax error near LIMIT",
+            json: async () => ({ head: { vars: [] } }),
+        }));
+        const el = buildFusekiView(() => {});
+        await flush();
+        expect(el.querySelector(".af-fuseki-status")?.textContent).toContain("Error 400");
+        expect(el.querySelector(".af-fuseki-error")?.textContent).toContain("syntax error");
+    });
 });

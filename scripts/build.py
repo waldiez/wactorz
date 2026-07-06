@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Build script for Wactorz — produces a PyPI-ready wheel and sdist.
+"""Build script for Wactorz — produces a PyPI-ready wheel and sdist.
 
 Usage:
     python scripts/build.py           # build only
@@ -38,13 +37,15 @@ def main() -> None:
             print(f"  removed {d}/")
 
     # ── Install build tools ───────────────────────────────────────────────────
-    run([sys.executable, "-m", "pip", "install", "--quiet", "--upgrade",
-         "hatchling", "twine"])
+    run([sys.executable, "-m", "pip", "install", "--quiet", "--upgrade", "hatchling", "twine"])
 
     # ── Build wheel + sdist (force fresh frontend via STALE_AFTER=0) ─────────
     env = {**os.environ, "WACTORZ_FRONTEND_STALE": "0"}
-    run([sys.executable, "-m", "hatchling", "build", "-t", "wheel", "-t", "sdist"],
-        cwd=ROOT, env=env)
+    run(
+        [sys.executable, "-m", "hatchling", "build", "-t", "wheel", "-t", "sdist"],
+        cwd=ROOT,
+        env=env,
+    )
 
     # ── Validate packages ─────────────────────────────────────────────────────
     run([sys.executable, "-m", "twine", "check", "dist/*"], cwd=ROOT, shell=False)

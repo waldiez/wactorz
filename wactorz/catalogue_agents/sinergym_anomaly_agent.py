@@ -1,5 +1,4 @@
-"""
-sinergym_anomaly_agent.py — live anomaly detection over the Sinergym obs stream.
+"""sinergym_anomaly_agent.py — live anomaly detection over the Sinergym obs stream.
 
 Place in catalogue_agents/ and register in catalog_agent.py _build_catalog()
 (see REGISTER block at the bottom).
@@ -39,7 +38,7 @@ Control (via @sinergym-anomaly)
   {"action":"config", ...}  -> update params (re-loads detector)
 """
 
-AGENT_CODE = r'''
+AGENT_CODE = r"""
 import asyncio
 import json
 import os
@@ -281,7 +280,7 @@ async def handle_task(agent, payload):
             f"  last alert:      {la}\n"
             f"  alert topic:     {agent.state.get('alert_topic')}\n"
             f"  Fuseki graph:    {G_ANOM} (write failures: {agent.state.get('fuseki_fail', 0)})")
-'''
+"""
 
 
 # ──────────────────────────────────────────────────────────────────────────────

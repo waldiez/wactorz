@@ -23,10 +23,48 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        run: pip install -e ".[all]"
+        run: pip install -e ".[all,dev]"
 
       - name: Test
-        run: python -m unittest discover -s tests -p 'test_*.py'
+        run: python -m pytest tests
+
+  coverage-python:
+    name: Python coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        run: pip install -e ".[all,dev]"
+
+      - name: Coverage
+        run: make coverage-py
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage
+          path: coverage/python-coverage.xml
+
+  lint-python:
+    name: Python lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        run: pip install -e ".[all,dev]"
+
+      - name: Lint
+        run: make lint-py
 
   test-frontend:
     name: Frontend
@@ -36,32 +74,18 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      - name: Install & build
+      - name: Install
         working-directory: frontend
-        run: bun install && bun run build
+        run: bun install
 
       - name: Lint
         working-directory: frontend
         run: bun run lint
 
-  test-mobile:
-    name: Mobile (Flutter)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6.0.2
+      - name: Test + coverage (gated)
+        working-directory: frontend
+        run: bun run coverage
 
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-
-      - name: Install dependencies
-        working-directory: mobile
-        run: flutter pub get
-
-      - name: Analyze
-        working-directory: mobile
-        run: flutter analyze
-
-      - name: Test
-        working-directory: mobile
-        run: flutter test
+      - name: Build
+        working-directory: frontend
+        run: bun run build

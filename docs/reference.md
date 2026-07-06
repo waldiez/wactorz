@@ -76,7 +76,7 @@ Every user message goes through a single cheap LLM call that classifies it into 
 | Intent | Description | Route |
 |--------|-------------|-------|
 | `ACTUATE` | Immediate one-shot Home Assistant device control — turn on/off lights, set temperature, lock/unlock, open/close covers | → ephemeral `OneOffActuatorAgent` |
-| `HA` | Home Assistant management and automation CRUD — list devices/entities/areas, create/edit/delete automations, answer open-ended HA questions | → `home-assistant-agent` |
+| `HA` | Home Assistant management and automation CRUD — list devices/entities/areas, create/edit/delete automations, answer open-ended HA questions (including historical entity state) | → `home-assistant-agent` |
 | `PIPELINE` | Reactive rule — "if X then Y", "when X send me a message", any event-driven logic | → `PlannerAgent` |
 | `OTHER` | General conversation, coding, questions, everything else | → `main` LLM |
 
@@ -438,16 +438,17 @@ The `PlannerAgent` handles pipeline requests:
 
 ### Wiring Patterns
 
-The pipeline builder uses five canonical patterns:
+The pipeline builder uses seven canonical patterns:
 
 | Pattern | Trigger | Action | Agents spawned |
 |---------|---------|--------|----------------|
 | 1 | HA sensor state change | HA service call (light/switch/climate) | dynamic filter agent + `ha_actuator` |
 | 2 | HA sensor state change | Discord/webhook notification | dynamic agent |
-| 3 | Webcam object detection | HA service call | dynamic YOLO agent + `ha_actuator` |
-| 4 | Webcam object detection | Discord/webhook notification | dynamic YOLO agent + dynamic notify agent |
+| 3 | Camera stream object detection (YOLO) | HA service call | dynamic YOLO agent + `ha_actuator` |
+| 4 | Camera stream object detection (YOLO) | Discord/webhook notification | dynamic YOLO agent + dynamic notify agent |
 | 5 | Timer/schedule | HA service call | `ScheduledAgent` + `ha_actuator` |
 | 6 | MQTT sensor data + condition (e.g. temp > 20 AND lamp is on) | HA service call | dynamic monitor agent + `ha_actuator` |
+| 7 | One-shot camera snapshot | Process/save still image (optionally feed HA action) | single dynamic agent (`httpx`) |
 
 Pattern 1 requires a dynamic filter agent because HA state is nested under `new_state.state` — the `ha_actuator`'s `detection_filter` only matches top-level payload keys, so the filter agent extracts the state and re-publishes a clean trigger.
 
@@ -848,6 +849,8 @@ Connects to your Home Assistant instance (set `HA_URL` and `HA_TOKEN`) and handl
 | `list_areas` | Lists all Home Assistant areas |
 | `list_devices` | Lists all devices |
 | `list_entities` | Lists all entities |
+| `other` | Open-ended HA questions via an LLM tool-call loop — current state, camera snapshots/streams, and entity history (`get_entity_history`) |
+| `get_history` | Structured A2A operation: fetch entity state history for explicit entity IDs, returned as CSV |
 
 Device and automation data is cached (30s TTL). The agent includes a self-correction loop for hardware selection — if the LLM returns `can_fulfill=true` with an empty hardware list, it prompts for a correction automatically.
 
@@ -1197,7 +1200,7 @@ myenv\Scripts\activate
 # Mac/Linux
 source myenv/bin/activate
 
-pip install -r requirements.txt
+pip install -e ".[all]"
 
 # Set your LLM key
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -1294,13 +1297,11 @@ Ensure **Message Content Intent** is enabled in the Discord Developer Portal (Bo
 ```
 wactorz/
 ├── __main__.py                                Entry point — runs `cli.app()` via `python -m wactorz`
-├── main.py                                    Embedded application entry — used by ha-addon and tests
 ├── cli.py                                     argparse, supervision tree wiring, interface dispatch
-├── config.py                                  Env-driven `AppConfig` (LLM_*, MQTT_*, HA_*, FUSEKI_*, …)
+├── config.py                                  Env-driven `AppConfig` (LLM_*, MQTT_*, HA_*, …)
 ├── remote_runner.py                           Self-contained edge node runner — deploy to any Pi or machine
 ├── monitor_server.py                          aiohttp dashboard + MQTT↔WS bridge (serves `static/app/`)
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
-├── fuseki.py / fuseki_proxy.py                Fuseki bootstrap and SPARQL HTTP proxy
 │
 ├── core/
 │   ├── actor.py                               Base Actor — mailbox, lifecycle, heartbeat, spawn, supervisor
@@ -1323,9 +1324,7 @@ wactorz/
 │   ├── home_assistant_map_agent.py            HomeAssistantMapAgent — live entity/location map via HA WebSocket
 │   ├── home_assistant_state_bridge_agent.py   HomeAssistantStateBridgeAgent — HA state_changed → MQTT bridge
 │   ├── home_assistant_actuator_agent.py       HomeAssistantActuatorAgent — reactive MQTT→HA service actuator
-│   ├── timeseries_collector.py                TimeSeriesCollector — buffered MQTT → SQLite time-series tables
-│   ├── fuseki_agent.py                        FusekiAgent — SPARQL query/update interface (a.k.a. `fern-agent`)
-│   └── sparql_context.py                      SPARQL prompt helpers
+│   └── timeseries_collector.py                TimeSeriesCollector — buffered MQTT → SQLite time-series tables
 │
 ├── catalogue_agents/                          Pre-built recipe files (loaded by CatalogAgent at startup)
 │   ├── image_gen_agent.py                     NIM FLUX.1-dev image generation

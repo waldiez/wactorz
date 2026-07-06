@@ -1,5 +1,4 @@
-"""
-FusekiAgent — SPARQL knowledge-graph interface (NATO: FERN / Foxtrot).
+"""FusekiAgent — SPARQL knowledge-graph interface (NATO: FERN / Foxtrot).
 
 Connects to an Apache Jena Fuseki triple store and executes SPARQL queries.
 No API key required — uses the standard SPARQL 1.1 HTTP protocol.
@@ -19,18 +18,16 @@ Commands (prefix @fern-agent or @fuseki-agent stripped automatically):
 from __future__ import annotations
 
 import logging
-import os
 import time
 
 from ..config import CONFIG
-
 from ..core.actor import Actor, Message, MessageType
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_URL     = CONFIG.fuseki_url
+_DEFAULT_URL = CONFIG.fuseki_url
 _DEFAULT_DATASET = CONFIG.fuseki_dataset
-_TIMEOUT         = 20
+_TIMEOUT = 20
 
 _COMMON_PREFIXES = """\
 PREFIX rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -72,8 +69,10 @@ class FusekiAgent(Actor):
         kwargs.setdefault("name", "fern-agent")
         super().__init__(**kwargs)
         self.protected = False
-        self._base_url  = _DEFAULT_URL.rstrip("/")
-        self._dataset   = _DEFAULT_DATASET if _DEFAULT_DATASET.startswith("/") else f"/{_DEFAULT_DATASET}"
+        self._base_url = _DEFAULT_URL.rstrip("/")
+        self._dataset = (
+            _DEFAULT_DATASET if _DEFAULT_DATASET.startswith("/") else f"/{_DEFAULT_DATASET}"
+        )
 
     @property
     def _sparql_endpoint(self) -> str:
@@ -87,7 +86,7 @@ class FusekiAgent(Actor):
         await self._mqtt_publish(
             f"agents/{self.actor_id}/spawn",
             {
-                "agentId":   self.actor_id,
+                "agentId": self.actor_id,
                 "agentName": self.name,
                 "agentType": "librarian",
                 "timestamp": time.time(),
@@ -101,14 +100,15 @@ class FusekiAgent(Actor):
         payload = msg.payload or {}
         text = str(
             payload.get("text") or payload.get("content") or payload.get("task") or ""
-            if isinstance(payload, dict) else payload
+            if isinstance(payload, dict)
+            else payload
         ).strip()
         if not text:
             return
         # strip agent prefix
         for pfx in ("@fern-agent", "@fern_agent", "@fuseki-agent", "@fuseki_agent"):
             if text.lower().startswith(pfx):
-                text = text[len(pfx):].lstrip()
+                text = text[len(pfx) :].lstrip()
                 break
         reply = await self._dispatch(text)
         await self._reply(reply)
@@ -148,7 +148,9 @@ class FusekiAgent(Actor):
 
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(self._sparql_endpoint, params=params, headers=headers) as resp:
+                async with session.get(
+                    self._sparql_endpoint, params=params, headers=headers
+                ) as resp:
                     if resp.status != 200:
                         body = await resp.text()
                         return f"✗ Fuseki returned HTTP {resp.status}:\n```\n{body[:500]}\n```"
@@ -175,7 +177,9 @@ class FusekiAgent(Actor):
 
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(self._sparql_endpoint, params=params, headers=headers) as resp:
+                async with session.get(
+                    self._sparql_endpoint, params=params, headers=headers
+                ) as resp:
                     if resp.status != 200:
                         body = await resp.text()
                         return f"✗ Fuseki returned HTTP {resp.status}:\n```\n{body[:300]}\n```"
@@ -232,7 +236,7 @@ class FusekiAgent(Actor):
             for var in vars_:
                 cell = row.get(var, {})
                 val = cell.get("value", "")
-                t   = cell.get("type", "")
+                t = cell.get("type", "")
                 if t == "uri":
                     # shorten common namespaces
                     for pfx, ns in (
@@ -242,7 +246,7 @@ class FusekiAgent(Actor):
                         ("xsd", "http://www.w3.org/2001/XMLSchema#"),
                     ):
                         if val.startswith(ns):
-                            val = f"{pfx}:{val[len(ns):]}"
+                            val = f"{pfx}:{val[len(ns) :]}"
                             break
                 parts.append(f"`{var}`={val!r}")
             lines.append(f"{i + 1}. {' | '.join(parts)}")

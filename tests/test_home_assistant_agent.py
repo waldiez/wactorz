@@ -110,7 +110,9 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
     def _valid_automation(self) -> dict:
         return {
             "name": "Porch lights",
-            "trigger": [{"platform": "state", "entity_id": "binary_sensor.porch_motion", "to": "on"}],
+            "trigger": [
+                {"platform": "state", "entity_id": "binary_sensor.porch_motion", "to": "on"}
+            ],
             "condition": [],
             "action": [{"service": "light.turn_on", "target": {"entity_id": "light.porch"}}],
             "mode": "single",
@@ -127,7 +129,9 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
         agent = self._agent()
 
         self.assertEqual(agent._classify_action_heuristic("do I have any thermometers?"), "other")
-        self.assertEqual(agent._classify_action_heuristic("what is the state of my thermometer?"), "other")
+        self.assertEqual(
+            agent._classify_action_heuristic("what is the state of my thermometer?"), "other"
+        )
 
     async def test_classify_action_get_entities_state_is_literal_heuristic_only(self):
         """Only the literal trigger routes to the deterministic entity-state action."""
@@ -149,10 +153,12 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
 
         with patch(
             "wactorz.agents.home_assistant_agent.get_states",
-            new=AsyncMock(return_value=[
-                state_obj,
-                {"entity_id": "light.kitchen", "state": "off"},
-            ]),
+            new=AsyncMock(
+                return_value=[
+                    state_obj,
+                    {"entity_id": "light.kitchen", "state": "off"},
+                ]
+            ),
         ) as get_states:
             result = await agent._process("get_entities_state sensor.kitchen_temp")
 
@@ -261,7 +267,9 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
             "wactorz.agents.home_assistant_agent.get_states",
             new=AsyncMock(return_value=[]),
         ) as get_states:
-            result = await agent._handle_entities_state_request("get_entities_state sensor.kitchen_temp")
+            result = await agent._handle_entities_state_request(
+                "get_entities_state sensor.kitchen_temp"
+            )
 
         self.assertEqual(result["error"], "HA_URL or HA_TOKEN not configured.")
         get_states.assert_not_awaited()
@@ -329,7 +337,9 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
 
         with patch(
             "wactorz.agents.home_assistant_agent.get_simplified_ha_data",
-            new=AsyncMock(return_value={"entities": [{"entity_id": "sensor.kitchen_temp", "state": "21"}]}),
+            new=AsyncMock(
+                return_value={"entities": [{"entity_id": "sensor.kitchen_temp", "state": "21"}]}
+            ),
         ) as get_data:
             result = await agent._handle_other_request("what is the kitchen temperature?")
 
@@ -397,6 +407,143 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Home Assistant tool request failed", result["result"])
         self.assertIn("provider does not support tools", result["error"])
 
+    async def test_other_tool_loop_calls_get_entity_history(self):
+        """A model tool request executes get_entity_history with the parsed args."""
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={"input_tokens": 2},
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="get_entity_history",
+                            arguments={
+                                "entity_ids": ["sensor.office_temp"],
+                                "start_time": "2026-06-27T17:00:00",
+                                "end_time": "2026-06-27T17:05:00",
+                            },
+                        )
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(
+                    content="It was 21.5C at 17:00 on Saturday.", usage={"output_tokens": 4}
+                ),
+            ]
+        )
+        agent = self._agent(llm)
+
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(
+                return_value={
+                    "sensor.office_temp": [{"state": "21.5", "last_changed": "2026-06-27T17:00:00"}]
+                }
+            ),
+        ) as get_history:
+            result = await agent._handle_other_request(
+                "what was the office temperature on saturday at 17:00?"
+            )
+
+        get_history.assert_awaited_once()
+        _, call_kwargs = get_history.await_args
+        # Times must have been converted to UTC (offset-aware, ending "+00:00")
+        self.assertIn("+00:00", call_kwargs["start_time"])
+        self.assertIn("+00:00", call_kwargs["end_time"])
+        self.assertEqual(result["result"], "It was 21.5C at 17:00 on Saturday.")
+
+    async def test_other_tool_loop_get_entity_history_converts_times_to_utc_and_localises_result(
+        self,
+    ):
+        """Naive start/end times are converted to UTC for the HA call; returned timestamps are localised."""
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="get_entity_history",
+                            # LLM provides naive local time (no offset)
+                            arguments={
+                                "entity_ids": ["sensor.office_temp"],
+                                "start_time": "2026-06-27T17:00:00",
+                            },
+                        )
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Done.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+
+        utc_history = {
+            "sensor.office_temp": [
+                {
+                    "entity_id": "sensor.office_temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-27T15:00:00+00:00",
+                    "attributes": {},
+                },
+            ]
+        }
+
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(return_value=utc_history),
+        ) as get_history:
+            with patch(
+                "wactorz.agents.home_assistant_agent.localise_history_timestamps",
+                wraps=lambda h: h,  # pass-through so we can still inspect the call
+            ) as localise:
+                with patch(
+                    "wactorz.agents.home_assistant_agent.to_utc", wraps=lambda s: s
+                ) as to_utc:
+                    await agent._handle_other_request("what was the office temperature at 17:00?")
+
+        # to_utc must have been called for the start_time argument
+        to_utc.assert_called_with("2026-06-27T17:00:00")
+        # localise_history_timestamps must have been called with the history
+        localise.assert_called_once_with(utc_history)
+        # get_entity_history was called (times may have been converted, but call happened)
+        get_history.assert_awaited_once()
+
+    async def test_other_tool_loop_get_entity_history_error_marks_tool_result_as_error(self):
+        """An error dict from get_entity_history is surfaced as a tool error to the LLM."""
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="get_entity_history",
+                            arguments={"entity_ids": ["sensor.x"]},
+                        )
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="I could not fetch that history.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(
+                return_value={"error": "HTTP 401", "status": 401, "detail": "unauthorized"}
+            ),
+        ):
+            result = await agent._handle_other_request("what was sensor.x doing yesterday?")
+
+        self.assertEqual(result["result"], "I could not fetch that history.")
+        tool_message = llm.calls[1]["messages"][-1]
+        self.assertTrue(tool_message["is_error"])
+
     async def test_edit_automation_updates_generated_automation(self):
         """Editing awaits generation and sends the generated automation payload to HA."""
         updated_automation = self._valid_automation()
@@ -414,14 +561,18 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch(
                 "wactorz.agents.home_assistant_agent.get_automations",
-                new=AsyncMock(return_value=[{"id": "abc123", "alias": "Porch lights", **updated_automation}]),
+                new=AsyncMock(
+                    return_value=[{"id": "abc123", "alias": "Porch lights", **updated_automation}]
+                ),
             ),
             patch(
                 "wactorz.agents.home_assistant_agent.update_automation",
                 new=AsyncMock(return_value=True),
             ) as update,
         ):
-            result = await agent._edit_automation("turn on porch light on motion", automations, devices)
+            result = await agent._edit_automation(
+                "turn on porch light on motion", automations, devices
+            )
 
         self.assertTrue(result["edited"])
         update.assert_awaited_once_with(agent.ha_url, agent.ha_token, "abc123", updated_automation)
@@ -519,7 +670,9 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
         """Generated automation must pass local validation before HA is updated."""
         invalid_automation = {
             "name": "Porch lights",
-            "trigger": [{"platform": "state", "entity_id": "binary_sensor.porch_motion", "to": "on"}],
+            "trigger": [
+                {"platform": "state", "entity_id": "binary_sensor.porch_motion", "to": "on"}
+            ],
             "condition": [],
             "mode": "single",
         }
@@ -646,7 +799,9 @@ class HomeAssistantAgentEntrypointDispatchTest(unittest.IsolatedAsyncioTestCase)
 
         self.assertEqual(await agent.chat("hello"), "hello back")
 
-        self.assertEqual([m["role"] for m in agent._conversation_history[-2:]], ["user", "assistant"])
+        self.assertEqual(
+            [m["role"] for m in agent._conversation_history[-2:]], ["user", "assistant"]
+        )
         agent.persist.assert_called_with("conversation_history", agent._conversation_history)
         agent._maybe_summarize.assert_awaited_once()
         agent._log_chat_turn.assert_called_once()
@@ -667,7 +822,9 @@ class HomeAssistantAgentEntrypointDispatchTest(unittest.IsolatedAsyncioTestCase)
         agent.send.assert_not_awaited()
         self.assertEqual(agent.metrics.tasks_completed, 0)
 
-        await agent.handle_message(Message(MessageType.TASK, "sender", {"text": "list", "_task_id": "t-1"}))
+        await agent.handle_message(
+            Message(MessageType.TASK, "sender", {"text": "list", "_task_id": "t-1"})
+        )
         agent._process.assert_awaited_once_with("list")
         sent_payload = agent.send.await_args.args[2]
         self.assertEqual(sent_payload["task"], "list")
@@ -680,7 +837,11 @@ class HomeAssistantAgentEntrypointDispatchTest(unittest.IsolatedAsyncioTestCase)
         agent._process = AsyncMock()
         agent._create_automation = AsyncMock(return_value={"result": "created"})
 
-        payload = {"task": "turn on light", "entities": [" light.porch "], "hardware": [{"hardware": "light"}]}
+        payload = {
+            "task": "turn on light",
+            "entities": [" light.porch "],
+            "hardware": [{"hardware": "light"}],
+        }
         await agent.handle_message(Message(MessageType.TASK, "sender", payload))
 
         agent._process.assert_not_awaited()
@@ -711,32 +872,50 @@ class HomeAssistantAgentRegistryAndCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("offline", error)
 
         agent.ha_url = ""
-        self.assertEqual(await agent._fetch_registry_items(AsyncMock()), ([], "HA_URL or HA_TOKEN not configured."))
+        self.assertEqual(
+            await agent._fetch_registry_items(AsyncMock()),
+            ([], "HA_URL or HA_TOKEN not configured."),
+        )
 
     async def test_list_areas_devices_entities_format_empty_success_and_errors(self):
         agent = self._agent()
         with patch("wactorz.agents.home_assistant_agent.get_areas", new=AsyncMock(return_value=[])):
             self.assertIn("No areas", (await agent._list_areas())["result"])
-        with patch("wactorz.agents.home_assistant_agent.get_areas", new=AsyncMock(return_value=[
-            {"area_id": "kitchen", "name": "Kitchen"},
-            {"area_id": "blank"},
-        ])):
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_areas",
+            new=AsyncMock(
+                return_value=[
+                    {"area_id": "kitchen", "name": "Kitchen"},
+                    {"area_id": "blank"},
+                ]
+            ),
+        ):
             result = await agent._list_areas()
             self.assertEqual(result["areas"][1]["name"], "(unnamed)")
             self.assertIn("Kitchen (kitchen)", result["result"])
 
-        with patch("wactorz.agents.home_assistant_agent.get_devices", new=AsyncMock(return_value=[
-            {"id": "d1", "name_by_user": "Lamp", "manufacturer": "Acme", "model": "L1"},
-            {"id": "d2"},
-        ])):
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_devices",
+            new=AsyncMock(
+                return_value=[
+                    {"id": "d1", "name_by_user": "Lamp", "manufacturer": "Acme", "model": "L1"},
+                    {"id": "d2"},
+                ]
+            ),
+        ):
             result = await agent._list_devices()
             self.assertEqual(result["devices"][0]["device_id"], "d1")
             self.assertIn("Lamp (Acme L1)", result["result"])
 
-        with patch("wactorz.agents.home_assistant_agent.get_entities", new=AsyncMock(return_value=[
-            {"entity_id": "light.kitchen", "platform": "mqtt"},
-            {"entity_id": "sensor.temp", "original_name": "Temp"},
-        ])):
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entities",
+            new=AsyncMock(
+                return_value=[
+                    {"entity_id": "light.kitchen", "platform": "mqtt"},
+                    {"entity_id": "sensor.temp", "original_name": "Temp"},
+                ]
+            ),
+        ):
             result = await agent._list_entities()
             self.assertEqual(result["entities"][1]["name"], "Temp")
             self.assertIn("light.kitchen (mqtt)", result["result"])
@@ -757,7 +936,10 @@ class HomeAssistantAgentRegistryAndCacheTest(unittest.IsolatedAsyncioTestCase):
         get_data.assert_awaited_once()
 
         agent._device_cache = {"timestamp": 0.0, "data": None}
-        with patch("wactorz.agents.home_assistant_agent.get_simplified_ha_data", new=AsyncMock(return_value=[])):
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_simplified_ha_data",
+            new=AsyncMock(return_value=[]),
+        ):
             self.assertEqual((await agent._get_devices())["data"], {})
 
         agent._device_cache = {"timestamp": 0.0, "data": None}
@@ -779,7 +961,9 @@ class HomeAssistantAgentRegistryAndCacheTest(unittest.IsolatedAsyncioTestCase):
             {"id": "id-1", "alias": "Morning", "description": "Wake up"},
             {"automation_id": "id-2", "name": "Night"},
         ]
-        with patch("wactorz.agents.home_assistant_agent.get_automations", new=AsyncMock(return_value=full)) as get_auto:
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_automations", new=AsyncMock(return_value=full)
+        ) as get_auto:
             first = await agent._get_automations_brief()
             second = await agent._get_automations_brief()
         self.assertEqual(first[0], {"id": "id-1", "name": "Morning", "description": "Wake up"})
@@ -848,20 +1032,28 @@ class HomeAssistantAgentHardwareTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["primary_hardware"][0]["required_domains"], ["light"])
         self.assertEqual([a["hardware"] for a in result["alternatives"]], ["Back porch light"])
 
-        agent = self._agent(_SequencedLLM([
-            '{"can_fulfill": true, "primary_hardware": []}',
-            json.dumps(
-                {
-                    "can_fulfill": True,
-                    "primary_hardware": [{"hardware": "Light", "required_entities": ["light.porch"]}],
-                }
-            ),
-        ]))
+        agent = self._agent(
+            _SequencedLLM(
+                [
+                    '{"can_fulfill": true, "primary_hardware": []}',
+                    json.dumps(
+                        {
+                            "can_fulfill": True,
+                            "primary_hardware": [
+                                {"hardware": "Light", "required_entities": ["light.porch"]}
+                            ],
+                        }
+                    ),
+                ]
+            )
+        )
         result = await agent._recommend_hardware("porch lights", _devices())
         self.assertTrue(result["can_fulfill"])
         self.assertEqual(len(agent.llm.calls), 2)
 
-        result = await self._agent(_SequencedLLM(["not-json"]))._recommend_hardware("porch lights", _devices())
+        result = await self._agent(_SequencedLLM(["not-json"]))._recommend_hardware(
+            "porch lights", _devices()
+        )
         self.assertFalse(result["can_fulfill"])
         self.assertIn("Hardware recommendation error", result["result"])
 
@@ -874,20 +1066,28 @@ class HomeAssistantAgentHardwareTest(unittest.IsolatedAsyncioTestCase):
         fenced = """```json
 {"can_fulfill": true, "hardware": [{"hardware": "Motion sensor", "protocol": "Zigbee", "why": "motion", "required_entities": ["binary_sensor.porch_motion"]}]}
 ```"""
-        result = await self._agent(_SequencedLLM([fenced]))._select_hardware("make automation", _devices())
+        result = await self._agent(_SequencedLLM([fenced]))._select_hardware(
+            "make automation", _devices()
+        )
         self.assertTrue(result["can_fulfill"])
         self.assertIn("Best hardware", result["result"])
 
-        agent = self._agent(_SequencedLLM([
-            '{"can_fulfill": true, "hardware": []}',
-            '{"can_fulfill": false, "result": "nothing suitable"}',
-        ]))
+        agent = self._agent(
+            _SequencedLLM(
+                [
+                    '{"can_fulfill": true, "hardware": []}',
+                    '{"can_fulfill": false, "result": "nothing suitable"}',
+                ]
+            )
+        )
         result = await agent._select_hardware("make automation", _devices())
         self.assertFalse(result["can_fulfill"])
         self.assertIn("nothing suitable", result["result"])
         self.assertEqual(len(agent.llm.calls), 2)
 
-        result = await self._agent(_SequencedLLM(["[]"]))._select_hardware("make automation", _devices())
+        result = await self._agent(_SequencedLLM(["[]"]))._select_hardware(
+            "make automation", _devices()
+        )
         self.assertFalse(result["can_fulfill"])
         self.assertIn("Hardware selection error", result["result"])
 
@@ -905,19 +1105,38 @@ class HomeAssistantAgentAutomationCrudTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["can_create"])
         self.assertEqual(result["result"], "need more")
 
-        minimal = {"name": "A", "trigger": [{"platform": "time"}], "action": [{"service": "light.turn_on"}]}
-        agent = self._agent(_SequencedLLM([f"```json\n{json.dumps({'can_create': True, 'automation': minimal})}\n```"]))
+        minimal = {
+            "name": "A",
+            "trigger": [{"platform": "time"}],
+            "action": [{"service": "light.turn_on"}],
+        }
+        agent = self._agent(
+            _SequencedLLM(
+                [f"```json\n{json.dumps({'can_create': True, 'automation': minimal})}\n```"]
+            )
+        )
         result = await agent._generate_automation("x", ["light.porch"], [])
         self.assertTrue(result["can_create"])
         self.assertEqual(result["automation"]["condition"], [])
         self.assertEqual(result["automation"]["mode"], "single")
 
         with self.assertRaisesRegex(ValueError, "automation.name"):
-            await self._agent(_SequencedLLM(['{"can_create": true, "automation": []}']))._generate_automation("x", [], [])
+            await self._agent(
+                _SequencedLLM(['{"can_create": true, "automation": []}'])
+            )._generate_automation("x", [], [])
         with self.assertRaisesRegex(ValueError, "automation.action"):
-            await self._agent(_SequencedLLM([
-                json.dumps({"can_create": True, "automation": {"name": "A", "trigger": [{"platform": "time"}]}})
-            ]))._generate_automation("x", [], [])
+            await self._agent(
+                _SequencedLLM(
+                    [
+                        json.dumps(
+                            {
+                                "can_create": True,
+                                "automation": {"name": "A", "trigger": [{"platform": "time"}]},
+                            }
+                        )
+                    ]
+                )
+            )._generate_automation("x", [], [])
 
     async def test_insert_and_create_automation_paths(self):
         agent = self._agent()
@@ -937,20 +1156,28 @@ class HomeAssistantAgentAutomationCrudTest(unittest.IsolatedAsyncioTestCase):
             "wactorz.agents.home_assistant_agent.create_automation_via_rest",
             new=AsyncMock(side_effect=RuntimeError("rejected")),
         ):
-            self.assertIn("rejected", (await agent._insert_automation(_valid_automation()))["error"])
+            self.assertIn(
+                "rejected", (await agent._insert_automation(_valid_automation()))["error"]
+            )
 
         agent = self._agent()
-        agent._generate_automation = AsyncMock(return_value={"can_create": False, "result": "no", "automation": {}})
+        agent._generate_automation = AsyncMock(
+            return_value={"can_create": False, "result": "no", "automation": {}}
+        )
         self.assertFalse((await agent._create_automation("x", [], []))["can_create"])
 
-        agent._generate_automation = AsyncMock(return_value={"can_create": True, "automation": _valid_automation()})
+        agent._generate_automation = AsyncMock(
+            return_value={"can_create": True, "automation": _valid_automation()}
+        )
         agent._insert_automation = AsyncMock(return_value={"inserted": False, "error": "offline"})
         result = await agent._create_automation("x", [], [])
         self.assertTrue(result["can_create"])
         self.assertFalse(result["inserted"])
         self.assertIn("offline", result["result"])
 
-        agent._insert_automation = AsyncMock(return_value={"inserted": True, "response": {"ok": True}})
+        agent._insert_automation = AsyncMock(
+            return_value={"inserted": True, "response": {"ok": True}}
+        )
         self.assertTrue((await agent._create_automation("x", [], []))["inserted"])
 
         agent._generate_automation = AsyncMock(side_effect=RuntimeError("boom"))
@@ -960,30 +1187,43 @@ class HomeAssistantAgentAutomationCrudTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await self._agent()._delete_automation("delete", []))["deleted"])
         self.assertIn(
             "No LLM",
-            (await self._agent()._delete_automation("delete", [{"id": "a", "name": "A"}]))["result"],
+            (await self._agent()._delete_automation("delete", [{"id": "a", "name": "A"}]))[
+                "result"
+            ],
         )
 
         cases = [
             (_SequencedLLM(["not-json"]), "Could not identify"),
             (_SequencedLLM(["[]"]), "Could not identify which automation"),
             (_SequencedLLM(['{"found": false, "result": "ambiguous"}']), "ambiguous"),
-            (_SequencedLLM(['{"found": true, "automation_name": "A"}']), "Could not determine automation ID"),
+            (
+                _SequencedLLM(['{"found": true, "automation_name": "A"}']),
+                "Could not determine automation ID",
+            ),
         ]
         for llm, expected_text in cases:
             with self.subTest(expected_text=expected_text):
-                result = await self._agent(llm)._delete_automation("delete", [{"id": "a", "name": "A"}])
+                result = await self._agent(llm)._delete_automation(
+                    "delete", [{"id": "a", "name": "A"}]
+                )
                 self.assertFalse(result["deleted"])
                 self.assertIn(expected_text, result["result"])
 
         llm = _SequencedLLM(['{"found": true, "automation_id": "a", "automation_name": "A"}'])
         agent = self._agent(llm)
         agent.ha_token = ""
-        self.assertIn("HA_URL", (await agent._delete_automation("delete", [{"id": "a", "name": "A"}]))["result"])
+        self.assertIn(
+            "HA_URL",
+            (await agent._delete_automation("delete", [{"id": "a", "name": "A"}]))["result"],
+        )
 
         llm = _SequencedLLM(['{"found": true, "automation_id": "a", "automation_name": "A"}'])
         agent = self._agent(llm)
         agent._automation_cache = {"timestamp": 1.0, "data": [{"id": "a"}]}
-        with patch("wactorz.agents.home_assistant_agent.delete_automation", new=AsyncMock(return_value=True)) as delete:
+        with patch(
+            "wactorz.agents.home_assistant_agent.delete_automation",
+            new=AsyncMock(return_value=True),
+        ) as delete:
             result = await agent._delete_automation("delete", [{"id": "a", "name": "A"}])
         self.assertTrue(result["deleted"])
         self.assertIsNone(agent._automation_cache["data"])
@@ -995,7 +1235,9 @@ class HomeAssistantAgentAutomationCrudTest(unittest.IsolatedAsyncioTestCase):
         ):
             llm = _SequencedLLM(['{"found": true, "automation_id": "a", "automation_name": "A"}'])
             with patch("wactorz.agents.home_assistant_agent.delete_automation", new=helper):
-                result = await self._agent(llm)._delete_automation("delete", [{"id": "a", "name": "A"}])
+                result = await self._agent(llm)._delete_automation(
+                    "delete", [{"id": "a", "name": "A"}]
+                )
             self.assertFalse(result["deleted"])
             self.assertIn(expected, result["result"])
 
@@ -1006,22 +1248,45 @@ class HomeAssistantAgentEditAndHelperRegressionTest(unittest.IsolatedAsyncioTest
 
     async def test_edit_guard_and_helper_failure_paths(self):
         self.assertFalse((await self._agent()._edit_automation("x", [], _devices()))["edited"])
-        self.assertIn("No LLM", (await self._agent()._edit_automation("x", [{"id": "a"}], _devices()))["result"])
+        self.assertIn(
+            "No LLM",
+            (await self._agent()._edit_automation("x", [{"id": "a"}], _devices()))["result"],
+        )
 
         agent = self._agent(_SequencedLLM([]))
         agent.ha_url = ""
-        self.assertIn("HA_URL", (await agent._edit_automation("x", [{"id": "a"}], _devices()))["result"])
+        self.assertIn(
+            "HA_URL", (await agent._edit_automation("x", [{"id": "a"}], _devices()))["result"]
+        )
 
         for llm, expected in (
             (_SequencedLLM(["not-json"]), "Could not identify automation"),
             (_SequencedLLM(["[]"]), "Could not identify which automation"),
             (_SequencedLLM(['{"found": true}']), "Could not determine"),
-            (_SequencedLLM(['{"found": true, "automation_id": "a", "automation_name": "A"}', "[]"]), "Invalid generated"),
-            (_SequencedLLM(['{"found": true, "automation_id": "a", "automation_name": "A"}', '{"can_edit": true, "automation": []}']), "automation.name"),
+            (
+                _SequencedLLM(
+                    ['{"found": true, "automation_id": "a", "automation_name": "A"}', "[]"]
+                ),
+                "Invalid generated",
+            ),
+            (
+                _SequencedLLM(
+                    [
+                        '{"found": true, "automation_id": "a", "automation_name": "A"}',
+                        '{"can_edit": true, "automation": []}',
+                    ]
+                ),
+                "automation.name",
+            ),
         ):
             with self.subTest(expected=expected):
-                with patch("wactorz.agents.home_assistant_agent.get_automations", new=AsyncMock(return_value=[])):
-                    result = await self._agent(llm)._edit_automation("x", [{"id": "a", "name": "A"}], _devices())
+                with patch(
+                    "wactorz.agents.home_assistant_agent.get_automations",
+                    new=AsyncMock(return_value=[]),
+                ):
+                    result = await self._agent(llm)._edit_automation(
+                        "x", [{"id": "a", "name": "A"}], _devices()
+                    )
                 self.assertFalse(result["edited"])
                 self.assertIn(expected, result["result"])
 
@@ -1032,15 +1297,25 @@ class HomeAssistantAgentEditAndHelperRegressionTest(unittest.IsolatedAsyncioTest
             {"id": "different", "alias": "A", **_valid_automation()},
         ):
             with self.subTest(full_config=full_config):
-                llm = _SequencedLLM([
-                    '{"found": true, "automation_id": "a", "automation_name": "A"}',
-                    json.dumps({"can_edit": True, "automation": _valid_automation("Edited")}),
-                ])
+                llm = _SequencedLLM(
+                    [
+                        '{"found": true, "automation_id": "a", "automation_name": "A"}',
+                        json.dumps({"can_edit": True, "automation": _valid_automation("Edited")}),
+                    ]
+                )
                 with (
-                    patch("wactorz.agents.home_assistant_agent.get_automations", new=AsyncMock(return_value=[full_config])),
-                    patch("wactorz.agents.home_assistant_agent.update_automation", new=AsyncMock(return_value=True)),
+                    patch(
+                        "wactorz.agents.home_assistant_agent.get_automations",
+                        new=AsyncMock(return_value=[full_config]),
+                    ),
+                    patch(
+                        "wactorz.agents.home_assistant_agent.update_automation",
+                        new=AsyncMock(return_value=True),
+                    ),
                 ):
-                    result = await self._agent(llm)._edit_automation("x", [{"id": "a", "name": "A"}], many_entities)
+                    result = await self._agent(llm)._edit_automation(
+                        "x", [{"id": "a", "name": "A"}], many_entities
+                    )
                 self.assertTrue(result["edited"])
                 edit_payload = json.loads(llm.calls[1]["kwargs"]["messages"][0]["content"])
                 self.assertEqual(len(edit_payload["available_entities"]), 100)
@@ -1064,12 +1339,17 @@ class HomeAssistantAgentStaticHelperTest(unittest.TestCase):
         agent._accumulate_usage("bad")
         self.assertEqual(agent.total_input_tokens, 2)
 
-        self.assertEqual(HomeAssistantAgent._extract_payload({"text": " x ", "entities": "bad"}), ("x", [], []))
-        self.assertEqual(HomeAssistantAgent._extract_payload({"task": "x", "entities": [" light.a "]}), ("x", ["light.a"], []))
+        self.assertEqual(
+            HomeAssistantAgent._extract_payload({"text": " x ", "entities": "bad"}), ("x", [], [])
+        )
+        self.assertEqual(
+            HomeAssistantAgent._extract_payload({"task": "x", "entities": [" light.a "]}),
+            ("x", ["light.a"], []),
+        )
         self.assertEqual(HomeAssistantAgent._extract_payload("plain"), ("plain", [], []))
         self.assertEqual(HomeAssistantAgent._extract_task_id({"task": "t"}, "fallback"), "t")
         self.assertEqual(HomeAssistantAgent._extract_task_id({}, "fallback"), "fallback")
-        self.assertEqual(HomeAssistantAgent._strip_fences("```json\n{\"a\": 1}\n```"), '{"a": 1}')
+        self.assertEqual(HomeAssistantAgent._strip_fences('```json\n{"a": 1}\n```'), '{"a": 1}')
         self.assertIn("I can help", HomeAssistantAgent._unsupported_action_response("x")["result"])
 
     async def _classify(self, llm, text):
@@ -1077,10 +1357,15 @@ class HomeAssistantAgentStaticHelperTest(unittest.TestCase):
 
     def test_classification_fallbacks_and_heuristic_categories(self):
         async def run():
-            self.assertEqual(await self._classify(_ClassifyingLLM("nonsense"), "list devices"), "list_devices")
-            self.assertEqual(await self._classify(_FailingCompleteLLM(), "list areas"), "list_areas")
+            self.assertEqual(
+                await self._classify(_ClassifyingLLM("nonsense"), "list devices"), "list_devices"
+            )
+            self.assertEqual(
+                await self._classify(_FailingCompleteLLM(), "list areas"), "list_areas"
+            )
 
         import asyncio
+
         asyncio.run(run())
 
         expectations = {
@@ -1115,9 +1400,14 @@ class HomeAssistantAgentStaticHelperTest(unittest.TestCase):
             self.assertIn(expected, HomeAssistantAgent._validate_automation(automation))
 
         devices = {"data": {"entities": [{"entity_id": "light.a"}, {}, {"entity_id": "sensor.b"}]}}
-        self.assertEqual(HomeAssistantAgent._entity_ids_from_devices(devices), ["light.a", "sensor.b"])
+        self.assertEqual(
+            HomeAssistantAgent._entity_ids_from_devices(devices), ["light.a", "sensor.b"]
+        )
         self.assertEqual(HomeAssistantAgent._available_entity_ids(devices), {"light.a", "sensor.b"})
-        self.assertEqual(HomeAssistantAgent._extract_entity_ids("Light.A light.a SENSOR.B"), ["light.a", "sensor.b"])
+        self.assertEqual(
+            HomeAssistantAgent._extract_entity_ids("Light.A light.a SENSOR.B"),
+            ["light.a", "sensor.b"],
+        )
         self.assertEqual(
             HomeAssistantAgent._extract_entity_ids_from_hardware(
                 {"hardware": [{"required_entities": ["light.a", "light.a", "sensor.b"]}]}
@@ -1134,24 +1424,541 @@ class HomeAssistantAgentStaticHelperTest(unittest.TestCase):
             ],
             {"light.a", "sensor.b"},
         )
-        self.assertEqual(normalized, [{
-            "hardware": "Lamp",
-            "why": "",
-            "protocol": "N/A",
-            "required_domains": ["light"],
-            "required_entities": ["light.a"],
-        }])
+        self.assertEqual(
+            normalized,
+            [
+                {
+                    "hardware": "Lamp",
+                    "why": "",
+                    "protocol": "N/A",
+                    "required_domains": ["light"],
+                    "required_entities": ["light.a"],
+                }
+            ],
+        )
 
         alternatives = HomeAssistantAgent._filter_hardware_alternatives(
             [{"hardware": "Lamp", "required_entities": ["light.a"]}],
             [
                 {"hardware": "Alt", "required_entities": ["sensor.b"], "alternative_to": "light.a"},
                 {"hardware": "No link", "required_entities": ["sensor.b"]},
-                {"hardware": "Overlap", "required_entities": ["light.a"], "alternative_to": "light.a"},
+                {
+                    "hardware": "Overlap",
+                    "required_entities": ["light.a"],
+                    "alternative_to": "light.a",
+                },
             ],
         )
         self.assertEqual([a["hardware"] for a in alternatives], ["Alt"])
         self.assertIn("Alt", HomeAssistantAgent._hardware_summary_lines(alternatives)[0])
+
+
+class HomeAssistantAgentCameraTest(unittest.IsolatedAsyncioTestCase):
+    def _agent(self, llm_provider=None) -> HomeAssistantAgent:
+        return _make_agent(self, llm_provider)
+
+    # ── heuristic ────────────────────────────────────────────────────────────
+
+    def test_camera_terms_route_to_other_heuristic(self):
+        for text in ("show me my camera", "list cameras", "get a snapshot", "camera stream url"):
+            with self.subTest(text=text):
+                self.assertEqual(HomeAssistantAgent._classify_action_heuristic(text), "other")
+
+    def test_meta_camera_question_does_not_route_to_unknown(self):
+        # "camera" in the message → heuristic returns "other", never "unknown"
+        self.assertNotEqual(
+            HomeAssistantAgent._classify_action_heuristic("can you show snapshots from cameras?"),
+            "unknown",
+        )
+
+    # ── _list_cameras ────────────────────────────────────────────────────────
+
+    async def test_list_cameras_no_config(self):
+        agent = self._agent()
+        agent.ha_url = ""
+        result = await agent._list_cameras()
+        self.assertIn("not configured", result["result"])
+        self.assertEqual(result["cameras"], [])
+
+    async def test_list_cameras_empty(self):
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_entities",
+            new=AsyncMock(return_value=[]),
+        ):
+            result = await agent._list_cameras()
+        self.assertIn("No camera", result["result"])
+        self.assertEqual(result["cameras"], [])
+
+    async def test_list_cameras_populated(self):
+        cameras = [
+            {"entity_id": "camera.front_door", "state": "idle", "friendly_name": "Front Door"},
+            {"entity_id": "camera.backyard", "state": "streaming", "friendly_name": "Backyard"},
+        ]
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_entities",
+            new=AsyncMock(return_value=cameras),
+        ):
+            result = await agent._list_cameras()
+        self.assertIn("2 camera", result["result"])
+        self.assertIn("camera.front_door", result["result"])
+        self.assertEqual(result["cameras"], cameras)
+
+    async def test_list_cameras_exception(self):
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_entities",
+            new=AsyncMock(side_effect=RuntimeError("offline")),
+        ):
+            result = await agent._list_cameras()
+        self.assertIn("offline", result["result"])
+        self.assertIn("error", result)
+
+    # ── _camera_snapshot ─────────────────────────────────────────────────────
+
+    async def test_camera_snapshot_no_config(self):
+        agent = self._agent()
+        agent.ha_url = ""
+        result = await agent._camera_snapshot("camera.front_door")
+        self.assertIn("not configured", result["result"])
+
+    async def test_camera_snapshot_missing_entity_id(self):
+        agent = self._agent()
+        result = await agent._camera_snapshot("")
+        self.assertIn("required", result["result"])
+
+    async def test_camera_snapshot_success(self):
+        snap = {
+            "image_base64": "abc123",
+            "content_type": "image/jpeg",
+            "entity_id": "camera.front_door",
+        }
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_snapshot",
+            new=AsyncMock(return_value=snap),
+        ):
+            result = await agent._camera_snapshot("camera.front_door")
+        self.assertIn("Snapshot captured", result["result"])
+        self.assertEqual(result["data"], snap)
+
+    async def test_camera_snapshot_error_from_ha(self):
+        snap = {"error": "HTTP 502", "status": 502, "detail": "", "entity_id": "camera.front_door"}
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_snapshot",
+            new=AsyncMock(return_value=snap),
+        ):
+            result = await agent._camera_snapshot("camera.front_door")
+        self.assertIn("502", result["result"])
+        self.assertIn("error", result)
+
+    # ── _camera_stream_url ───────────────────────────────────────────────────
+
+    async def test_camera_stream_url_no_config(self):
+        agent = self._agent()
+        agent.ha_url = ""
+        result = await agent._camera_stream_url("camera.backyard")
+        self.assertIn("not configured", result["result"])
+
+    async def test_camera_stream_url_missing_entity_id(self):
+        agent = self._agent()
+        result = await agent._camera_stream_url("")
+        self.assertIn("required", result["result"])
+
+    async def test_camera_stream_url_returns_all_sources(self):
+        streams_data = {
+            "entity_id": "camera.backyard",
+            "streams": {
+                "mjpeg_proxy": "http://ha.local:8123/api/camera_proxy_stream/camera.backyard",
+                "camera_source": "rtsp://192.168.1.10/stream",
+                "hls": "http://ha.local:8123/api/hls/abc/master.m3u8",
+            },
+            "capabilities": ["hls"],
+        }
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_stream_urls",
+            new=AsyncMock(return_value=streams_data),
+        ):
+            result = await agent._camera_stream_url("camera.backyard")
+        self.assertIn("mjpeg_proxy", result["result"])
+        self.assertIn("rtsp://", result["result"])
+        self.assertIn("hls", result["result"])
+        self.assertEqual(result["data"], streams_data)
+
+    # ── A2A dispatch via handle_message ─────────────────────────────────────
+
+    async def test_handle_message_dispatches_list_cameras(self):
+        agent = self._agent()
+        agent.send = AsyncMock()
+        agent._list_cameras = AsyncMock(return_value={"result": "2 cameras", "cameras": []})
+        agent._process = AsyncMock()
+
+        await agent.handle_message(
+            Message(MessageType.TASK, "sender", {"operation": "list_cameras"})
+        )
+        agent._list_cameras.assert_awaited_once()
+        agent._process.assert_not_awaited()
+        sent = agent.send.await_args.args[2]
+        self.assertIn("2 cameras", sent["result"])
+
+    async def test_handle_message_dispatches_camera_snapshot(self):
+        agent = self._agent()
+        agent.send = AsyncMock()
+        snap = {"result": "Snapshot captured", "data": {"image_base64": "x"}}
+        agent._camera_snapshot = AsyncMock(return_value=snap)
+        agent._process = AsyncMock()
+
+        await agent.handle_message(
+            Message(
+                MessageType.TASK,
+                "sender",
+                {"operation": "get_camera_snapshot", "camera_entity_id": "camera.front_door"},
+            )
+        )
+        agent._camera_snapshot.assert_awaited_once_with("camera.front_door")
+        agent._process.assert_not_awaited()
+
+    async def test_handle_message_dispatches_camera_stream_url(self):
+        agent = self._agent()
+        agent.send = AsyncMock()
+        agent._camera_stream_url = AsyncMock(return_value={"result": "Stream URLs", "data": {}})
+        agent._process = AsyncMock()
+
+        await agent.handle_message(
+            Message(
+                MessageType.TASK,
+                "sender",
+                {"operation": "get_camera_stream_url", "camera_entity_id": "camera.backyard"},
+            )
+        )
+        agent._camera_stream_url.assert_awaited_once_with("camera.backyard")
+        agent._process.assert_not_awaited()
+
+    # ── tool loop: list_camera_entities ─────────────────────────────────────
+
+    async def test_tool_loop_list_camera_entities(self):
+        cameras = [
+            {"entity_id": "camera.front_door", "state": "idle", "friendly_name": "Front Door"}
+        ]
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[ToolCall(id="c1", name="list_camera_entities")],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="You have one camera: Front Door.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_entities",
+            new=AsyncMock(return_value=cameras),
+        ) as mock_list:
+            result = await agent._handle_other_request("what cameras do I have?")
+        mock_list.assert_awaited_once_with(agent.ha_url, agent.ha_token)
+        self.assertEqual(result["result"], "You have one camera: Front Door.")
+
+    async def test_tool_loop_list_camera_entities_cached(self):
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(id="c1", name="list_camera_entities"),
+                        ToolCall(id="c2", name="list_camera_entities"),
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Checked once.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_entities",
+            new=AsyncMock(return_value=[]),
+        ) as mock_list:
+            await agent._handle_other_request("list cameras twice")
+        mock_list.assert_awaited_once()
+
+    # ── tool loop: get_camera_snapshot ───────────────────────────────────────
+
+    async def test_tool_loop_snapshot_appends_base64_to_result(self):
+        snap = {
+            "image_base64": "BASE64DATA",
+            "content_type": "image/jpeg",
+            "entity_id": "camera.front_door",
+        }
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(
+                            id="c1",
+                            name="get_camera_snapshot",
+                            arguments={"camera_entity_id": "camera.front_door"},
+                        )
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Snapshot captured for Front Door.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_snapshot",
+            new=AsyncMock(return_value=snap),
+        ) as mock_snap:
+            result = await agent._handle_other_request("show me the front door camera")
+        mock_snap.assert_awaited_once()
+        self.assertIn("Snapshot captured", result["result"])
+        self.assertIn("data:image/jpeg;base64,BASE64DATA", result["result"])
+
+    async def test_tool_loop_snapshot_error_not_appended(self):
+        snap = {"error": "HTTP 502", "status": 502, "detail": "", "entity_id": "camera.front_door"}
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(
+                            id="c1",
+                            name="get_camera_snapshot",
+                            arguments={"camera_entity_id": "camera.front_door"},
+                        )
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="The camera returned an error.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_snapshot",
+            new=AsyncMock(return_value=snap),
+        ):
+            result = await agent._handle_other_request("show me the front door camera")
+        self.assertNotIn("base64", result["result"])
+        self.assertNotIn("data:image", result["result"])
+
+    # ── tool loop: get_camera_stream_url ─────────────────────────────────────
+
+    async def test_tool_loop_stream_url_returns_all_sources(self):
+        streams_data = {
+            "entity_id": "camera.backyard",
+            "streams": {
+                "mjpeg_proxy": "http://ha.local:8123/api/camera_proxy_stream/camera.backyard",
+                "hls": "http://ha.local:8123/api/hls/xyz/master.m3u8",
+            },
+            "capabilities": ["hls"],
+        }
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(
+                            id="c1",
+                            name="get_camera_stream_url",
+                            arguments={"camera_entity_id": "camera.backyard"},
+                        )
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Here are your stream URLs.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_stream_urls",
+            new=AsyncMock(return_value=streams_data),
+        ) as mock_stream:
+            result = await agent._handle_other_request("give me stream urls for my backyard camera")
+        mock_stream.assert_awaited_once_with(agent.ha_url, agent.ha_token, "camera.backyard")
+        self.assertEqual(result["result"], "Here are your stream URLs.")
+
+    async def test_tool_loop_stream_url_error(self):
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[
+                        ToolCall(
+                            id="c1",
+                            name="get_camera_stream_url",
+                            arguments={"camera_entity_id": "camera.backyard"},
+                        )
+                    ],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Failed to get stream.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_camera_stream_urls",
+            new=AsyncMock(side_effect=RuntimeError("ws error")),
+        ):
+            result = await agent._handle_other_request("stream url for camera.backyard")
+        self.assertIsNotNone(result["result"])
+
+    async def test_tool_loop_unsupported_tool_is_error(self):
+        llm = _ToolLLM(
+            [
+                ToolCompletion(
+                    content="",
+                    usage={},
+                    tool_calls=[ToolCall(id="c1", name="fly_to_moon")],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": []},
+                ),
+                ToolCompletion(content="Cannot do that.", usage={}),
+            ]
+        )
+        agent = self._agent(llm)
+        result = await agent._handle_other_request("do something unsupported")
+        self.assertEqual(result["result"], "Cannot do that.")
+
+
+class HomeAssistantAgentHistoryTest(unittest.IsolatedAsyncioTestCase):
+    def _agent(self, llm_provider=None) -> HomeAssistantAgent:
+        return _make_agent(self, llm_provider)
+
+    # ── _get_history (deterministic agent-to-agent path) ───────────────────
+
+    async def test_get_history_no_config(self):
+        agent = self._agent()
+        agent.ha_url = ""
+        result = await agent._get_history({"entity_ids": ["sensor.office_temp"]})
+        self.assertEqual(result["error"], "not_configured")
+        self.assertIn("not configured", result["result"])
+
+    async def test_get_history_missing_entity_ids(self):
+        agent = self._agent()
+        result = await agent._get_history({})
+        self.assertEqual(result["error"], "missing_entity_ids")
+        self.assertIn("entity_ids", result["result"])
+
+    async def test_get_history_accepts_singular_entity_id(self):
+        history = {
+            "sensor.office_temp": [
+                {
+                    "entity_id": "sensor.office_temp",
+                    "state": "21.5",
+                    "last_changed": "t",
+                    "attributes": {},
+                }
+            ]
+        }
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(return_value=history),
+        ) as get_history:
+            result = await agent._get_history({"entity_id": "sensor.office_temp"})
+        get_history.assert_awaited_once_with(
+            agent.ha_url,
+            agent.ha_token,
+            ["sensor.office_temp"],
+            start_time=None,
+            end_time=None,
+        )
+        self.assertEqual(result["data"], history)
+
+    async def test_get_history_success_returns_csv_and_data(self):
+        history = {
+            "sensor.office_temp": [
+                {
+                    "entity_id": "sensor.office_temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-28T00:00:00",
+                    "attributes": {"unit_of_measurement": "C"},
+                }
+            ],
+            "sensor.bedroom_temp": [
+                {
+                    "entity_id": "sensor.bedroom_temp",
+                    "state": "19.0",
+                    "last_changed": "2026-06-28T00:00:00",
+                    "attributes": {"unit_of_measurement": "C"},
+                }
+            ],
+        }
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(return_value=history),
+        ) as get_history:
+            result = await agent._get_history(
+                {
+                    "entity_ids": ["sensor.office_temp", "sensor.bedroom_temp"],
+                    "start_time": "2026-06-28T00:00:00",
+                    "end_time": "2026-06-28T00:05:00",
+                }
+            )
+
+        get_history.assert_awaited_once_with(
+            agent.ha_url,
+            agent.ha_token,
+            ["sensor.office_temp", "sensor.bedroom_temp"],
+            start_time="2026-06-28T00:00:00",
+            end_time="2026-06-28T00:05:00",
+        )
+        self.assertEqual(result["format"], "csv")
+        self.assertEqual(result["data"], history)
+        self.assertIn("sensor.office_temp,2026-06-28T00:00:00,21.5,C", result["csv"])
+        self.assertIn("sensor.bedroom_temp,2026-06-28T00:00:00,19.0,C", result["csv"])
+        self.assertIn("2 entit", result["result"])
+
+    async def test_get_history_ha_error_is_reported(self):
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(
+                return_value={"error": "HTTP 401", "status": 401, "detail": "unauthorized"}
+            ),
+        ):
+            result = await agent._get_history({"entity_ids": ["sensor.x"]})
+        self.assertEqual(result["error"], "HTTP 401")
+        self.assertIn("HTTP 401", result["result"])
+
+    async def test_get_history_exception_is_reported(self):
+        agent = self._agent()
+        with patch(
+            "wactorz.agents.home_assistant_agent.get_entity_history",
+            new=AsyncMock(side_effect=RuntimeError("offline")),
+        ):
+            result = await agent._get_history({"entity_ids": ["sensor.x"]})
+        self.assertIn("offline", result["result"])
+        self.assertIn("error", result)
+
+    # ── A2A dispatch via handle_message ─────────────────────────────────────
+
+    async def test_handle_message_dispatches_get_history(self):
+        agent = self._agent()
+        agent.send = AsyncMock()
+        agent._get_history = AsyncMock(
+            return_value={"result": "Fetched history for 1 entity.", "csv": "...", "data": {}}
+        )
+        agent._process = AsyncMock()
+
+        payload = {"operation": "get_history", "entity_ids": ["sensor.office_temp"]}
+        await agent.handle_message(Message(MessageType.TASK, "sender", payload))
+
+        agent._get_history.assert_awaited_once_with(payload)
+        agent._process.assert_not_awaited()
+        sent = agent.send.await_args.args[2]
+        self.assertIn("Fetched history", sent["result"])
+        self.assertEqual(sent["csv"], "...")
 
 
 if __name__ == "__main__":

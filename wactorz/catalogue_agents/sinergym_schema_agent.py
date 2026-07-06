@@ -1,5 +1,4 @@
-"""
-sinergym_schema_agent.py — authoritative knowledge of the Sinergym I/O layout.
+"""sinergym_schema_agent.py — authoritative knowledge of the Sinergym I/O layout.
 
 Place in catalogue_agents/ and register in catalog_agent.py _build_catalog()
 (see REGISTER block at the bottom).
@@ -38,7 +37,7 @@ so this agent must be running when an episode begins. Once captured, the schema
 is persisted and survives restarts.
 """
 
-AGENT_CODE = r'''
+AGENT_CODE = r"""
 import asyncio
 import json
 
@@ -200,7 +199,7 @@ async def handle_task(agent, payload):
             f"n_zones={g.get('n_zones')}\n"
             f"  zones: {', '.join(g.get('zones') or [])}\n"
             f"Ask me: 'obs' (index->name table), 'zone <name>', 'actions', 'reward', or 'info'.")
-'''
+"""
 
 
 # ──────────────────────────────────────────────────────────────────────────────

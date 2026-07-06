@@ -1,5 +1,4 @@
-"""
-CATALOG AGENT — manual-agent
+"""CATALOG AGENT — manual-agent
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Searches the internet for device manuals, downloads PDFs, extracts text,
 and answers questions about the device using the agent's LLM.

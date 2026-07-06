@@ -12,11 +12,11 @@ environment plumbing differs.
 ## What changed vs the original branch
 
 | Topic | `../SETUP.md` (Windows) | This path (Linux) |
-|---|---|---|
+| --- | --- | --- |
 | EnergyPlus + Sinergym | hand-built devcontainer: 3.11.0 source, Dockerfile edited to force EnergyPlus 24.1.0 (§3a/§3b) | `docker/Dockerfile.bridge`: base `sailugr/sinergym:v3.12.0-lite` (already Sinergym 3.12.0 + EnergyPlus 25.1.0) — no from-source EnergyPlus build |
 | Image size | full devcontainer | `-lite` base (0.7 GB pull) — the DRL/torch stack is dropped because inference runs host-side in wactorz |
 | MQTT + Fuseki | three Docker services started by hand | already running via repo `compose.yaml` (`wactorz-mosquitto`, `wactorz-fuseki`); only the `sinergym` dataset had to be created |
-| Model/detector dir | `C:/Users/pkasn/.../state/maddpg_office/` | `state/maddpg_office/` (host paths; relative paths work in the launch payload) |
+| Model/detector dir | `C:/Users/yuu/.../state/maddpg_office/` | `state/maddpg_office/` (host paths; relative paths work in the launch payload) |
 | Host Python deps | n/a (host = Windows GUI) | `torch==2.12.0+cpu` + `numpy` added to the wactorz `.venv` (py3.14) |
 | `host.docker.internal` | automatic on Docker Desktop | mapped explicitly on Linux via `--add-host=host.docker.internal:host-gateway` (in `run-bridge.sh`) |
 | Bridge `--env` / topics | unchanged | unchanged (`officeMedium-multiagent`) |
@@ -28,7 +28,7 @@ Files added by this path (everything else is the original branch):
 
 ## One-time setup
 
-```bash
+```text
 # 0. (services already up via compose.yaml: wactorz-mosquitto :1883, wactorz-fuseki :3030)
 
 # 1. Create the persistent Fuseki dataset the bridge writes to
@@ -53,7 +53,7 @@ docker build -f docker/Dockerfile.bridge -t wactorz-sinergym-bridge:3.12.0-ep25.
 
 Verified versions inside the built image / host venv:
 
-```
+```text
 EnergyPlus, Version 25.1.0-1c11a3d85f
 Sinergym 3.12.0
 host torch 2.12.0+cpu | numpy 2.4.6
@@ -65,38 +65,51 @@ host torch 2.12.0+cpu | numpy 2.4.6
 
 In the wactorz console:
 
-```
+```text
 @catalog spawn sinergym-labeler
 @catalog spawn sinergym-hsml
+@catalog spawn sinergym-anomaly       # the anomaly DETECTOR — used on BOTH paths (it publishes /anomaly, which the viz reads)
 
-# DRL (MADDPG):
-@catalog spawn maddpg-fleet
-@catalog spawn sinergym-anomaly
+# Controllers — spawn any you want (idle until launched); you LAUNCH exactly one below.
+@catalog spawn maddpg-fleet           # DRL (MADDPG)
+@catalog spawn aif-fleet              # AIF — 15 decentralized per-zone agents
+@catalog spawn aif-anomaly            # AIF — single batched N=15 (exact v7 parity); alternative to aif-fleet, NOT a detector
 
-# …or AIF (custom active inference):
-@catalog spawn aif-fleet
-@catalog spawn aif-anomaly
-
-# point the host-side agents at Fuseki (use whichever anomaly agent you spawned):
+# point the host-side agents at Fuseki. sinergym-anomaly is the detector on BOTH paths;
+# the controllers (maddpg-fleet / aif-fleet / aif-anomaly) publish actions to MQTT and need no Fuseki config:
 @sinergym-hsml    {"action":"config","fuseki_url":"http://localhost:3030"}
-@sinergym-anomaly {"action":"config","fuseki_url":"http://localhost:3030"}   # or @aif-anomaly for the AIF path
+@sinergym-anomaly {"action":"config","fuseki_url":"http://localhost:3030"}
 ```
 
-Launch the 15-zone fleet — `env_id` MUST be explicit (the recipe default differs), paths
-may be relative to the repo root, `infer_dir` is auto-derived from `model_path`:
+> **Replace `<WACTORZ_DIR>`** with your absolute wactorz path (the dir holding
+> `state/`), e.g. `/Users/you/Projects/waldiez/wactorz` or `C:/Users/you/wactorz`.
+> The `model_path` (and `normalizer_path` for DRL) must point at the files you
+> staged into `state/maddpg_office/` in step 0.
 
-```
+Launch the controller you chose. **Every controller needs an explicit `launch`** — `maddpg-fleet`,
+`aif-fleet`, or `aif-anomaly` — and for each, `env_id` MUST be explicit (the recipe default is a
+different MQTT topic than the bridge's, so it is never auto-inferred). Paths may be relative to the
+repo root; `infer_dir` is auto-derived from `model_path`. The detector `sinergym-anomaly` needs NO
+`launch` — it auto-detects on observations once configured above (both paths).
+
+```text
 # DRL (MADDPG):
-@maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"state/maddpg_office/model.pt","normalizer_path":"state/maddpg_office/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+@maddpg-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"<WACTORZ_DIR>/state/maddpg_office/model.pt","normalizer_path":"state/maddpg_office/normalizer.npz","zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
 
-# …or AIF (custom active inference) — model_path is the .pkl; no normalizer:
-@aif-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"state/maddpg_office/aif_model.pkl","heat_low":15.0,"heat_high":22.0,"cool_low":24.0,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":4.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+# AIF (custom active inference) — model_path is the .pkl; no normalizer:
+@aif-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"<WACTORZ_DIR>/state/maddpg_office/aif_model.pkl","heat_low":15.0,"heat_high":22.0,"cool_low":24.0,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":4.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
+
+# aif-anomaly is an ALTERNATIVE AIF controller (single batched N=15, exact v7 parity), NOT a
+# detector despite the name. Launch it INSTEAD of aif-fleet, never both — they publish to the same
+# action topics and would fight. Launch exactly one controller (same env_id + zones):
+@aif-anomaly {"action":"launch","env_id":"officeMedium-multiagent","model_path":"<WACTORZ_DIR>/state/maddpg_office/aif_model.pkl","heat_low":15.0,"heat_high":22.0,"cool_low":24.0,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":4.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
 ```
 
 Start the bridge **last** (env_info + first obs at episode start are not retained):
 
-```bash
-./docker/run-bridge.sh                                    # clean eval run
+```shell
+# add --clean to start with an empty dataset and avoid mixing multiple runs
+./docker/run-bridge.sh                                       # clean eval run
 ./docker/run-bridge.sh --inject-anomalies --anomaly-seed 5   # with anomaly injection
 ```
 
@@ -105,22 +118,26 @@ Start the bridge **last** (env_info + first obs at episode start are not retaine
 ## Verification (commands + captured output from a real run)
 
 **Bridge stepping + anomaly injection** (from the bridge stdout):
-```
+
+```text
 [ENVIRONMENT] (INFO) : Episode 1 started.
 [ENV] reward components: [...'hvac_efficiency', 'hvac_fault_active']
 ⚠ [ANOMALY START step=1492] HVAC eff 65% — winter fault (day 15)
 ✓ [ANOMALY END   step=1516] hvac_fault resolved
 ```
+
 > The one-off `Zone '...' timed out — using last known action (htg=18.50, clg=27.00)`
 > warnings at **step 0 only** are expected: first-inference warmup before the fleet
 > answers the first obs. They must not recur after warmup.
 
 **All 15 zones are actually acting** (not coasting on last-known):
-```bash
+
+```shell
 docker exec wactorz-mosquitto \
   mosquitto_sub -t "sinergym/env/officeMedium-multiagent/zone/+/action" -v -W 3
 ```
-```
+
+```text
 .../zone/Core_bottom/action       {"action":[1.0,-1.0],     "agent":"maddpg-zone-00","step":6963,...}
 .../zone/Core_mid/action          {"action":[-1.0,-1.0],    "agent":"maddpg-zone-01",...}
 .../zone/Perimeter_bot_ZN_3/action{"action":[-1.0,0.9753],  "agent":"maddpg-zone-05",...}
@@ -128,14 +145,16 @@ docker exec wactorz-mosquitto \
 ```
 
 **Fuseki is filling** (host side → `localhost`):
-```bash
+
+```shell
 FUSEKI_USER="${FUSEKI_USER:-admin}"
 FUSEKI_PASSWORD="${FUSEKI_PASSWORD:-admin}"
 curl -s -u "${FUSEKI_USER}":"${FUSEKI_PASSWORD}" -H 'Content-Type: application/sparql-query' \
   --data 'SELECT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g' \
   http://localhost:3030/sinergym/sparql
 ```
-```
+
+```text
 urn:sinergym:observations    36300
 urn:sinergym:zones          508367
 urn:sinergym:episodes            7
@@ -143,7 +162,8 @@ urn:sinergym:catalog           689
 ```
 
 **All 15 agents writing decisions** (SETUP §9 sanity):
-```bash
+
+```shell
 FUSEKI_USER="${FUSEKI_USER:-admin}"
 FUSEKI_PASSWORD="${FUSEKI_PASSWORD:-admin}"
 curl -s -u "${FUSEKI_USER}":"${FUSEKI_PASSWORD}" -H 'Content-Type: application/sparql-query' \
@@ -156,9 +176,14 @@ curl -s -u "${FUSEKI_USER}":"${FUSEKI_PASSWORD}" -H 'Content-Type: application/s
 ```
 
 **Agent self-checks** (in the wactorz console):
-```
+
+```text
 @maddpg-fleet     {"action":"status"}   # 15 children maddpg-zone-00..14, env_info_seen=true
 @sinergym-anomaly {"action":"status"}   # detector loaded, steps climbing, write failures=0
+
+# or AIF
+@aif-fleet        {"action":"status"}   # 15 children maddpg-zone-00..14, env_info_seen=true
+@aif-anomaly      {"action":"status"}   # detector loaded, steps climbing, write failures=0
 ```
 
 ---

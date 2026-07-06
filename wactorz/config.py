@@ -1,7 +1,8 @@
-from dotenv import load_dotenv, find_dotenv
+import os
 from dataclasses import dataclass
 from pathlib import Path
-import os
+
+from dotenv import find_dotenv, load_dotenv
 
 
 def _env_truthy(name: str) -> bool:
@@ -47,6 +48,8 @@ class AppConfig:
     ollama_url: str
     mqtt_host: str
     mqtt_port: int
+    mqtt_username: str
+    mqtt_password: str
     ha_url: str
     ha_token: str
     ha_state_bridge_output_topic: str
@@ -65,13 +68,20 @@ class AppConfig:
     nautilus_ssh_key: str
     nautilus_strict_host_keys: bool
     weather_default_location: str
+    llm_cost_limit_usd: float
+    llm_cost_limit_period: str
+    energy_rate: float
+    energy_currency: str
+    openai_url: str
     fuseki_url: str
     fuseki_dataset: str
     fuseki_user: str
     fuseki_password: str
-    llm_cost_limit_usd: float
-    llm_cost_limit_period: str
-    openai_url: str
+    # Stable deployment/site domain used as the SWID namespace. Kept separate
+    # from a device's room/area on purpose: a device that is moved between rooms
+    # must keep the same SWID, so location is modelled as an hsml relationship in
+    # the graph rather than being encoded into the identifier.
+    swid_namespace: str
 
 
 CONFIG = AppConfig(
@@ -83,11 +93,16 @@ CONFIG = AppConfig(
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),
     mqtt_port=_env_int("MQTT_PORT", 1883),
+    mqtt_username=os.getenv("MQTT_USERNAME", ""),
+    mqtt_password=os.getenv("MQTT_PASSWORD", ""),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
-    ha_state_bridge_output_topic=os.getenv("HA_STATE_BRIDGE_OUTPUT_TOPIC", "homeassistant/state_changes"),
+    ha_state_bridge_output_topic=os.getenv(
+        "HA_STATE_BRIDGE_OUTPUT_TOPIC", "homeassistant/state_changes"
+    ),
     ha_state_bridge_domains=os.getenv("HA_STATE_BRIDGE_DOMAINS", ""),
-    ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0") not in ("0", "false", "no"),
+    ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0")
+    not in ("0", "false", "no"),
     discord_token=os.getenv("DISCORD_BOT_TOKEN", ""),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
@@ -99,13 +114,16 @@ CONFIG = AppConfig(
     twilio_whatsapp_number=os.getenv("TWILIO_WHATSAPP_NUMBER", ""),
     api_key=os.getenv("API_KEY", ""),
     nautilus_ssh_key=os.getenv("NAUTILUS_SSH_KEY", ""),
-    nautilus_strict_host_keys=os.getenv("NAUTILUS_STRICT_HOST_KEYS", "0"),
+    nautilus_strict_host_keys=_env_truthy("NAUTILUS_STRICT_HOST_KEYS"),
     weather_default_location=os.getenv("WEATHER_DEFAULT_LOCATION", "London"),
+    llm_cost_limit_usd=_env_float("LLM_COST_LIMIT_USD", 0.0),
+    llm_cost_limit_period=os.getenv("LLM_COST_LIMIT_PERIOD", "monthly"),
+    energy_rate=_env_float("ENERGY_RATE", 0.138),
+    energy_currency=os.getenv("ENERGY_CURRENCY", "EUR"),
+    openai_url=os.getenv("OPENAI_URL", ""),
     fuseki_url=os.getenv("FUSEKI_URL", ""),
     fuseki_dataset=os.getenv("FUSEKI_DATASET", "wactorz"),
     fuseki_user=os.getenv("FUSEKI_USER", "admin"),
     fuseki_password=os.getenv("FUSEKI_PASSWORD", "admin"),
-    llm_cost_limit_usd=_env_float("LLM_COST_LIMIT_USD", 0.0),
-    llm_cost_limit_period=os.getenv("LLM_COST_LIMIT_PERIOD", "monthly"),
-    openai_url=os.getenv("OPENAI_URL", ""),
+    swid_namespace=os.getenv("SWID_NAMESPACE", "home"),
 )

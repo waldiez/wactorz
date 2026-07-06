@@ -1,5 +1,4 @@
-"""
-wactorz/fuseki.py  -  Home Assistant + Agent Manifest → Apache Jena Fuseki bridge.
+"""wactorz/fuseki.py  -  Home Assistant + Agent Manifest → Apache Jena Fuseki bridge.
 
 Two bridges run concurrently:
 
@@ -22,7 +21,7 @@ Ontology prefixes used (all inline - no external file references):
   prov:     PROV-O     <http://www.w3.org/ns/prov#>
   dcterms:  DC Terms   <http://purl.org/dc/terms/>
   bot:    BOT        <https://w3id.org/bot#>  (Building Topology Ontology)
-  
+
 
 Named graphs managed:
   urn:ha:current  - latest state per entity  (DELETE + INSERT on every change)
@@ -48,7 +47,6 @@ Environment variables:
 """
 
 # cspell: disable
-# flake8: noqa: E501
 # pyright: reportAny=false,reportExplicitAny=false,reportUnusedCallResult=false
 # pyright: reportUnknownVariableType=false,reportUnknownMemberType=false,reportUnknownArgumentType=false
 
@@ -62,7 +60,7 @@ import re
 import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse, quote
+from urllib.parse import quote, urlparse
 
 import aiohttp
 import aiomqtt
@@ -103,12 +101,12 @@ BRIDGE_AGENT_IRI = "<urn:ha:bridge:wactorz>"
 MANIFEST_BRIDGE_IRI = "<urn:wactorz:bridge:agent-manifest>"
 
 # Named graph IRIs
-GRAPH_CURRENT  = "urn:ha:current"
-GRAPH_HISTORY  = "urn:ha:history"
-GRAPH_DEVICES  = "urn:ha:devices"
-GRAPH_AGENTS   = "urn:wactorz:agents"
+GRAPH_CURRENT = "urn:ha:current"
+GRAPH_HISTORY = "urn:ha:history"
+GRAPH_DEVICES = "urn:ha:devices"
+GRAPH_AGENTS = "urn:wactorz:agents"
 GRAPH_CHANNELS = "urn:wactorz:channels"
-GRAPH_AREAS    = "urn:ha:areas"
+GRAPH_AREAS = "urn:ha:areas"
 
 AF = "https://waldiez.github.io/wactorz/ontology#"
 
@@ -145,45 +143,45 @@ DEFAULT_DOMAINS: frozenset[str] = frozenset(
 # than being mislabeled as tangible devices.
 _DOMAIN_TYPES: dict[str, tuple[list[str], bool]] = {
     # ── Physical sensors (tangible, observe a property) ──────────────────────
-    "sensor":         (["sosa:Sensor", "saref:Sensor", "core:Thing"], False),
-    "binary_sensor":  (["sosa:Sensor", "saref:Sensor", "core:Thing"], False),
-    "camera":         (["sosa:Sensor", "core:Thing"], False),
-    "button":         (["sosa:Sensor", "core:Thing"], False),
-    "event":          (["sosa:Sensor", "core:Thing"], False),
+    "sensor": (["sosa:Sensor", "saref:Sensor", "core:Thing"], False),
+    "binary_sensor": (["sosa:Sensor", "saref:Sensor", "core:Thing"], False),
+    "camera": (["sosa:Sensor", "core:Thing"], False),
+    "button": (["sosa:Sensor", "core:Thing"], False),
+    "event": (["sosa:Sensor", "core:Thing"], False),
     # ── Physical actuators (tangible, perform an action) ─────────────────────
-    "light":          (["sosa:Actuator", "saref:LightSwitch", "core:Thing"], True),
-    "switch":         (["sosa:Actuator", "saref:Switch", "core:Thing"], True),
-    "cover":          (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
-    "fan":            (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
-    "lock":           (["sosa:Actuator", "sosa:Sensor", "saref:DoorSwitch", "core:Thing"], True),
-    "siren":          (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
-    "valve":          (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
-    "humidifier":     (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
-    "vacuum":         (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
-    "remote":         (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
-    "media_player":   (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
-    "lawn_mower":     (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
-    "climate":        (["sosa:Actuator", "sosa:Sensor", "saref:HVAC", "core:Thing"], True),
-    "water_heater":   (["sosa:Actuator", "saref:HVAC", "core:Thing"], True),
-    "number":         (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
-    "select":         (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
+    "light": (["sosa:Actuator", "saref:LightSwitch", "core:Thing"], True),
+    "switch": (["sosa:Actuator", "saref:Switch", "core:Thing"], True),
+    "cover": (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "fan": (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "lock": (["sosa:Actuator", "sosa:Sensor", "saref:DoorSwitch", "core:Thing"], True),
+    "siren": (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "valve": (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "humidifier": (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "vacuum": (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "remote": (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "media_player": (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "lawn_mower": (["sosa:Actuator", "saref:Actuator", "core:Thing"], True),
+    "climate": (["sosa:Actuator", "sosa:Sensor", "saref:HVAC", "core:Thing"], True),
+    "water_heater": (["sosa:Actuator", "saref:HVAC", "core:Thing"], True),
+    "number": (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
+    "select": (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
     # ── Virtual / software sensors (observe, but not a tangible device) ──────
-    "weather":        (["sosa:Sensor", "core:Thing"], False),
-    "sun":            (["sosa:Sensor", "core:Thing"], False),
+    "weather": (["sosa:Sensor", "core:Thing"], False),
+    "sun": (["sosa:Sensor", "core:Thing"], False),
     "device_tracker": (["sosa:Sensor", "core:Thing"], False),
-    "person":         (["syn:Person", "sosa:FeatureOfInterest", "core:Thing"], False),
-    "zone":           (["sosa:FeatureOfInterest", "core:Thing"], False),
+    "person": (["syn:Person", "sosa:FeatureOfInterest", "core:Thing"], False),
+    "zone": (["sosa:FeatureOfInterest", "core:Thing"], False),
     # ── Settable parameters / helpers (user-controllable values) ─────────────
-    "input_boolean":  (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
-    "input_number":   (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
-    "input_button":   (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
-    "input_select":   (["syn:Parameter", "core:Thing"], False),
-    "input_text":     (["syn:Parameter", "core:Thing"], False),
+    "input_boolean": (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
+    "input_number": (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
+    "input_button": (["sosa:Actuator", "syn:Parameter", "core:Thing"], True),
+    "input_select": (["syn:Parameter", "core:Thing"], False),
+    "input_text": (["syn:Parameter", "core:Thing"], False),
     "input_datetime": (["syn:Parameter", "core:Thing"], False),
     # ── Processes / behaviours (intangible — NOT devices) ────────────────────
-    "automation":     (["syn:Automation", "prov:Activity", "core:Thing"], False),
-    "script":         (["syn:Script", "prov:Activity", "core:Thing"], False),
-    "scene":          (["syn:Scene", "prov:Activity", "core:Thing"], False),
+    "automation": (["syn:Automation", "prov:Activity", "core:Thing"], False),
+    "script": (["syn:Script", "prov:Activity", "core:Thing"], False),
+    "scene": (["syn:Scene", "prov:Activity", "core:Thing"], False),
 }
 _DEFAULT_TYPES: tuple[list[str], bool] = (["saref:Device", "core:Thing"], False)
 
@@ -196,13 +194,14 @@ _DEFAULT_TYPES: tuple[list[str], bool] = (["saref:Device", "core:Thing"], False)
 # soil-moisture vs illuminance vs uv sensors are still separable even though SAREF
 # core has no class for them).
 _DEVICE_CLASS_TYPES: dict[tuple[str, str], list[str]] = {
-    ("sensor", "temperature"):  ["saref:TemperatureSensor"],
-    ("sensor", "smoke"):        ["saref:SmokeSensor"],
+    ("sensor", "temperature"): ["saref:TemperatureSensor"],
+    ("sensor", "smoke"): ["saref:SmokeSensor"],
     ("binary_sensor", "smoke"): ["saref:SmokeSensor"],
 }
 
 
 # ── Small helpers ─────────────────────────────────────────────────────────────
+
 
 def _safe(s: str) -> str:
     """Replace non-IRI-safe chars with underscores."""
@@ -273,6 +272,7 @@ def _dt_now() -> str:
 
 # ── Turtle body builders (no prefix declarations) ─────────────────────────────
 
+
 def _bridge_agent_body() -> str:
     return (
         f"{BRIDGE_AGENT_IRI}\n"
@@ -291,7 +291,7 @@ def _area_body(area: dict[str, Any]) -> str:
     iri = _area_iri(area_id)
     lines: list[str] = []
     lines.append(f"{iri}")
-    lines.append(f"  a bot:Space, syn:Area ;")
+    lines.append("  a bot:Space, syn:Area ;")
     lines.append(f'  rdfs:label "{_esc(name)}" ;')
     lines.append(f'  syn:areaId "{_esc(area_id)}" ;')
     if icon:
@@ -365,9 +365,7 @@ def _device_body(
 def _current_obs_body(entity_id: str, state_obj: dict[str, Any], ts_ms: int) -> str:
     attrs = state_obj.get("attributes") or {}
     state_val = str(state_obj.get("state", ""))
-    last_changed = (
-        state_obj.get("last_changed") or state_obj.get("last_updated")
-    )
+    last_changed = state_obj.get("last_changed") or state_obj.get("last_updated")
     ts_dt = _dt_from_ha(last_changed)
     unit = attrs.get("unit_of_measurement") or attrs.get("unit")
 
@@ -401,9 +399,7 @@ def _current_obs_body(entity_id: str, state_obj: dict[str, Any], ts_ms: int) -> 
 def _history_obs_body(entity_id: str, state_obj: dict[str, Any], ts_ms: int) -> str:
     attrs = state_obj.get("attributes") or {}
     state_val = str(state_obj.get("state", ""))
-    last_changed = (
-        state_obj.get("last_changed") or state_obj.get("last_updated")
-    )
+    last_changed = state_obj.get("last_changed") or state_obj.get("last_updated")
     ts_dt = _dt_from_ha(last_changed)
     unit = attrs.get("unit_of_measurement") or attrs.get("unit")
 
@@ -434,6 +430,7 @@ def _ttl(body: str) -> str:
 
 
 # ── Agent manifest → RDF helpers ─────────────────────────────────────────────
+
 
 def _agent_iri(actor_id: str) -> str:
     return f"wact:{_safe(actor_id)}"
@@ -489,21 +486,19 @@ def _agent_manifest_body(manifest: dict[str, Any]) -> str:
 
     safe_id = _safe(actor_id)
     agent_iri = f"wact:{safe_id}"
-    ts_dt = datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    ts_dt = datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    in_props  = [_aprop_iri(actor_id, "in",  f) for f in input_schema]
+    in_props = [_aprop_iri(actor_id, "in", f) for f in input_schema]
     out_props = [_aprop_iri(actor_id, "out", f) for f in output_schema]
-    cap_iris  = [_aprop_iri(actor_id, "cap", c) for c in capabilities if isinstance(c, str)]
-    pub_iris  = [_aprop_iri(actor_id, "pub", t) for t in publishes   if isinstance(t, str)]
+    cap_iris = [_aprop_iri(actor_id, "cap", c) for c in capabilities if isinstance(c, str)]
+    pub_iris = [_aprop_iri(actor_id, "pub", t) for t in publishes if isinstance(t, str)]
     all_props = in_props + out_props + cap_iris + pub_iris
 
     lines: list[str] = []
 
     # ── Agent node ────────────────────────────────────────────────────────────
     lines.append(f"{agent_iri}")
-    lines.append(f"  a syn:Agent, prov:SoftwareAgent, core:Thing ;")
+    lines.append("  a syn:Agent, prov:SoftwareAgent, core:Thing ;")
     lines.append(f'  rdfs:label "{_esc(name)}" ;')
     if description:
         lines.append(f'  dcterms:description "{_esc(description)}" ;')
@@ -519,7 +514,7 @@ def _agent_manifest_body(manifest: dict[str, Any]) -> str:
         prop_iri = _aprop_iri(actor_id, "in", field)
         desc = _parse_schema_desc(spec)
         lines.append(f"{prop_iri}")
-        lines.append(f"  a sosa:ActuatableProperty ;")
+        lines.append("  a sosa:ActuatableProperty ;")
         lines.append(f'  rdfs:label "{_esc(field)}" ;')
         if desc:
             lines.append(f'  rdfs:comment "{_esc(desc)}" ;')
@@ -532,7 +527,7 @@ def _agent_manifest_body(manifest: dict[str, Any]) -> str:
         prop_iri = _aprop_iri(actor_id, "out", field)
         desc = _parse_schema_desc(spec)
         lines.append(f"{prop_iri}")
-        lines.append(f"  a sosa:ObservableProperty ;")
+        lines.append("  a sosa:ObservableProperty ;")
         lines.append(f'  rdfs:label "{_esc(field)}" ;')
         if desc:
             lines.append(f'  rdfs:comment "{_esc(desc)}" ;')
@@ -564,7 +559,7 @@ def _agent_manifest_body(manifest: dict[str, Any]) -> str:
             continue
         pub_iri = _aprop_iri(actor_id, "pub", topic)
         lines.append(f"{pub_iri}")
-        lines.append(f"  a sosa:ObservableProperty ;")
+        lines.append("  a sosa:ObservableProperty ;")
         lines.append(f'  rdfs:label "{_esc(topic)}" ;')
         lines.append(f'  syn:publishesTopic "{_esc(topic)}" ;')
         lines.append(f"  syn:claimedBy {agent_iri} .")
@@ -575,32 +570,32 @@ def _agent_manifest_body(manifest: dict[str, Any]) -> str:
 
 # ── Channel contract helpers ──────────────────────────────────────────────────
 
+
 def _channel_iri(topic: str) -> str:
     return f"wactchan:{_safe(topic)}"
 
 
 def _channel_contract_body(actor_id: str, manifest: dict) -> str:
-    """
-    Convert the TopicContract fields from a manifest to Turtle for urn:wactorz:channels.
+    """Convert the TopicContract fields from a manifest to Turtle for urn:wactorz:channels.
 
     Writes af:Channel nodes and links them to the agent via af:publishesTo /
     af:subscribesTo. observed_samples (authoritative runtime schemas) are stored
     on the channel so SPARQL can answer "what does this topic actually carry?".
     """
     agent_iri = _agent_iri(actor_id)
-    observed   = manifest.get("observed_samples") or {}
-    produces   = manifest.get("produces_schema") or {}
-    consumes   = manifest.get("consumes_schema") or {}
-    triggers   = manifest.get("triggers_when") or {}
+    observed = manifest.get("observed_samples") or {}
+    produces = manifest.get("produces_schema") or {}
+    consumes = manifest.get("consumes_schema") or {}
+    triggers = manifest.get("triggers_when") or {}
     lines: list[str] = []
 
     for topic in manifest.get("publishes") or []:
         if not isinstance(topic, str):
             continue
         ch_iri = _channel_iri(topic)
-        obs    = observed.get(topic) or {}
+        obs = observed.get(topic) or {}
         lines.append(f"{ch_iri}")
-        lines.append(f"  a af:Channel ;")
+        lines.append("  a af:Channel ;")
         lines.append(f'  af:channelTopic "{_esc(topic)}" ;')
         if produces:
             lines.append(f'  af:declaredSchema "{_esc(json.dumps(produces))}" ;')
@@ -618,7 +613,7 @@ def _channel_contract_body(actor_id: str, manifest: dict) -> str:
             continue
         ch_iri = _channel_iri(topic)
         lines.append(f"{ch_iri}")
-        lines.append(f"  a af:Channel ;")
+        lines.append("  a af:Channel ;")
         lines.append(f'  af:channelTopic "{_esc(topic)}" ;')
         if consumes:
             lines.append(f'  af:declaredSchema "{_esc(json.dumps(consumes))}" ;')
@@ -634,6 +629,7 @@ def _channel_contract_body(actor_id: str, manifest: dict) -> str:
 
 # ── Fuseki GSP / SPARQL Update client ────────────────────────────────────────
 
+
 class FusekiClient:
     """Thin async wrapper around Fuseki GSP and SPARQL Update endpoints."""
 
@@ -648,6 +644,9 @@ class FusekiClient:
         self._ds = dataset
         self._session = session
         self._auth = auth
+
+    def _query_url(self) -> str:
+        return f"{self._base}/{self._ds}/sparql"
 
     def _gsp_url(self, graph: str) -> str:
         return f"{self._base}/{self._ds}/data?graph={quote(graph, safe='')}"
@@ -692,9 +691,40 @@ class FusekiClient:
                 body = await resp.text()
                 log.warning("SPARQL Update → %s: %s", resp.status, body[:300])
 
-    async def compact(self) -> bool:
+    async def sparql_select(self, query: str) -> list[dict[str, str]]:
+        """Run a SPARQL SELECT; return rows as ``{var: value}`` string dicts.
+
+        Bindings are flattened to their string ``value`` (RDF term type/datatype
+        is dropped) which is all the SWID registry needs. Returns ``[]`` on any
+        non-200 response rather than raising.
         """
-        Trigger TDB2 journal compaction for this dataset.
+        params = {"query": query, "format": "json"}
+        headers = {"Accept": "application/sparql-results+json,application/json"}
+        async with self._session.get(
+            self._query_url(), params=params, headers=headers, auth=self._auth
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                log.warning("SPARQL SELECT - %s: %s", resp.status, body[:300])
+                return []
+            data = await resp.json(content_type=None)
+        bindings = data.get("results", {}).get("bindings", [])
+        return [{var: cell.get("value") for var, cell in row.items()} for row in bindings]
+
+    async def sparql_ask(self, query: str) -> bool:
+        """Run a SPARQL ASK; return the boolean (``False`` on any error)."""
+        params = {"query": query, "format": "json"}
+        headers = {"Accept": "application/sparql-results+json,application/json"}
+        async with self._session.get(
+            self._query_url(), params=params, headers=headers, auth=self._auth
+        ) as resp:
+            if resp.status != 200:
+                return False
+            data = await resp.json(content_type=None)
+        return bool(data.get("boolean", False))
+
+    async def compact(self) -> bool:
+        """Trigger TDB2 journal compaction for this dataset.
         Rewrites the on-disk store, reclaiming space from accumulated transaction
         journals. Should be called periodically (e.g., every few hours) when the
         dataset receives high write volume.
@@ -713,17 +743,14 @@ class FusekiClient:
             log.warning("Fuseki compact failed: %s", exc)
             return False
 
-    async def trim_history_graph(
-        self, graph: str, retain_days: int = 30
-    ) -> None:
-        """
-        Delete observations from *graph* older than *retain_days* days.
+    async def trim_history_graph(self, graph: str, retain_days: int = 30) -> None:
+        """Delete observations from *graph* older than *retain_days* days.
         Prevents unbounded growth of the HA state-change history graph.
         """
         import datetime
+
         cutoff = (
-            datetime.datetime.now(datetime.timezone.utc)
-            - datetime.timedelta(days=retain_days)
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=retain_days)
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         query = f"""
@@ -747,11 +774,8 @@ WHERE {{
         await self.sparql_update(query)
         log.info("Trimmed history graph <%s> — deleted observations before %s", graph, cutoff)
 
-    async def replace_agent_in_graph(
-        self, graph: str, actor_id: str, ttl: str
-    ) -> None:
-        """
-        Atomically replace all triples for *actor_id* and its properties in *graph*:
+    async def replace_agent_in_graph(self, graph: str, actor_id: str, ttl: str) -> None:
+        """Atomically replace all triples for *actor_id* and its properties in *graph*:
           1. SPARQL DELETE WHERE for the agent IRI and all properties it owns
           2. GSP POST to append the new triples
 
@@ -868,9 +892,7 @@ WHERE {{
 """
         await self.sparql_update(q)
 
-    async def replace_agent_channels(
-        self, graph: str, actor_id: str, ttl: str
-    ) -> None:
+    async def replace_agent_channels(self, graph: str, actor_id: str, ttl: str) -> None:
         """Replace all af:publishesTo / af:subscribesTo links for one agent, then append new ones."""
         full_iri = f"urn:wactorz:agent:{_safe(actor_id)}"
         delete_q = f"""
@@ -895,38 +917,41 @@ WHERE {{
             await self.append_graph(graph, ttl)
 
     async def upsert_agent_metrics(
-        self, graph: str, actor_id: str, metrics: dict
+        self, graph: str, actor_id: str, metrics: dict[str, Any]
     ) -> None:
         """Atomically replace metrics properties for one agent."""
         full_iri = f"urn:wactorz:agent:{_safe(actor_id)}"
-        dt_now   = _dt_now()
+        dt_now = _dt_now()
 
         metric_props = [
-            "af:messagesProcessed", "af:errorsCount", "af:tasksCompleted",
-            "af:tasksFailed", "af:restartCount", "af:costUsd", "af:metricsUpdatedAt",
+            "af:messagesProcessed",
+            "af:errorsCount",
+            "af:tasksCompleted",
+            "af:tasksFailed",
+            "af:restartCount",
+            "af:costUsd",
+            "af:metricsUpdatedAt",
         ]
         delete_block = "\n".join(
-            f"    <{full_iri}> {p} ?v{i} ."
-            for i, p in enumerate(metric_props)
+            f"    <{full_iri}> {p} ?v{i} ." for i, p in enumerate(metric_props)
         )
         optional_block = "\n".join(
-            f"    OPTIONAL {{ <{full_iri}> {p} ?v{i} . }}"
-            for i, p in enumerate(metric_props)
+            f"    OPTIONAL {{ <{full_iri}> {p} ?v{i} . }}" for i, p in enumerate(metric_props)
         )
 
         inserts: list[str] = []
         if metrics.get("messages_processed") is not None:
-            inserts.append(f'af:messagesProcessed {_literal(int(metrics["messages_processed"]))}')
+            inserts.append(f"af:messagesProcessed {_literal(int(metrics['messages_processed']))}")
         if metrics.get("errors") is not None:
-            inserts.append(f'af:errorsCount {_literal(int(metrics["errors"]))}')
+            inserts.append(f"af:errorsCount {_literal(int(metrics['errors']))}")
         if metrics.get("tasks_completed") is not None:
-            inserts.append(f'af:tasksCompleted {_literal(int(metrics["tasks_completed"]))}')
+            inserts.append(f"af:tasksCompleted {_literal(int(metrics['tasks_completed']))}")
         if metrics.get("tasks_failed") is not None:
-            inserts.append(f'af:tasksFailed {_literal(int(metrics["tasks_failed"]))}')
+            inserts.append(f"af:tasksFailed {_literal(int(metrics['tasks_failed']))}")
         if metrics.get("restart_count") is not None:
-            inserts.append(f'af:restartCount {_literal(int(metrics["restart_count"]))}')
+            inserts.append(f"af:restartCount {_literal(int(metrics['restart_count']))}")
         if metrics.get("cost_usd") is not None:
-            inserts.append(f'af:costUsd {_literal(float(metrics["cost_usd"]))}')
+            inserts.append(f"af:costUsd {_literal(float(metrics['cost_usd']))}")
         inserts.append(f'af:metricsUpdatedAt "{dt_now}"^^xsd:dateTime')
 
         insert_block = " ;\n      ".join(inserts)
@@ -954,9 +979,7 @@ WHERE {{
 """
         await self.sparql_update(query)
 
-    async def replace_entity_in_graph(
-        self, graph: str, entity_id: str, ttl: str
-    ) -> None:
+    async def replace_entity_in_graph(self, graph: str, entity_id: str, ttl: str) -> None:
         full_iri = f"urn:ha:entity:{_safe(entity_id)}"
 
         delete_q = f"""
@@ -985,6 +1008,7 @@ WHERE {{
 
 # ── Bridge ────────────────────────────────────────────────────────────────────
 
+
 class HAFusekiBridge:
     """Subscribe to Home Assistant events and push RDF to Fuseki."""
 
@@ -1003,9 +1027,7 @@ class HAFusekiBridge:
         self._fuseki_url = fuseki_url
         self._fuseki_dataset = fuseki_dataset
         self._fuseki_auth: aiohttp.BasicAuth | None = (
-            aiohttp.BasicAuth(fuseki_user, fuseki_password)
-            if fuseki_user
-            else None
+            aiohttp.BasicAuth(fuseki_user, fuseki_password) if fuseki_user else None
         )
         self._domains: frozenset[str] = domains if domains is not None else DEFAULT_DOMAINS
         # area_id → area name lookup built during seed
@@ -1026,9 +1048,7 @@ class HAFusekiBridge:
     async def run(self) -> None:
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as http:
-            fuseki = FusekiClient(
-                self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth
-            )
+            fuseki = FusekiClient(self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth)
             ws_url = self._ws_url()
             backoff = 5
 
@@ -1059,7 +1079,7 @@ class HAFusekiBridge:
 
                         sub_id = await ha.subscribe_events("state_changed")
                         log.info("Subscribed (id=%d). Listening for state_changed …", sub_id)
-                        backoff = 5            # healthy connection — reset backoff
+                        backoff = 5  # healthy connection — reset backoff
                         last_trim = time.time()
 
                         while True:
@@ -1087,8 +1107,9 @@ class HAFusekiBridge:
                 except Exception as exc:
                     # Concise one-line log (no full traceback) — the socket is
                     # gone, we know why, and we're reconnecting.
-                    log.warning("HA connection lost (%s) — reconnecting in %ss",
-                                type(exc).__name__, backoff)
+                    log.warning(
+                        "HA connection lost (%s) — reconnecting in %ss", type(exc).__name__, backoff
+                    )
 
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)
@@ -1132,10 +1153,7 @@ class HAFusekiBridge:
             for entry in entity_registry:
                 eid = entry.get("entity_id", "")
                 # Prefer entity-level area, fall back to device-level area
-                aid = (
-                    entry.get("area_id")
-                    or device_area_map.get(entry.get("device_id", ""), "")
-                )
+                aid = entry.get("area_id") or device_area_map.get(entry.get("device_id", ""), "")
                 if eid and aid:
                     entity_area_map[eid] = aid
             log.info(
@@ -1148,9 +1166,7 @@ class HAFusekiBridge:
 
         # Build area_id → name lookup
         self._area_names = {
-            a["area_id"]: a.get("name", a["area_id"])
-            for a in areas
-            if "area_id" in a
+            a["area_id"]: a.get("name", a["area_id"]) for a in areas if "area_id" in a
         }
 
         # ── 2. Push areas graph ───────────────────────────────────────────────
@@ -1159,23 +1175,17 @@ class HAFusekiBridge:
             for area in areas:
                 area_body_parts.append(_area_body(area))
             try:
-                await fuseki.replace_graph(
-                    GRAPH_AREAS, _ttl("\n".join(area_body_parts))
-                )
+                await fuseki.replace_graph(GRAPH_AREAS, _ttl("\n".join(area_body_parts)))
                 log.info("Areas graph replaced (%d areas).", len(areas))
             except Exception as exc:
-                log.warning(
-                    "Fuseki unavailable — skipping areas graph: %s", exc
-                )
+                log.warning("Fuseki unavailable — skipping areas graph: %s", exc)
         else:
             log.info("No areas found — skipping areas graph.")
 
         # ── 3. Fetch states ───────────────────────────────────────────────────
         all_states: list[dict[str, Any]] = await ha.call("get_states") or []
         wanted = [s for s in all_states if self._want(s.get("entity_id", ""))]
-        log.info(
-            "Seeding %d / %d entities → Fuseki …", len(wanted), len(all_states)
-        )
+        log.info("Seeding %d / %d entities → Fuseki …", len(wanted), len(all_states))
 
         # ── 4. Devices catalog (full replace, with area info) ─────────────────
         catalog_body_parts = [_bridge_agent_body()]
@@ -1183,19 +1193,13 @@ class HAFusekiBridge:
             eid = s["entity_id"]
             area_id = entity_area_map.get(eid)
             area_name = self._area_names.get(area_id, "") if area_id else None
-            catalog_body_parts.append(
-                _device_body(eid, s, area_id=area_id, area_name=area_name)
-            )
+            catalog_body_parts.append(_device_body(eid, s, area_id=area_id, area_name=area_name))
 
         try:
-            await fuseki.replace_graph(
-                GRAPH_DEVICES, _ttl("\n".join(catalog_body_parts))
-            )
+            await fuseki.replace_graph(GRAPH_DEVICES, _ttl("\n".join(catalog_body_parts)))
             log.info("Devices catalog replaced (%d entities).", len(wanted))
         except Exception as exc:
-            log.warning(
-                "Fuseki unavailable — skipping devices catalog: %s", exc
-            )
+            log.warning("Fuseki unavailable — skipping devices catalog: %s", exc)
 
         # ── 5. Current-state graph (patch per entity) ─────────────────────────
         ts_ms = int(time.time() * 1000)
@@ -1203,20 +1207,14 @@ class HAFusekiBridge:
             for s in wanted:
                 eid = s["entity_id"]
                 body = _current_obs_body(eid, s, ts_ms)
-                await fuseki.replace_entity_in_graph(
-                    GRAPH_CURRENT, eid, _ttl(body)
-                )
+                await fuseki.replace_entity_in_graph(GRAPH_CURRENT, eid, _ttl(body))
             log.info("Current-state graph seeded.")
         except Exception as exc:
-            log.warning(
-                "Fuseki unavailable — skipping current-state seed: %s", exc
-            )
+            log.warning("Fuseki unavailable — skipping current-state seed: %s", exc)
 
     # ── Live events ───────────────────────────────────────────────────────────
 
-    async def _on_event(
-        self, msg: dict[str, Any], fuseki: FusekiClient
-    ) -> None:
+    async def _on_event(self, msg: dict[str, Any], fuseki: FusekiClient) -> None:
         event = msg.get("event") or {}
         data = event.get("data") or {}
         entity_id: str = data.get("entity_id", "")
@@ -1226,20 +1224,17 @@ class HAFusekiBridge:
             return
 
         ts_ms = int(time.time() * 1000)
-        log.debug(
-            "state_changed  %s → %s", entity_id, new_state.get("state", "?")
-        )
+        log.debug("state_changed  %s → %s", entity_id, new_state.get("state", "?"))
 
         current_body = _current_obs_body(entity_id, new_state, ts_ms)
-        await fuseki.replace_entity_in_graph(
-            GRAPH_CURRENT, entity_id, _ttl(current_body)
-        )
+        await fuseki.replace_entity_in_graph(GRAPH_CURRENT, entity_id, _ttl(current_body))
 
         hist_body = _history_obs_body(entity_id, new_state, ts_ms)
         await fuseki.append_graph(GRAPH_HISTORY, _ttl(hist_body))
 
 
 # ── Agent registry seed ──────────────────────────────────────────────────────
+
 
 async def seed_agent_registry(
     actors: list[Any],
@@ -1302,13 +1297,15 @@ async def seed_agent_registry(
 
             log.info(
                 "Agent registry merged: %d/%d actors → Fuseki (no full-graph replace)",
-                count, len(actors),
+                count,
+                len(actors),
             )
     except Exception as exc:
         log.warning("Agent registry seed failed (Fuseki not ready?): %s", exc)
 
 
 # ── Agent manifest bridge ────────────────────────────────────────────────────
+
 
 class AgentManifestBridge:
     """Subscribe to agents/+/manifest MQTT and push RDF to Fuseki."""
@@ -1333,9 +1330,7 @@ class AgentManifestBridge:
     async def run(self) -> None:
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as http:
-            fuseki = FusekiClient(
-                self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth
-            )
+            fuseki = FusekiClient(self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth)
             # Register the bridge itself (best-effort — Fuseki may not be ready yet)
             bridge_body = (
                 f"{MANIFEST_BRIDGE_IRI}\n"
@@ -1345,13 +1340,17 @@ class AgentManifestBridge:
             try:
                 await fuseki.append_graph(GRAPH_AGENTS, _ttl(bridge_body))
             except Exception as exc:
-                log.warning("AgentManifestBridge: Fuseki not ready yet (%s) — will retry on first manifest", exc)
+                log.warning(
+                    "AgentManifestBridge: Fuseki not ready yet (%s) — will retry on first manifest",
+                    exc,
+                )
 
             async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
                 await client.subscribe("agents/+/manifest")
                 log.info(
                     "AgentManifestBridge listening on %s:%d agents/+/manifest",
-                    self._mqtt_broker, self._mqtt_port,
+                    self._mqtt_broker,
+                    self._mqtt_port,
                 )
                 async for message in client.messages:
                     try:
@@ -1360,9 +1359,7 @@ class AgentManifestBridge:
                     except Exception as exc:
                         log.exception("Manifest handling error: %s", exc)
 
-    async def _on_manifest(
-        self, manifest: dict[str, Any], fuseki: FusekiClient
-    ) -> None:
+    async def _on_manifest(self, manifest: dict[str, Any], fuseki: FusekiClient) -> None:
         actor_id = str(manifest.get("actor_id") or manifest.get("name") or "")
         if not actor_id:
             log.warning("Manifest missing actor_id/name — skipping")
@@ -1379,17 +1376,15 @@ class AgentManifestBridge:
         if manifest.get("publishes") or manifest.get("subscribes"):
             chan_body = _channel_contract_body(actor_id, manifest)
             if chan_body.strip():
-                await fuseki.replace_agent_channels(
-                    GRAPH_CHANNELS, actor_id, _ttl(chan_body)
-                )
+                await fuseki.replace_agent_channels(GRAPH_CHANNELS, actor_id, _ttl(chan_body))
                 log.info("Upserted channels: %s → %s", name, GRAPH_CHANNELS)
 
 
 # ── Metrics bridge ───────────────────────────────────────────────────────────
 
+
 class MetricsBridge:
-    """
-    Subscribe to agents/+/metrics MQTT and upsert runtime metrics into
+    """Subscribe to agents/+/metrics MQTT and upsert runtime metrics into
     urn:wactorz:agents via af: properties.
 
     Enables SPARQL like:
@@ -1408,9 +1403,9 @@ class MetricsBridge:
         fuseki_user: str = "",
         fuseki_password: str = "",
     ) -> None:
-        self._mqtt_broker    = mqtt_broker
-        self._mqtt_port      = mqtt_port
-        self._fuseki_url     = fuseki_url
+        self._mqtt_broker = mqtt_broker
+        self._mqtt_port = mqtt_port
+        self._fuseki_url = fuseki_url
         self._fuseki_dataset = fuseki_dataset
         self._fuseki_auth: aiohttp.BasicAuth | None = (
             aiohttp.BasicAuth(fuseki_user, fuseki_password) if fuseki_user else None
@@ -1422,25 +1417,22 @@ class MetricsBridge:
     async def run(self) -> None:
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as http:
-            fuseki = FusekiClient(
-                self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth
-            )
+            fuseki = FusekiClient(self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth)
             last_compact = time.time()
 
             async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
                 await client.subscribe("agents/+/metrics")
                 log.info(
                     "MetricsBridge listening on %s:%d agents/+/metrics",
-                    self._mqtt_broker, self._mqtt_port,
+                    self._mqtt_broker,
+                    self._mqtt_port,
                 )
                 async for message in client.messages:
                     try:
                         metrics: dict[str, Any] = json.loads(bytes(message.payload))
                         # topic is agents/{actor_id}/metrics
                         actor_id = str(message.topic).split("/")[1]
-                        await fuseki.upsert_agent_metrics(
-                            GRAPH_AGENTS, actor_id, metrics
-                        )
+                        await fuseki.upsert_agent_metrics(GRAPH_AGENTS, actor_id, metrics)
                         log.debug("Metrics upserted: %s", actor_id)
                     except Exception as exc:
                         log.exception("MetricsBridge handling error: %s", exc)
@@ -1457,6 +1449,7 @@ class MetricsBridge:
 
 # ── CLI entrypoint ────────────────────────────────────────────────────────────
 
+
 def _parse_domains(raw: str | None) -> frozenset[str] | None:
     if not raw:
         return None
@@ -1469,12 +1462,13 @@ async def fuseki_reachable(url: str, timeout: float = 2.0) -> bool:
     Used to decide whether to start the HA→Fuseki bridge at all. If the user
     isn't running Fuseki, there's no point connecting to HA and then failing to
     write every single state change — that just floods the log. A pure TCP
-    connect is fast and doesn't depend on any Fuseki endpoint/auth."""
+    connect is fast and doesn't depend on any Fuseki endpoint/auth.
+    """
     try:
         parsed = urlparse(url if "://" in url else f"http://{url}")
         host = parsed.hostname or "localhost"
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        reader, writer = await asyncio.wait_for(
+        _reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=timeout
         )
         writer.close()
@@ -1502,9 +1496,7 @@ async def _run_with_retry(coro_factory: Any, label: str) -> None:
         except Exception as exc:
             exc_str = str(exc)
             if exc_str != _last_exc_str:
-                log.warning(
-                    "%s error: %s — will retry in %.0f s", label, exc, _backoff
-                )
+                log.warning("%s error: %s — will retry in %.0f s", label, exc, _backoff)
                 _last_exc_str = exc_str
             else:
                 log.debug("%s still unavailable — retrying in %.0f s …", label, _backoff)
@@ -1518,27 +1510,32 @@ async def _main() -> None:
         format="%(asctime)s [%(name)s] %(levelname)s  %(message)s",
     )
 
-    ha_url        = os.environ.get("HA_URL", "http://homeassistant.local:8123")
-    ha_token      = os.environ.get("HA_TOKEN", "")
-    fuseki_url    = os.environ.get("FUSEKI_URL", "http://localhost:3030")
+    ha_url = os.environ.get("HA_URL", "http://homeassistant.local:8123")
+    ha_token = os.environ.get("HA_TOKEN", "")
+    fuseki_url = os.environ.get("FUSEKI_URL", "http://localhost:3030")
     fuseki_dataset = os.environ.get("FUSEKI_DATASET", "wactorz")
-    fuseki_user   = os.environ.get("FUSEKI_USER", "admin")
+    fuseki_user = os.environ.get("FUSEKI_USER", "admin")
     fuseki_password = os.environ.get("FUSEKI_PASSWORD", "")
-    domains       = _parse_domains(os.environ.get("HA_DOMAINS"))
-    mqtt_broker   = os.environ.get("MQTT_BROKER", "localhost")
-    mqtt_port     = int(os.environ.get("MQTT_PORT", "1883"))
+    domains = _parse_domains(os.environ.get("HA_DOMAINS"))
+    mqtt_broker = os.environ.get("MQTT_BROKER", "localhost")
+    mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
 
     log.info(
         "Bridges starting  fuseki=%s/%s  auth=%s",
-        fuseki_url, fuseki_dataset, "yes" if fuseki_password else "none",
+        fuseki_url,
+        fuseki_dataset,
+        "yes" if fuseki_password else "none",
     )
 
     tasks: list[Any] = []
 
     # ── HA bridge (optional — skipped if no HA_TOKEN or no Fuseki) ───────────
     if ha_token and await fuseki_reachable(fuseki_url):
-        log.info("HA→Fuseki bridge  ha=%s  domains=%s",
-                 ha_url, ",".join(sorted(domains)) if domains else "default")
+        log.info(
+            "HA→Fuseki bridge  ha=%s  domains=%s",
+            ha_url,
+            ",".join(sorted(domains)) if domains else "default",
+        )
         ha_bridge = HAFusekiBridge(
             ha_url=ha_url,
             ha_token=ha_token,
@@ -1584,17 +1581,19 @@ async def _main() -> None:
 def _cli_main() -> None:
     """Sync entry point for the ``wactorz-fuseki`` console script."""
     import sys
+
     if sys.platform == "win32":
         loop = asyncio.SelectorEventLoop()
         asyncio.set_event_loop(loop)
     else:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    
+
     try:
         loop.run_until_complete(_main())
     finally:
         loop.close()
+
 
 if __name__ == "__main__":
     _cli_main()

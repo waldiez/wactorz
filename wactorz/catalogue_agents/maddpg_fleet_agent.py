@@ -1,5 +1,4 @@
-"""
-maddpg_fleet_agent.py — catalogue recipe for deploying the trained MADDPG policy
+"""maddpg_fleet_agent.py — catalogue recipe for deploying the trained MADDPG policy
 as a fleet of per-zone inference agents (decentralized execution).
 
 Place this file in your `catalogue_agents/` directory and register it in
@@ -39,7 +38,7 @@ Control (via @maddpg-fleet or main natural language)
 # The launcher prepends a header binding ZONE_INDEX / ZONE_NAME / MODEL_PATH /
 # NORM_PATH / ENV_ID / OBS_TOPIC / ACTION_TOPIC before spawning each child.
 # ──────────────────────────────────────────────────────────────────────────────
-ZONE_AGENT_CODE = r'''
+ZONE_AGENT_CODE = r"""
 import sys as _sys
 # INFER_DIR is injected by the launcher header; ensure maddpg_infer is importable
 # regardless of how wactorz was started.
@@ -103,7 +102,7 @@ async def handle_task(agent, payload):
         "acted":      agent.state.get("acted", 0),
         "action_topic": ACTION_TOPIC,
     }
-'''
+"""
 
 
 # ──────────────────────────────────────────────────────────────────────────────

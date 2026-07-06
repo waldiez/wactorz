@@ -8,6 +8,7 @@ import base64
 async def fuseki_proxy_handler(request):
     import aiohttp
     from aiohttp import web
+
     from .config import CONFIG
 
     dataset = request.match_info["dataset"]
@@ -26,9 +27,7 @@ async def fuseki_proxy_handler(request):
             forward_headers[h] = request.headers[h]
 
     if "Authorization" not in forward_headers and CONFIG.fuseki_user:
-        creds = base64.b64encode(
-            f"{CONFIG.fuseki_user}:{CONFIG.fuseki_password}".encode()
-        ).decode()
+        creds = base64.b64encode(f"{CONFIG.fuseki_user}:{CONFIG.fuseki_password}".encode()).decode()
         forward_headers["Authorization"] = f"Basic {creds}"
 
     try:

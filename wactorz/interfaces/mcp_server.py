@@ -1,9 +1,8 @@
-"""
-MCP Server - Exposes wactorz capabilities as Model Context Protocol tools.
+"""MCP Server - Exposes wactorz capabilities as Model Context Protocol tools.
 
 Any MCP-compatible client (Claude Desktop, Cursor, Zed, etc.) can connect
 and drive a running wactorz instance: chat with the orchestrator, manage
-live agents, query Fuseki, and control Home Assistant entities directly.
+live agents, and control Home Assistant entities directly.
 
 Run:      wactorz-mcp                           (stdio transport, for Claude Desktop)
 Env:      WACTORZ_URL       (default http://localhost:8000)
@@ -28,9 +27,18 @@ Claude Desktop config (~/.claude/claude_desktop_config.json):
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import aiohttp
+
+from wactorz.core.integrations.google_calendar_mcp import (
+    DEFAULT_CALENDAR_MCP_SCOPES,
+    GOOGLE_CALENDAR_MCP_URL,
+    GoogleCalendarMcpClient,
+)
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -45,6 +53,22 @@ WACTORZ_URL = os.getenv("WACTORZ_URL", "http://localhost:8000").rstrip("/")
 WACTORZ_API_KEY = os.getenv("WACTORZ_API_KEY", "")
 HA_URL = os.getenv("HA_URL", "").rstrip("/")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
+CALENDAR_MCP_URL = os.getenv("CALENDAR_MCP_URL", GOOGLE_CALENDAR_MCP_URL).rstrip("/")
+CALENDAR_MCP_TOKEN = os.getenv("CALENDAR_MCP_TOKEN", "")
+CALENDAR_MCP_AUTHORIZATION = os.getenv("CALENDAR_MCP_AUTHORIZATION", "")
+CALENDAR_MCP_CLIENT_ID = os.getenv("CALENDAR_MCP_CLIENT_ID", "")
+CALENDAR_MCP_CLIENT_SECRET = os.getenv("CALENDAR_MCP_CLIENT_SECRET", "")
+CALENDAR_MCP_REDIRECT_URI = os.getenv(
+    "CALENDAR_MCP_REDIRECT_URI",
+    "http://localhost:8765/oauth/callback",
+)
+CALENDAR_MCP_SCOPES = os.getenv(
+    "CALENDAR_MCP_SCOPES",
+    DEFAULT_CALENDAR_MCP_SCOPES,
+)
+CALENDAR_MCP_TOKEN_FILE = os.getenv("CALENDAR_MCP_TOKEN_FILE") or str(
+    Path.home() / ".wactorz" / "calendar_mcp_token.json"
+)
 
 mcp = FastMCP("wactorz")
 
@@ -95,9 +119,7 @@ async def _wactorz_get(path: str) -> Any:
 async def _wactorz_delete(path: str) -> dict:
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.delete(
-                f"{WACTORZ_URL}{path}", headers=_wactorz_headers()
-            ) as resp:
+            async with session.delete(f"{WACTORZ_URL}{path}", headers=_wactorz_headers()) as resp:
                 return {"status": resp.status, "text": await resp.text()}
     except aiohttp.ClientConnectorError:
         return {"status": 0, "text": f"Cannot connect to wactorz at {WACTORZ_URL}. Is it running?"}
@@ -110,8 +132,7 @@ async def _wactorz_delete(path: str) -> dict:
 
 @mcp.tool()
 async def ask_wactorz(message: str) -> str:
-    """
-    Send a message to the wactorz main orchestrator.
+    """Send a message to the wactorz main orchestrator.
 
     The orchestrator will route to an existing agent, spawn a new one, or
     answer directly. Use for fuzzy requests ("monitor my CPU temp",
@@ -123,8 +144,7 @@ async def ask_wactorz(message: str) -> str:
 
 @mcp.tool()
 async def ask_agent(agent_name: str, message: str) -> str:
-    """
-    Send a message directly to a named agent, bypassing the orchestrator.
+    """Send a message directly to a named agent, bypassing the orchestrator.
 
     Use when you already know which agent should handle the request.
     Agent names are lowercase-hyphenated (e.g. "home-assistant-agent").
@@ -132,6 +152,140 @@ async def ask_agent(agent_name: str, message: str) -> str:
     """
     data = await _wactorz_post("/chat", {"message": message, "agent_name": agent_name})
     return str(data.get("response", data))
+
+
+# ─── Remote Calendar MCP tools ──────────────────────────────────────────────
+
+
+def _calendar_timezone() -> tuple[Any, str | None]:
+    """Return ``(tzinfo, iana_name)`` for calendar math.
+
+    ``iana_name`` is only set when it's a zone we can hand to the Google Calendar
+    API; otherwise it's ``None`` and callers omit ``timeZone`` (the offset-aware
+    ISO timestamps already pin the window). Keeps the tools working on systems
+    without the IANA tz database (e.g. Windows without ``tzdata``), where even
+    ``ZoneInfo("UTC")`` raises — and the API rejects a bare ``UTC`` key anyway.
+    """
+    name = os.getenv("CALENDAR_MCP_TIMEZONE") or os.getenv("TZ")
+    if name:
+        try:
+            return ZoneInfo(name), name
+        except Exception:
+            logger.debug("Unknown calendar timezone %r; using local time", name)
+    local = datetime.now().astimezone().tzinfo or timezone.utc
+    return local, getattr(local, "key", None)
+
+
+def _calendar_range_arguments(range_name: str, count: int = 10) -> dict[str, Any]:
+    tz, tz_name = _calendar_timezone()
+    now = datetime.now(tz)
+    if range_name == "today":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+    elif range_name == "week":
+        start = now
+        end = now + timedelta(days=7)
+    else:
+        start = now
+        end = now + timedelta(days=1)
+    args = {
+        "pageSize": count,
+        "orderBy": "startTime",
+        "startTime": start.isoformat(),
+        "endTime": end.isoformat(),
+    }
+    if tz_name:
+        args["timeZone"] = tz_name
+    return args
+
+
+def _calendar_mcp_status_from_constants() -> dict[str, Any]:
+    return {
+        "calendar_mcp_url": CALENDAR_MCP_URL or None,
+        "calendar_mcp_auth": bool(
+            CALENDAR_MCP_CLIENT_ID or CALENDAR_MCP_TOKEN or CALENDAR_MCP_AUTHORIZATION
+        ),
+        "calendar_mcp_oauth_client": bool(CALENDAR_MCP_CLIENT_ID),
+        "calendar_mcp_redirect_uri": CALENDAR_MCP_REDIRECT_URI if CALENDAR_MCP_CLIENT_ID else None,
+        "calendar_mcp_token_file": CALENDAR_MCP_TOKEN_FILE if CALENDAR_MCP_CLIENT_ID else None,
+    }
+
+
+async def _calendar_mcp_call(tool_name: str, arguments: dict | None = None) -> str:
+    """Call a tool on the configured Google Calendar MCP server."""
+    return await GoogleCalendarMcpClient().call_tool(tool_name, arguments)
+
+
+@mcp.tool()
+async def calendar_status() -> str:
+    """Show sanitized Google Calendar MCP configuration status."""
+    status = _calendar_mcp_status_from_constants()
+    return json.dumps(status, indent=2)
+
+
+@mcp.tool()
+async def calendar_mcp_list_tools() -> str:
+    """List tools exposed by the configured Google Calendar MCP server."""
+    return await GoogleCalendarMcpClient().list_tools()
+
+
+@mcp.tool()
+async def calendar_mcp_call_tool(tool_name: str, arguments_json: str = "{}") -> str:
+    """Call any tool exposed by the configured remote Calendar MCP server.
+
+    arguments_json must be a JSON object string. Use calendar_mcp_list_tools()
+    to discover the exact tool names and schemas.
+    """
+    try:
+        arguments = json.loads(arguments_json or "{}")
+    except json.JSONDecodeError as exc:
+        return f"Invalid arguments_json: {exc}"
+    if not isinstance(arguments, dict):
+        return "arguments_json must encode a JSON object."
+    return await _calendar_mcp_call(tool_name, arguments)
+
+
+@mcp.tool()
+async def calendar_list(count: int = 10) -> str:
+    """List upcoming Google Calendar events through the Google Calendar MCP server."""
+    return await _calendar_mcp_call("list_events", {"pageSize": count, "orderBy": "startTime"})
+
+
+@mcp.tool()
+async def calendar_today() -> str:
+    """List today's Google Calendar events through the Google Calendar MCP server."""
+    return await _calendar_mcp_call("list_events", _calendar_range_arguments("today"))
+
+
+@mcp.tool()
+async def calendar_week() -> str:
+    """List this week's Google Calendar events through the Google Calendar MCP server."""
+    return await _calendar_mcp_call("list_events", _calendar_range_arguments("week"))
+
+
+@mcp.tool()
+async def calendar_create_event(
+    summary: str,
+    start: str,
+    end: str = "",
+    location: str = "",
+    description: str = "",
+) -> str:
+    """Create a Google Calendar event through the Google Calendar MCP server."""
+    if not end:
+        return "calendar_create_event requires an ISO-8601 end time because Google Calendar MCP create_event requires endTime."
+    payload = {"summary": summary, "startTime": start, "endTime": end}
+    if location:
+        payload["location"] = location
+    if description:
+        payload["description"] = description
+    return await _calendar_mcp_call("create_event", payload)
+
+
+@mcp.tool()
+async def calendar_delete_event(event_id: str) -> str:
+    """Delete a Google Calendar event through the Google Calendar MCP server."""
+    return await _calendar_mcp_call("delete_event", {"eventId": event_id})
 
 
 # ─── Agent management tools ─────────────────────────────────────────────────
@@ -157,8 +311,7 @@ async def list_agents() -> str:
 
 @mcp.tool()
 async def list_capabilities(keyword: str = "") -> str:
-    """
-    List the full agent capability catalog (running + spawnable).
+    """List the full agent capability catalog (running + spawnable).
 
     Each entry shows name, description, capabilities, and whether the agent
     is running or available as a catalog recipe. Filter with an optional
@@ -203,8 +356,7 @@ def _require_ha() -> str | None:
 
 @mcp.tool()
 async def ha_list_entities(domain: str = "") -> str:
-    """
-    List Home Assistant entities. Filter by domain (e.g. "light", "sensor",
+    """List Home Assistant entities. Filter by domain (e.g. "light", "sensor",
     "switch", "climate") or pass "" for all. Returns up to 100 entities.
     """
     err = _require_ha()
@@ -261,8 +413,7 @@ async def ha_call_service(
     entity_id: str = "",
     data_json: str = "{}",
 ) -> str:
-    """
-    Call a Home Assistant service (e.g. turn on a light, set thermostat).
+    """Call a Home Assistant service (e.g. turn on a light, set thermostat).
 
     Examples:
       ha_call_service("light", "turn_on", "light.kitchen")
@@ -333,6 +484,7 @@ async def config_resource() -> str:
             "wactorz_auth": bool(WACTORZ_API_KEY),
             "ha_url": HA_URL or None,
             "ha_auth": bool(HA_TOKEN),
+            **_calendar_mcp_status_from_constants(),
         },
         indent=2,
     )

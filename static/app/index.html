@@ -11,7 +11,8 @@
     <meta name="keywords"
           content="multi-agent, AI agents, orchestration, actor model, MQTT, real-time dashboard, LLM, wactorz" />
     <meta name="author"   content="Wactorz" />
-    <meta name="robots"   content="index, follow" />
+    <!-- Ops control surface (agents can be paused/stopped/reset from here) — never ask to be indexed. -->
+    <meta name="robots"   content="noindex, nofollow" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
 
     <!-- ── Open Graph ───────────────────────────────────────────────────────── -->
@@ -45,58 +46,24 @@
     <link rel="icon" href="./icon.png" type="image/png" sizes="512x512" />
     <!-- crossorigin: send the ingress auth cookie, else HA ingress 401s the manifest -->
     <link rel="manifest"         href="./site.webmanifest" crossorigin="use-credentials" />
-    <script type="module" crossorigin src="./assets/index-CoIFZLvF.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/vendor-Cqb5uiT0.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-0rSVT2zh.css">
+    <script type="module" crossorigin src="./assets/index-B1Cit16l.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/vendor-BM98O73h.js">
+    <link rel="modulepreload" crossorigin href="./assets/mqtt-B8zo0mtW.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-p012fNGT.css">
   </head>
   <body>
-    <!-- 3D canvas -->
-    <canvas id="renderCanvas"></canvas>
-
-    <!-- HUD: agent count + health badge + page links -->
-    <div id="hud" class="glass" style="display:none">
-      <div class="hud-title">Wactorz</div>
-      <div class="hud-count" id="hud-count">0</div>
-      <div class="hud-label">Active Agents</div>
-      <div class="hud-badge healthy" id="hud-health">System Healthy</div>
-      <div id="hud-stats"></div>
-      <nav class="hud-links">
-        <a id="ha-link" href="#" target="_blank" rel="noopener" class="hud-link">⌂ Home Assistant</a>
-      </nav>
-      <button id="btn-settings" title="App settings">⚙ Settings</button>
-    </div>
-
-
-    <!-- Activity feed toggle (below theme switcher) -->
-    <button id="feed-toggle" style="display:none" title="Toggle activity feed">
-      Feed <span id="feed-badge"></span>
-    </button>
-
-    <!-- Activity feed panel -->
-    <div id="activity-feed">
-      <div id="feed-list"></div>
-    </div>
-
-    <!-- Chat panel (slides in from right on agent click) -->
-    <div id="chat-panel">
-      <div class="af-chat-sidebar">
-        <div class="af-chat-sidebar-search">
-          <input id="chat-sidebar-search" placeholder="Filter agents…" autocomplete="off">
-        </div>
-        <div class="af-chat-agent-list" id="chat-agent-list"></div>
-      </div>
-      <div class="af-chat-pane">
-        <div class="af-chat-pane-header">
-          <button class="af-chat-back-btn" id="panel-back" title="Back to agents">‹ Back</button>
-          <div class="af-chat-pane-title" id="panel-agent-name">— select an agent —</div>
-          <span class="af-chat-pane-state" id="panel-agent-status"></span>
-          <button class="close-btn" id="panel-close" title="Close">✕</button>
-        </div>
-        <div id="chat-messages"></div>
-      </div>
-    </div>
+    <!-- CSP note: inline scripts are allowed only because the monitor server stamps
+         each first-party inline script with a per-request nonce at serve time (see
+         monitor_server.index_handler / _csp_report_only). It also injects a nonced
+         window.__WACTORZ_INGRESS_PATH bootstrap into the document head. Keep inline
+         scripts first-party — never inline remote or user-supplied content here. -->
     <script>
-      if ("serviceWorker" in navigator) {
+      // Register the service worker only for the standalone / desktop deployment.
+      // Behind Home Assistant's ingress proxy the app is served under a rotating
+      // /api/hassio_ingress/<slug>/… path; a cache there is useless (and would risk
+      // caching assets under a dead token), so we deliberately skip it. The backend
+      // injects a non-empty __WACTORZ_INGRESS_PATH only when serving behind ingress.
+      if ("serviceWorker" in navigator && !window.__WACTORZ_INGRESS_PATH) {
         window.addEventListener("load", () => {
           navigator.serviceWorker.register("./sw.js").then(
             r  => console.debug("[sw] registered, scope:", r.scope),

@@ -1,0 +1,320 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/* ── Card Dashboard overlay ─────────────────────────────────────────── */
+.cd-root {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: none;
+  flex-direction: column;
+  background: #050818;
+  z-index: 160;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 13px;
+}
+.cd-root.cd-visible {
+  display: flex;
+}
+
+/* ── Wactorz header / body / iobar ─────────────────────────── */
+.af-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(37, 99, 235, 0.2);
+  background: rgba(5, 10, 24, 0.95);
+  flex-shrink: 0;
+}
+.af-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.af-header-center {
+  flex: 1;
+  text-align: center;
+}
+.af-header-right {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.af-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #93c5fd;
+  letter-spacing: 0.03em;
+}
+
+.af-conn-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  border: 1px solid;
+}
+.af-conn-live {
+  color: #22d3a0;
+  border-color: rgba(34, 211, 160, 0.35);
+  background: rgba(34, 211, 160, 0.08);
+}
+.af-conn-connecting {
+  color: #60a5fa;
+  border-color: rgba(96, 165, 250, 0.35);
+  background: rgba(96, 165, 250, 0.08);
+  animation: af-connecting-blink 1s ease-in-out infinite;
+}
+.af-conn-demo {
+  color: #a78bfa;
+  border-color: rgba(167, 139, 250, 0.35);
+  background: rgba(167, 139, 250, 0.08);
+}
+@keyframes af-connecting-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.af-health {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+}
+.af-view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+/* Inline line-icons inherit the button's text colour (incl. the active tint). */
+.af-icon {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+/* Icon-only chrome buttons (audio, reset) — keep them square, no label gap. */
+.af-view-btn-icon {
+  gap: 0;
+  padding: 4px 8px;
+}
+/* The Devices entry is an external link to the HA UI, not a view button. */
+.af-ha-nav-link {
+  text-decoration: none;
+}
+.af-ha-ext {
+  font-size: 0.7em;
+  opacity: 0.6;
+  margin-left: 1px;
+  align-self: flex-start;
+}
+.af-view-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-view-btn.active {
+  background: rgba(37, 99, 235, 0.2);
+  border-color: rgba(37, 99, 235, 0.5);
+  color: #93c5fd;
+}
+
+/* ── Audio popover ──────────────────────────────────────────────────── */
+.af-audio-popover {
+  position: fixed;
+  z-index: 300;
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  min-width: 230px;
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+}
+.af-audio-popover.open {
+  display: flex;
+}
+.af-audio-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.af-audio-vol-row {
+  gap: 10px;
+}
+.af-audio-toggle {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.af-audio-toggle.on {
+  background: rgba(37, 99, 235, 0.22);
+  border-color: rgba(37, 99, 235, 0.5);
+  color: #93c5fd;
+}
+.af-audio-toggle:hover:not(.on) {
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.8);
+}
+.af-audio-select {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(10, 14, 30, 0.9);
+  color: #e0e8ff;
+  cursor: pointer;
+  appearance: auto;
+}
+.af-audio-select:focus {
+  outline: none;
+  border-color: rgba(37, 99, 235, 0.5);
+}
+.af-audio-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 2px 0;
+}
+.af-audio-label {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: -4px;
+}
+.af-audio-tracks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.af-audio-track-btn {
+  padding: 5px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.af-audio-track-btn.on {
+  background: rgba(52, 211, 153, 0.18);
+  border-color: rgba(52, 211, 153, 0.45);
+  color: #34d399;
+}
+.af-audio-track-btn:hover:not(.on) {
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.8);
+}
+.af-audio-slider {
+  flex: 1;
+  accent-color: #6366f1;
+  cursor: pointer;
+  height: 4px;
+  border-radius: 4px;
+}
+
+/* ── Bottom nav (mobile only — hidden on desktop) ───────────────────── */
+.af-bottom-nav {
+  display: none; /* shown via @media below */
+  flex-shrink: 0;
+  position: relative;
+  background: rgba(4, 8, 20, 0.97);
+  border-top: 1px solid rgba(37, 99, 235, 0.2);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.af-bottom-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 4px;
+  min-height: 52px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.6);
+  transition: color 0.15s;
+  font-family: inherit;
+}
+.af-bottom-tab.active {
+  color: #93c5fd;
+}
+.af-bottom-tab:active {
+  opacity: 0.7;
+}
+.af-bottom-tab-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.af-bottom-tab-label {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+.af-bottom-sheet {
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  min-width: 140px;
+  padding: 8px;
+  background: rgba(8, 14, 30, 0.97);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: 12px 12px 0 0;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.af-bottom-sheet-btn {
+  flex: unset;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  width: 100%;
+  font-size: 13px;
+}
+.af-bottom-sheet-btn .af-bottom-tab-label {
+  font-size: 13px;
+}
+.af-bottom-sheet-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.af-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}

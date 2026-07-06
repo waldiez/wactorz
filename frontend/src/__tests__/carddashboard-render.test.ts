@@ -6,7 +6,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { CardDashboard } from "../ui/CardDashboard";
 import { buildAudioPopover, buildResetPopover } from "../ui/dashboard/popovers";
 import type { AgentInfo, ChatMessage } from "../types/agent";
-import type { FeedItem } from "../ui/ActivityFeed";
 
 // Characterization tests: they pin CardDashboard's observable render behaviour
 // (view containers, card structure, builders) so the upcoming module split can
@@ -19,10 +18,6 @@ function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
 
 function chatMsg(over: Partial<ChatMessage> = {}): ChatMessage {
     return { id: "m1", from: "main", to: "user", content: "**hi**", timestampMs: 1_700_000_000_000, ...over };
-}
-
-function feedItem(over: Partial<FeedItem> = {}): FeedItem {
-    return { type: "chat", label: "hello", agentName: "main", timestamp: 1_700_000_000_000, ...over };
 }
 
 describe("CardDashboard render", () => {
@@ -62,7 +57,6 @@ describe("CardDashboard render", () => {
         ["chat", ".af-chat-thread"],
         ["feed", ".af-feed"],
         ["settings", ".af-settings"],
-        ["ha", ".af-overview"],
     ])("renders the %s view", (view, selector) => {
         cd.show([agent("main")]);
         cd._setView(view);
@@ -98,12 +92,6 @@ describe("CardDashboard render", () => {
         expect(bubble!.innerHTML).toContain("<strong>");
     });
 
-    it("_feedItemEl renders a feed row", () => {
-        const container = document.createElement("div");
-        cd._feedItemEl(container, feedItem());
-        expect(container.querySelector(".af-feed-text")?.textContent).toContain("hello");
-    });
-
     it("builds the audio and reset popovers without throwing", () => {
         const audio = buildAudioPopover();
         expect(audio.classList.contains("af-audio-popover")).toBe(true);
@@ -111,11 +99,11 @@ describe("CardDashboard render", () => {
         expect(() => buildResetPopover()).not.toThrow();
     });
 
-    it("builds settings + cost-limit sections without throwing", () => {
+    it("builds the settings view with the cost-limit section", () => {
         const settings = cd._buildSettingsView();
         expect(settings.classList.contains("af-settings")).toBe(true);
-        // spend-limit section + Home Assistant section
-        expect(settings.querySelectorAll(".af-settings-section").length).toBe(2);
+        // Only the spend-limit section remains (HA config was removed).
+        expect(settings.querySelectorAll(".af-settings-section").length).toBe(1);
     });
 
     it("addAgent / updateAgent / removeAgent keep the agents map in sync", () => {

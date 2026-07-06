@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-from typing import Any
-from urllib.parse import urlparse
+import csv
 import hashlib
+import io
+import logging
 import re
 import time
+from datetime import datetime, timezone
+from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 
-from .ha_web_socket_client import HAWebSocketClient
+logger = logging.getLogger(__name__)
+
+from .ha_web_socket_client import HAWebSocketClient  # noqa: E402
 
 
 # ── SWID ────────────────────────────────────────────────────────
@@ -24,8 +30,7 @@ def _normalize_swid_segment(text: str) -> str:
     # Keep only alphanumeric, hyphens, and dots
     segment = re.sub(r"[^a-z0-9\-\.]", "", segment)
     # Collapse repeated hyphens and strip leading/trailing hyphens
-    segment = re.sub(r"-{2,}", "-", segment).strip("-")
-    return segment
+    return re.sub(r"-{2,}", "-", segment).strip("-")
 
 
 def generate_swid(
@@ -106,16 +111,14 @@ def normalize_ha_base_url(url: str) -> str:
     if scheme in {"http", "https"}:
         netloc = parsed.netloc or parsed.path
         path = (parsed.path or "").rstrip("/")
-        if path.endswith("/api/websocket"):
-            path = path[: -len("/api/websocket")]
+        path = path.removesuffix("/api/websocket")
         return f"{scheme}://{netloc}{path}"
 
     if scheme in {"ws", "wss"}:
         http_scheme = "https" if scheme == "wss" else "http"
         netloc = parsed.netloc or parsed.path
         path = (parsed.path or "").rstrip("/")
-        if path.endswith("/api/websocket"):
-            path = path[: -len("/api/websocket")]
+        path = path.removesuffix("/api/websocket")
         return f"{http_scheme}://{netloc}{path}"
 
     return raw
@@ -192,11 +195,11 @@ async def fetch_devices_entities_with_location(
                     # "sw_version": d.get("sw_version"),
                     # "hw_version": d.get("hw_version"),
                     "area": device_area_name,
-                    "entities": sorted(ents, key=lambda x: (x["entity_id"] or "")),
+                    "entities": sorted(ents, key=lambda x: x["entity_id"] or ""),
                 }
             )
 
-        return sorted(output, key=lambda x: (x["name"] or ""))
+        return sorted(output, key=lambda x: x["name"] or "")
 
 
 async def _get_floors_safe(ha: HAWebSocketClient) -> list[dict[str, Any]]:
@@ -306,45 +309,53 @@ async def get_simplified_ha_data(ws_url: str, token: str) -> dict[str, list[dict
 
         return {
             "floors": [
-                drop_nulls({"floor_id": f["floor_id"], "name": f.get("name")})
-                for f in floors
+                drop_nulls({"floor_id": f["floor_id"], "name": f.get("name")}) for f in floors
             ],
-            "areas": [
-                drop_nulls({"area_id": a["area_id"], "name": a.get("name")})
-                for a in areas
-            ],
+            "areas": [drop_nulls({"area_id": a["area_id"], "name": a.get("name")}) for a in areas],
             "devices": [
-                drop_nulls({
-                    "id": d["id"],
-                    "name": d.get("name"),
-                    "name_by_user": d.get("name_by_user"),
-                    "area_id": d.get("area_id"),
-                    "manufacturer": d.get("manufacturer"),
-                    "model": d.get("model"),
-                    "labels": d.get("labels", []),
-                    "disabled_by": d.get("disabled_by"),
-                })
+                drop_nulls(
+                    {
+                        "id": d["id"],
+                        "name": d.get("name"),
+                        "name_by_user": d.get("name_by_user"),
+                        "area_id": d.get("area_id"),
+                        "manufacturer": d.get("manufacturer"),
+                        "model": d.get("model"),
+                        "labels": d.get("labels", []),
+                        "disabled_by": d.get("disabled_by"),
+                    }
+                )
                 for d in devices
             ],
             "entities": [
-                drop_nulls({
-                    "entity_id": e.get("entity_id"),
-                    "domain": (e.get("entity_id") or "").split(".")[0] or None,
-                    "name": (
-                        states_by_id.get(e.get("entity_id", ""), {}).get("attributes", {}).get("friendly_name")
-                        or e.get("original_name")
-                        or e.get("name")
-                    ),
-                    "area_id": e.get("area_id") or device_area_by_id.get(e.get("device_id")),
-                    "device_id": e.get("device_id"),
-                    "disabled_by": e.get("disabled_by"),
-                    "hidden_by": e.get("hidden_by"),
-                    "entity_category": e.get("entity_category"),
-                    "platform": e.get("platform"),
-                    "state": states_by_id.get(e.get("entity_id", ""), {}).get("state"),
-                    # "last_changed": states_by_id.get(e.get("entity_id", ""), {}).get("last_changed"),
-                    **{k: v for k, v in states_by_id.get(e.get("entity_id", ""), {}).get("attributes", {}).items() if k != "friendly_name"},
-                })
+                drop_nulls(
+                    {
+                        "entity_id": e.get("entity_id"),
+                        "domain": (e.get("entity_id") or "").split(".")[0] or None,
+                        "name": (
+                            states_by_id.get(e.get("entity_id", ""), {})
+                            .get("attributes", {})
+                            .get("friendly_name")
+                            or e.get("original_name")
+                            or e.get("name")
+                        ),
+                        "area_id": e.get("area_id") or device_area_by_id.get(e.get("device_id")),
+                        "device_id": e.get("device_id"),
+                        "disabled_by": e.get("disabled_by"),
+                        "hidden_by": e.get("hidden_by"),
+                        "entity_category": e.get("entity_category"),
+                        "platform": e.get("platform"),
+                        "state": states_by_id.get(e.get("entity_id", ""), {}).get("state"),
+                        # "last_changed": states_by_id.get(e.get("entity_id", ""), {}).get("last_changed"),
+                        **{
+                            k: v
+                            for k, v in states_by_id.get(e.get("entity_id", ""), {})
+                            .get("attributes", {})
+                            .items()
+                            if k != "friendly_name"
+                        },
+                    }
+                )
                 for e in entities
                 if e.get("platform") != "hassio"
             ],
@@ -405,7 +416,7 @@ async def get_devices(ws_url: str, token: str) -> list[dict[str, Any]]:
     ws_url = normalize_ha_ws_url(ws_url)
     async with HAWebSocketClient(ws_url, token) as ha:
         devices = await ha.call("config/device_registry/list")
-        for d in (devices or []):
+        for d in devices or []:
             d["swid"] = generate_swid(
                 d["id"],
                 name=d.get("name_by_user") or d.get("name"),
@@ -539,6 +550,157 @@ async def get_states(ws_url: str, token: str) -> list[dict[str, Any]]:
         return states or []
 
 
+async def get_camera_entities(ws_url: str, token: str) -> list[dict[str, Any]]:
+    """Return camera entities from HA states, each with entity_id, state, and friendly_name."""
+    states = await get_states(ws_url, token)
+    return [
+        {
+            "entity_id": s["entity_id"],
+            "state": s.get("state"),
+            "friendly_name": s.get("attributes", {}).get("friendly_name"),
+        }
+        for s in states
+        if s.get("entity_id", "").startswith("camera.")
+    ]
+
+
+async def get_camera_snapshot(rest_base: str, token: str, camera_entity_id: str) -> dict[str, Any]:
+    """Fetch a JPEG snapshot from HA and return it base64-encoded.
+
+    rest_base must be an http/https URL (use normalize_ha_base_url first).
+    Returns {"image_base64": str, "content_type": str, "entity_id": str}
+    or {"error": str, "status": int, "detail": str, "entity_id": str} on failure.
+    """
+    import base64
+
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"{rest_base}/api/camera_proxy/{camera_entity_id}"
+    logger.debug("Camera snapshot request: %s", url)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as resp:
+                logger.debug("Camera snapshot response: %s %s", resp.status, resp.content_type)
+                if resp.status != 200:
+                    detail = ""
+                    try:
+                        detail = await resp.text()
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "Camera snapshot failed for %s: HTTP %s — %s",
+                        camera_entity_id,
+                        resp.status,
+                        detail[:200] if detail else "(no body)",
+                    )
+                    return {
+                        "error": f"HTTP {resp.status}",
+                        "status": resp.status,
+                        "detail": detail[:200] if detail else "",
+                        "entity_id": camera_entity_id,
+                    }
+                content_type = resp.headers.get("Content-Type", "image/jpeg")
+                raw = await resp.read()
+                return {
+                    "image_base64": base64.b64encode(raw).decode("ascii"),
+                    "content_type": content_type,
+                    "entity_id": camera_entity_id,
+                }
+    except Exception as exc:
+        logger.warning("Camera snapshot exception for %s: %s", camera_entity_id, exc)
+        return {"error": str(exc), "entity_id": camera_entity_id}
+
+
+def get_camera_stream_url(rest_base: str, camera_entity_id: str) -> str:
+    """Return the MJPEG stream URL for a camera entity (no HTTP call)."""
+    return f"{rest_base}/api/camera_proxy_stream/{camera_entity_id}"
+
+
+def get_camera_snapshot_url(rest_base: str, camera_entity_id: str) -> str:
+    """Return the single-image snapshot URL for a camera entity (no HTTP call).
+
+    Requires an Authorization: Bearer <HA_TOKEN> header to fetch.
+    """
+    return f"{rest_base}/api/camera_proxy/{camera_entity_id}"
+
+
+async def get_camera_stream_urls(ws_url: str, token: str, camera_entity_id: str) -> dict[str, Any]:
+    """Collect all available stream URLs for a camera entity from three sources.
+
+    Sources attempted in order (failures are logged and skipped):
+    1. MJPEG proxy  — always present, no API call.
+    2. Expose Camera Stream Source custom integration — REST GET
+       /api/camera_source/{entity_id}; silently skipped on 404 (not installed).
+    3. HA WebSocket camera/capabilities → camera/stream per supported format.
+       ``web_rtc`` is reported in capabilities but skipped for stream URL calls
+       (requires browser-side SDP negotiation, cannot yield a plain URL).
+
+    Returns:
+        {
+          "entity_id": str,
+          "streams": {
+            "mjpeg_proxy": "http://ha.local:8123/api/camera_proxy_stream/...",
+            "camera_source": "rtsp://...",              # if integration present
+            "hls": "http://ha.local:8123/api/hls/...", # if camera supports it
+            ...
+          },
+          "capabilities": ["hls", "web_rtc", ...],  # raw from HA, or []
+        }
+    """
+    rest_base = normalize_ha_base_url(ws_url)
+    streams: dict[str, str] = {}
+    capabilities: list[str] = []
+
+    # 1. MJPEG proxy — always available
+    streams["mjpeg_proxy"] = f"{rest_base}/api/camera_proxy_stream/{camera_entity_id}"
+
+    # 2. Expose Camera Stream Source custom integration
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        url = f"{rest_base}/api/camera_stream_source/{camera_entity_id}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    source_url = (await resp.text()).strip()
+                    if source_url:
+                        streams["camera_source"] = source_url
+                elif resp.status != 404:
+                    logger.debug(
+                        "Expose Camera Stream Source returned HTTP %s for %s",
+                        resp.status,
+                        camera_entity_id,
+                    )
+    except Exception as exc:
+        logger.debug("Expose Camera Stream Source unavailable for %s: %s", camera_entity_id, exc)
+
+    # 3. WebSocket camera/capabilities → camera/stream per supported format
+    ws_url_normalized = normalize_ha_ws_url(ws_url)
+    try:
+        async with HAWebSocketClient(ws_url_normalized, token) as ha:
+            caps_result = await ha.call("camera/capabilities", entity_id=camera_entity_id)
+            capabilities = list((caps_result or {}).get("frontend_stream_types", []))
+
+            for fmt in capabilities:
+                if fmt == "web_rtc":
+                    continue
+                try:
+                    stream_result = await ha.call(
+                        "camera/stream", entity_id=camera_entity_id, format=fmt
+                    )
+                    stream_url = (stream_result or {}).get("url", "")
+                    if stream_url:
+                        if stream_url.startswith("/"):
+                            stream_url = f"{rest_base}{stream_url}"
+                        streams[fmt] = stream_url
+                except Exception as exc:
+                    logger.debug(
+                        "camera/stream format=%s failed for %s: %s", fmt, camera_entity_id, exc
+                    )
+    except Exception as exc:
+        logger.debug("camera/capabilities WS call failed for %s: %s", camera_entity_id, exc)
+
+    return {"entity_id": camera_entity_id, "streams": streams, "capabilities": capabilities}
+
+
 async def get_config_entries(ws_url: str, token: str) -> list[dict[str, Any]]:
     """Fetch config entries and return the list as-is from Home Assistant.
 
@@ -626,9 +788,7 @@ async def _post_automation_config(
                 body = await response.text()
 
             if response.status >= 400:
-                raise RuntimeError(
-                    f"REST automation POST failed ({response.status}): {body}"
-                )
+                raise RuntimeError(f"REST automation POST failed ({response.status}): {body}")
 
             return {
                 "automation_id": automation_id,
@@ -701,8 +861,9 @@ async def update_automation(
 
 async def delete_automation(base_url: str, token: str, automation_id: str) -> bool:
     """Delete an automation by ID. Returns True if deletion was successful.
-    This is undocumented but that is the endpoint used by the HA frontend to delete automations, 
-    so it should be stable."""
+    This is undocumented but that is the endpoint used by the HA frontend to delete automations,
+    so it should be stable.
+    """
     normalized_base = normalize_ha_base_url(base_url)
     endpoint = f"{normalized_base}/api/config/automation/config/{automation_id}"
     headers = {
@@ -712,6 +873,172 @@ async def delete_automation(base_url: str, token: str, automation_id: str) -> bo
     async with aiohttp.ClientSession() as session:
         async with session.delete(endpoint, headers=headers) as response:
             return response.status == 200
+
+
+async def get_entity_history(
+    base_url: str,
+    token: str,
+    entity_ids: str | list[str],
+    start_time: datetime | str | None = None,
+    end_time: datetime | str | None = None,
+    minimal_response: bool = True,
+    significant_changes_only: bool = False,
+) -> dict[str, Any]:
+    """Fetch historical state changes for one or more entities.
+
+    Calls HA's /api/history/period REST endpoint. ``start_time`` defaults to
+    HA's own default (1 day before ``end_time``/now) when omitted.
+
+    Args:
+        base_url: HA base URL (normalized internally via normalize_ha_base_url).
+        token: Long-lived access token.
+        entity_ids: A single entity_id string or a list of entity_id strings.
+        start_time: Start of the history window. Accepts a ``datetime`` object
+            (converted to ISO-8601) or a pre-formatted ISO-8601 string.
+            When omitted, HA defaults to 1 day before ``end_time`` (or now).
+        end_time: End of the history window. Same format as ``start_time``.
+            When omitted, HA defaults to now.
+        minimal_response: When True (default), HA omits attributes except for
+            the first and last state in each entity's series, reducing payload
+            size. Set to False to receive full attributes for every state.
+        significant_changes_only: When True, HA skips attribute-only changes
+            for sensor-like domains. Defaults to False so all changes are
+            included unless the caller explicitly opts out.
+
+    Returns:
+        On success: ``{entity_id: [state_obj, ...], ...}`` — a dict keyed by
+        entity_id.  Entities with no recorded history appear with an empty list.
+        On failure: ``{"error": str, "status": int, "detail": str}``.
+    """
+
+    def _to_iso(dt: datetime | str) -> str:
+        return dt.isoformat() if isinstance(dt, datetime) else dt
+
+    rest_base = normalize_ha_base_url(base_url)
+    ids = [entity_ids] if isinstance(entity_ids, str) else list(entity_ids)
+
+    path = "/api/history/period"
+    if start_time is not None:
+        path = f"{path}/{_to_iso(start_time)}"
+    url = f"{rest_base}{path}"
+
+    params: dict[str, str] = {"filter_entity_id": ",".join(ids)}
+    if end_time is not None:
+        params["end_time"] = _to_iso(end_time)
+    if minimal_response:
+        params["minimal_response"] = "true"
+    if significant_changes_only:
+        params["significant_changes_only"] = "true"
+
+    headers = {"Authorization": f"Bearer {token}"}
+    logger.debug("Entity history request: %s params=%s", url, params)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params) as resp:
+                if resp.status != 200:
+                    detail = ""
+                    try:
+                        detail = await resp.text()
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "Entity history failed: HTTP %s — %s",
+                        resp.status,
+                        detail[:200] if detail else "(no body)",
+                    )
+                    return {
+                        "error": f"HTTP {resp.status}",
+                        "status": resp.status,
+                        "detail": detail[:200] if detail else "",
+                    }
+                raw: list[list[dict[str, Any]]] = await resp.json()
+    except Exception as exc:
+        logger.warning("Entity history exception: %s", exc)
+        return {"error": str(exc)}
+
+    result: dict[str, list[dict[str, Any]]] = {eid: [] for eid in ids}
+    for entity_states in raw:
+        if not entity_states:
+            continue
+        eid = entity_states[0].get("entity_id")
+        if eid:
+            result[eid] = entity_states
+
+    return result
+
+
+def history_to_csv(history: dict[str, Any]) -> str:
+    """Convert a get_entity_history result to a CSV string.
+
+    Args:
+        history: The dict returned by ``get_entity_history``.  Entries that are
+            error dicts or empty lists are silently skipped.
+
+    Returns:
+        A CSV string with header ``entity_id,last_changed,state,unit_of_measurement``.
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["entity_id", "last_changed", "state", "unit_of_measurement"])
+    for eid, states in history.items():
+        if not isinstance(states, list):
+            continue
+        for s in states:
+            if not isinstance(s, dict):
+                continue
+            unit = s.get("attributes", {}).get("unit_of_measurement", "")
+            writer.writerow([eid, s.get("last_changed", ""), s.get("state", ""), unit or ""])
+    return buf.getvalue()
+
+
+def to_utc(s: str) -> str:
+    """Parse an ISO-8601 string and return its UTC equivalent.
+
+    Naive strings (no UTC offset) are treated as local time before conversion.
+    Returns the original string unchanged if it cannot be parsed.
+    """
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return s
+    if dt.tzinfo is None:
+        dt = dt.astimezone()  # attach local tz
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+_TS_KEYS = ("last_changed", "last_updated", "last_reported")
+
+
+def localise_history_timestamps(history: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of the history dict with timestamp fields converted to local tz.
+
+    HA returns ``last_changed`` / ``last_updated`` / ``last_reported`` in UTC.
+    This converts them to the server's local timezone so the LLM can correlate
+    them with user-provided local times (e.g. "Saturday at 17:00").
+    Error-dict values and non-list entries are passed through unchanged.
+    """
+    local_tz = datetime.now().astimezone().tzinfo
+    result: dict[str, Any] = {}
+    for eid, states in history.items():
+        if not isinstance(states, list):
+            result[eid] = states
+            continue
+        localised = []
+        for s in states:
+            if not isinstance(s, dict):
+                localised.append(s)
+                continue
+            s = dict(s)
+            for key in _TS_KEYS:
+                if isinstance(s.get(key), str):
+                    try:
+                        dt = datetime.fromisoformat(s[key].replace("Z", "+00:00"))
+                        s[key] = dt.astimezone(local_tz).isoformat()
+                    except ValueError:
+                        pass
+            localised.append(s)
+        result[eid] = localised
+    return result
 
 
 _LIVE_CONTEXT_INTERESTING_ATTRIBUTES = frozenset(
@@ -776,7 +1103,9 @@ async def get_live_context(
     # ---- build set of exposed entity IDs ------------------------------------
     # expose_resp["exposed_entities"] maps entity_id → {assistant: bool, ...}.
     # An entity is considered exposed if at least one assistant has it set to True.
-    raw_exposed: dict[str, Any] = expose_resp.get("exposed_entities", expose_resp) if isinstance(expose_resp, dict) else {}
+    raw_exposed: dict[str, Any] = (
+        expose_resp.get("exposed_entities", expose_resp) if isinstance(expose_resp, dict) else {}
+    )
     exposed_entity_ids: set[str] = {
         eid
         for eid, assistants in raw_exposed.items()
@@ -816,9 +1145,7 @@ async def get_live_context(
 
     for state in sorted(
         states,
-        key=lambda s: (
-            s.get("attributes", {}).get("friendly_name") or s.get("entity_id") or ""
-        ),
+        key=lambda s: s.get("attributes", {}).get("friendly_name") or s.get("entity_id") or "",
     ):
         entity_id: str = state.get("entity_id", "")
         if not entity_id or "." not in entity_id:

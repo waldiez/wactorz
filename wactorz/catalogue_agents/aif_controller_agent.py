@@ -1,5 +1,4 @@
-"""
-aif_controller_agent.py — single-agent deployment of the Factored Active
+"""aif_controller_agent.py — single-agent deployment of the Factored Active
 Inference OfficeMedium policy, running ALL zones as one N=15 batch (the same
 BatchedFactoredAgents object v7's PyMDPOffice drives). Publishes one normalized
 [-1,1] action per zone to the per-zone action topics.
@@ -30,7 +29,7 @@ Control (via @aif-controller):
   {"action":"stop"}          # stop publishing (unsubscribe)
 """
 
-AGENT_CODE = r'''
+AGENT_CODE = r"""
 import asyncio
 import os
 import sys as _sys
@@ -259,7 +258,7 @@ async def handle_task(agent, payload):
             "acted":    agent.state.get("acted", 0),
             "bounds":   agent.state.get("bounds"),
             "config":   cfg}
-'''
+"""
 
 
 # ──────────────────────────────────────────────────────────────────────────────

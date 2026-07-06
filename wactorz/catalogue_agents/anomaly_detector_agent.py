@@ -1,5 +1,4 @@
-"""
-CATALOG AGENT — anomaly-detector
+"""CATALOG AGENT — anomaly-detector
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Learns "normal" patterns from historical time-series data (SQLite), then
 detects anomalies in real-time (MQTT). Works with both real-world Home
@@ -623,12 +622,15 @@ async def _discover_entities(agent) -> list:
 async def _mqtt_detector(agent):
     """Subscribe to MQTT and score each reading against baselines."""
     import aiomqtt
+    import os
 
     while True:
         try:
             async with aiomqtt.Client(
                 agent._actor._mqtt_broker,
                 agent._actor._mqtt_port,
+                username=os.environ.get("MQTT_USERNAME") or None,
+                password=os.environ.get("MQTT_PASSWORD") or None,
             ) as client:
                 for pattern in MONITOR_TOPICS:
                     await client.subscribe(pattern)

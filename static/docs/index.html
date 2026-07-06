@@ -62,7 +62,7 @@
       font-weight: 600;
       font-size: 1rem;
       letter-spacing: 0.08em;
-      color: var(--text);
+      color: #fff;
       text-decoration: none;
       display: flex; align-items: center; gap: 0.6rem;
     }
@@ -168,12 +168,6 @@
       margin-bottom: 1.5rem;
     }
 
-    h1 span {
-      background: linear-gradient(135deg, var(--blue) 0%, var(--cyan) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
 
     .hero-tagline {
       font-family: var(--mono);
@@ -512,10 +506,7 @@
 
 <!-- ── Nav ────────────────────────────────────────────────────────────── -->
 <nav>
-  <a href="." class="nav-logo">
-    <img src="https://waldiez.io/images/wactorz/favicon.svg" alt="Wactorz" width="32" height="32" />
-    Wactorz
-  </a>
+  <a href="." class="nav-logo">Wactorz</a>
   <ul class="nav-links">
     <li><a href="./guide/">Guide</a></li>
     <!-- <li><a href="./api/python/">Python API</a></li> -->
@@ -534,9 +525,9 @@
   <canvas id="hero-canvas"></canvas>
 
   <div class="hero-content">
-    <div class="hero-badge">v0.4.4 · Alpha</div>
+    <div class="hero-badge">v0.5.0 · Alpha</div>
 
-    <h1>Wac<span>torZ</span></h1>
+    <h1>Wactorz</h1>
 
     <p class="hero-tagline">
       Actor-model multi-agent AI framework —
@@ -577,7 +568,7 @@
     <div class="features-header">
       <p class="section-label">// capabilities</p>
       <h2 class="section-title">Built for production<br/>multi-agent systems</h2>
-      <p class="section-sub">Erlang/OTP-style supervision, real-time MQTT telemetry, and a live 3D web dashboard — out of the box.</p>
+      <p class="section-sub">Erlang/OTP-style supervision, real-time MQTT telemetry, and a live web dashboard — out of the box.</p>
     </div>
 
     <div class="features-grid">
@@ -604,9 +595,9 @@
 
       <div class="feature-card">
         <div class="feature-icon">◉</div>
-        <div class="feature-title">Live 3D Dashboard</div>
-        <p class="feature-desc">Babylon.js web UI renders agent graphs, galaxy views, and card layouts. Chat, monitor and command agents in-browser.</p>
-        <span class="feature-tag">Babylon.js · MQTT WS</span>
+        <div class="feature-title">Live Web Dashboard</div>
+        <p class="feature-desc">A real-time card dashboard renders every agent's state, cost and activity. Chat, monitor and command agents in-browser.</p>
+        <span class="feature-tag">HTML/CSS · MQTT WS</span>
       </div>
     </div>
   </div>
@@ -623,7 +614,7 @@
     <div class="code-block">
       <div class="code-bar">
         <div class="code-bar-dots"><span></span><span></span><span></span></div>
-        <span class="code-bar-label">main.py</span>
+        <span class="code-bar-label">example.py</span>
       </div>
       <div class="code-body"><pre><span class="cm"># 1. Install</span>
 <span class="cm">#    pip install wactorz[all]</span>
@@ -683,7 +674,7 @@
         <span class="docs-arrow">↗</span>
         <div class="docs-card-icon">🟨</div>
         <div class="docs-card-title">JS / TypeScript Docs</div>
-        <p class="docs-card-desc">TypeDoc for the Wactorz browser client — MQTT over WebSocket.</p>
+        <p class="docs-card-desc">TypeDoc for the Wactorz browser client — MQTT over WebSocket, card dashboard.</p>
       </a> -->
     </div>
   </div>

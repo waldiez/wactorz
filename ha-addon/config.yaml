@@ -50,6 +50,11 @@ options:
   # Ollama (local LLM alternative — set llm_provider: ollama)
   ollama_url: "http://localhost:11434"
 
+  # OpenAI-compatible endpoint (set llm_provider: openai). Leave blank for the
+  # real OpenAI API, or point to any compatible proxy/provider for communication
+  # with it — e.g. a LiteLLM proxy, Groq, Together, vLLM, or LM Studio.
+  openai_url: ""
+
   # MQTT broker — set to the Mosquitto addon host if using the official addon
   mqtt_host: core-mosquitto
   mqtt_port: 1883
@@ -98,6 +103,7 @@ schema:
   llm_cost_limit_usd: float
   llm_cost_limit_period: list(daily|weekly|monthly)
   ollama_url: url
+  openai_url: str?
   mqtt_host: str
   mqtt_port: port
   mqtt_ws_port: port

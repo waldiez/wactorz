@@ -51,10 +51,9 @@ _KB: dict[str, str] = {
         "- `system/qa-flag` — QA safety flags"
     ),
     "api": (
-        "**REST / WS / MQTT endpoints**\n\n"
+        "**REST / WS endpoints**\n\n"
         "- REST API: `http://host/api/` — send tasks, query agent status\n"
         "- WebSocket bridge: `ws://host/ws` — MQTT→browser real-time stream\n"
-        "- MQTT WebSocket: `ws://host/mqtt` (port 9001 via nginx)\n"
         "- nginx is the single public entry point; wactorz binary listens on :8080 (REST) / :8081 (WS)"
     ),
     "chat": (

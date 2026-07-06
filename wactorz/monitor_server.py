@@ -1686,17 +1686,9 @@ async def static_handler(request):
                     content = content.replace('"/config"', f'"{ingress_path}/config"')
                     content = content.replace('"/actors"', f'"{ingress_path}/actors"')
                     # Point the WebSocket at the monitor's actual port (WS_PORT),
-                    # not HA's 8123. WS_PORT is where the /ws and /mqtt proxies live.
-                    host = request.host.split(":")[0]
-                    content = content.replace(
-                        '"ws://localhost:9001"', f'"ws://{host}:{WS_PORT}/mqtt"'
-                    )
+                    # not HA's 8123. WS_PORT is where the /ws proxy lives.
                     content = content.replace(
                         "`ws://${location.host}/ws`", f"`ws://${{location.hostname}}:{WS_PORT}/ws`"
-                    )
-                    content = content.replace(
-                        "`ws://${location.host}/mqtt`",
-                        f"`ws://${{location.hostname}}:{WS_PORT}/mqtt`",
                     )
 
                     return _with_no_cache(
@@ -2484,13 +2476,12 @@ async def config_handler(request):
 
     from .config import CONFIG
 
-    # The /mqtt and /ws proxies are served by *this* server, so point the
-    # frontend at the monitor's actual port (WS_PORT), not a hardcoded one.
+    # The /ws proxy is served by *this* server, so point the frontend at the
+    # monitor's actual port (WS_PORT), not a hardcoded one.
     raw_host = request.host.split(":")[0]
     ws_host = f"{raw_host}:{WS_PORT}"
     protocol = "wss" if request.secure else "ws"
 
-    mqtt_url = f"{protocol}://{ws_host}/mqtt"
     ws_url = f"{protocol}://{ws_host}/ws"
 
     return web.json_response(
@@ -2499,11 +2490,6 @@ async def config_handler(request):
                 # URL only — the dashboard links out to the HA UI and never talks to
                 # HA directly, so the long-lived token must NOT reach the browser.
                 "url": CONFIG.ha_url,
-            },
-            "mqtt": {
-                "host": MQTT_BROKER,
-                "port": MQTT_PORT,
-                "url": mqtt_url,
             },
             "llm": {
                 "provider": CONFIG.llm_provider,

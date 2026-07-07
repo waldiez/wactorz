@@ -57,10 +57,7 @@ export class DashboardChat {
     private _chatInput = new ChatInput({
         // Only messageable agents — mirrors the target <select> (see _populateSelect).
         agentNames: () => messageableNames(this.host.agents.values()),
-        setTarget: (name: string) => {
-            this.chatTarget = name;
-            this._userPicked = true;
-        },
+        setTarget: (name: string) => this.setTarget(name),
         send: (input, select) => this._sendMessage(input, select),
     });
 
@@ -344,10 +341,7 @@ export class DashboardChat {
             chatInput: this._chatInput,
             stt: this._stt,
             target: () => this.chatTarget,
-            setTarget: name => {
-                this.chatTarget = name;
-                this._userPicked = true;
-            },
+            setTarget: name => this.setTarget(name),
             populateSelect: select => this._populateSelect(select),
             send: (input, select) => this._sendMessage(input, select),
             stop: () => this._stopGeneration(),

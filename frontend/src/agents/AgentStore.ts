@@ -12,10 +12,16 @@ import type { AgentInfo, HeartbeatPayload, AlertPayload, SpawnPayload } from "..
 import { CardDashboard } from "../ui/CardDashboard";
 import { STALE_MS } from "../ui/dashboard/agentState";
 
+/** Consecutive node heartbeats that must omit a remote agent before it is evicted.
+ *  A single missed heartbeat is a transient discovery gap; evicting on it would
+ *  flip the chat target off the agent and misroute the next message to main. */
+export const EVICT_AFTER_MISSES = 3;
+
 export class AgentStore {
     private agents: Map<string, AgentInfo> = new Map();
     private cardDashboard: CardDashboard | null = null;
     private _remoteNodeLastSeen: Map<string, number> = new Map();
+    private _remoteAgentMisses: Map<string, number> = new Map();
 
     /** Create the store and mount an (initially empty) CardDashboard. */
     constructor() {
@@ -58,6 +64,7 @@ export class AgentStore {
     /** Drop an agent by id and remove its card. */
     removeAgent(id: string): void {
         this.agents.delete(id);
+        this._remoteAgentMisses.delete(id);
         this.cardDashboard?.removeAgent(id);
     }
 
@@ -82,12 +89,25 @@ export class AgentStore {
         } else {
             this._remoteNodeLastSeen.delete(name);
         }
-        // Evict remote agents for this node whose names are no longer in the live list.
+        // Evict a remote agent only after several consecutive heartbeats from its
+        // node omit it. A single miss is a transient discovery gap and must not drop
+        // a live agent — that would flip the chat target and misroute the next
+        // message to main. A reappearance resets the counter.
         const liveNames = new Set(agents);
         const toEvict: string[] = [];
         for (const [id, agent] of this.agents) {
-            if (agent.node === name && !liveNames.has(agent.name)) {
+            if (agent.node !== name) {
+                continue;
+            }
+            if (liveNames.has(agent.name)) {
+                this._remoteAgentMisses.delete(id);
+                continue;
+            }
+            const misses = (this._remoteAgentMisses.get(id) ?? 0) + 1;
+            if (misses >= EVICT_AFTER_MISSES) {
                 toEvict.push(id);
+            } else {
+                this._remoteAgentMisses.set(id, misses);
             }
         }
         toEvict.forEach(id => this.removeAgent(id));

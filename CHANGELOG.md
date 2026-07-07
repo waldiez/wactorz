@@ -10,6 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Chat input** — up-arrow history recall now grows the textarea to fit a multi-line message instead of clipping it to one line.
 - **Nodes panel** — remote-runner agents no longer also appear under the local node; each agent is listed only on the node it runs on.
 - **Remote agent delete** — deleting an agent that runs on a remote node now stops it on the node instead of only clearing the server's records, so it no longer keeps running and reappearing.
+- **Chat routing** — a remote agent momentarily missing from one node heartbeat no longer gets evicted (which flipped the chat target to main and misrouted the next message); eviction now needs several consecutive misses.
 
 ## [0.5.1] - 2026-07-06
 

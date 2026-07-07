@@ -32,7 +32,7 @@ vi.mock("../ui/CardDashboard", () => ({
     },
 }));
 
-import { AgentStore } from "../agents/AgentStore";
+import { AgentStore, EVICT_AFTER_MISSES } from "../agents/AgentStore";
 
 function agent(over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: "id-1", name: "worker", state: "running", protected: false, ...over };
@@ -124,18 +124,36 @@ describe("AgentStore — removal & totals", () => {
 });
 
 describe("AgentStore — remote nodes", () => {
-    it("updateRemoteNode forwards, records last-seen, and evicts stale-name agents", () => {
+    it("updateRemoteNode forwards to the dashboard and records last-seen", () => {
         store.addOrUpdateAgent(agent({ id: "r1", name: "remote-1", node: "n1" }));
-        store.updateRemoteNode("n1", ["someone-else"]);
-        expect(dash.updateRemoteNode).toHaveBeenCalledWith("n1", ["someone-else"]);
-        // remote-1 is no longer in the live list → evicted
+        store.updateRemoteNode("n1", ["remote-1"]);
+        expect(dash.updateRemoteNode).toHaveBeenCalledWith("n1", ["remote-1"]);
+    });
+
+    it("keeps a remote agent missing from a single heartbeat (transient gap)", () => {
+        store.addOrUpdateAgent(agent({ id: "r1", name: "remote-1", node: "n1" }));
+        store.updateRemoteNode("n1", ["someone-else"]); // one miss — not enough
+        expect(store.getAgents().some(a => a.id === "r1")).toBe(true);
+    });
+
+    it("evicts a remote agent after EVICT_AFTER_MISSES consecutive omissions", () => {
+        store.addOrUpdateAgent(agent({ id: "r1", name: "remote-1", node: "n1" }));
+        for (let i = 0; i < EVICT_AFTER_MISSES; i++) {
+            store.updateRemoteNode("n1", ["someone-else"]);
+        }
         expect(store.getAgents().some(a => a.id === "r1")).toBe(false);
     });
 
-    it("updateRemoteNode with an empty list clears last-seen (node offline)", () => {
+    it("a reappearance resets the miss counter so blips never accumulate", () => {
         store.addOrUpdateAgent(agent({ id: "r1", name: "remote-1", node: "n1" }));
-        store.updateRemoteNode("n1", []);
-        expect(store.getAgents().some(a => a.id === "r1")).toBe(false);
+        for (let i = 0; i < EVICT_AFTER_MISSES - 1; i++) {
+            store.updateRemoteNode("n1", []); // misses, but short of the threshold
+        }
+        store.updateRemoteNode("n1", ["remote-1"]); // seen again → reset
+        for (let i = 0; i < EVICT_AFTER_MISSES - 1; i++) {
+            store.updateRemoteNode("n1", []);
+        }
+        expect(store.getAgents().some(a => a.id === "r1")).toBe(true);
     });
 
     it("pruneStaleRemoteAgents evicts node agents past the stale window, keeps fresh & local", () => {

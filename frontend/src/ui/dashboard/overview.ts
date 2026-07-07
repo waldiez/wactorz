@@ -121,7 +121,9 @@ export class OverviewView {
         if (!list) {
             return;
         }
-        const agentNames = [...this.host.agents.values()].map(a => a.name);
+        // Remote-runner agents carry a `node` and belong to that remote node's list;
+        // the local node lists only agents running here (no `node`).
+        const agentNames = [...this.host.agents.values()].filter(a => !a.node).map(a => a.name);
         const items: HTMLElement[] = [
             this._buildNodeItem("local", agentNames.length > 0 ? agentNames.join(", ") : "no agents", true),
         ];

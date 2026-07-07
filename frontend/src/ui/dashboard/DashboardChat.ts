@@ -410,11 +410,7 @@ export class DashboardChat {
 
     /** Keep chatTarget on a live messageable agent (prefers main; never an id). */
     syncChatTarget(): void {
-        this.chatTarget = pickChatTarget(
-            [...this.host.agents.values()],
-            this.chatTarget,
-            this._userPicked,
-        );
+        this.chatTarget = pickChatTarget([...this.host.agents.values()], this.chatTarget, this._userPicked);
     }
 
     private _sendMessage(input: HTMLTextAreaElement, select: HTMLSelectElement): void {

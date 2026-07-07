@@ -79,6 +79,11 @@ export function toAgentInfo(a: StatePatchAgent): AgentInfo {
     if (a.agent_type != null) {
         update.agentType = a.agent_type;
     }
+    // Remote agents aren't in the /api/actors REST list; the node marks them so the
+    // REST reconcile doesn't evict them (see AgentStore.reconcileAgents).
+    if (a.node != null) {
+        update.node = a.node;
+    }
     return update;
 }
 

@@ -23,6 +23,8 @@ export type StatePatchAgent = {
     mem?: number;
     task?: string;
     agent_type?: string;
+    /** Set for remote-runner agents — the node name; marks the agent as remote. */
+    node?: string;
 };
 
 /** Snapshot-level totals computed by the backend (includes historical/deleted agents). */

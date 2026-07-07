@@ -67,32 +67,44 @@ def _parse_spawn_config(raw: str) -> dict:
         config["code"] = code_raw
         return config
 
-    # Strategy 3: character scanner — find opening " after "code":
-    # then scan forward respecting escape sequences to find the real closing "
-    # This correctly handles } and { inside the code value.
+    # Strategy 3: locate the code value's bounds, then swap it out for a
+    # placeholder so the surrounding object parses as normal JSON.
+    #
+    # We can't find the value's end by scanning forward for the first unescaped
+    # '"': the code is raw (that's why strategies 1/2 failed) and legitimately
+    # contains its own double quotes — e.g. a Python string like
+    # 'phrases like "Vamos!"'. A forward scan stops at that first inner quote,
+    # truncates the code, and corrupts the placeholder ("Expecting ',' delimiter").
+    #
+    # Instead, treat every '"' after the opening one as a candidate closing
+    # quote, right-most first, and keep the first that makes the REST of the
+    # object valid JSON. The genuine closing quote is the right-most one (code
+    # is the last field by convention), so it wins on the first try; inner
+    # quotes are only tried if a trailing field moves the true end leftward.
     key_match = re.search(r'"code"\s*:\s*"', raw)
     if not key_match:
         raise ValueError(f"No 'code' key found in spawn config:\n{raw[:200]}")
 
     code_start = key_match.end()  # index right after the opening "
-    i = code_start
-    while i < len(raw):
-        if raw[i] == "\\":
-            i += 2  # skip escaped character
+    prefix = raw[: key_match.start()]
+    quote_positions = [code_start + m.start() for m in re.finditer(r'"', raw[code_start:])]
+
+    config = None
+    code_raw = ""
+    for close in reversed(quote_positions):
+        placeholder = prefix + '"code": "__CODE__"' + raw[close + 1 :]
+        try:
+            config = json.loads(placeholder)
+        except json.JSONDecodeError:
             continue
-        if raw[i] == '"':
-            break  # found unescaped closing quote
-        i += 1
+        code_raw = raw[code_start:close]
+        break
 
-    code_raw = raw[code_start:i]
-    placeholder = raw[: key_match.start()] + '"code": "__CODE__"' + raw[i + 1 :]
-
-    try:
-        config = json.loads(placeholder)
-    except json.JSONDecodeError as e:
+    if config is None:
         raise ValueError(
-            f"Spawn config JSON invalid after code extraction: {e}\nPlaceholder:\n{placeholder[:300]}"
-        ) from e
+            "Spawn config JSON invalid after code extraction: no closing quote for "
+            f"the code value produced parseable JSON.\nRaw:\n{raw[:300]}"
+        )
 
     # Unescape sequences the LLM may have added. Decode as a real JSON string in
     # one correct pass (json.loads handles \\, \n, \t, \", \uXXXX, … together and,

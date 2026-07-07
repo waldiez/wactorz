@@ -94,8 +94,27 @@ def _parse_spawn_config(raw: str) -> dict:
             f"Spawn config JSON invalid after code extraction: {e}\nPlaceholder:\n{placeholder[:300]}"
         ) from e
 
-    # Unescape sequences the LLM may have added
-    config["code"] = code_raw.replace("\\n", "\n").replace('\\"', '"').replace("\\t", "\t")
+    # Unescape sequences the LLM may have added. Decode as a real JSON string in
+    # one correct pass (json.loads handles \\, \n, \t, \", \uXXXX, … together and,
+    # crucially, collapses an escaped backslash instead of leaving it doubled).
+    # strict=False tolerates the raw newlines/tabs that made the top-level
+    # json.loads fail in the first place. Falling back to sequential .replace()
+    # would re-introduce the original bug: a Python escape like \' arrives here as
+    # \\' (JSON-escaped), and without collapsing \\ the string literal terminates
+    # early — stranding any following non-ASCII char (e.g. an em-dash) outside the
+    # string and raising SyntaxError only once the runner compiles it.
+    try:
+        config["code"] = json.loads('"' + code_raw + '"', strict=False)
+    except json.JSONDecodeError:
+        # Best-effort fallback for genuinely invalid escapes (e.g. a bare \');
+        # collapse the common sequences with the backslash LAST so it doesn't
+        # corrupt the ones decoded before it.
+        config["code"] = (
+            code_raw.replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace('\\"', '"')
+            .replace("\\\\", "\\")
+        )
     return config
 
 

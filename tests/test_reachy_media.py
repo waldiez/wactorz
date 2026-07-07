@@ -180,6 +180,174 @@ class ListenCommandTest(unittest.TestCase):
         self.assertFalse(res["voice_detected"])
         self.assertFalse(media.recording)  # never started a recording
 
+    def test_listen_result_summary_has_no_base64_blob(self):
+        agent = FakeAgent(FakeMedia(samplerate=16000, channels=1, doa=(42.0, True)))
+        res = _run(NS["_dispatch"](agent, "listen", {"duration": 0.1}, return_result=True))
+        # The human-facing summary is a short line, and the blob lives elsewhere.
+        self.assertIn("Recorded", res["result"])
+        self.assertIn("42", res["result"])
+        self.assertNotIn(res["audio_b64"], res["result"])
+
+
+class DoaToYawTest(unittest.TestCase):
+    def test_passthrough_and_clamp(self):
+        f = NS["_doa_to_yaw"]
+        self.assertEqual(f(0), 0)
+        self.assertEqual(f(45), 45)
+        self.assertEqual(f(120, max_yaw=90), 90)
+        self.assertEqual(f(-120, max_yaw=90), -90)
+
+    def test_normalises_wraparound(self):
+        f = NS["_doa_to_yaw"]
+        self.assertEqual(f(200, max_yaw=180), -160)
+        self.assertEqual(f(-200, max_yaw=180), 160)
+
+    def test_offset_and_invert(self):
+        f = NS["_doa_to_yaw"]
+        self.assertEqual(f(10, offset_deg=5), 15)
+        self.assertEqual(f(30, invert=True), -30)
+
+
+class TurnToSoundTest(unittest.TestCase):
+    def _agent(self, doa):
+        media = FakeMedia(doa=doa)
+        calls: list[dict] = []
+        agent = FakeAgent(media)
+        agent.state["mini"] = types.SimpleNamespace(
+            media=media, goto_target=lambda **kw: calls.append(kw))
+        agent.state["np"] = np
+        agent.state["create_head_pose"] = lambda **kw: ("HEAD", kw)
+        agent.state["motion_lock"] = asyncio.Lock()
+        agent.state["busy"] = False
+        agent.calls = calls
+        return agent
+
+    def test_turns_toward_localized_voice(self):
+        agent = self._agent((42.0, True))
+        res = _run(NS["_dispatch"](agent, "turn_to_sound", {}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["turned"])
+        self.assertAlmostEqual(res["yaw"], 42.0, places=3)
+        self.assertEqual(res["angle_deg"], 42.0)
+        self.assertTrue(agent.calls)          # goto_target actually called
+        self.assertIn("head", agent.calls[0])
+
+    def test_no_doa_does_not_turn(self):
+        agent = self._agent(None)
+        res = _run(NS["_dispatch"](agent, "turn_to_sound", {}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["turned"])
+        self.assertFalse(agent.calls)         # no motion issued
+
+    def test_require_voice_skips_non_voice(self):
+        agent = self._agent((30.0, False))
+        res = _run(NS["_dispatch"](
+            agent, "turn_to_sound", {"require_voice": True}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["turned"])
+        self.assertEqual(res["angle_deg"], 30.0)
+        self.assertFalse(agent.calls)
+
+
+class FakeLLM:
+    """Records the messages it is asked to complete and returns a canned reply."""
+
+    def __init__(self, reply="A desk with a laptop and a blue mug."):
+        self.reply = reply
+        self.calls: list[dict] = []
+
+    async def complete(self, messages, system=""):
+        self.calls.append({"messages": messages, "system": system})
+        return self.reply
+
+
+class DescribeCommandTest(unittest.TestCase):
+    def _agent(self, frame, llm):
+        agent = FakeAgent(FakeMedia(frame=frame))
+        agent.llm = llm
+        return agent
+
+    def test_describe_sends_image_block_and_returns_description(self):
+        frame = np.zeros((16, 16, 3), dtype=np.uint8)
+        llm = FakeLLM("I see a dim room with a chair.")
+        agent = self._agent(frame, llm)
+        # say=False so we exercise vision without the TTS/audio path.
+        res = _run(NS["_dispatch"](agent, "describe", {"say": False}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["description"], "I see a dim room with a chair.")
+        self.assertEqual(res["said"], "I see a dim room with a chair.")
+        # The LLM must have received a real base64 JPEG image block.
+        content = llm.calls[0]["messages"][0]["content"]
+        img = next(b for b in content if b["type"] == "image")
+        self.assertEqual(img["source"]["type"], "base64")
+        self.assertEqual(img["source"]["media_type"], "image/jpeg")
+        self.assertTrue(img["source"]["data"])  # non-empty b64
+
+    def test_describe_passes_the_users_question(self):
+        frame = np.zeros((16, 16, 3), dtype=np.uint8)
+        llm = FakeLLM("Two people.")
+        agent = self._agent(frame, llm)
+        res = _run(NS["_dispatch"](
+            agent, "describe", {"question": "how many people?", "say": False},
+            return_result=True))
+        self.assertTrue(res["ok"])
+        text_block = llm.calls[0]["messages"][0]["content"][0]
+        self.assertEqual(text_block["type"], "text")
+        self.assertIn("how many people", text_block["text"].lower())
+
+    def test_describe_no_frame_is_clear_error(self):
+        agent = self._agent(None, FakeLLM())
+        res = _run(NS["_dispatch"](agent, "describe", {"say": False}, return_result=True))
+        self.assertFalse(res["ok"])
+        self.assertIn("no camera frame", res["error"])
+
+    def test_describe_surfaces_llm_error_instead_of_speaking_it(self):
+        frame = np.zeros((16, 16, 3), dtype=np.uint8)
+        agent = self._agent(frame, FakeLLM("[No LLM configured]"))
+        res = _run(NS["_dispatch"](agent, "describe", {"say": False}, return_result=True))
+        self.assertFalse(res["ok"])
+        self.assertIn("No LLM", res["error"])
+
+
+class ConnectionModeTest(unittest.TestCase):
+    def test_normalize_aliases(self):
+        norm = NS["_normalize_connection_mode"]
+        for word in ("network", "wireless", "wifi", "robot", "DIRECT"):
+            self.assertEqual(norm(word), "network")
+        for word in ("local", "localhost", "app", "sim", "Simulator", "desktop"):
+            self.assertEqual(norm(word), "local")
+        for word in ("", "  ", "auto", "banana", None):
+            self.assertEqual(norm(word), "")
+
+    def test_network_mode_skips_localhost(self):
+        # Wireless: every attempt forces network; none probe localhost first.
+        attempts = NS["_build_connection_attempts"]("192.168.1.42", "", "network")
+        self.assertTrue(attempts)
+        self.assertTrue(all(a.get("connection_mode") == "network" for a in attempts))
+        self.assertEqual(attempts[0]["host"], "192.168.1.42")
+
+    def test_network_mode_without_host(self):
+        attempts = NS["_build_connection_attempts"]("", "", "network")
+        self.assertEqual(attempts, [{"connection_mode": "network"}])
+
+    def test_local_mode_targets_localhost_and_never_forces_network(self):
+        attempts = NS["_build_connection_attempts"]("192.168.1.42", "", "local")
+        self.assertEqual(attempts[0]["host"], "localhost")  # robot_host ignored
+        self.assertTrue(all("connection_mode" not in a for a in attempts))
+
+    def test_auto_mode_preserves_pinned_then_network_fallback(self):
+        attempts = NS["_build_connection_attempts"]("host.local", "", "")
+        self.assertEqual(attempts[0], {"host": "host.local"})
+        self.assertIn({"connection_mode": "network"}, attempts)
+
+    def test_media_backend_threads_into_every_attempt(self):
+        for mode in ("network", "local", ""):
+            attempts = NS["_build_connection_attempts"]("h", "webrtc", mode)
+            self.assertTrue(
+                all(a.get("media_backend") == "webrtc" for a in attempts),
+                msg=f"mode={mode!r} dropped media_backend",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Reachy sound localization (`turn_to_sound`)** — turns the head toward the direction the mic
+  array localizes a sound (`doa` angle → head yaw, clamped, with `offset_deg`/`invert` calibration).
+  "Turn toward the sound", "face the speaker", and "who's talking?" route here. Sensing works
+  whenever the mic is live; the turn itself needs the motors. `listen`/`camera`/`doa` now also
+  return a short human-readable `result` summary so the base64 blob no longer floods the chat.
+- **Reachy vision (`describe`)** — a new `describe` command captures a camera frame, sends it to
+  the vision-capable LLM, and speaks the real description of what the robot sees. "What do you
+  see?", "what's in front of you?", "look around", and questions about the view now route here
+  (deterministically and via the NL planner) instead of the old capture-then-invent-a-line path.
+  Optional `question` asks something specific; `say: false` returns the text without speaking.
+- **Reachy connection mode toggle** — a `connection_mode` config (via `custom/reachy/config` or
+  `REACHY_CONNECTION_MODE`) selects `network` (wireless: connect straight to the robot, skip the
+  localhost probe, no control app needed), `local` (the Reachy Mini control app or simulator on
+  localhost), or the default auto-detect. The active mode is reported in `custom/reachy/state`.
 - **Reachy camera & microphone access** — new `camera`, `listen`, and `doa` commands on the
   reachy-mini agent read the robot's onboard sensors through the SDK media manager. `camera`
   returns one still frame as base64 (JPEG/PNG); `listen` records a short mic-array clip as base64

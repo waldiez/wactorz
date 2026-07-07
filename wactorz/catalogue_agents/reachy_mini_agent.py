@@ -48,6 +48,21 @@ have multiple robots on the LAN, or mDNS is flaky, pin a host once:
 The agent persists it; restart picks it up. Current host is published to
 custom/reachy/state under `robot_host`.
 
+CONNECTION MODE (wireless robot vs. local control app / simulator)
+──────────────────────────────────────────────────────────────────
+Default is auto-detect (localhost first, then the robot). To pin one:
+
+    publish to:  custom/reachy/config
+    payload:     {"connection_mode": "network"}   # wireless: straight to robot
+                 {"connection_mode": "local"}      # Reachy Mini control app / sim
+
+Or set REACHY_CONNECTION_MODE=network|local in the environment. Restart the
+agent to apply. "network" talks directly to the robot over WiFi and skips the
+localhost probe (no control app needed); "local" targets the Reachy Mini
+control app or simulator on localhost. The active mode is published to
+custom/reachy/state under `connection_mode`. Audio routing is set separately by
+media_backend, not by this mode.
+
 TASK PAYLOAD EXAMPLES
 ─────────────────────
 Wake / sleep:
@@ -66,8 +81,15 @@ Play recorded emotion:
     {"cmd": "emotion", "name": "curious1"}
 
 Capture a camera frame (base64 JPEG in the result; add "publish": true to also
-emit it on custom/reachy/camera, or "path": "/tmp/shot.jpg" to save it):
+emit it on custom/reachy/camera, or "path": "/tmp/shot.jpg" to save it). NOTE:
+the frame is NOT saved anywhere unless you pass "path" or "publish":
     {"cmd": "camera"}
+
+Look and SPEAK what the camera sees (sends the frame to the vision LLM, then
+says the real description — not a made-up line). Optional "question" to ask
+something specific; "say": false to get the text without speaking:
+    {"cmd": "describe"}
+    {"cmd": "describe", "question": "how many people are here?"}
 
 Record a short mic clip (base64 WAV + direction of arrival in the result):
     {"cmd": "listen", "duration": 3}
@@ -102,6 +124,56 @@ async def _do(fn, *args, **kwargs):
     return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
 
 
+def _normalize_connection_mode(raw):
+    """Map user-facing connection words to 'network' | 'local' | '' (auto).
+
+    'network'/'wireless' → talk straight to the robot over WiFi (no control app
+    needed). 'local'/'sim' → the Reachy Mini control app or simulator on
+    localhost. Anything unrecognised (including '') means auto-detect.
+    """
+    m = (raw or "").strip().lower()
+    if m in ("network", "wireless", "wifi", "remote", "robot", "direct"):
+        return "network"
+    if m in ("local", "localhost", "app", "control", "control-app", "control_app",
+             "sim", "simu", "simulation", "simulator", "desktop"):
+        return "local"
+    return ""
+
+
+def _build_connection_attempts(robot_host, media_backend, conn_mode):
+    """Ordered ReachyMini(**kwargs) attempts for the requested connection mode.
+
+    conn_mode:
+      'network' — wireless: connect straight to the robot, never probe localhost.
+      'local'   — the Reachy Mini control app / simulator on localhost.
+      ''        — auto: pinned host (if any), then SDK autodetect, then network.
+
+    media_backend (when set) is threaded into every attempt — it, not the
+    connection mode, is what decides whether audio plays on the robot.
+    """
+    base = {"media_backend": media_backend} if media_backend else {}
+    host = (robot_host or "").strip()
+    attempts = []
+    if conn_mode == "network":
+        # Direct to the robot over WiFi; skip the localhost probe entirely.
+        if host:
+            attempts.append({**base, "host": host, "connection_mode": "network"})
+        attempts.append({**base, "connection_mode": "network"})
+    elif conn_mode == "local":
+        # The control app / simulator listens on localhost; a robot_host pin is
+        # the robot's own address, so it is intentionally ignored here.
+        attempts.append({**base, "host": "localhost"})
+        attempts.append({**base})  # autodetect (localhost-first) fallback
+    else:
+        # Auto: pinned host first, then SDK autodetect, then forced network.
+        if host:
+            attempts.append({**base, "host": host})
+            attempts.append({**base, "host": host, "connection_mode": "network"})
+        attempts.append({**base})
+        attempts.append({**base, "connection_mode": "network"})
+    return attempts
+
+
 async def setup(agent):
     # ---- Heavy imports inside setup (never at module level) ----
     import numpy as np
@@ -132,6 +204,11 @@ async def setup(agent):
             agent.persist("media_backend", m)
             agent.state["media_backend"] = m
             await agent.log(f"media_backend updated to {m} — restart agent to apply")
+        if "connection_mode" in payload:
+            c = payload["connection_mode"]
+            agent.persist("connection_mode", c)
+            agent.state["connection_mode"] = _normalize_connection_mode(c) or "auto"
+            await agent.log(f"connection_mode updated to {c} — restart agent to apply")
     agent.subscribe("custom/reachy/config", on_config)
 
     # ---- Open robot with a small fallback chain ----
@@ -152,19 +229,25 @@ async def setup(agent):
                      or _os.environ.get("REACHY_MEDIA_BACKEND") or "").strip()
     agent.state["media_backend"] = media_backend
 
+    # ---- Connection mode (first non-empty wins) ----------------------------
+    #   1. runtime config via custom/reachy/config: {"connection_mode": "..."}
+    #   2. REACHY_CONNECTION_MODE in the environment/.env
+    #   3. "" → auto (SDK autodetect: localhost first, then the robot).
+    # Modes:
+    #   network / wireless — talk straight to the robot over WiFi; never probe
+    #                        localhost. Use this when NO control app / simulator
+    #                        is running on this machine (the common wireless case).
+    #   local / sim        — the Reachy Mini control app or simulator on
+    #                        localhost (handy for a shared demo or headless sim).
+    # NOTE: audio routing is decided by media_backend above, NOT by this mode.
+    conn_mode = _normalize_connection_mode(
+        agent.recall("connection_mode")
+        or _os.environ.get("REACHY_CONNECTION_MODE") or "")
+    agent.state["connection_mode"] = conn_mode or "auto"
+
     mini = None
     last_err = None
-    attempts = []
-    base = {"media_backend": media_backend} if media_backend else {}
-    # Connection: keep auto-detect first (the desktop app's local daemon is the
-    # bridge that actually reaches the robot, same path the dashboard uses), with
-    # a forced-network fallback. The backend choice above — not the connection
-    # mode — is what routes audio to the robot.
-    if robot_host:
-        attempts.append({**base, "host": robot_host})                                 # explicit host pin
-        attempts.append({**base, "host": robot_host, "connection_mode": "network"})
-    attempts.append({**base})                                                          # autodetect (default)
-    attempts.append({**base, "connection_mode": "network"})                            # force network mode
+    attempts = _build_connection_attempts(robot_host, media_backend, conn_mode)
 
     # IMPORTANT: ReachyMini().__enter__() does blocking websocket / media handshakes
     # that take 5–10 seconds. Running it directly here freezes the asyncio event
@@ -301,7 +384,7 @@ async def setup(agent):
     for verb in ("wake", "sleep", "pose", "antennas", "look_at",
                  "look_pixel", "emotion", "set_pose", "bind",
                  "unbind", "list_emotions", "stop", "say", "volume",
-                 "camera", "listen", "doa"):
+                 "camera", "describe", "listen", "doa", "turn_to_sound"):
         def _make_cb(v):
             async def cb(payload):
                 p = dict(payload or {})
@@ -324,6 +407,7 @@ async def setup(agent):
         "bindings": list(agent.state["bindings"].keys()),
         "robot_host":    agent.state.get("robot_host") or "(autodetect)",
         "media_backend": agent.state.get("media_backend") or "default",
+        "connection_mode": agent.state.get("connection_mode", "auto"),
         "volume_level":  agent.state.get("volume_level", 100),
         "muted":         bool(agent.state.get("muted")),
         "ts":            _time.time(),
@@ -346,6 +430,7 @@ async def process(agent):
         "bindings": list(agent.state.get("bindings", {}).keys()),
         "robot_host":    agent.state.get("robot_host") or "(autodetect)",
         "media_backend": agent.state.get("media_backend") or "default",
+        "connection_mode": agent.state.get("connection_mode", "auto"),
         "volume_level":  agent.state.get("volume_level", 100),
         "muted":         bool(agent.state.get("muted")),
         "ts":            _time.time(),
@@ -363,7 +448,10 @@ Robot commands:
   {"cmd":"antennas","left":<deg>,"right":<deg>,"duration":<sec>}
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
   {"cmd":"camera"}                         ← capture one still frame from the robot camera (returns an image)
+  {"cmd":"describe"}                        ← LOOK through the camera and SPEAK a description of what is seen
+  {"cmd":"describe","question":"<q>"}       ← answer a specific question about the current view
   {"cmd":"listen","duration":<sec>}        ← record a short mic clip (returns audio + direction of arrival)
+  {"cmd":"turn_to_sound"}                    ← turn the head toward whatever sound the mic array hears (needs motors)
   {"cmd":"say","text":"<what to say>"}
   {"cmd":"say","text":"<what to say>","voice":"<edge-tts voice name>"}
   {"cmd":"volume","preset":"whisper|normal|louder|presenter"}  ← human speaking modes (whisper=70, normal=85, louder=93, presenter=100)
@@ -434,6 +522,11 @@ Decision rules — CRITICAL:
 - A request without "when/whenever/every/if" is a one-shot — emit the action directly.
 - ONLY add wake/sleep when the user asks for robot motion, an expression,
   or explicitly says wake/sleep. Pure HA requests do NOT need wake/sleep.
+- SEEING / VISION: any question about what the robot sees — the scene, "what is
+  this", "who is here", "read this label", "what colour is X", "look around" —
+  becomes {"cmd":"describe"} (or {"cmd":"describe","question":"<their question>"}).
+  NEVER emit camera+say for this: camera only captures a raw frame to a file/topic,
+  and say would just invent a description. describe actually looks and speaks.
 
 Examples:
 User: "turn on the light"
@@ -472,6 +565,15 @@ User: "react to the light: wake when on, sleep when off"
 
 User: "stop reacting to the light"
   → [{"cmd":"unbind","topic":"homeassistant/state_changes"}]
+
+User: "what do you see?"   (and "what's in front of you", "describe the scene", "look around")
+  → [{"cmd":"describe"}]
+
+User: "how many people are in the room?"   (any question ABOUT the view)
+  → [{"cmd":"describe","question":"how many people are in the room?"}]
+
+User: "turn toward the sound"   (and "face whoever is talking", "look at the noise")
+  → [{"cmd":"turn_to_sound"}]
 
 User: "wiggle your antennas"
   → [{"cmd":"wake"},
@@ -669,19 +771,30 @@ async def handle_task(agent, payload):
                 except Exception:
                     pass
             if "cmd" not in payload and "action" not in payload and stripped:
-                low = stripped.lower().rstrip("!.")
+                low = stripped.lower().rstrip("!.?")
                 # Single-verb shortcuts (no LLM call needed)
                 if   low in ("wake", "wake up"):           payload = {"cmd": "wake"}
                 elif low in ("sleep", "go to sleep"):      payload = {"cmd": "sleep"}
                 elif low in ("stop",):                     payload = {"cmd": "stop"}
                 elif low in ("list emotions", "emotions"): payload = {"cmd": "list_emotions"}
                 # Perception: grab a camera frame / a short mic clip (no LLM needed).
+                elif low in ("what do you see", "what can you see", "what's in front of you",
+                             "what is in front of you", "describe what you see",
+                             "describe the scene", "look around", "what do you see right now",
+                             "tell me what you see", "what's there"):
+                    payload = {"cmd": "describe"}
                 elif low in ("take a photo", "take a picture", "take a snapshot",
                              "snapshot", "photo", "picture", "capture", "camera"):
                     payload = {"cmd": "camera"}
                 elif low in ("listen", "record", "record audio", "take a listen",
                              "what do you hear"):
                     payload = {"cmd": "listen"}
+                elif low in ("turn to the sound", "turn toward the sound",
+                             "turn towards the sound", "face the speaker",
+                             "look toward the sound", "look at the sound",
+                             "turn to the noise", "face the sound",
+                             "who's talking", "who is talking"):
+                    payload = {"cmd": "turn_to_sound"}
                 # Common volume phrases — handled without an LLM round-trip.
                 elif low in ("mute", "silence", "be quiet", "quiet", "shut up", "stop talking"):
                     payload = {"cmd": "volume", "mute": True}
@@ -755,7 +868,7 @@ async def handle_task(agent, payload):
                             summary_parts.append(f"{label} SKIPPED")
                             continue
                         step = next(step_iter, None)
-                        if isinstance(step, dict) and cc == "say" and step.get("said"):
+                        if isinstance(step, dict) and cc in ("say", "describe") and step.get("said"):
                             spoken_replies.append(str(step["said"]))
                         if isinstance(step, dict) and cc == "ha" and step.get("ha_result"):
                             ha_text = str(step["ha_result"]).strip()
@@ -795,9 +908,9 @@ async def handle_task(agent, payload):
                     "cmd": cmd, "_task_id": _tid, "task": _tid}
     result = await _dispatch(agent, cmd, payload, return_result=True)
     if isinstance(result, dict):
-        if cmd == "say" and result.get("said"):
+        if cmd in ("say", "describe") and result.get("said"):
             _queue_spoken_replies(agent, [str(result["said"])])
-            result["result"] = "ran 1 of 1: [say]"
+            result["result"] = f"ran 1 of 1: [{cmd}]"
         result.setdefault("_task_id", _tid)
         result.setdefault("task", _tid)
     return result
@@ -869,8 +982,10 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "look_at":       result = await _look_at(agent, payload)
         elif cmd == "look_pixel":    result = await _look_pixel(agent, payload)
         elif cmd == "camera":        result = await _camera(agent, payload)
+        elif cmd == "describe":      result = await _describe(agent, payload)
         elif cmd == "listen":        result = await _listen(agent, payload)
         elif cmd == "doa":           result = await _doa(agent, payload)
+        elif cmd == "turn_to_sound": result = await _turn_to_sound(agent, payload)
         elif cmd == "emotion":       result = await _emotion(agent, payload)
         elif cmd == "set_pose":      result = await _set_pose(agent, payload)
         elif cmd == "bind":          result = await _bind(agent, payload)
@@ -1646,6 +1761,94 @@ async def _camera(agent, payload):
         result["published"] = "custom/reachy/camera"
     if payload.get("include_b64", True):
         result["image_b64"] = b64
+    # Human-facing summary so the chat shows a line, not the base64 blob.
+    extra = f", saved to {result['path']}" if result.get("path") else ""
+    if result.get("published"):
+        extra += ", published"
+    result["result"] = f"Captured a {w}x{h} {result['format']} image ({len(data)} bytes){extra}."
+    return result
+
+
+async def _vision_describe(agent, b64_jpeg, question):
+    """Ask the vision-capable LLM to describe a base64 JPEG frame.
+
+    Uses the Anthropic image content-block shape, which the configured provider
+    forwards to the model unchanged. Returns the description text, or raises with
+    the provider's error if the LLM is unavailable.
+    """
+    llm = getattr(agent, "llm", None)
+    if llm is None:
+        raise RuntimeError("vision needs an LLM provider (none configured)")
+    system = (
+        "You are the eyes of a Reachy Mini robot. Describe what is ACTUALLY visible "
+        "in the image in a detailed, natural paragraph the robot can say aloud: the "
+        "main objects, any people, the layout, colours, and notable details. Do not "
+        "invent anything you cannot see. If the image is black, blank, or unreadable, "
+        "say exactly that instead of guessing."
+    )
+    content = [
+        {"type": "text", "text": question or "What do you see?"},
+        {"type": "image",
+         "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_jpeg}},
+    ]
+    answer = await llm.complete(messages=[{"role": "user", "content": content}], system=system)
+    answer = (answer or "").strip()
+    # The LLM helper returns sentinel strings like "[No LLM configured]" / "[LLM error: ..]"
+    # instead of raising — surface those as real errors rather than speaking them.
+    if answer.startswith("[") and ("LLM error" in answer or "No LLM" in answer):
+        raise RuntimeError(answer.strip("[]"))
+    return answer
+
+
+async def _describe(agent, payload):
+    """Capture one camera frame, describe it with the vision LLM, and speak the result.
+
+    Unlike camera->say (which would just make up a line), this actually sends the
+    frame to the model, so the spoken answer reflects what the robot really sees.
+
+      {"cmd":"describe"}                          -> capture + vision + speak
+      {"cmd":"describe","question":"how many people?"}  -> answer a specific question
+      {"cmd":"describe","say":false}              -> return the text, don't speak it
+      {"cmd":"describe","path":"C:/shot.jpg"}     -> also save the frame to disk
+      {"cmd":"describe","quality":60}             -> JPEG quality sent to the model (default 85)
+    """
+    media = _media(agent)
+    frame = await _do(media.get_frame)
+    if frame is None:
+        raise RuntimeError(
+            "no camera frame available — this media backend has no video "
+            f"(media_backend='{agent.state.get('media_backend') or 'default'}'). "
+            "Make sure the daemon holds the camera (no HF app running on the robot).")
+    data, w, h = await _do(_encode_frame, frame, "jpeg", int(payload.get("quality", 85)))
+    import base64 as _b64
+    b64 = _b64.b64encode(data).decode("ascii")
+
+    # Save only when explicitly asked (frames are not persisted by default).
+    path = payload.get("path")
+    if path:
+        def _write():
+            with open(path, "wb") as f:
+                f.write(data)
+        await _do(_write)
+
+    question = (payload.get("question") or payload.get("text")
+                or payload.get("prompt") or "What do you see?")
+    answer = await _vision_describe(agent, b64, question)
+    if not answer:
+        answer = "I captured an image but couldn't make out what's in it."
+
+    result = {"description": answer, "result": answer, "said": answer,
+              "width": w, "height": h, "bytes": len(data)}
+    if path:
+        result["path"] = path
+
+    # Speak the real description on the robot (skip with say:false).
+    if payload.get("say", True):
+        try:
+            await _say(agent, {"text": answer})
+        except Exception as e:
+            await agent.log(f"describe: speaking failed ({e}); returning text only",
+                            level="warning")
     return result
 
 
@@ -1763,6 +1966,9 @@ async def _listen(agent, payload):
         result["published"] = "custom/reachy/audio"
     if payload.get("include_b64", True):
         result["audio_b64"] = b64
+    # Human-facing summary so the chat shows a line, not the base64 blob.
+    doa_str = f", sound from {result['doa_deg']:.0f}°" if "doa_deg" in result else ""
+    result["result"] = f"Recorded {actual:.1f}s of audio ({sr} Hz, {ch}ch){doa_str}."
     return result
 
 
@@ -1772,11 +1978,64 @@ async def _doa(agent, payload):
     media = _media(agent)
     doa = await _do(media.get_DoA)
     if doa is None:
-        return {"detected": False}
+        return {"detected": False, "result": "No sound localized."}
     result = {"angle_deg": float(doa[0]), "detected": True}
     if len(doa) > 1:
         result["voice_detected"] = bool(doa[1])
+    v = result.get("voice_detected")
+    vstr = "" if v is None else (", voice detected" if v else ", no voice")
+    result["result"] = f"Sound from {result['angle_deg']:.0f}°{vstr}."
     return result
+
+
+def _doa_to_yaw(angle_deg, max_yaw=90.0, offset_deg=0.0, invert=False):
+    """Map a mic-array direction-of-arrival angle to a head-yaw command (degrees).
+
+    DoA is reported in degrees; we add an optional calibration offset, normalise
+    to [-180, 180], optionally invert (array vs head handedness), then clamp to
+    +/- max_yaw. Head-yaw convention here is left = +, right = -. The offset and
+    invert knobs exist because the array's 0-reference and rotation sense are
+    robot-specific and may need a one-time tune on the real hardware.
+    """
+    a = float(angle_deg) + float(offset_deg)
+    a = ((a + 180.0) % 360.0) - 180.0  # normalise to [-180, 180]
+    if invert:
+        a = -a
+    m = abs(float(max_yaw))
+    return max(-m, min(m, a))
+
+
+async def _turn_to_sound(agent, payload):
+    """Turn the head toward wherever the mic array last localized a sound.
+
+    Sensing (DoA) works whenever the mic is live; the head turn itself needs the
+    motors. If nothing is localized (or require_voice is set and no voice is
+    present), this does nothing rather than snapping to a stale angle.
+
+      {"cmd":"turn_to_sound"}                      -> face the localized sound
+      {"cmd":"turn_to_sound","require_voice":true} -> only turn for a human voice
+      {"cmd":"turn_to_sound","duration":0.6}       -> head-move duration (s)
+      {"cmd":"turn_to_sound","max_yaw":90}         -> clamp the yaw (deg)
+      {"cmd":"turn_to_sound","offset_deg":0,"invert":false} -> one-time calibration
+    """
+    media = _media(agent)
+    doa = await _do(media.get_DoA)
+    if doa is None:
+        return {"detected": False, "turned": False, "result": "No sound to turn toward."}
+    angle = float(doa[0])
+    voice = bool(doa[1]) if len(doa) > 1 else None
+    if payload.get("require_voice") and voice is False:
+        return {"detected": True, "angle_deg": angle, "voice_detected": voice,
+                "turned": False,
+                "result": f"Heard a non-voice sound from {angle:.0f}°; not turning."}
+    yaw = _doa_to_yaw(angle,
+                      max_yaw=float(payload.get("max_yaw", 90.0)),
+                      offset_deg=float(payload.get("offset_deg", 0.0)),
+                      invert=bool(payload.get("invert", False)))
+    await _pose(agent, {"yaw": yaw, "duration": float(payload.get("duration", 0.6))})
+    return {"detected": True, "angle_deg": angle, "voice_detected": voice,
+            "turned": True, "yaw": yaw,
+            "result": f"Turned toward sound at {angle:.0f}° (yaw {yaw:.0f}°)."}
 
 
 # ============================================================

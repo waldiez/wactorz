@@ -1492,12 +1492,12 @@ async def mqtt_listener():
                             await broadcast(
                                 {"type": "patch", "event": log_event, "state": _snapshot()}
                             )
-                            # Agent-originated user-facing message → push to the
-                            # chat panel as a live chat frame, and persist it so
-                            # it survives a browser reload like any other turn.
+                            # Agent-originated user-facing message. The browser already
+                            # renders it from the agents/{id}/chat (the broadcast above)
+                            # so we do NOT broadcast a second frame here. We only persist
+                            # it so it survives a browser reload like any other turn.
                             push = event.get("_push_chat")
                             if push:
-                                await broadcast(push)
                                 try:
                                     if db is not None and push.get("content"):
                                         db.write_chat_log(

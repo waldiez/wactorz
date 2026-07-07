@@ -290,7 +290,7 @@ export class CardDashboard {
         this._evFeed = listen("af-feed-push", detail => {
             const item = detail.item;
             // The same event can arrive from several sources (SQLite seed, WS
-            // log_feed replay, live MQTT/chat); drop exact duplicates so the feed
+            // log_feed replay, live chat); drop exact duplicates so the feed
             // doesn't double up or render out of order on rebuild.
             const key = feedKey(item);
             if (this._feedKeys.has(key)) {

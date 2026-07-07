@@ -344,7 +344,7 @@ export function nodeHeartbeatFeedItem(p: NodeHeartbeatPayload, now = Date.now())
 // ── Extensible raw-topic feed rows ─────────────────────────────────────────
 // Agent topics that are feed-only (not part of the typed MQTTEvents route) reach
 // the browser via the `raw` catch-all. Map `agents/{id}/{suffix}` → a feed row
-// here; surfacing another topic is a single entry + test, no MQTTClient changes.
+// here; surfacing another topic is a single entry + test, no ServerEventRouter changes.
 
 const RAW_AGENT_FEED_MAPPERS: Record<
     string,

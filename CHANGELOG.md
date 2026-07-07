@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Fixed
+
+- **Chat input** — up-arrow history recall now grows the textarea to fit a multi-line message instead of clipping it to one line.
+
 ## [0.5.1] - 2026-07-06
 
 ### Added

@@ -199,4 +199,13 @@ describe("ChatInput history & ghost suggestion", () => {
         h.ci.onKeydown(key("Escape"), h.input, h.select, h.ghost, h.panel);
         expect(h.input.classList.contains("has-suggestion")).toBe(false);
     });
+    it("fires input on history recall so the textarea auto-grows to fit", () => {
+        const h = setup();
+        const grew = vi.fn();
+        h.input.addEventListener("input", grew);
+        h.ci.recordSent("line 1\nline 2\nline 3", h.input);
+        h.ci.onKeydown(key("ArrowUp"), h.input, h.select, h.ghost, h.panel);
+        expect(h.input.value).toBe("line 1\nline 2\nline 3");
+        expect(grew).toHaveBeenCalled();
+    });
 });

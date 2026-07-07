@@ -1,5 +1,4 @@
-"""
-aif_anomaly_agent.py — live anomaly detection over the Sinergym obs stream using
+"""aif_anomaly_agent.py — live anomaly detection over the Sinergym obs stream using
 the AIF-trained detector (detector_aif_v6.pkl). Structural twin of
 sinergym_anomaly_agent.py; only the defaults, identity, and Fuseki IRI differ so
 the two detectors can run side-by-side without clobbering each other's records.

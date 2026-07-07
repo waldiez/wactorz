@@ -3692,6 +3692,22 @@ async def handle_task(agent, payload):
         if target:
             await self.send(target.actor_id, command)
 
+    def _node_running_agent(self, name: str) -> str:
+        """Return the live remote node currently running ``name``, from heartbeat
+        telemetry, or "" if none recently claims it.
+
+        Fallback for when the spawn registry doesn't record the node. Mirrors the
+        freshness window used by ``migrate_agent``.
+        """
+        import time as _t
+
+        for nd_name, nd in self._known_nodes.items():
+            if _t.time() - nd.get("last_seen", 0) >= 30:
+                continue
+            if name in nd.get("agents", []):
+                return nd_name
+        return ""
+
     async def delete_spawned_agent(self, name: str):
         """Permanently delete an agent.
 
@@ -3710,9 +3726,14 @@ async def handle_task(agent, payload):
             per-agent MQTT topics as a defensive second pass — if the runner
             is offline or main is acting alone, the broker is still cleared.
         """
-        # Find node before removing from registry
+        # Find node before removing from registry. If the registry has no record
+        # of the agent (e.g. already pruned), fall back to live heartbeat
+        # telemetry — otherwise a remote agent would take the local-only branch
+        # below and keep running on its node.
         reg = self._get_spawn_registry()
         node = reg.get(name, {}).get("node", "").strip()
+        if not node:
+            node = self._node_running_agent(name)
 
         # Capture/derive the deterministic actor_id BEFORE we tear anything down,
         # so we can purge per-agent retained topics even after the local actor

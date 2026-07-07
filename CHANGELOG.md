@@ -5,17 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
-<<<<<<< HEAD
 ### Changed
 
 - **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant
   activity now stream to the browser as server-push over `/ws`; the dashboard no longer opens its own
   MQTT connection to the broker, and the browser receives no broker credentials.
-=======
+
 ### Fixed
 
 - **Chat input** — up-arrow history recall now grows the textarea to fit a multi-line message instead of clipping it to one line.
->>>>>>> origin/dev
 
 ## [0.5.1] - 2026-07-06
 

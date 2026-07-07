@@ -46,6 +46,9 @@ export class DashboardChat {
     private _streamTarget: string | null = null;
     private _streamText = "";
     private _lastSentTarget = "main-actor";
+    // True once the user has explicitly chosen a target. Until then the picker
+    // prefers main (so an agent registering before main on startup can't stick).
+    private _userPicked = false;
 
     private _historyLoaded = new Set<string>();
     private _selfDispatching = false;
@@ -56,6 +59,7 @@ export class DashboardChat {
         agentNames: () => messageableNames(this.host.agents.values()),
         setTarget: (name: string) => {
             this.chatTarget = name;
+            this._userPicked = true;
         },
         send: (input, select) => this._sendMessage(input, select),
     });
@@ -79,6 +83,7 @@ export class DashboardChat {
     /** Switch the open thread to `agent` (wactor-card "Chat" button). */
     setTarget(name: string): void {
         this.chatTarget = name;
+        this._userPicked = true;
     }
 
     /** Release the mic if a recording was in progress (dashboard hidden). */
@@ -193,6 +198,7 @@ export class DashboardChat {
             return;
         }
         this.chatTarget = name;
+        this._userPicked = true;
         this.renderSidebar();
         this.renderChatPaneHeader();
         this.renderChatThread();
@@ -340,6 +346,7 @@ export class DashboardChat {
             target: () => this.chatTarget,
             setTarget: name => {
                 this.chatTarget = name;
+                this._userPicked = true;
             },
             populateSelect: select => this._populateSelect(select),
             send: (input, select) => this._sendMessage(input, select),
@@ -403,7 +410,11 @@ export class DashboardChat {
 
     /** Keep chatTarget on a live messageable agent (prefers main; never an id). */
     syncChatTarget(): void {
-        this.chatTarget = pickChatTarget([...this.host.agents.values()], this.chatTarget);
+        this.chatTarget = pickChatTarget(
+            [...this.host.agents.values()],
+            this.chatTarget,
+            this._userPicked,
+        );
     }
 
     private _sendMessage(input: HTMLTextAreaElement, select: HTMLSelectElement): void {

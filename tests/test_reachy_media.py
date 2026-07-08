@@ -527,6 +527,29 @@ class TrackSoundToggleTest(unittest.TestCase):
         self.assertFalse(agent.state["tracking"])
 
 
+class NotConnectedMessageTest(unittest.TestCase):
+    """The 'not connected' reason must be actionable: surface the real connect
+    error and how to run without the control app."""
+
+    def test_surfaces_last_connect_error_and_network_hint(self):
+        agent = FakeAgent(FakeMedia())
+        agent.state["mini"] = None
+        agent.state["last_connect_error"] = "mDNS lookup failed for reachy-mini.local"
+        ok, reason = NS["_is_connected"](agent)
+        self.assertFalse(ok)
+        self.assertIn("mDNS lookup failed", reason)
+        self.assertIn("REACHY_CONNECTION_MODE=network", reason)
+        self.assertIn("REACHY_ROBOT_HOST", reason)
+
+    def test_no_handle_without_error_still_hints_network(self):
+        agent = FakeAgent(FakeMedia())
+        agent.state["mini"] = None
+        ok, reason = NS["_is_connected"](agent)
+        self.assertFalse(ok)
+        self.assertIn("no SDK handle", reason)
+        self.assertIn("REACHY_ROBOT_HOST", reason)
+
+
 class BridgeToMainTest(unittest.TestCase):
     """Reachy-as-interface: input that isn't a robot/HA command is piped to the
     main orchestrator and the answer comes back. Robot offline here, so we

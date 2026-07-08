@@ -36,6 +36,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Reachy without the Reachy Mini control app** - the reachy-mini agent can now connect
+  straight to a powered-on robot over WiFi with no control app running on your machine:
+  set `REACHY_CONNECTION_MODE=network` plus the new `REACHY_ROBOT_HOST=<ip|hostname>` env
+  var. The env var is the reliable way to pin the robot (survives a wiped state folder, no
+  config topic or mDNS needed). And when a connection can't be made, the reason is no
+  longer an opaque "no SDK handle": the real connect error and the exact env vars to set
+  now appear in the startup log AND in the "reachy not connected: ..." reply to any robot
+  command, so you don't have to hunt logs. `.env.template` documents the new keys.
 - **Reachy as a Wactorz interface (text bridge)** - anything you say to the reachy-mini
   agent that it can't turn into a robot or Home Assistant command is now piped through the
   MAIN orchestrator (full intent routing, HA, and sub-agent delegation - not just a bare

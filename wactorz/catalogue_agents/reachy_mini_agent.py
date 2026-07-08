@@ -47,13 +47,27 @@ SPAWN
 PINNING THE HOST (Wireless only — optional)
 ───────────────────────────────────────────
 The SDK autodetects Lite vs Wireless and chooses the right transport. If you
-have multiple robots on the LAN, or mDNS is flaky, pin a host once:
+have multiple robots on the LAN, or mDNS is flaky, pin a host:
 
-    publish to:  custom/reachy/config
-    payload:     {"robot_host": "192.168.1.42"}
+    env:         REACHY_ROBOT_HOST=192.168.1.42   (or reachy-mini.local)
+    or publish:  custom/reachy/config  {"robot_host": "192.168.1.42"}
 
-The agent persists it; restart picks it up. Current host is published to
-custom/reachy/state under `robot_host`.
+The env var is the reliable choice when running WITHOUT the control app and it
+survives a wiped state folder; the config-topic value persists across restarts.
+Current host is published to custom/reachy/state under `robot_host`.
+
+RUN WITHOUT THE REACHY MINI CONTROL APP (direct to the robot over WiFi)
+──────────────────────────────────────────────────────────────────────
+The control app is only needed for `connection_mode=local` (or the simulator).
+To drive the powered-on robot directly, with no app running on your machine:
+
+    REACHY_CONNECTION_MODE=network
+    REACHY_ROBOT_HOST=<robot ip or reachy-mini.local>
+
+Set both in .env and restart the agent. `network` skips the localhost probe and
+connects straight to the robot's on-board daemon; pinning the host avoids
+depending on mDNS. If it still can't connect, the failure reason is now in the
+agent log AND in the "reachy not connected: …" reply to any robot command.
 
 CONNECTION MODE (wireless robot vs. local control app / simulator)
 ──────────────────────────────────────────────────────────────────
@@ -188,13 +202,17 @@ async def setup(agent):
     from reachy_mini.utils import create_head_pose
 
     # ---- Resolve robot host (Wireless on LAN OR Lite via USB) ----
-    # Priority: persisted robot_host  >  agent.recall fallback  >  autodetect.
+    # Priority: persisted robot_host  >  REACHY_ROBOT_HOST env  >  autodetect.
     # The user can pin it any of these ways:
-    #   1. add "robot_host": "reachy-mini.local" (or IP) to the spawn config
-    #      and call: agent.persist("robot_host", "reachy-mini.local") from a setup hook
-    #   2. publish once to custom/reachy/config: {"robot_host": "192.168.1.42"}
+    #   1. publish once to custom/reachy/config: {"robot_host": "192.168.1.42"}
+    #      (persists across restarts)
+    #   2. set REACHY_ROBOT_HOST=reachy-mini.local (or an IP) in the environment
+    #      /.env — the reliable way to run WITHOUT the control app and without
+    #      relying on mDNS, and it survives a wiped state folder.
     #   3. leave blank — SDK autodetect chooses Lite (localhost) vs Wireless (LAN).
-    robot_host = agent.recall("robot_host") or ""
+    import os as _os
+    robot_host = (agent.recall("robot_host")
+                  or _os.environ.get("REACHY_ROBOT_HOST") or "").strip()
     agent.state["robot_host"] = robot_host
 
     # Live update channel for the host (no restart needed)
@@ -287,9 +305,21 @@ async def setup(agent):
         # and so users get a friendly "reachy not connected" instead of a crash
         # loop. Setup() must NOT raise — the supervisor would auto-restart us.
         agent.state["mini"] = None
+        def _descr(kw):
+            parts = []
+            if kw.get("host"):
+                parts.append(f"host={kw['host']}")
+            if kw.get("connection_mode"):
+                parts.append(kw["connection_mode"])
+            return "+".join(parts) or "autodetect(localhost-first)"
+        tried = ", ".join(_descr(kw) for kw in attempts) or "autodetect"
         await agent.log(
-            f"Reachy daemon unreachable. Agent will stay up and refuse robot "
-            f"commands with 'reachy not connected'. Last error: {last_err}",
+            f"Reachy daemon unreachable (tried: {tried}). Last error: {last_err}. "
+            f"Agent stays up and refuses robot commands with 'reachy not connected'. "
+            f"To run WITHOUT the Reachy Mini control app, set REACHY_CONNECTION_MODE=network "
+            f"and REACHY_ROBOT_HOST=<robot ip/hostname> in your .env (or publish "
+            f'{{"connection_mode":"network","robot_host":"<ip>"}} to custom/reachy/config), '
+            f"then restart the agent.",
             level="warning",
         )
     else:
@@ -1024,7 +1054,15 @@ def _is_connected(agent):
     """Quick check that the SDK handle is alive. Returns (ok, reason)."""
     mini = agent.state.get("mini")
     if mini is None:
-        return False, "reachy not connected (no SDK handle)"
+        # Surface WHY setup couldn't connect + how to run without the control app,
+        # instead of an opaque "no SDK handle" the user has to hunt logs for.
+        err = agent.state.get("last_connect_error")
+        base = f"reachy not connected: {err}" if err else "reachy not connected (no SDK handle)"
+        return False, (
+            base + " — to run without the Reachy Mini control app, set "
+            "REACHY_CONNECTION_MODE=network and REACHY_ROBOT_HOST=<robot ip/hostname> "
+            "and restart the agent"
+        )
     # The SDK exposes _connected / _is_connected / ws on various versions — be tolerant.
     for attr in ("_connected", "is_connected", "connected"):
         v = getattr(mini, attr, None)

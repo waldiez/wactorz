@@ -194,7 +194,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         logger.info(f"[{self.name}] Restoring {len(pending)} agent(s): {list(pending.keys())}")
         for name, config in pending.items():
-            node = config.get("node", "").strip()
+            node = (config.get("node") or "").strip()
             if node:
                 # Remote agent — re-publish spawn to its node; no local object expected
                 logger.info(f"[{self.name}] Re-spawning remote agent '{name}' on node '{node}'")
@@ -1981,7 +1981,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         everything local is handled by the shared ``SpawnMixin`` so main and the
         planner construct agents identically.
         """
-        node = config.get("node", "").strip()
+        node = (config.get("node") or "").strip()
         if node:
             return await self._spawn_remote(config, node, save)
         return await self._spawn_local_from_config(config, register=save)

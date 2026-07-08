@@ -707,7 +707,89 @@ def _build_catalog() -> dict:
             "code": code,
         }
         logger.info("[catalog] Loaded sinergym-anomaly recipe")
+        
+    # ── comfort-optimizer ─────────────────────────────────────────────────────
+    code = _load_recipe("comfort_optimizer_agent.py")
+    if code:
+        catalog["comfort-optimizer"] = {
+            "name": "comfort-optimizer",
+            "type": "dynamic",
+            "description": (
+                "Discovers the site's devices purely from collected data, mines "
+                "behavior patterns, and uses the LLM to propose optimization "
+                "opportunities (control loops, rules, data gaps). For the chosen "
+                "control loop it designs the AIF model (A/C/D; B warm-started from "
+                "measured rates and kept learnable) and spawns the aif-agent."
+            ),
+            "capabilities": [
+                "comfort_optimization",
+                "pattern_analysis",
+                "model_design",
+                "active_inference",
+                "commissioning",
+                "device_discovery",
+            ],
+            "input_schema": {
+                "action": "str — optimize|analyze|status",
+                "goal": "str — free-text user goal, e.g. 'save energy', 'comfort first'",
+                "hours": "float — history window to analyze (default 24)",
+                "dry_run": "bool — analyze + design but do NOT spawn (approval flow)",
+                "opportunity": "int|str — pick a specific proposed opportunity (index or title)",
+                "comfort_when": "str — occupied|unoccupied; overrides the inferred preference",
+                "comfort_band": "[lo, hi] — °C; overrides the inferred band",
+                "aif_name": "str — name for the spawned controller (default 'aif-ac')",
+                "node": "str — node to spawn the aif-agent on (default: local)",
+                "tick_seconds": "int — control tick (default 900)",
+                "propose_every_min": "int — proposal cadence k (default 15)",
+            },
+            "output_schema": {
+                "inventory": "dict — discovered entities and their data profiles",
+                "patterns": "dict — mined correlations, activity, responses, energy",
+                "opportunities": "list — LLM-proposed optimizations (ranked)",
+                "aif_config": "dict — the designed spawn config (A/B/C/D + binding)",
+                "spawned": "bool",
+                "llm_used": "bool",
+                "result": "str — human-readable report",
+            },
+            "poll_interval": 3600,
+            "code": code,
+        }
 
+    # ── aif-agent ─────────────────────────────────────────────────────────────
+    code = _load_recipe("active_inference_ac_agent.py")
+    if code:
+        catalog["aif-agent"] = {
+            "name": "aif-agent",
+            "type": "dynamic",
+            "description": (
+                "Generic active-inference controller (proposal-only). Regulates any "
+                "quantity (°C, watts, lux…) bound by the comfort-optimizer: builds a "
+                "state grid from the sensor's observed range, plans by expected free "
+                "energy (comfort · energy · curiosity), learns B online, and every k "
+                "minutes publishes the proposed actuation together with its "
+                "explanation. Normally spawned by comfort-optimizer with a full config."
+            ),
+            "capabilities": [
+                "active_inference",
+                "adaptive_control",
+                "explainable_ai",
+                "proposals",
+            ],
+            "input_schema": {
+                "action": "str — propose|status|explain|configure",
+                "comfort_when": "str — occupied|unoccupied (configure)",
+                "comfort_band": "[lo, hi] — in the regulated quantity's units (configure)",
+                "comfort_weight": "float (configure)",
+                "energy_weight": "float (configure)",
+            },
+            "output_schema": {
+                "decision": "dict — proposed action call + explanation (beliefs, EFE terms)",
+                "result": "str — human-readable decision text",
+            },
+            "poll_interval": 3600,
+            "code": code,
+        }
+        
     # ── aif-anomaly ────────────────────────────────────────────────────
     code = _load_recipe("aif_anomaly_agent.py")
     if code:

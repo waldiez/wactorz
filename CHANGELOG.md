@@ -45,6 +45,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Reachy `shutup` / "stop talking"** - cut the current utterance immediately, instead
+  of being stuck listening to a long spoken reply with no way to stop it. `{"cmd":"shutup"}`
+  (or "shut up" / "stop talking" / "be quiet") stops playback now; `{"cmd":"stop"}` also
+  cuts speech (on top of motion and sound-tracking). Distinct from volume `mute`, which is
+  persistent. Long spoken replies (`describe`, and the main-interface bridge) now play
+  non-blocking so a "shut up" typed while Reachy is talking actually gets through - the
+  actor mailbox is serial, so a blocking utterance used to freeze it until it finished.
+  Verbose command output (e.g. `diag`) is returned to chat only and never spoken.
 - **Reachy `diag` command** - diagnoses "the robot won't move". Motion commands are
   fire-and-forget over the websocket, so a clean `goto_target` only means the daemon
   RECEIVED the command. `{"cmd":"diag"}` (or "why won't you move") reports the SDK vs

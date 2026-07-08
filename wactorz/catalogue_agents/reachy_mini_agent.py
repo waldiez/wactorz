@@ -96,6 +96,11 @@ Motor torque (the control app's enable/disable — needed to move at all):
     # robot TALKS but won't MOVE, its torque is off — this is the toggle. Plain
     # English "enable motors" / "go limp" work too.
 
+Stop talking right now (cut the current utterance):
+    {"cmd": "shutup"}    # or say "shut up" / "stop talking" / "be quiet"
+    # Different from volume mute (persistent): shutup cuts what's playing NOW.
+    # {"cmd":"stop"} also cuts speech (plus motion and sound-tracking).
+
 Diagnose "won't move" (daemon version vs SDK + a real move self-test):
     {"cmd": "diag"}      # or say "diag" / "why won't you move"
 
@@ -386,6 +391,9 @@ async def setup(agent):
     agent.state["busy"] = False
     agent.state["awake"] = False
     agent.state["last_cmd"] = None
+    # Speech interrupt state — a 'shutup'/'stop' sets stop_speaking to cut a say.
+    agent.state["stop_speaking"] = False
+    agent.state["_speaking"] = False
 
     # ---- Continuous sound tracking (opt-in, off by default) ----
     agent.state["tracking"] = False
@@ -444,7 +452,7 @@ async def setup(agent):
     # Convenience: per-verb topics rewrite payload through the same dispatcher.
     for verb in ("wake", "sleep", "pose", "antennas", "look_at",
                  "look_pixel", "emotion", "motors", "diag", "set_pose", "bind",
-                 "unbind", "list_emotions", "stop", "say", "volume",
+                 "unbind", "list_emotions", "stop", "shutup", "say", "volume",
                  "camera", "describe", "listen", "doa", "turn_to_sound",
                  "track_sound"):
         def _make_cb(v):
@@ -887,8 +895,14 @@ async def handle_task(agent, payload):
                              "why won't you move", "why wont you move", "why aren't you moving",
                              "why arent you moving", "run diagnostics"):
                     payload = {"cmd": "diag"}
-                # Common volume phrases — handled without an LLM round-trip.
-                elif low in ("mute", "silence", "be quiet", "quiet", "shut up", "stop talking"):
+                # "Stop talking NOW" — cut the current utterance (not persistent
+                # mute). This is the shutup the user reaches for mid-sentence.
+                elif low in ("shut up", "shutup", "stop talking", "stop speaking",
+                             "be quiet", "quiet", "hush", "enough", "silence",
+                             "stop it", "that's enough", "thats enough"):
+                    payload = {"cmd": "shutup"}
+                # Persistent volume mute (stays muted until unmuted).
+                elif low in ("mute", "mute yourself"):
                     payload = {"cmd": "volume", "mute": True}
                 elif low in ("unmute", "sound on", "speak up", "speak up again"):
                     payload = {"cmd": "volume", "mute": False}
@@ -1059,7 +1073,8 @@ async def _bridge_to_main(agent, text, task_id=None):
     ok_link, _reason = _is_connected(agent)
     if ok_link:
         try:
-            await _say(agent, {"text": reply})
+            # Non-blocking so a "shut up" can interrupt a long spoken answer.
+            await _say(agent, {"text": reply, "await_playback": False})
             spoke = True
         except Exception as e:
             await agent.log(f"bridge speak failed: {e}", level="warning")
@@ -1144,6 +1159,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "unbind":        result = await _unbind(agent, payload)
         elif cmd == "list_emotions": result = {"emotions": agent.state.get("emotion_names", [])}
         elif cmd == "stop":          result = await _stop(agent)
+        elif cmd == "shutup":        result = await _shutup(agent, payload)
         elif cmd == "say":           result = await _say(agent, payload)
         elif cmd == "volume":        result = await _volume(agent, payload)
         elif cmd == "ha":            result = await _ha(agent, payload)
@@ -1480,9 +1496,46 @@ async def _set_pose(agent, payload):
     return {}
 
 
+async def _stop_audio(agent):
+    """Halt any in-progress speech immediately (best-effort across backends).
+
+    Sets stop_speaking so an interruptible say-wait bails, then tells the audio
+    backend to stop the current playback (GStreamer local OR the WebRTC/robot
+    speaker). Runs on the concurrent per-verb MQTT listener, so it can cut audio
+    even while a say is otherwise holding the (serial) actor mailbox.
+    """
+    agent.state["stop_speaking"] = True
+    mini = agent.state.get("mini")
+    if mini is None:
+        return False
+    media = getattr(mini, "media", None) or getattr(mini, "media_manager", None)
+    audio = getattr(media, "audio", None) if media else None
+    stopped = False
+    for obj, meth in ((audio, "stop_playing"), (media, "stop_playing"),
+                      (media, "stop_sound"), (audio, "stop_sound")):
+        fn = getattr(obj, meth, None) if obj is not None else None
+        if callable(fn):
+            try:
+                await _do(fn)
+                stopped = True
+            except Exception as e:
+                await agent.log(f"{meth} failed: {e}", level="warning")
+    agent.state["_speaking"] = False
+    return stopped
+
+
+async def _shutup(agent, payload=None):
+    """Stop talking right now — cut the current utterance. Plain English 'shut
+    up' / 'stop talking' / 'be quiet' route here (vs. 'mute' which is volume)."""
+    stopped = await _stop_audio(agent)
+    return {"stopped_speaking": stopped,
+            "result": "Stopped talking." if stopped else "Nothing was playing."}
+
+
 async def _stop(agent):
     """Best-effort motion abort — not all SDK versions have a stop primitive, so we re-target current pose."""
     agent.state["tracking"] = False  # halt continuous sound tracking, if running
+    await _stop_audio(agent)          # a full 'stop' also cuts any speech
     mini = agent.state["mini"]
     # If the SDK exposes a stop, use it.
     fn = getattr(mini, "stop", None) or getattr(mini, "cancel", None)
@@ -1644,16 +1697,28 @@ async def _say(agent, payload):
                 pass
             play_path = boosted
 
+    # Clear any stale 'shutup' request from a previous utterance before we start.
+    agent.state["stop_speaking"] = False
+
     # -- Play through the robot's speaker (non-blocking GStreamer playbin) --
     await _do(media.play_sound, play_path)
+    agent.state["_speaking"] = True
 
     # play_sound returns immediately; block for the utterance's length so a
     # following say (or volume change) in the same plan doesn't stomp this one
     # mid-word. Opt out with {"await_playback": false} for a single fire-and-
-    # forget say.
+    # forget say. The wait is INTERRUPTIBLE: a concurrent 'shutup'/'stop' sets
+    # stop_speaking (and cuts the audio), so a long utterance ends early instead
+    # of blocking for its full length.
     pad = _say_playback_pad(speech_seconds, payload)
-    if pad:
-        await asyncio.sleep(pad)
+    waited = 0.0
+    while waited < pad:
+        if agent.state.get("stop_speaking"):
+            break
+        chunk = min(0.1, pad - waited)
+        await asyncio.sleep(chunk)
+        waited += chunk
+    agent.state["_speaking"] = False
 
     # Clean up the previous utterance now that a new one is playing.
     prev = agent.state.get("_say_tmp")
@@ -2169,9 +2234,12 @@ async def _describe(agent, payload):
         result["path"] = path
 
     # Speak the real description on the robot (skip with say:false).
+    # await_playback:false so this (often long) utterance doesn't hold the serial
+    # actor mailbox — that way a "shut up" typed while it's talking gets through
+    # and can cut it off.
     if payload.get("say", True):
         try:
-            await _say(agent, {"text": answer})
+            await _say(agent, {"text": answer, "await_playback": False})
         except Exception as e:
             await agent.log(f"describe: speaking failed ({e}); returning text only",
                             level="warning")

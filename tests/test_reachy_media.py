@@ -600,6 +600,42 @@ class MotorsCommandTest(unittest.TestCase):
         self.assertEqual(order, ["enable", "wake"])  # torque on, THEN move
 
 
+class ShutupTest(unittest.TestCase):
+    """'shut up' must cut the current utterance immediately."""
+
+    def _agent(self):
+        calls = []
+        agent = FakeAgent(FakeMedia())
+        audio = types.SimpleNamespace(stop_playing=lambda: calls.append("stop_playing"))
+        agent.state["mini"] = types.SimpleNamespace(media=types.SimpleNamespace(audio=audio))
+        agent.calls = calls
+        return agent
+
+    def test_shutup_stops_playback_and_sets_flag(self):
+        agent = self._agent()
+        res = _run(NS["_dispatch"](agent, "shutup", {}, return_result=True))
+        self.assertTrue(res["stopped_speaking"])
+        self.assertEqual(agent.calls, ["stop_playing"])
+        self.assertTrue(agent.state["stop_speaking"])  # in-flight say will bail
+        self.assertFalse(agent.state["_speaking"])
+
+    def test_stop_command_also_cuts_audio(self):
+        agent = self._agent()
+        agent.state["mini"].stop = lambda: None  # SDK motion-stop present
+        agent.state["tracking"] = True
+        res = _run(NS["_dispatch"](agent, "stop", {}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertIn("stop_playing", agent.calls)   # speech cut too
+        self.assertFalse(agent.state["tracking"])    # and tracking halted
+
+    def test_shutup_when_nothing_playing_is_graceful(self):
+        agent = FakeAgent(FakeMedia())
+        agent.state["mini"] = types.SimpleNamespace(media=types.SimpleNamespace(audio=None))
+        res = _run(NS["_dispatch"](agent, "shutup", {}, return_result=True))
+        self.assertFalse(res["stopped_speaking"])
+        self.assertTrue(agent.state["stop_speaking"])
+
+
 class DiagCommandTest(unittest.TestCase):
     """`diag` turns 'he didn't move' into signal: daemon version vs SDK, and a
     real move-then-recheck of joint angles."""

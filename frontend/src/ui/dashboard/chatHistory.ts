@@ -10,7 +10,7 @@
  * reconciling optimistic user echoes with their persisted copies.
  */
 import type { ChatMessage } from "../../types/agent";
-import { toMs } from "../../mqtt/MQTTClient";
+import { toMs } from "../../time";
 
 function ingressBase(): string {
     return window.__WACTORZ_INGRESS_PATH ?? "";

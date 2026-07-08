@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Changed
+
+- **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant
+  activity now stream to the browser as server-push over `/ws`; the dashboard no longer opens its own
+  MQTT connection to the broker, and the browser receives no broker credentials.
+
 ### Fixed
 
 - **Remote agent vanish-detection** — a remote agent missing from a single node heartbeat is no longer pruned from the registry (which broke delete and node-reboot recovery); pruning now needs several consecutive misses, and never touches an agent that hasn't appeared yet or has migrated away.

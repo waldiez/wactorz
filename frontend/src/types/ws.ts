@@ -5,7 +5,7 @@
 /**
  * Wire contracts for the monitor server's `/ws` endpoint — the data shapes the
  * server broadcasts (state patches, snapshot totals, log-feed entries). The
- * `WSChatClient` consumes these and the mappers in `agents/mapping.ts` turn them
+ * `WSClient` consumes these and the mappers in `agents/mapping.ts` turn them
  * into UI models. Callback/handler signatures stay with the client.
  */
 

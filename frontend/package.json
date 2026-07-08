@@ -25,8 +25,7 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@waldiez/wid": "github:waldiez/wid#69164d3",
-    "mqtt": "^5.15.1"
+    "@waldiez/wid": "github:waldiez/wid#7681bb3"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.9",

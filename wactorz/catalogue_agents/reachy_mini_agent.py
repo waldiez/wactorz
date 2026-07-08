@@ -340,6 +340,11 @@ async def setup(agent):
     agent.state["awake"] = False
     agent.state["last_cmd"] = None
 
+    # ---- Continuous sound tracking (opt-in, off by default) ----
+    agent.state["tracking"] = False
+    agent.state["track_cfg"] = {}
+    agent.state["track_last_target"] = None
+
     # ---- Reactive bindings ----
     # bindings :: { topic_pattern: { 'when': {field: value}, 'do': {cmd, payload} } }
     # Loaded from persistent state so they survive restarts.
@@ -384,7 +389,8 @@ async def setup(agent):
     for verb in ("wake", "sleep", "pose", "antennas", "look_at",
                  "look_pixel", "emotion", "set_pose", "bind",
                  "unbind", "list_emotions", "stop", "say", "volume",
-                 "camera", "describe", "listen", "doa", "turn_to_sound"):
+                 "camera", "describe", "listen", "doa", "turn_to_sound",
+                 "track_sound"):
         def _make_cb(v):
             async def cb(payload):
                 p = dict(payload or {})
@@ -451,7 +457,9 @@ Robot commands:
   {"cmd":"describe"}                        ← LOOK through the camera and SPEAK a description of what is seen
   {"cmd":"describe","question":"<q>"}       ← answer a specific question about the current view
   {"cmd":"listen","duration":<sec>}        ← record a short mic clip (returns audio + direction of arrival)
-  {"cmd":"turn_to_sound"}                    ← turn the head toward whatever sound the mic array hears (needs motors)
+  {"cmd":"turn_to_sound"}                    ← turn ONCE toward whatever sound the mic array hears (needs motors)
+  {"cmd":"track_sound","on":true}            ← KEEP turning toward whoever is speaking (continuous, until stopped)
+  {"cmd":"track_sound","on":false}           ← stop the continuous sound-tracking
   {"cmd":"say","text":"<what to say>"}
   {"cmd":"say","text":"<what to say>","voice":"<edge-tts voice name>"}
   {"cmd":"volume","preset":"whisper|normal|louder|presenter"}  ← human speaking modes (whisper=70, normal=85, louder=93, presenter=100)
@@ -527,6 +535,14 @@ Decision rules — CRITICAL:
   becomes {"cmd":"describe"} (or {"cmd":"describe","question":"<their question>"}).
   NEVER emit camera+say for this: camera only captures a raw frame to a file/topic,
   and say would just invent a description. describe actually looks and speaks.
+- HEARING / SOUND-FACING: a ONE-OFF "turn toward the sound/voice", "look at whoever
+  just spoke", "face the noise" → {"cmd":"turn_to_sound"}. A CONTINUOUS "KEEP turning
+  toward whoever is speaking", "follow the speaker", "track the voices", "as the
+  students present, look at each one" → {"cmd":"track_sound","on":true}. To end it —
+  "stop tracking/following the sound/voices", "stop turning toward the sound" →
+  {"cmd":"track_sound","on":false}. Continuous tracking is OPT-IN: only emit
+  track_sound on=true when the user clearly wants an ongoing behaviour, never for a
+  single turn.
 
 Examples:
 User: "turn on the light"
@@ -574,6 +590,12 @@ User: "how many people are in the room?"   (any question ABOUT the view)
 
 User: "turn toward the sound"   (and "face whoever is talking", "look at the noise")
   → [{"cmd":"turn_to_sound"}]
+
+User: "keep turning toward whoever is talking"   (and "follow the speaker", "track the voices as we present")
+  → [{"cmd":"track_sound","on":true}]
+
+User: "stop following the voices"   (and "stop tracking the sound", "quit turning toward the noise")
+  → [{"cmd":"track_sound","on":false}]
 
 User: "wiggle your antennas"
   → [{"cmd":"wake"},
@@ -929,6 +951,7 @@ def _queue_spoken_replies(agent, spoken_replies):
 
 
 async def cleanup(agent):
+    agent.state["tracking"] = False  # stop the tracking loop on shutdown
     mini = agent.state.get("mini")
     if not mini:
         return
@@ -986,6 +1009,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "listen":        result = await _listen(agent, payload)
         elif cmd == "doa":           result = await _doa(agent, payload)
         elif cmd == "turn_to_sound": result = await _turn_to_sound(agent, payload)
+        elif cmd == "track_sound":   result = await _track_sound(agent, payload)
         elif cmd == "emotion":       result = await _emotion(agent, payload)
         elif cmd == "set_pose":      result = await _set_pose(agent, payload)
         elif cmd == "bind":          result = await _bind(agent, payload)
@@ -1039,6 +1063,7 @@ async def _sleep(agent):
     """Animated 'sleep' — head droops, antennas fall. We DO NOT call mini.goto_sleep()
     because that disables motors and often loses the daemon connection, requiring a
     full agent restart. This is purely cosmetic."""
+    agent.state["tracking"] = False  # a sleeping robot shouldn't chase sounds
     mini = agent.state["mini"]
     np   = agent.state["np"]
     create_head_pose = agent.state["create_head_pose"]
@@ -1205,6 +1230,7 @@ async def _set_pose(agent, payload):
 
 async def _stop(agent):
     """Best-effort motion abort — not all SDK versions have a stop primitive, so we re-target current pose."""
+    agent.state["tracking"] = False  # halt continuous sound tracking, if running
     mini = agent.state["mini"]
     # If the SDK exposes a stop, use it.
     fn = getattr(mini, "stop", None) or getattr(mini, "cancel", None)
@@ -1241,6 +1267,21 @@ def _voice_for_text(text, default_voice):
     if el > 0 and el >= latin and not default_voice.lower().startswith("el-"):
         return "el-GR-AthinaNeural"
     return default_voice
+
+
+def _say_playback_pad(speech_seconds, payload):
+    """Seconds to wait after starting playback so back-to-back says don't stomp.
+
+    play_sound is fire-and-forget, so without a wait a second utterance cuts the
+    first off mid-word (and any volume change between them lands on the wrong
+    one). Returns 0 when the caller opts out with await_playback:false, or when
+    the duration is unknown. tail_pad covers trailing silence / daemon latency.
+    """
+    if not payload.get("await_playback", True):
+        return 0.0
+    if not speech_seconds or speech_seconds <= 0:
+        return 0.0
+    return float(speech_seconds) + float(payload.get("tail_pad", 0.35))
 
 
 async def _say(agent, payload):
@@ -1319,7 +1360,20 @@ async def _say(agent, payload):
 
     raw_path = os.path.join(tempfile.gettempdir(), f"reachy_say_{uuid.uuid4().hex}.mp3")
     communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(raw_path)
+    # Stream (what .save() does internally) so we can capture the total speech
+    # duration from the WordBoundary offsets for free — used below to wait out
+    # playback so sequential says don't cut each other off.
+    speech_ticks = 0
+    with open(raw_path, "wb") as _f:
+        async for chunk in communicate.stream():
+            if chunk.get("type") == "audio":
+                _f.write(chunk["data"])
+            elif chunk.get("type") == "WordBoundary":
+                speech_ticks = max(
+                    speech_ticks,
+                    int(chunk.get("offset", 0)) + int(chunk.get("duration", 0)),
+                )
+    speech_seconds = speech_ticks / 1e7  # edge-tts uses 100-ns ticks
 
     # -- Loudness boost (default on) --------------------------------------------
     # The boost compresses + limits the TTS file to the digital ceiling (loudest
@@ -1341,6 +1395,14 @@ async def _say(agent, payload):
     # -- Play through the robot's speaker (non-blocking GStreamer playbin) --
     await _do(media.play_sound, play_path)
 
+    # play_sound returns immediately; block for the utterance's length so a
+    # following say (or volume change) in the same plan doesn't stomp this one
+    # mid-word. Opt out with {"await_playback": false} for a single fire-and-
+    # forget say.
+    pad = _say_playback_pad(speech_seconds, payload)
+    if pad:
+        await asyncio.sleep(pad)
+
     # Clean up the previous utterance now that a new one is playing.
     prev = agent.state.get("_say_tmp")
     if prev and prev != play_path:
@@ -1351,6 +1413,7 @@ async def _say(agent, payload):
     agent.state["_say_tmp"] = play_path
 
     return {"said": text, "voice": voice, "trim_db": trim_db,
+            "duration_s": round(speech_seconds, 2),
             "volume_level": agent.state.get("volume_level", 100),
             "boosted": play_path != raw_path,
             "on_robot": plays_on_robot,
@@ -2036,6 +2099,153 @@ async def _turn_to_sound(agent, payload):
     return {"detected": True, "angle_deg": angle, "voice_detected": voice,
             "turned": True, "yaw": yaw,
             "result": f"Turned toward sound at {angle:.0f}° (yaw {yaw:.0f}°)."}
+
+
+# ============================================================
+# Continuous sound tracking (opt-in) — face whoever is speaking
+# ============================================================
+# turn_to_sound is one-shot. track_sound runs a background loop that keeps
+# facing the current speaker until told to stop. It only starts when the user
+# explicitly asks for an ongoing behaviour and stops on
+# {"cmd":"track_sound","on":false} or on stop / sleep / disconnect. A deadband
+# keeps the head from chasing tiny fluctuations and thrashing the motors, and
+# large angles rotate the BODY (body_yaw) so the robot can face anywhere in the
+# room, not just the +/-max_head_yaw arc a head turn alone can reach.
+
+def _split_track_yaw(target_deg, max_head_yaw=45.0, max_body_yaw=150.0):
+    """Split a desired facing angle into (body_yaw, head_yaw), body-first.
+
+    The body takes as much of the turn as its limit allows and the head covers
+    only the residual, so Reachy faces the source with a roughly centred head
+    (looks attentive) and can still reach angles a head turn alone could not.
+    """
+    t = ((float(target_deg) + 180.0) % 360.0) - 180.0
+    body = max(-abs(max_body_yaw), min(abs(max_body_yaw), t))
+    head = max(-abs(max_head_yaw), min(abs(max_head_yaw), t - body))
+    return body, head
+
+
+def _angle_delta(a, b):
+    """Smallest signed difference a-b on a circle, in [-180, 180]."""
+    return ((float(a) - float(b) + 180.0) % 360.0) - 180.0
+
+
+def _track_decision(angle_deg, last_target, deadband_deg,
+                    offset_deg=0.0, invert=False,
+                    max_head_yaw=45.0, max_body_yaw=150.0):
+    """Pure planner for one tracking tick.
+
+    Applies the array's calibration (offset/invert), normalises to [-180, 180],
+    and returns whether to move plus the body/head split. Suppresses the move
+    when the new source is within deadband of the last angle we turned to, so
+    the robot holds still instead of twitching at every sample.
+    """
+    a = float(angle_deg) + float(offset_deg)
+    a = ((a + 180.0) % 360.0) - 180.0
+    if invert:
+        a = -a
+    if last_target is not None and abs(_angle_delta(a, last_target)) < float(deadband_deg):
+        return {"turn": False, "target": a}
+    body, head = _split_track_yaw(a, max_head_yaw, max_body_yaw)
+    return {"turn": True, "target": a, "body_yaw": body, "head_yaw": head}
+
+
+async def _track_step(agent):
+    """One tracking iteration: read DoA, decide, and turn if warranted.
+
+    Returns the decision dict, or None when there is no reading to act on. Kept
+    separate from the loop so it is unit-testable without a real robot.
+    """
+    media = _media(agent)
+    cfg = agent.state.get("track_cfg", {})
+    try:
+        doa = await _do(media.get_DoA)
+    except Exception:
+        return None
+    if doa is None:
+        return None
+    angle = float(doa[0])
+    voice = bool(doa[1]) if len(doa) > 1 else True
+    if cfg.get("require_voice", True) and not voice:
+        return {"turn": False, "reason": "no-voice", "angle_deg": angle}
+    decision = _track_decision(
+        angle, agent.state.get("track_last_target"),
+        deadband_deg=float(cfg.get("deadband_deg", 15.0)),
+        offset_deg=float(cfg.get("offset_deg", 0.0)),
+        invert=bool(cfg.get("invert", False)),
+        max_head_yaw=float(cfg.get("max_head_yaw", 45.0)),
+        max_body_yaw=float(cfg.get("max_body_yaw", 150.0)),
+    )
+    if decision.get("turn"):
+        agent.state["track_last_target"] = decision["target"]
+        await _pose(agent, {"yaw": decision["head_yaw"],
+                            "body_yaw": decision["body_yaw"],
+                            "duration": float(cfg.get("duration", 0.5))})
+    return decision
+
+
+async def _track_loop(agent):
+    """Background loop: step, sleep, repeat while tracking stays enabled."""
+    await agent.log("sound tracking started")
+    try:
+        while agent.state.get("tracking"):
+            try:
+                await _track_step(agent)
+            except Exception as e:
+                await agent.log(f"track_sound step failed: {e}", level="warning")
+            await asyncio.sleep(float(agent.state.get("track_cfg", {}).get("interval", 0.4)))
+    finally:
+        agent.state["tracking"] = False
+        await agent.log("sound tracking stopped")
+
+
+async def _track_sound(agent, payload):
+    """Start/stop continuously turning toward the current speaker.
+
+      {"cmd":"track_sound","on":true}    -> start (only when the user asks for it)
+      {"cmd":"track_sound","on":false}   -> stop  (also: {"stop":true} / {"off":true})
+      knobs (optional): interval, require_voice, deadband_deg, duration,
+                        max_head_yaw, max_body_yaw, offset_deg, invert
+
+    Runs a single background loop; a second start just updates the settings. The
+    loop stops on its own on stop / sleep / disconnect.
+    """
+    on = payload.get("on")
+    if on is None:
+        on = payload.get("enable", payload.get("start"))
+    if (payload.get("off") or payload.get("stop")
+            or (isinstance(on, str) and on.lower() in ("off", "false", "stop", "no"))):
+        on = False
+    if on is None:
+        on = True  # bare {"cmd":"track_sound"} means start
+
+    if not on:
+        agent.state["tracking"] = False
+        return {"tracking": False, "result": "Stopped turning toward sound."}
+
+    ok, reason = _is_connected(agent)
+    if not ok:
+        return {"tracking": False, "error": reason, "result": reason}
+
+    cfg = {
+        "interval":      max(0.1, min(5.0, float(payload.get("interval", 0.4)))),
+        "require_voice": bool(payload.get("require_voice", True)),
+        "deadband_deg":  max(0.0, float(payload.get("deadband_deg", 15.0))),
+        "duration":      max(0.1, float(payload.get("duration", 0.5))),
+        "max_head_yaw":  abs(float(payload.get("max_head_yaw", 45.0))),
+        "max_body_yaw":  abs(float(payload.get("max_body_yaw", 150.0))),
+        "offset_deg":    float(payload.get("offset_deg", 0.0)),
+        "invert":        bool(payload.get("invert", False)),
+    }
+    agent.state["track_cfg"] = cfg
+    if agent.state.get("tracking"):
+        return {"tracking": True, "cfg": cfg,
+                "result": "Already tracking sound; updated the settings."}
+    agent.state["tracking"] = True
+    agent.state["track_last_target"] = None
+    agent.run_in_background(_track_loop(agent))
+    return {"tracking": True, "cfg": cfg,
+            "result": "Now turning toward whoever's speaking. Say 'stop tracking the sound' to stop."}
 
 
 # ============================================================

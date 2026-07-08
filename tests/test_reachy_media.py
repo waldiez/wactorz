@@ -309,6 +309,19 @@ class DescribeCommandTest(unittest.TestCase):
         self.assertIn("No LLM", res["error"])
 
 
+class SayPlaybackPadTest(unittest.TestCase):
+    def test_waits_out_speech_plus_tail_by_default(self):
+        pad = NS["_say_playback_pad"]
+        self.assertAlmostEqual(pad(2.0, {}), 2.35, places=3)  # default tail 0.35
+        self.assertAlmostEqual(pad(2.0, {"tail_pad": 0.5}), 2.5, places=3)
+
+    def test_no_wait_when_opted_out_or_unknown_duration(self):
+        pad = NS["_say_playback_pad"]
+        self.assertEqual(pad(2.0, {"await_playback": False}), 0.0)
+        self.assertEqual(pad(0, {}), 0.0)
+        self.assertEqual(pad(None, {}), 0.0)
+
+
 class ConnectionModeTest(unittest.TestCase):
     def test_normalize_aliases(self):
         norm = NS["_normalize_connection_mode"]
@@ -347,6 +360,171 @@ class ConnectionModeTest(unittest.TestCase):
                 all(a.get("media_backend") == "webrtc" for a in attempts),
                 msg=f"mode={mode!r} dropped media_backend",
             )
+
+
+class TrackSoundYawSplitTest(unittest.TestCase):
+    """Pure geometry: how a facing angle is split into body_yaw + head_yaw."""
+
+    def test_small_angle_body_first_head_centered(self):
+        body, head = NS["_split_track_yaw"](30.0)
+        self.assertAlmostEqual(body, 30.0)
+        self.assertAlmostEqual(head, 0.0)  # body covers it; head stays centred
+
+    def test_beyond_body_limit_head_takes_residual(self):
+        body, head = NS["_split_track_yaw"](170.0, max_head_yaw=45.0, max_body_yaw=150.0)
+        self.assertAlmostEqual(body, 150.0)  # body maxes out
+        self.assertAlmostEqual(head, 20.0)   # head covers the remaining 20°
+
+    def test_residual_past_reach_is_clamped(self):
+        # 210° normalises to -150°; body maxes at -150, head residual 0.
+        body, head = NS["_split_track_yaw"](210.0, max_head_yaw=45.0, max_body_yaw=150.0)
+        self.assertAlmostEqual(body, -150.0)
+        self.assertAlmostEqual(head, 0.0)
+
+
+class TrackDecisionTest(unittest.TestCase):
+    """Pure planner: when to turn and to what, with deadband + calibration."""
+
+    def test_turns_when_no_prior_target(self):
+        d = NS["_track_decision"](60.0, None, 15.0)
+        self.assertTrue(d["turn"])
+        self.assertAlmostEqual(d["target"], 60.0)
+
+    def test_deadband_suppresses_small_change(self):
+        d = NS["_track_decision"](40.0, 35.0, 15.0)  # only 5° away
+        self.assertFalse(d["turn"])
+
+    def test_turns_past_deadband(self):
+        d = NS["_track_decision"](60.0, 35.0, 15.0)  # 25° away
+        self.assertTrue(d["turn"])
+
+    def test_normalises_wrapped_angle(self):
+        d = NS["_track_decision"](190.0, None, 15.0)
+        self.assertAlmostEqual(d["target"], -170.0)
+
+    def test_offset_and_invert_calibration(self):
+        d = NS["_track_decision"](30.0, None, 0.0, offset_deg=10.0, invert=True)
+        self.assertAlmostEqual(d["target"], -40.0)  # (30+10) then inverted
+
+    def test_deadband_uses_circular_distance(self):
+        # 179 vs -179 is 2° apart on the circle, not 358°.
+        d = NS["_track_decision"](179.0, -179.0, 15.0)
+        self.assertFalse(d["turn"])
+
+
+class _TrackAgent(FakeAgent):
+    """FakeAgent plus the surface track_sound touches: motion lock + bg tasks."""
+
+    def __init__(self, media):
+        super().__init__(media)
+        self.state["motion_lock"] = asyncio.Lock()
+        self.state["tracking"] = False
+        self.state["track_cfg"] = {}
+        self.state["track_last_target"] = None
+        self.bg: list = []
+
+    def run_in_background(self, coro):
+        # Record the scheduled loop but don't run the infinite coroutine here;
+        # closing it avoids an "un-awaited coroutine" warning in the test.
+        self.bg.append(coro)
+        coro.close()
+        return None
+
+
+class TrackStepTest(unittest.TestCase):
+    """One tracking iteration against a fake mic, with _pose stubbed to a recorder."""
+
+    def setUp(self):
+        self._orig_pose = NS["_pose"]
+        self.pose_calls: list = []
+
+        async def _fake_pose(agent, payload):
+            self.pose_calls.append(payload)
+            return {}
+
+        NS["_pose"] = _fake_pose
+
+    def tearDown(self):
+        NS["_pose"] = self._orig_pose
+
+    def _agent(self, doa, cfg=None):
+        agent = _TrackAgent(FakeMedia(doa=doa))
+        agent.state["track_cfg"] = cfg or {"require_voice": True, "deadband_deg": 15.0}
+        return agent
+
+    def test_turns_toward_a_voice(self):
+        agent = self._agent((60.0, True))
+        d = _run(NS["_track_step"](agent))
+        self.assertTrue(d["turn"])
+        self.assertEqual(len(self.pose_calls), 1)
+        self.assertIn("body_yaw", self.pose_calls[0])
+        self.assertAlmostEqual(agent.state["track_last_target"], 60.0)
+
+    def test_ignores_non_voice_when_require_voice(self):
+        agent = self._agent((60.0, False))
+        d = _run(NS["_track_step"](agent))
+        self.assertFalse(d["turn"])
+        self.assertEqual(len(self.pose_calls), 0)  # no motor command
+
+    def test_holds_still_within_deadband(self):
+        agent = self._agent((60.0, True))
+        agent.state["track_last_target"] = 55.0  # already facing ~here
+        d = _run(NS["_track_step"](agent))
+        self.assertFalse(d["turn"])
+        self.assertEqual(len(self.pose_calls), 0)
+
+
+class TrackSoundToggleTest(unittest.TestCase):
+    """The command that turns the continuous behaviour on and off."""
+
+    def _agent(self):
+        return _TrackAgent(FakeMedia(doa=(30.0, True)))
+
+    def test_start_enables_and_schedules_one_loop(self):
+        agent = self._agent()
+        res = _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["tracking"])
+        self.assertTrue(agent.state["tracking"])
+        self.assertEqual(len(agent.bg), 1)  # exactly one background loop
+
+    def test_bare_command_starts_tracking(self):
+        agent = self._agent()
+        res = _run(NS["_dispatch"](agent, "track_sound", {}, return_result=True))
+        self.assertTrue(agent.state["tracking"])
+        self.assertTrue(res["tracking"])
+
+    def test_second_start_updates_cfg_without_new_loop(self):
+        agent = self._agent()
+        _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
+        _run(NS["_dispatch"](agent, "track_sound", {"on": True, "interval": 0.2}, return_result=True))
+        self.assertTrue(agent.state["tracking"])
+        self.assertEqual(len(agent.bg), 1)  # no second loop spawned
+        self.assertEqual(agent.state["track_cfg"]["interval"], 0.2)
+
+    def test_off_stops_tracking(self):
+        agent = self._agent()
+        _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
+        res = _run(NS["_dispatch"](agent, "track_sound", {"on": False}, return_result=True))
+        self.assertFalse(res["tracking"])
+        self.assertFalse(agent.state["tracking"])
+
+    def test_stop_alias_stops_tracking(self):
+        agent = self._agent()
+        _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
+        _run(NS["_dispatch"](agent, "track_sound", {"stop": True}, return_result=True))
+        self.assertFalse(agent.state["tracking"])
+
+    def test_stop_command_halts_tracking(self):
+        # The generic {"cmd":"stop"} abort must also cancel sound tracking.
+        agent = self._agent()
+        agent.state["mini"] = types.SimpleNamespace(
+            media=agent.state["mini"].media, stop=lambda: None
+        )
+        _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
+        self.assertTrue(agent.state["tracking"])
+        _run(NS["_dispatch"](agent, "stop", {}, return_result=True))
+        self.assertFalse(agent.state["tracking"])
 
 
 if __name__ == "__main__":

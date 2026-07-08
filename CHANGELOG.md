@@ -5,8 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Fixed
+
+- **Reachy `say` no longer stomps itself in a sequence** — `play_sound` is fire-and-forget, so a
+  multi-step plan like "whisper X, then normally say Y, then shout Z" cut every utterance off
+  except the last (while the volume changes all flew by). `say` now measures each utterance's
+  length from the edge-tts word boundaries and waits it out before returning, so sequential
+  says (and their volume changes) play fully and in order. Opt out with `await_playback: false`.
+
 ### Added
 
+- **Reachy continuous sound tracking (`track_sound`)** — an opt-in mode that keeps turning Reachy
+  toward whoever is currently speaking, not just once like `turn_to_sound`. "Keep turning toward
+  whoever's talking", "follow the speaker", "track the voices as we present" start it; "stop
+  tracking/following the sound" stops it (it also stops on `stop`, `sleep`, and shutdown). A
+  background loop polls the mic array on an `interval`, and a `deadband_deg` keeps the head from
+  chasing tiny fluctuations and thrashing the motors. Large angles rotate the body (`body_yaw`)
+  with the head covering the residual, so Reachy can face anywhere in the room, not just the
+  `max_head_yaw` arc a head turn alone reaches. `require_voice` (default on) ignores non-speech
+  noise. Tuning knobs: `interval`, `deadband_deg`, `duration`, `max_head_yaw`, `max_body_yaw`,
+  `offset_deg`, `invert`.
 - **Reachy sound localization (`turn_to_sound`)** — turns the head toward the direction the mic
   array localizes a sound (`doa` angle → head yaw, clamped, with `offset_deg`/`invert` calibration).
   "Turn toward the sound", "face the speaker", and "who's talking?" route here. Sensing works

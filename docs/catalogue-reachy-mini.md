@@ -30,6 +30,14 @@ manually:
 pip install reachy-mini numpy edge-tts
 ```
 
+`edge-tts` is required for the `say` command (speech synthesis); the other
+commands work without it.
+
+**Optional:** install `ffmpeg` (a system binary, not a pip package) on the host
+if the robot's speech comes out too quiet. It is used only to boost the TTS
+loudness by roughly 3-4x. Without it, `say` still works - it plays the raw,
+quieter audio and logs a warning.
+
 ## Spawn
 
 ```text

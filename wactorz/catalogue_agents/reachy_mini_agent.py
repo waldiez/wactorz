@@ -23,6 +23,8 @@ DEPENDENCIES
 Python:
     reachy-mini    → Pollen Robotics SDK (and its transitive deps)
     numpy
+    edge-tts       → speech synthesis for the `say` command (required for `say`;
+                     other commands work without it)
 
 Outside wactorz:
     Wireless: robot powered on, same WiFi as the wactorz host, no client
@@ -30,6 +32,11 @@ Outside wactorz:
     Lite:     daemon running locally — `reachy-mini-daemon -p <serial_port>`.
 
     NO HF App may be running on the robot — Apps take exclusive control.
+
+    ffmpeg (OPTIONAL system binary) — only used to boost the TTS loudness
+           (~3-4x). If it is missing or fails, `say` still works: it just plays
+           the raw, quieter edge-tts audio and logs a warning. Install it on the
+           host if room/audience-level speech is too quiet.
 
 SPAWN
 ─────
@@ -1432,7 +1439,18 @@ async def _boost_audio(agent, src_path, attenuation_db=0.0):
     import os, shutil, subprocess, tempfile, uuid
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
-        await agent.log("ffmpeg not found — playing raw (quieter) TTS", level="warning")
+        # Not an error: speech already synthesized fine and WILL play — ffmpeg only
+        # makes it louder. Say so clearly, and only once per session so a tester
+        # isn't spooked by a warning on every single utterance.
+        if not agent.state.get("_ffmpeg_missing_logged"):
+            agent.state["_ffmpeg_missing_logged"] = True
+            await agent.log(
+                "ffmpeg not installed — Reachy will still speak, just at a lower "
+                "volume (the optional loudness boost is skipped). Install ffmpeg on "
+                "this host if the speech is too quiet for the room. This is the only "
+                "time this notice will be logged.",
+                level="info",
+            )
         return None
     af = "acompressor=threshold=-20dB:ratio=9:attack=5:release=50:makeup=10,alimiter=limit=0.97"
     attenuation_db = min(0.0, float(attenuation_db))

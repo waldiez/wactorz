@@ -1,5 +1,4 @@
-"""
-CATALOG AGENT — aif-agent
+"""CATALOG AGENT — aif-agent
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Generic active-inference controller, commissioned by the `comfort-optimizer`
 (docs/design/automation-advisor.md — scenario step 4).

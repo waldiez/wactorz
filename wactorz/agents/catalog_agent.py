@@ -707,7 +707,7 @@ def _build_catalog() -> dict:
             "code": code,
         }
         logger.info("[catalog] Loaded sinergym-anomaly recipe")
-        
+
     # ── comfort-optimizer ─────────────────────────────────────────────────────
     code = _load_recipe("comfort_optimizer_agent.py")
     if code:
@@ -789,7 +789,7 @@ def _build_catalog() -> dict:
             "poll_interval": 3600,
             "code": code,
         }
-        
+
     # ── aif-anomaly ────────────────────────────────────────────────────
     code = _load_recipe("aif_anomaly_agent.py")
     if code:

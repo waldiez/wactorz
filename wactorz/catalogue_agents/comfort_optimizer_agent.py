@@ -1,5 +1,4 @@
-"""
-CATALOG AGENT — comfort-optimizer
+"""CATALOG AGENT — comfort-optimizer
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 The orchestrating brain of the active-inference comfort pipeline
 (docs/design/automation-advisor.md, "scenario flow" steps 3a–3d).

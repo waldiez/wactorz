@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import tempfile
 import types
@@ -65,6 +66,52 @@ class MainActorActuateRoutingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "ACTUATE")
         self.assertEqual(llm.complete.await_args.kwargs["reasoning_effort"], "none")
+
+
+class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
+    """An interface bridge (e.g. reachy) routes through the FULL orchestrator."""
+
+    async def test_via_interface_task_runs_process_user_input_and_replies(self):
+        from wactorz.core.actor import Message, MessageType
+
+        actor = MainActor(llm_provider=None)
+        actor.process_user_input = AsyncMock(return_value="It is sunny.")
+        sent = []
+
+        async def _send(target, mtype, payload):
+            sent.append((target, mtype, payload))
+
+        actor.send = _send
+
+        msg = Message(
+            type=MessageType.TASK,
+            sender_id="reachy-1",
+            payload={"text": "weather?", "_via_interface": True,
+                     "_task_id": "abc", "_reply_to": "reachy-1"},
+        )
+        await actor._handle_task(msg)
+        await asyncio.sleep(0.05)  # the request runs as a background task
+
+        actor.process_user_input.assert_awaited_once_with("weather?")
+        self.assertEqual(len(sent), 1)
+        target, mtype, payload = sent[0]
+        self.assertEqual(target, "reachy-1")
+        self.assertEqual(mtype, MessageType.RESULT)
+        self.assertEqual(payload["_task_id"], "abc")
+        self.assertEqual(payload["result"], "It is sunny.")
+
+    async def test_plain_task_does_not_use_orchestrator(self):
+        from wactorz.core.actor import Message, MessageType
+
+        actor = MainActor(llm_provider=None)
+        actor.process_user_input = AsyncMock()
+
+        # No _via_interface flag -> inherited handler (no-op with llm=None).
+        msg = Message(type=MessageType.TASK, sender_id="x", payload={"text": "hi"})
+        await actor._handle_task(msg)
+        await asyncio.sleep(0.02)
+
+        actor.process_user_input.assert_not_called()
 
 
 class OpenAIProviderReasoningTest(unittest.IsolatedAsyncioTestCase):

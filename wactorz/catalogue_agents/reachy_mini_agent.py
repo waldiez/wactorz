@@ -852,9 +852,14 @@ async def handle_task(agent, payload):
                     cmds = _parse_speak_compound(stripped) or await _nl_to_commands(agent, stripped)
                     cmds = _repair_ha_commands(cmds, stripped)
                     if not cmds:
-                        # Return a clear 'result' message — NOT the raw input under
-                        # 'text', or the io-agent's reply picker (reply→result→text)
-                        # echoes the user's own words back at them.
+                        # Not a robot/HA command — act as an interface: pipe it
+                        # through the main orchestrator and voice the answer.
+                        bridged = await _bridge_to_main(agent, stripped, _tid)
+                        if bridged is not None:
+                            return bridged
+                        # Bridge unavailable — fall back to a clear hint. NOT the
+                        # raw input under 'text', or the io-agent's reply picker
+                        # (reply→result→text) echoes the user's own words back.
                         return {"ok": False, "error": "could not parse instruction",
                                 "result": (f"I couldn't turn \"{stripped}\" into a robot action. "
                                            "Try something like \"wake\", \"say hello\", "
@@ -955,6 +960,49 @@ def _queue_spoken_replies(agent, spoken_replies):
         await agent.notify_user("\n\n".join(texts))
 
     agent.run_in_background(_send())
+
+
+async def _bridge_to_main(agent, text, task_id=None):
+    """Reachy-as-interface bridge.
+
+    Anything Reachy can't turn into a robot/HA command is piped to the MAIN
+    orchestrator (send_to('main', _via_interface=True) — full delegation, HA,
+    sub-agents) and the answer is spoken back through the robot. Returns a task
+    result dict, or None when main is unreachable or answers with nothing, so
+    the caller can fall back to the local parse-error hint.
+    """
+    try:
+        resp = await agent.send_to(
+            "main", {"text": text, "_via_interface": True}, timeout=60.0)
+    except Exception as e:
+        await agent.log(f"bridge to main failed: {e}", level="warning")
+        return None
+
+    reply = ""
+    if isinstance(resp, dict):
+        # A bare error with no answer text means the bridge didn't work.
+        if resp.get("error") and not (resp.get("text") or resp.get("result")):
+            return None
+        reply = str(resp.get("text") or resp.get("result")
+                    or resp.get("reply") or "").strip()
+    elif isinstance(resp, str):
+        reply = resp.strip()
+    if not reply:
+        return None
+
+    # Voice it through the robot when connected; the text is returned either way
+    # (and is the only channel when the robot is offline).
+    spoke = False
+    ok_link, _reason = _is_connected(agent)
+    if ok_link:
+        try:
+            await _say(agent, {"text": reply})
+            spoke = True
+        except Exception as e:
+            await agent.log(f"bridge speak failed: {e}", level="warning")
+    return {"ok": True, "cmd": "bridge", "bridged": True, "spoke": spoke,
+            "said": reply if spoke else None, "result": reply,
+            "_task_id": task_id, "task": task_id}
 
 
 async def cleanup(agent):

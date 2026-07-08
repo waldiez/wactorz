@@ -36,6 +36,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Reachy as a Wactorz interface (text bridge)** - anything you say to the reachy-mini
+  agent that it can't turn into a robot or Home Assistant command is now piped through the
+  MAIN orchestrator (full intent routing, HA, and sub-agent delegation - not just a bare
+  single-turn LLM reply) and the answer is spoken back through the robot. So "what's the
+  weather in Paris?" or "add milk to my shopping list" reach the same agents the CLI/web
+  chat would, embodied. Under the hood the agent forwards unhandled text with
+  `send_to('main', _via_interface=True)`; `MainActor` routes any `_via_interface` task
+  through `process_user_input` (run as a background task so it never blocks main's message
+  loop) and replies on the caller's correlation id. Speaking to the robot out loud
+  (speech-to-text) layers on top of this later; for now the bridge is reached via
+  chat/delegation to the agent.
 - **Reachy continuous sound tracking (`track_sound`)** — an opt-in mode that keeps turning Reachy
   toward whoever is currently speaking, not just once like `turn_to_sound`. "Keep turning toward
   whoever's talking", "follow the speaker", "track the voices as we present" start it; "stop

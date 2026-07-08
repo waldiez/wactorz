@@ -527,5 +527,44 @@ class TrackSoundToggleTest(unittest.TestCase):
         self.assertFalse(agent.state["tracking"])
 
 
+class BridgeToMainTest(unittest.TestCase):
+    """Reachy-as-interface: input that isn't a robot/HA command is piped to the
+    main orchestrator and the answer comes back. Robot offline here, so we
+    exercise the routing without the TTS/audio path."""
+
+    def _agent(self, send_to_impl):
+        agent = FakeAgent(FakeMedia())
+        agent.state["mini"] = None  # disconnected -> no speech, text still returned
+        agent.sent = []
+
+        async def send_to(name, payload, timeout=60.0):
+            agent.sent.append((name, payload))
+            return send_to_impl(payload)
+
+        agent.send_to = send_to
+        return agent
+
+    def test_bridges_unhandled_text_and_returns_orchestrator_reply(self):
+        agent = self._agent(lambda _p: {"text": "It is sunny in Paris."})
+        res = _run(NS["_bridge_to_main"](agent, "what's the weather in Paris?", "tid1"))
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["bridged"])
+        self.assertFalse(res["spoke"])  # robot offline -> not spoken aloud
+        self.assertEqual(res["result"], "It is sunny in Paris.")
+        # It routed to main, via the interface flag, with the user's text.
+        name, payload = agent.sent[0]
+        self.assertEqual(name, "main")
+        self.assertTrue(payload["_via_interface"])
+        self.assertEqual(payload["text"], "what's the weather in Paris?")
+
+    def test_returns_none_when_main_unreachable(self):
+        agent = self._agent(lambda _p: {"error": "Agent 'main' not found"})
+        self.assertIsNone(_run(NS["_bridge_to_main"](agent, "hi", "t")))
+
+    def test_returns_none_on_empty_reply(self):
+        agent = self._agent(lambda _p: {"text": "   "})
+        self.assertIsNone(_run(NS["_bridge_to_main"](agent, "hi", "t")))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -236,6 +236,53 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     if not fut.done():
                         fut.set_result(msg.payload)
 
+    async def _handle_task(self, msg: Message):
+        """Peer TASK handler.
+
+        An interface bridge — e.g. the reachy-mini agent acting as a voice
+        front-end — sets ``_via_interface`` to route its message through the
+        FULL orchestrator (``process_user_input``: intent classification, HA
+        actuation, sub-agent delegation) instead of the base ``LLMAgent``'s raw
+        single-turn completion, so Reachy is as capable as the CLI/web chat.
+        Everything else keeps the inherited behaviour untouched.
+        """
+        payload = msg.payload if isinstance(msg.payload, dict) else {}
+        if payload.get("_via_interface"):
+            # Run in the background: process_user_input may await a delegation
+            # whose RESULT comes back as another message to main — blocking the
+            # message loop here would deadlock that reply. Keep a reference on
+            # self._tasks so the loop doesn't garbage-collect it mid-flight.
+            task = asyncio.create_task(self._handle_interface_request(payload, msg))
+            self._tasks.append(task)
+            task.add_done_callback(
+                lambda t: self._tasks.remove(t) if t in self._tasks else None
+            )
+            return
+        await super()._handle_task(msg)
+
+    async def _handle_interface_request(self, payload: dict, msg: Message):
+        """Run an interface bridge's text through the orchestrator and reply on
+        the sender's correlation id so its ``send_to`` future resolves."""
+        text = (
+            payload.get("text")
+            or payload.get("message")
+            or payload.get("query")
+            or payload.get("task")
+            or ""
+        ).strip()
+        task_id = payload.get("_task_id")
+        reply_to = payload.get("_reply_to") or msg.reply_to or msg.sender_id
+        try:
+            reply = await self.process_user_input(text) if text else ""
+        except Exception as e:
+            logger.warning(f"[{self.name}] interface request failed: {e}")
+            reply = f"[error] {e}"
+        if reply_to:
+            result = {"text": reply, "result": reply, "task": text}
+            if task_id:
+                result["_task_id"] = task_id
+            await self.send(reply_to, MessageType.RESULT, result)
+
     # ── Home Automation intent detection ───────────────────────────────────
 
     # ── User input ─────────────────────────────────────────────────────────

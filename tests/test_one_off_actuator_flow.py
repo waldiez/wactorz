@@ -183,5 +183,79 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(agent._build_metrics()["cost_usd"], 0.00123)
 
 
+class GenericColorLightCollapseTest(unittest.TestCase):
+    """A generic 'change the light colour' must not fan out across every colour
+    light. These exercise the pure repair/collapse path — no robot, no HA."""
+
+    def _agent(self, request):
+        return OneOffActuatorAgent(
+            request=request,
+            llm_provider=_FakeLLM("[]"),
+            task_id="actuate_test",
+            reply_to_id="main-actor",
+            persistence_dir=tempfile.gettempdir(),
+        )
+
+    def _two_color_lights(self):
+        # Both support rgb, so neither gets reassigned during colour repair.
+        return [
+            {"entity_id": "light.led_strip",
+             "state": {"attributes": {"supported_color_modes": ["rgb"]}}},
+            {"entity_id": "light.main",
+             "state": {"attributes": {"supported_color_modes": ["rgb"]}}},
+        ]
+
+    def _both_on(self):
+        from wactorz.agents.home_assistant_actuator_agent import ActuatorAction
+
+        return [
+            ActuatorAction(domain="light", service="turn_on",
+                           entity_id="light.led_strip", service_data={}),
+            ActuatorAction(domain="light", service="turn_on",
+                           entity_id="light.main", service_data={}),
+        ]
+
+    def test_generic_color_request_collapses_to_one_light(self):
+        agent = self._agent("turn the light pink")
+        repaired = agent._repair_color_actions(self._both_on(), self._two_color_lights())
+        light_ons = [a for a in repaired if a.domain == "light" and a.service == "turn_on"]
+        self.assertEqual(len(light_ons), 1)  # not both
+        self.assertEqual(light_ons[0].entity_id, "light.main")  # main, not the strip
+        self.assertIn("rgb_color", light_ons[0].service_data)
+
+    def test_prefers_main_light_over_accent_strip_regardless_of_order(self):
+        # led_strip is listed FIRST; the main light must still win the tiebreak.
+        agent = self._agent("change the light to blue")
+        self.assertEqual(agent._find_color_light(self._two_color_lights()), "light.main")
+
+    def test_plural_request_keeps_every_light(self):
+        agent = self._agent("turn all the lights pink")
+        repaired = agent._repair_color_actions(self._both_on(), self._two_color_lights())
+        light_ons = [a for a in repaired if a.domain == "light" and a.service == "turn_on"]
+        self.assertEqual({a.entity_id for a in light_ons},
+                         {"light.led_strip", "light.main"})  # explicit plural -> all
+
+    def test_enrichment_block_does_not_make_singular_look_plural(self):
+        # Main appends an entity list; a "Living Room Lights" entity in it must
+        # not defeat the collapse for a singular user request.
+        request = (
+            "turn the light pink\n\n"
+            "[AVAILABLE HA ENTITIES — match the user's device to one of these:\n"
+            "  light.led_strip (Living Room Lights)\n"
+            "  light.main (Main Light)\n]"
+        )
+        agent = self._agent(request)
+        self.assertFalse(agent._request_targets_multiple_lights())
+        repaired = agent._repair_color_actions(self._both_on(), self._two_color_lights())
+        light_ons = [a for a in repaired if a.domain == "light" and a.service == "turn_on"]
+        self.assertEqual(len(light_ons), 1)
+
+    def test_non_color_request_is_untouched(self):
+        # No colour requested -> repair is a passthrough, both lights stay.
+        agent = self._agent("turn on the light")
+        repaired = agent._repair_color_actions(self._both_on(), self._two_color_lights())
+        self.assertEqual(len(repaired), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

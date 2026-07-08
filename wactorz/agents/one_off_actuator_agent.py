@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import time
 from typing import Any, ClassVar
@@ -37,6 +38,14 @@ _COLOR_SERVICE_KEYS = {
     "color_name",
 }
 _COLOR_MODES = {"hs", "rgb", "rgbw", "rgbww", "xy"}
+# When a generic "the light" has to be resolved to ONE bulb, prefer the room's
+# main/overhead light over an accent/strip. These are tiebreak hints only — an
+# explicit name the user said still wins via the token-overlap score.
+_PRIMARY_LIGHT_HINTS = ("main", "ceiling", "overhead", "primary", "central")
+_ACCENT_LIGHT_HINTS = (
+    "strip", "accent", "ambient", "bias", "backlight",
+    "undercabinet", "under cabinet", "nightlight", "night light",
+)
 
 _RESOLVER_PROMPT = """You are a Home Assistant service-call resolver.
 
@@ -200,15 +209,32 @@ class OneOffActuatorAgent(Actor):
             raise json.JSONDecodeError("Expected a JSON array", cleaned, 0)
         return [item for item in data if isinstance(item, dict)]
 
+    def _clean_request(self) -> str:
+        """The user's own words, lowercased, with any injected entity-context
+        block stripped.
+
+        Main enriches the request with an ``[AVAILABLE HA ENTITIES ...]`` list
+        before spawning this agent. The keyword heuristics below (colour,
+        brightness, plurality) must read the user's actual phrasing, not entity
+        names in that block — otherwise a ``Living Room Lights`` entity makes a
+        singular "turn the light red" look plural, or a ``Red Lamp`` entity
+        looks like a colour request.
+        """
+        text = self.request or ""
+        idx = text.find("\n\n[AVAILABLE HA ENTITIES")
+        if idx != -1:
+            text = text[:idx]
+        return text.lower()
+
     def _requested_rgb(self) -> list[int] | None:
-        request = self.request.lower()
+        request = self._clean_request()
         for color, rgb in _COLOR_RGB.items():
             if color in request:
                 return list(rgb)
         return None
 
     def _requests_max_brightness(self) -> bool:
-        request = self.request.lower()
+        request = self._clean_request()
         return any(
             phrase in request
             for phrase in (
@@ -257,7 +283,51 @@ class OneOffActuatorAgent(Actor):
                     service_data=service_data,
                 )
             )
-        return repaired
+        return self._collapse_generic_color_lights(repaired, color_entity)
+
+    def _request_targets_multiple_lights(self) -> bool:
+        """True when the user clearly means more than one light, so a generic
+        single-light collapse must NOT apply.
+
+        Scope/plural words ("all", "every", "each", "both", plural "lights"/
+        "lamps") mean keep them all; a singular "the light" / "my lamp" is
+        False. ``\\b`` boundaries keep "hallway" from matching "all".
+        """
+        return bool(re.search(r"\b(all|every|each|both|lights|lamps)\b", self._clean_request()))
+
+    def _collapse_generic_color_lights(
+        self,
+        actions: list[ActuatorAction],
+        preferred_entity: str | None,
+    ) -> list[ActuatorAction]:
+        """Collapse a generic colour request that fanned out across several
+        colour lights down to the single best one.
+
+        The resolver is handed every entity, so "change the light colour" in a
+        home with two colour-capable lights can come back as a ``turn_on`` for
+        BOTH — lighting the whole room instead of the one light the user meant.
+        When the request names no specific light and isn't explicitly plural
+        ("all/every/both lights"), keep only the best colour light (the one the
+        colour repair already prefers) and drop the rest. Non-light actions and
+        explicitly-plural requests pass through untouched.
+        """
+        if self._request_targets_multiple_lights():
+            return actions
+        light_ons = [a for a in actions if a.domain == "light" and a.service == "turn_on"]
+        distinct = {a.entity_id for a in light_ons}
+        if len(distinct) <= 1:
+            return actions
+        keep_id = preferred_entity if preferred_entity in distinct else sorted(distinct)[0]
+        collapsed: list[ActuatorAction] = []
+        kept = False
+        for action in actions:
+            if action.domain == "light" and action.service == "turn_on":
+                if action.entity_id == keep_id and not kept:
+                    collapsed.append(action)
+                    kept = True
+                continue
+            collapsed.append(action)
+        return collapsed
 
     def _find_color_light(self, devices: list[dict[str, Any]]) -> str | None:
         lights = [
@@ -266,8 +336,8 @@ class OneOffActuatorAgent(Actor):
         if not lights:
             return None
 
-        request = self.request.lower()
-        ranked: list[tuple[int, str]] = []
+        request = self._clean_request()
+        ranked: list[tuple[int, int, str]] = []
         for entity in lights:
             entity_id = str(entity.get("entity_id") or "")
             attrs = self._entity_attrs(entity)
@@ -288,9 +358,27 @@ class OneOffActuatorAgent(Actor):
                 token = token.strip(".,!?()[]{}'\"")
                 if len(token) > 2 and token in haystack:
                     score += 1
-            ranked.append((score, entity_id))
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        return ranked[0][1] if ranked else None
+            # Tiebreak: when the user named no specific light, favour the main/
+            # overhead bulb over an accent strip so "change the light to blue"
+            # lands on the light they mean. Entity-id sort keeps it deterministic.
+            ranked.append((score, self._primary_light_preference(haystack), entity_id))
+        ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        return ranked[0][2] if ranked else None
+
+    def _primary_light_preference(self, haystack: str) -> int:
+        """Tiebreak score: +1 per main/overhead hint, -1 per accent/strip hint.
+
+        Only breaks ties between equally-matching colour lights; it never
+        overrides a name the user actually said (that lifts the token score).
+        """
+        score = 0
+        for hint in _PRIMARY_LIGHT_HINTS:
+            if hint in haystack:
+                score += 1
+        for hint in _ACCENT_LIGHT_HINTS:
+            if hint in haystack:
+                score -= 1
+        return score
 
     def _entity_id_supports_color(self, entity_id: str, devices: list[dict[str, Any]]) -> bool:
         for entity in self._iter_entities(devices):

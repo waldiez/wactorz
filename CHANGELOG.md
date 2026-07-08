@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A generic "change the light colour" no longer lights up every colour bulb** -
+  the shared one-shot actuator (used by both main chat and Reachy) hands the
+  resolver every entity, so "turn the light pink" in a home with two
+  colour-capable lights (e.g. an LED strip and the main light) could come back as
+  a `turn_on` for BOTH. A generic, singular request now collapses to a single
+  colour light - preferring the room's main/overhead bulb over an accent strip -
+  while explicitly plural requests ("all/every/both lights") still control them
+  all. The colour / brightness / plurality keyword checks also now
+  ignore the `[AVAILABLE HA ENTITIES ...]` block main injects, so an entity named
+  "Living Room Lights" can't make a singular request look plural (nor a "Red Lamp"
+  look like a colour request).
 - **Reachy `say` no longer looks broken when `ffmpeg` is absent** - `ffmpeg` is
   optional (it only boosts TTS loudness ~3-4x), but its absence logged a
   `warning` reading `ffmpeg not found - playing raw (quieter) TTS` on *every*

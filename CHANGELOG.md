@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Reachy talked but wouldn't move (motors never enabled)** - `wake_up()` and
+  `goto_target()` only stream target positions; they don't turn on motor torque. The
+  Reachy Mini control app enables the motors for you, so with the app running everything
+  moved - but driving the robot directly over `network` (no app), the daemon comes up with
+  motors DISABLED, so commands were accepted and sounds played while nothing physically
+  moved. The reachy-mini agent now calls `enable_motors()` on connect and on every wake,
+  and adds a `motors` command (`{"cmd":"motors","on":true|false}`, plus plain-English
+  "enable motors" / "go limp") to toggle torque like the app did. `motors_enabled` is
+  reported in `custom/reachy/state`.
 - **A generic "change the light colour" no longer lights up every colour bulb** -
   the shared one-shot actuator (used by both main chat and Reachy) hands the
   resolver every entity, so "turn the light pink" in a home with two
@@ -36,6 +45,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Reachy `diag` command** - diagnoses "the robot won't move". Motion commands are
+  fire-and-forget over the websocket, so a clean `goto_target` only means the daemon
+  RECEIVED the command. `{"cmd":"diag"}` (or "why won't you move") reports the SDK vs
+  robot-daemon version (a mismatch makes the daemon silently ignore motion while audio
+  still works), then runs a real self-test: enable torque, read joint angles, command a
+  small move, re-read, and report whether the angles actually changed - so you find out
+  it's a version mismatch / torque / hardware issue instead of guessing.
 - **Reachy without the Reachy Mini control app** - the reachy-mini agent can now connect
   straight to a powered-on robot over WiFi with no control app running on your machine:
   set `REACHY_CONNECTION_MODE=network` plus the new `REACHY_ROBOT_HOST=<ip|hostname>` env

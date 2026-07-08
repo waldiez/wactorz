@@ -89,6 +89,16 @@ TASK PAYLOAD EXAMPLES
 Wake / sleep:
     {"cmd": "wake"}      {"cmd": "sleep"}
 
+Motor torque (the control app's enable/disable — needed to move at all):
+    {"cmd": "motors", "on": true}    # torque ON so the robot can move
+    {"cmd": "motors", "on": false}   # torque OFF (compliant; hand-pose it)
+    # Motors are enabled automatically on connect and on every wake. If the
+    # robot TALKS but won't MOVE, its torque is off — this is the toggle. Plain
+    # English "enable motors" / "go limp" work too.
+
+Diagnose "won't move" (daemon version vs SDK + a real move self-test):
+    {"cmd": "diag"}      # or say "diag" / "why won't you move"
+
 Head pose (yaw 30°, smooth):
     {"cmd": "pose", "yaw": 30, "duration": 0.6, "method": "minjerk"}
 
@@ -399,6 +409,15 @@ async def setup(agent):
     else:
         agent.state["volume_level"] = int(agent.recall("volume_level") or 100)
 
+    # ---- Enable motor torque so the robot actually MOVES ----
+    # wake_up()/goto_target() only stream target positions; with torque OFF the
+    # daemon accepts them and plays sounds but nothing moves ("talks but won't
+    # move"). The Reachy Mini control app enables motors for you; running direct
+    # over `network` the daemon can come up with motors disabled, so do it here.
+    agent.state["motors_enabled"] = False
+    if mini is not None:
+        await _ensure_motors_enabled(agent)
+
     # ---- Wake up so the robot is ready for commands (skip if disconnected) ----
     if mini is not None:
         try:
@@ -424,7 +443,7 @@ async def setup(agent):
 
     # Convenience: per-verb topics rewrite payload through the same dispatcher.
     for verb in ("wake", "sleep", "pose", "antennas", "look_at",
-                 "look_pixel", "emotion", "set_pose", "bind",
+                 "look_pixel", "emotion", "motors", "diag", "set_pose", "bind",
                  "unbind", "list_emotions", "stop", "say", "volume",
                  "camera", "describe", "listen", "doa", "turn_to_sound",
                  "track_sound"):
@@ -453,6 +472,7 @@ async def setup(agent):
         "connection_mode": agent.state.get("connection_mode", "auto"),
         "volume_level":  agent.state.get("volume_level", 100),
         "muted":         bool(agent.state.get("muted")),
+        "motors_enabled": bool(agent.state.get("motors_enabled")),
         "ts":            _time.time(),
     })
 
@@ -476,6 +496,7 @@ async def process(agent):
         "connection_mode": agent.state.get("connection_mode", "auto"),
         "volume_level":  agent.state.get("volume_level", 100),
         "muted":         bool(agent.state.get("muted")),
+        "motors_enabled": bool(agent.state.get("motors_enabled")),
         "ts":            _time.time(),
     })
 
@@ -854,6 +875,18 @@ async def handle_task(agent, payload):
                              "turn to the noise", "face the sound",
                              "who's talking", "who is talking"):
                     payload = {"cmd": "turn_to_sound"}
+                # Motor torque toggle — the control app's enable/disable.
+                elif low in ("enable motors", "motors on", "enable your motors",
+                             "turn on motors", "turn your motors on", "stiffen"):
+                    payload = {"cmd": "motors", "on": True}
+                elif low in ("disable motors", "motors off", "disable your motors",
+                             "turn off motors", "turn your motors off", "go limp",
+                             "relax your motors"):
+                    payload = {"cmd": "motors", "on": False}
+                elif low in ("diag", "diagnostics", "diagnose", "self test", "self-test",
+                             "why won't you move", "why wont you move", "why aren't you moving",
+                             "why arent you moving", "run diagnostics"):
+                    payload = {"cmd": "diag"}
                 # Common volume phrases — handled without an LLM round-trip.
                 elif low in ("mute", "silence", "be quiet", "quiet", "shut up", "stop talking"):
                     payload = {"cmd": "volume", "mute": True}
@@ -1104,6 +1137,8 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "turn_to_sound": result = await _turn_to_sound(agent, payload)
         elif cmd == "track_sound":   result = await _track_sound(agent, payload)
         elif cmd == "emotion":       result = await _emotion(agent, payload)
+        elif cmd == "motors":        result = await _motors(agent, payload)
+        elif cmd == "diag":          result = await _diag(agent, payload)
         elif cmd == "set_pose":      result = await _set_pose(agent, payload)
         elif cmd == "bind":          result = await _bind(agent, payload)
         elif cmd == "unbind":        result = await _unbind(agent, payload)
@@ -1142,6 +1177,9 @@ async def _dispatch(agent, cmd, payload, return_result=False):
 
 async def _wake(agent):
     mini = agent.state["mini"]
+    # Torque must be ON or wake_up plays its sound but the head/antennas don't
+    # move. Re-enable every wake in case motors were disabled meanwhile.
+    await _ensure_motors_enabled(agent)
     async with agent.state["motion_lock"]:
         agent.state["busy"] = True
         try:
@@ -1150,6 +1188,127 @@ async def _wake(agent):
         finally:
             agent.state["busy"] = False
     return {}
+
+
+async def _ensure_motors_enabled(agent):
+    """Turn motor torque ON (best-effort).
+
+    Without the Reachy Mini control app the daemon can come up with motors
+    DISABLED (compliant/safe), so goto_target quietly moves nothing while
+    play_sound still works — the robot 'talks but won't move'. Older SDKs
+    without enable_motors just skip this.
+    """
+    mini = agent.state.get("mini")
+    if mini is None:
+        return False
+    fn = getattr(mini, "enable_motors", None)
+    if not callable(fn):
+        return False
+    try:
+        await _do(fn)
+        agent.state["motors_enabled"] = True
+        return True
+    except Exception as e:
+        await agent.log(f"enable_motors failed: {e}", level="warning")
+        return False
+
+
+async def _motors(agent, payload):
+    """Enable or disable motor torque — the toggle the control app gave you.
+
+      {"cmd":"motors","on":true}    -> torque ON  (needed to move)
+      {"cmd":"motors","on":false}   -> torque OFF (compliant; hand-pose the robot)
+    """
+    mini = agent.state["mini"]
+    on = payload.get("on")
+    if on is None:
+        on = not (payload.get("off") or payload.get("disable"))
+    if isinstance(on, str):
+        on = on.strip().lower() not in ("off", "false", "no", "0", "disable")
+    on = bool(on)
+    fn = getattr(mini, "enable_motors" if on else "disable_motors", None)
+    if not callable(fn):
+        raise RuntimeError("SDK has no motor enable/disable")
+    await _do(fn)
+    agent.state["motors_enabled"] = on
+    return {"motors_enabled": on,
+            "result": f"Motors {'enabled — the robot can move now' if on else 'disabled (compliant)'}."}
+
+
+async def _diag(agent, payload):
+    """Diagnose 'the robot won't move'.
+
+    Motion commands are fire-and-forget over the websocket, so goto_target
+    returning cleanly means only that the daemon RECEIVED the command — not that
+    a motor turned. This reports what the daemon actually is (version vs the SDK
+    — a mismatch makes the daemon silently ignore motion commands) and runs a
+    real motion self-test: enable torque, read joint positions, command a small
+    move, read them again, and report whether they actually changed.
+    """
+    import reachy_mini as _rm
+    mini = agent.state["mini"]
+    info = {
+        "sdk_version":     getattr(_rm, "__version__", "?"),
+        "connection_mode": agent.state.get("connection_mode"),
+        "robot_host":      agent.state.get("robot_host") or "(autodetect)",
+        "motors_enabled":  bool(agent.state.get("motors_enabled")),
+    }
+
+    # ---- Daemon status: the version is the key signal ----
+    try:
+        st = await _do(mini.client.get_status)
+        info["daemon_version"] = getattr(st, "version", None)
+        info["daemon_wlan_ip"] = getattr(st, "wlan_ip", None)
+        info["daemon_no_media"] = getattr(st, "no_media", None)
+    except Exception as e:
+        info["daemon_status_error"] = str(e)
+    sdk_v = str(info.get("sdk_version") or "").strip()
+    dae_v = str(info.get("daemon_version") or "").strip()
+    info["version_mismatch"] = bool(sdk_v and dae_v and sdk_v != dae_v)
+
+    # ---- Motion self-test: does a commanded move change real joint angles? ----
+    def _positions(raw):
+        # get_current_joint_positions returns (positions, velocities) on this SDK.
+        seq = raw[0] if isinstance(raw, tuple) else raw
+        return [float(x) for x in seq]
+    try:
+        await _ensure_motors_enabled(agent)
+        create_head_pose = agent.state["create_head_pose"]
+        before = _positions(await _do(mini.get_current_joint_positions))
+        await _do(mini.goto_target, head=create_head_pose(yaw=15, degrees=True), duration=0.6)
+        await asyncio.sleep(0.9)
+        after = _positions(await _do(mini.get_current_joint_positions))
+        delta = max((abs(a - b) for a, b in zip(after, before)), default=0.0)
+        info["joint_delta_max_rad"] = round(delta, 4)
+        info["moved"] = delta > 0.01
+        # Re-centre.
+        await _do(mini.goto_target, head=create_head_pose(yaw=0, degrees=True), duration=0.6)
+    except Exception as e:
+        info["motion_test_error"] = str(e)
+
+    # ---- Human-readable verdict ----
+    if info.get("version_mismatch"):
+        info["result"] = (
+            f"SDK {sdk_v} does not match the robot daemon {dae_v}. A version mismatch "
+            f"makes the daemon silently ignore motion commands (audio still works). Fix: "
+            f"pip install reachy_mini=={dae_v} (match the robot), then restart the agent."
+        )
+    elif info.get("motion_test_error"):
+        info["result"] = f"Motion self-test errored: {info['motion_test_error']}"
+    elif info.get("moved") is False:
+        info["result"] = (
+            "Motors enabled and a move was commanded, but joint angles did not change - "
+            "the daemon is not driving the motors (torque not applied, or a hardware/"
+            "calibration issue on the robot)."
+        )
+    elif info.get("moved"):
+        info["result"] = (
+            f"Robot moved (Δ={info['joint_delta_max_rad']} rad) - the motion path works. "
+            "If a plan still looks static, the moves may just be small/fast."
+        )
+    else:
+        info["result"] = "Diagnostics collected (see fields)."
+    return info
 
 
 async def _sleep(agent):

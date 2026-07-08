@@ -550,6 +550,106 @@ class NotConnectedMessageTest(unittest.TestCase):
         self.assertIn("REACHY_ROBOT_HOST", reason)
 
 
+class MotorsCommandTest(unittest.TestCase):
+    """Motor torque must be enabled or the robot 'talks but won't move'."""
+
+    def _agent(self):
+        calls = []
+        agent = FakeAgent(FakeMedia())
+        agent.state["mini"] = types.SimpleNamespace(
+            enable_motors=lambda *a, **k: calls.append("enable"),
+            disable_motors=lambda *a, **k: calls.append("disable"),
+        )
+        agent.calls = calls
+        return agent
+
+    def test_motors_on_enables_torque(self):
+        agent = self._agent()
+        res = _run(NS["_dispatch"](agent, "motors", {"on": True}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["motors_enabled"])
+        self.assertEqual(agent.calls, ["enable"])
+        self.assertTrue(agent.state["motors_enabled"])
+
+    def test_motors_off_disables_torque(self):
+        agent = self._agent()
+        res = _run(NS["_dispatch"](agent, "motors", {"on": False}, return_result=True))
+        self.assertFalse(res["motors_enabled"])
+        self.assertEqual(agent.calls, ["disable"])
+
+    def test_ensure_motors_enabled_is_called_and_best_effort(self):
+        agent = self._agent()
+        self.assertTrue(_run(NS["_ensure_motors_enabled"](agent)))
+        self.assertEqual(agent.calls, ["enable"])
+        self.assertTrue(agent.state["motors_enabled"])
+
+    def test_ensure_motors_enabled_skips_when_sdk_lacks_it(self):
+        agent = FakeAgent(FakeMedia())
+        agent.state["mini"] = types.SimpleNamespace()  # no enable_motors method
+        self.assertFalse(_run(NS["_ensure_motors_enabled"](agent)))
+
+    def test_wake_enables_motors_before_moving(self):
+        agent = self._agent()
+        order = []
+        mini = agent.state["mini"]
+        mini.enable_motors = lambda *a, **k: order.append("enable")
+        mini.wake_up = lambda *a, **k: order.append("wake")
+        agent.state["motion_lock"] = asyncio.Lock()
+        agent.state["busy"] = False
+        _run(NS["_dispatch"](agent, "wake", {}, return_result=True))
+        self.assertEqual(order, ["enable", "wake"])  # torque on, THEN move
+
+
+class DiagCommandTest(unittest.TestCase):
+    """`diag` turns 'he didn't move' into signal: daemon version vs SDK, and a
+    real move-then-recheck of joint angles."""
+
+    def _agent(self, daemon_version, positions_before, positions_after):
+        agent = FakeAgent(FakeMedia())
+        seq = [positions_before, positions_after]
+
+        def get_positions():
+            return (seq.pop(0) if len(seq) > 1 else seq[0], None)
+
+        mini = types.SimpleNamespace(
+            client=types.SimpleNamespace(
+                get_status=lambda: types.SimpleNamespace(
+                    version=daemon_version, wlan_ip="10.0.0.5", no_media=False)),
+            enable_motors=lambda *a, **k: None,
+            get_current_joint_positions=get_positions,
+            goto_target=lambda **k: None,
+        )
+        agent.state["mini"] = mini
+        agent.state["create_head_pose"] = lambda **k: "HEAD"
+        agent.state["np"] = np
+        agent.state["connection_mode"] = "network"
+        return agent
+
+    def test_flags_version_mismatch(self):
+        import reachy_mini as rm
+        other = "9.9.9" if rm.__version__ != "9.9.9" else "0.0.0"
+        agent = self._agent(other, [0.0] * 7, [0.0] * 7)
+        res = _run(NS["_dispatch"](agent, "diag", {}, return_result=True))
+        self.assertTrue(res["version_mismatch"])
+        self.assertEqual(res["daemon_version"], other)
+        self.assertIn("does not match", res["result"])
+
+    def test_reports_no_movement_when_angles_unchanged(self):
+        import reachy_mini as rm
+        agent = self._agent(rm.__version__, [0.0] * 7, [0.0] * 7)  # matched version
+        res = _run(NS["_dispatch"](agent, "diag", {}, return_result=True))
+        self.assertFalse(res["version_mismatch"])
+        self.assertFalse(res["moved"])
+        self.assertIn("did not change", res["result"])
+
+    def test_reports_movement_when_angles_change(self):
+        import reachy_mini as rm
+        agent = self._agent(rm.__version__, [0.0] * 7, [0.0, 0.3, 0.0, 0, 0, 0, 0])
+        res = _run(NS["_dispatch"](agent, "diag", {}, return_result=True))
+        self.assertTrue(res["moved"])
+        self.assertGreater(res["joint_delta_max_rad"], 0.01)
+
+
 class BridgeToMainTest(unittest.TestCase):
     """Reachy-as-interface: input that isn't a robot/HA command is piped to the
     main orchestrator and the answer comes back. Robot offline here, so we

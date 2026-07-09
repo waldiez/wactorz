@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from ..core.actor import Message, MessageType
-from .llm_agent import LLMAgent
+from ..agents.llm_agent import LLMAgent
 
 logger = logging.getLogger(__name__)
 

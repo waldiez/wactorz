@@ -728,7 +728,10 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                 if "agents" in payload and isinstance(payload["agents"], list):
                     lines = [payload.get("message", "Available agents:")]
                     for a in payload["agents"]:
-                        lines.append(f"  • {a['name']}: {a.get('description', '')}")
+                        suffix = ""
+                        if a.get("experimental"):
+                            suffix = f" [beta: {a.get('warning', 'Experimental/Beta agent')}]"
+                        lines.append(f"  - {a['name']}: {a.get('description', '')}{suffix}")
                     text_out = "\n".join(lines)
             else:
                 text_out = str(payload)

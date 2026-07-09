@@ -213,7 +213,12 @@ def _build_experimental_catalog() -> dict:
             "qa-agent": {
                 "factory": QAAgent,
                 "description": "Experimental passive safety observer for prompt injection, raw data bleed, and response timeouts.",
-                "capabilities": ["qa", "safety", "prompt_injection_detection", "response_monitoring"],
+                "capabilities": [
+                    "qa",
+                    "safety",
+                    "prompt_injection_detection",
+                    "response_monitoring",
+                ],
                 "input_schema": {"from": "str", "content": "str - chat text to inspect"},
                 "output_schema": {"category": "str", "severity": "str", "excerpt": "str"},
             },
@@ -235,7 +240,9 @@ def _build_experimental_catalog() -> dict:
                 "factory": WizAgent,
                 "description": "Experimental WaldiezCoin in-game economy tracker for agent activity and system events.",
                 "capabilities": ["gamification", "coin_economy", "activity_tracking"],
-                "input_schema": {"text": "str - economy command such as 'balance', 'history', or 'earn 5'"},
+                "input_schema": {
+                    "text": "str - economy command such as 'balance', 'history', or 'earn 5'"
+                },
                 "output_schema": {"result": "str - balance or transaction response"},
             },
         }
@@ -253,6 +260,7 @@ def _build_experimental_catalog() -> dict:
         logger.warning(f"[catalog] experimental beta recipes unavailable: {e}")
 
     return experimental
+
 
 def _build_catalog() -> dict:
     catalog = _build_native_catalog()
@@ -749,7 +757,9 @@ class CatalogAgent(Actor):
         safe = {k: v for k, v in recipe.items() if k not in {"code", "factory"}}
         message = f"Recipe for '{resolved}'"
         if recipe.get("experimental"):
-            message += f" ({recipe.get('stability', 'beta')}: {recipe.get('warning', BETA_WARNING)})"
+            message += (
+                f" ({recipe.get('stability', 'beta')}: {recipe.get('warning', BETA_WARNING)})"
+            )
         return {"ok": True, "message": message, "recipe": safe}
 
     async def _action_spawn(self, name: str, payload: dict) -> dict:

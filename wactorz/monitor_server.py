@@ -85,6 +85,7 @@ mqtt_client_ref = None
 # IOAgent via the io/chat/control topic.
 _inflight_chat_tasks: set = set()
 
+
 def _catalog_agent_line(agent: dict) -> str:
     name = agent.get("name", "unknown")
     description = agent.get("description", "")

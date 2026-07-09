@@ -11,8 +11,8 @@ from io import StringIO
 from pathlib import Path
 from typing import ClassVar
 
-from ..core.actor import Message, MessageType
 from ..agents.llm_agent import LLMAgent
+from ..core.actor import Message, MessageType
 
 logger = logging.getLogger(__name__)
 

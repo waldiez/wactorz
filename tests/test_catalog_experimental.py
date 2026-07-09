@@ -1,5 +1,8 @@
-from wactorz.agents.catalog_agent import BETA_WARNING, CatalogAgent, _chat_message_with_beta_warning
-
+from wactorz.agents.catalog_agent import (
+    BETA_WARNING,
+    CatalogAgent,
+    _chat_message_with_beta_warning,
+)
 
 EXPECTED_EXPERIMENTAL = {
     "code-agent",

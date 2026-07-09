@@ -122,10 +122,16 @@ the frame is NOT saved anywhere unless you pass "path" or "publish":
     {"cmd": "camera"}
 
 Look and SPEAK what the camera sees (sends the frame to the vision LLM, then
-says the real description — not a made-up line). Optional "question" to ask
-something specific; "say": false to get the text without speaking:
+says the real description — not a made-up line). The head is oriented to the look
+aim first (default level/forward; aim with "look down/up/left" or pitch/yaw).
+Optional "question" to ask something specific; "say": false to get text only:
     {"cmd": "describe"}
     {"cmd": "describe", "question": "how many people are here?"}
+    {"cmd": "describe", "pitch": 22}          # look down at the desk, then describe
+
+Look AROUND the room — pan across several head angles and describe the whole
+scene in one go (say "look around" / "what's in the room"):
+    {"cmd": "look_around"}
 
 Record a short mic clip (base64 WAV + direction of arrival in the result):
     {"cmd": "listen", "duration": 3}
@@ -453,7 +459,7 @@ async def setup(agent):
     for verb in ("wake", "sleep", "pose", "antennas", "look_at",
                  "look_pixel", "emotion", "motors", "diag", "set_pose", "bind",
                  "unbind", "list_emotions", "stop", "shutup", "say", "volume",
-                 "camera", "describe", "listen", "doa", "turn_to_sound",
+                 "camera", "describe", "look_around", "listen", "doa", "turn_to_sound",
                  "track_sound"):
         def _make_cb(v):
             async def cb(payload):
@@ -522,6 +528,7 @@ Robot commands:
   {"cmd":"camera"}                         ← capture one still frame from the robot camera (returns an image)
   {"cmd":"describe"}                        ← LOOK through the camera and SPEAK a description of what is seen
   {"cmd":"describe","question":"<q>"}       ← answer a specific question about the current view
+  {"cmd":"look_around"}                      ← pan the head across the room and describe the WHOLE scene
   {"cmd":"listen","duration":<sec>}        ← record a short mic clip (returns audio + direction of arrival)
   {"cmd":"turn_to_sound"}                    ← turn ONCE toward whatever sound the mic array hears (needs motors)
   {"cmd":"track_sound","on":true}            ← KEEP turning toward whoever is speaking (continuous, until stopped)
@@ -596,11 +603,15 @@ Decision rules — CRITICAL:
 - A request without "when/whenever/every/if" is a one-shot — emit the action directly.
 - ONLY add wake/sleep when the user asks for robot motion, an expression,
   or explicitly says wake/sleep. Pure HA requests do NOT need wake/sleep.
-- SEEING / VISION: any question about what the robot sees — the scene, "what is
-  this", "who is here", "read this label", "what colour is X", "look around" —
+- SEEING / VISION: a question about what's in FRONT of the robot — "what do you
+  see", "what is this", "who is here", "read this label", "what colour is X" —
   becomes {"cmd":"describe"} (or {"cmd":"describe","question":"<their question>"}).
-  NEVER emit camera+say for this: camera only captures a raw frame to a file/topic,
-  and say would just invent a description. describe actually looks and speaks.
+  To look in a direction, add words like "look down/up/left" (describe aims the head).
+  A request to survey the whole ROOM — "look around", "what's in the room",
+  "describe the room", "scan the room" — becomes {"cmd":"look_around"} instead,
+  which pans across several angles. NEVER emit camera+say for vision: camera only
+  captures a raw frame, and say would invent a description; describe/look_around
+  actually look and speak.
 - HEARING / SOUND-FACING: a ONE-OFF "turn toward the sound/voice", "look at whoever
   just spoke", "face the noise" → {"cmd":"turn_to_sound"}. A CONTINUOUS "KEEP turning
   toward whoever is speaking", "follow the speaker", "track the voices", "as the
@@ -868,9 +879,14 @@ async def handle_task(agent, payload):
                 # Perception: grab a camera frame / a short mic clip (no LLM needed).
                 elif low in ("what do you see", "what can you see", "what's in front of you",
                              "what is in front of you", "describe what you see",
-                             "describe the scene", "look around", "what do you see right now",
+                             "describe the scene", "what do you see right now",
                              "tell me what you see", "what's there"):
                     payload = {"cmd": "describe"}
+                # Room sweep — pan across a few angles and describe the whole room.
+                elif low in ("look around", "look around the room", "scan the room",
+                             "what's in the room", "what is in the room", "describe the room",
+                             "look around you", "check out the room", "survey the room"):
+                    payload = {"cmd": "look_around"}
                 # Follow-up to the brief look — ask for the full description.
                 elif low in ("look closer", "closer look", "take a closer look",
                              "describe in detail", "in detail", "more detail",
@@ -1172,6 +1188,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "look_pixel":    result = await _look_pixel(agent, payload)
         elif cmd == "camera":        result = await _camera(agent, payload)
         elif cmd == "describe":      result = await _describe(agent, payload)
+        elif cmd == "look_around":   result = await _look_around(agent, payload)
         elif cmd == "listen":        result = await _listen(agent, payload)
         elif cmd == "doa":           result = await _doa(agent, payload)
         elif cmd == "turn_to_sound": result = await _turn_to_sound(agent, payload)
@@ -2225,6 +2242,54 @@ async def _vision_describe(agent, b64_jpeg, question, detail=False):
     return answer
 
 
+_AIM_DOWN = ("look down", "downward", "at the desk", "on the desk", "my desk",
+             "the floor", "at the floor", "below")
+_AIM_UP = ("look up", "upward", "at the ceiling", "the ceiling", "up high", "above")
+_AIM_LEFT = ("look left", "to the left", "on the left", "to your left")
+_AIM_RIGHT = ("look right", "to the right", "on the right", "to your right")
+
+
+def _describe_aim(payload, q_low):
+    """Head aim (pitch, yaw in degrees) for a look. Explicit {pitch,yaw} win;
+    otherwise parse direction words; default (0, 0) = level and forward.
+
+    pitch: down=+, up=-. yaw: left=+, right=-. Kept modest so the camera still
+    frames the scene rather than staring at the floor/ceiling.
+    """
+    if "pitch" in payload or "yaw" in payload:
+        return float(payload.get("pitch", 0)), float(payload.get("yaw", 0))
+    pitch = yaw = 0.0
+    if any(w in q_low for w in _AIM_DOWN):
+        pitch = 22
+    elif any(w in q_low for w in _AIM_UP):
+        pitch = -22
+    if any(w in q_low for w in _AIM_LEFT):
+        yaw = 32
+    elif any(w in q_low for w in _AIM_RIGHT):
+        yaw = -32
+    return pitch, yaw
+
+
+async def _orient_head(agent, payload, q_low):
+    """Point the head at the look aim before capturing (best-effort).
+
+    Skipped by {"orient": false} or when the robot isn't connected. Failure is
+    non-fatal — we just capture from the current pose and log a warning.
+    """
+    if not payload.get("orient", True):
+        return
+    ok, _reason = _is_connected(agent)
+    if not ok:
+        return
+    pitch, yaw = _describe_aim(payload, q_low)
+    try:
+        await _pose(agent, {"pitch": pitch, "yaw": yaw,
+                            "duration": float(payload.get("look_duration", 0.5))})
+        await asyncio.sleep(0.15)  # let the image settle after the move
+    except Exception as e:
+        await agent.log(f"orient before look failed ({e}); capturing as-is", level="warning")
+
+
 async def _describe(agent, payload):
     """Capture one camera frame, describe it with the vision LLM, and speak the result.
 
@@ -2239,8 +2304,29 @@ async def _describe(agent, payload):
       {"cmd":"describe","say":false}              -> return the text, don't speak it
       {"cmd":"describe","path":"C:/shot.jpg"}     -> also save the frame to disk
       {"cmd":"describe","quality":60}             -> JPEG quality sent to the model (default 85)
+
+    Before capturing, the head is oriented to the look aim (default level/forward)
+    so a prior gesture or droop doesn't leave Reachy staring at the floor. Aim it
+    with {"pitch":<deg>,"yaw":<deg>} or by saying "look down/up/left/right"; pass
+    {"orient": false} to capture from the current pose without moving. To sweep the
+    whole room instead of one view, use {"cmd":"look_around"}.
     """
     media = _media(agent)
+
+    q = (payload.get("question") or payload.get("text") or payload.get("prompt") or "").strip()
+    # Detail is opt-in: a keyword in the request, or {"detail": true}. Otherwise a
+    # brief one-liner so Reachy doesn't monologue every glance.
+    _DETAIL_HINTS = ("detail", "more", "closer", "thorough", "everything",
+                     "full", "elaborate", "look again", "closely")
+    detail = bool(payload.get("detail")) or any(h in q.lower() for h in _DETAIL_HINTS)
+    is_general = not q  # no specific user question — a plain "what do you see"
+    question = q or "What do you see?"
+
+    # Orient BEFORE capturing: point the head where we're going to look (default:
+    # level/forward) so we frame the scene instead of whatever pose a gesture or a
+    # droop left us in. Aim with {pitch,yaw} or words like "look down/up/left".
+    await _orient_head(agent, payload, q.lower())
+
     frame = await _do(media.get_frame)
     if frame is None:
         raise RuntimeError(
@@ -2259,14 +2345,6 @@ async def _describe(agent, payload):
                 f.write(data)
         await _do(_write)
 
-    q = (payload.get("question") or payload.get("text") or payload.get("prompt") or "").strip()
-    # Detail is opt-in: a keyword in the request, or {"detail": true}. Otherwise a
-    # brief one-liner so Reachy doesn't monologue every glance.
-    _DETAIL_HINTS = ("detail", "more", "closer", "thorough", "everything",
-                     "full", "elaborate", "look again", "closely")
-    detail = bool(payload.get("detail")) or any(h in q.lower() for h in _DETAIL_HINTS)
-    is_general = not q  # no specific user question — a plain "what do you see"
-    question = q or "What do you see?"
     answer = await _vision_describe(agent, b64, question, detail=detail)
     if not answer:
         answer = "I captured an image but couldn't make out what's in it."
@@ -2299,6 +2377,90 @@ async def _describe(agent, payload):
             await agent.log(f"describe: speaking failed ({e}); returning text only",
                             level="warning")
     return result
+
+
+async def _vision_describe_multi(agent, b64_jpegs, question=None):
+    """Describe a SCENE from several camera views (one multi-image vision call).
+
+    Used by look_around: the frames are the same room from different head angles,
+    so we ask for one coherent overview, not a per-frame list.
+    """
+    llm = getattr(agent, "llm", None)
+    if llm is None:
+        raise RuntimeError("vision needs an LLM provider (none configured)")
+    system = (
+        "You are the eyes of a Reachy Mini robot. The images are several camera views "
+        "the robot captured while looking AROUND one room (e.g. left, ahead, right, up). "
+        "Give ONE natural, moderately detailed description of the overall scene and room — "
+        "combine the views into a coherent whole, do NOT list them separately or say "
+        "'image 1/2'. Do not invent anything you cannot see. If the views are black or "
+        "unreadable, say exactly that."
+    )
+    content = [{"type": "text", "text": question or "Look around and describe the room."}]
+    for b in b64_jpegs:
+        content.append({"type": "image",
+                        "source": {"type": "base64", "media_type": "image/jpeg", "data": b}})
+    answer = await llm.complete(messages=[{"role": "user", "content": content}], system=system)
+    answer = (answer or "").strip()
+    if answer.startswith("[") and ("LLM error" in answer or "No LLM" in answer):
+        raise RuntimeError(answer.strip("[]"))
+    return answer
+
+
+async def _look_around(agent, payload):
+    """Sweep the head across a few angles, capture a frame at each, and describe
+    the whole room from the combined views.
+
+      {"cmd":"look_around"}                         -> pan left/ahead/right + up, one summary
+      {"cmd":"look_around","angles":[[0,40],[0,-40]]}  -> custom [pitch,yaw] stops (degrees)
+      {"cmd":"look_around","question":"is anyone here?"}  -> ask about the whole room
+      {"cmd":"look_around","say":false}             -> return text without speaking
+
+    Costs one vision call over N frames; it re-centres the head when done.
+    """
+    media = _media(agent)
+    # (pitch, yaw) stops in degrees. Default: pan left→ahead→right, then a glance up.
+    angles = payload.get("angles") or [[0, 40], [0, 0], [0, -40], [-18, 0]]
+    quality = int(payload.get("quality", 80))
+    dur = float(payload.get("look_duration", 0.5))
+
+    import base64 as _b64
+    frames = []
+    for stop in angles:
+        try:
+            p, y = float(stop[0]), float(stop[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        try:
+            await _pose(agent, {"pitch": p, "yaw": y, "duration": dur})
+            await asyncio.sleep(0.2)  # settle before grabbing the frame
+            frame = await _do(media.get_frame)
+            if frame is None:
+                continue
+            data, w, h = await _do(_encode_frame, frame, "jpeg", quality)
+            frames.append(_b64.b64encode(data).decode("ascii"))
+        except Exception as e:
+            await agent.log(f"look_around: view {stop} failed: {e}", level="warning")
+
+    # Always try to re-centre so we don't leave the head cocked to one side.
+    try:
+        await _pose(agent, {"pitch": 0, "yaw": 0, "duration": dur})
+    except Exception:
+        pass
+
+    if not frames:
+        raise RuntimeError("look_around captured no frames (camera unavailable?)")
+
+    answer = await _vision_describe_multi(agent, frames, payload.get("question"))
+    if not answer:
+        answer = "I looked around but couldn't make out the room."
+    if payload.get("say", True):
+        try:
+            await _say(agent, {"text": answer, "await_playback": False})
+        except Exception as e:
+            await agent.log(f"look_around: speaking failed ({e}); returning text only",
+                            level="warning")
+    return {"description": answer, "result": answer, "said": answer, "views": len(frames)}
 
 
 def _record_audio_blocking(media, duration, max_frames):

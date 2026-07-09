@@ -356,6 +356,104 @@ class DescribeCommandTest(unittest.TestCase):
         self.assertIn("No LLM", res["error"])
 
 
+class DescribeAimTest(unittest.TestCase):
+    """Head aim parsing for a look (pitch down=+, up=-; yaw left=+, right=-)."""
+
+    def test_default_is_level_and_forward(self):
+        self.assertEqual(NS["_describe_aim"]({}, "what do you see"), (0.0, 0.0))
+
+    def test_direction_words(self):
+        f = NS["_describe_aim"]
+        self.assertEqual(f({}, "look down at my desk"), (22, 0.0))
+        self.assertEqual(f({}, "look up"), (-22, 0.0))
+        self.assertEqual(f({}, "look left"), (0.0, 32))
+        self.assertEqual(f({}, "look right"), (0.0, -32))
+
+    def test_explicit_pitch_yaw_win_over_words(self):
+        self.assertEqual(NS["_describe_aim"]({"pitch": 10, "yaw": -5}, "look up"), (10.0, -5.0))
+
+
+class DescribeOrientTest(unittest.TestCase):
+    """describe orients the head before capturing so it frames the scene."""
+
+    def setUp(self):
+        self._orig_pose = NS["_pose"]
+        self.poses = []
+
+        async def _fake_pose(agent, payload):
+            self.poses.append(payload)
+            return {}
+
+        NS["_pose"] = _fake_pose
+
+    def tearDown(self):
+        NS["_pose"] = self._orig_pose
+
+    def _agent(self):
+        agent = FakeAgent(FakeMedia(frame=np.zeros((16, 16, 3), dtype=np.uint8)))
+        agent.llm = FakeLLM("A room.")
+        return agent
+
+    def test_levels_head_before_capturing(self):
+        agent = self._agent()
+        _run(NS["_dispatch"](agent, "describe", {"say": False}, return_result=True))
+        self.assertTrue(self.poses)
+        self.assertEqual((self.poses[0]["pitch"], self.poses[0]["yaw"]), (0.0, 0.0))
+
+    def test_aim_words_tilt_the_head(self):
+        agent = self._agent()
+        _run(NS["_dispatch"](
+            agent, "describe", {"question": "look down at my desk", "say": False},
+            return_result=True))
+        self.assertEqual(self.poses[0]["pitch"], 22)
+
+    def test_orient_false_captures_without_moving(self):
+        agent = self._agent()
+        _run(NS["_dispatch"](agent, "describe", {"orient": False, "say": False},
+                             return_result=True))
+        self.assertEqual(self.poses, [])
+
+
+class LookAroundTest(unittest.TestCase):
+    """look_around sweeps a few angles and describes the whole room in one call."""
+
+    def setUp(self):
+        self._orig_pose = NS["_pose"]
+        self.poses = []
+
+        async def _fake_pose(agent, payload):
+            self.poses.append((payload.get("pitch"), payload.get("yaw")))
+            return {}
+
+        NS["_pose"] = _fake_pose
+
+    def tearDown(self):
+        NS["_pose"] = self._orig_pose
+
+    def _agent(self, reply="A combined room overview."):
+        agent = FakeAgent(FakeMedia(frame=np.zeros((16, 16, 3), dtype=np.uint8)))
+        agent.llm = FakeLLM(reply)
+        return agent
+
+    def test_sweeps_default_views_combines_and_recentres(self):
+        agent = self._agent()
+        res = _run(NS["_dispatch"](agent, "look_around", {"say": False}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["said"], "A combined room overview.")
+        self.assertEqual(res["views"], 4)  # default 4 angles
+        # A single multi-image vision call carrying all four frames.
+        content = agent.llm.calls[0]["messages"][0]["content"]
+        self.assertEqual(len([b for b in content if b["type"] == "image"]), 4)
+        self.assertEqual(self.poses[-1], (0, 0))  # head re-centred at the end
+
+    def test_custom_angles(self):
+        agent = self._agent("ok")
+        res = _run(NS["_dispatch"](
+            agent, "look_around", {"angles": [[0, 30], [0, -30]], "say": False},
+            return_result=True))
+        self.assertEqual(res["views"], 2)
+
+
 class SayPlaybackPadTest(unittest.TestCase):
     def test_waits_out_speech_plus_tail_by_default(self):
         pad = NS["_say_playback_pad"]

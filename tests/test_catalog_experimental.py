@@ -1,4 +1,4 @@
-from wactorz.agents.catalog_agent import BETA_WARNING, CatalogAgent
+from wactorz.agents.catalog_agent import BETA_WARNING, CatalogAgent, _chat_message_with_beta_warning
 
 
 EXPECTED_EXPERIMENTAL = {
@@ -73,10 +73,21 @@ def test_catalog_agent_response_groups_recommended_and_experimental():
     assert "**Catalog agents**" in text
     assert "`2` total - `1` recommended, `1` experimental beta" in text
     assert "### Recommended" in text
-    assert "Use these first for normal workflows." in text
     assert "- `weather-agent` - Weather lookup" in text
     assert "### Experimental / Beta" in text
-    assert BETA_WARNING in text
+    assert BETA_WARNING not in text
     assert "- `code-agent` - Sandboxed code helper" in text
     assert text.index("### Recommended") < text.index("### Experimental / Beta")
-    assert text.count(BETA_WARNING) == 1
+    assert "Use these first for normal workflows." not in text
+
+
+def test_catalog_spawn_message_includes_beta_warning_in_chat():
+    text = _chat_message_with_beta_warning("'code-agent' spawned and running", BETA_WARNING)
+
+    assert text == f"'code-agent' spawned and running\n\nWarning: {BETA_WARNING}"
+
+
+def test_catalog_spawn_message_leaves_recommended_agents_plain():
+    text = _chat_message_with_beta_warning("'weather-agent' spawned and running", "")
+
+    assert text == "'weather-agent' spawned and running"

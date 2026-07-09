@@ -45,6 +45,12 @@ BETA_WARNING = (
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+def _chat_message_with_beta_warning(message: str, beta_warning: str) -> str:
+    if not beta_warning:
+        return message
+    return f"{message}\n\nWarning: {beta_warning}"
+
+
 def _load_recipe(filename: str) -> str | None:
     import importlib.util
 
@@ -804,7 +810,9 @@ class CatalogAgent(Actor):
                     native_kwargs["llm_provider"] = llm_provider
                 actor = await self.spawn(factory, **native_kwargs)
                 if actor:
-                    msg = f"'{resolved}' spawned and running"
+                    msg = _chat_message_with_beta_warning(
+                        f"'{resolved}' spawned and running", beta_warning
+                    )
                     logger.info(f"[{self.name}] {msg}")
                     await self._mqtt_publish(
                         f"agents/{self.actor_id}/logs",
@@ -907,7 +915,9 @@ class CatalogAgent(Actor):
                     save_config["trusted"] = True
                     main._save_to_spawn_registry(save_config)
 
-                msg = f"'{resolved}' spawned and running"
+                msg = _chat_message_with_beta_warning(
+                    f"'{resolved}' spawned and running", beta_warning
+                )
                 logger.info(f"[{self.name}] {msg}")
                 await self._mqtt_publish(
                     f"agents/{self.actor_id}/logs",

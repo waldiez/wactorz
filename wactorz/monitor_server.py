@@ -111,18 +111,15 @@ def _format_catalog_agents_response(payload: dict) -> str:
             [
                 "",
                 "### Recommended",
-                "Use these first for normal workflows.",
                 *(_catalog_agent_line(agent) for agent in recommended),
             ]
         )
 
     if experimental:
-        warning = next((a.get("warning") for a in experimental if a.get("warning")), "")
         lines.extend(
             [
                 "",
                 "### Experimental / Beta",
-                warning or "Use for trials only. These agents may change, fail, or be removed.",
                 *(_catalog_agent_line(agent) for agent in experimental),
             ]
         )

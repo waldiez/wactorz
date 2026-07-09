@@ -49,10 +49,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   BEFORE capturing (default level/forward), so a prior gesture or a droop no longer leaves
   Reachy staring at the desk/floor when you ask "what do you see". Aim it with "look
   down/up/left/right" or `{"pitch":..,"yaw":..}`; `{"orient":false}` keeps the old
-  capture-from-current-pose behaviour.
+  capture-from-current-pose behaviour. Each look waits for the head move to finish before
+  grabbing the frame (goto_target is fire-and-forget), so the shot is sharp, not blurred
+  mid-turn.
 - **Reachy `look_around`** - a new command that pans the head across several angles
-  (left / ahead / right / up by default), captures a frame at each, and describes the whole
-  room in one combined vision call, then re-centres. "look around" / "what's in the room" /
+  (left / ahead / right / up by default), captures a sharp frame at each (waiting out each
+  move so it isn't motion-blurred), and describes the whole room in one combined vision
+  call, then re-centres. "look around" / "what's in the room" /
   "scan the room" route here (they used to collapse to a single-frame `describe`). Tune with
   `angles`, `question`, `quality`, `look_duration`.
 - **Reachy `describe` is brief by default** - "what do you see?" now gets one short spoken

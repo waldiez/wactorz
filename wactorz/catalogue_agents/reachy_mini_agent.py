@@ -2282,10 +2282,12 @@ async def _orient_head(agent, payload, q_low):
     if not ok:
         return
     pitch, yaw = _describe_aim(payload, q_low)
+    dur = float(payload.get("look_duration", 0.5))
     try:
-        await _pose(agent, {"pitch": pitch, "yaw": yaw,
-                            "duration": float(payload.get("look_duration", 0.5))})
-        await asyncio.sleep(0.15)  # let the image settle after the move
+        await _pose(agent, {"pitch": pitch, "yaw": yaw, "duration": dur})
+        # goto_target is fire-and-forget, so wait out the move + a short settle
+        # BEFORE the caller captures — otherwise the frame is blurred mid-turn.
+        await asyncio.sleep(dur + 0.25)
     except Exception as e:
         await agent.log(f"orient before look failed ({e}); capturing as-is", level="warning")
 
@@ -2433,7 +2435,9 @@ async def _look_around(agent, payload):
             continue
         try:
             await _pose(agent, {"pitch": p, "yaw": y, "duration": dur})
-            await asyncio.sleep(0.2)  # settle before grabbing the frame
+            # Wait out the move + settle BEFORE grabbing the frame — goto_target is
+            # fire-and-forget, so capturing right away yields a motion-blurred shot.
+            await asyncio.sleep(dur + 0.3)
             frame = await _do(media.get_frame)
             if frame is None:
                 continue

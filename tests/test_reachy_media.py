@@ -396,14 +396,16 @@ class DescribeOrientTest(unittest.TestCase):
 
     def test_levels_head_before_capturing(self):
         agent = self._agent()
-        _run(NS["_dispatch"](agent, "describe", {"say": False}, return_result=True))
+        _run(NS["_dispatch"](agent, "describe", {"say": False, "look_duration": 0},
+                             return_result=True))
         self.assertTrue(self.poses)
         self.assertEqual((self.poses[0]["pitch"], self.poses[0]["yaw"]), (0.0, 0.0))
 
     def test_aim_words_tilt_the_head(self):
         agent = self._agent()
         _run(NS["_dispatch"](
-            agent, "describe", {"question": "look down at my desk", "say": False},
+            agent, "describe",
+            {"question": "look down at my desk", "say": False, "look_duration": 0},
             return_result=True))
         self.assertEqual(self.poses[0]["pitch"], 22)
 
@@ -437,7 +439,8 @@ class LookAroundTest(unittest.TestCase):
 
     def test_sweeps_default_views_combines_and_recentres(self):
         agent = self._agent()
-        res = _run(NS["_dispatch"](agent, "look_around", {"say": False}, return_result=True))
+        res = _run(NS["_dispatch"](
+            agent, "look_around", {"say": False, "look_duration": 0}, return_result=True))
         self.assertTrue(res["ok"])
         self.assertEqual(res["said"], "A combined room overview.")
         self.assertEqual(res["views"], 4)  # default 4 angles
@@ -449,7 +452,8 @@ class LookAroundTest(unittest.TestCase):
     def test_custom_angles(self):
         agent = self._agent("ok")
         res = _run(NS["_dispatch"](
-            agent, "look_around", {"angles": [[0, 30], [0, -30]], "say": False},
+            agent, "look_around",
+            {"angles": [[0, 30], [0, -30]], "say": False, "look_duration": 0},
             return_result=True))
         self.assertEqual(res["views"], 2)
 

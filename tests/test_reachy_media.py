@@ -269,19 +269,42 @@ class DescribeCommandTest(unittest.TestCase):
 
     def test_describe_sends_image_block_and_returns_description(self):
         frame = np.zeros((16, 16, 3), dtype=np.uint8)
-        llm = FakeLLM("I see a dim room with a chair.")
+        llm = FakeLLM("A tidy desk with a laptop.")
         agent = self._agent(frame, llm)
         # say=False so we exercise vision without the TTS/audio path.
         res = _run(NS["_dispatch"](agent, "describe", {"say": False}, return_result=True))
         self.assertTrue(res["ok"])
-        self.assertEqual(res["description"], "I see a dim room with a chair.")
-        self.assertEqual(res["said"], "I see a dim room with a chair.")
-        # The LLM must have received a real base64 JPEG image block.
+        self.assertEqual(res["description"], "A tidy desk with a laptop.")  # raw answer
+        # A general, brief look offers more instead of monologuing.
+        self.assertTrue(res["said"].startswith("A tidy desk with a laptop"))
+        self.assertIn("look closer", res["said"].lower())
+        self.assertFalse(res["detail"])
+        # The LLM must have received a real base64 JPEG image block + the BRIEF prompt.
         content = llm.calls[0]["messages"][0]["content"]
         img = next(b for b in content if b["type"] == "image")
         self.assertEqual(img["source"]["type"], "base64")
         self.assertEqual(img["source"]["media_type"], "image/jpeg")
         self.assertTrue(img["source"]["data"])  # non-empty b64
+        self.assertIn("one short", llm.calls[0]["system"].lower())  # brief by default
+
+    def test_detail_request_uses_full_paragraph_and_skips_nudge(self):
+        frame = np.zeros((16, 16, 3), dtype=np.uint8)
+        llm = FakeLLM("A long, detailed paragraph about the room.")
+        agent = self._agent(frame, llm)
+        res = _run(NS["_dispatch"](
+            agent, "describe", {"detail": True, "say": False}, return_result=True))
+        self.assertTrue(res["detail"])
+        self.assertEqual(res["said"], "A long, detailed paragraph about the room.")  # no nudge
+        self.assertIn("paragraph", llm.calls[0]["system"].lower())  # detailed prompt
+
+    def test_specific_question_gets_no_nudge(self):
+        frame = np.zeros((16, 16, 3), dtype=np.uint8)
+        llm = FakeLLM("Two people.")
+        agent = self._agent(frame, llm)
+        res = _run(NS["_dispatch"](
+            agent, "describe", {"question": "how many people?", "say": False},
+            return_result=True))
+        self.assertEqual(res["said"], "Two people.")  # no "look closer" tacked on
 
     def test_describe_passes_the_users_question(self):
         frame = np.zeros((16, 16, 3), dtype=np.uint8)

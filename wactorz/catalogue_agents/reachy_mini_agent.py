@@ -871,6 +871,12 @@ async def handle_task(agent, payload):
                              "describe the scene", "look around", "what do you see right now",
                              "tell me what you see", "what's there"):
                     payload = {"cmd": "describe"}
+                # Follow-up to the brief look — ask for the full description.
+                elif low in ("look closer", "closer look", "take a closer look",
+                             "describe in detail", "in detail", "more detail",
+                             "tell me more", "describe more", "look again", "look closely",
+                             "what else do you see", "go on"):
+                    payload = {"cmd": "describe", "detail": True}
                 elif low in ("take a photo", "take a picture", "take a snapshot",
                              "snapshot", "photo", "picture", "capture", "camera"):
                     payload = {"cmd": "camera"}
@@ -2160,23 +2166,32 @@ async def _camera(agent, payload):
     return result
 
 
-async def _vision_describe(agent, b64_jpeg, question):
+async def _vision_describe(agent, b64_jpeg, question, detail=False):
     """Ask the vision-capable LLM to describe a base64 JPEG frame.
 
     Uses the Anthropic image content-block shape, which the configured provider
     forwards to the model unchanged. Returns the description text, or raises with
-    the provider's error if the LLM is unavailable.
+    the provider's error if the LLM is unavailable. `detail=False` keeps the
+    answer to one short spoken sentence; `detail=True` gives the full paragraph.
     """
     llm = getattr(agent, "llm", None)
     if llm is None:
         raise RuntimeError("vision needs an LLM provider (none configured)")
-    system = (
-        "You are the eyes of a Reachy Mini robot. Describe what is ACTUALLY visible "
-        "in the image in a detailed, natural paragraph the robot can say aloud: the "
-        "main objects, any people, the layout, colours, and notable details. Do not "
-        "invent anything you cannot see. If the image is black, blank, or unreadable, "
-        "say exactly that instead of guessing."
-    )
+    if detail:
+        system = (
+            "You are the eyes of a Reachy Mini robot. Describe what is ACTUALLY visible "
+            "in the image in a natural paragraph the robot can say aloud: the main objects, "
+            "any people, the layout, colours, and notable details. Do not invent anything "
+            "you cannot see. If the image is black, blank, or unreadable, say exactly that."
+        )
+    else:
+        system = (
+            "You are the eyes of a Reachy Mini robot. In ONE short, natural sentence "
+            "(roughly 15-25 words) say the gist of what you see — the main subject and "
+            "setting — not a full inventory. Speak it aloud, plainly. Do not invent "
+            "anything you cannot see. If the image is black, blank, or unreadable, say "
+            "exactly that in a few words."
+        )
     content = [
         {"type": "text", "text": question or "What do you see?"},
         {"type": "image",
@@ -2197,7 +2212,10 @@ async def _describe(agent, payload):
     Unlike camera->say (which would just make up a line), this actually sends the
     frame to the model, so the spoken answer reflects what the robot really sees.
 
-      {"cmd":"describe"}                          -> capture + vision + speak
+      {"cmd":"describe"}                          -> capture + vision + speak (BRIEF: one
+                                                     short sentence, then offers a closer look)
+      {"cmd":"describe","detail":true}            -> full detailed paragraph (also: say
+                                                     "look closer" / "in detail" / "tell me more")
       {"cmd":"describe","question":"how many people?"}  -> answer a specific question
       {"cmd":"describe","say":false}              -> return the text, don't speak it
       {"cmd":"describe","path":"C:/shot.jpg"}     -> also save the frame to disk
@@ -2222,13 +2240,26 @@ async def _describe(agent, payload):
                 f.write(data)
         await _do(_write)
 
-    question = (payload.get("question") or payload.get("text")
-                or payload.get("prompt") or "What do you see?")
-    answer = await _vision_describe(agent, b64, question)
+    q = (payload.get("question") or payload.get("text") or payload.get("prompt") or "").strip()
+    # Detail is opt-in: a keyword in the request, or {"detail": true}. Otherwise a
+    # brief one-liner so Reachy doesn't monologue every glance.
+    _DETAIL_HINTS = ("detail", "more", "closer", "thorough", "everything",
+                     "full", "elaborate", "look again", "closely")
+    detail = bool(payload.get("detail")) or any(h in q.lower() for h in _DETAIL_HINTS)
+    is_general = not q  # no specific user question — a plain "what do you see"
+    question = q or "What do you see?"
+    answer = await _vision_describe(agent, b64, question, detail=detail)
     if not answer:
         answer = "I captured an image but couldn't make out what's in it."
 
-    result = {"description": answer, "result": answer, "said": answer,
+    # Nudge that more is available — only after a brief, general look, and not when
+    # the view was unreadable. Kept short so the offer isn't itself a monologue.
+    said = answer
+    _unreadable = any(w in answer.lower() for w in ("black", "blank", "couldn't", "can't", "cannot"))
+    if is_general and not detail and not _unreadable and not answer.rstrip().endswith("?"):
+        said = answer.rstrip(".") + ". Want me to look closer?"
+
+    result = {"description": answer, "result": said, "said": said, "detail": detail,
               "width": w, "height": h, "bytes": len(data)}
     if path:
         result["path"] = path
@@ -2239,7 +2270,7 @@ async def _describe(agent, payload):
     # and can cut it off.
     if payload.get("say", True):
         try:
-            await _say(agent, {"text": answer, "await_playback": False})
+            await _say(agent, {"text": said, "await_playback": False})
         except Exception as e:
             await agent.log(f"describe: speaking failed ({e}); returning text only",
                             level="warning")

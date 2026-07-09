@@ -85,6 +85,50 @@ mqtt_client_ref = None
 # IOAgent via the io/chat/control topic.
 _inflight_chat_tasks: set = set()
 
+def _catalog_agent_line(agent: dict) -> str:
+    name = agent.get("name", "unknown")
+    description = agent.get("description", "")
+    return f"- `{name}` - {description}" if description else f"- `{name}`"
+
+
+def _format_catalog_agents_response(payload: dict) -> str:
+    agents = payload.get("agents", [])
+    if not isinstance(agents, list):
+        return str(payload)
+
+    recommended = [a for a in agents if isinstance(a, dict) and not a.get("experimental")]
+    experimental = [a for a in agents if isinstance(a, dict) and a.get("experimental")]
+    total = len(recommended) + len(experimental)
+
+    lines = [
+        "**Catalog agents**",
+        f"`{total}` total - `{len(recommended)}` recommended, "
+        f"`{len(experimental)}` experimental beta",
+    ]
+
+    if recommended:
+        lines.extend(
+            [
+                "",
+                "### Recommended",
+                "Use these first for normal workflows.",
+                *(_catalog_agent_line(agent) for agent in recommended),
+            ]
+        )
+
+    if experimental:
+        warning = next((a.get("warning") for a in experimental if a.get("warning")), "")
+        lines.extend(
+            [
+                "",
+                "### Experimental / Beta",
+                warning or "Use for trials only. These agents may change, fail, or be removed.",
+                *(_catalog_agent_line(agent) for agent in experimental),
+            ]
+        )
+
+    return "\n".join(lines)
+
 
 def _track_chat_task(task):
     """Register an in-flight chat-generation task so /chat/stop can cancel it."""
@@ -726,13 +770,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                     or str(payload)
                 )
                 if "agents" in payload and isinstance(payload["agents"], list):
-                    lines = [payload.get("message", "Available agents:")]
-                    for a in payload["agents"]:
-                        suffix = ""
-                        if a.get("experimental"):
-                            suffix = f" [beta: {a.get('warning', 'Experimental/Beta agent')}]"
-                        lines.append(f"  - {a['name']}: {a.get('description', '')}{suffix}")
-                    text_out = "\n".join(lines)
+                    text_out = _format_catalog_agents_response(payload)
             else:
                 text_out = str(payload)
 

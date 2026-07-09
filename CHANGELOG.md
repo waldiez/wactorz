@@ -48,9 +48,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Reachy `describe` is brief by default** - "what do you see?" now gets one short spoken
   sentence (the gist) that ends by offering a closer look, instead of a whole paragraph
   monologue every glance. Ask for more with `{"cmd":"describe","detail":true}` or plain
-  "look closer" / "in detail" / "tell me more" for the full description. A specific question
-  ("how many people?") is answered concisely with no nudge, and unreadable/black frames skip
-  the offer.
+  "look closer" / "in detail" / "tell me more" for the full description — and a plain **"yes"**
+  right after the "Want me to look closer?" offer now does the detailed look (the offer is
+  remembered for 60s) instead of being echoed back. A specific question ("how many people?")
+  is answered concisely with no nudge, and unreadable/black frames skip the offer.
 - **Reachy `shutup` / "stop talking"** - cut the current utterance immediately, instead
   of being stuck listening to a long spoken reply with no way to stop it. `{"cmd":"shutup"}`
   (or "shut up" / "stop talking" / "be quiet") stops playback now; `{"cmd":"stop"}` also

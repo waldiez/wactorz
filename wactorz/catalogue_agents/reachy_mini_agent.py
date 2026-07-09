@@ -875,7 +875,13 @@ async def handle_task(agent, payload):
                 elif low in ("look closer", "closer look", "take a closer look",
                              "describe in detail", "in detail", "more detail",
                              "tell me more", "describe more", "look again", "look closely",
-                             "what else do you see", "go on"):
+                             "what else do you see"):
+                    payload = {"cmd": "describe", "detail": True}
+                # A bare 'yes' right after "Want me to look closer?" means: do it.
+                # Only hijacks the affirmative while that offer is still open, so a
+                # normal 'yes' elsewhere still falls through to the planner.
+                elif low in _AFFIRMATIVES and _pending_look_closer(agent):
+                    agent.state["_pending_detail"] = None
                     payload = {"cmd": "describe", "detail": True}
                 elif low in ("take a photo", "take a picture", "take a snapshot",
                              "snapshot", "photo", "picture", "capture", "camera"):
@@ -1043,6 +1049,19 @@ def _queue_spoken_replies(agent, spoken_replies):
         await agent.notify_user("\n\n".join(texts))
 
     agent.run_in_background(_send())
+
+
+_AFFIRMATIVES = {
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "please", "yes please",
+    "go on", "do it", "please do", "go ahead", "yes go on", "sure do", "yeah go on",
+}
+
+
+def _pending_look_closer(agent):
+    """True if a 'Want me to look closer?' offer is still open (within 60s), so a
+    bare 'yes' means 'give me the detailed description' rather than being echoed."""
+    ts = agent.state.get("_pending_detail")
+    return bool(ts and (_time.time() - ts) < 60)
 
 
 async def _bridge_to_main(agent, text, task_id=None):
@@ -2258,6 +2277,11 @@ async def _describe(agent, payload):
     _unreadable = any(w in answer.lower() for w in ("black", "blank", "couldn't", "can't", "cannot"))
     if is_general and not detail and not _unreadable and not answer.rstrip().endswith("?"):
         said = answer.rstrip(".") + ". Want me to look closer?"
+        # Arm the follow-up: a 'yes' next means 'do the detailed look'.
+        agent.state["_pending_detail"] = _time.time()
+    else:
+        # Detailed look, a specific question, or an unreadable frame — no open offer.
+        agent.state["_pending_detail"] = None
 
     result = {"description": answer, "result": said, "said": said, "detail": detail,
               "width": w, "height": h, "bytes": len(data)}

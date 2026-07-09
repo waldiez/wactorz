@@ -306,6 +306,30 @@ class DescribeCommandTest(unittest.TestCase):
             return_result=True))
         self.assertEqual(res["said"], "Two people.")  # no "look closer" tacked on
 
+    def test_brief_general_look_arms_the_yes_followup(self):
+        agent = self._agent(np.zeros((16, 16, 3), dtype=np.uint8), FakeLLM("A desk."))
+        _run(NS["_dispatch"](agent, "describe", {"say": False}, return_result=True))
+        self.assertTrue(NS["_pending_look_closer"](agent))  # 'yes' now means look closer
+
+    def test_detail_look_disarms_the_followup(self):
+        agent = self._agent(np.zeros((16, 16, 3), dtype=np.uint8), FakeLLM("Long detail."))
+        agent.state["_pending_detail"] = __import__("time").time()  # armed
+        _run(NS["_dispatch"](agent, "describe", {"detail": True, "say": False}, return_result=True))
+        self.assertFalse(NS["_pending_look_closer"](agent))
+
+    def test_specific_question_disarms_the_followup(self):
+        agent = self._agent(np.zeros((16, 16, 3), dtype=np.uint8), FakeLLM("Two people."))
+        agent.state["_pending_detail"] = __import__("time").time()
+        _run(NS["_dispatch"](
+            agent, "describe", {"question": "how many people?", "say": False},
+            return_result=True))
+        self.assertFalse(NS["_pending_look_closer"](agent))
+
+    def test_offer_expires_after_a_minute(self):
+        agent = self._agent(np.zeros((16, 16, 3), dtype=np.uint8), FakeLLM("x"))
+        agent.state["_pending_detail"] = __import__("time").time() - 120  # 2 min ago
+        self.assertFalse(NS["_pending_look_closer"](agent))
+
     def test_describe_passes_the_users_question(self):
         frame = np.zeros((16, 16, 3), dtype=np.uint8)
         llm = FakeLLM("Two people.")

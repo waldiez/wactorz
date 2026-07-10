@@ -2551,6 +2551,7 @@ async def chat_log_handler(request):
 
 _tts_voices_cache: list | None = None
 _ha_bridge_task: asyncio.Task | None = None
+_agent_bridge_tasks: list[asyncio.Task] = []
 
 
 async def _start_ha_bridge(_app=None) -> None:
@@ -2593,6 +2594,98 @@ async def _start_ha_bridge(_app=None) -> None:
     logger.info(
         "[ha-bridge] HAFusekiBridge started (ha=%s → fuseki=%s/%s)",
         CONFIG.ha_url,
+        CONFIG.fuseki_url,
+        CONFIG.fuseki_dataset,
+    )
+
+
+async def _start_agent_bridges(_app=None) -> None:
+    """Launch the agent-manifest and metrics Fuseki bridges in-process.
+
+    Agents publish their capability manifests as *retained* MQTT messages on
+    ``agents/{id}/manifest``, but something has to consume them and upsert them
+    into the ``urn:wactorz:agents`` named graph that the dashboard's "Agents"
+    panel queries. In the standalone ``wactorz-fuseki`` process that is the job
+    of AgentManifestBridge/MetricsBridge — but the single-process app (``wactorz``,
+    the HA add-on, ``make run``) only ran HAFusekiBridge, so ``urn:ha:devices`` /
+    ``urn:ha:areas`` were rebuilt on startup and showed up while the agents graph
+    stayed empty. Starting the bridges here consumes the retained manifests
+    without needing a separate bridge container.
+
+    Also seeds the registry once so agents that never publish a manifest (main,
+    planner, monitor, io) still appear as typed, labelled nodes.
+    """
+    global _agent_bridge_tasks
+    from .config import CONFIG
+
+    if not CONFIG.fuseki_url:
+        return
+    try:
+        from .fuseki import (
+            AgentManifestBridge,
+            MetricsBridge,
+            _run_with_retry,
+            fuseki_reachable,
+            seed_agent_registry,
+        )
+    except Exception as exc:
+        logger.warning("[agent-bridge] Could not import Fuseki agent bridges: %s", exc)
+        return
+
+    # Skip if Fuseki isn't up — otherwise the bridges retry-loop forever writing
+    # nowhere. The agents graph simply stays empty until Fuseki is reachable.
+    if not await fuseki_reachable(CONFIG.fuseki_url):
+        logger.info(
+            "[agent-bridge] Fuseki not reachable at %s — agent manifest bridge "
+            "disabled. (Start Fuseki to populate the agents graph.)",
+            CONFIG.fuseki_url,
+        )
+        return
+
+    # Seed registry-owned fields (state/protected) plus a fallback node for every
+    # running actor, so agents without a manifest still show. Best-effort.
+    if registry is not None:
+        try:
+            await seed_agent_registry(
+                registry.all_actors(),
+                CONFIG.fuseki_url,
+                CONFIG.fuseki_dataset,
+                CONFIG.fuseki_user,
+                CONFIG.fuseki_password,
+            )
+        except Exception as exc:
+            logger.warning("[agent-bridge] Agent registry seed failed: %s", exc)
+
+    manifest_bridge = AgentManifestBridge(
+        mqtt_broker=MQTT_BROKER,
+        mqtt_port=MQTT_PORT,
+        fuseki_url=CONFIG.fuseki_url,
+        fuseki_dataset=CONFIG.fuseki_dataset,
+        fuseki_user=CONFIG.fuseki_user,
+        fuseki_password=CONFIG.fuseki_password,
+    )
+    metrics_bridge = MetricsBridge(
+        mqtt_broker=MQTT_BROKER,
+        mqtt_port=MQTT_PORT,
+        fuseki_url=CONFIG.fuseki_url,
+        fuseki_dataset=CONFIG.fuseki_dataset,
+        fuseki_user=CONFIG.fuseki_user,
+        fuseki_password=CONFIG.fuseki_password,
+    )
+    _agent_bridge_tasks = [
+        asyncio.create_task(
+            _run_with_retry(manifest_bridge.run, "AgentManifestBridge"),
+            name="agent-manifest-bridge",
+        ),
+        asyncio.create_task(
+            _run_with_retry(metrics_bridge.run, "MetricsBridge"),
+            name="agent-metrics-bridge",
+        ),
+    ]
+    logger.info(
+        "[agent-bridge] AgentManifestBridge + MetricsBridge started (mqtt=%s:%d → fuseki=%s/%s)",
+        MQTT_BROKER,
+        MQTT_PORT,
         CONFIG.fuseki_url,
         CONFIG.fuseki_dataset,
     )
@@ -2937,6 +3030,7 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/api/tts", tts_handler)
     app.on_startup.append(_warm_tts_voices)
     app.on_startup.append(_start_ha_bridge)
+    app.on_startup.append(_start_agent_bridges)
 
     app.router.add_get("/api/config", config_handler)
     app.router.add_get("/config", config_handler)

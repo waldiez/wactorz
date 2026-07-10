@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.1
+
+- Added: `openai_url` add-on option — surfaces the existing OpenAI-compatible endpoint support in the settings UI, so the `openai` provider can be pointed at a LiteLLM proxy or any compatible API (Groq, Together, vLLM, LM Studio) without editing env vars.
+
+## 0.5.0
+
+- Added: optional MQTT broker authentication via `mqtt_username` / `mqtt_password`, wired into runtime MQTT clients and the dashboard MQTT WebSocket proxy without exposing credentials to the browser.
+- Fixed: dashboard now binds before the supervisor starts, so slow, unreachable, or auth-rejecting MQTT brokers no longer leave the add-on serving a blank page during boot.
+- Fixed: external broker startup now gets a short readiness probe before Wactorz launches, reducing churn when the configured broker is still unavailable.
+- Fixed: TTS, agent avatar, and PWA manifest requests now stay inside the Home Assistant ingress prefix, restoring these assets under ingress.
+- Fixed: cost totals now survive agent deletion and hard kills more reliably, with deleted-agent spend retained in the all-time total.
+- Fixed: agent date/time context now uses the real current time with timezone override support through `WACTORZ_TZ`.
+- Removed: remaining Fuseki/SPARQL surfaces and the dashboard Graph tab are gone from the add-on path.
+
+## 0.4.4.2
+
+- Removed: Apache Jena Fuseki / SPARQL entirely. Gone are the bundled JRE 17 + Fuseki tarball (~170 MB), the `fuseki_embedded` option, all `fuseki_url` / `fuseki_dataset` / `fuseki_user` / `fuseki_password` options, and addon port `3030`. The UI "Graph" tab has also been removed. Wactorz runs without a triplestore.
+
 ## 0.4.4
 
 - Added: OpenAI-compatible endpoint support — set `OPENAI_URL` to redirect the `openai` provider to any compatible API (Groq, Together, vLLM, LM Studio, etc.).

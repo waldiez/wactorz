@@ -79,9 +79,7 @@ describe("fusekiView", () => {
             json: async () => ({
                 head: { vars: ["s", "p"] },
                 results: {
-                    bindings: [
-                        { s: { type: "uri", value: "urn:a" }, p: { type: "literal", value: "hi" } },
-                    ],
+                    bindings: [{ s: { type: "uri", value: "urn:a" }, p: { type: "literal", value: "hi" } }],
                 },
             }),
             text: async () => "",

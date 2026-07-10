@@ -35,17 +35,8 @@ export async function seedHaConfigFromServer(): Promise<boolean> {
         if (!resp.ok) {
             return false;
         }
-        const cfg = (await resp.json()) as {
-            ha?: { url?: string };
-            fuseki?: { url?: string; dataset?: string };
-        };
-        // Seed all keys (each is a no-op when the server omits the value), then
-        // report whether anything changed. Kept as separate calls so short-
-        // circuiting can't skip a seed.
-        const haChanged = seedKeyFromServer("wactorz-ha-url", cfg.ha?.url);
-        const fkUrl = seedKeyFromServer("wactorz-fuseki-url", cfg.fuseki?.url);
-        const fkDs = seedKeyFromServer("wactorz-fuseki-dataset", cfg.fuseki?.dataset);
-        return haChanged || fkUrl || fkDs;
+        const cfg = (await resp.json()) as { ha?: { url?: string } };
+        return seedKeyFromServer("wactorz-ha-url", cfg.ha?.url);
     } catch {
         return false; // server may not be ready yet
     }

@@ -77,10 +77,6 @@ class AppConfig:
     fuseki_dataset: str
     fuseki_user: str
     fuseki_password: str
-    # Stable deployment/site domain used as the SWID namespace. Kept separate
-    # from a device's room/area on purpose: a device that is moved between rooms
-    # must keep the same SWID, so location is modelled as an hsml relationship in
-    # the graph rather than being encoded into the identifier.
     swid_namespace: str
 
 

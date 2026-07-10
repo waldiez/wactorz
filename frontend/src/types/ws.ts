@@ -5,7 +5,7 @@
 /**
  * Wire contracts for the monitor server's `/ws` endpoint — the data shapes the
  * server broadcasts (state patches, snapshot totals, log-feed entries). The
- * `WSChatClient` consumes these and the mappers in `agents/mapping.ts` turn them
+ * `WSClient` consumes these and the mappers in `agents/mapping.ts` turn them
  * into UI models. Callback/handler signatures stay with the client.
  */
 
@@ -23,6 +23,8 @@ export type StatePatchAgent = {
     mem?: number;
     task?: string;
     agent_type?: string;
+    /** Set for remote-runner agents — the node name; marks the agent as remote. */
+    node?: string;
 };
 
 /** Snapshot-level totals computed by the backend (includes historical/deleted agents). */

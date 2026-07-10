@@ -5,8 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+> **sinergym branch:** synced with `dev`. Unlike `dev`, this branch keeps Fuseki
+> (server container, HA→Fuseki bridge, `/api/fuseki` proxy, Graph tab), extra
+> agents, and the `sinergym/` + `models/` experiment trees.
+
+### Changed
+
+- **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant
+  activity now stream to the browser as server-push over `/ws`; the dashboard no longer opens its own
+  MQTT connection to the broker, and the browser receives no broker credentials.
+
+### Fixed
+
+- **Remote agent vanish-detection** — a remote agent missing from a single node heartbeat is no longer pruned from the registry (which broke delete and node-reboot recovery); pruning now needs several consecutive misses, and never touches an agent that hasn't appeared yet or has migrated away.
+- **Chat input** — up-arrow history recall now grows the textarea to fit a multi-line message instead of clipping it to one line.
+- **Nodes panel** — remote-runner agents no longer also appear under the local node; each agent is listed only on the node it runs on.
+- **Remote agent delete** — deleting an agent that runs on a remote node now stops it on the node instead of only clearing the server's records, so it no longer keeps running and reappearing.
+- **Remote agents flicker / chat misroutes to main** — the dashboard dropped the `node` field when mapping WS state patches, so the 15s /api/actors reconcile (local-only) repeatedly evicted remote agents. They now keep their node marker and survive the reconcile.
+
+## [0.5.1] - 2026-07-06
+
 ### Added
 
+- **`openai_url` add-on option** — surfaces the existing OpenAI-compatible endpoint support in the
+  Home Assistant add-on settings, so the `openai` provider can be pointed at a LiteLLM proxy or any
+  compatible API (Groq, Together, vLLM, LM Studio) without editing env vars.
 - **Named volume presets for reachy** - `whisper` (70), `normal` (85), `louder` (93)
   and `presenter` (100) speaking modes, mapped to the robot speaker's usable loudness band.
   Deterministic "whisper X" / "say X softly|loudly" set the level and speak aloud.

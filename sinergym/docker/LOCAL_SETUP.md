@@ -73,7 +73,7 @@ In the wactorz console:
 # Controllers — spawn any you want (idle until launched); you LAUNCH exactly one below.
 @catalog spawn maddpg-fleet           # DRL (MADDPG)
 @catalog spawn aif-fleet              # AIF — 15 decentralized per-zone agents
-@catalog spawn aif-anomaly            # AIF — single batched N=15 (exact v7 parity); alternative to aif-fleet, NOT a detector
+@catalog spawn aif-anomaly            # AIF — single batched N=15 (exact v14 parity); alternative to aif-fleet, NOT a detector
 
 # point the host-side agents at Fuseki. sinergym-anomaly is the detector on BOTH paths;
 # the controllers (maddpg-fleet / aif-fleet / aif-anomaly) publish actions to MQTT and need no Fuseki config:
@@ -98,7 +98,7 @@ repo root; `infer_dir` is auto-derived from `model_path`. The detector `sinergym
 # AIF (custom active inference) — model_path is the .pkl; no normalizer:
 @aif-fleet {"action":"launch","env_id":"officeMedium-multiagent","model_path":"models/aif/aif_model.pkl","heat_low":15.0,"heat_high":22.5,"cool_low":22.5,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":8.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}
 
-# aif-anomaly is an ALTERNATIVE AIF controller (single batched N=15, exact v7 parity), NOT a
+# aif-anomaly is an ALTERNATIVE AIF controller (single batched N=15, exact v14 parity), NOT a
 # detector despite the name. Launch it INSTEAD of aif-fleet, never both — they publish to the same
 # action topics and would fight. Launch exactly one controller (same env_id + zones):
 @aif-anomaly {"action":"launch","env_id":"officeMedium-multiagent","model_path":"models/aif/aif_model.pkl","heat_low":15.0,"heat_high":22.5,"cool_low":22.5,"cool_high":30.0,"policy_len":8,"energy_weight":0.2,"comfort_weight":1.0,"epistemic_weight":0.2,"unocc_gate":0.1,"deadband_weight":8.0,"override":"safety","freeze_B":true,"lr_pB":1.0,"zones":["Core_bottom","Core_mid","Core_top","Perimeter_bot_ZN_1","Perimeter_bot_ZN_2","Perimeter_bot_ZN_3","Perimeter_bot_ZN_4","Perimeter_mid_ZN_1","Perimeter_mid_ZN_2","Perimeter_mid_ZN_3","Perimeter_mid_ZN_4","Perimeter_top_ZN_1","Perimeter_top_ZN_2","Perimeter_top_ZN_3","Perimeter_top_ZN_4"]}

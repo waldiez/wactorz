@@ -90,6 +90,13 @@ describe("toAgentInfo", () => {
         expect(out.costUsd).toBeUndefined();
         expect(out.agentType).toBeUndefined();
     });
+
+    it("carries the remote node through so reconcile won't evict remote agents", () => {
+        // /api/actors returns local actors only; the node marks an agent as remote
+        // so the REST reconcile (which excludes remotes) doesn't drop it.
+        const out = toAgentInfo({ agent_id: "a", name: "remote-1", node: "rpi-test" } as StatePatchAgent);
+        expect(out.node).toBe("rpi-test");
+    });
 });
 
 describe("buildNameIndex", () => {
@@ -144,6 +151,34 @@ describe("mapLogFeedItem", () => {
     it("maps a critical alert to an error row (matches the live-MQTT path)", () => {
         const item: LogFeedItem = { type: "alert", agent_id: "a", message: "meltdown", severity: "critical" };
         expect(mapLogFeedItem(item)?.type).toBe("alert-error");
+    });
+
+    it("maps a completed entry via the shared builder (matches the live path)", () => {
+        const item: LogFeedItem = { type: "completed", agent_id: "a", name: "Worker", timestamp: 2 };
+        expect(mapLogFeedItem(item)).toEqual({
+            type: "spawn",
+            label: "task completed",
+            agentName: "Worker",
+            timestamp: 2000,
+        });
+    });
+
+    it("maps a stopped status via the shared builder, and drops non-stopped states", () => {
+        const stopped: LogFeedItem = {
+            type: "status",
+            agent_id: "a",
+            name: "Worker",
+            status: { state: "stopped" },
+            timestamp: 3,
+        };
+        expect(mapLogFeedItem(stopped)).toEqual({
+            type: "stopped",
+            label: "stopped",
+            agentName: "Worker",
+            timestamp: 3000,
+        });
+        const running: LogFeedItem = { type: "status", agent_id: "a", status: { state: "running" } };
+        expect(mapLogFeedItem(running)).toBeNull();
     });
 
     it("drops a log entry with no message", () => {

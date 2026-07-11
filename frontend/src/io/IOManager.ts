@@ -13,31 +13,35 @@
  * the content so IOAgent can route it.
  */
 
-import { HLCWidGen } from "@waldiez/wid";
 import type { AgentInfo, ChatMessage } from "../types/agent";
-import type { MQTTClient } from "../mqtt/MQTTClient";
-import type { WSChatClient } from "./WSChatClient";
+import type { ServerEventRouter } from "./ServerEventRouter";
+import type { WSClient } from "./WSClient";
 import { tts } from "./TTSManager";
 import { toast } from "../ui/ToastManager";
 import { emit } from "../events";
+import { uid } from "../ids";
 
-const _widGen = new HLCWidGen({ node: "browser", W: 4 });
+/** Ceiling on a single streamed reply's accumulated text, guarding against a
+ *  runaway/looping stream growing this without bound. */
+const MAX_STREAM_CHARS = 200_000;
 
 export class IOManager {
     private _lastStreamFrom = "";
     /** Accumulates the current streamed reply so stream-end can emit the full text. */
     private _streamText = "";
-    private _ws: WSChatClient | null = null;
+    private _ws: WSClient | null = null;
 
-    constructor(private readonly mqtt: MQTTClient) {}
+    constructor(private readonly router: ServerEventRouter) {}
 
-    /** Wire in a WSChatClient so send() can use direct WebSocket when available. */
-    setWSClient(ws: WSChatClient): void {
+    /** Wire in a WSClient so send() can use direct WebSocket when available. */
+    setWSClient(ws: WSClient): void {
         this._ws = ws;
 
         ws.onStreamChunk((chunk, from) => {
             this._lastStreamFrom = from;
-            this._streamText += chunk;
+            if (this._streamText.length < MAX_STREAM_CHARS) {
+                this._streamText += chunk;
+            }
             emit("af-stream-chunk", { chunk, from });
         });
 
@@ -70,7 +74,7 @@ export class IOManager {
         }
 
         const msg: ChatMessage = {
-            id: _widGen.next(),
+            id: uid(),
             from: "user",
             to: agent?.name ?? "main-actor",
             content, // routed form (`@agent …`), mirroring what goes on the wire
@@ -83,33 +87,13 @@ export class IOManager {
             item: { type: "chat", label: content, agentName: "user", timestamp: msg.timestampMs },
         });
 
-        // direct_ws mode: send over WebSocket only — never fall back to MQTT.
-        // Falling back would let IOAgent pick up the message and double-handle it.
-        if (this._ws?.chatMode === "direct_ws") {
-            const sent = this._ws.send(content, agent?.name ?? "main-actor");
-            if (!sent) {
-                toast.show({
-                    type: "alert-error",
-                    title: "Disconnected",
-                    message: "WebSocket disconnected — reconnecting, please retry.",
-                });
-            }
-            return;
-        }
-
-        // mqtt mode (legacy / no registry): publish to io/chat.
-        const published = this.mqtt.publish("io/chat", {
-            id: msg.id,
-            from: "user",
-            to: msg.to,
-            content,
-            timestampMs: msg.timestampMs,
-        });
-        if (!published) {
+        // direct_ws mode
+        const sent = this._ws?.send(content, agent?.name ?? "main-actor");
+        if (!sent) {
             toast.show({
                 type: "alert-error",
-                title: "Not connected",
-                message: "Start the backend:  docker compose up -d  &&  wactorz",
+                title: "Disconnected",
+                message: "WebSocket disconnected — reconnecting, please retry.",
             });
         }
     }

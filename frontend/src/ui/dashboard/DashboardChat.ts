@@ -8,6 +8,7 @@
  * host only for the shared root element, the agent map, and view switching.
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
+import { uid } from "../../ids";
 import type { View } from "./types";
 import { canDirectMessage, messageableNames, stateColor, stateLabel } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
@@ -45,6 +46,9 @@ export class DashboardChat {
     private _streamTarget: string | null = null;
     private _streamText = "";
     private _lastSentTarget = "main-actor";
+    // True once the user has explicitly chosen a target. Until then the picker
+    // prefers main (so an agent registering before main on startup can't stick).
+    private _userPicked = false;
 
     private _historyLoaded = new Set<string>();
     private _selfDispatching = false;
@@ -53,9 +57,7 @@ export class DashboardChat {
     private _chatInput = new ChatInput({
         // Only messageable agents — mirrors the target <select> (see _populateSelect).
         agentNames: () => messageableNames(this.host.agents.values()),
-        setTarget: (name: string) => {
-            this.chatTarget = name;
-        },
+        setTarget: (name: string) => this.setTarget(name),
         send: (input, select) => this._sendMessage(input, select),
     });
 
@@ -78,6 +80,7 @@ export class DashboardChat {
     /** Switch the open thread to `agent` (wactor-card "Chat" button). */
     setTarget(name: string): void {
         this.chatTarget = name;
+        this._userPicked = true;
     }
 
     /** Release the mic if a recording was in progress (dashboard hidden). */
@@ -192,6 +195,7 @@ export class DashboardChat {
             return;
         }
         this.chatTarget = name;
+        this._userPicked = true;
         this.renderSidebar();
         this.renderChatPaneHeader();
         this.renderChatThread();
@@ -314,17 +318,20 @@ export class DashboardChat {
         }
     }
 
-    /** Fetch and merge persisted chat history for an agent once (subsequent calls no-op). */
-    async loadHistory(agentId: string): Promise<void> {
-        if (this._historyLoaded.has(agentId)) {
+    /** Fetch and merge an agent's persisted chat history once, by agent NAME
+     *  (history is keyed by name, not actor id; subsequent calls no-op). */
+    async loadHistory(agentName: string): Promise<void> {
+        if (this._historyLoaded.has(agentName)) {
             return;
         }
-        this._historyLoaded.add(agentId);
-        const incoming = await fetchChatHistory(agentId);
+        this._historyLoaded.add(agentName);
+        const incoming = await fetchChatHistory(agentName);
         if (!incoming.length) {
             return;
         }
         this.chatMessages.unshift(...mergeChatHistory(this.chatMessages, incoming));
+        // Cap to the most recent 500, matching the live feed.
+        this.chatMessages = this.chatMessages.slice(-500);
         this.renderChatThread();
     }
 
@@ -334,9 +341,7 @@ export class DashboardChat {
             chatInput: this._chatInput,
             stt: this._stt,
             target: () => this.chatTarget,
-            setTarget: name => {
-                this.chatTarget = name;
-            },
+            setTarget: name => this.setTarget(name),
             populateSelect: select => this._populateSelect(select),
             send: (input, select) => this._sendMessage(input, select),
             stop: () => this._stopGeneration(),
@@ -399,7 +404,7 @@ export class DashboardChat {
 
     /** Keep chatTarget on a live messageable agent (prefers main; never an id). */
     syncChatTarget(): void {
-        this.chatTarget = pickChatTarget([...this.host.agents.values()], this.chatTarget);
+        this.chatTarget = pickChatTarget([...this.host.agents.values()], this.chatTarget, this._userPicked);
     }
 
     private _sendMessage(input: HTMLTextAreaElement, select: HTMLSelectElement): void {
@@ -425,7 +430,7 @@ export class DashboardChat {
         // if stripping would leave nothing to send.
         const body = stripLeadingMention(content, target) || content;
         const msg: ChatMessage = {
-            id: `user-${Date.now()}`,
+            id: uid("user"),
             from: "user",
             to: target,
             content: body,
@@ -538,7 +543,7 @@ export class DashboardChat {
             this.chatTarget = target;
             this._lastSentTarget = target;
             const msg: ChatMessage = {
-                id: `user-${Date.now()}`,
+                id: uid("user"),
                 from: "user",
                 to: target,
                 content,
@@ -557,7 +562,9 @@ export class DashboardChat {
                 this._streamTarget = this._lastSentTarget;
                 this._streamText = "";
             }
-            this._streamText += chunk;
+            // Cap accumulation so a runaway/looping stream can't grow this without bound.
+            this._streamText =
+                this._streamText.length < 200_000 ? this._streamText + chunk : this._streamText;
             if (this.host.getView() !== "chat") {
                 return;
             }
@@ -573,7 +580,7 @@ export class DashboardChat {
         this._evEnd = listen("af-stream-end", () => {
             if (this._streamFrom && this._streamText) {
                 this.chatMessages.push({
-                    id: `stream-${Date.now()}`,
+                    id: uid("stream"),
                     from: this._streamFrom,
                     to: this._streamTarget ?? this._lastSentTarget,
                     content: this._streamText,
@@ -584,10 +591,8 @@ export class DashboardChat {
                 this._streamBody.textContent = "";
                 this._streamBody.appendChild(renderMarkdown(this._streamText));
             }
-            this._streamRow = null;
-            this._streamBody = null;
-            this._streamFrom = null;
-            this._streamTarget = null;
+            this._streamRow = this._streamBody = null;
+            this._streamFrom = this._streamTarget = null;
             this._streamText = "";
         });
     }

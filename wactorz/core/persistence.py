@@ -217,18 +217,18 @@ class WactorzDB:
         logger.info(f"[Persistence] SQLite opened: {self._path}")
 
     def _init_schema(self):
-        self._conn.executescript(_SCHEMA_SQL)
+        self.conn.executescript(_SCHEMA_SQL)
         # Check/set version
-        row = self._conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+        row = self.conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
         if not row:
-            self._conn.execute(
-                "INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,)
-            )
-        self._conn.commit()
+            self.conn.execute("INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,))
+        self.conn.commit()
         logger.info(f"[Persistence] Schema v{_SCHEMA_VERSION} ready")
 
     @property
     def conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            raise RuntimeError("WactorzDB connection is closed")
         return self._conn
 
     def close(self):
@@ -240,15 +240,15 @@ class WactorzDB:
 
     def kv_set(self, agent: str, key: str, value: Any):
         """Store a JSON-serializable value."""
-        self._conn.execute(
+        self.conn.execute(
             "INSERT OR REPLACE INTO kv_store (agent, key, value, updated) VALUES (?, ?, ?, ?)",
             (agent, key, json.dumps(value, default=str), time.time()),
         )
-        self._conn.commit()
+        self.conn.commit()
 
     def kv_get(self, agent: str, key: str, default: Any = None) -> Any:
         """Retrieve a value. Returns default if not found."""
-        row = self._conn.execute(
+        row = self.conn.execute(
             "SELECT value FROM kv_store WHERE agent=? AND key=?",
             (agent, key),
         ).fetchone()
@@ -260,8 +260,8 @@ class WactorzDB:
         return default
 
     def kv_delete(self, agent: str, key: str):
-        self._conn.execute("DELETE FROM kv_store WHERE agent=? AND key=?", (agent, key))
-        self._conn.commit()
+        self.conn.execute("DELETE FROM kv_store WHERE agent=? AND key=?", (agent, key))
+        self.conn.commit()
 
     def kv_purge_agent(self, agent: str) -> int:
         """Hard-delete EVERY kv_store row for a given agent. Used when an agent
@@ -270,13 +270,13 @@ class WactorzDB:
 
         Returns the number of rows removed.
         """
-        cur = self._conn.execute("DELETE FROM kv_store WHERE agent=?", (agent,))
-        self._conn.commit()
+        cur = self.conn.execute("DELETE FROM kv_store WHERE agent=?", (agent,))
+        self.conn.commit()
         return cur.rowcount or 0
 
     def kv_all(self, agent: str) -> dict:
         """Return all key-value pairs for an agent."""
-        rows = self._conn.execute(
+        rows = self.conn.execute(
             "SELECT key, value FROM kv_store WHERE agent=?", (agent,)
         ).fetchall()
         result = {}
@@ -301,7 +301,7 @@ class WactorzDB:
         agent: str = "",
         node: str = "",
     ):
-        self._conn.execute(
+        self.conn.execute(
             "INSERT INTO sensor_readings "
             "(ts, topic, entity_id, field, value, value_str, unit, agent, node) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -310,13 +310,13 @@ class WactorzDB:
 
     def write_sensor_batch(self, rows: list[tuple]):
         """Batch insert sensor readings. Each tuple matches write_sensor args."""
-        self._conn.executemany(
+        self.conn.executemany(
             "INSERT INTO sensor_readings "
             "(ts, topic, entity_id, field, value, value_str, unit, agent, node) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
-        self._conn.commit()
+        self.conn.commit()
 
     def write_detection(
         self,
@@ -329,13 +329,13 @@ class WactorzDB:
         metadata: str = "{}",
         node: str = "",
     ):
-        self._conn.execute(
+        self.conn.execute(
             "INSERT INTO detections "
             "(ts, agent, class_name, confidence, bbox, frame_id, metadata, node) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (ts, agent, class_name, confidence, bbox, frame_id, metadata, node),
         )
-        self._conn.commit()
+        self.conn.commit()
 
     def write_ha_state(
         self,
@@ -347,13 +347,13 @@ class WactorzDB:
         attributes: str = "{}",
         context: str = "",
     ):
-        self._conn.execute(
+        self.conn.execute(
             "INSERT INTO ha_state_changes "
             "(ts, entity_id, old_state, new_state, domain, attributes, context) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (ts, entity_id, old_state, new_state, domain, attributes, context),
         )
-        self._conn.commit()
+        self.conn.commit()
 
     def write_actuation(
         self,
@@ -366,13 +366,13 @@ class WactorzDB:
         trigger: str = "{}",
         rule_id: str = "",
     ):
-        self._conn.execute(
+        self.conn.execute(
             "INSERT INTO actuations "
             "(ts, agent, domain, service, entity_id, payload, trigger, rule_id) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (ts, agent, domain, service, entity_id, payload, trigger, rule_id),
         )
-        self._conn.commit()
+        self.conn.commit()
 
     # ── Chat log (persistent feed for the UI) ──────────────────────────────
 
@@ -382,29 +382,29 @@ class WactorzDB:
         """Persist a single chat turn so the UI feed can be rebuilt with real
         timestamps after a restart. The schema is created in init_state.sql.
         """
-        self._conn.execute(
+        self.conn.execute(
             "INSERT INTO chat_log (ts, agent_name, role, content, session_id) "
             "VALUES (?, ?, ?, ?, ?)",
             (ts, agent_name, role, content, session_id),
         )
-        self._conn.commit()
+        self.conn.commit()
 
     def clear_chat_log(self, agent_name: str | None = None) -> int:
         """Delete chat_log rows. Pass agent_name to limit to one agent."""
         if agent_name:
-            cur = self._conn.execute("DELETE FROM chat_log WHERE agent_name=?", (agent_name,))
+            cur = self.conn.execute("DELETE FROM chat_log WHERE agent_name=?", (agent_name,))
         else:
-            cur = self._conn.execute("DELETE FROM chat_log")
-        self._conn.commit()
+            cur = self.conn.execute("DELETE FROM chat_log")
+        self.conn.commit()
         return cur.rowcount
 
     def clear_spawn_registry(self, agent_name: str | None = None) -> int:
         """Delete spawn_registry rows. Pass agent_name to limit to one agent."""
         if agent_name:
-            cur = self._conn.execute("DELETE FROM spawn_registry WHERE name=?", (agent_name,))
+            cur = self.conn.execute("DELETE FROM spawn_registry WHERE name=?", (agent_name,))
         else:
-            cur = self._conn.execute("DELETE FROM spawn_registry")
-        self._conn.commit()
+            cur = self.conn.execute("DELETE FROM spawn_registry")
+        self.conn.commit()
         return cur.rowcount
 
     def query_chat_log(
@@ -433,7 +433,7 @@ class WactorzDB:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY ts DESC LIMIT ?"
         params.append(int(limit))
-        rows = self._conn.execute(sql, params).fetchall()
+        rows = self.conn.execute(sql, params).fetchall()
         # rows are sqlite3.Row because connect() set row_factory; coerce to dict
         return [dict(r) for r in rows]
 
@@ -465,7 +465,7 @@ class WactorzDB:
             params.append(field)
 
         where = " AND ".join(conditions)
-        rows = self._conn.execute(
+        rows = self.conn.execute(
             f"SELECT ts, topic, entity_id, field, value, value_str, unit, agent, node "
             f"FROM sensor_readings WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
@@ -493,7 +493,7 @@ class WactorzDB:
             params.append(class_name)
 
         where = " AND ".join(conditions)
-        rows = self._conn.execute(
+        rows = self.conn.execute(
             f"SELECT ts, agent, class_name, confidence, bbox, metadata, node "
             f"FROM detections WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
@@ -520,7 +520,7 @@ class WactorzDB:
             params.append(domain)
 
         where = " AND ".join(conditions)
-        rows = self._conn.execute(
+        rows = self.conn.execute(
             f"SELECT ts, entity_id, old_state, new_state, domain, attributes "
             f"FROM ha_state_changes WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
@@ -543,7 +543,7 @@ class WactorzDB:
             params.append(entity_id)
 
         where = " AND ".join(conditions)
-        rows = self._conn.execute(
+        rows = self.conn.execute(
             f"SELECT ts, agent, domain, service, entity_id, payload, trigger, rule_id "
             f"FROM actuations WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
@@ -559,9 +559,9 @@ class WactorzDB:
         tables = ["sensor_readings", "detections", "ha_state_changes", "actuations"]
         total = 0
         for table in tables:
-            cur = self._conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
+            cur = self.conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
             total += cur.rowcount
-        self._conn.commit()
+        self.conn.commit()
         if total:
             logger.info(f"[Persistence] Pruned {total} rows older than {days}d")
         return total
@@ -571,7 +571,7 @@ class WactorzDB:
         tables = ["sensor_readings", "detections", "ha_state_changes", "actuations"]
         result = {}
         for table in tables:
-            row = self._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            row = self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
             result[table] = row[0] if row else 0
         return result
 

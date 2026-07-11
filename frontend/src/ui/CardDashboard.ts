@@ -18,6 +18,7 @@
  */
 
 import type { AgentInfo } from "../types/agent";
+import { safeStorage } from "../safeStorage";
 import type { FeedItem } from "../types/feed";
 import { buildHeader, buildBottomNav, setHaNavUrl } from "./dashboard/header";
 import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
@@ -59,7 +60,7 @@ export class CardDashboard {
 
     /** HA base URL (seeded from /api/config) — the Devices nav button links to it. */
     private get haUrl(): string | null {
-        return localStorage.getItem("wactorz-ha-url") || null;
+        return safeStorage.get("wactorz-ha-url") || null;
     }
 
     constructor() {
@@ -116,7 +117,11 @@ export class CardDashboard {
         this.root.classList.add("cd-visible");
         this._wireEvents();
         this._renderView();
-        this.tickTimer = setInterval(() => this._refreshTimestamps(), 5000);
+        this.tickTimer = setInterval(() => {
+            if (!document.hidden) {
+                this._refreshTimestamps();
+            }
+        }, 5000);
         this._metrics.startPolling();
     }
 
@@ -285,7 +290,7 @@ export class CardDashboard {
         this._evFeed = listen("af-feed-push", detail => {
             const item = detail.item;
             // The same event can arrive from several sources (SQLite seed, WS
-            // log_feed replay, live MQTT/chat); drop exact duplicates so the feed
+            // log_feed replay, live chat); drop exact duplicates so the feed
             // doesn't double up or render out of order on rebuild.
             const key = feedKey(item);
             if (this._feedKeys.has(key)) {
@@ -362,7 +367,13 @@ export class CardDashboard {
     /** Sync the header view buttons, health line and target-select to the view. */
     private _syncViewChrome(): void {
         this.root.querySelectorAll<HTMLElement>(".af-view-btn[data-view]").forEach(btn => {
-            btn.classList.toggle("active", btn.dataset["view"] === this.view);
+            const active = btn.dataset["view"] === this.view;
+            btn.classList.toggle("active", active);
+            if (active) {
+                btn.setAttribute("aria-current", "page");
+            } else {
+                btn.removeAttribute("aria-current");
+            }
         });
         this._renderHealth();
         // Only show the agent-target dropdown in the chat view

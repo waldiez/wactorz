@@ -196,7 +196,8 @@ Wraps the Home Assistant REST API. Uses multiple internal LLM calls to classify 
 | `edit_automation` | Identify and update an existing automation |
 | `delete_automation` | Remove an automation |
 | `get_entities_state` | Fetch current state for explicit entity IDs and re-publish to MQTT — used by PlannerAgent bootstrap |
-| `other` | Answer open-ended HA questions via a short LLM tool-call loop backed by `get_simplified_ha_data`, plus camera tools (see below) |
+| `other` | Answer open-ended HA questions via a short LLM tool-call loop backed by `get_simplified_ha_data`, plus camera and history tools (see below) |
+| `get_history` | Structured A2A fetch of entity state history for explicit entity IDs, returned as CSV — see [History tool](#history-tool) |
 
 #### Camera tools
 
@@ -218,6 +219,18 @@ Camera tools also support **A2A structured dispatch** — a peer agent can send 
 ```
 
 `get_camera_snapshot_url` returns only the URL (no HTTP fetch) — useful when a peer agent (e.g. PlannerAgent) needs to embed the URL in generated code rather than fetch the image itself. The response `data.snapshot_url` is the `/api/camera_proxy/{entity_id}` path and requires an `Authorization: Bearer <HA_TOKEN>` header to fetch.
+
+#### History tool
+
+Also available through the `other` intent's LLM tool-call loop is `get_entity_history`, backed by `get_entity_history()` in `ha_helper.py` (calls HA's `/api/history/period` REST endpoint). The system prompt tells the LLM to first call `get_simplified_ha_data` to resolve friendly names to `entity_id`s, then call `get_entity_history` with those IDs. The user message is prefixed with the current local datetime so the LLM can convert relative times ("yesterday midnight", "Saturday at 17:00") into ISO-8601 timestamps with UTC offset; returned timestamps are localised back to the server's timezone (`localise_history_timestamps`) so they line up with what the user asked for.
+
+Like the camera tools, history also supports **A2A structured dispatch**:
+
+```json
+{"operation": "get_history", "entity_ids": ["sensor.office_temperature"], "start_time": "2026-06-28T00:00:00", "end_time": "2026-06-29T00:00:00"}
+```
+
+This path skips the LLM entirely and returns the raw history alongside a flattened CSV (`entity_id,last_changed,state,unit_of_measurement`) via `history_to_csv()`, for peer agents that want tabular data rather than JSON.
 
 #### Prompts
 

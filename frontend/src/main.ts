@@ -18,16 +18,18 @@
  *   1. Deployment env & service URLs   5. Wiring — Home Assistant feed
  *   2. Core services & shared state    6. Wiring — app events (CustomEvents)
  *   3. Helpers                         7. Startup — REST seed, TTS, connect
- *   4. Wiring — transports (WS, MQTT)  8. Teardown
+ *   4. Wiring — transport              8. Teardown
  */
 
 import "./app.css";
+import { safeStorage } from "./safeStorage";
+import { uid } from "./ids";
 import { AgentStore } from "./agents/AgentStore";
-import { MQTTClient } from "./mqtt/MQTTClient";
+import { ServerEventRouter } from "./io/ServerEventRouter";
 import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
 import { emit, listen } from "./events";
-import { WSChatClient } from "./io/WSChatClient";
+import { WSClient } from "./io/WSClient";
 import { tts } from "./io/TTSManager";
 import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
@@ -73,7 +75,7 @@ import { createDeletionGuard } from "./agents/deletionGuard";
 // webview that host is the HA instance itself, not the addon backend.
 
 // Clear any stale persisted theme from older builds.
-localStorage.removeItem("wactorz-theme");
+safeStorage.remove("wactorz-theme");
 
 const _ingressPath: string = window.__WACTORZ_INGRESS_PATH ?? "";
 
@@ -86,31 +88,31 @@ const _wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
 const _wsHost = window.location.host;
 const _wsBase = `${_wsProto}//${_wsHost}${_ingressPath}`;
 
-// The MQTT WebSocket is always proxied at /mqtt on the *same* origin as this
-// page — the monitor server serves both the page and the proxy on one port.
-// So we derive the URL from window.location on every load and never persist it.
-// This makes it impossible for a stale cached value (e.g. an old port like the
-// hardcoded :8888) to break the connection and trip the "Demo fallback" badge.
-//
-// A build-time VITE_MQTT_WS_URL still wins for dev setups that talk to a broker
-// directly. There is deliberately no per-user/runtime override: a same-origin
-// proxy never needs one, and caching one in localStorage was the root cause of
-// the stale-port failures.
-const _mqttDefault = `${_wsBase}/mqtt`;
-
 // Self-heal browsers that cached a URL under old builds (incl. the hardcoded :8888
 // value). Removing it on load means existing users recover automatically on the
 // next page load — no manual localStorage clearing required.
-localStorage.removeItem("wactorz-mqtt-url");
-
-const MQTT_BROKER = (import.meta.env["VITE_MQTT_WS_URL"] as string | undefined) || _mqttDefault;
+safeStorage.remove("wactorz-mqtt-url");
 
 // ═══ 2 · Core services & shared state ════════════════════════════════════════
 
+// Global safety net — surface otherwise-silent failures (uncaught exceptions and
+// unhandled promise rejections) to the log and a toast; without this they reach
+// only the console.
+function reportGlobalError(context: string, detail: unknown): void {
+    log.error(`[${context}]`, detail);
+    toast.show({
+        type: "alert-error",
+        title: "Unexpected error",
+        message: "Something went wrong — see the console for details.",
+    });
+}
+window.addEventListener("error", e => reportGlobalError("uncaught", e.error ?? e.message));
+window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
+
 const agentStore = new AgentStore();
-const mqtt = new MQTTClient(MQTT_BROKER);
-const ioManager = new IOManager(mqtt);
-const wsChat = new WSChatClient();
+const router = new ServerEventRouter();
+const ioManager = new IOManager(router);
+const ws = new WSClient();
 
 // Global drag-and-drop upload overlay — only wired up when the backend endpoint
 // exists (flip UPLOADS_ENABLED once /api/upload is live), so the overlay never
@@ -123,9 +125,13 @@ const _dropZone = UPLOADS_ENABLED ? new DropZone(_apiBase) : null;
 const { markDeleted, isDeleted } = createDeletionGuard();
 
 const _logFeedState: LogFeedReplayState = { maxTs: 0, initialized: false };
-let _mqttLive = false;
+// "live" = the /ws is open AND the server↔broker link is up. Both are required:
+// an open /ws with a dead broker means no events are actually flowing.
+let _wsOpen = false;
+let _mqttUp = false;
+let _feedLive = false;
 let liveSyncInFlight = false;
-// Seed only once — MQTT reconnects must not re-add already-known agents.
+// Seed only once — reconnects must not re-add already-known agents.
 let seeded = false;
 
 // ═══ 3 · Helpers ═════════════════════════════════════════════════════════════
@@ -139,7 +145,11 @@ function refreshLiveActors(): void {
         return;
     }
     liveSyncInFlight = true;
-    fetch(`${_apiBase}/api/actors`)
+    // Bound the request so a hung fetch can't pin liveSyncInFlight and wedge every
+    // future refresh (the browser's default timeout is ~90s).
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => ctrl.abort(), 10_000);
+    fetch(`${_apiBase}/api/actors`, { signal: ctrl.signal })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((actors: AgentInfo[]) => {
             agentStore.reconcileAgents(reconcileActorList(actors, isDeleted));
@@ -151,6 +161,7 @@ function refreshLiveActors(): void {
             log.debug("[Dashboard] live actor refresh failed:", err);
         })
         .finally(() => {
+            window.clearTimeout(timer);
             liveSyncInFlight = false;
         });
 }
@@ -158,10 +169,10 @@ function refreshLiveActors(): void {
 // ═══ 4 · Wiring — WebSocket transport (chat replies · state patches · log feed)
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
-wsChat.onChat((content, from, timestampMs) => {
+ws.onChat((content, from, timestampMs) => {
     toast.show({ type: "chat", title: from, message: content.slice(0, 120) });
     const msg = {
-        id: `ws-${timestampMs}`,
+        id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
         from,
         to: "user",
         content,
@@ -180,11 +191,11 @@ wsChat.onChat((content, from, timestampMs) => {
 });
 
 // Streaming replies — onStreamChunk / onStreamEnd are wired inside setWSClient
-ioManager.setWSClient(wsChat);
+ioManager.setWSClient(ws);
 
 // State patches broadcast by the server over the same /ws connection.
 // This is how pause/stop/resume state changes reach the UI without polling.
-wsChat.onStatePatch((agents, deletedId, stats) => {
+ws.onStatePatch((agents, deletedId, stats) => {
     if (deletedId) {
         markDeleted(deletedId);
         agentStore.removeAgent(deletedId);
@@ -206,7 +217,7 @@ wsChat.onStatePatch((agents, deletedId, stats) => {
 // The server embeds its in-memory log_feed (spawned/status/logs/alerts) in
 // every state-patch.  We use this as a reliable secondary path so MQTT events
 // appear in the feed even when the direct Mosquitto WebSocket is unavailable.
-wsChat.onLogFeed(items => {
+ws.onLogFeed(items => {
     // Nameless entries (e.g. `log`) borrow their friendly name from the
     // `spawned` entry in the same batch, then from the live agent store — so
     // reloads attribute them by name instead of a raw id.
@@ -214,13 +225,13 @@ wsChat.onLogFeed(items => {
     const resolveName = (id: string): string | undefined =>
         nameIndex.get(id) ?? agentStore.getAgents().find(a => a.id === id)?.name;
     // Replay/dedup bookkeeping (first-batch backlog vs. high-water mark vs.
-    // skip-while-MQTT-live) lives in selectLogFeedReplay so it stays tested.
-    selectLogFeedReplay(items, _logFeedState, _mqttLive, resolveName).forEach(pushFeed);
+    // skip-while-ws-live) lives in selectLogFeedReplay so it stays tested.
+    selectLogFeedReplay(items, _logFeedState, _feedLive, resolveName).forEach(pushFeed);
 });
 
-// ═══ 4 · Wiring — MQTT transport ═════════════════════════════════════════════
+// ═══ 4 · Wiring — WS transport ═════════════════════════════════════════════
 
-mqtt.on("heartbeat", payload => {
+router.on("heartbeat", payload => {
     if (isDeleted(payload.agentId, payload.timestampMs)) {
         return;
     }
@@ -228,7 +239,7 @@ mqtt.on("heartbeat", payload => {
     pushFeed(heartbeatFeedItem(payload));
 });
 
-mqtt.on("spawn", payload => {
+router.on("spawn", payload => {
     // Block a stale spawn from the stop-window; a respawn carries a newer
     // timestamp and is re-admitted by isDeleted().
     if (isDeleted(payload.agentId, payload.timestampMs)) {
@@ -243,7 +254,7 @@ mqtt.on("spawn", payload => {
     });
 });
 
-mqtt.on("alert", payload => {
+router.on("alert", payload => {
     agentStore.onAlert(payload);
     pushFeed(alertFeedItem(payload));
     toast.show({
@@ -253,7 +264,7 @@ mqtt.on("alert", payload => {
     });
 });
 
-mqtt.on("chat", msg => {
+router.on("chat", msg => {
     if (msg.from !== "user") {
         toast.show({ type: "chat", title: msg.from, message: msg.content.slice(0, 120) });
     }
@@ -263,7 +274,7 @@ mqtt.on("chat", msg => {
     pushFeed(chatFeedItem(msg));
 });
 
-mqtt.on("status", payload => {
+router.on("status", payload => {
     if (!isDeleted(payload.agentId)) {
         agentStore.addOrUpdateAgent({
             id: payload.agentId,
@@ -279,28 +290,47 @@ mqtt.on("status", payload => {
     }
 });
 
-mqtt.on("connected", () => {
-    _mqttLive = true;
-    log.info("[Dashboard] MQTT connected");
-    emit("af-connection-status", { status: "live" });
-
-    agentStore.pruneStaleRemoteAgents();
-
-    if (seeded) {
-        return;
-    }
-    seeded = true;
-
-    // Startup spawn events are published before the browser connects.
-    // Fetch the current actor list from REST so they appear immediately.
-    refreshLiveActors();
+// The /ws transport owns the connection; the router only decodes events. Feed it
+// the server_event frames, and derive "live" from the transport + broker state.
+ws.onServerEvent((topic, payload) => router.route(topic, payload));
+ws.onConnected(() => {
+    _wsOpen = true;
+    recomputeLive();
+});
+ws.onDisconnected(() => {
+    _wsOpen = false;
+    recomputeLive();
+});
+ws.onMqttStatus(up => {
+    _mqttUp = up;
+    recomputeLive();
 });
 
-mqtt.on("qa-flag", payload => {
+function recomputeLive(): void {
+    const live = _wsOpen && _mqttUp;
+    if (live === _feedLive) {
+        return;
+    }
+    _feedLive = live;
+    if (!live) {
+        emit("af-connection-status", { status: "demo" });
+        return;
+    }
+    emit("af-connection-status", { status: "live" });
+    agentStore.pruneStaleRemoteAgents();
+    if (!seeded) {
+        seeded = true;
+        // Startup spawn events are published before the browser connects;
+        // fetch the current actor list from REST so they appear immediately.
+        refreshLiveActors();
+    }
+}
+
+router.on("qa-flag", payload => {
     pushFeed(qaFlagFeedItem(payload));
 });
 
-mqtt.on("metrics", payload => {
+router.on("metrics", payload => {
     // Merge cost/message metrics into the agent record so dashboards can display them.
     const existing = agentStore.getAgents().find(a => a.id === payload.agentId);
     if (!existing) {
@@ -309,45 +339,35 @@ mqtt.on("metrics", payload => {
     agentStore.addOrUpdateAgent(buildMetricsUpdate(payload, existing));
 });
 
-mqtt.on("logs", payload => {
+router.on("logs", payload => {
     const item = logFeedItem(payload);
     if (item) {
         pushFeed(item);
     }
 });
 
-mqtt.on("completed", payload => {
+router.on("completed", payload => {
     pushFeed(completedFeedItem(payload));
 });
 
-mqtt.on("node-heartbeat", payload => {
+router.on("node-heartbeat", payload => {
     agentStore.updateRemoteNode(payload.node, payload.agents);
     pushFeed(nodeHeartbeatFeedItem(payload));
 });
 
-mqtt.on("host-stats", stats => {
+router.on("host-stats", stats => {
     if (stats.cpu !== undefined || stats.memUsedMb !== undefined) {
         agentStore.setHostStats(stats.cpu ?? 0, stats.memUsedMb ?? 0, stats.memTotalMb);
     }
 });
 
-mqtt.on("disconnected", () => {
-    _mqttLive = false;
-    log.warn("[Dashboard] MQTT disconnected");
-    emit("af-connection-status", { status: "demo" });
-});
-
-mqtt.on("error", err => {
-    log.error("[Dashboard] MQTT error:", err);
-});
-
 // ═══ 5 · Wiring — Home Assistant feed ════════════════════════════════════════
 // HA entity state reaches the activity feed via the ha-state-bridge-agent over
-// MQTT (homeassistant/state_changes/{domain}/{entity_id}). The browser no longer
+// WS (homeassistant/state_changes/{domain}/{entity_id}). The browser no longer
 // talks to HA directly — the Devices nav button just links out to the HA UI.
 const pushHaFeed = createHaFeedPusher(pushFeed);
 
-mqtt.on("raw", ({ topic, payload }) => {
+router.on("raw", ({ topic, payload }) => {
     const ev = parseHaRawEvent(topic, payload);
     if (ev) {
         pushHaFeed(ev.entityId, ev.state, ev.friendlyName);
@@ -381,7 +401,7 @@ listen("af-agent-command", detail => {
         markDeleted(agentId);
         agentStore.removeAgent(agentId);
     }
-    wsChat.sendRaw({ type: "command", command, agent_id: agentId });
+    ws.sendRaw({ type: "command", command, agent_id: agentId });
 });
 
 // af-iobar sends: route through ioManager (same as regular io-bar)
@@ -406,9 +426,12 @@ listen("af-clear-feed", () => {
 
 // ═══ 7 · Startup — REST seed, TTS probe, connect ═════════════════════════════
 
-wsChat.connect(`${_wsBase}/ws`);
+ws.connect(`${_wsBase}/ws`);
 refreshLiveActors();
 const _liveActorsTimer = window.setInterval(() => {
+    if (document.hidden) {
+        return;
+    }
     refreshLiveActors();
     agentStore.pruneStaleRemoteAgents();
 }, 15000);
@@ -426,22 +449,18 @@ fetch(`${_apiBase}/api/feed`)
     .catch(err => log.debug("[feed] /api/feed seed failed:", err));
 
 // The HA URL is seeded from /api/config by CardDashboard (see ui/dashboard/haConfig)
-// for the Devices link; no token ever reaches the browser. The MQTT URL is
-// likewise never seeded: the frontend always uses the same-origin /mqtt proxy
-// (see _mqttDefault), so the broker address never belongs in the browser.
+// for the Devices link; no token ever reaches the browser. No broker address is
+// seeded either — the browser never connects to MQTT; it gets everything over /ws.
 
 // Probe server TTS availability + load voice list (base must be set first so
 // the request stays inside the ingress prefix instead of bare "/api").
 tts.setApiBase(_apiBase);
 void tts.init();
 
-mqtt.connect();
-
 // ═══ 8 · Teardown ════════════════════════════════════════════════════════════
 
 window.addEventListener("beforeunload", () => {
     window.clearInterval(_liveActorsTimer);
-    mqtt.disconnect();
-    wsChat.disconnect();
+    ws.disconnect();
     agentStore.dispose();
 });

@@ -1,14 +1,13 @@
 # Wactorz Frontend
 
 Vite + TypeScript single-page application that visualises a running Wactorz agent system.
-Renders a live dashboard as HTML/CSS card components driven by real-time MQTT events.
+Renders a live dashboard as HTML/CSS card components driven by real-time server-push.
 
 ## Stack
 
 | Layer | Library | Purpose |
 | ----- | ------- | ------- |
-| Transport | MQTT.js 5 | Real-time agent events |
-| Chat bridge | WebSocket (native) | Direct `main` agent replies |
+| Transport | WebSocket (native) | One `/ws` connection: live server events + chat |
 | IDs | `@waldiez/wid` | Time-ordered collision-resistant IDs |
 | Build | Vite 8 + TypeScript 6 | Strict mode, ES2022 target |
 
@@ -20,16 +19,17 @@ frontend/
 │   ├── main.ts            # Bootstrap — wires transports → store + UI
 │   ├── events.ts          # Typed app event bus over document CustomEvents (emit/listen + AppEventMap)
 │   ├── types/             # Shared types: agent.ts, feed.ts, tts.ts, ws.ts, global.d.ts (Window augmentation)
-│   ├── mqtt/              # MQTT WebSocket client + typed event emitter
+│   ├── time.ts            # toMs() epoch→ms helper
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
-│   ├── io/                # IO/transport: IOManager, WSChatClient, TTSManager, SpeechToText,
+│   ├── io/                # IO/transport: WSClient (the /ws connection), ServerEventRouter
+│   │                      #   (topic→typed-event decoder), IOManager, TTSManager, SpeechToText,
 │   │                      #   AmbientManager, logger
 │   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard
 │   ├── styles/            # Global CSS (base, cards, chat, dashboard, …); app.css is the entry
 │   └── __tests__/         # Vitest unit tests (happy-dom)
 ├── public/                # Static assets (icons, sw.js, webmanifest)
 ├── index.html
-├── vite.config.ts         # Dev proxy → :8888 (REST + WS + MQTT); build → ../static/app
+├── vite.config.ts         # Dev proxy → :8888 (REST + WS); build → ../static/app
 ├── vitest.config.ts       # Coverage floors (gated in CI)
 └── tsconfig.json          # Strict, noUncheckedIndexedAccess, exactOptionalPropertyTypes
 ```
@@ -51,7 +51,7 @@ bun run dev          # http://localhost:3000
 
 | Script | What it does |
 | ------ | ------------ |
-| `bun run dev` | Vite dev server on :3000, proxying `/api`, `/ws`, `/mqtt` to :8888 |
+| `bun run dev` | Vite dev server on :3000, proxying `/api`, `/ws` to :8888 |
 | `bun run build` | TypeScript check + Vite bundle → `../static/app` |
 | `bun run preview` | Serve the production bundle locally |
 | `bun run typecheck` | `tsc --noEmit` only |
@@ -85,26 +85,29 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 
 | Event | Direction | Payload |
 | ------ | --------- | ------- |
-| `af-agent-command` | CardDashboard → main.ts (WSChatClient) | `{ command, agentId }` |
+| `af-agent-command` | CardDashboard → main.ts (WSClient) | `{ command, agentId }` |
 | `af-send-message` | DashboardChat → main.ts (IOManager) | `{ content, target, attachments }` |
 | `af-feed-push` | IOManager / main.ts → CardDashboard | `{ item: FeedItem }` |
-| `af-chat-message` | main.ts (WS/MQTT) → DashboardChat | `{ msg: ChatMessage }` |
+| `af-chat-message` | main.ts (WSClient) → DashboardChat | `{ msg: ChatMessage }` |
 | `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from }` |
 | `af-stream-end` | IOManager → DashboardChat | `{ text, from }` |
-| `af-connection-status` | main.ts (MQTT/WS) → CardDashboard | `{ status: "live" \| "connecting" \| "demo" }` |
+| `af-connection-status` | main.ts (WSClient) → CardDashboard | `{ status: "live" \| "connecting" \| "demo" }` |
 | `af-attachment-added` | DropZone / chatIobar → DashboardChat | `{ attachment }` |
-| `af-reset-chat` | WSChatClient → DashboardChat | `{ agent: string \| null }` |
-| `af-clear-feed` | WSChatClient / main.ts → CardDashboard | _(none)_ |
-| `af-wipe-all` | WSChatClient / main.ts → CardDashboard | _(none)_ |
+| `af-reset-chat` | WSClient → DashboardChat | `{ agent: string \| null }` |
+| `af-clear-feed` | WSClient / main.ts → CardDashboard | _(none)_ |
+| `af-wipe-all` | WSClient / main.ts → CardDashboard | _(none)_ |
 | `tts-voices-loaded` | TTSManager → popovers | `{ voices }` |
 
-## MQTT topics consumed
+## Server events consumed
+
+Live activity arrives as `server_event` frames over `/ws` (the backend relays them from
+MQTT server-side); `ServerEventRouter` decodes each by its topic key into a typed event:
 
 ```text
 agents/{id}/heartbeat   agents/{id}/status    agents/{id}/spawn
 agents/{id}/chat        agents/{id}/alert     agents/{id}/metrics
 agents/{id}/logs        agents/{id}/completed
-nodes/{node}/heartbeat  system/health
+nodes/{node}/heartbeat  system/health         system/host    system/qa-flag
 ```
 
 ## Adding a new UI component
@@ -128,10 +131,8 @@ During development, Vite proxies:
 | ---- | ------ | -------- |
 | `/api` | `localhost:8888` | HTTP |
 | `/ws` | `localhost:8888` | WebSocket |
-| `/mqtt` | `localhost:8888` | WebSocket |
 
-All three proxy to the backend monitor server on `:8888` (see `vite.config.ts`).
-Set `VITE_MQTT_WS_URL` in `.env` to override the MQTT broker URL in production builds.
+Both proxy to the backend monitor server on `:8888` (see `vite.config.ts`).
 Set `VITE_OPEN=true` to auto-open the browser on `bun run dev`.
 
 ## Deployment modes
@@ -140,7 +141,7 @@ The same bundle serves two targets, distinguished at runtime:
 
 | Mode | How API/WS URLs resolve |
 | ---- | ----------------------- |
-| Standalone | Paths are root-relative (`/api`, `/ws`, `/mqtt`) |
+| Standalone | Paths are root-relative (`/api`, `/ws`) |
 | Home Assistant add-on | The Python add-on injects `window.__WACTORZ_INGRESS_PATH`; all API/WS URLs are rebased onto that ingress prefix |
 
 `__WACTORZ_INGRESS_PATH` is typed in `src/types/global.d.ts` and read wherever a
@@ -152,11 +153,12 @@ links out to the HA UI (new tab) using the `ha.url` from `/api/config`. No HA to
 ever reaches the browser. HA entity activity still reaches the feed via the
 `ha-state-bridge-agent` over MQTT (`homeassistant/state_changes/#`).
 
-The MQTT client subscribes to `agents/#`, `system/#`, `nodes/#`, and
-`homeassistant/state_changes/#`. Most agent topics are routed to typed events in
-`MQTTClient.ts`; feed-only agent topics (e.g. `actuations`, `anomaly`) ride the
-`raw` catch-all and are mapped to feed rows by the extensible `rawFeedItem`
-registry in `agents/mapping.ts` — add a topic there without touching the client.
+The backend subscribes server-side to `agents/#`, `system/#`, `nodes/#`, and
+`homeassistant/state_changes/#` and relays them to the browser as `server_event`
+frames. `ServerEventRouter` routes most topics to typed events; feed-only agent
+topics (e.g. `actuations`, `anomaly`) ride the `raw` catch-all and are mapped to
+feed rows by the extensible `rawFeedItem` registry in `agents/mapping.ts` — add a
+topic there without touching the router.
 
 ## Feature flags (build-time)
 

@@ -17,6 +17,7 @@
  */
 
 import { ambient } from "./AmbientManager";
+import { safeStorage } from "../safeStorage";
 import { emit } from "../events";
 import type { TTSVoice } from "../types/tts";
 
@@ -36,8 +37,8 @@ export class TTSManager {
     private _apiBase = "";
 
     constructor() {
-        this._beepEnabled = localStorage.getItem(LS_BEEP) !== "0";
-        this._ttsEnabled = localStorage.getItem(LS_TTS) === "1";
+        this._beepEnabled = safeStorage.get(LS_BEEP) !== "0";
+        this._ttsEnabled = safeStorage.get(LS_TTS) === "1";
     }
 
     /** Set the API base (plain-relative or ingress prefix). Call before init(). */
@@ -125,25 +126,25 @@ export class TTSManager {
 
     /** The persisted selected voice name, or "" for the default. */
     get selectedVoice(): string {
-        return localStorage.getItem(LS_VOICE) ?? "";
+        return safeStorage.get(LS_VOICE) ?? "";
     }
 
     /** Persist the selected voice name. */
     setVoice(name: string): void {
-        localStorage.setItem(LS_VOICE, name);
+        safeStorage.set(LS_VOICE, name);
     }
 
     /** Toggle the notification beep (persisted); returns the new state. */
     toggleBeep(): boolean {
         this._beepEnabled = !this._beepEnabled;
-        localStorage.setItem(LS_BEEP, this._beepEnabled ? "1" : "0");
+        safeStorage.set(LS_BEEP, this._beepEnabled ? "1" : "0");
         return this._beepEnabled;
     }
 
     /** Toggle spoken TTS (persisted), cancelling any in-progress speech when turning off; returns the new state. */
     toggleTTS(): boolean {
         this._ttsEnabled = !this._ttsEnabled;
-        localStorage.setItem(LS_TTS, this._ttsEnabled ? "1" : "0");
+        safeStorage.set(LS_TTS, this._ttsEnabled ? "1" : "0");
         if (!this._ttsEnabled) {
             window.speechSynthesis?.cancel();
         }

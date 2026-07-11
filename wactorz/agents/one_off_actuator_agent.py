@@ -20,6 +20,24 @@ from .llm_agent import LLMProvider, _accumulate_global_cost
 
 logger = logging.getLogger(__name__)
 
+_COLOR_RGB = {
+    "blue": [0, 0, 255],
+    "pink": [255, 105, 180],
+    "red": [255, 0, 0],
+    "green": [0, 255, 0],
+    "purple": [128, 0, 128],
+    "white": [255, 255, 255],
+}
+_COLOR_SERVICE_KEYS = {
+    "rgb_color",
+    "hs_color",
+    "xy_color",
+    "rgbw_color",
+    "rgbww_color",
+    "color_name",
+}
+_COLOR_MODES = {"hs", "rgb", "rgbw", "rgbww", "xy"}
+
 _RESOLVER_PROMPT = """You are a Home Assistant service-call resolver.
 
 Your task:
@@ -45,10 +63,17 @@ Rules:
 - Only include service_data keys that are needed.
 - Common examples:
   - turn on/off light or switch -> light.turn_on / light.turn_off or switch.turn_on / switch.turn_off
+  - set a light color -> light.turn_on with service_data containing rgb_color
   - set heating/thermostat temperature -> climate.set_temperature with {"temperature": number}
   - lock/unlock door -> lock.lock / lock.unlock
   - open/close cover/blinds -> cover.open_cover / cover.close_cover
   - brightness percent -> use {"brightness_pct": number}
+- Color requests:
+  - For "blue", use {"rgb_color": [0, 0, 255]}.
+  - For "pink", use {"rgb_color": [255, 105, 180]}.
+  - For "red", use {"rgb_color": [255, 0, 0]}; "green" -> [0, 255, 0]; "purple" -> [128, 0, 128]; "white" -> [255, 255, 255].
+  - If the user says just "my light" / "the light" and a color is requested, prefer a color-capable light entity over a color-temperature-only light. Color-capable entities usually have state attributes such as supported_color_modes containing hs, rgb, rgbw, rgbww, or xy, or current color_mode hs/rgb/xy.
+  - Do not send color service_data to a light that only supports color_temp.
 - Do not invent entity IDs.
 - Do not return markdown or explanation.
 """
@@ -161,7 +186,8 @@ class OneOffActuatorAgent(Actor):
         )
         self._accumulate_usage(usage)
         parsed = self._parse_actions_json(raw)
-        return [ActuatorAction.from_dict(item) for item in parsed]
+        actions = [ActuatorAction.from_dict(item) for item in parsed]
+        return self._repair_color_actions(actions, devices)
 
     def _parse_actions_json(self, raw: str) -> list[dict[str, Any]]:
         cleaned = (raw or "").strip()
@@ -173,6 +199,134 @@ class OneOffActuatorAgent(Actor):
         if not isinstance(data, list):
             raise json.JSONDecodeError("Expected a JSON array", cleaned, 0)
         return [item for item in data if isinstance(item, dict)]
+
+    def _requested_rgb(self) -> list[int] | None:
+        request = self.request.lower()
+        for color, rgb in _COLOR_RGB.items():
+            if color in request:
+                return list(rgb)
+        return None
+
+    def _requests_max_brightness(self) -> bool:
+        request = self.request.lower()
+        return any(
+            phrase in request
+            for phrase in (
+                "max brightness",
+                "maximum brightness",
+                "full brightness",
+                "brightest",
+                "100% brightness",
+                "100 percent brightness",
+            )
+        )
+
+    def _repair_color_actions(
+        self,
+        actions: list[ActuatorAction],
+        devices: list[dict[str, Any]],
+    ) -> list[ActuatorAction]:
+        rgb = self._requested_rgb()
+        if rgb is None:
+            return actions
+
+        color_entity = self._find_color_light(devices)
+        repaired: list[ActuatorAction] = []
+        has_light_action = False
+        for action in actions:
+            if action.domain == "light" and action.service == "turn_on":
+                has_light_action = True
+                if color_entity and not self._entity_id_supports_color(action.entity_id, devices):
+                    action.entity_id = color_entity
+                action.service_data = dict(action.service_data or {})
+                if not any(key in action.service_data for key in _COLOR_SERVICE_KEYS):
+                    action.service_data["rgb_color"] = rgb
+                if self._requests_max_brightness() and "brightness_pct" not in action.service_data:
+                    action.service_data["brightness_pct"] = 100
+            repaired.append(action)
+
+        if not has_light_action and color_entity:
+            service_data: dict[str, Any] = {"rgb_color": rgb}
+            if self._requests_max_brightness():
+                service_data["brightness_pct"] = 100
+            repaired.append(
+                ActuatorAction(
+                    domain="light",
+                    service="turn_on",
+                    entity_id=color_entity,
+                    service_data=service_data,
+                )
+            )
+        return repaired
+
+    def _find_color_light(self, devices: list[dict[str, Any]]) -> str | None:
+        lights = [
+            entity for entity in self._iter_entities(devices) if self._entity_supports_color(entity)
+        ]
+        if not lights:
+            return None
+
+        request = self.request.lower()
+        ranked: list[tuple[int, str]] = []
+        for entity in lights:
+            entity_id = str(entity.get("entity_id") or "")
+            attrs = self._entity_attrs(entity)
+            haystack = " ".join(
+                str(value).lower()
+                for value in (
+                    entity_id,
+                    entity.get("name"),
+                    entity.get("friendly_name"),
+                    attrs.get("friendly_name"),
+                    entity.get("area"),
+                    entity.get("location"),
+                )
+                if value
+            )
+            score = 0
+            for token in request.replace("_", " ").replace("-", " ").split():
+                token = token.strip(".,!?()[]{}'\"")
+                if len(token) > 2 and token in haystack:
+                    score += 1
+            ranked.append((score, entity_id))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return ranked[0][1] if ranked else None
+
+    def _entity_id_supports_color(self, entity_id: str, devices: list[dict[str, Any]]) -> bool:
+        for entity in self._iter_entities(devices):
+            if str(entity.get("entity_id") or "") == entity_id:
+                return self._entity_supports_color(entity)
+        return False
+
+    def _iter_entities(self, node: Any):
+        if isinstance(node, dict):
+            entity_id = str(node.get("entity_id") or "")
+            if entity_id.startswith("light."):
+                yield node
+            for value in node.values():
+                yield from self._iter_entities(value)
+        elif isinstance(node, list):
+            for item in node:
+                yield from self._iter_entities(item)
+
+    def _entity_supports_color(self, entity: dict[str, Any]) -> bool:
+        attrs = self._entity_attrs(entity)
+        modes = attrs.get("supported_color_modes") or []
+        if isinstance(modes, str):
+            modes = [modes]
+        mode_set = {str(mode).lower() for mode in modes}
+        color_mode = str(attrs.get("color_mode") or "").lower()
+        return bool(mode_set & _COLOR_MODES) or color_mode in _COLOR_MODES
+
+    def _entity_attrs(self, entity: dict[str, Any]) -> dict[str, Any]:
+        attrs: dict[str, Any] = {}
+        state = entity.get("state")
+        if isinstance(state, dict) and isinstance(state.get("attributes"), dict):
+            attrs.update(state["attributes"])
+        for key in ("attributes", "state_attributes"):
+            if isinstance(entity.get(key), dict):
+                attrs.update(entity[key])
+        return attrs
 
     async def _execute_actions(self, actions: list[ActuatorAction]) -> str:
         ws_url = normalize_ha_ws_url(CONFIG.ha_url)

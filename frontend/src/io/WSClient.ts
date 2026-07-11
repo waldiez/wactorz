@@ -3,23 +3,28 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * WSChatClient — lightweight wrapper around the monitor server's /ws endpoint.
+ * WSClient — the browser's single connection to the monitor server's /ws endpoint.
  *
- * On connect the server sends:
- *   {"type":"config","chat_mode":"direct_ws"|"mqtt"}
- *
- * When chat_mode is "direct_ws" the browser should send chat messages here
- * instead of publishing to MQTT io/chat.  The server streams replies back as:
- *   {"type":"chat","from":"io-gateway","content":"...","timestamp":...}
+ * It owns the connection (and the "live" signal) and dispatches every server frame
+ * by `type`: chat/stream, state patches (store + log_feed), and `server_event`
+ * frames — `{topic, payload}` live activity that it hands to the ServerEventRouter.
+ * On connect the server sends `{"type":"config","chat_mode":"direct_ws"|"mqtt"}`;
+ * chat is sent back over this socket (never over a broker).
  */
 import { log } from "./logger";
+import { toMs } from "../time";
 import { emit } from "../events";
 import type { StatePatchAgent, SnapshotStats, LogFeedItem } from "../types/ws";
 
 export type ChatHandler = (content: string, from: string, timestampMs: number) => void;
 export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number) => void;
 export type StreamEndHandler = (from: string) => void;
-export type ModeHandler = (mode: "direct_ws" | "mqtt") => void;
+/** A live `server_event` frame carrying a topic-addressed payload. */
+export type ServerEventHandler = (topic: string, payload: unknown) => void;
+/** The /ws connection opened or dropped. */
+export type ConnectionHandler = () => void;
+/** Server↔broker connection state — combined with the /ws state to drive "live". */
+export type MqttStatusHandler = (connected: boolean) => void;
 
 /** Coerce an untrusted JSON field to a string; non-strings fall back (so a
  *  hostile object can't stringify to "[object Object]"). */
@@ -46,27 +51,26 @@ interface StatePatch {
     log_feed?: LogFeedItem[];
 }
 
-export class WSChatClient {
+export class WSClient {
     private ws: WebSocket | null = null;
-    private _chatMode: "direct_ws" | "mqtt" = "mqtt";
     private _onChat: ChatHandler | null = null;
     private _onStreamChunk: StreamChunkHandler | null = null;
     private _onStreamEnd: StreamEndHandler | null = null;
-    private _onMode: ModeHandler | null = null;
     private _onStatePatch: StatePatchHandler | null = null;
     private _onLogFeed: LogFeedHandler | null = null;
+    private _onServerEvent: ServerEventHandler | null = null;
+    private _onConnected: ConnectionHandler | null = null;
+    private _onDisconnected: ConnectionHandler | null = null;
+    private _onMqttStatus: MqttStatusHandler | null = null;
     private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Debounces "dropped" so a brief close/reopen doesn't flip the UI to demo. */
+    private _disconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private _reconnectDelay = 1_000;
     private _url = "";
     private _closed = false;
     /** The agent the last chat was addressed to — used to attribute replies,
      *  which the server stamps with the generic transport id "io-gateway". */
     private _lastAgentName = "main-actor";
-
-    /** Active chat mode announced by the server (`direct_ws` or `mqtt`). */
-    get chatMode(): "direct_ws" | "mqtt" {
-        return this._chatMode;
-    }
 
     /** True while the WebSocket is open. */
     get connected(): boolean {
@@ -88,19 +92,34 @@ export class WSChatClient {
         this._onStreamEnd = fn;
     }
 
-    /** Server announced which chat mode is active. */
-    onMode(fn: ModeHandler): void {
-        this._onMode = fn;
-    }
-
     /** Server broadcast a state patch (agent list updated, or agent deleted). */
     onStatePatch(fn: StatePatchHandler): void {
         this._onStatePatch = fn;
     }
 
-    /** Server broadcast new MQTT-derived log_feed entries inside a state patch. */
+    /** Server broadcast new log_feed entries inside a state patch. */
     onLogFeed(fn: LogFeedHandler): void {
         this._onLogFeed = fn;
+    }
+
+    /** A live `server_event` frame — hand `(topic, payload)` to the ServerEventRouter. */
+    onServerEvent(fn: ServerEventHandler): void {
+        this._onServerEvent = fn;
+    }
+
+    /** The /ws connection opened (or reopened after a drop). */
+    onConnected(fn: ConnectionHandler): void {
+        this._onConnected = fn;
+    }
+
+    /** The /ws connection dropped (fired ~6 s after close, cancelled by a reconnect). */
+    onDisconnected(fn: ConnectionHandler): void {
+        this._onDisconnected = fn;
+    }
+
+    /** Server↔broker connection state changed (or its value on connect). */
+    onMqttStatus(fn: MqttStatusHandler): void {
+        this._onMqttStatus = fn;
     }
 
     /** Open the WebSocket to `url` and auto-reconnect on drops until disconnected. */
@@ -118,13 +137,18 @@ export class WSChatClient {
             clearTimeout(this._reconnectTimer);
             this._reconnectTimer = null;
         }
+        if (this._disconnectTimer !== null) {
+            clearTimeout(this._disconnectTimer);
+            this._disconnectTimer = null;
+        }
         this.ws?.close();
         this.ws = null;
+        this._onDisconnected?.();
     }
 
     /**
      * Send a chat message over the WebSocket.
-     * Returns false when the socket is not open (caller can fall back to MQTT).
+     * Returns false when the socket is not open.
      */
     send(content: string, agentName = "main-actor"): boolean {
         if (!this.connected) {
@@ -151,14 +175,20 @@ export class WSChatClient {
         try {
             this.ws = new WebSocket(this._url);
         } catch (err) {
-            log.warn("[WSChat] Cannot open WebSocket:", err);
+            log.warn("[WS] Cannot open WebSocket:", err);
             this._scheduleReconnect();
             return;
         }
 
         this.ws.addEventListener("open", () => {
-            log.info("[WSChat] connected →", this._url);
+            log.info("[WS] connected →", this._url);
             this._reconnectDelay = 1_000;
+            // A reconnect within the debounce window cancels the pending "dropped".
+            if (this._disconnectTimer !== null) {
+                clearTimeout(this._disconnectTimer);
+                this._disconnectTimer = null;
+            }
+            this._onConnected?.();
         });
 
         this.ws.addEventListener("message", (ev: MessageEvent) => {
@@ -172,8 +202,17 @@ export class WSChatClient {
         });
 
         this.ws.addEventListener("close", () => {
-            if (!this._closed) {
-                this._scheduleReconnect();
+            if (this._closed) {
+                return;
+            }
+            this._scheduleReconnect();
+            // Debounce the "dropped" notification: a fast reconnect (its "open"
+            // handler) cancels this timer, so the badge/feed don't flicker.
+            if (this._disconnectTimer === null) {
+                this._disconnectTimer = setTimeout(() => {
+                    this._disconnectTimer = null;
+                    this._onDisconnected?.();
+                }, 6_000);
             }
         });
 
@@ -185,8 +224,12 @@ export class WSChatClient {
     /** Route a parsed server frame by its `type` / `state` fields. */
     private _handleFrame(data: Record<string, unknown>): void {
         const type = data["type"];
-        if (type === "config") {
-            this._handleConfig(data);
+        if (type === "server_event") {
+            this._onServerEvent?.(asStr(data["topic"]), data["payload"]);
+            return;
+        }
+        if (type === "mqtt_status") {
+            this._onMqttStatus?.(Boolean(data["connected"]));
             return;
         }
         if (type === "reset") {
@@ -204,13 +247,6 @@ export class WSChatClient {
             this._applyStatePatch(data["state"]);
         }
         this._dispatchContent(data);
-    }
-
-    private _handleConfig(data: Record<string, unknown>): void {
-        const mode = (data["chat_mode"] as string) === "direct_ws" ? "direct_ws" : "mqtt";
-        this._chatMode = mode;
-        log.info("[WSChat] chat_mode =", mode);
-        this._onMode?.(mode);
     }
 
     /** State reset broadcast — apply the state patch then clear UI as needed. */
@@ -256,8 +292,7 @@ export class WSChatClient {
         // is server-side — the reply frame should carry the real agent name.
         const rawFrom = asStr(data["from"], "io-gateway");
         const from = rawFrom === "io-gateway" ? this._lastAgentName : rawFrom;
-        const rawTs = data["timestamp"] as number | undefined;
-        const ts = rawTs ? (rawTs < 1e10 ? rawTs * 1000 : rawTs) : Date.now();
+        const ts = toMs(data["timestamp"]);
 
         if (data["type"] === "chat") {
             this._onChat?.(asStr(data["content"]), from, ts);

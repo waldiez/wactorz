@@ -124,6 +124,9 @@ function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButton
         sendBtn.disabled = false;
         stopBtn.style.display = "none";
     };
+    // Page-lifetime listeners: buildIobar runs once (CardDashboard is a single
+    // instance never remounted), so these are intentionally not removed. If that
+    // assumption ever changes, a second call here double-fires busy/idle.
     listen("af-send-message", busy);
     listen("af-stream-end", idle);
     listen("af-chat-message", idle);

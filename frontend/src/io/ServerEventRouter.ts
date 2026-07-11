@@ -2,22 +2,9 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright 2025 - 2026 Waldiez & contributors
  */
-/**
- * MQTT WebSocket client.
- *
- * Connects to the Mosquitto broker's WebSocket listener (default: ws://localhost:9001)
- * and emits typed events for each topic pattern Wactorz uses.
- *
- * Usage:
- * ```ts
- * const client = new MQTTClient("ws://localhost:9001");
- * client.on("heartbeat", (payload) => { ... });
- * ```
- */
-
-import mqtt, { type MqttClient } from "mqtt";
-import { log } from "../io/logger";
-import { nameFromWid, resolveAgentName } from "../agents/naming";
+import { log } from "./logger";
+import { uid } from "../ids";
+import { resolveAgentName } from "../agents/naming";
 import type {
     AgentState,
     AlertPayload,
@@ -31,11 +18,11 @@ import type {
     SpawnPayload,
     StatusPayload,
 } from "../types/agent";
+import { toMs } from "../time";
 
-export interface MQTTEvents {
-    connected: void;
-    disconnected: void;
-    error: Error;
+type RawObj = Record<string, unknown>;
+
+export interface ServerEvents {
     heartbeat: HeartbeatPayload;
     status: StatusPayload;
     alert: AlertPayload;
@@ -59,103 +46,22 @@ export interface MQTTEvents {
 }
 
 export type Listener<T> = (data: T) => void;
-type Listeners = { [K in keyof MQTTEvents]: Array<Listener<MQTTEvents[K]>> };
+type Listeners = { [K in keyof ServerEvents]: Array<Listener<ServerEvents[K]>> };
 
-export class MQTTClient {
-    private client: MqttClient | null = null;
+export class ServerEventRouter {
     private listeners: Partial<Listeners> = {};
-    private _disconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-    // Default: MQTT WebSocket via nginx path (/mqtt) rather than direct port 9001.
-    // Override with VITE_MQTT_WS_URL env var or constructor argument.
-    constructor(private readonly brokerUrl: string = "ws://localhost/mqtt") {}
-
-    /** Connect and subscribe to all agent topics. */
-    connect(): void {
-        this.client = mqtt.connect(this.brokerUrl, {
-            clientId: `wactorz-dashboard-${Math.random().toString(16).slice(2, 8)}`,
-            keepalive: 30,
-            reconnectPeriod: 2000,
-        });
-
-        this.client.on("connect", () => {
-            log.info("[MQTT] Connected to", this.brokerUrl);
-            // Cancel any pending disconnected notification from a brief close/reconnect cycle.
-            if (this._disconnectTimer !== null) {
-                clearTimeout(this._disconnectTimer);
-                this._disconnectTimer = null;
-            }
-            // Scope to the prefixes the dashboard actually routes (see
-            // handleMessage: agents/system/nodes + homeassistant/state_changes via
-            // the raw→parseHaRawEvent path) instead of "#", so unrelated broker
-            // topics never reach the browser to be parsed. All dynamic ids live
-            // under these prefixes. Subscribe narrowly to state_changes (not all of
-            // homeassistant/#) to skip the large chunked map payloads we don't use.
-            this.client?.subscribe(["agents/#", "system/#", "nodes/#", "homeassistant/state_changes/#"], {
-                qos: 1,
-            });
-            this.emit("connected", undefined);
-        });
-
-        this.client.on("disconnect", () => {
-            this.emit("disconnected", undefined);
-        });
-
-        this.client.on("close", () => {
-            // mqtt.js fires "close" on every WebSocket close, including between
-            // reconnect attempts (reconnectPeriod: 2000 ms).  Immediately emitting
-            // "disconnected" flips the badge to "Demo fallback" on every brief
-            // hiccup.  Delay the notification so a successful reconnect (which fires
-            // "connect" and cancels this timer) doesn't cause a visible flicker.
-            if (this._disconnectTimer !== null) {
-                return;
-            }
-            this._disconnectTimer = setTimeout(() => {
-                this._disconnectTimer = null;
-                this.emit("disconnected", undefined);
-            }, 6000);
-        });
-
-        this.client.on("error", err => {
-            log.error("[MQTT] Error:", err);
-            this.emit("error", err);
-        });
-
-        this.client.on("message", (topic: string, raw: Buffer) => {
-            this.handleMessage(topic, raw);
-        });
-    }
-
-    /** Disconnect cleanly. */
-    disconnect(): void {
-        if (this._disconnectTimer !== null) {
-            clearTimeout(this._disconnectTimer);
-            this._disconnectTimer = null;
-        }
-        this.client?.end(true);
-        this.client = null;
-    }
-
-    /** Publish a raw JSON payload to a topic. Returns false if not connected. */
-    publish(topic: string, payload: unknown): boolean {
-        if (!this.client?.connected) {
-            return false;
-        }
-        this.client.publish(topic, JSON.stringify(payload), { qos: 1 });
-        return true;
-    }
 
     /** Register a listener for a typed event. Chainable. */
-    on<K extends keyof MQTTEvents>(event: K, listener: Listener<MQTTEvents[K]>): this {
+    on<K extends keyof ServerEvents>(event: K, listener: Listener<ServerEvents[K]>): this {
         if (!this.listeners[event]) {
             (this.listeners as Listeners)[event] = [];
         }
-        (this.listeners[event] as Array<Listener<MQTTEvents[K]>>).push(listener);
+        (this.listeners[event] as Array<Listener<ServerEvents[K]>>).push(listener);
         return this;
     }
 
     /** Remove a previously registered listener. Chainable. */
-    off<K extends keyof MQTTEvents>(event: K, listener: Listener<MQTTEvents[K]>): this {
+    off<K extends keyof ServerEvents>(event: K, listener: Listener<ServerEvents[K]>): this {
         const arr = this.listeners[event];
         if (arr) {
             const idx = arr.indexOf(listener);
@@ -166,25 +72,7 @@ export class MQTTClient {
         return this;
     }
 
-    private emit<K extends keyof MQTTEvents>(event: K, data: MQTTEvents[K]): void {
-        const arr = this.listeners[event];
-        arr?.forEach(fn => {
-            try {
-                fn(data);
-            } catch (err) {
-                log.error(`[MQTT] listener error on "${event}":`, err);
-            }
-        });
-    }
-
-    private handleMessage(topic: string, raw: Buffer): void {
-        let payload: unknown;
-        try {
-            payload = JSON.parse(raw.toString());
-        } catch {
-            return;
-        }
-
+    route(topic: string, payload: unknown): void {
         // Structured routing needs an object. A null/primitive payload can't match
         // any known shape and would throw on property access inside the routers,
         // so surface it as `raw` instead of letting it escape the message handler.
@@ -202,6 +90,17 @@ export class MQTTClient {
         }
 
         this.emit("raw", { topic, payload });
+    }
+
+    private emit<K extends keyof ServerEvents>(event: K, data: ServerEvents[K]): void {
+        const arr = this.listeners[event];
+        arr?.forEach(fn => {
+            try {
+                fn(data);
+            } catch (err) {
+                log.error(`[ServerEvent] listener error on "${event}":`, err);
+            }
+        });
     }
 
     /** Fixed-shape agent topics: `agents/{id}/{heartbeat|status|alert|chat|spawn}`. */
@@ -324,24 +223,12 @@ export class MQTTClient {
     }
 }
 
-type RawObj = Record<string, unknown>;
-
-/** Convert a raw epoch value to milliseconds.
- *  Python's time.time() returns seconds (< 1e10); JS Date.now() returns ms. */
-export function toMs(raw: unknown): number {
-    const n = Number(raw);
-    if (!Number.isFinite(n) || n <= 0) {
-        return Date.now();
-    }
-    return n < 1e10 ? n * 1000 : n;
-}
-
 function str(v: unknown, fallback = ""): string {
     return typeof v === "string" ? v : fallback;
 }
 
 // --- Field validators ---------------------------------------------------------
-// Every MQTT payload is untrusted external JSON. These coerce individual fields
+// Every payload is untrusted external JSON. These coerce individual fields
 // to their declared types so a malformed or hostile value (e.g. a number where a
 // string is expected, or an unknown key) can't be laundered into a typed payload.
 
@@ -386,11 +273,6 @@ function strArray(v: unknown): string[] {
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
-// Agent-name resolution is single-sourced in agents/naming; re-exported here,
-// with `nameFromId` as an alias of nameFromWid, for callers that import it from
-// the MQTT module.
-export { nameFromWid as nameFromId, resolveAgentName };
-
 /** Normalise a raw heartbeat payload, tolerating snake_case/camelCase keys and resolving id + name. */
 export function normaliseHeartbeat(p: unknown): HeartbeatPayload {
     const o = asObj(p);
@@ -426,7 +308,7 @@ export function normaliseChat(p: unknown): ChatMessage {
     const o = asObj(p);
     const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
     return {
-        id: str(o["id"]) || `chat-${timestampMs}`,
+        id: str(o["id"]) || uid("chat"), // WID, not `chat-${ms}`: same-ms ids collide and dedupe-drop
         from: str(o["from"] ?? o["agentName"] ?? o["name"]),
         to: str(o["to"]) || "user", // default to "user" when field absent
         content: str(o["content"]),

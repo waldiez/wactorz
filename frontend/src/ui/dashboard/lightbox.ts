@@ -11,6 +11,9 @@ export function openLightbox(url: string, alt = ""): void {
 
     const overlay = document.createElement("div");
     overlay.className = "af-lightbox";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", alt || "Image preview");
 
     const img = document.createElement("img");
     img.src = url;

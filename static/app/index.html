@@ -11,7 +11,8 @@
     <meta name="keywords"
           content="multi-agent, AI agents, orchestration, actor model, MQTT, real-time dashboard, LLM, wactorz" />
     <meta name="author"   content="Wactorz" />
-    <meta name="robots"   content="index, follow" />
+    <!-- Ops control surface (agents can be paused/stopped/reset from here) — never ask to be indexed. -->
+    <meta name="robots"   content="noindex, nofollow" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
 
     <!-- ── Open Graph ───────────────────────────────────────────────────────── -->
@@ -45,11 +46,16 @@
     <link rel="icon" href="./icon.png" type="image/png" sizes="512x512" />
     <!-- crossorigin: send the ingress auth cookie, else HA ingress 401s the manifest -->
     <link rel="manifest"         href="./site.webmanifest" crossorigin="use-credentials" />
-    <script type="module" crossorigin src="./assets/index-Bc-pXzGd.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/vendor-B43O1bX-.js">
+    <script type="module" crossorigin src="./assets/index-DxKNRdb6.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/vendor-DVCETZFR.js">
     <link rel="stylesheet" crossorigin href="./assets/index-vj2OEFug.css">
   </head>
   <body>
+    <!-- CSP note: inline scripts are allowed only because the monitor server stamps
+         each first-party inline script with a per-request nonce at serve time (see
+         monitor_server.index_handler / _csp_report_only). It also injects a nonced
+         window.__WACTORZ_INGRESS_PATH bootstrap into the document head. Keep inline
+         scripts first-party — never inline remote or user-supplied content here. -->
     <script>
       // Register the service worker only for the standalone / desktop deployment.
       // Behind Home Assistant's ingress proxy the app is served under a rotating

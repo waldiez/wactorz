@@ -144,9 +144,10 @@ def reset_logs(log_dir: str | None = None) -> None:
         if isinstance(handler, logging.FileHandler):
             try:
                 handler.acquire()
-                handler.stream.truncate(0)
-                handler.stream.seek(0)
-                truncated.add(str(Path(handler.baseFilename).resolve()))
+                if handler.stream is not None:  # None for a delay-opened handler
+                    handler.stream.truncate(0)
+                    handler.stream.seek(0)
+                    truncated.add(str(Path(handler.baseFilename).resolve()))
                 handler.release()
             except Exception as exc:
                 logger.warning(

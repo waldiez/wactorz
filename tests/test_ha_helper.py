@@ -283,6 +283,124 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(ha_helper.normalize_ha_base_url(value), expected)
 
+    def test_history_to_csv_normal(self):
+        history = {
+            "sensor.temp": [
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-28T17:00:00",
+                    "attributes": {"unit_of_measurement": "°C"},
+                },
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.8",
+                    "last_changed": "2026-06-28T17:05:00",
+                    "attributes": {"unit_of_measurement": "°C"},
+                },
+            ],
+            "sensor.humidity": [
+                {
+                    "entity_id": "sensor.humidity",
+                    "state": "55",
+                    "last_changed": "2026-06-28T17:00:00",
+                    "attributes": {},
+                },
+            ],
+        }
+        csv_str = ha_helper.history_to_csv(history)
+        lines = csv_str.strip().splitlines()
+        self.assertEqual(lines[0], "entity_id,last_changed,state,unit_of_measurement")
+        self.assertEqual(len(lines), 4)
+        self.assertIn("sensor.temp,2026-06-28T17:00:00,21.5,°C", csv_str)
+        self.assertIn("sensor.humidity,2026-06-28T17:00:00,55,", csv_str)
+
+    def test_history_to_csv_empty_series_skipped(self):
+        history = {"sensor.temp": [], "sensor.humidity": []}
+        csv_str = ha_helper.history_to_csv(history)
+        lines = csv_str.strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0], "entity_id,last_changed,state,unit_of_measurement")
+
+    def test_history_to_csv_error_dict_skipped(self):
+        history = {"error": "HTTP 401", "status": 401, "detail": "unauthorized"}
+        csv_str = ha_helper.history_to_csv(history)
+        lines = csv_str.strip().splitlines()
+        self.assertEqual(len(lines), 1)
+
+    def test_history_to_csv_missing_unit(self):
+        history = {
+            "sensor.temp": [
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-28T17:00:00",
+                    "attributes": {},
+                },
+            ],
+        }
+        csv_str = ha_helper.history_to_csv(history)
+        self.assertIn("sensor.temp,2026-06-28T17:00:00,21.5,", csv_str)
+
+    def test_to_utc_offset_aware_string_converted(self):
+        result = ha_helper.to_utc("2026-06-27T17:00:00+02:00")
+        self.assertEqual(result, "2026-06-27T15:00:00+00:00")
+
+    def test_to_utc_naive_treated_as_local(self):
+        from datetime import datetime, timezone
+
+        naive = "2026-06-27T17:00:00"
+        result = ha_helper.to_utc(naive)
+        dt = datetime.fromisoformat(naive).astimezone().astimezone(timezone.utc)
+        self.assertEqual(result, dt.isoformat())
+
+    def test_to_utc_unparseable_passes_through(self):
+        self.assertEqual(ha_helper.to_utc("not-a-date"), "not-a-date")
+        self.assertEqual(ha_helper.to_utc(""), "")
+
+    def test_localise_history_timestamps_converts_utc(self):
+        history = {
+            "sensor.temp": [
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-27T15:00:00+00:00",
+                    "attributes": {},
+                },
+            ]
+        }
+        result = ha_helper.localise_history_timestamps(history)
+        ts = result["sensor.temp"][0]["last_changed"]
+        # Converted to local tz — must no longer be UTC (+00:00) if local offset is non-zero,
+        # but always a valid ISO string parseable by fromisoformat.
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(ts)
+        self.assertIsNotNone(dt.tzinfo)
+
+    def test_localise_history_timestamps_handles_z_suffix(self):
+        history = {
+            "sensor.temp": [
+                {
+                    "entity_id": "sensor.temp",
+                    "state": "21.5",
+                    "last_changed": "2026-06-27T15:00:00Z",
+                    "attributes": {},
+                },
+            ]
+        }
+        result = ha_helper.localise_history_timestamps(history)
+        ts = result["sensor.temp"][0]["last_changed"]
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(ts)
+        self.assertIsNotNone(dt.tzinfo)
+
+    def test_localise_history_timestamps_skips_error_dicts(self):
+        history = {"error": "HTTP 401", "status": 401, "detail": ""}
+        result = ha_helper.localise_history_timestamps(history)
+        self.assertEqual(result["error"], "HTTP 401")
+
 
 class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -1148,6 +1266,193 @@ class HomeAssistantHelperCameraTest(unittest.IsolatedAsyncioTestCase):
             result["streams"]["mjpeg_proxy"],
             "https://ha.example.com/api/camera_proxy_stream/camera.x",
         )
+
+
+class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        _reset_fakes()
+        self._patch_session = patch(
+            "wactorz.core.integrations.home_assistant.ha_helper.aiohttp.ClientSession",
+            _FakeClientSession,
+        )
+        self._patch_session.start()
+
+    def tearDown(self):
+        self._patch_session.stop()
+
+    # -- helpers -----------------------------------------------------------
+
+    def _state(self, entity_id: str, state: str = "on") -> dict:
+        return {"entity_id": entity_id, "state": state, "last_changed": "2024-01-01T00:00:00+00:00"}
+
+    # -- single entity -----------------------------------------------------
+
+    async def test_single_entity_returns_dict_keyed_by_entity_id(self):
+        states = [self._state("light.kitchen")]
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[states])]
+
+        result = await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.kitchen")
+
+        self.assertIn("light.kitchen", result)
+        self.assertEqual(result["light.kitchen"], states)
+
+    async def test_multiple_entities_comma_joined_in_params(self):
+        k_states = [self._state("light.kitchen")]
+        l_states = [self._state("light.lounge")]
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[k_states, l_states])]
+
+        result = await ha_helper.get_entity_history(
+            "http://ha.local:8123", "tok", ["light.kitchen", "light.lounge"]
+        )
+
+        session = _FakeClientSession.instances[0]
+        params = session.get_calls[0][1]["params"]
+        self.assertEqual(params["filter_entity_id"], "light.kitchen,light.lounge")
+        self.assertIn("light.kitchen", result)
+        self.assertIn("light.lounge", result)
+        self.assertEqual(result["light.kitchen"], k_states)
+        self.assertEqual(result["light.lounge"], l_states)
+
+    # -- entity with no history stays in result ----------------------------
+
+    async def test_entity_with_no_history_present_with_empty_list(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[[]])]
+
+        result = await ha_helper.get_entity_history("http://ha.local:8123", "tok", "sensor.temp")
+
+        self.assertIn("sensor.temp", result)
+        self.assertEqual(result["sensor.temp"], [])
+
+    # -- start_time / end_time as datetime ---------------------------------
+
+    async def test_start_time_datetime_appears_in_url_path(self):
+        from datetime import datetime, timezone
+
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+        dt = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x", start_time=dt)
+
+        session = _FakeClientSession.instances[0]
+        called_url = session.get_calls[0][0]
+        self.assertIn(dt.isoformat(), called_url)
+
+    async def test_end_time_datetime_appears_in_params(self):
+        from datetime import datetime, timezone
+
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+        dt = datetime(2024, 6, 2, 0, 0, 0, tzinfo=timezone.utc)
+
+        await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x", end_time=dt)
+
+        session = _FakeClientSession.instances[0]
+        params = session.get_calls[0][1]["params"]
+        self.assertEqual(params["end_time"], dt.isoformat())
+
+    # -- start_time / end_time as pre-formatted strings --------------------
+
+    async def test_start_time_string_passed_through(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history(
+            "http://ha.local:8123", "tok", "light.x", start_time="2024-06-01T12:00:00+00:00"
+        )
+
+        session = _FakeClientSession.instances[0]
+        self.assertIn("2024-06-01T12:00:00+00:00", session.get_calls[0][0])
+
+    async def test_end_time_string_passed_through(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history(
+            "http://ha.local:8123", "tok", "light.x", end_time="2024-06-02T00:00:00+00:00"
+        )
+
+        session = _FakeClientSession.instances[0]
+        params = session.get_calls[0][1]["params"]
+        self.assertEqual(params["end_time"], "2024-06-02T00:00:00+00:00")
+
+    # -- omitted times generate no extra path or params --------------------
+
+    async def test_no_times_no_path_segment_no_time_params(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x")
+
+        session = _FakeClientSession.instances[0]
+        url, kwargs = session.get_calls[0]
+        params = kwargs["params"]
+        self.assertTrue(url.endswith("/api/history/period"))
+        self.assertNotIn("end_time", params)
+
+    # -- minimal_response / significant_changes_only defaults -------------
+
+    async def test_defaults_minimal_true_significant_false(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x")
+
+        session = _FakeClientSession.instances[0]
+        params = session.get_calls[0][1]["params"]
+        self.assertEqual(params.get("minimal_response"), "true")
+        self.assertNotIn("significant_changes_only", params)
+
+    async def test_explicit_overrides_sent_correctly(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history(
+            "http://ha.local:8123",
+            "tok",
+            "light.x",
+            minimal_response=False,
+            significant_changes_only=True,
+        )
+
+        session = _FakeClientSession.instances[0]
+        params = session.get_calls[0][1]["params"]
+        self.assertNotIn("minimal_response", params)
+        self.assertEqual(params.get("significant_changes_only"), "true")
+
+    # -- authorization header ----------------------------------------------
+
+    async def test_auth_header_sent(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history("http://ha.local:8123", "mytoken", "light.x")
+
+        session = _FakeClientSession.instances[0]
+        headers = session.get_calls[0][1]["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer mytoken")
+
+    # -- error shapes ------------------------------------------------------
+
+    async def test_non_200_returns_error_dict(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=401, text_data="Unauthorized")]
+
+        result = await ha_helper.get_entity_history("http://ha.local:8123", "bad", "light.x")
+
+        self.assertEqual(result["error"], "HTTP 401")
+        self.assertEqual(result["status"], 401)
+        self.assertIn("Unauthorized", result["detail"])
+
+    async def test_exception_returns_error_dict(self):
+        _FakeClientSession.get_results = [ConnectionError("refused")]
+
+        result = await ha_helper.get_entity_history("http://ha.local:8123", "tok", "light.x")
+
+        self.assertIn("error", result)
+        self.assertIn("refused", result["error"])
+
+    # -- URL normalisation -------------------------------------------------
+
+    async def test_ws_url_normalised_to_http(self):
+        _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
+
+        await ha_helper.get_entity_history("wss://ha.example.com/api/websocket", "tok", "light.x")
+
+        session = _FakeClientSession.instances[0]
+        url = session.get_calls[0][0]
+        self.assertTrue(url.startswith("https://ha.example.com/api/history/period"))
 
 
 if __name__ == "__main__":

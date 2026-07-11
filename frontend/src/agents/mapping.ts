@@ -18,7 +18,6 @@ import type {
     HeartbeatPayload,
     SpawnPayload,
     AlertPayload,
-    StatusPayload,
     LogPayload,
     NodeHeartbeatPayload,
     ChatMessage,
@@ -80,6 +79,11 @@ export function toAgentInfo(a: StatePatchAgent): AgentInfo {
     if (a.agent_type != null) {
         update.agentType = a.agent_type;
     }
+    // Remote agents aren't in the /api/actors REST list; the node marks them so the
+    // REST reconcile doesn't evict them (see AgentStore.reconcileAgents).
+    if (a.node != null) {
+        update.node = a.node;
+    }
     return update;
 }
 
@@ -134,20 +138,15 @@ const FEED_MAPPERS: Record<string, (item: LogFeedItem, ctx: FeedCtx) => FeedItem
         agentName: item.agentName ?? item.name ?? agentName,
         timestamp: ts,
     }),
-    completed: (_item, { agentName, ts }) => ({
-        type: "spawn",
-        label: "task completed",
-        agentName,
-        timestamp: ts,
-    }),
+    completed: (_item, { agentName, ts }) => completedFeedItem({ agentName }, ts),
     log: (item, { agentName, ts }) => {
         const msg = item.message ?? item.text ?? "";
         return msg ? { type: "chat", label: msg, agentName, timestamp: ts } : null;
     },
-    status: (item, { agentName, ts }) => {
-        const st = item.status?.["state"] as string | undefined;
-        return st === "stopped" ? { type: "stopped", label: "stopped", agentName, timestamp: ts } : null;
-    },
+    status: (item, { agentName, ts }) =>
+        (item.status?.["state"] as string | undefined) === "stopped"
+            ? stoppedFeedItem({ agentName }, ts)
+            : null,
     alert: (item, { agentName, ts }) => ({
         type: alertKind(item.severity),
         label: item.message ?? "",
@@ -306,7 +305,7 @@ export function chatFeedItem(msg: ChatMessage): FeedItem {
 }
 
 /** Feed row when an agent reports stopped. */
-export function stoppedFeedItem(p: StatusPayload, now = Date.now()): FeedItem {
+export function stoppedFeedItem(p: { agentName: string }, now = Date.now()): FeedItem {
     return { type: "stopped", label: "stopped", agentName: p.agentName, timestamp: now };
 }
 
@@ -350,7 +349,7 @@ export function nodeHeartbeatFeedItem(p: NodeHeartbeatPayload, now = Date.now())
 // ── Extensible raw-topic feed rows ─────────────────────────────────────────
 // Agent topics that are feed-only (not part of the typed MQTTEvents route) reach
 // the browser via the `raw` catch-all. Map `agents/{id}/{suffix}` → a feed row
-// here; surfacing another topic is a single entry + test, no MQTTClient changes.
+// here; surfacing another topic is a single entry + test, no ServerEventRouter changes.
 
 const RAW_AGENT_FEED_MAPPERS: Record<
     string,

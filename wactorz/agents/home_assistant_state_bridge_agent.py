@@ -51,11 +51,7 @@ class HomeAssistantStateBridgeAgent(Actor):
             or DEFAULT_OUTPUT_TOPIC
         ).strip()
 
-        _raw_domains = (
-            os.getenv("HA_STATE_BRIDGE_DOMAINS")
-            or CONFIG.ha_state_bridge_domains
-            or ""
-        )
+        _raw_domains = os.getenv("HA_STATE_BRIDGE_DOMAINS") or CONFIG.ha_state_bridge_domains or ""
         self._domain_filter: set[str] = _parse_domains(_raw_domains)
 
         _per_entity_raw = os.getenv("HA_STATE_BRIDGE_PER_ENTITY")

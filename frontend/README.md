@@ -1,30 +1,36 @@
 # Wactorz Frontend
 
 Vite + TypeScript single-page application that visualises a running Wactorz agent system.
-Renders a live dashboard as HTML/CSS card components driven by real-time MQTT events.
+Renders a live dashboard as HTML/CSS card components driven by real-time server-push.
 
 ## Stack
 
 | Layer | Library | Purpose |
-|-------|---------|---------|
-| Transport | MQTT.js 5 | Real-time agent events |
-| Chat bridge | WebSocket (native) | Direct `main` agent replies |
+| ----- | ------- | ------- |
+| Transport | WebSocket (native) | One `/ws` connection: live server events + chat |
 | IDs | `@waldiez/wid` | Time-ordered collision-resistant IDs |
-| Build | Vite 8 + TypeScript 5.9 | Strict mode, ES2022 target |
+| Build | Vite 8 + TypeScript 6 | Strict mode, ES2022 target |
 
 ## Directory layout
 
-```
+```text
 frontend/
 ├── src/
-│   ├── main.ts            # Bootstrap — wires everything together
-│   ├── types/agent.ts     # Shared types (AgentInfo, ChatMessage, …)
-│   ├── mqtt/              # MQTT WebSocket client + typed event emitter
-│   ├── io/                # IOManager, WSChatClient, TTS, VoiceInput, HAClient
-│   ├── scene/             # SceneManager — agent-state store + dashboard coordinator
-│   └── ui/                # HTML overlay components (no framework)
+│   ├── main.ts            # Bootstrap — wires transports → store + UI
+│   ├── events.ts          # Typed app event bus over document CustomEvents (emit/listen + AppEventMap)
+│   ├── types/             # Shared types: agent.ts, feed.ts, tts.ts, ws.ts, global.d.ts (Window augmentation)
+│   ├── time.ts            # toMs() epoch→ms helper
+│   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
+│   ├── io/                # IO/transport: WSClient (the /ws connection), ServerEventRouter
+│   │                      #   (topic→typed-event decoder), IOManager, TTSManager, SpeechToText,
+│   │                      #   AmbientManager, logger
+│   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard
+│   ├── styles/            # Global CSS (base, cards, chat, dashboard, …); app.css is the entry
+│   └── __tests__/         # Vitest unit tests (happy-dom)
+├── public/                # Static assets (icons, sw.js, webmanifest)
 ├── index.html
-├── vite.config.ts         # Dev proxy → :8000 (REST) + :8081 (WS) + :9001 (MQTT)
+├── vite.config.ts         # Dev proxy → :8888 (REST + WS); build → ../static/app
+├── vitest.config.ts       # Coverage floors (gated in CI)
 └── tsconfig.json          # Strict, noUncheckedIndexedAccess, exactOptionalPropertyTypes
 ```
 
@@ -44,53 +50,122 @@ bun run dev          # http://localhost:3000
 ## Available scripts
 
 | Script | What it does |
-|--------|-------------|
-| `bun run dev` | Vite dev server on :3000 with proxy to :8000/:8081/:9001 |
+| ------ | ------------ |
+| `bun run dev` | Vite dev server on :3000, proxying `/api`, `/ws` to :8888 |
 | `bun run build` | TypeScript check + Vite bundle → `../static/app` |
+| `bun run preview` | Serve the production bundle locally |
 | `bun run typecheck` | `tsc --noEmit` only |
-| `bun run fmt` | Prettier over `src/**/*.ts` |
+| `bun run lint` | typecheck + Prettier check + ESLint + markdownlint (what CI runs) |
+| `bun run fmt` | Prettier write over `src/**/*.{ts,tsx,css,json}` |
+| `bun run markdownlint` | markdownlint-cli2 `--fix` over `*.md` (`:check` variant is in `lint`) |
+| `bun run test` | Vitest unit tests (happy-dom) |
+| `bun run coverage` | Vitest with coverage; **fails below the gated thresholds** |
 | `bun run docs` | TypeDoc → `../site/api/js` |
+
+## Testing
+
+Unit tests run on [Vitest](https://vitest.dev) in a `happy-dom` environment — no browser required:
+
+```bash
+bun run test         # run once
+bun run test:watch   # watch mode
+bun run coverage     # run with a coverage report
+```
+
+Coverage thresholds live in `vitest.config.ts` and **gate CI**: `bun run coverage`
+fails if any metric drops below the floor. The floor is ratcheted up as coverage grows — raise it,
+never lower it. New components and bug fixes should ship with a test in `src/__tests__/`.
 
 ## Event bus
 
 Components communicate exclusively through **DOM `CustomEvent`s** — no shared mutable state, no framework store.
+Use the typed helpers in `src/events.ts`: `emit(type, detail)` to dispatch and `listen(type, handler)` to
+subscribe. `AppEventMap` there is the single source of truth for every event name and its payload (the table
+below mirrors it); add new events to that map so dispatch and handlers stay type-checked.
 
 | Event | Direction | Payload |
-|-------|-----------|---------|
-| `agent-selected` | UI → SceneManager | `{ agent: { id } }` |
-| `af-agent-command` | UI → WSChatClient | `{ command, agentId }` |
-| `af-send-message` | IOBar/CardDash → IOManager | `{ content, target }` |
-| `af-feed-push` | any → CardDashboard | `{ item: FeedItem }` |
-| `af-chat-message` | WS/MQTT → ChatPanel | `{ msg: ChatMessage }` |
-| `af-stream-chunk` | IOManager → ChatPanel | `{ chunk, from }` |
-| `af-stream-end` | IOManager → ChatPanel | — |
-| `af-connection-status` | MQTT/WS → HUD | `{ status: "live"\|"demo" }` |
+| ------ | --------- | ------- |
+| `af-agent-command` | CardDashboard → main.ts (WSClient) | `{ command, agentId }` |
+| `af-send-message` | DashboardChat → main.ts (IOManager) | `{ content, target, attachments }` |
+| `af-feed-push` | IOManager / main.ts → CardDashboard | `{ item: FeedItem }` |
+| `af-chat-message` | main.ts (WSClient) → DashboardChat | `{ msg: ChatMessage }` |
+| `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from }` |
+| `af-stream-end` | IOManager → DashboardChat | `{ text, from }` |
+| `af-connection-status` | main.ts (WSClient) → CardDashboard | `{ status: "live" \| "connecting" \| "demo" }` |
+| `af-attachment-added` | DropZone / chatIobar → DashboardChat | `{ attachment }` |
+| `af-reset-chat` | WSClient → DashboardChat | `{ agent: string \| null }` |
+| `af-clear-feed` | WSClient / main.ts → CardDashboard | _(none)_ |
+| `af-wipe-all` | WSClient / main.ts → CardDashboard | _(none)_ |
+| `tts-voices-loaded` | TTSManager → popovers | `{ voices }` |
 
-## MQTT topics consumed
+## Server events consumed
 
-```
+Live activity arrives as `server_event` frames over `/ws` (the backend relays them from
+MQTT server-side); `ServerEventRouter` decodes each by its topic key into a typed event:
+
+```text
 agents/{id}/heartbeat   agents/{id}/status    agents/{id}/spawn
 agents/{id}/chat        agents/{id}/alert     agents/{id}/metrics
 agents/{id}/logs        agents/{id}/completed
-nodes/{node}/heartbeat  system/health
+nodes/{node}/heartbeat  system/health         system/host    system/qa-flag
 ```
 
 ## Adding a new UI component
 
 1. Create `src/ui/MyComponent.ts`
-2. Instantiate in `main.ts` (follow the existing bootstrap order comment)
-3. Subscribe to relevant DOM events via `document.addEventListener`
-4. Fire DOM events rather than calling methods on other components directly
-5. Run `bun run typecheck` — fix all errors before opening a PR
+2. Instantiate in `main.ts`, in the matching numbered section (see its header map)
+3. Subscribe to relevant events via `listen(type, handler)` from `src/events.ts`
+4. Fire events via `emit(type, detail)` rather than calling methods on other components directly
+   (add the event to `AppEventMap` first)
+5. Add a unit test in `src/__tests__/` (coverage is gated in CI)
+6. Run `bun run lint && bun run test` — both must pass before opening a PR
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide: style/JSDoc rules, the
+PR checklist, and the branch target (`dev`).
 
 ## Proxy configuration
 
 During development, Vite proxies:
 
 | Path | Target | Protocol |
-|------|--------|----------|
-| `/api` | `localhost:8000` | HTTP |
-| `/ws` | `localhost:8081` | WebSocket |
-| `/mqtt` | `localhost:9001` | WebSocket |
+| ---- | ------ | -------- |
+| `/api` | `localhost:8888` | HTTP |
+| `/ws` | `localhost:8888` | WebSocket |
 
-Set `VITE_MQTT_WS_URL` in `.env` to override the MQTT broker URL in production builds.
+Both proxy to the backend monitor server on `:8888` (see `vite.config.ts`).
+Set `VITE_OPEN=true` to auto-open the browser on `bun run dev`.
+
+## Deployment modes
+
+The same bundle serves two targets, distinguished at runtime:
+
+| Mode | How API/WS URLs resolve |
+| ---- | ----------------------- |
+| Standalone | Paths are root-relative (`/api`, `/ws`) |
+| Home Assistant add-on | The Python add-on injects `window.__WACTORZ_INGRESS_PATH`; all API/WS URLs are rebased onto that ingress prefix |
+
+`__WACTORZ_INGRESS_PATH` is typed in `src/types/global.d.ts` and read wherever a
+same-origin URL is built (e.g. `main.ts`, `chatHistory.ts`, `popovers.ts`, `haConfig`).
+It defaults to `""`, so standalone builds need no configuration.
+
+The dashboard does **not** talk to Home Assistant directly: the "Devices" nav button
+links out to the HA UI (new tab) using the `ha.url` from `/api/config`. No HA token
+ever reaches the browser. HA entity activity still reaches the feed via the
+`ha-state-bridge-agent` over MQTT (`homeassistant/state_changes/#`).
+
+The backend subscribes server-side to `agents/#`, `system/#`, `nodes/#`, and
+`homeassistant/state_changes/#` and relays them to the browser as `server_event`
+frames. `ServerEventRouter` routes most topics to typed events; feed-only agent
+topics (e.g. `actuations`, `anomaly`) ride the `raw` catch-all and are mapped to
+feed rows by the extensible `rawFeedItem` registry in `agents/mapping.ts` — add a
+topic there without touching the router.
+
+## Feature flags (build-time)
+
+Some UI is gated behind backend endpoints that aren't always available. They're
+off by default; enable per-deploy by setting the env var at build time (`.env`):
+
+| Flag | Enables | Needs backend |
+| ---- | ------- | ------------- |
+| `VITE_STT_ENABLED=true` | Voice/mic button (speech-to-text) | `/api/stt` |
+| `VITE_UPLOADS_ENABLED=true` | Attachments (drag-drop + paste) | `/api/upload` |

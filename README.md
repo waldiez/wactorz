@@ -108,7 +108,6 @@ flowchart LR
 | Discord | `python -m wactorz --interface discord` |
 | Telegram | `python -m wactorz --interface telegram` |
 | MCP server | `wactorz-mcp` |
-| Flutter app | iOS/Android companion app for agents, chat, and activity feed |
 | Home Assistant addon | One-click install inside the HA Supervisor |
 
 ---
@@ -143,7 +142,6 @@ LLM_API_KEY=your-key-here
 |---|---|
 | `wactorz/` | Python actor runtime, built-in agents, interfaces, monitoring, HA integration |
 | `frontend/` | Vite + TypeScript card dashboard |
-| `mobile/` | Flutter companion app |
 | `ha-addon/` | Home Assistant Supervisor addon |
 | `docs/` | Markdown docs source |
 | `infra/` | Mosquitto, Prometheus, OpenTelemetry, nginx, and HA configs |

@@ -76,7 +76,7 @@ Every user message goes through a single cheap LLM call that classifies it into 
 | Intent | Description | Route |
 |--------|-------------|-------|
 | `ACTUATE` | Immediate one-shot Home Assistant device control — turn on/off lights, set temperature, lock/unlock, open/close covers | → ephemeral `OneOffActuatorAgent` |
-| `HA` | Home Assistant management and automation CRUD — list devices/entities/areas, create/edit/delete automations, answer open-ended HA questions | → `home-assistant-agent` |
+| `HA` | Home Assistant management and automation CRUD — list devices/entities/areas, create/edit/delete automations, answer open-ended HA questions (including historical entity state) | → `home-assistant-agent` |
 | `PIPELINE` | Reactive rule — "if X then Y", "when X send me a message", any event-driven logic | → `PlannerAgent` |
 | `OTHER` | General conversation, coding, questions, everything else | → `main` LLM |
 
@@ -849,6 +849,8 @@ Connects to your Home Assistant instance (set `HA_URL` and `HA_TOKEN`) and handl
 | `list_areas` | Lists all Home Assistant areas |
 | `list_devices` | Lists all devices |
 | `list_entities` | Lists all entities |
+| `other` | Open-ended HA questions via an LLM tool-call loop — current state, camera snapshots/streams, and entity history (`get_entity_history`) |
+| `get_history` | Structured A2A operation: fetch entity state history for explicit entity IDs, returned as CSV |
 
 Device and automation data is cached (30s TTL). The agent includes a self-correction loop for hardware selection — if the LLM returns `can_fulfill=true` with an empty hardware list, it prompts for a correction automatically.
 
@@ -1198,7 +1200,7 @@ myenv\Scripts\activate
 # Mac/Linux
 source myenv/bin/activate
 
-pip install -r requirements.txt
+pip install -e ".[all]"
 
 # Set your LLM key
 export ANTHROPIC_API_KEY=sk-ant-...

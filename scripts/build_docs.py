@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Wactorz docs builder.
+"""Wactorz docs builder.
 
 Converts docs/*.md → static/docs/*.html using a custom dark template that matches
 the landing page (Chakra Petch + JetBrains Mono, #05080e background).
@@ -56,6 +55,19 @@ NAV = [
         ("Remote Nodes",      "remote-nodes.md"),
         ("Prometheus",       "prometheus.md"),
     ]),
+    ("Catalogue agents", "catalogue", [
+        ("Overview",               "catalogue-agents.md"),
+        ("Google — setup & login", "catalogue-google-setup.md"),
+        ("Google Calendar",        "catalogue-google-calendar.md"),
+        ("Gmail",                  "catalogue-gmail.md"),
+        ("Weather",                "catalogue-weather.md"),
+        ("Smart Energy",           "catalogue-smart-energy.md"),
+        ("Reachy Mini",            "catalogue-reachy-mini.md"),
+        ("Anomaly Detector",       "catalogue-anomaly-detector.md"),
+        ("Device Manuals",         "catalogue-manual.md"),
+        ("Doc → PPTX",             "catalogue-doc-to-pptx.md"),
+        ("Time-Series Collector",  "catalogue-timeseries.md"),
+    ]),
     #("Reference", "reference", [
     #    ("REST & WebSocket API", "api.md"),
     #    ("Prometheus Monitoring", "prometheus.md"),
@@ -96,9 +108,7 @@ TEMPLATE = """\
 
     /* ── Nav bar ── */
     .topbar{{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}}
-    .topbar-logo{{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:.5rem}}
-    .logo-mark{{width:20px;height:20px;border:1.5px solid var(--blue);border-radius:3px;display:grid;place-items:center}}
-    .logo-mark::before{{content:'';width:5px;height:5px;background:var(--blue);border-radius:50%;box-shadow:0 0 6px var(--blue)}}
+    .topbar-logo{{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}}
     .topbar-links{{display:flex;gap:.1rem}}
     .topbar-links a{{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}}
     .topbar-links a:hover,.topbar-links a.active{{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}}
@@ -110,6 +120,12 @@ TEMPLATE = """\
     .sidebar{{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}}
     .sidebar-group{{margin-bottom:1.25rem}}
     .sidebar-label{{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{{display:none}}
+    details.sidebar-group > summary.sidebar-label::after{{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}}
+    details.sidebar-group[open] > summary.sidebar-label::after{{content:'▾'}}
+    details.sidebar-group > summary.sidebar-label:hover{{color:var(--muted-hi)}}
     .sidebar a{{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}}
     .sidebar a:hover{{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}}
     .sidebar a.active{{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}}
@@ -171,9 +187,7 @@ TEMPLATE = """\
 </head>
 <body>
 <header class="topbar">
-  <a href="{root}index.html" class="topbar-logo">
-    <div class="logo-mark"></div>Wactorz
-  </a>
+  <a href="{root}index.html" class="topbar-logo">Wactorz</a>
   <nav class="topbar-links">
     <a href="https://github.com/waldiez/wactorz">GitHub</a>
     <a href="https://pypi.org/project/wactorz/">PyPI</a>
@@ -241,13 +255,19 @@ def build_sidebar(active_md: str, active_subdir: str, root: str = "../") -> str:
             lines.append(f'    <a href="{url}" class="external" target="_blank" rel="noopener">{label}</a>')
         else:
             subdir, children = item[1], item[2]
-            lines.append('    <div class="sidebar-group">')
-            lines.append(f'      <div class="sidebar-label">{label}</div>')
+            # A collapsible group; only the section containing the current page
+            # is open by default, so the sidebar stays uncluttered for newcomers.
+            is_active_group = any(
+                child_md == active_md and subdir == active_subdir for _, child_md in children
+            )
+            open_attr = " open" if is_active_group else ""
+            lines.append(f'    <details class="sidebar-group"{open_attr}>')
+            lines.append(f'      <summary class="sidebar-label">{label}</summary>')
             for child_label, child_md in children:
                 href = f"{root}{subdir}/{_md_to_html_path(child_md)}"
                 cls = "active" if child_md == active_md and subdir == active_subdir else ""
                 lines.append(f'      <a href="{href}" class="{cls}">{child_label}</a>')
-            lines.append("    </div>")
+            lines.append("    </details>")
     return "\n".join(lines)
 
 
@@ -353,7 +373,7 @@ def build(site_dir: Path = SITE) -> None:
     py_api_compat.mkdir(parents=True, exist_ok=True)
     compat_idx = py_api_compat / "index.html"
     compat_idx.write_text(_redirect("../../reference/python-api.html"))
-    print(f"  compat   → static/docs/api/python/ → ../../reference/python-api.html")
+    print("  compat   → static/docs/api/python/ → ../../reference/python-api.html")
 
     print(f"\n✓  site built → {site_dir}")
 
@@ -385,7 +405,7 @@ def build_jsdocs(site_dir: Path = SITE) -> None:
     js_src = ROOT / "site" / "api" / "js"
     if js_src.is_dir():
         shutil.copytree(js_src, out_dir, dirs_exist_ok=True)
-        print(f"  typedoc  → static/docs/api/js/")
+        print("  typedoc  → static/docs/api/js/")
     else:
         print(f"  [warn] typedoc output not found at {js_src.relative_to(ROOT)}")
 
@@ -557,7 +577,7 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
         print(f"  guide     → {url}guide/")
         print(f"  api/js    → {url}api/js/")
         print(f"  api/python→ {url}api/python/")
-        print(f"\nPress Ctrl-C to stop.\n")
+        print("\nPress Ctrl-C to stop.\n")
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
         try:
             httpd.serve_forever()

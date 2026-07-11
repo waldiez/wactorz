@@ -167,4 +167,12 @@ describe("renderMarkdown", () => {
         expect(el.querySelector("table")).toBeNull();
         expect(el.textContent).toBe("a | b | c");
     });
+
+    it("keeps inline formatting on long messages (iteration bound scales with length)", () => {
+        // More inline tokens than the old fixed 10000-iteration cap, which used
+        // to render the tail as plain text instead of <em>.
+        const n = 12000;
+        const el = render("*a*".repeat(n));
+        expect(el.querySelectorAll("em")).toHaveLength(n);
+    });
 });

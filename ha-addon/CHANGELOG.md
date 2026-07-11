@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- Added: `openai_url` add-on option — surfaces the existing OpenAI-compatible endpoint support in the settings UI, so the `openai` provider can be pointed at a LiteLLM proxy or any compatible API (Groq, Together, vLLM, LM Studio) without editing env vars.
+
 ## 0.5.0
 
 - Added: optional MQTT broker authentication via `mqtt_username` / `mqtt_password`, wired into runtime MQTT clients and the dashboard MQTT WebSocket proxy without exposing credentials to the browser.

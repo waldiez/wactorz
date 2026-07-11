@@ -10,49 +10,85 @@
  * reconciling optimistic user echoes with their persisted copies.
  */
 import type { ChatMessage } from "../../types/agent";
+import { toMs } from "../../time";
 
 function ingressBase(): string {
-    return (window as any).__WACTORZ_INGRESS_PATH ?? "";
+    return window.__WACTORZ_INGRESS_PATH ?? "";
+}
+
+/**
+ * Drop internal bookkeeping turns the backend records into an agent's
+ * conversation history for the LLM's benefit but which are not real chat.
+ *
+ * When an agent is deleted, main_actor records a synthetic pair so the model
+ * stops believing the agent still exists:
+ *   { role: "user",      content: "[SYSTEM] Agent '…' was deleted …" }
+ *   { role: "assistant", content: "Acknowledged — '…' has been removed …" }
+ * These live only in the kv_store conversation_history (LLM memory) — surfacing
+ * them renders the note as a "you" bubble + an orphan agent ack. Filter the
+ * "[SYSTEM]" user turn together with its paired acknowledgement.
+ *
+ * Operates on chronologically-ordered rows (the ack follows its note).
+ */
+function stripInternalTurns<T extends { role: string; content: string }>(rows: T[]): T[] {
+    const out: T[] = [];
+    for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r) {
+            continue;
+        }
+        if (r.role === "user" && r.content.startsWith("[SYSTEM]")) {
+            // Skip the note and, if present, the synthetic ack recorded right after it.
+            if (rows[i + 1]?.role === "assistant" && rows[i + 1]!.content.startsWith("Acknowledged")) {
+                i++;
+            }
+            continue;
+        }
+        out.push(r);
+    }
+    return out;
 }
 
 /** Primary source: chat_log table — carries real persisted timestamps. */
-async function fromChatLog(agentId: string): Promise<ChatMessage[]> {
-    const res = await fetch(`${ingressBase()}/api/chats?agent=${encodeURIComponent(agentId)}&limit=200`);
+async function fromChatLog(agentName: string): Promise<ChatMessage[]> {
+    const res = await fetch(`${ingressBase()}/api/chats?agent=${encodeURIComponent(agentName)}&limit=200`);
     if (!res.ok) {
         return [];
     }
-    const rows: { id: number; ts: number; role: string; content: string }[] = await res.json();
-    return rows.reverse().map(r => ({
-        id: `hist-${agentId}-${r.id}`,
-        from: r.role === "user" ? "user" : agentId,
-        to: r.role === "user" ? agentId : "user",
+    const rows = (await res.json()) as { id: number; ts: number; role: string; content: string }[];
+    return stripInternalTurns(rows.reverse()).map(r => ({
+        id: `hist-${agentName}-${r.id}`,
+        from: r.role === "user" ? "user" : agentName,
+        to: r.role === "user" ? agentName : "user",
         content: r.content,
-        timestampMs: r.ts < 1e10 ? r.ts * 1000 : r.ts,
+        timestampMs: toMs(r.ts),
     }));
 }
 
 /** Fallback: actor kv_store history — no timestamps, so synthesise them. */
-async function fromKvStore(agentId: string): Promise<ChatMessage[]> {
-    const res = await fetch(`${ingressBase()}/api/actors/${encodeURIComponent(agentId)}/history`);
+async function fromKvStore(agentName: string): Promise<ChatMessage[]> {
+    const res = await fetch(`${ingressBase()}/api/actors/${encodeURIComponent(agentName)}/history`);
     if (!res.ok) {
         return [];
     }
-    const raw: { role: string; content: string }[] = await res.json();
+    const rawAll = (await res.json()) as { role: string; content: string }[];
+    const raw = stripInternalTurns(rawAll);
     const base = Date.now() - raw.length * 2000 - 5000;
     return raw.map((m, i) => ({
-        id: `hist-${agentId}-${i}`,
-        from: m.role === "user" ? "user" : agentId,
-        to: m.role === "user" ? agentId : "user",
+        id: `hist-${agentName}-${i}`,
+        from: m.role === "user" ? "user" : agentName,
+        to: m.role === "user" ? agentName : "user",
         content: m.content,
         timestampMs: base + i * 2000,
     }));
 }
 
-/** Fetch an agent's persisted chat history (best-effort; [] on any failure). */
-export async function fetchChatHistory(agentId: string): Promise<ChatMessage[]> {
+/** Fetch an agent's persisted chat history by NAME — history is keyed by agent
+ *  name (the chat target), not the actor id (best-effort; [] on any failure). */
+export async function fetchChatHistory(agentName: string): Promise<ChatMessage[]> {
     try {
-        const primary = await fromChatLog(agentId);
-        return primary.length ? primary : await fromKvStore(agentId);
+        const primary = await fromChatLog(agentName);
+        return primary.length ? primary : await fromKvStore(agentName);
     } catch {
         return [];
     }
@@ -80,17 +116,19 @@ function optimisticEcho(existing: ChatMessage[], m: ChatMessage): ChatMessage | 
 export function mergeChatHistory(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
     const ids = new Set(existing.map(m => m.id));
     const toAdd: ChatMessage[] = [];
-    for (const m of incoming) {
-        if (ids.has(m.id)) {
+    for (const raw of incoming) {
+        if (ids.has(raw.id)) {
             continue;
         }
         // Strip the `@agent ` routing prefix IOManager adds on send so restored
         // history matches the live thread AND the echo comparison can pair up.
-        if (m.from === "user") {
-            m.content = m.content.replace(/^@[\w-]+\s+/, "");
-        }
+        // Normalise onto a copy — never mutate the caller's incoming messages.
+        const m: ChatMessage =
+            raw.from === "user" ? { ...raw, content: raw.content.replace(/^@[\w-]+\s+/, "") } : raw;
         const echo = m.from === "user" ? optimisticEcho(existing, m) : undefined;
         if (echo) {
+            // Adopt the persisted id onto the live thread's optimistic echo in
+            // place — the caller relies on this to reconcile its rendered message.
             echo.id = m.id;
             continue;
         }

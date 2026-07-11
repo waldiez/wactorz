@@ -16,20 +16,18 @@ export default defineConfig({
             // Forward API and WebSocket calls to the local monitor server in dev.
             "/api": { target: "http://localhost:8888", changeOrigin: true },
             "/ws": { target: "ws://localhost:8888", ws: true },
-            "/mqtt": { target: "ws://localhost:8888", ws: true },
         },
     },
     base: "./",
     build: {
         outDir: "../static/app",
         emptyOutDir: true,
-        sourcemap: true,
+        sourcemap: false,
         target: "es2022",
         rollupOptions: {
             output: {
                 manualChunks: id => {
-                    // mqtt.js + ws deps
-                    if (id.includes("mqtt") || id.includes("node_modules")) {
+                    if (id.includes("node_modules")) {
                         return "vendor";
                     }
                 },

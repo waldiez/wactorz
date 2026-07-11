@@ -3,5 +3,5 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /** Shared dashboard view identifiers. */
-export type View = "overview" | "feed" | "chat" | "ha" | "settings";
+export type View = "overview" | "feed" | "chat" | "settings";
 export type ConnState = "live" | "connecting" | "demo";

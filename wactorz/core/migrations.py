@@ -1,5 +1,4 @@
-"""
-wactorz.core.migrations — Schema & State Migration Framework
+"""wactorz.core.migrations — Schema & State Migration Framework
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Handles version upgrades when users update wactorz (e.g. 0.3 → 0.4).
 
@@ -36,7 +35,6 @@ import pickle
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +50,9 @@ FRAMEWORK_VERSION = 2
 # Each function receives a sqlite3.Connection and runs inside a transaction.
 # Only add columns/tables/indices — never drop or rename (breaks rollback).
 
+
 def migrate_sql_2(conn: sqlite3.Connection):
-    """
-    v1 → v2: Add migration tracking table and framework_version to schema_version.
+    """v1 → v2: Add migration tracking table and framework_version to schema_version.
     Also adds any missing columns/tables that may not exist in older databases.
     """
     # Add migration history table
@@ -103,9 +101,9 @@ _SQL_MIGRATIONS = {
 # Each function receives (db, redis, pickle_store) and handles its own
 # error recovery per-agent.
 
+
 def migrate_state_2(db, redis, pickle_store):
-    """
-    v1 → v2: Upgrade persisted state structures.
+    """v1 → v2: Upgrade persisted state structures.
 
     - EntityBaseline: add missing fields (is_binary, transition_freq, ready)
     - TopicContract observed_samples: ensure proper dict structure
@@ -143,7 +141,7 @@ def _upgrade_baselines(db, pickle_store):
                 if not isinstance(baselines, dict):
                     continue
                 upgraded = False
-                for key, baseline in baselines.items():
+                for _key, baseline in baselines.items():
                     if not isinstance(baseline, dict):
                         continue
                     for field, default in BASELINE_DEFAULTS.items():
@@ -179,7 +177,7 @@ def _upgrade_baselines(db, pickle_store):
             if not isinstance(baselines, dict):
                 continue
             upgraded = False
-            for key, baseline in baselines.items():
+            for _key, baseline in baselines.items():
                 if not isinstance(baseline, dict):
                     continue
                 for field, default in BASELINE_DEFAULTS.items():
@@ -262,8 +260,7 @@ def _upgrade_topic_contracts(db):
 
 
 def _stamp_spawn_registry(db):
-    """
-    Mark all existing spawn registry entries with the current framework version.
+    """Mark all existing spawn registry entries with the current framework version.
     This lets us detect stale configs on future upgrades.
     """
     try:
@@ -308,8 +305,7 @@ _API_CHANGES = {
 
 
 def validate_spawn_registry(db) -> list[dict]:
-    """
-    Check all spawn registry entries for compatibility with the current version.
+    """Check all spawn registry entries for compatibility with the current version.
 
     Returns a list of issues found:
       [{"agent": "name", "severity": "warning|error", "message": "...", "action": "..."}]
@@ -332,12 +328,14 @@ def validate_spawn_registry(db) -> list[dict]:
         try:
             config = json.loads(row[1])
         except (json.JSONDecodeError, TypeError):
-            issues.append({
-                "agent": name,
-                "severity": "error",
-                "message": "Spawn config is corrupted (invalid JSON)",
-                "action": "delete_and_respawn",
-            })
+            issues.append(
+                {
+                    "agent": name,
+                    "severity": "error",
+                    "message": "Spawn config is corrupted (invalid JSON)",
+                    "action": "delete_and_respawn",
+                }
+            )
             continue
 
         saved_version = row[2] if len(row) > 2 else 1
@@ -362,50 +360,55 @@ def validate_spawn_registry(db) -> list[dict]:
             # Check for removed methods in agent code
             for method in changes.get("removed_methods", []):
                 if f"agent.{method}(" in code or f"agent.{method} " in code:
-                    issues.append({
-                        "agent": name,
-                        "severity": "error",
-                        "message": (
-                            f"Code uses agent.{method}() which was removed in v{version}. "
-                            f"This agent will crash on startup."
-                        ),
-                        "action": "needs_respawn",
-                        "version_gap": f"v{saved_version} → v{FRAMEWORK_VERSION}",
-                    })
+                    issues.append(
+                        {
+                            "agent": name,
+                            "severity": "error",
+                            "message": (
+                                f"Code uses agent.{method}() which was removed in v{version}. "
+                                f"This agent will crash on startup."
+                            ),
+                            "action": "needs_respawn",
+                            "version_gap": f"v{saved_version} → v{FRAMEWORK_VERSION}",
+                        }
+                    )
 
             # Check for renamed methods
             for old_name, new_name in changes.get("renamed_methods", {}).items():
                 if f"agent.{old_name}(" in code:
-                    issues.append({
-                        "agent": name,
-                        "severity": "error",
-                        "message": (
-                            f"Code uses agent.{old_name}() which was renamed to "
-                            f"agent.{new_name}() in v{version}."
-                        ),
-                        "action": "needs_respawn",
-                        "version_gap": f"v{saved_version} → v{FRAMEWORK_VERSION}",
-                    })
+                    issues.append(
+                        {
+                            "agent": name,
+                            "severity": "error",
+                            "message": (
+                                f"Code uses agent.{old_name}() which was renamed to "
+                                f"agent.{new_name}() in v{version}."
+                            ),
+                            "action": "needs_respawn",
+                            "version_gap": f"v{saved_version} → v{FRAMEWORK_VERSION}",
+                        }
+                    )
 
         # Version gap warning (even if no specific issues found)
         if saved_version < FRAMEWORK_VERSION:
-            issues.append({
-                "agent": name,
-                "severity": "warning",
-                "message": (
-                    f"Agent was spawned under framework v{saved_version} "
-                    f"(current: v{FRAMEWORK_VERSION}). Code may not use newer API features."
-                ),
-                "action": "consider_respawn",
-                "version_gap": f"v{saved_version} → v{FRAMEWORK_VERSION}",
-            })
+            issues.append(
+                {
+                    "agent": name,
+                    "severity": "warning",
+                    "message": (
+                        f"Agent was spawned under framework v{saved_version} "
+                        f"(current: v{FRAMEWORK_VERSION}). Code may not use newer API features."
+                    ),
+                    "action": "consider_respawn",
+                    "version_gap": f"v{saved_version} → v{FRAMEWORK_VERSION}",
+                }
+            )
 
     return issues
 
 
 def auto_fix_spawn_registry(db) -> list[str]:
-    """
-    Attempt to auto-fix known issues in spawn registry configs.
+    """Attempt to auto-fix known issues in spawn registry configs.
     Returns list of fixes applied.
 
     Currently handles:
@@ -469,12 +472,11 @@ def auto_fix_spawn_registry(db) -> list[str]:
 # MIGRATION RUNNER
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def get_current_version(db) -> int:
     """Get the current framework version from the database."""
     try:
-        row = db.conn.execute(
-            "SELECT framework_version FROM schema_version LIMIT 1"
-        ).fetchone()
+        row = db.conn.execute("SELECT framework_version FROM schema_version LIMIT 1").fetchone()
         if row and row[0] is not None:
             return int(row[0])
     except sqlite3.OperationalError:
@@ -492,8 +494,7 @@ def get_current_version(db) -> int:
 
 
 def run_migrations(db, redis=None, pickle_store=None) -> dict:
-    """
-    Run all pending migrations from current version to FRAMEWORK_VERSION.
+    """Run all pending migrations from current version to FRAMEWORK_VERSION.
 
     Called automatically by init_persistence(). Safe to call multiple times.
 
@@ -520,9 +521,7 @@ def run_migrations(db, redis=None, pickle_store=None) -> dict:
     }
 
     if current >= FRAMEWORK_VERSION:
-        logger.info(
-            f"[Migration] Framework v{FRAMEWORK_VERSION} — no migrations needed"
-        )
+        logger.info(f"[Migration] Framework v{FRAMEWORK_VERSION} — no migrations needed")
         # Still validate spawn registry even if no version change
         result["spawn_issues"] = validate_spawn_registry(db)
         return result
@@ -555,7 +554,7 @@ def run_migrations(db, redis=None, pickle_store=None) -> dict:
                     pass  # migration_history table might not exist yet (v1→v2)
 
             result["sql_migrations"] += 1
-            logger.info(f"[Migration] SQL v{version} applied ({(time.time()-t0)*1000:.0f}ms)")
+            logger.info(f"[Migration] SQL v{version} applied ({(time.time() - t0) * 1000:.0f}ms)")
 
         except Exception as e:
             error_msg = f"SQL migration v{version} failed: {e}"
@@ -574,7 +573,7 @@ def run_migrations(db, redis=None, pickle_store=None) -> dict:
         try:
             migrate_fn(db, redis, pickle_store)
             result["state_migrations"] += 1
-            logger.info(f"[Migration] State v{version} applied ({(time.time()-t0)*1000:.0f}ms)")
+            logger.info(f"[Migration] State v{version} applied ({(time.time() - t0) * 1000:.0f}ms)")
 
             try:
                 duration_ms = int((time.time() - t0) * 1000)

@@ -22,13 +22,14 @@ if TYPE_CHECKING:  # pragma: no cover
     import aiomqtt
 
 
-def mqtt_client(hostname: str, port: int, **kwargs: Any) -> "aiomqtt.Client":
+def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:
     """Build an ``aiomqtt.Client`` with broker credentials injected from CONFIG.
 
     Credentials are only added when configured *and* not already supplied by
     the caller, so explicit per-call overrides still win.
     """
     import aiomqtt
+
     from ..config import CONFIG
 
     if "username" not in kwargs and CONFIG.mqtt_username:

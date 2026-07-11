@@ -1,32 +1,58 @@
 """Wactorz - Actor-Model Multi-Agent Framework"""
+
 from ._version import __version__
 from .core.actor import Actor, ActorState, Message, MessageType
-from .core.registry import ActorSystem, ActorRegistry
+from .core.registry import ActorRegistry, ActorSystem
+
 __all__ = [
+    "Actor",
+    "ActorRegistry",
+    "ActorState",
+    "ActorSystem",
+    "Message",
+    "MessageType",
     "__version__",
-    "Actor", "ActorState", "Message", "MessageType",
-    "ActorSystem", "ActorRegistry",
 ]
-# Optional agents — only exported when their dependencies are available.
-try:
-    from .agents.llm_agent import LLMAgent, AnthropicProvider, OpenAIProvider, OllamaProvider, NIMProvider
-    __all__ += ["LLMAgent", "AnthropicProvider", "OpenAIProvider", "OllamaProvider", "NIMProvider"]
-except ImportError:
-    pass
-try:
-    from .agents.main_actor import MainActor
-    from .agents.monitor_agent import MonitorActor
-    from .agents.manual_agent import ManualAgent
-    from .agents.planner_agent import PlannerAgent
-    from .agents.dynamic_agent import DynamicAgent
-    from .agents.installer_agent import InstallerAgent
-    from .agents.catalog_agent import CatalogAgent
-    __all__ += ["MainActor", "MonitorActor", "CodeAgent", "ManualAgent", "PlannerAgent",
-                "DynamicAgent", "InstallerAgent", "CatalogAgent"]
-except ImportError:
-    pass
-#try:
-#    from .agents.ml_agent import MLAgent, YOLOAgent, AnomalyDetectorAgent
-#    __all__ += ["MLAgent", "YOLOAgent", "AnomalyDetectorAgent"]
-#except ImportError:
-#    pass
+# Agents & LLM providers. Optional provider SDKs (anthropic/openai) are imported
+# lazily inside the providers, so every symbol below resolves on a base install.
+from .agents import (
+    AnthropicProvider,
+    CatalogAgent,
+    DynamicAgent,
+    HomeAssistantActuatorAgent,
+    HomeAssistantAgent,
+    HomeAssistantMapAgent,
+    HomeAssistantStateBridgeAgent,
+    InstallerAgent,
+    IOAgent,
+    LLMAgent,
+    MainActor,
+    MonitorActor,
+    NIMProvider,
+    OllamaProvider,
+    OneOffActuatorAgent,
+    OpenAIProvider,
+    PlannerAgent,
+    ScheduledAgent,
+)
+
+__all__ += [
+    "AnthropicProvider",
+    "CatalogAgent",
+    "DynamicAgent",
+    "HomeAssistantActuatorAgent",
+    "HomeAssistantAgent",
+    "HomeAssistantMapAgent",
+    "HomeAssistantStateBridgeAgent",
+    "IOAgent",
+    "InstallerAgent",
+    "LLMAgent",
+    "MainActor",
+    "MonitorActor",
+    "NIMProvider",
+    "OllamaProvider",
+    "OneOffActuatorAgent",
+    "OpenAIProvider",
+    "PlannerAgent",
+    "ScheduledAgent",
+]

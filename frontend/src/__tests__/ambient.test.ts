@@ -105,6 +105,21 @@ describe("AmbientManager", () => {
         expect(new AmbientManager().volume).toBeCloseTo(0.7);
     });
 
+    it("track falls back to 'none' for a corrupt localStorage value", () => {
+        localStorage.setItem("wactorz.ambientTrack", "bogus");
+        expect(new AmbientManager().track).toBe("none");
+    });
+
+    it("volume falls back to 0.4 for a non-numeric localStorage value", () => {
+        localStorage.setItem("wactorz.ambientVolume", "not-a-number");
+        expect(new AmbientManager().volume).toBeCloseTo(0.4);
+    });
+
+    it("volume clamps an out-of-range persisted value", () => {
+        localStorage.setItem("wactorz.ambientVolume", "5");
+        expect(new AmbientManager().volume).toBe(1);
+    });
+
     it.each(["rain", "forest", "beach", "cafe"] as AmbientTrackId[])(
         "setTrack('%s') starts audio and persists to localStorage",
         id => {

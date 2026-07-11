@@ -51,10 +51,10 @@ describe("CardDashboard chat-target selection", () => {
         expect(cd._chat.chatTarget).toBe("catalog");
     });
 
-    it("keeps a valid existing chatTarget unchanged", () => {
+    it("keeps a user-picked chatTarget unchanged", () => {
         cd.agents.set("1", agent("main"));
         cd.agents.set("2", agent("home-assistant-agent"));
-        cd._chat.chatTarget = "home-assistant-agent";
+        cd._chat.setTarget("home-assistant-agent"); // explicit user pick → sticky
 
         const select = document.createElement("select");
         cd._chat._populateSelect(select);

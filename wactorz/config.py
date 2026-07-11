@@ -1,7 +1,8 @@
-from dotenv import load_dotenv, find_dotenv
+import os
 from dataclasses import dataclass
 from pathlib import Path
-import os
+
+from dotenv import find_dotenv, load_dotenv
 
 
 def _env_truthy(name: str) -> bool:
@@ -69,6 +70,8 @@ class AppConfig:
     weather_default_location: str
     llm_cost_limit_usd: float
     llm_cost_limit_period: str
+    energy_rate: float
+    energy_currency: str
     openai_url: str
 
 
@@ -85,9 +88,12 @@ CONFIG = AppConfig(
     mqtt_password=os.getenv("MQTT_PASSWORD", ""),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
-    ha_state_bridge_output_topic=os.getenv("HA_STATE_BRIDGE_OUTPUT_TOPIC", "homeassistant/state_changes"),
+    ha_state_bridge_output_topic=os.getenv(
+        "HA_STATE_BRIDGE_OUTPUT_TOPIC", "homeassistant/state_changes"
+    ),
     ha_state_bridge_domains=os.getenv("HA_STATE_BRIDGE_DOMAINS", ""),
-    ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0") not in ("0", "false", "no"),
+    ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0")
+    not in ("0", "false", "no"),
     discord_token=os.getenv("DISCORD_BOT_TOKEN", ""),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
@@ -103,5 +109,7 @@ CONFIG = AppConfig(
     weather_default_location=os.getenv("WEATHER_DEFAULT_LOCATION", "London"),
     llm_cost_limit_usd=_env_float("LLM_COST_LIMIT_USD", 0.0),
     llm_cost_limit_period=os.getenv("LLM_COST_LIMIT_PERIOD", "monthly"),
+    energy_rate=_env_float("ENERGY_RATE", 0.138),
+    energy_currency=os.getenv("ENERGY_CURRENCY", "EUR"),
     openai_url=os.getenv("OPENAI_URL", ""),
 )

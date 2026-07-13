@@ -63,11 +63,11 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 import aiohttp
-import aiomqtt
 
 from wactorz.core.integrations.home_assistant.ha_web_socket_client import (
     HAWebSocketClient,
 )
+from wactorz.core.mqtt import mqtt_client
 
 log = logging.getLogger("wactorz.fuseki")
 
@@ -1427,7 +1427,7 @@ class AgentManifestBridge:
                     exc,
                 )
 
-            async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+            async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                 await client.subscribe("agents/+/manifest")
                 log.info(
                     "AgentManifestBridge listening on %s:%d agents/+/manifest",
@@ -1502,7 +1502,7 @@ class MetricsBridge:
             fuseki = FusekiClient(self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth)
             last_compact = time.time()
 
-            async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+            async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                 await client.subscribe("agents/+/metrics")
                 log.info(
                     "MetricsBridge listening on %s:%d agents/+/metrics",

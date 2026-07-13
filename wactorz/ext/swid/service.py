@@ -22,7 +22,8 @@ import swid as swid_lib
 from swid.keystore import EncryptedFileKeyStore
 from swid.keystore.util import atomic_write
 
-from ..handles import make_handle
+from wactorz.core.handles import make_handle
+
 from .registry import FileSWIDRegistry
 
 logger = logging.getLogger(__name__)

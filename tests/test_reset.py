@@ -8,53 +8,32 @@ Covers:
   4. reset_handler per-agent filter is forwarded
 """
 
+# pylint: disable=too-few-public-methods,too-many-instance-attributes
+# pylint: disable=missing-function-docstring,missing-class-docstring
+# pylint: disable=protected-access,import-outside-toplevel
+
+# pyright: reportAttributeAccessIssue=false
+
 from __future__ import annotations
 
-import sys
+import json
+import logging
 import tempfile
 import types
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# ── Minimal stubs so aiohttp / mqtt deps are not required ────────────────────
 
+def _payload(resp):
+    """Decode the JSON body of a real aiohttp ``web.json_response``.
 
-def _install_stubs() -> None:
-    for mod in ("aiomqtt", "openai", "websockets"):
-        sys.modules.setdefault(mod, types.ModuleType(mod))
-
-
-_install_stubs()
-
-
-def _make_aiohttp_mod() -> types.ModuleType:
-    """Build a fresh aiohttp ModuleType stub each time.
-
-    Using a proper ModuleType (not SimpleNamespace) is required so that
-    ``from aiohttp import web`` inside handler functions succeeds — Python
-    needs the module object to have a ``__name__`` attribute.  Other test
-    files may replace ``sys.modules["aiohttp"]`` with a SimpleNamespace
-    between test runs, so handler tests install their own stub via
-    ``patch.dict`` in setUp/tearDown instead of relying on module-level state.
+    monitor_server binds ``web`` at import (real aiohttp), so its handlers always
+    return a real Response no matter what other tests do to ``sys.modules`` — read
+    the body directly instead of faking ``json_response`` (which cannot reach the
+    handler's already-bound ``web`` reference anyway).
     """
-
-    class _Response:
-        def __init__(self, *, body=b"", headers=None, content_type=None, status=200):
-            self.body = body
-            self.status = status
-            self.headers = dict(headers or {})
-
-    mod = types.ModuleType("aiohttp")
-    mod.web = types.SimpleNamespace(  # type: ignore[attr-defined]
-        json_response=lambda data, **kw: types.SimpleNamespace(
-            data=data, status=kw.get("status", 200)
-        ),
-        Response=_Response,
-        middleware=lambda fn: fn,
-        HTTPException=type("HTTPException", (Exception,), {"status": 500}),
-    )
-    return mod
+    return json.loads(resp.body)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,13 +78,12 @@ class ResetLogsTest(unittest.TestCase):
                 self.assertEqual((Path(tmp) / name).read_text(), "")
 
     def test_truncates_open_file_handler(self):
-        import logging
-
         from wactorz.reset import reset_logs
 
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "wactorz.log"
             handler = logging.FileHandler(str(log_path))
+            assert handler.stream
             handler.stream.write("previous content\n")
             handler.stream.flush()
             logging.root.addHandler(handler)
@@ -133,20 +111,13 @@ def _make_request(body: dict):
 
 
 class ResetHandlerScopeValidationTest(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        self._aiohttp_patcher = patch.dict(sys.modules, {"aiohttp": _make_aiohttp_mod()})
-        self._aiohttp_patcher.start()
-
-    def tearDown(self):
-        self._aiohttp_patcher.stop()
-
     async def test_invalid_scope_returns_400(self):
         import wactorz.monitor_server as ms
 
         req = _make_request({"scope": "invalid"})
         resp = await ms.reset_handler(req)
         self.assertEqual(resp.status, 400)
-        self.assertIn("scope", str(resp.data))
+        self.assertIn("scope", str(_payload(resp)))
 
     async def test_empty_scope_returns_400(self):
         import wactorz.monitor_server as ms
@@ -176,8 +147,6 @@ VALID_SCOPES = ("chat", "state", "metrics", "spawns", "logs", "all")
 
 class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self._aiohttp_patcher = patch.dict(sys.modules, {"aiohttp": _make_aiohttp_mod()})
-        self._aiohttp_patcher.start()
         import wactorz.monitor_server as ms
 
         self._ms = ms
@@ -189,7 +158,6 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self._ms.state["alerts"] = self._orig_state["alerts"]
         self._ms.state["log_feed"] = self._orig_state["log_feed"]
-        self._aiohttp_patcher.stop()
 
     async def _call(self, scope: str, agent: str | None = None) -> object:
         import wactorz.monitor_server as ms
@@ -214,9 +182,10 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_chat_scope_returns_200(self):
         resp = await self._call("chat")
+        payload = _payload(resp)
         self.assertEqual(resp.status, 200)
-        self.assertEqual(resp.data["status"], "ok")
-        self.assertEqual(resp.data["scope"], "chat")
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["scope"], "chat")
 
     async def test_state_scope_returns_200(self):
         resp = await self._call("state")
@@ -233,7 +202,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
     async def test_logs_scope_returns_200(self):
         resp = await self._call("logs")
         self.assertEqual(resp.status, 200)
-        self.assertEqual(resp.data["scope"], "logs")
+        self.assertEqual(_payload(resp)["scope"], "logs")
 
     async def test_chat_scope_preserves_alerts_and_feed(self):
         # Narrowed: clearing chat history must not wipe alerts or the feed.
@@ -264,8 +233,6 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         # reset_metrics only clears the persisted kv; the handler must also zero
         # the running actors' in-memory counters so the dashboard updates live
         # instead of waiting for a restart.
-        import types
-
         import wactorz.monitor_server as ms
 
         actor = types.SimpleNamespace(
@@ -295,7 +262,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         finally:
             ms.registry = orig_registry
 
-    async def test_metrics_scope_clears_inmemory_lifetime_ledger(self):
+    async def test_metrics_scope_clears_in_memory_lifetime_ledger(self):
         # The headline total is max(live+historical, lifetime ledger). The kv
         # ledger is cleared by reset_metrics, but the in-memory _lifetime_cost
         # high-water survives in-process and pins the headline — the handler must
@@ -327,8 +294,6 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         # reset_chat only clears persisted chat; the handler must also wipe the
         # running actor's in-memory conversation so the agent stops "remembering"
         # without a restart.
-        import types
-
         import wactorz.monitor_server as ms
 
         actor = types.SimpleNamespace(
@@ -355,8 +320,6 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
             ms.registry = orig_registry
 
     async def test_chat_scope_respects_agent_filter(self):
-        import types
-
         import wactorz.monitor_server as ms
 
         alpha = types.SimpleNamespace(name="alpha", _conversation_history=[1], _history_summary="a")
@@ -381,8 +344,6 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_metrics_scope_respects_agent_filter(self):
         # With an agent filter, only the matching actor's counters reset.
-        import types
-
         import wactorz.monitor_server as ms
 
         alpha = types.SimpleNamespace(
@@ -415,11 +376,11 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_response_includes_agent_when_provided(self):
         resp = await self._call("chat", agent="my-agent")
-        self.assertEqual(resp.data["agent"], "my-agent")
+        self.assertEqual(_payload(resp)["agent"], "my-agent")
 
     async def test_response_agent_is_none_when_not_provided(self):
         resp = await self._call("chat")
-        self.assertIsNone(resp.data["agent"])
+        self.assertIsNone(_payload(resp)["agent"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -428,20 +389,6 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ResetHandlerDispatchTest(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        # Pre-import wactorz.reset before patch.dict snapshots sys.modules.
-        # On Python 3.10, patch.dict.stop() restores sys.modules from the snapshot;
-        # if wactorz.reset is absent from the snapshot, tearDown removes it, leaving
-        # a stale package attribute.  Subsequent patch() calls then target the stale
-        # module while the handler imports a fresh one, so mocks are never seen.
-        import wactorz.reset  # noqa: F401
-
-        self._aiohttp_patcher = patch.dict(sys.modules, {"aiohttp": _make_aiohttp_mod()})
-        self._aiohttp_patcher.start()
-
-    def tearDown(self):
-        self._aiohttp_patcher.stop()
-
     async def _call_with_mocks(self, scope: str, agent: str | None = None):
         import wactorz.monitor_server as ms
 
@@ -560,13 +507,6 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
 
 
 class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        self._aiohttp_patcher = patch.dict(sys.modules, {"aiohttp": _make_aiohttp_mod()})
-        self._aiohttp_patcher.start()
-
-    def tearDown(self):
-        self._aiohttp_patcher.stop()
-
     async def test_all_scope_clears_desired_state_for_all_nodes(self):
         import wactorz.monitor_server as ms
 

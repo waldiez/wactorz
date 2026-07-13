@@ -10,7 +10,7 @@ from pathlib import Path
 
 import swid
 
-from wactorz.core.swid.service import SwidMinter
+from wactorz.ext.swid.service import SwidMinter
 
 PASSPHRASE = "test-passphrase"
 

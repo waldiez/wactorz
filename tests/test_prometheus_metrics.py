@@ -1,30 +1,13 @@
-import sys
+"""Tests for prometheus monitoring."""
+
 import time
 import types
 import unittest
 
-
-def _install_aiohttp_web_stub() -> None:
-    class _Response:
-        def __init__(self, *, body=b"", headers=None, content_type=None, status=200):
-            self.body = body
-            self.status = status
-            self.headers = dict(headers or {})
-            if content_type is not None:
-                self.headers.setdefault("Content-Type", content_type)
-
-    web = types.SimpleNamespace(
-        Request=type("Request", (), {}),
-        HTTPException=type("HTTPException", (Exception,), {"status": 500}),
-        Response=_Response,
-        middleware=lambda fn: fn,
-    )
-    sys.modules["aiohttp"] = types.SimpleNamespace(web=web)
-
-
-_install_aiohttp_web_stub()
-
 from wactorz.monitoring.prometheus import PrometheusMonitor
+
+# pylint: disable=too-few-public-methods,too-many-instance-attributes
+# pylint: disable=missing-function-docstring,missing-class-docstring
 
 
 class _FakeMetrics:
@@ -38,7 +21,7 @@ class _FakeMetrics:
         self.last_heartbeat = time.time() - 15
 
     @property
-    def uptime(self):
+    def uptime(self) -> float:
         return time.time() - self.start_time
 
 

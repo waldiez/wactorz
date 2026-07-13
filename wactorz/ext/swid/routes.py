@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import swid as swid_lib
+from aiohttp import web
 
 from .registry import FileSWIDRegistry
 from .service import SwidMinter
-
-if TYPE_CHECKING:
-    from aiohttp import web as _web
 
 
 def _resolution_status(error: str | None) -> int:
@@ -24,7 +20,7 @@ def _resolution_status(error: str | None) -> int:
     return 500
 
 
-def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) -> _web.RouteTableDef:
+def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) -> web.RouteTableDef:
     """Build the did:swid routes: DIF resolution, plus the identity index.
 
     ``GET /1.0/identifiers/{did}`` resolves over ``registry``. When ``minter``
@@ -32,10 +28,6 @@ def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) ->
     (handle → did, with the entity class parsed from the handle) for the
     dashboard's Identity view.
     """
-    # Call-time import: parts of the test suite install a partial aiohttp stub
-    # in sys.modules; binding `web` at module import would freeze that stub in.
-    from aiohttp import web
-
     routes = web.RouteTableDef()
 
     @routes.get("/1.0/identifiers/{did}")

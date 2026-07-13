@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from wactorz.core.swid import FileSWIDRegistry, SwidMinter, swid_routes
+from wactorz.ext.swid import FileSWIDRegistry, SwidMinter, swid_routes
 
 if TYPE_CHECKING:
     from aiohttp.test_utils import TestClient

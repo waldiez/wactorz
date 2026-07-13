@@ -424,6 +424,9 @@ export class DashboardChat {
             select.value || "main-actor",
         );
         this.chatTarget = target;
+        // An @mention that routes elsewhere is a deliberate pick — keep it sticky
+        // so syncChatTarget() won't snap the view back to main on the next reply.
+        this._userPicked ||= target !== prevTarget;
         this._lastSentTarget = target;
         // The leading @mention is the routing prefix; drop it from the displayed
         // bubble/feed (the transport re-adds the canonical one). Keep the original

@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Reachy mic commands failed silently when the mic array wasn't usable** -
+  `listen`, `doa`, `turn_to_sound` and `track_sound` now check the microphone
+  input capability (`start_recording` / `get_audio_sample` / `get_DoA`) is
+  actually exposed before use, and every failed attempt returns `ok:false` with a
+  clear message ("Reachy microphone array is unavailable: required microphone
+  capability is not exposed by the current backend or SDK build") that names the
+  missing methods and suggests - without over-claiming - trying the blank/auto
+  `media_backend`. The check is judged only by the input methods the mic path
+  calls, not by the output/playback object, so a working mic isn't blocked by an
+  absent speaker path. `listen` no longer returns `ok:true` with a 0-second WAV
+  when the mic yields no samples - it fails clearly. `get_DoA` exceptions are
+  logged with backend context and surfaced rather than swallowed, empty DoA
+  readings (None / `()` / `[]`) are treated uniformly as "no sound localized",
+  and `turn_to_sound` validates the direction-of-arrival (NaN / unreadable
+  readings never reach the motors).
 - **Reachy talked but wouldn't move (motors never enabled)** - `wake_up()` and
   `goto_target()` only stream target positions; they don't turn on motor torque. The
   Reachy Mini control app enables the motors for you, so with the app running everything

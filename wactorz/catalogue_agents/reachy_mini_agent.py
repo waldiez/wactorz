@@ -2126,6 +2126,57 @@ def _media(agent):
     return media
 
 
+def _require_mic(agent, *, record=False, doa=False):
+    """Return the media manager, or raise an actionable error when the mic array
+    is not usable.
+
+    Capability is judged ONLY by the input methods the mic path actually calls —
+    start_recording / get_audio_sample (recording) and get_DoA (direction of
+    arrival). It is deliberately NOT coupled to the output/playback object
+    (mini.media.audio): that carries speech playback, not mic input, and can be
+    absent on a working-mic backend. Dead-but-present mics are caught downstream
+    by the no-samples and get_DoA-exception guards.
+    """
+    media = _media(agent)
+    backend = agent.state.get("media_backend") or "default"
+    missing = []
+    if record:
+        for m in ("start_recording", "get_audio_sample"):
+            if not callable(getattr(media, m, None)):
+                missing.append(m)
+    if doa and not callable(getattr(media, "get_DoA", None)):
+        missing.append("get_DoA")
+    if missing:
+        raise RuntimeError(
+            "Reachy microphone array is unavailable: required microphone "
+            "capability is not exposed by the current backend or SDK build "
+            f"(backend '{backend}'; missing {', '.join(missing)}). A media-capable "
+            'backend may help — e.g. publish {"media_backend": ""} to '
+            "custom/reachy/config (or set REACHY_MEDIA_BACKEND= and leave it "
+            "blank) and restart the agent — but this is not guaranteed to be the "
+            "cause.")
+    return media
+
+
+async def _read_doa(agent, media):
+    """Read the mic array's direction of arrival, surfacing SDK failures instead
+    of swallowing them.
+
+    Returns the raw SDK DoA (a tuple-like of (angle_deg, voice_detected?)) or
+    None when nothing is currently localized. Raises RuntimeError — with the
+    backend context, and after logging — when the get_DoA call itself fails, so
+    callers report a real error rather than silently "hearing nothing".
+    """
+    try:
+        return await _do(media.get_DoA)
+    except Exception as e:
+        await agent.log(
+            f"get_DoA failed (media_backend="
+            f"'{agent.state.get('media_backend') or 'default'}'): {e}",
+            level="error")
+        raise RuntimeError(f"direction-of-arrival read failed: {e}")
+
+
 def _encode_frame(frame, fmt="jpeg", quality=85):
     """Encode a BGR uint8 HxWx3 numpy frame to JPEG/PNG bytes via PIL.
 
@@ -2549,22 +2600,34 @@ async def _listen(agent, payload):
       {"cmd":"listen","publish":true}         -> also publish to custom/reachy/audio
       {"cmd":"listen","include_b64":false}    -> omit the blob (pair with path/publish)
     """
-    media = _media(agent)
+    media = _require_mic(agent, record=True)
+    backend = agent.state.get("media_backend") or "default"
     duration = max(0.1, min(30.0, float(payload.get("duration", 3.0))))
     # Defensive frame cap: 30 s at 48 kHz.
     audio, sr, ch = await _do(_record_audio_blocking, media, duration, 30 * 48000)
     b64, frames = await _do(_pcm_to_wav_b64, audio, sr, ch)
+    # Silent-failure guard: an initialized-but-dead mic yields an empty buffer.
+    # Fail loudly instead of returning ok:true with a 0-second WAV.
+    if frames <= 0:
+        raise RuntimeError(
+            f"reachy recorded no audio — the mic array returned no samples in "
+            f"{duration:.1f}s (media_backend='{backend}'). Check the mic is live "
+            "and that no HF app on the robot is holding the audio device, then "
+            "retry.")
     actual = round(frames / sr, 3) if sr else 0.0
     result = {"samplerate": sr, "channels": ch, "duration_s": actual,
               "frames": frames, "format": "wav"}
+    # DoA here is a best-effort supplement to the clip: log a failure (never
+    # swallow it) but still return the audio we captured.
     try:
         doa = await _do(media.get_DoA)
-        if doa is not None:
+        if doa:
             result["doa_deg"] = float(doa[0])
             if len(doa) > 1:
                 result["voice_detected"] = bool(doa[1])
-    except Exception:
-        pass
+    except Exception as e:
+        await agent.log(f"listen: DoA read failed (non-fatal): {e}", level="warning")
+        result["doa_error"] = str(e)
     path = payload.get("path")
     if path:
         import base64 as _b64
@@ -2590,9 +2653,9 @@ async def _listen(agent, payload):
 async def _doa(agent, payload):
     """Report the mic array's current direction of arrival: angle in degrees
     plus whether a voice/source is presently detected."""
-    media = _media(agent)
-    doa = await _do(media.get_DoA)
-    if doa is None:
+    media = _require_mic(agent, doa=True)
+    doa = await _read_doa(agent, media)
+    if not doa:
         return {"detected": False, "result": "No sound localized."}
     result = {"angle_deg": float(doa[0]), "detected": True}
     if len(doa) > 1:
@@ -2633,11 +2696,19 @@ async def _turn_to_sound(agent, payload):
       {"cmd":"turn_to_sound","max_yaw":90}         -> clamp the yaw (deg)
       {"cmd":"turn_to_sound","offset_deg":0,"invert":false} -> one-time calibration
     """
-    media = _media(agent)
-    doa = await _do(media.get_DoA)
-    if doa is None:
+    media = _require_mic(agent, doa=True)
+    doa = await _read_doa(agent, media)
+    if not doa:
         return {"detected": False, "turned": False, "result": "No sound to turn toward."}
-    angle = float(doa[0])
+    # Validate the reading before turning: a garbled or non-finite angle must
+    # never be handed to the motors as a yaw target.
+    try:
+        angle = float(doa[0])
+    except (TypeError, ValueError, IndexError):
+        raise RuntimeError(f"mic array returned an unreadable DoA value: {doa!r}")
+    if angle != angle or abs(angle) == float("inf"):  # NaN or +/-inf
+        return {"detected": False, "turned": False,
+                "result": "Sound direction was indeterminate; not turning."}
     voice = bool(doa[1]) if len(doa) > 1 else None
     if payload.get("require_voice") and voice is False:
         return {"detected": True, "angle_deg": angle, "voice_detected": voice,
@@ -2710,11 +2781,15 @@ async def _track_step(agent):
     """
     media = _media(agent)
     cfg = agent.state.get("track_cfg", {})
+    # Capability is validated once when tracking starts (_track_sound); here we
+    # stay resilient — log a read failure and skip this tick rather than raising
+    # out of the background loop.
     try:
         doa = await _do(media.get_DoA)
-    except Exception:
-        return None
-    if doa is None:
+    except Exception as e:
+        await agent.log(f"track_sound: DoA read failed: {e}", level="warning")
+        return {"turn": False, "reason": "doa-error", "error": str(e)}
+    if not doa:
         return None
     angle = float(doa[0])
     voice = bool(doa[1]) if len(doa) > 1 else True
@@ -2775,9 +2850,15 @@ async def _track_sound(agent, payload):
         agent.state["tracking"] = False
         return {"tracking": False, "result": "Stopped turning toward sound."}
 
+    # A failed START raises so _dispatch reports ok:false (same convention as
+    # listen / doa / turn_to_sound), rather than an ok:true with tracking:false.
     ok, reason = _is_connected(agent)
     if not ok:
-        return {"tracking": False, "error": reason, "result": reason}
+        raise RuntimeError(reason)
+
+    # Fail fast if the mic array can't localize sound, rather than launching a
+    # background loop that could never turn. _require_mic raises on its own.
+    _require_mic(agent, doa=True)
 
     cfg = {
         "interval":      max(0.1, min(5.0, float(payload.get("interval", 0.4)))),

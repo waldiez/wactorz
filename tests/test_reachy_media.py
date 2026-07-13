@@ -874,5 +874,189 @@ class BridgeToMainTest(unittest.TestCase):
         self.assertIsNone(_run(NS["_bridge_to_main"](agent, "hi", "t")))
 
 
+class NoMicMedia:
+    """A media manager with a camera but NO mic array — models a 'no_media'-style
+    backend: get_frame works, but recording / DoA methods are absent."""
+
+    def __init__(self, frame=None):
+        self._frame = frame
+
+    def get_frame(self):
+        return self._frame
+
+
+class MicBackendGuardTest(unittest.TestCase):
+    """listen / doa / turn_to_sound / track_sound must refuse with an actionable
+    message when the media backend has no mic array — never an opaque
+    AttributeError or a silent success."""
+
+    def _agent(self):
+        agent = FakeAgent(FakeMedia())
+        agent.state["mini"] = types.SimpleNamespace(media=NoMicMedia(frame=None))
+        return agent
+
+    def test_listen_without_mic_backend_is_actionable(self):
+        res = _run(NS["_dispatch"](self._agent(), "listen", {"duration": 0.1}, return_result=True))
+        self.assertFalse(res["ok"])
+        self.assertIn("microphone array is unavailable", res["error"].lower())
+        self.assertIn("get_audio_sample", res["error"])  # names the missing capability
+
+    def test_doa_without_mic_backend_is_actionable(self):
+        res = _run(NS["_dispatch"](self._agent(), "doa", {}, return_result=True))
+        self.assertFalse(res["ok"])
+        self.assertIn("microphone array is unavailable", res["error"].lower())
+        self.assertIn("get_DoA", res["error"])
+
+    def test_turn_to_sound_without_mic_backend_is_actionable(self):
+        res = _run(NS["_dispatch"](self._agent(), "turn_to_sound", {}, return_result=True))
+        self.assertFalse(res["ok"])
+        self.assertIn("microphone array is unavailable", res["error"].lower())
+
+    def test_track_sound_start_without_mic_backend_refuses(self):
+        agent = self._agent()
+        res = _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
+        self.assertFalse(res["ok"])  # a failed START reports ok:false, like its siblings
+        self.assertIn("microphone array is unavailable", res["error"].lower())
+        self.assertFalse(agent.state.get("tracking"))  # no background loop armed
+
+    def test_require_mic_ignores_output_audio_object(self):
+        # A working-mic backend can still have media.audio (playback) == None;
+        # mic input capability must be judged only by the input methods present.
+        media = FakeMedia()
+        media.audio = None
+        agent = FakeAgent(media)
+        self.assertIs(NS["_require_mic"](agent, record=True, doa=True), media)
+
+
+class ListenNoSamplesTest(unittest.TestCase):
+    """A live-but-silent mic (get_audio_sample never yields) must fail loudly, not
+    return ok:true with a 0-second WAV."""
+
+    def test_no_samples_is_clear_failure(self):
+        media = FakeMedia(samplerate=16000, channels=1)
+        media.get_audio_sample = lambda: None  # never produces a sample
+        agent = FakeAgent(media)
+        res = _run(NS["_dispatch"](agent, "listen", {"duration": 0.1}, return_result=True))
+        self.assertFalse(res["ok"])
+        self.assertIn("no audio", res["error"].lower())
+        self.assertNotIn("audio_b64", res)  # no bogus zero-length blob handed back
+
+
+class DoaExceptionTest(unittest.TestCase):
+    """get_DoA failures are logged with context and surfaced — never swallowed."""
+
+    def _agent(self):
+        media = FakeMedia(doa=(0.0, True))
+
+        def boom():
+            raise RuntimeError("array offline")
+
+        media.get_DoA = boom
+        return FakeAgent(media)
+
+    def test_doa_command_surfaces_and_logs_exception(self):
+        agent = self._agent()
+        res = _run(NS["_dispatch"](agent, "doa", {}, return_result=True))
+        self.assertFalse(res["ok"])
+        self.assertIn("direction-of-arrival", res["error"].lower())
+        self.assertTrue(any("get_DoA failed" in m for m in agent.logs))
+
+    def test_turn_to_sound_surfaces_doa_exception(self):
+        agent = self._agent()
+        res = _run(NS["_dispatch"](agent, "turn_to_sound", {}, return_result=True))
+        self.assertFalse(res["ok"])
+        self.assertIn("direction-of-arrival", res["error"].lower())
+
+    def test_listen_keeps_audio_when_doa_read_fails(self):
+        # DoA is a best-effort supplement to a listen clip: its failure is logged
+        # and reported, but the recorded audio is still returned.
+        media = FakeMedia(samplerate=16000, channels=1)
+
+        def boom():
+            raise RuntimeError("array offline")
+
+        media.get_DoA = boom
+        agent = FakeAgent(media)
+        res = _run(NS["_dispatch"](agent, "listen", {"duration": 0.1}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertIn("audio_b64", res)
+        self.assertIn("doa_error", res)
+        self.assertTrue(any("DoA read failed" in m for m in agent.logs))
+
+
+class TurnToSoundDoaValidationTest(unittest.TestCase):
+    """turn_to_sound must validate the DoA before commanding a yaw: None / NaN /
+    unreadable readings must not reach the motors."""
+
+    def _agent(self, doa):
+        media = FakeMedia(doa=doa)
+        agent = FakeAgent(media)
+        agent.state["mini"] = types.SimpleNamespace(
+            media=media, goto_target=lambda **kw: None)
+        agent.state["np"] = np
+        agent.state["create_head_pose"] = lambda **kw: ("HEAD", kw)
+        agent.state["motion_lock"] = asyncio.Lock()
+        agent.state["busy"] = False
+        return agent
+
+    def test_none_doa_does_not_turn(self):
+        res = _run(NS["_dispatch"](self._agent(None), "turn_to_sound", {}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["turned"])
+
+    def test_nan_angle_is_indeterminate_not_a_turn(self):
+        res = _run(NS["_dispatch"](
+            self._agent((float("nan"), True)), "turn_to_sound", {}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["turned"])
+        self.assertIn("indeterminate", res["result"].lower())
+
+    def test_unreadable_doa_is_clear_error(self):
+        res = _run(NS["_dispatch"](
+            self._agent(("north", True)), "turn_to_sound", {}, return_result=True))
+        self.assertFalse(res["ok"])
+        self.assertIn("unreadable", res["error"].lower())
+
+    def test_valid_doa_turns_and_reports_angle(self):
+        res = _run(NS["_dispatch"](
+            self._agent((42.0, True)), "turn_to_sound", {}, return_result=True))
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["turned"])
+        self.assertEqual(res["angle_deg"], 42.0)
+
+
+class EmptyDoaTest(unittest.TestCase):
+    """None / empty tuple / empty list from get_DoA all mean 'no sound localized'
+    and must never be indexed (doa[0]) across any mic command."""
+
+    def test_doa_command_handles_empty(self):
+        for empty in (None, (), []):
+            agent = FakeAgent(FakeMedia(doa=empty))
+            res = _run(NS["_dispatch"](agent, "doa", {}, return_result=True))
+            self.assertTrue(res["ok"], msg=f"doa={empty!r}")
+            self.assertFalse(res["detected"])
+
+    def test_listen_handles_empty_doa(self):
+        for empty in (None, (), []):
+            agent = FakeAgent(FakeMedia(samplerate=16000, channels=1, doa=empty))
+            res = _run(NS["_dispatch"](agent, "listen", {"duration": 0.1}, return_result=True))
+            self.assertTrue(res["ok"], msg=f"doa={empty!r}")
+            self.assertNotIn("doa_deg", res)      # nothing localized
+            self.assertNotIn("doa_error", res)    # and it wasn't an error, just empty
+
+    def test_turn_to_sound_handles_empty_doa(self):
+        for empty in (None, (), []):
+            agent = FakeAgent(FakeMedia(doa=empty))
+            res = _run(NS["_dispatch"](agent, "turn_to_sound", {}, return_result=True))
+            self.assertTrue(res["ok"], msg=f"doa={empty!r}")
+            self.assertFalse(res["turned"])
+
+    def test_track_step_skips_on_empty_doa(self):
+        for empty in (None, (), []):
+            agent = _TrackAgent(FakeMedia(doa=empty))
+            agent.state["track_cfg"] = {"require_voice": True, "deadband_deg": 15.0}
+            self.assertIsNone(_run(NS["_track_step"](agent)), msg=f"doa={empty!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -664,7 +664,11 @@ class OpenAIProvider(LLMProvider):
             "max_completion_tokens": kwargs.get("max_tokens", 16384),
         }
         reasoning_effort = kwargs.get("reasoning_effort")
-        if (reasoning_effort == "none" or reasoning_effort is None) and self.base_url is not None and "mistral" not in self.model.lower():
+        if (
+            (reasoning_effort == "none" or reasoning_effort is None)
+            and self.base_url is not None
+            and "mistral" not in self.model.lower()
+        ):
             params["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
         if reasoning_effort and "mistral" not in self.model.lower():
             params["reasoning_effort"] = reasoning_effort

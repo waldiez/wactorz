@@ -20,7 +20,7 @@ so the frontend knows whether to send chat over /ws or publish to io/chat.
 
 # pyright: reportAttributeAccessIssue=false,reportUnusedParameter=false,reportUnusedImport=false
 
-from ._bootstrap import bootstrap  # noqa: I001,F401 # pylint: disable=unused-import
+from ._bootstrap import WACTORZ_BOOTSTRAP  # noqa: I001,F401 # pylint: disable=unused-import
 import asyncio
 import json
 import logging

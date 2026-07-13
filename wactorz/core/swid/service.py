@@ -68,6 +68,11 @@ class SwidMinter:  # pylint: disable=too-many-instance-attributes
         """Get the Keystore if a passphrase is set."""
         return self._keystore
 
+    async def identities(self) -> dict[str, str]:
+        """A snapshot of every minted identity: {handle: did}."""
+        async with self._lock:
+            return dict(await self._load_index())
+
     async def ensure_did(
         self,
         entity_class: str,

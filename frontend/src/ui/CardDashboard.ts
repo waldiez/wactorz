@@ -25,6 +25,7 @@ import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentStat
 import type { View, ConnState } from "./dashboard/types";
 import { buildFeedView, appendFeedItemToView, feedKey } from "./dashboard/feedView";
 import { buildFusekiView } from "./dashboard/fusekiView";
+import { buildIdentityView } from "./dashboard/identityView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import { MetricsController } from "./dashboard/metrics";
@@ -359,6 +360,8 @@ export class CardDashboard {
             body.appendChild(this._buildSettingsView());
         } else if (this.view === "fuseki") {
             body.appendChild(this._buildFusekiView());
+        } else if (this.view === "identity") {
+            body.appendChild(buildIdentityView());
         } else if (this.view === "chat") {
             body.appendChild(this._chat.buildChatView());
             // buildChatView()'s renders run before the element is in the DOM

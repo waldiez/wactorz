@@ -11,6 +11,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Identity view** — a new dashboard tab listing every minted Spatial Web identity
+  (agents, devices, spaces) with its class, readable handle, and DID; each row copies the
+  full DID or resolves it in place to show the live DID document. Backed by
+  `GET /api/swid/identities`.
 - **Real `did:swid` identities (SWF-STD-5)** via the `waldiez-swid` library. Agents, HA devices,
   and areas get a key-bound DID (Ed25519 key in an encrypted keystore, CEL log in a file registry)
   plus a readable handle carried in the DID document's `alsoKnownAs`; DIDs resolve at

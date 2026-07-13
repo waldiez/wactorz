@@ -46,7 +46,7 @@ async def _client(tmp_path: Path) -> tuple["TestClient[Request, Application]", s
     minter = SwidMinter(tmp_path, PASSPHRASE, "https://hstp.example")
     res = await minter.ensure_did("agent", "home", "actor-1", name="Main")
     app = web.Application()
-    app.add_routes(swid_routes(FileSWIDRegistry(tmp_path)))
+    app.add_routes(swid_routes(FileSWIDRegistry(tmp_path), minter))
     client = TestClient(TestServer(app))
     await client.start_server()
     return client, res.did, res.handle
@@ -85,5 +85,17 @@ async def test_unknown_did_is_404(tmp_path: Path) -> None:
         assert resp.status == 404
         body = await resp.json()
         assert body["didResolutionMetadata"]["error"] == "notFound"
+    finally:
+        await client.close()
+
+
+async def test_identities_endpoint_lists_minted(tmp_path: Path) -> None:
+    client, did, handle = await _client(tmp_path)
+    try:
+        resp = await client.get("/api/swid/identities")
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["enabled"] is True
+        assert body["identities"] == [{"handle": handle, "did": did, "entityClass": "agent"}]
     finally:
         await client.close()

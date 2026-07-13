@@ -14,7 +14,7 @@ so the frontend knows whether to send chat over /ws or publish to io/chat.
 # TODO: Refactor this file: split it to wactorz/monitor/ package
 
 # pylint: disable=global-statement,invalid-name,logging-fstring-interpolation
-# pylint: disable=broad-exception-caught,protected-access
+# pylint: disable=broad-exception-caught,protected-access,line-too-long
 # pylint: disable=missing-function-docstring,unused-argument
 # pylint: disable=import-outside-toplevel,wrong-import-position,wrong-import-order
 
@@ -2883,7 +2883,7 @@ async def main(exit_on_failure: bool = False):
     swid_minter = SwidMinter(
         Path(_cfg.swid_data_dir), _cfg.swid_keystore_passphrase, _cfg.swid_hstp_base
     )
-    app.add_routes(swid_routes(swid_registry))
+    app.add_routes(swid_routes(swid_registry, swid_minter))
     app.on_startup.append(_mint_agent_dids)
 
     app.router.add_get("/docs", docs_redirect)

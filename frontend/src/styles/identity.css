@@ -1,0 +1,136 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/* Identity view: the Spatial Web passport register (did:swid + handles). */
+.af-identity {
+  padding: 18px 22px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.af-identity-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.af-identity-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.af-identity-pill {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 2px 10px;
+  border-radius: 999px;
+}
+.af-identity-pill.on {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.35);
+}
+.af-identity-pill.off {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+.af-identity-count {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+}
+.af-identity-empty {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
+  padding: 24px 0;
+  max-width: 560px;
+  line-height: 1.5;
+}
+.af-identity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.af-identity-row {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.af-identity-row-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.af-identity-chip {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  min-width: 48px;
+  text-align: center;
+}
+.af-identity-chip-agent {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+.af-identity-chip-device {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+}
+.af-identity-chip-space {
+  color: #c084fc;
+  background: rgba(192, 132, 252, 0.12);
+}
+.af-identity-chip-user,
+.af-identity-chip-unknown {
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.08);
+}
+.af-identity-handle {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-identity-did {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  margin-left: auto;
+}
+.af-identity-btn {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.af-identity-btn:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.af-identity-detail {
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+}
+.af-identity-doc {
+  margin: 0;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-x: auto;
+  color: rgba(255, 255, 255, 0.8);
+}
+@media (max-width: 720px) {
+  .af-identity-did {
+    margin-left: 0;
+  }
+}

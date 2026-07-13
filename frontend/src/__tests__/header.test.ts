@@ -21,8 +21,8 @@ describe("buildHeader", () => {
         const header = buildHeader({ view: "overview", connState: "live", onSetView: vi.fn(), haUrl: null });
         expect(header.querySelector(".af-title")!.textContent).toBe("Wactorz");
         expect(header.querySelector(".af-conn-badge")!.classList.contains("af-conn-live")).toBe(true);
-        // 5 view tabs (incl. Graph) + the Devices link + audio + reset icon buttons
-        expect(header.querySelectorAll(".af-view-btn").length).toBe(8);
+        // 6 view tabs (incl. Graph + Identity) + the Devices link + audio + reset icon buttons
+        expect(header.querySelectorAll(".af-view-btn").length).toBe(9);
     });
 
     it("marks the current view active (class + aria-current)", () => {

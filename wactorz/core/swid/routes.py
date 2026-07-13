@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import swid as swid_lib
 
 from .registry import FileSWIDRegistry
+from .service import SwidMinter
 
 if TYPE_CHECKING:
     from aiohttp import web as _web
@@ -23,8 +24,14 @@ def _resolution_status(error: str | None) -> int:
     return 500
 
 
-def swid_routes(registry: FileSWIDRegistry) -> _web.RouteTableDef:
-    """Build the ``GET /1.0/identifiers/{did}`` route over ``registry``."""
+def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) -> _web.RouteTableDef:
+    """Build the did:swid routes: DIF resolution, plus the identity index.
+
+    ``GET /1.0/identifiers/{did}`` resolves over ``registry``. When ``minter``
+    is given, ``GET /api/swid/identities`` lists every minted identity
+    (handle → did, with the entity class parsed from the handle) for the
+    dashboard's Identity view.
+    """
     # Call-time import: parts of the test suite install a partial aiohttp stub
     # in sys.modules; binding `web` at module import would freeze that stub in.
     from aiohttp import web
@@ -46,5 +53,21 @@ def swid_routes(registry: FileSWIDRegistry) -> _web.RouteTableDef:
             },
             status=_resolution_status(error),
         )
+
+    if minter is not None:
+
+        @routes.get("/api/swid/identities")
+        async def identities_handler(_request: web.Request) -> web.Response:
+            index = await minter.identities()
+            identities = [
+                {
+                    "handle": handle,
+                    "did": did,
+                    # Handle shape: swid:<class>:<ns>:<local> — class is segment 1.
+                    "entityClass": handle.split(":")[1] if handle.count(":") >= 3 else "",
+                }
+                for handle, did in sorted(index.items())
+            ]
+            return web.json_response({"enabled": minter.enabled, "identities": identities})
 
     return routes

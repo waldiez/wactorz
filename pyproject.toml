@@ -39,7 +39,8 @@ dependencies = [
     "prometheus-client>=0.24.0",
     "python-dotenv>=1.2.2",
     "websockets>=15.0",
-    "asyncssh>=2.14.0"
+    "asyncssh>=2.14.0",
+    "waldiez-swid @ git+https://github.com/waldiez/swid"
 ]
 
 [project.optional-dependencies]

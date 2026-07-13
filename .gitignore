@@ -5,6 +5,9 @@ package-lock.json
 state/
 actor_state/
 
+# SWID data (CEL logs + encrypted DID keys — never commit)
+data/
+
 # Logs
 *.log
 

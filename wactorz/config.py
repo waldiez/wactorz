@@ -1,3 +1,5 @@
+"""Configuration module."""
+
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +18,10 @@ def _env_int(name: str, default: int) -> int:
     value = value.strip()
     if not value:
         return default
-    return int(value)
+    try:
+        return int(value)
+    except ValueError:
+        return default
 
 
 def _env_float(name: str, default: float) -> float:
@@ -26,7 +31,10 @@ def _env_float(name: str, default: float) -> float:
     value = value.strip()
     if not value:
         return default
-    return float(value)
+    try:
+        return float(value)
+    except ValueError:
+        return default
 
 
 DEV_MODE = _env_truthy("WACTORZ_DEV_MODE")
@@ -78,6 +86,9 @@ class AppConfig:
     fuseki_user: str
     fuseki_password: str
     swid_namespace: str
+    swid_keystore_passphrase: str
+    swid_data_dir: str
+    swid_hstp_base: str
 
 
 CONFIG = AppConfig(
@@ -122,4 +133,7 @@ CONFIG = AppConfig(
     fuseki_user=os.getenv("FUSEKI_USER", "admin"),
     fuseki_password=os.getenv("FUSEKI_PASSWORD", "admin"),
     swid_namespace=os.getenv("SWID_NAMESPACE", "home"),
+    swid_keystore_passphrase=os.getenv("SWID_KEYSTORE_PASSPHRASE", ""),
+    swid_data_dir=os.getenv("SWID_DATA_DIR", "data/swid"),
+    swid_hstp_base=os.getenv("SWID_HSTP_BASE", "https://hstp.waldiez.io"),
 )

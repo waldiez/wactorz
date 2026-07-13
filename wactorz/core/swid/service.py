@@ -1,106 +1,126 @@
-"""SwidService: the idempotent onboarding facade (async).
+"""SwidMinter — mints real ``did:swid`` identities for wactorz entities.
 
-This is what the Device Onboarding Flow calls when a device is discovered:
+Custody is monitor-side: the minter holds each entity's Ed25519 key in an
+encrypted file keystore (scrypt + AES-256-GCM) on behalf of devices/spaces/
+agents, registers the genesis CEL in the file registry, and remembers the
+handle→DID mapping in a small JSON index so minting is idempotent.
 
-    record = await service.onboard_device(namespace, device_id, name=..., area_iri=...)
-
-It ties deterministic generation (:mod:`.identifier`), the DID-document builder
-(:mod:`.document`) and a :class:`Registry` together, and guarantees that
-re-onboarding the same entity returns the existing record unchanged -- the key
-property for a discovery loop that re-fires on every Home Assistant restart.
+With an empty passphrase the minter is *disabled*: ``ensure_did`` still returns
+the readable handle (so labels keep working) but ``did=None`` and nothing
+touches disk. Resolution of previously minted DIDs is unaffected.
 """
 
-from typing import Any, final
+from __future__ import annotations
 
-from .document import build_did_document
-from .identifier import DEFAULT_FINGERPRINT_LEN, generate_swid
-from .registry import Record, Registry, SwidCollisionError
+import asyncio
+import json
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+
+import swid as swid_lib
+from swid.keystore import EncryptedFileKeyStore
+from swid.keystore.util import atomic_write
+
+from ..handles import make_handle
+from .registry import FileSWIDRegistry
+
+logger = logging.getLogger(__name__)
 
 
-@final
-class SwidService:
-    """Mint-or-return SWIDs and their DID documents, idempotently."""
+@dataclass(frozen=True, slots=True)
+class MintResult:
+    """Outcome of ``ensure_did``: the handle always; the DID when minting is on."""
 
-    def __init__(self, registry: Registry, *, resolver_base: str = "") -> None:
-        self._registry = registry
-        self._resolver_base = resolver_base
+    did: str | None
+    handle: str
+    created: bool
 
-    async def onboard(
+
+class SwidMinter:  # pylint: disable=too-many-instance-attributes
+    """Idempotent DID minting keyed by readable handle."""
+
+    def __init__(self, data_dir: Path, passphrase: str, hstp_base: str) -> None:
+        self._data_dir = Path(data_dir)
+        self._hstp_base = hstp_base.rstrip("/")
+        self.enabled = bool(passphrase)
+        self._keystore: EncryptedFileKeyStore | None = None
+        if self.enabled:
+            # EncryptedFileKeyStore raises ValueError on an empty passphrase, so
+            # it is only constructed when minting is enabled.
+            self._keystore = EncryptedFileKeyStore(self._data_dir / "keys", passphrase=passphrase)
+        # Lazy: a disabled minter must not create directories or touch disk.
+        self._registry_instance: FileSWIDRegistry | None = None
+        self._index_path = self._data_dir / "index.json"
+        self._index: dict[str, str] | None = None  # lazy-loaded {handle: did}
+        self._lock = asyncio.Lock()
+        self._warned_disabled = False
+
+    @property
+    def registry(self) -> FileSWIDRegistry:
+        """The CEL registry the minter writes to (serve resolution from it)."""
+        if self._registry_instance is None:
+            self._registry_instance = FileSWIDRegistry(self._data_dir)
+        return self._registry_instance
+
+    @property
+    def keystore(self) -> EncryptedFileKeyStore | None:
+        """Get the Keystore if a passphrase is set."""
+        return self._keystore
+
+    async def ensure_did(
         self,
         entity_class: str,
         namespace: str,
         natural_key: str,
         *,
         name: str | None = None,
-        controller: str | None = None,
-        verification_method: list[dict[str, Any]] | None = None,  # pyright: ignore[reportExplicitAny]
-        also_known_as: list[str] | None = None,
-        metadata: dict[str, Any] | None = None,  # pyright: ignore[reportExplicitAny]
-        fingerprint_len: int = DEFAULT_FINGERPRINT_LEN,
-    ) -> Record:
-        """Return the existing or newly created :class:`Record` for an entity.
+    ) -> MintResult:
+        """Return the entity's DID, minting one on first sight of its handle.
 
-        Idempotent: identical inputs always yield the same SWID, so a repeat
-        call returns the stored record. Raises :class:`SwidCollisionError` only
-        on a genuine fingerprint collision (retry with a larger
-        ``fingerprint_len``).
+        Idempotent: the handle→DID index is checked first (no scrypt on the
+        skip path). When minting is disabled, returns ``did=None``.
         """
-        swid_str = str(
-            generate_swid(
-                entity_class,
-                namespace,
-                natural_key,
-                name=name,
-                fingerprint_len=fingerprint_len,
+        handle = make_handle(entity_class, namespace, natural_key, name=name)
+        async with self._lock:
+            index = await self._load_index()
+            existing = index.get(handle)
+            if existing is not None:
+                return MintResult(did=existing, handle=handle, created=False)
+            if not self.enabled or self._keystore is None:
+                if not self._warned_disabled:
+                    self._warned_disabled = True
+                    logger.warning(
+                        "[swid] minting disabled (SWID_KEYSTORE_PASSPHRASE empty) — "
+                        "entities get handles only, no DIDs"
+                    )
+                return MintResult(did=None, handle=handle, created=False)
+
+            res = await swid_lib.create_async(
+                hstp_endpoint=f"{self._hstp_base}/{handle}",
+                also_known_as=[handle],
             )
-        )
+            # Persist order matters: key first, then log, then index. A crash
+            # in between leaves an orphan key or an un-indexed DID (harmless — a
+            # re-run mints afresh); the reverse would register a DID whose key
+            # is lost, i.e. an uncontrollable identity.
+            await asyncio.to_thread(self._keystore.store, res.did, res.keypair)
+            await self.registry.register([res.cel_genesis])
+            index[handle] = res.did
+            await self._save_index(index)
+            return MintResult(did=res.did, handle=handle, created=True)
 
-        existing = await self._registry.get(swid_str)
-        if existing is not None:
-            if existing.natural_key != natural_key:
-                msg = (
-                    f"{swid_str} already bound to {existing.natural_key!r}; "
-                    f"re-mint {natural_key!r} with a larger fingerprint_len"
-                )
-                raise SwidCollisionError(msg)
-            return existing
+    async def _load_index(self) -> dict[str, str]:
+        if self._index is None:
+            self._index = await asyncio.to_thread(self._read_index)
+        return self._index
 
-        document = build_did_document(
-            swid_str,
-            resolver_base=self._resolver_base,
-            controller=controller,
-            verification_method=verification_method,
-            also_known_as=also_known_as,
-        )
-        record = Record(
-            swid=swid_str,
-            natural_key=natural_key,
-            document=document,
-            metadata=metadata or {},
-        )
-        await self._registry.put(record)
-        return record
+    def _read_index(self) -> dict[str, str]:
+        if self._index_path.exists():
+            return json.loads(self._index_path.read_text(encoding="utf-8"))
+        return {}
 
-    async def onboard_device(
-        self,
-        namespace: str,
-        device_id: str,
-        *,
-        name: str | None = None,
-        area_iri: str | None = None,
-        metadata: dict[str, Any] | None = None,  # pyright: ignore[reportExplicitAny]
-    ) -> Record:
-        """Onboard a Home Assistant device.
-
-        ``area_iri`` (the ``ha:`` / ``haarea:`` graph node for the current room)
-        is recorded as ``alsoKnownAs`` context, never baked into the SWID -- so
-        moving the device between rooms does not change its identifier.
-        """
-        return await self.onboard(
-            "device",
-            namespace,
-            device_id,
-            name=name,
-            also_known_as=[area_iri] if area_iri else None,
-            metadata=metadata,
-        )
+    async def _save_index(self, index: dict[str, str]) -> None:
+        self._index = index
+        data = json.dumps(index, indent=0, sort_keys=True).encode("utf-8")
+        await asyncio.to_thread(atomic_write, self._index_path, data)

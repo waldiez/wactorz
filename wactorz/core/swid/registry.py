@@ -1,141 +1,75 @@
-"""SWID registry: async persistence + uniqueness guard.
+"""File-backed CEL registry implementing swid's ``AsyncSWIDRegistry`` protocol.
 
-Stores one :class:`Record` per minted SWID and enforces that a SWID maps to
-exactly one natural key. Two implementations:
-
-* :class:`InMemoryRegistry` -- dependency-free; tests and single-process use.
-* :class:`FusekiSwidRegistry` -- persists to a dedicated named graph in the UDG
-  (Jena/Fuseki) via any client exposing async ``sparql_select`` /
-  ``sparql_update`` (i.e. :class:`wactorz.fuseki.FusekiClient`).
-
-The registry is storage only; idempotent onboarding lives in
-:class:`wactorz.core.swid.service.SwidService`.
+One JSON file per DID under ``<data_dir>/logs/``, so registered DIDs survive a
+server restart. Semantics mirror the library's ``AsyncInMemoryRegistry``
+exactly: ``register`` raises ``ValueError`` on an empty log or a duplicate DID;
+``get_log``/``append`` raise ``KeyError`` for unknown DIDs (the resolver maps
+that to ``notFound``). No chain verification happens here — the minter is the
+only writer, and ``resolve_async`` verifies the chain on every read.
 """
 
+from __future__ import annotations
+
+import asyncio
 import json
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, final, runtime_checkable
+from pathlib import Path
+from typing import Any
 
-if TYPE_CHECKING:
-    from wactorz.fuseki import FusekiClient
-
-# Dedicated named graph for registry triples (kept apart from HA catalog graphs).
-REGISTRY_GRAPH = "urn:wactorz:swid-registry"
-SWID_NS = "https://spatialwebfoundation.org/ns/swid#"
+from swid.cel import derive_scid_from_event
+from swid.keystore.util import atomic_write, encode_did
 
 
-class SwidCollisionError(Exception):
-    """Two different natural keys derived the same SWID (fingerprint collision)."""
+class FileSWIDRegistry:
+    """``AsyncSWIDRegistry`` over a directory of per-DID JSON event logs."""
 
+    def __init__(self, data_dir: Path) -> None:
+        self._logs_dir = Path(data_dir) / "logs"
+        self._logs_dir.mkdir(parents=True, exist_ok=True)
+        # Single-process server: one lock serialises writers (matches the
+        # in-memory reference; readers go through it too for simplicity).
+        self._lock = asyncio.Lock()
 
-@dataclass(frozen=True, slots=True)
-class Record:
-    """One registered entity."""
+    def _path(self, did: str) -> Path:
+        return self._logs_dir / f"{encode_did(did)}.json"
 
-    swid: str
-    natural_key: str
-    document: dict[str, Any]  # pyright: ignore[reportExplicitAny]
-    metadata: dict[str, Any] = field(default_factory=dict)  # pyright: ignore[reportExplicitAny]
+    async def register(self, log: list[dict[str, Any]]) -> str:
+        """Persist a genesis CEL and return the ``did:swid`` derived from it.
 
+        Raises ValueError if ``log`` is empty or the DID is already registered.
+        """
+        if not log:
+            raise ValueError("cannot register an empty CEL")
+        scid = derive_scid_from_event(log[0])
+        did = f"did:swid:{scid}"
+        async with self._lock:
+            path = self._path(did)
+            if await asyncio.to_thread(path.exists):
+                raise ValueError(f"DID {did} is already registered")
+            data = json.dumps(list(log)).encode("utf-8")
+            await asyncio.to_thread(atomic_write, path, data)
+        return did
 
-@runtime_checkable
-class Registry(Protocol):
-    """Async storage contract for SWID records."""
+    async def get_log(self, did: str) -> list[dict[str, Any]]:
+        """Return the full CEL for ``did``; raise KeyError if unknown."""
+        async with self._lock:
+            return await asyncio.to_thread(self._read, did)
 
-    async def get(self, swid: str) -> Record | None: ...
-    async def find_by_natural_key(self, natural_key: str) -> Record | None: ...
-    async def put(self, record: Record) -> None: ...
+    async def append(self, did: str, event: dict[str, Any]) -> None:
+        """Append a signed update/deactivation event to ``did``'s CEL.
 
+        Raises KeyError if the DID is not registered.
+        """
+        async with self._lock:
+            log = await asyncio.to_thread(self._read, did)
+            log.append(event)
+            data = json.dumps(log).encode("utf-8")
+            await asyncio.to_thread(atomic_write, self._path(did), data)
 
-class InMemoryRegistry:
-    """Dict-backed async registry (single-process pilot / tests)."""
+    async def close(self) -> None:
+        """Nothing to release — files are closed after every read/write."""
 
-    def __init__(self) -> None:
-        self._by_swid: dict[str, Record] = {}
-        self._by_key: dict[str, Record] = {}
-
-    async def get(self, swid: str) -> Record | None:
-        return self._by_swid.get(swid)
-
-    async def find_by_natural_key(self, natural_key: str) -> Record | None:
-        return self._by_key.get(natural_key)
-
-    async def put(self, record: Record) -> None:
-        existing = self._by_swid.get(record.swid)
-        if existing is not None and existing.natural_key != record.natural_key:
-            raise SwidCollisionError(f"{record.swid} already bound to {existing.natural_key!r}")
-        self._by_swid[record.swid] = record
-        self._by_key[record.natural_key] = record
-
-
-def _lit(value: str) -> str:
-    """Escape a Python string as a SPARQL/Turtle quoted literal (JSON-escaped)."""
-    return json.dumps(value)
-
-
-@final
-class FusekiSwidRegistry:
-    """Registry backed by a Fuseki named graph via an async SPARQL client.
-
-    ``client`` must provide::
-
-        async def sparql_update(self, sparql: str) -> None
-        async def sparql_select(self, sparql: str) -> list[dict]   # [{var: str}]
-    """
-
-    def __init__(
-        self, client: "FusekiClient", *, graph: str = REGISTRY_GRAPH, ns: str = SWID_NS
-    ) -> None:
-        self._client = client
-        self._graph = graph
-        self._ns = ns
-
-    def _select(self, where: str) -> str:
-        return (
-            f"PREFIX swid: <{self._ns}>\n"
-            f"SELECT ?swid ?naturalKey ?document ?metadata WHERE {{\n"
-            f"  GRAPH <{self._graph}> {{\n{where}\n"
-            f"    OPTIONAL {{ ?swid swid:metadata ?metadata . }}\n"
-            f"  }}\n}}"
-        )
-
-    @staticmethod
-    def _row_to_record(row: dict[str, Any]) -> Record:  # pyright: ignore[reportExplicitAny]
-        return Record(
-            swid=row["swid"],  # pyright: ignore[reportAny]
-            natural_key=row["naturalKey"],  # pyright: ignore[reportAny]
-            document=json.loads(row["document"]),  # pyright: ignore[reportAny]
-            metadata=json.loads(row["metadata"]) if row.get("metadata") else {},  # pyright: ignore[reportAny]
-        )
-
-    async def get(self, swid: str) -> Record | None:
-        where = (
-            f"    BIND(<{swid}> AS ?swid)\n"
-            f"    ?swid swid:naturalKey ?naturalKey ; swid:document ?document ."
-        )
-        rows = await self._client.sparql_select(self._select(where))
-        return self._row_to_record(rows[0]) if rows else None
-
-    async def find_by_natural_key(self, natural_key: str) -> Record | None:
-        where = (
-            f"    ?swid swid:naturalKey {_lit(natural_key)} ; swid:document ?document .\n"
-            f"    ?swid swid:naturalKey ?naturalKey ."
-        )
-        rows = await self._client.sparql_select(self._select(where))
-        return self._row_to_record(rows[0]) if rows else None
-
-    async def put(self, record: Record) -> None:
-        existing = await self.get(record.swid)
-        if existing is not None:
-            if existing.natural_key != record.natural_key:
-                raise SwidCollisionError(f"{record.swid} already bound to {existing.natural_key!r}")
-            return  # idempotent: same swid + same key already stored
-        insert = (
-            f"PREFIX swid: <{self._ns}>\n"
-            f"INSERT DATA {{ GRAPH <{self._graph}> {{\n"
-            f"  <{record.swid}> swid:naturalKey {_lit(record.natural_key)} ;\n"
-            f"                  swid:document   {_lit(json.dumps(record.document))} ;\n"
-            f"                  swid:metadata   {_lit(json.dumps(record.metadata))} .\n"
-            f"}} }}"
-        )
-        await self._client.sparql_update(insert)
+    def _read(self, did: str) -> list[dict[str, Any]]:
+        path = self._path(did)
+        if not path.exists():
+            raise KeyError(f"DID {did} is not registered")
+        return json.loads(path.read_text(encoding="utf-8"))

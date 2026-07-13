@@ -1,4 +1,3 @@
-import hashlib
 import unittest
 from typing import ClassVar
 from unittest.mock import patch
@@ -231,26 +230,19 @@ def _fixtures():
 
 
 class HomeAssistantHelperPureTest(unittest.TestCase):
-    def test_normalize_swid_segment(self):
-        self.assertEqual(ha_helper._normalize_swid_segment(" Kitchen_Light!! "), "kitchen-light")
-        self.assertEqual(ha_helper._normalize_swid_segment("A__  B---C"), "a-b-c")
-        self.assertEqual(ha_helper._normalize_swid_segment("Name.v2"), "name.v2")
-        self.assertEqual(ha_helper._normalize_swid_segment(" !!! "), "")
+    def test_generate_swid_is_deterministic_and_room_independent(self):
+        swid = ha_helper.generate_swid("device-123", name="Kitchen Light!")
 
-    def test_generate_swid_is_deterministic_and_uses_fallbacks(self):
-        expected_hash = hashlib.sha256(b"device-123").hexdigest()[:6]
-
-        swid = ha_helper.generate_swid("device-123", name="Kitchen Light!", area="Main_Floor")
-
-        self.assertEqual(swid, f"did:swid:home:main-floor:kitchen-light-{expected_hash}")
+        # Handle format: swid:device:<ns>:<slug>-<fp> (blake2s/base32 fingerprint).
+        self.assertEqual(swid, "swid:device:home:kitchen-light-pbufprlw")
         self.assertEqual(
-            ha_helper.generate_swid("device-123", name="Kitchen Light!", area="Main_Floor"),
+            ha_helper.generate_swid("device-123", name="Kitchen Light!"),
             swid,
         )
-        fallback_hash = hashlib.sha256(b"blank").hexdigest()[:6]
+        # A name that slugifies to nothing falls back to the bare fingerprint.
         self.assertEqual(
-            ha_helper.generate_swid("blank", name="!!!", area="   "),
-            f"did:swid:home:unassigned:device-{fallback_hash}",
+            ha_helper.generate_swid("blank", name="!!!"),
+            "swid:device:home:22qwlkqm",
         )
 
     def test_normalize_ha_ws_url(self):
@@ -458,7 +450,7 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kitchen["entities"][0]["entity_id"], "light.kitchen")
         self.assertEqual(kitchen["entities"][0]["area"], "Living Room")
         self.assertNotIn("state", kitchen["entities"][0])
-        self.assertTrue(kitchen["swid"].startswith("did:swid:home:kitchen:kitchen-light-"))
+        self.assertTrue(kitchen["swid"].startswith("swid:device:home:kitchen-light-"))
         self.assertEqual(len(result[1]["entities"]), 2)
         self.assertNotIn("switch.orphan", {e["entity_id"] for d in result for e in d["entities"]})
 
@@ -606,7 +598,7 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(full_devices, devices)
         self.assertIn("swid", full_devices[0])
-        self.assertTrue(full_devices[0]["swid"].startswith("did:swid:home:kitchen:kitchen-light-"))
+        self.assertTrue(full_devices[0]["swid"].startswith("swid:device:home:kitchen-light-"))
 
         _FakeHAWebSocketClient.instances = []
         simple_devices = await ha_helper.get_devices_simple("http://ha.local:8123", "token")

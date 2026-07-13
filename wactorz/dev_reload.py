@@ -16,6 +16,7 @@ _RELOAD_CWD = os.getcwd()
 def start_reloader(logger: logging.Logger) -> None:
     """Watch wactorz/ for source changes and restart the process via os.execv."""
     try:
+        # pylint: disable=import-outside-toplevel
         from watchdog.events import FileSystemEvent, FileSystemEventHandler
         from watchdog.observers import Observer
 
@@ -46,7 +47,7 @@ def start_reloader(logger: logging.Logger) -> None:
                     os.chdir(_RELOAD_CWD)
                     time.sleep(0.1)
                     os.execv(sys.executable, [sys.executable, *sys.argv])  # nosec
-                except Exception as exc:
+                except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.error("[reload] restart failed: %s", exc)
                     os._exit(1)  # nosec
 

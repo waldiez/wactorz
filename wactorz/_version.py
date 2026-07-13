@@ -1,3 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-# This file is auto-maintained — update the version here and in pyproject.toml.
+"""Wactorz version info."""
+
 __version__ = "0.5.1"

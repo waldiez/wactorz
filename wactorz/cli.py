@@ -8,11 +8,13 @@ import argparse
 import asyncio
 import os
 
-import wactorz._bootstrap  # noqa: F401  side effects: import path, platform, root logging
+# pylint: disable=unused-import
+import wactorz._bootstrap  # noqa: F401 # pyright: ignore[reportUnusedImport]
 from wactorz.config import CONFIG
 
 
-def get_args():
+def get_args() -> argparse.Namespace:
+    """Gather the cli args."""
     parser = argparse.ArgumentParser(description="Wactorz - Multi-Agent Framework")
     parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp", "telegram"])
     parser.add_argument("--port", type=int)
@@ -25,7 +27,10 @@ def get_args():
     parser.add_argument(
         "--gemini-model",
         default="gemini-2.5-flash",
-        help="Google Gemini model (default: gemini-2.5-flash). Options: gemini-2.5-flash-lite, gemini-2.5-pro, gemini-3.1-pro",
+        help=(
+            "Google Gemini model (default: gemini-2.5-flash). "
+            "Options: gemini-2.5-flash-lite, gemini-2.5-pro, gemini-3.1-pro"
+        ),
     )
     parser.add_argument("--discord-token")
     parser.add_argument("--mqtt-broker")
@@ -51,8 +56,9 @@ def get_args():
     return args
 
 
-def main():
-    from wactorz.app import app
+def main() -> None:
+    """Start app."""
+    from wactorz.app import app  # pylint: disable=import-outside-toplevel
 
     asyncio.run(app(get_args()))
 

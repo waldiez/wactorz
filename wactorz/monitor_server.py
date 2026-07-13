@@ -20,44 +20,35 @@ so the frontend knows whether to send chat over /ws or publish to io/chat.
 
 # pyright: reportAttributeAccessIssue=false,reportUnusedParameter=false,reportUnusedImport=false
 
+from ._bootstrap import bootstrap  # noqa: I001,F401 # pylint: disable=unused-import
 import asyncio
-import secrets
-import sys
-from typing import Any
-
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    # Force UTF-8 on the real Windows console only. Skip when stdio has been
-    # replaced (pytest capture, test runners, etc.) since re-wrapping a
-    # capture stream breaks the harness on Python 3.13.
-    _need_wrap = (
-        (getattr(sys.stdout, "encoding", "") or "").lower() != "utf-8"
-        and hasattr(sys.stdout, "buffer")
-        and hasattr(sys.stderr, "buffer")
-    )
-    if _need_wrap:
-        import io
-
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
 import json
 import logging
 import os
 import re
+import secrets
 import socket
+import sys
 import time
 import uuid
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
-from aiohttp import web
+from aiohttp import WSMsgType, web
 
 from .agents.main_actor import MainActor
 from .core.mqtt import mqtt_client
 from .core.persistence import WactorzDB
 from .core.registry import ActorRegistry
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("monitor.log", encoding="utf-8"),
+    ],
+)
 logger = logging.getLogger(__name__)
 
 MQTT_BROKER = "localhost"
@@ -918,7 +909,7 @@ async def ws_handler(request):
 
     try:
         async for msg in ws:
-            if msg.type == web.WSMsgType.TEXT:
+            if msg.type == WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
                     msg_type = data.get("type")
@@ -973,7 +964,7 @@ async def ws_handler(request):
 
                 except Exception as e:
                     logger.warning(f"[ws] Bad message: {e}")
-            elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
+            elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                 break
     finally:
         ws_clients.discard(ws)

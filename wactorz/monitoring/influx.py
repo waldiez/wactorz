@@ -10,15 +10,23 @@ Required env vars:
   INFLUX_BUCKET  — bucket name       (default: "wactorz")
 """
 
+# pyright: reportMissingImports=false
+
 from __future__ import annotations
 
 import logging
 import os
+import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from influxdb_client.client.influxdb_client import InfluxDBClient
+    from influxdb_client.client.write_api import WriteApi
 
 logger = logging.getLogger(__name__)
 
-_client = None
-_write_api = None
+_client: InfluxDBClient | None = None
+_write_api: WriteApi | None = None
 
 
 def setup_influx() -> bool:
@@ -26,7 +34,7 @@ def setup_influx() -> bool:
     Returns True if successfully set up, False if disabled or unavailable.
     Idempotent — safe to call multiple times.
     """
-    global _client, _write_api
+    global _client, _write_api  # pylint: disable=global-statement
 
     url = os.getenv("INFLUX_URL", "").rstrip("/")
     token = os.getenv("INFLUX_TOKEN", "")
@@ -34,13 +42,9 @@ def setup_influx() -> bool:
         return False
 
     try:
-        from influxdb_client import (  # pyright: ignore[reportMissingImports]  # noqa: F401
-            InfluxDBClient,
-            WriteOptions,
-        )
-        from influxdb_client.client.write_api import (
-            ASYNCHRONOUS,  # pyright: ignore[reportMissingImports]
-        )
+        # pylint: disable=import-outside-toplevel
+        from influxdb_client.client.influxdb_client import InfluxDBClient
+        from influxdb_client.client.write_api import ASYNCHRONOUS
     except ImportError:
         logger.warning("influxdb-client not installed — run: pip install 'wactorz[influx]'")
         return False
@@ -58,8 +62,9 @@ def setup_influx() -> bool:
         bucket,
     )
     # store bucket name for writes
-    _write_api._wactorz_bucket = bucket
-    _write_api._wactorz_org = org
+    # pylint: disable=protected-access
+    _write_api._wactorz_bucket = bucket  # pyright: ignore[reportAttributeAccessIssue]
+    _write_api._wactorz_org = org  # pyright: ignore[reportAttributeAccessIssue]
     return True
 
 
@@ -68,9 +73,8 @@ def write_chat(agent_name: str, role: str, content: str, ts: float | None = None
     if _write_api is None:
         return
     try:
-        import time as _t
-
-        from influxdb_client import Point  # pyright: ignore[reportMissingImports]
+        # pylint: disable=import-outside-toplevel
+        from influxdb_client.client.write.point import Point
 
         point = (
             Point("wactorz_chat")
@@ -78,27 +82,27 @@ def write_chat(agent_name: str, role: str, content: str, ts: float | None = None
             .tag("role", role)
             .field("content", content)
             .field("length", len(content))
-            .time(int((ts or _t.time()) * 1_000_000_000))  # nanoseconds
+            .time(int((ts or time.time()) * 1_000_000_000))  # nanoseconds
         )
         bucket = getattr(_write_api, "_wactorz_bucket", "wactorz")
         org = getattr(_write_api, "_wactorz_org", "wactorz")
         _write_api.write(bucket=bucket, org=org, record=point)
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.debug("InfluxDB write_chat failed: %s", exc)
 
 
 def shutdown_influx() -> None:
     """Flush pending writes and close the client."""
-    global _client, _write_api
+    global _client, _write_api  # pylint: disable=global-statement
     if _write_api is not None:
         try:
             _write_api.close()
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             pass
         _write_api = None
     if _client is not None:
         try:
             _client.close()
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             pass
         _client = None

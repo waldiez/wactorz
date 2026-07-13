@@ -9,8 +9,9 @@ import asyncio
 import logging
 import os
 import sys
+from typing import cast
 
-import wactorz._bootstrap  # noqa: F401  side effects: import path, platform, root logging
+import wactorz._bootstrap  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from wactorz.config import CONFIG
 from wactorz.dev_reload import start_reloader
 
@@ -289,7 +290,7 @@ async def build_system(args: argparse.Namespace):
         sys.exit(1)
 
     logger.info("Wactorz system started. Supervision tree active.")
-    return system, main_actor, _db
+    return system, cast(MainActor, main_actor), _db
 
 
 async def app(args: argparse.Namespace):
@@ -328,7 +329,7 @@ async def app(args: argparse.Namespace):
                 # with run_forever() — tearing the whole system down a second
                 # after boot. Skip the interactive loop and just stay up.
                 logger.info("stdin is not a TTY — running headless (no interactive CLI)")
-                system._running = True
+                system._running = True  # pylint: disable=protected-access
                 await system.run_forever()
         elif interface == "rest":
             port = args.port or CONFIG.port
@@ -363,8 +364,9 @@ async def app(args: argparse.Namespace):
                 main_actor, token=telegram_token, allowed_user_id=allowed_user_id
             )
             await asyncio.gather(iface.run(), system.run_forever())
-    except Exception as exc:
-        logger.error(f"System error: {exc}", exc_info=True)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        msg = f"System error: {exc}"
+        logger.error(msg, exc_info=True)
     finally:
         shutdown_otel()
         shutdown_influx()

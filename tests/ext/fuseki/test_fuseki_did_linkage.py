@@ -14,7 +14,7 @@ from aiohttp import web
 
 import wactorz.monitor_server as ms
 from wactorz.core import contract
-from wactorz.fuseki import TTL_PREFIXES, HAFusekiBridge, _area_body, _device_body
+from wactorz.ext.fuseki import TTL_PREFIXES, HAFusekiBridge, area_body, device_body
 
 DID = "did:swid:zQmcn8EtYXq3CETZxfom5FJzHJYy2BBchWMGbAB5NnvyKpX"
 HANDLE = "swid:device:home:kitchen-light-ab12cd34"
@@ -35,7 +35,15 @@ class _StubMinter:
         self._fail = fail
         self.calls: list[tuple[str, str, str]] = []
 
-    async def ensure_did(self, entity_class, namespace, natural_key, *, name=None):
+    # pylint: disable=unused-argument
+    async def ensure_did(
+        self,
+        entity_class,
+        namespace,
+        natural_key,
+        *,
+        name=None,
+    ):  # pyright: ignore[reportUnusedParameter]
         self.calls.append((entity_class, namespace, natural_key))
         if self._fail:
             raise RuntimeError("keystore unavailable")
@@ -63,24 +71,24 @@ def test_swidns_prefix_declared():
 
 
 def test_area_body_includes_did_and_handle_when_given():
-    body = _area_body(AREA, did=DID, handle=HANDLE)
+    body = area_body(AREA, did=DID, handle=HANDLE)
     assert f'swidns:did "{DID}"' in body
     assert f'swidns:handle "{HANDLE}"' in body
 
 
 def test_area_body_omits_identity_when_not_minted():
-    body = _area_body(AREA)
+    body = area_body(AREA)
     assert "swidns:" not in body
 
 
 def test_device_body_includes_did_and_handle_when_given():
-    body = _device_body("light.kitchen", STATE, did=DID, handle=HANDLE)
+    body = device_body("light.kitchen", STATE, did=DID, handle=HANDLE)
     assert f'swidns:did "{DID}"' in body
     assert f'swidns:handle "{HANDLE}"' in body
 
 
 def test_device_body_omits_identity_when_not_minted():
-    body = _device_body("light.kitchen", STATE)
+    body = device_body("light.kitchen", STATE)
     assert "swidns:" not in body
 
 
@@ -127,12 +135,12 @@ async def test_link_hook_links_only_minted_agent_dids(monkeypatch):
     }
     monkeypatch.setattr("wactorz.config.CONFIG", _FUSEKI_CFG)
     fake = AsyncMock()
-    monkeypatch.setattr("wactorz.fuseki.link_agent_dids", fake)
+    monkeypatch.setattr("wactorz.ext.fuseki.bridge.link_agent_dids", fake)
 
     await ms._link_agent_dids_to_graph(app)
 
     fake.assert_awaited_once()
-    links = fake.await_args.args[0]
+    links = fake.await_args.args[0]  # pyright: ignore[reportOptionalMemberAccess]
     # did=None agent is excluded; only the minted one is linked.
     assert links == {"main": (DID, "swid:agent:home:main-aa11")}
 
@@ -142,7 +150,7 @@ async def test_link_hook_noop_without_fuseki(monkeypatch):
     app[contract.AGENT_IDENTITY] = {"main": SimpleNamespace(did=DID, handle="h")}
     monkeypatch.setattr("wactorz.config.CONFIG", SimpleNamespace(fuseki_url=""))
     fake = AsyncMock()
-    monkeypatch.setattr("wactorz.fuseki.link_agent_dids", fake)
+    monkeypatch.setattr("wactorz.ext.fuseki.bridge.link_agent_dids", fake)
 
     await ms._link_agent_dids_to_graph(app)
 
@@ -154,7 +162,7 @@ async def test_link_hook_noop_when_no_dids_minted(monkeypatch):
     app[contract.AGENT_IDENTITY] = {"x": SimpleNamespace(did=None, handle="h")}
     monkeypatch.setattr("wactorz.config.CONFIG", _FUSEKI_CFG)
     fake = AsyncMock()
-    monkeypatch.setattr("wactorz.fuseki.link_agent_dids", fake)
+    monkeypatch.setattr("wactorz.ext.fuseki.bridge.link_agent_dids", fake)
 
     await ms._link_agent_dids_to_graph(app)
 

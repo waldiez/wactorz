@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import base64
 
+from aiohttp import ClientSession, web
 
-async def fuseki_proxy_handler(request):
-    import aiohttp
-    from aiohttp import web
 
-    from .config import CONFIG
+async def fuseki_proxy_handler(request: web.Request) -> web.Response:
+    """Start fuseki proxy handler."""
+    from wactorz.config import CONFIG  # pylint: disable=import-outside-toplevel
 
     dataset = request.match_info["dataset"]
     operation = request.path.rsplit("/", 1)[-1]  # "sparql" or "update"
@@ -31,12 +31,12 @@ async def fuseki_proxy_handler(request):
         forward_headers["Authorization"] = f"Basic {creds}"
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with ClientSession() as session:
             async with session.post(target, data=body, headers=forward_headers) as resp:
                 resp_body = await resp.read()
                 resp_headers: dict[str, str] = {}
                 if "Content-Type" in resp.headers:
                     resp_headers["Content-Type"] = resp.headers["Content-Type"]
                 return web.Response(status=resp.status, body=resp_body, headers=resp_headers)
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         return web.json_response({"error": f"Fuseki proxy failed: {exc}"}, status=502)

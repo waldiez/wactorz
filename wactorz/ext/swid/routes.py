@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+import os
+
 import swid as swid_lib
 from aiohttp import web
 
+from wactorz.core import contract
+
 from .registry import FileSWIDRegistry
 from .service import SwidMinter
+
+logger = logging.getLogger(__name__)
 
 
 def _resolution_status(error: str | None) -> int:
@@ -49,7 +56,28 @@ def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) ->
     if minter is not None:
 
         @routes.get("/api/swid/identities")
-        async def identities_handler(_request: web.Request) -> web.Response:
+        async def identities_handler(request: web.Request) -> web.Response:
+            # Reconcile before listing: mint a DID for any live actor not yet
+            # minted, so agents spawned *after* startup show up on refresh
+            # (the boot-time mint hook only covers actors present at startup).
+            # Idempotent — already-minted actors skip via the id-map / index.
+            app_registry = request.app.get(contract.ACTOR_REGISTRY)
+            id_map = request.app.get(contract.AGENT_IDENTITY)
+            if app_registry is not None and id_map is not None:
+                namespace = os.getenv("SWID_NAMESPACE", "home")
+                for actor in app_registry.all_actors():
+                    if actor.actor_id in id_map:
+                        continue
+                    try:
+                        id_map[actor.actor_id] = await minter.ensure_did(
+                            "agent", namespace, actor.actor_id, name=actor.name
+                        )
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        logger.warning(
+                            "[swid] minting DID for agent '%s' failed: %s",
+                            actor.actor_id,
+                            exc,
+                        )
             index = await minter.identities()
             identities = [
                 {

@@ -35,13 +35,16 @@ async def mint_agent_dids(app: Application) -> None:
     Best-effort: minting failure must never abort server startup. With an empty
     keystore passphrase the minter is disabled and agents get handles only.
     Populates ``app[AGENT_IDENTITY]`` (actor_id → MintResult), which the
-    ``/api/actors`` handler reads display-only. Agents spawned *after* startup
-    are not minted until restart — minting is idempotent, so wiring this into
-    the spawn/heartbeat path is a safe future follow-up (out of scope here).
+    ``/api/actors`` handler reads display-only.
 
-    Note: linking agent DIDs onto Fuseki graph nodes is deferred to the fuseki
-    extraction (the fuseki extension will read AGENT_IDENTITY and link them);
-    device/space linkage already happens inside the HA bridge via the minter.
+    This covers actors present at startup; agents spawned later are reconciled
+    on demand by the ``/api/swid/identities`` handler (idempotent), so the
+    Identity view stays current without a restart.
+
+    Note: agent DIDs are linked onto their Fuseki graph nodes by
+    ``monitor_server._link_agent_dids_to_graph`` (registered after this hook so
+    AGENT_IDENTITY is populated first); device/space linkage happens inside the
+    HA bridge via the minter.
     """
     app_registry = app.get(contract.ACTOR_REGISTRY)
     if app_registry is None:

@@ -47,6 +47,7 @@ Environment variables:
 """
 
 # cspell: disable
+# pylint: disable=line-too-long,too-many-lines
 # pyright: reportAny=false,reportExplicitAny=false,reportUnusedCallResult=false
 # pyright: reportUnknownVariableType=false,reportUnknownMemberType=false,reportUnknownArgumentType=false
 
@@ -57,20 +58,22 @@ import json
 import logging
 import os
 import re
+import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlparse
 
 import aiohttp
-import aiomqtt
-
-if TYPE_CHECKING:
-    from wactorz.core.contract import IdentityMinter
 
 from wactorz.core.integrations.home_assistant.ha_web_socket_client import (
     HAWebSocketClient,
 )
+from wactorz.core.mqtt import mqtt_client
+
+if TYPE_CHECKING:
+    from wactorz.core.contract import IdentityMinter
+
 
 log = logging.getLogger("wactorz.fuseki")
 
@@ -266,7 +269,7 @@ def _dt_from_ha(ts: str | None) -> str:
     try:
         dt = datetime.fromisoformat(ts)
         return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught
         return _dt_now()
 
 
@@ -285,7 +288,7 @@ def _bridge_agent_body() -> str:
     )
 
 
-def _area_body(area: dict[str, Any], *, did: str | None = None, handle: str | None = None) -> str:
+def area_body(area: dict[str, Any], *, did: str | None = None, handle: str | None = None) -> str:
     """RDF triples for one HA area (room) using BOT ontology.
 
     ``did``/``handle`` link the node to its Spatial Web identity when minted
@@ -315,7 +318,8 @@ def _area_body(area: dict[str, Any], *, did: str | None = None, handle: str | No
     return "\n".join(lines)
 
 
-def _device_body(
+# pylint: disable=too-many-locals,too-many-arguments
+def device_body(
     entity_id: str,
     state_obj: dict[str, Any],
     area_id: str | None = None,
@@ -763,7 +767,7 @@ class FusekiClient:
                 body = await resp.text()
                 log.warning("Fuseki compact → %s: %s", resp.status, body[:200])
                 return False
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             log.warning("Fuseki compact failed: %s", exc)
             return False
 
@@ -771,11 +775,9 @@ class FusekiClient:
         """Delete observations from *graph* older than *retain_days* days.
         Prevents unbounded growth of the HA state-change history graph.
         """
-        import datetime
-
-        cutoff = (
-            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=retain_days)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retain_days)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
 
         query = f"""
 PREFIX sosa: <http://www.w3.org/ns/sosa/>
@@ -1004,6 +1006,7 @@ WHERE {{
         await self.sparql_update(query)
 
     async def replace_entity_in_graph(self, graph: str, entity_id: str, ttl: str) -> None:
+        """Replace an entity in the graph."""
         full_iri = f"urn:ha:entity:{_safe(entity_id)}"
 
         delete_q = f"""
@@ -1076,7 +1079,7 @@ class HAFusekiBridge:
                 entity_class, self._swid_namespace, natural_key, name=name
             )
             return res.did, res.handle
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             log.warning("SWID minting for %s '%s' failed: %s", entity_class, natural_key, exc)
             return None, None
 
@@ -1092,7 +1095,9 @@ class HAFusekiBridge:
     _TRIM_INTERVAL = 24 * 3600
     _HISTORY_RETAIN_DAYS = 30
 
+    # pylint: disable=broad-exception-caught
     async def run(self) -> None:
+        """Start the ha-fuseki bridge."""
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as http:
             fuseki = FusekiClient(self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth)
@@ -1149,8 +1154,8 @@ class HAFusekiBridge:
                                 except Exception as exc:
                                     log.warning("Periodic history trim failed: %s", exc)
 
-                except asyncio.CancelledError:
-                    raise
+                except asyncio.CancelledError as err:
+                    raise asyncio.CancelledError(str(err)) from err
                 except Exception as exc:
                     # Concise one-line log (no full traceback) — the socket is
                     # gone, we know why, and we're reconnecting.
@@ -1221,7 +1226,7 @@ class HAFusekiBridge:
             area_body_parts = [_bridge_agent_body()]
             for area in areas:
                 did, handle = await self._mint("space", area.get("area_id", ""), area.get("name"))
-                area_body_parts.append(_area_body(area, did=did, handle=handle))
+                area_body_parts.append(area_body(area, did=did, handle=handle))
             try:
                 await fuseki.replace_graph(GRAPH_AREAS, _ttl("\n".join(area_body_parts)))
                 log.info("Areas graph replaced (%d areas).", len(areas))
@@ -1244,7 +1249,7 @@ class HAFusekiBridge:
             friendly = (s.get("attributes") or {}).get("friendly_name") or eid
             did, handle = await self._mint("device", eid, friendly)
             catalog_body_parts.append(
-                _device_body(eid, s, area_id=area_id, area_name=area_name, did=did, handle=handle)
+                device_body(eid, s, area_id=area_id, area_name=area_name, did=did, handle=handle)
             )
 
         try:
@@ -1288,6 +1293,7 @@ class HAFusekiBridge:
 # ── Agent registry seed ──────────────────────────────────────────────────────
 
 
+# pylint: disable=broad-exception-caught
 async def seed_agent_registry(
     actors: list[Any],
     fuseki_url: str,
@@ -1414,6 +1420,7 @@ class AgentManifestBridge:
         )
 
     async def run(self) -> None:
+        """Start the agents manifest bridge."""
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as http:
             fuseki = FusekiClient(self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth)
@@ -1431,7 +1438,7 @@ class AgentManifestBridge:
                     exc,
                 )
 
-            async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+            async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                 await client.subscribe("agents/+/manifest")
                 log.info(
                     "AgentManifestBridge listening on %s:%d agents/+/manifest",
@@ -1501,12 +1508,13 @@ class MetricsBridge:
     _COMPACT_INTERVAL = 6 * 3600
 
     async def run(self) -> None:
+        """Start the metrics bridge."""
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as http:
             fuseki = FusekiClient(self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth)
             last_compact = time.time()
 
-            async with aiomqtt.Client(self._mqtt_broker, self._mqtt_port) as client:
+            async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                 await client.subscribe("agents/+/metrics")
                 log.info(
                     "MetricsBridge listening on %s:%d agents/+/metrics",
@@ -1666,8 +1674,6 @@ async def _main() -> None:
 
 def _cli_main() -> None:
     """Sync entry point for the ``wactorz-fuseki`` console script."""
-    import sys
-
     if sys.platform == "win32":
         loop = asyncio.SelectorEventLoop()
         asyncio.set_event_loop(loop)

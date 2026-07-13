@@ -99,3 +99,33 @@ async def test_identities_endpoint_lists_minted(tmp_path: Path) -> None:
         assert body["identities"] == [{"handle": handle, "did": did, "entityClass": "agent"}]
     finally:
         await client.close()
+
+
+async def test_identities_reconciles_late_spawned_agent(tmp_path: Path) -> None:
+    # An agent spawned after startup (not in AGENT_IDENTITY) is minted on read,
+    # so the Identity view shows it on refresh without a restart.
+    from types import SimpleNamespace
+
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from wactorz.core import contract
+
+    minter = SwidMinter(tmp_path, PASSPHRASE, "https://hstp.example")
+    app = web.Application()
+    app.add_routes(swid_routes(FileSWIDRegistry(tmp_path), minter))
+    actor = SimpleNamespace(actor_id="weather", name="Weather Agent")
+    app[contract.ACTOR_REGISTRY] = SimpleNamespace(all_actors=lambda: [actor])
+    app[contract.AGENT_IDENTITY] = {}
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        resp = await client.get("/api/swid/identities")
+        assert resp.status == 200
+        body = await resp.json()
+        handles = [i["handle"] for i in body["identities"]]
+        assert any(h.startswith("swid:agent:home:weather-") for h in handles)
+        # cached for the /api/actors card too
+        assert "weather" in app[contract.AGENT_IDENTITY]
+    finally:
+        await client.close()

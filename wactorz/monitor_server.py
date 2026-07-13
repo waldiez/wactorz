@@ -9,6 +9,17 @@ The mode is advertised to the browser on connect via a {"type":"config"} frame
 so the frontend knows whether to send chat over /ws or publish to io/chat.
 """
 
+# TODO: uncomment the skips below (when we can do that and not make the linters crazy)
+# TODO: handle the 'from aiohttp import web' inside the function cases. Tests fail if we move them!!
+# TODO: Refactor this file: split it to wactorz/monitor/ package
+
+# pylint: disable=global-statement,invalid-name,logging-fstring-interpolation
+# pylint: disable=broad-exception-caught,protected-access
+# pylint: disable=missing-function-docstring,unused-argument
+# pylint: disable=import-outside-toplevel,wrong-import-position,wrong-import-order
+
+# pyright: reportAttributeAccessIssue=false,reportUnusedParameter=false,reportUnusedImport=false
+
 import asyncio
 import secrets
 import sys
@@ -32,20 +43,21 @@ if sys.platform == "win32":
 
 import json
 import logging
+import os
+import re
 import socket
 import time
+import uuid
 from pathlib import Path
+from typing import cast
 
+from aiohttp import web
+
+from .agents.main_actor import MainActor
 from .core.mqtt import mqtt_client
+from .core.persistence import WactorzDB
+from .core.registry import ActorRegistry
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("monitor.log", encoding="utf-8"),
-    ],
-)
 logger = logging.getLogger(__name__)
 
 MQTT_BROKER = "localhost"
@@ -63,10 +75,10 @@ MQTT_TOPICS = [
 # Injected by cli.py after the actor system is built.
 # None  → legacy MQTT/IOAgent mode
 # <registry> → direct mode (Option B)
-registry = None
+registry: ActorRegistry | None = None
 
 # Injected by cli.py — used to query historical cost data for deleted agents.
-db = None
+db: WactorzDB | None = None
 
 IO_GATEWAY_ID = "io-gateway"
 
@@ -197,10 +209,10 @@ async def _purge_spawn_reconcile(agent: str | None = None) -> None:
     Must run BEFORE reset_spawns()/reset_all() wipe the kv on disk — it reads the
     registry to learn which nodes are affected.
     """
-    main_ref = registry.find_by_name("main") if registry is not None else None
+    main_actor = _find_main()
     reg = {}
-    if main_ref is not None and hasattr(main_ref, "_get_spawn_registry"):
-        reg = main_ref._get_spawn_registry() or {}
+    if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
+        reg = main_actor._get_spawn_registry() or {}
 
     # Affected nodes: live heartbeats ∪ registry (covers offline nodes).
     node_names: set[str] = set(state["nodes"].keys())
@@ -213,17 +225,17 @@ async def _purge_spawn_reconcile(agent: str | None = None) -> None:
 
     # Clear the live registry through the actor's own persistence.
     if (
-        main_ref is not None
-        and hasattr(main_ref, "recall")
-        and main_ref.recall("_spawned_agents", None) is not None
+        main_actor is not None
+        and hasattr(main_actor, "recall")
+        and main_actor.recall("_spawned_agents", None) is not None
     ):
         kept = {k: v for k, v in reg.items() if k != agent} if agent else {}
-        main_ref.persist("_spawned_agents", kept)
+        main_actor.persist("_spawned_agents", kept)
 
-    if agent and main_ref is not None and hasattr(main_ref, "_update_node_desired_state"):
+    if agent and main_actor is not None and hasattr(main_actor, "_update_node_desired_state"):
         # Republish from the reduced registry so siblings on the node survive.
         await asyncio.gather(
-            *[main_ref._update_node_desired_state(n) for n in node_names],
+            *[main_actor._update_node_desired_state(n) for n in node_names],
             return_exceptions=True,
         )
     else:
@@ -262,10 +274,10 @@ async def _delete_agent(agent_id: str) -> str:
     if registry is not None:
         # In-process: delegate to main, which owns the spawn registry and
         # knows exactly how to clean up both local and remote agents.
-        main = registry.find_by_name("main")
-        if main is not None and hasattr(main, "delete_spawned_agent"):
+        main_actor = _find_main()
+        if main_actor is not None and hasattr(main_actor, "delete_spawned_agent"):
             try:
-                await main.delete_spawned_agent(name)
+                await main_actor.delete_spawned_agent(name)
                 routed = f"via main.delete_spawned_agent({name!r})"
             except Exception as e:
                 logger.warning(
@@ -316,12 +328,19 @@ async def _delete_agent(agent_id: str) -> str:
 # ── helpers ────────────────────────────────────────────────────────────────
 
 
+async def no_op_async() -> None:
+    """No op. To use instead of lambdas."""
+
+
 def _chat_mode() -> str:
     return "direct_ws" if registry is not None else "mqtt"
 
 
 def _find_main():
-    return registry.find_by_name("main") if registry else None
+    actor = registry.find_by_name("main") if registry else None
+    if actor:
+        return cast(MainActor, actor)
+    return None
 
 
 def _parse_mention(content: str) -> tuple[str, str]:
@@ -419,14 +438,14 @@ async def _slash_deploy(node: str, host: str, user: str, pw: str, broker: str, r
         )
         return
 
-    main = _find_main()
-    if main is None or not hasattr(main, "delegate_to_installer"):
+    main_actor = _find_main()
+    if main_actor is None or not hasattr(main_actor, "delegate_to_installer"):
         await reply_fn("[error] Installer agent not available.")
         return
 
     broker = broker or "localhost"
     await reply_fn(f"[deploy] Deploying to {user}@{host} as '{node}'... (20-60s)")
-    result = await main.delegate_to_installer(
+    result = await main_actor.delegate_to_installer(
         {
             "action": "node_deploy",
             "host": host,
@@ -473,9 +492,9 @@ async def handle_slash(text: str, reply_fn) -> bool:
     cmd = parts[0].lower()
 
     if cmd == "/clear-plans":
-        main = _find_main()
-        if main and hasattr(main, "persist"):
-            main.persist("_plan_cache", {})
+        main_actor = _find_main()
+        if main_actor and hasattr(main_actor, "persist"):
+            main_actor.persist("_plan_cache", {})
         await reply_fn("[System: Plan cache cleared.]")
         return True
 
@@ -494,8 +513,10 @@ async def handle_slash(text: str, reply_fn) -> bool:
         return True
 
     if cmd == "/nodes":
-        main = _find_main()
-        remote_nodes = main.list_nodes() if (main and hasattr(main, "list_nodes")) else []
+        main_actor = _find_main()
+        remote_nodes = (
+            main_actor.list_nodes() if (main_actor and hasattr(main_actor, "list_nodes")) else []
+        )
         local = [a.name for a in registry.all_actors()] if registry else []
         lines = [f"  {'local':20s} online   {', '.join('@' + n for n in local) or '(none)'}"]
         for nd in sorted(remote_nodes, key=lambda x: x["node"]):
@@ -511,12 +532,12 @@ async def handle_slash(text: str, reply_fn) -> bool:
         if len(parts) < 3:
             await reply_fn("[usage] /migrate <agent-name> <target-node>")
             return True
-        main = _find_main()
-        if main is None or not hasattr(main, "migrate_agent"):
+        main_actor = _find_main()
+        if main_actor is None or not hasattr(main_actor, "migrate_agent"):
             await reply_fn("[error] migrate_agent not available.")
             return True
         await reply_fn(f"[migrating] @{parts[1]} → {parts[2]}...")
-        result = await main.migrate_agent(parts[1], parts[2])
+        result = await main_actor.migrate_agent(parts[1], parts[2])
         sym = "OK" if result.get("success") else "FAIL"
         await reply_fn(f"[{sym}] {result.get('message', str(result))}")
         return True
@@ -546,25 +567,25 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
     stream_end_fn()       — signal that streaming is done (optional)
     """
     _chunk_fn = stream_fn or reply_fn
-    _end_fn = stream_end_fn or (lambda: None)
+    _end_fn = stream_end_fn or no_op_async
 
     if content.startswith("/"):
         handled = await handle_slash(content, reply_fn)
         if not handled:
+            main_actor = _find_main()
             # Forward unrecognized slash commands to main actor.
             # main_actor.process_user_input handles the full command set
             # (/help, /plans, /delete, /stop, /memory, /rules, /topics, etc.)
-            main = _find_main()
-            if main and hasattr(main, "process_user_input_stream"):
+            if main_actor and hasattr(main_actor, "process_user_input_stream"):
                 _chunk_fn = stream_fn or reply_fn
-                async for chunk in main.process_user_input_stream(content):
+                async for chunk in main_actor.process_user_input_stream(content):
                     if isinstance(chunk, dict):
                         continue
                     await _chunk_fn(str(chunk))
                 if stream_end_fn:
                     await stream_end_fn()
-            elif main and hasattr(main, "process_user_input"):
-                result = await main.process_user_input(content)
+            elif main_actor and hasattr(main_actor, "process_user_input"):
+                result = await main_actor.process_user_input(content)
                 await reply_fn(str(result))
                 if stream_end_fn:
                     await stream_end_fn()
@@ -577,24 +598,21 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
     target = registry.find_by_name(target_name) if registry else None
 
     if target is None:
+        main_actor = _find_main()
         # ── Remote agent fallback ─────────────────────────────────────────────
         # Agent not in local registry — check if it's running on a remote node.
         # If so, route the message via MQTT and stream the reply back.
-        main = registry.find_by_name("main") if registry else None
-        if main and hasattr(main, "_known_nodes"):
-            import time as _rt
-
+        if main_actor and hasattr(main_actor, "_known_nodes"):
             remote_node = None
-            for node_name, nd in main._known_nodes.items():
-                if _rt.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get("agents", []):
+            for node_name, nd in main_actor._known_nodes.items():
+                if time.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get(
+                    "agents", []
+                ):
                     remote_node = node_name
                     break
 
             if remote_node:
-                import json as _json
-                import uuid as _uuid
-
-                reply_topic = f"main/reply/io-gateway/{_uuid.uuid4().hex[:8]}"
+                reply_topic = f"main/reply/io-gateway/{uuid.uuid4().hex[:8]}"
                 payload = {
                     "text": text,
                     "payload": text,
@@ -603,12 +621,12 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                 }
                 try:
                     async with mqtt_client(
-                        getattr(main, "_mqtt_broker", "localhost"),
-                        getattr(main, "_mqtt_port", 1883),
+                        getattr(main_actor, "_mqtt_broker", "localhost"),
+                        getattr(main_actor, "_mqtt_port", 1883),
                     ) as client:
                         # Subscribe first, then publish — avoids race condition
                         await client.subscribe(reply_topic)
-                        await main._mqtt_publish(
+                        await main_actor._mqtt_publish(
                             f"agents/by-name/{target_name}/task",
                             payload,
                         )
@@ -618,7 +636,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                             async def _get_reply():
                                 async for msg in client.messages:
                                     try:
-                                        data = _json.loads(msg.payload.decode())
+                                        data = json.loads(msg.payload.decode())
                                         text_out = (
                                             data.get("result")
                                             or data.get("reply")
@@ -662,7 +680,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
     )
     if gen_fn:
         try:
-            async for chunk in gen_fn(text):
+            async for chunk in gen_fn(text):  # pylint: disable=not-callable
                 if isinstance(chunk, dict):
                     continue
                 await _chunk_fn(str(chunk))
@@ -759,7 +777,6 @@ async def handle_chat_mqtt(data: dict):
         return
 
     async def mqtt_reply(text: str):
-        global mqtt_client_ref
         if mqtt_client_ref:
             await mqtt_client_ref.publish(
                 f"agents/{IO_GATEWAY_ID}/chat",
@@ -780,8 +797,6 @@ async def handle_chat_mqtt(data: dict):
 
 
 async def ws_handler(request):
-    from aiohttp import WSMsgType, web
-
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     ws_clients.add(ws)
@@ -903,7 +918,7 @@ async def ws_handler(request):
 
     try:
         async for msg in ws:
-            if msg.type == WSMsgType.TEXT:
+            if msg.type == web.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
                     msg_type = data.get("type")
@@ -958,7 +973,7 @@ async def ws_handler(request):
 
                 except Exception as e:
                     logger.warning(f"[ws] Bad message: {e}")
-            elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
+            elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
                 break
     finally:
         ws_clients.discard(ws)
@@ -970,7 +985,6 @@ async def ws_handler(request):
 
 
 async def handle_command(cmd: dict):
-    global mqtt_client_ref
     command = cmd.get("command")
     agent_id = cmd.get("agent_id")
     if not command or not agent_id:
@@ -1242,7 +1256,7 @@ def _ensure_lifetime_loaded() -> None:
     try:
         stored = db.kv_get("_system", _LIFETIME_LEDGER_KEY)
         if isinstance(stored, dict):
-            for k, v in stored.items():
+            for k, v in stored.items():  # pyright: ignore[reportGeneralTypeIssues]
                 try:
                     _lifetime_cost[k] = float(v)
                 except (TypeError, ValueError):
@@ -1315,13 +1329,11 @@ def _historical_cost_usd(live_names: set) -> float:
     if db is None:
         return 0.0
     try:
-        import json as _json
-
         rows = db.conn.execute("SELECT value FROM kv_store WHERE key = '_final_cost'").fetchall()
         total = 0.0
         for row in rows:
             try:
-                entry = _json.loads(row[0])
+                entry = json.loads(row[0])
                 if entry.get("name") not in live_names:
                     total += entry.get("cost_usd", 0.0)
             except Exception:
@@ -1336,8 +1348,6 @@ def _historical_messages(live_names: set) -> int:
     if db is None:
         return 0
     try:
-        import json as _json
-
         rows = db.conn.execute(
             "SELECT agent, value FROM kv_store WHERE key = '_messages_processed'"
         ).fetchall()
@@ -1345,7 +1355,7 @@ def _historical_messages(live_names: set) -> int:
         for agent_name, value in rows:
             if agent_name not in live_names:
                 try:
-                    entry = _json.loads(value)
+                    entry = json.loads(value)
                     total += entry.get("count", 0)
                 except Exception:
                     pass
@@ -1566,7 +1576,8 @@ async def _check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
             if i < attempts - 1:
                 await asyncio.sleep(delay)
     logger.error(
-        f"[startup] MQTT broker {MQTT_BROKER}:{MQTT_PORT} unreachable after {attempts} tries — {last}"
+        f"[startup] MQTT broker {MQTT_BROKER}:{MQTT_PORT} "
+        f"unreachable after {attempts} tries — {last}"
     )
     return False
 
@@ -1639,8 +1650,6 @@ def _csp_policy(nonce: str) -> str:
 
 
 async def index_handler(request):
-    from aiohttp import web
-
     if request.path.endswith("favicon.svg"):
         for candidate in [FRONTEND_PUBLIC / "favicon.svg", FRONTEND_DIST / "favicon.svg"]:
             if candidate.exists():
@@ -1676,8 +1685,6 @@ async def index_handler(request):
 
 
 async def static_handler(request):
-    from aiohttp import web
-
     rel = request.match_info["path"]
 
     # Special case for favicon if it's requested at root
@@ -1717,9 +1724,11 @@ async def static_handler(request):
     raise web.HTTPNotFound()
 
 
-async def docs_handler(request):
-    from aiohttp import web
+async def docs_redirect(request):
+    return web.HTTPFound("/docs/")
 
+
+async def docs_handler(request):
     if not DOCS_SITE.is_dir():
         raise web.HTTPNotFound(
             reason="Docs not built — run: python3 scripts/build_docs.py  (or: make docs-build)"
@@ -1764,14 +1773,12 @@ def _final_cost_from_db(name: str):
     if db is None or not name:
         return None
     try:
-        import json as _json
-
         row = db.conn.execute(
             "SELECT value FROM kv_store WHERE agent=? AND key='_final_cost'",
             (name,),
         ).fetchone()
         if row:
-            return _json.loads(row[0]).get("cost_usd")
+            return json.loads(row[0]).get("cost_usd")
     except Exception:
         pass
     return None
@@ -1785,7 +1792,7 @@ def _actor_cost(actor, ag: dict):
     live_cost = getattr(actor, "total_cost_usd", None)
     if live_cost:
         return round(live_cost, 6)
-    return _final_cost_from_db(getattr(actor, "name", None))
+    return _final_cost_from_db(getattr(actor, "name", ""))
 
 
 def _best_cost(ag, actor, name: str) -> float:
@@ -1833,22 +1840,16 @@ def _best_msgs(ag, actor) -> int:
 
 
 async def health_handler(request):
-    from aiohttp import web
-
     return web.json_response({"status": "ok"})
 
 
 async def cost_handler(request):
-    from aiohttp import web
-
     from .agents.llm_agent import get_global_cost_info
 
     return web.json_response(get_global_cost_info())
 
 
 async def cost_limit_handler(request):
-    from aiohttp import web
-
     from .agents.llm_agent import set_cost_limit
 
     try:
@@ -1886,8 +1887,6 @@ async def cost_reset_handler(request):
 
 
 async def send_message_handler(request):
-    from aiohttp import web
-
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -1911,8 +1910,6 @@ async def send_message_handler(request):
 
 
 async def delete_actor_handler(request):
-    from aiohttp import web
-
     actor_id = request.match_info["actor_id"]
     # Resolve the dashboard's record first so remote agents (which aren't in
     # the local registry) can still be deleted via this endpoint. The earlier
@@ -1998,7 +1995,7 @@ async def reset_handler(request):
                     supervisor.release(actor.name)
             await asyncio.gather(*[actor.stop() for actor in stoppable], return_exceptions=True)
             await asyncio.gather(
-                *[registry.unregister(a.actor_id) for a in stoppable],
+                *[registry.unregister(a.actor_id) for a in stoppable if registry],
                 return_exceptions=True,
             )
 
@@ -2006,9 +2003,9 @@ async def reset_handler(request):
             # retained spawn directives that would otherwise replay on reconnect.
             # Harmless when there are no nodes.
             node_names = set(state["nodes"].keys())
-            _main = registry.find_by_name("main") if registry is not None else None
-            if _main is not None and hasattr(_main, "_get_spawn_registry"):
-                for cfg in (_main._get_spawn_registry() or {}).values():
+            main_actor = _find_main()
+            if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
+                for cfg in (main_actor._get_spawn_registry() or {}).values():
                     n = (cfg.get("node") or "").strip()
                     if n:
                         node_names.add(n)
@@ -2179,8 +2176,6 @@ async def reset_handler(request):
 
 
 async def pause_actor_handler(request):
-    from aiohttp import web
-
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -2198,8 +2193,6 @@ async def pause_actor_handler(request):
 
 
 async def resume_actor_handler(request):
-    from aiohttp import web
-
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -2217,8 +2210,6 @@ async def resume_actor_handler(request):
 
 
 async def actor_metrics_handler(request):
-    from aiohttp import web
-
     actor_id = request.match_info["actor_id"]
     ag = state["agents"].get(actor_id)
     actor = None
@@ -2246,8 +2237,6 @@ async def actor_metrics_handler(request):
 
 async def rest_chat_handler(request):
     """POST /chat — fire-and-forget a message to a named agent."""
-    from aiohttp import web
-
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
     try:
@@ -2309,8 +2298,6 @@ async def rest_chat_stop_handler(request):
 
 
 async def actors_handler(request):
-    from aiohttp import web
-
     # Prefer the live registry (injected by cli.py) — actor objects carry the
     # authoritative protected flag.  Fall back to MQTT-derived state dict when
     # the registry is unavailable (standalone monitor_server mode).
@@ -2326,10 +2313,14 @@ async def actors_handler(request):
             if _is_deleted(actor.actor_id):
                 continue
             ag = state["agents"].get(actor.actor_id, {})
+            mint = _agent_dids.get(actor.actor_id)
             result.append(
                 {
                     "id": actor.actor_id,
                     "name": actor.name,
+                    # Display-only identity labels (did is None when minting is off).
+                    "did": getattr(mint, "did", None),
+                    "handle": getattr(mint, "handle", None),
                     "state": ag.get("state", "unknown"),
                     "protected": bool(getattr(actor, "protected", False)),
                     "cpu": ag.get("cpu"),
@@ -2346,8 +2337,6 @@ async def actors_handler(request):
 
 
 async def actor_handler(request):
-    from aiohttp import web
-
     actor_id = request.match_info["actor_id"]
     ag = state["agents"].get(actor_id)
     if ag is None:
@@ -2372,13 +2361,11 @@ async def actor_history_handler(request):
         # Actor not in registry (deleted or name-only lookup) — read from SQLite.
         # actor_id might be a display name (e.g. "main") — try it directly.
         try:
-            import json as _json
-
             row = db.conn.execute(
                 "SELECT value FROM kv_store WHERE agent=? AND key='conversation_history'",
                 (actor_id,),
             ).fetchone()
-            history = _json.loads(row[0]) if row else []
+            history = json.loads(row[0]) if row else []
         except Exception:
             history = []
     else:
@@ -2397,8 +2384,6 @@ async def chat_log_handler(request):
       since   — Unix timestamp float, only return rows newer than this
       limit   — max rows to return (default 200, max 1000)
     """
-    from aiohttp import web
-
     if db is None:
         return web.json_response([], status=200)
     try:
@@ -2415,6 +2400,54 @@ async def chat_log_handler(request):
 _tts_voices_cache: list | None = None
 _ha_bridge_task: asyncio.Task | None = None
 _agent_bridge_tasks: list[asyncio.Task] = []
+
+# did:swid minting (built at app construction; None in standalone tests). The
+# bare name `registry` is the ACTOR registry — swid objects use swid_* names.
+swid_minter = None
+# actor_id → MintResult (did + handle), filled by _mint_agent_dids at startup
+# and served display-only on the per-agent records.
+_agent_dids: dict[str, Any] = {}
+
+
+async def _mint_agent_dids(_app=None) -> None:
+    """Mint (or look up) a did:swid for every local actor at startup.
+
+    Best-effort: minting failure must never abort server startup. With an empty
+    keystore passphrase the minter is disabled and agents get handles only.
+    """
+    if swid_minter is None or registry is None:
+        return
+    from .config import CONFIG
+
+    for actor in registry.all_actors():
+        try:
+            res = await swid_minter.ensure_did(
+                "agent", CONFIG.swid_namespace, actor.actor_id, name=actor.name
+            )
+            _agent_dids[actor.actor_id] = res
+        except Exception as exc:
+            logger.warning("[swid] minting DID for agent '%s' failed: %s", actor.name, exc)
+
+    # Link the minted identities onto the agents' Fuseki nodes (best-effort;
+    # no-op when Fuseki is unconfigured or minting is disabled → did is None).
+    links = {
+        actor_id: (res.did, res.handle)
+        for actor_id, res in _agent_dids.items()
+        if res.did is not None
+    }
+    if links and CONFIG.fuseki_url:
+        try:
+            from .fuseki import link_agent_dids
+
+            await link_agent_dids(
+                links,
+                CONFIG.fuseki_url,
+                CONFIG.fuseki_dataset,
+                CONFIG.fuseki_user,
+                CONFIG.fuseki_password,
+            )
+        except Exception as exc:
+            logger.warning("[swid] agent DID linkage failed: %s", exc)
 
 
 async def _start_ha_bridge(_app=None) -> None:
@@ -2449,6 +2482,10 @@ async def _start_ha_bridge(_app=None) -> None:
         fuseki_dataset=CONFIG.fuseki_dataset,
         fuseki_user=CONFIG.fuseki_user,
         fuseki_password=CONFIG.fuseki_password,
+        # Mint a did:swid per space/device during seed and link it on the graph
+        # node (no-op when minting is disabled — handles only, no triples).
+        swid_minter=swid_minter,
+        swid_namespace=CONFIG.swid_namespace,
     )
     _ha_bridge_task = asyncio.create_task(
         _run_with_retry(bridge.run, "HAFusekiBridge"),
@@ -2556,11 +2593,8 @@ async def _start_agent_bridges(_app=None) -> None:
 
 async def ha_sync_handler(request):
     """POST /api/ha/sync — cancel and restart the HA→Fuseki bridge immediately."""
-    from aiohttp import web
-
     from .config import CONFIG
 
-    global _ha_bridge_task
     if not CONFIG.ha_token:
         return web.json_response({"error": "HA_TOKEN not configured"}, status=400)
     if _ha_bridge_task and not _ha_bridge_task.done():
@@ -2571,36 +2605,6 @@ async def ha_sync_handler(request):
             pass
     await _start_ha_bridge()
     return web.json_response({"status": "restarted"})
-
-
-# ── SWID resolution (W3C DID-Resolution shape; pilot swid: scheme) ──────────
-# The routes themselves live in wactorz.core.swid.resolver.aiohttp_routes; the
-# monitor only supplies a per-request registry. Kept as one self-contained block.
-from contextlib import asynccontextmanager  # noqa: E402
-
-
-@asynccontextmanager
-async def _open_swid_registry():
-    """Yield a SWID registry for one request: Fuseki-backed, or empty when unset.
-
-    A short-lived Fuseki session per request (matching the pattern used
-    elsewhere). When no triplestore is configured, an empty in-memory registry
-    makes every lookup resolve to ``notFound`` — the desired behaviour.
-    """
-    import aiohttp as _aiohttp
-
-    from .config import CONFIG
-    from .core.swid import FusekiSwidRegistry, InMemoryRegistry
-    from .fuseki import FusekiClient
-
-    if not CONFIG.fuseki_url:
-        yield InMemoryRegistry()
-        return
-    auth = _aiohttp.BasicAuth(CONFIG.fuseki_user, CONFIG.fuseki_password)
-    async with _aiohttp.ClientSession() as session:
-        yield FusekiSwidRegistry(
-            FusekiClient(CONFIG.fuseki_url, CONFIG.fuseki_dataset, session, auth)
-        )
 
 
 async def _warm_tts_voices(_app=None) -> None:
@@ -2620,10 +2624,8 @@ async def _warm_tts_voices(_app=None) -> None:
 
 async def tts_voices_handler(request):
     """GET /api/tts/voices — list available edge-tts voices."""
-    from aiohttp import web
-
     try:
-        import edge_tts as _  # noqa: F401 — check installed
+        import edge_tts  # noqa: F401  # pylint: disable=unused-import  # pyright: ignore[reportUnusedImport]
     except ImportError:
         return web.json_response([])
     if _tts_voices_cache is None:
@@ -2637,10 +2639,6 @@ async def tts_handler(request):
     Returns audio/mpeg. Falls back 503 if edge-tts is not installed so the
     frontend can transparently fall back to the Web Speech API.
     """
-    import os
-
-    from aiohttp import web
-
     try:
         import edge_tts
     except ImportError:
@@ -2651,8 +2649,6 @@ async def tts_handler(request):
         return web.Response(status=400, text="text param required")
 
     # Mirror TTSManager: strip code blocks, cap at 300 chars
-    import re
-
     text = re.sub(r"```[\s\S]*?```", "code block", text)[:300]
 
     default_voice = os.environ.get("TTS_VOICE", "en-US-JennyNeural")
@@ -2663,7 +2659,9 @@ async def tts_handler(request):
         chunks: list[bytes] = []
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
-                chunks.append(chunk["data"])
+                chunk_data = chunk.get("data")
+                if chunk_data:
+                    chunks.append(chunk_data)
         audio = b"".join(chunks)
         return web.Response(
             body=audio,
@@ -2676,8 +2674,6 @@ async def tts_handler(request):
 
 async def config_handler(request):
     """Expose non-secret runtime config so the frontend can seed its defaults."""
-    from aiohttp import web
-
     from .config import CONFIG
 
     # The /ws proxy is served by *this* server, so point the frontend at the
@@ -2721,8 +2717,6 @@ async def feed_handler(request):
     where nothing has been written yet) so existing users still see their
     pre-upgrade history on first launch.
     """
-    from aiohttp import web
-
     if db is None:
         return web.json_response([])
     try:
@@ -2756,8 +2750,6 @@ async def feed_handler(request):
         # until new chat turns start populating chat_log. Synthesises a
         # timestamp by anchoring the last entry to "now" and walking backwards
         # in 1-second steps, so at least entries are ordered consistently.
-        import json as _json
-
         kv_rows = db.conn.execute(
             "SELECT agent, value FROM kv_store WHERE key='conversation_history'"
         ).fetchall()
@@ -2765,7 +2757,7 @@ async def feed_handler(request):
         now = time.time()
         for agent_name, value in kv_rows:
             try:
-                history = _json.loads(value)
+                history = json.loads(value)
                 visible = [
                     m
                     for m in history
@@ -2798,8 +2790,6 @@ async def feed_handler(request):
 
 
 async def main(exit_on_failure: bool = False):
-    from aiohttp import web
-
     # ... (startup checks remain same) ...
     mqtt_ok = await _check_mqtt()
     port_ok = await _check_ws_port()
@@ -2891,11 +2881,21 @@ async def main(exit_on_failure: bool = False):
 
     app.router.add_post("/api/fuseki/{dataset}/sparql", fuseki_proxy_handler)
     app.router.add_post("/api/fuseki/{dataset}/update", fuseki_proxy_handler)
-    # SWID resolver (W3C DID Resolution): /1.0/identifiers/{swid}[/profile].
-    from .core.swid import aiohttp_routes as _swid_routes
 
-    app.add_routes(_swid_routes(_open_swid_registry))
-    app.router.add_get("/docs", lambda r: web.HTTPFound("/docs/"))
+    # did:swid — DIF resolution over the file-backed CEL registry, plus the
+    # minting service (disabled when SWID_KEYSTORE_PASSPHRASE is empty).
+    from .config import CONFIG as _cfg
+    from .core.swid import FileSWIDRegistry, SwidMinter, swid_routes
+
+    global swid_minter
+    swid_registry = FileSWIDRegistry(Path(_cfg.swid_data_dir))
+    swid_minter = SwidMinter(
+        Path(_cfg.swid_data_dir), _cfg.swid_keystore_passphrase, _cfg.swid_hstp_base
+    )
+    app.add_routes(swid_routes(swid_registry))
+    app.on_startup.append(_mint_agent_dids)
+
+    app.router.add_get("/docs", docs_redirect)
     app.router.add_get("/docs/", docs_handler)
     app.router.add_get("/docs/{path:.+}", docs_handler)
     app.router.add_get("/{path:.+}", static_handler)
@@ -2945,7 +2945,6 @@ def cli_main() -> None:
 
 if __name__ == "__main__":
     import argparse
-    import os
 
     parser = argparse.ArgumentParser(description="Wactorz Monitor Server")
     parser.add_argument("--broker", default=os.getenv("WACTORZ_BROKER", "localhost"))
@@ -2954,10 +2953,10 @@ if __name__ == "__main__":
     parser.add_argument("--ws-port", type=int, default=int(os.getenv("MONITOR_PORT", "8888")))
     args = parser.parse_args()
 
-    thismodule = sys.modules[__name__]
-    thismodule.MQTT_BROKER = args.broker
-    thismodule.MQTT_PORT = args.mqtt_port
-    thismodule.MQTT_WS_PORT = args.mqtt_ws_port
-    thismodule.WS_PORT = args.ws_port
+    this_module = sys.modules[__name__]
+    this_module.MQTT_BROKER = args.broker  # pyright: ignore[reportAttributeAccessIssue]
+    this_module.MQTT_PORT = args.mqtt_port  # pyright: ignore[reportAttributeAccessIssue]
+    this_module.MQTT_WS_PORT = args.mqtt_ws_port  # pyright: ignore[reportAttributeAccessIssue]
+    this_module.WS_PORT = args.ws_port  # pyright: ignore[reportAttributeAccessIssue]
 
     cli_main()

@@ -2297,7 +2297,7 @@ async def actors_handler(request: web.Request) -> Response:
     # but present via MQTT heartbeat with a "node" field is a remote agent and
     # must NOT be evicted by the 15-second REST reconcile cycle.
     if registry is not None:
-        from wactorz.ext import contract
+        from wactorz.core import contract
 
         id_map = request.app.get(contract.AGENT_IDENTITY) or {}
         result = []
@@ -2400,7 +2400,7 @@ async def _start_ha_bridge(app=None) -> None:
     so device/space graph nodes get linked; absent ⇒ handles-only, no triples.
     """
     global _ha_bridge_task
-    from wactorz.ext import contract
+    from wactorz.core import contract
 
     from .config import CONFIG
 
@@ -2540,6 +2540,44 @@ async def _start_agent_bridges(_app=None) -> None:
         CONFIG.fuseki_url,
         CONFIG.fuseki_dataset,
     )
+
+
+async def _link_agent_dids_to_graph(app: web.Application) -> None:
+    """Attach each agent's minted DID/handle onto its urn:wactorz:agents node.
+
+    Runs last (registered after setup_all), so both the swid extension's mint
+    hook (populates AGENT_IDENTITY) and _start_agent_bridges (seeds the agent
+    nodes) have already completed. Mirrors the device/space linkage the HA
+    bridge does inline. Best-effort and a no-op when minting is off (did is
+    None) or Fuseki is unconfigured.
+
+    TODO(ext/fuseki): when fuseki becomes an extension, this moves into its
+    setup() as its own on_startup hook — the consumer (fuseki) reads the
+    producer's (swid) AGENT_IDENTITY via the contract, so core keeps no wiring.
+    """
+    from .config import CONFIG
+    from .core import contract
+
+    if not CONFIG.fuseki_url:
+        return
+    id_map = app.get(contract.AGENT_IDENTITY) or {}
+    links = {
+        actor_id: (rec.did, rec.handle) for actor_id, rec in id_map.items() if rec.did is not None
+    }
+    if not links:
+        return
+    try:
+        from .fuseki import link_agent_dids
+
+        await link_agent_dids(
+            links,
+            CONFIG.fuseki_url,
+            CONFIG.fuseki_dataset,
+            CONFIG.fuseki_user,
+            CONFIG.fuseki_password,
+        )
+    except Exception as exc:
+        logger.warning("[swid] agent DID → graph linkage failed: %s", exc)
 
 
 async def ha_sync_handler(request: web.Request) -> Response:
@@ -2775,7 +2813,7 @@ async def main(exit_on_failure: bool = False):
             pass
         return response
 
-    from wactorz.ext import contract
+    from wactorz.core import contract
 
     app = web.Application(middlewares=[_cors_middleware])
     app[contract.ACTOR_REGISTRY] = registry
@@ -2842,6 +2880,10 @@ async def main(exit_on_failure: bool = False):
     from .ext import setup_all
 
     setup_all(app)
+    # Registered after setup_all so it runs after the swid mint hook (which fills
+    # AGENT_IDENTITY) and after the agent-registry seed — then links agent DIDs
+    # onto their graph nodes, matching device/space linkage.
+    app.on_startup.append(_link_agent_dids_to_graph)
 
     app.router.add_get("/docs", docs_redirect)
     app.router.add_get("/docs/", docs_handler)

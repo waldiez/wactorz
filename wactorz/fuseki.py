@@ -59,11 +59,14 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlparse
 
 import aiohttp
 import aiomqtt
+
+if TYPE_CHECKING:
+    from wactorz.core.contract import IdentityMinter
 
 from wactorz.core.integrations.home_assistant.ha_web_socket_client import (
     HAWebSocketClient,
@@ -1042,7 +1045,7 @@ class HAFusekiBridge:
         fuseki_user: str = "",
         fuseki_password: str = "",
         domains: frozenset[str] | None = None,
-        swid_minter: Any = None,
+        swid_minter: IdentityMinter | None = None,
         swid_namespace: str = "home",
     ) -> None:
         self._ha_url = ha_url.rstrip("/")
@@ -1055,10 +1058,11 @@ class HAFusekiBridge:
         self._domains: frozenset[str] = domains if domains is not None else DEFAULT_DOMAINS
         # area_id → area name lookup built during seed
         self._area_names: dict[str, str] = {}
-        # Optional SwidMinter: mints a did:swid per space/device during seed and
-        # links it on the graph node (swidns:did / swidns:handle). Duck-typed so
-        # fuseki.py needs no import from core.swid; None ⇒ no identity triples.
-        self._swid_minter = swid_minter
+        # Optional identity minter (the swid extension supplies one): mints a
+        # did:swid per space/device during seed and links it on the graph node
+        # (swidns:did / swidns:handle). Typed against the core IdentityMinter
+        # port, not the concrete impl. None -> no identity triples.
+        self._swid_minter: IdentityMinter | None = swid_minter
         self._swid_namespace = swid_namespace
 
     async def _mint(

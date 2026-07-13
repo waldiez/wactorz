@@ -2,7 +2,7 @@
 
 An additive extension (``wactorz/ext/``): its ``setup`` provides the minting
 service and the per-agent identity map on the aiohttp app (via the keys in
-:mod:`wactorz.ext.contract`), mounts the DIF resolver routes, and registers a
+:mod:`wactorz.core.contract`), mounts the DIF resolver routes, and registers a
 startup hook that mints a DID for every local actor. Nothing here imports
 ``monitor_server`` — the actor registry arrives through app-state.
 
@@ -19,8 +19,8 @@ from typing import cast
 
 from aiohttp.web import Application
 
+from wactorz.core import contract
 from wactorz.core.registry import ActorRegistry
-from wactorz.ext import contract
 
 from .registry import FileSWIDRegistry
 from .routes import swid_routes

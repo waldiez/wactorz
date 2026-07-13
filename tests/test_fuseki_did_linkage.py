@@ -7,6 +7,13 @@ minter — enabled, disabled (did=None), and failing. No network involved.
 
 # pylint: disable=missing-function-docstring,protected-access
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+from aiohttp import web
+
+import wactorz.monitor_server as ms
+from wactorz.core import contract
 from wactorz.fuseki import TTL_PREFIXES, HAFusekiBridge, _area_body, _device_body
 
 DID = "did:swid:zQmcn8EtYXq3CETZxfom5FJzHJYy2BBchWMGbAB5NnvyKpX"
@@ -100,3 +107,55 @@ async def test_bridge_mint_disabled_minter_passes_none_did_through():
     did, handle = await _bridge(_StubMinter(did=None))._mint("space", "kitchen", "Kitchen")
     assert did is None
     assert handle == HANDLE  # handle still flows (label-only mode)
+
+
+# ── agent DID → graph linkage hook (monitor_server) ──────────────────────────
+
+_FUSEKI_CFG = SimpleNamespace(
+    fuseki_url="http://fuseki:3030",
+    fuseki_dataset="wactorz",
+    fuseki_user="admin",
+    fuseki_password="admin",
+)
+
+
+async def test_link_hook_links_only_minted_agent_dids(monkeypatch):
+    app = web.Application()
+    app[contract.AGENT_IDENTITY] = {
+        "main": SimpleNamespace(did=DID, handle="swid:agent:home:main-aa11"),
+        "handles-only": SimpleNamespace(did=None, handle="swid:agent:home:x-bb22"),
+    }
+    monkeypatch.setattr("wactorz.config.CONFIG", _FUSEKI_CFG)
+    fake = AsyncMock()
+    monkeypatch.setattr("wactorz.fuseki.link_agent_dids", fake)
+
+    await ms._link_agent_dids_to_graph(app)
+
+    fake.assert_awaited_once()
+    links = fake.await_args.args[0]
+    # did=None agent is excluded; only the minted one is linked.
+    assert links == {"main": (DID, "swid:agent:home:main-aa11")}
+
+
+async def test_link_hook_noop_without_fuseki(monkeypatch):
+    app = web.Application()
+    app[contract.AGENT_IDENTITY] = {"main": SimpleNamespace(did=DID, handle="h")}
+    monkeypatch.setattr("wactorz.config.CONFIG", SimpleNamespace(fuseki_url=""))
+    fake = AsyncMock()
+    monkeypatch.setattr("wactorz.fuseki.link_agent_dids", fake)
+
+    await ms._link_agent_dids_to_graph(app)
+
+    fake.assert_not_awaited()
+
+
+async def test_link_hook_noop_when_no_dids_minted(monkeypatch):
+    app = web.Application()
+    app[contract.AGENT_IDENTITY] = {"x": SimpleNamespace(did=None, handle="h")}
+    monkeypatch.setattr("wactorz.config.CONFIG", _FUSEKI_CFG)
+    fake = AsyncMock()
+    monkeypatch.setattr("wactorz.fuseki.link_agent_dids", fake)
+
+    await ms._link_agent_dids_to_graph(app)
+
+    fake.assert_not_awaited()

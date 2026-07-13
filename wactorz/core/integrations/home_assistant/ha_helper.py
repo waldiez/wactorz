@@ -13,7 +13,6 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-from ...handles import make_handle  # noqa: E402
 from .ha_web_socket_client import HAWebSocketClient  # noqa: E402
 
 
@@ -29,8 +28,10 @@ def generate_swid(
     fingerprint covers the stable HA device registry ``id`` only, so the handle
     is room-independent: location is a graph relationship, not part of the id.
     """
+    from wactorz.core.handles import make_handle
+
     if namespace is None:
-        from ....config import CONFIG
+        from wactorz.config import CONFIG
 
         namespace = CONFIG.swid_namespace
     return make_handle("device", namespace, device_id, name=name)

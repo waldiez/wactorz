@@ -2886,6 +2886,13 @@ async def main(exit_on_failure: bool = False):
     app.add_routes(swid_routes(swid_registry, swid_minter))
     app.on_startup.append(_mint_agent_dids)
 
+    # Extensions (wactorz/ext/): additive features register their own routes
+    # and startup/teardown hooks here. Must run BEFORE the docs/static
+    # catch-alls below, or the /{path:.+} route shadows extension routes.
+    from .ext import setup_all
+
+    setup_all(app)
+
     app.router.add_get("/docs", docs_redirect)
     app.router.add_get("/docs/", docs_handler)
     app.router.add_get("/docs/{path:.+}", docs_handler)

@@ -2,10 +2,17 @@
 Supported: CLI (terminal), Discord, WhatsApp (via Twilio), REST.
 """
 
+# pyright: reportMissingImports=false
+
 import asyncio
+import json
 import logging
 import os
+import socket
+import uuid
 from typing import TYPE_CHECKING, Any
+
+from aiohttp import web
 
 from ..core.mqtt import mqtt_client
 from ..monitoring import PrometheusMonitor
@@ -23,6 +30,8 @@ REMOTE_RUNNER_PATH = os.path.normpath(os.path.join(_HERE, "..", "remote_runner.p
 # ─── CLI Interface ──────────────────────────────────────────────────────────
 
 
+# pylint: disable=protected-access,too-many-statements,too-many-branches,too-few-public-methods
+# pylint: disable=line-too-long,too-many-locals,too-many-return-statements,broad-exception-caught
 class CLIInterface:
     """Terminal chat interface.
 
@@ -57,7 +66,6 @@ class CLIInterface:
 """)
 
     # ── Agent routing ──────────────────────────────────────────────────────
-
     async def _get_agent_response(self, agent_name: str, message: str) -> str:
         registry = self.agent._registry
         if registry is None:
@@ -72,12 +80,13 @@ class CLIInterface:
             # Case 1: real LLMAgent — has self.llm and chat() backed by it
             # Detect by presence of _conversation_history (LLMAgent-specific)
             if hasattr(target, "_conversation_history") and hasattr(target, "chat"):
-                return await target.chat(message)
+                return await target.chat(message)  # pyright: ignore[reportAttributeAccessIssue]
 
             # Case 2: DynamicAgent with a handle_task function
-            if hasattr(target, "_fn_handle_task") and target._fn_handle_task:
-                result = await target._fn_handle_task(
-                    target._api, {"message": message, "text": message, "query": message}
+            if hasattr(target, "_fn_handle_task") and target._fn_handle_task:  # pyright: ignore[reportAttributeAccessIssue]
+                result = await target._fn_handle_task(  # pyright: ignore[reportAttributeAccessIssue]
+                    target._api,
+                    {"message": message, "text": message, "query": message},  # pyright: ignore[reportAttributeAccessIssue]
                 )
                 if isinstance(result, dict):
                     for key in ("reply", "answer", "result", "text", "response"):
@@ -87,14 +96,14 @@ class CLIInterface:
                 return str(result) if result else f"[{agent_name}] No response"
 
             # Case 3: DynamicAgent with llm but no handle_task — direct llm call
-            if hasattr(target, "_llm_provider") and target._llm_provider:
-                return await target._api.llm.chat(message)
+            if hasattr(target, "_llm_provider") and target._llm_provider:  # pyright: ignore[reportAttributeAccessIssue]
+                return await target._api.llm.chat(message)  # pyright: ignore[reportAttributeAccessIssue]
 
             # Case 4: any agent with a chat() method
             if hasattr(target, "chat"):
-                return await target.chat(message)
+                return await target.chat(message)  # pyright: ignore[reportAttributeAccessIssue]
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             return f"[error] {agent_name} failed: {e}"
 
         # Fallback: delegate via message passing
@@ -123,15 +132,12 @@ class CLIInterface:
                 return f"[error] Agent '{agent_name}' not found. Remote agents: {', '.join(known)}"
             return f"[error] Agent '{agent_name}' not found. No remote nodes connected."
 
-        import json
-        import uuid as _uuid
-
         try:
-            import aiomqtt  # noqa: F401
+            import aiomqtt  # noqa: F401  # pylint: disable=unused-import,import-outside-toplevel  # pyright: ignore[reportUnusedImport]
         except ImportError:
             return "[error] aiomqtt not installed"
 
-        reply_topic = f"main/reply/{main.actor_id}/{_uuid.uuid4().hex[:8]}"
+        reply_topic = f"main/reply/{main.actor_id}/{uuid.uuid4().hex[:8]}"
         result_holder = []
 
         async def _listen_for_reply():
@@ -146,8 +152,6 @@ class CLIInterface:
                         return
             except Exception as e:
                 result_holder.append({"error": str(e)})
-
-        import asyncio
 
         listener = asyncio.create_task(_listen_for_reply())
         await asyncio.sleep(0.15)  # let subscriber connect first
@@ -191,8 +195,6 @@ class CLIInterface:
         2. Scan  — scan local subnet for SSH (port 22)
         3. Manual — ask user
         """
-        import socket
-
         print(f"\n[discover] Searching for '{node_name}' on the network...")
 
         # 1. mDNS
@@ -334,7 +336,8 @@ class CLIInterface:
 
     # ── Main loop ──────────────────────────────────────────────────────────
 
-    async def run(self):
+    async def run(self) -> None:
+        """Start the app."""
         print("\nWactorz CLI | Type /help for commands\n")
         while True:
             try:
@@ -491,7 +494,7 @@ class CLIInterface:
                     # Stream if target is an LLMAgent with chat_stream support
                     if target and hasattr(target, "chat_stream"):
                         print(f"\n@{agent_name}: ", end="", flush=True)
-                        async for chunk in target.chat_stream(message):
+                        async for chunk in target.chat_stream(message):  # pyright: ignore[reportAttributeAccessIssue]
                             if not isinstance(chunk, dict):
                                 print(chunk, end="", flush=True)
                         print("\n")
@@ -529,14 +532,15 @@ class DiscordInterface:
     Set DISCORD_BOT_TOKEN in environment.
     """
 
-    def __init__(self, main_actor: "MainActor", token: str, channel_id: int = None):
+    def __init__(self, main_actor: "MainActor", token: str, channel_id: int | None = None) -> None:
         self.agent = main_actor
         self.token = token
         self.channel_id = channel_id
 
-    async def run(self):
+    async def run(self) -> None:
+        """Start the app."""
         try:
-            import discord
+            import discord  # pylint: disable=import-outside-toplevel
         except ImportError:
             logger.error("discord.py not installed. Run: pip install discord.py")
             return
@@ -547,10 +551,12 @@ class DiscordInterface:
 
         @client.event
         async def on_ready():
-            logger.info(f"[Discord] Logged in as {client.user}")
+            logger.info("[Discord] Logged in as %s", client.user)
 
         @client.event
         async def on_message(message):
+            if not client.user:
+                return
             if message.author == client.user:
                 return
             if self.channel_id and message.channel.id != self.channel_id:
@@ -575,12 +581,16 @@ class DiscordInterface:
 
 
 class TelegramInterface:
+    """Telegram interface. requires: pip install python-telegram-bot."""
+
     def __init__(self, main_actor: "MainActor", token: str, allowed_user_id: int | None = None):
         self.agent = main_actor
         self.token = token
         self.allowed_user_id = allowed_user_id
 
-    async def run(self):
+    async def run(self) -> None:
+        """Start the app."""
+        # pylint: disable=import-outside-toplevel
         try:
             from telegram import Update
             from telegram.constants import ChatAction
@@ -595,12 +605,13 @@ class TelegramInterface:
             logger.error("python-telegram-bot not installed. Run: pip install python-telegram-bot")
             return
 
-        async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  # pylint: disable=unused-argument
             user = update.effective_user
-            await update.message.reply_text(
-                f"Hi {user.first_name if user else ''}. Telegram interface is online.\n"
-                f"Your Telegram user id is: {user.id if user else 'unknown'}"
-            )
+            if update.message:
+                await update.message.reply_text(
+                    f"Hi {user.first_name if user else ''}. Telegram interface is online.\n"
+                    f"Your Telegram user id is: {user.id if user else 'unknown'}"
+                )
 
         async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not update.message or not update.message.text:
@@ -622,9 +633,10 @@ class TelegramInterface:
                 return
 
             text = update.message.text.strip()
-            await context.bot.send_chat_action(
-                chat_id=update.effective_chat.id, action=ChatAction.TYPING
-            )
+            if update.effective_chat:
+                await context.bot.send_chat_action(
+                    chat_id=update.effective_chat.id, action=ChatAction.TYPING
+                )
 
             response = await self.agent.process_user_input(text)
             response = response or "(no response)"
@@ -640,7 +652,8 @@ class TelegramInterface:
         logger.info("[Telegram] Bot starting (polling)...")
         await app.initialize()
         await app.start()
-        await app.updater.start_polling()
+        if app.updater:
+            await app.updater.start_polling()
         await asyncio.Event().wait()
 
 
@@ -667,9 +680,9 @@ class WhatsAppInterface:
         self.from_number = from_number
         self.port = port
 
-    async def run(self):
+    async def run(self) -> None:
+        """Start the app."""
         try:
-            from aiohttp import web
             from twilio.rest import Client as TwilioClient
         except ImportError:
             logger.error("Missing deps. Run: pip install aiohttp twilio")
@@ -681,7 +694,8 @@ class WhatsAppInterface:
             data = await request.post()
             user_msg = data.get("Body", "")
             from_number = data.get("From", "")
-            logger.info(f"[WhatsApp] Message from {from_number}: {user_msg[:60]}")
+            msg = f"[WhatsApp] Message from {from_number}: {user_msg[:60]}"
+            logger.info(msg)
 
             response_text = await self.agent.process_user_input(user_msg)
 
@@ -698,7 +712,7 @@ class WhatsAppInterface:
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", self.port)
         await site.start()
-        logger.info(f"[WhatsApp] Webhook server running on port {self.port}")
+        logger.info("[WhatsApp] Webhook server running on port %s", self.port)
         await asyncio.Event().wait()  # Run forever
 
 

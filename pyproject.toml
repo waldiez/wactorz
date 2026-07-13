@@ -49,6 +49,7 @@ openai    = ["openai>=2.29.0"]
 google    = ["google-genai>=1.0.0"]
 discord   = ["discord.py>=2.7.1"]
 whatsapp  = ["twilio>=9.10.4"]
+telegram =  ["python-telegram-bot>=22.8"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
 # Sinergym simulation integration (heavy — EnergyPlus/RL). NOT in `all`.
 sinergym  = [

@@ -9,8 +9,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 > (server container, HA→Fuseki bridge, `/api/fuseki` proxy, Graph tab), extra
 > agents, and the `sinergym/` + `models/` experiment trees.
 
+### Added
+
+- **Real `did:swid` identities (SWF-STD-5)** via the `waldiez-swid` library. Agents, HA devices,
+  and areas get a key-bound DID (Ed25519 key in an encrypted keystore, CEL log in a file registry)
+  plus a readable handle carried in the DID document's `alsoKnownAs`; DIDs resolve at
+  `GET /1.0/identifiers/{did}` and are linked on the Fuseki graph nodes (`swidns:did`/`swidns:handle`).
+  Minting is enabled by setting `SWID_KEYSTORE_PASSPHRASE` (empty = handles only). See
+  `SWID_DATA_DIR` / `SWID_HSTP_BASE` in `.env.template`.
+
 ### Changed
 
+- **Device `swid` labels are now readable handles** (`swid:device:<ns>:<slug>-<fp>`), replacing the
+  pilot `did:swid:home:<area>:<name>-<hash>` format that squatted the official `did:swid:` namespace.
+  Handles are room-independent: a device that moves rooms keeps its handle.
 - **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant
   activity now stream to the browser as server-push over `/ws`; the dashboard no longer opens its own
   MQTT connection to the broker, and the browser receives no broker credentials.

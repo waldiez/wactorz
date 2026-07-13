@@ -94,6 +94,7 @@ TTL_PREFIXES = """\
 @prefix wactprop: <urn:wactorz:prop:> .
 @prefix wactchan: <urn:wactorz:channel:> .
 @prefix haarea:   <urn:ha:area:> .
+@prefix swidns:   <https://spatialwebfoundation.org/ns/swid#> .
 """
 
 # Provenance IRIs
@@ -281,8 +282,12 @@ def _bridge_agent_body() -> str:
     )
 
 
-def _area_body(area: dict[str, Any]) -> str:
-    """RDF triples for one HA area (room) using BOT ontology."""
+def _area_body(area: dict[str, Any], *, did: str | None = None, handle: str | None = None) -> str:
+    """RDF triples for one HA area (room) using BOT ontology.
+
+    ``did``/``handle`` link the node to its Spatial Web identity when minted
+    (graph node → ``swidns:did`` → resolvable via ``/1.0/identifiers/{did}``).
+    """
     area_id = area.get("area_id", "")
     name = area.get("name", area_id)
     aliases = area.get("aliases", [])
@@ -298,6 +303,10 @@ def _area_body(area: dict[str, Any]) -> str:
         lines.append(f'  syn:icon "{_esc(icon)}" ;')
     for alias in aliases:
         lines.append(f'  syn:alias "{_esc(str(alias))}" ;')
+    if did:
+        lines.append(f'  swidns:did "{_esc(did)}" ;')
+    if handle:
+        lines.append(f'  swidns:handle "{_esc(handle)}" ;')
     lines.append(f"  prov:wasAttributedTo {BRIDGE_AGENT_IRI} .")
     lines.append("")
     return "\n".join(lines)
@@ -308,8 +317,14 @@ def _device_body(
     state_obj: dict[str, Any],
     area_id: str | None = None,
     area_name: str | None = None,
+    *,
+    did: str | None = None,
+    handle: str | None = None,
 ) -> str:
-    """Catalog entry for one HA entity (no prefix block)."""
+    """Catalog entry for one HA entity (no prefix block).
+
+    ``did``/``handle`` link the node to its Spatial Web identity when minted.
+    """
     domain = entity_id.split(".")[0]
     attrs = state_obj.get("attributes") or {}
     friendly = attrs.get("friendly_name") or entity_id
@@ -347,6 +362,12 @@ def _device_body(
         lines.append(f"  syn:hasArea {_area_iri(area_id)} ;")
     if area_name:
         lines.append(f'  syn:areaName "{_esc(area_name)}" ;')
+
+    # Spatial Web identity linkage
+    if did:
+        lines.append(f'  swidns:did "{_esc(did)}" ;')
+    if handle:
+        lines.append(f'  swidns:handle "{_esc(handle)}" ;')
 
     lines.append(f"  prov:wasAttributedTo {BRIDGE_AGENT_IRI} .")
     lines.append("")
@@ -1021,6 +1042,8 @@ class HAFusekiBridge:
         fuseki_user: str = "",
         fuseki_password: str = "",
         domains: frozenset[str] | None = None,
+        swid_minter: Any = None,
+        swid_namespace: str = "home",
     ) -> None:
         self._ha_url = ha_url.rstrip("/")
         self._ha_token = ha_token
@@ -1032,6 +1055,26 @@ class HAFusekiBridge:
         self._domains: frozenset[str] = domains if domains is not None else DEFAULT_DOMAINS
         # area_id → area name lookup built during seed
         self._area_names: dict[str, str] = {}
+        # Optional SwidMinter: mints a did:swid per space/device during seed and
+        # links it on the graph node (swidns:did / swidns:handle). Duck-typed so
+        # fuseki.py needs no import from core.swid; None ⇒ no identity triples.
+        self._swid_minter = swid_minter
+        self._swid_namespace = swid_namespace
+
+    async def _mint(
+        self, entity_class: str, natural_key: str, name: str | None
+    ) -> tuple[str | None, str | None]:
+        """Best-effort DID/handle for a graph node; (None, None) without a minter."""
+        if self._swid_minter is None:
+            return None, None
+        try:
+            res = await self._swid_minter.ensure_did(
+                entity_class, self._swid_namespace, natural_key, name=name
+            )
+            return res.did, res.handle
+        except Exception as exc:
+            log.warning("SWID minting for %s '%s' failed: %s", entity_class, natural_key, exc)
+            return None, None
 
     def _ws_url(self) -> str:
         parsed = urlparse(self._ha_url)
@@ -1173,7 +1216,8 @@ class HAFusekiBridge:
         if areas:
             area_body_parts = [_bridge_agent_body()]
             for area in areas:
-                area_body_parts.append(_area_body(area))
+                did, handle = await self._mint("space", area.get("area_id", ""), area.get("name"))
+                area_body_parts.append(_area_body(area, did=did, handle=handle))
             try:
                 await fuseki.replace_graph(GRAPH_AREAS, _ttl("\n".join(area_body_parts)))
                 log.info("Areas graph replaced (%d areas).", len(areas))
@@ -1193,7 +1237,11 @@ class HAFusekiBridge:
             eid = s["entity_id"]
             area_id = entity_area_map.get(eid)
             area_name = self._area_names.get(area_id, "") if area_id else None
-            catalog_body_parts.append(_device_body(eid, s, area_id=area_id, area_name=area_name))
+            friendly = (s.get("attributes") or {}).get("friendly_name") or eid
+            did, handle = await self._mint("device", eid, friendly)
+            catalog_body_parts.append(
+                _device_body(eid, s, area_id=area_id, area_name=area_name, did=did, handle=handle)
+            )
 
         try:
             await fuseki.replace_graph(GRAPH_DEVICES, _ttl("\n".join(catalog_body_parts)))
@@ -1302,6 +1350,40 @@ async def seed_agent_registry(
             )
     except Exception as exc:
         log.warning("Agent registry seed failed (Fuseki not ready?): %s", exc)
+
+
+async def link_agent_dids(
+    links: dict[str, tuple[str, str]],
+    fuseki_url: str,
+    fuseki_dataset: str,
+    fuseki_user: str = "",
+    fuseki_password: str = "",
+) -> None:
+    """Attach ``swidns:did`` / ``swidns:handle`` to agent nodes in urn:wactorz:agents.
+
+    ``links`` maps actor_id → (did, handle). Nodes are keyed like
+    ``upsert_agent_registry`` (``wact:{actor_id}``) so the identity lands on the
+    same node the registry/manifest bridges write. Idempotent: identical triples
+    dedupe in RDF. Best-effort — failures are logged, never raised.
+    """
+    if not links or not fuseki_url or not fuseki_dataset:
+        return
+    body_parts: list[str] = []
+    for actor_id, (did, handle) in links.items():
+        body_parts.append(
+            f"wact:{_safe(actor_id)}\n"
+            f'  swidns:did "{_esc(did)}" ;\n'
+            f'  swidns:handle "{_esc(handle)}" .\n'
+        )
+    auth = aiohttp.BasicAuth(fuseki_user, fuseki_password) if fuseki_user else None
+    connector = aiohttp.TCPConnector(ssl=False, force_close=True)
+    try:
+        async with aiohttp.ClientSession(connector=connector) as http:
+            fuseki = FusekiClient(fuseki_url, fuseki_dataset, http, auth)
+            await fuseki.append_graph(GRAPH_AGENTS, _ttl("\n".join(body_parts)))
+            log.info("Agent DID linkage written: %d agents → Fuseki", len(links))
+    except Exception as exc:
+        log.warning("Agent DID linkage failed (Fuseki not ready?): %s", exc)
 
 
 # ── Agent manifest bridge ────────────────────────────────────────────────────

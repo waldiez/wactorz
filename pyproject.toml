@@ -120,6 +120,9 @@ Documentation = "https://docs.waldiez.io/wactorz/"
 [tool.hatch.version]
 path = "wactorz/_version.py"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 # ── Build hook — auto-builds frontend if dist is stale ────────────────────────
 [tool.hatch.build.hooks.custom]
 path = "scripts/hooks/build_hook.py"

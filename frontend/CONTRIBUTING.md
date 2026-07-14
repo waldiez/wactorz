@@ -36,6 +36,8 @@ TTS (`src/ext/tts/`) is the reference implementation. When adding one:
       `src/events.ts`) — never imports from other extensions or `ui/` directly
 - [ ] Config fields (e.g. `available`, `url`) are added to the whitelist in
       `config/serverConfig.ts` and read from `safeStorage`
+- [ ] Custom icons registered via `registerIcon()` from `ui/dashboard/icons.ts`
+      before calling `dashboard.registerView()` — core never imports your icons
 - [ ] Unit test in `src/__tests__/ext/<name>/` mirroring the extension layout
 - [ ] Extension docs in `backend` and `frontend` READMEs
 

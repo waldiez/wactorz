@@ -8,6 +8,7 @@
  * back via `onSetView`; the active-view highlight is maintained by the caller.
  */
 import type { View, ConnState } from "./types";
+import { BUILTIN_VIEWS, SETTINGS_VIEW } from "./types";
 import { uid } from "../../ids";
 import { buildAudioPopover, buildResetPopover, type ResetPopover } from "./popovers";
 import { iconMarkup, type IconName } from "./icons";
@@ -18,6 +19,8 @@ export interface HeaderOpts {
     onSetView: (v: View) => void;
     /** HA base URL (from /api/config) for the external "Devices" link; null hides it. */
     haUrl: string | null;
+    /** Extension-registered extra nav buttons. */
+    extraViews: { key: View; label: string; icon: IconName }[];
 }
 
 /** Only http(s) links are safe in an href — `javascript:`/`data:` carry no HTML
@@ -113,19 +116,17 @@ function buildHeaderLeft(connState: ConnState): HTMLElement {
     return left;
 }
 
-function buildHeaderRight(view: View, onSetView: (v: View) => void, haUrl: string | null): HTMLElement {
+function buildHeaderRight(
+    view: View,
+    onSetView: (v: View) => void,
+    haUrl: string | null,
+    extraViews: { key: View; label: string; icon: IconName }[],
+): HTMLElement {
     const right = document.createElement("div");
     right.className = "af-header-right";
 
-    const views: { key: View; label: string; icon: IconName }[] = [
-        { key: "overview", label: "Overview", icon: "grid" },
-        { key: "feed", label: "Feed", icon: "list" },
-        { key: "chat", label: "Chat", icon: "chat" },
-        { key: "fuseki", label: "Graph", icon: "hexagon" },
-        { key: "identity", label: "Identity", icon: "key" },
-        { key: "settings", label: "Settings", icon: "settings" },
-    ];
-    views.forEach(({ key, label, icon }) => {
+    const allViews = [...BUILTIN_VIEWS, ...extraViews, SETTINGS_VIEW];
+    allViews.forEach(({ key, label, icon }) => {
         const btn = document.createElement("button");
         btn.className = `af-view-btn${key === view ? " active" : ""}`;
         btn.dataset["view"] = key;
@@ -173,7 +174,7 @@ export function buildHeader(opts: HeaderOpts): HTMLElement {
     header.append(
         buildHeaderLeft(opts.connState),
         center,
-        buildHeaderRight(opts.view, opts.onSetView, opts.haUrl),
+        buildHeaderRight(opts.view, opts.onSetView, opts.haUrl, opts.extraViews),
     );
     return header;
 }
@@ -194,8 +195,9 @@ export function buildBottomNav(opts: {
     view: View;
     onSetView: (v: View) => void;
     haUrl: string | null;
+    extraViews: { key: View; label: string; icon: IconName }[];
 }): HTMLElement {
-    const { view, onSetView, haUrl } = opts;
+    const { view, onSetView, haUrl, extraViews } = opts;
     const nav = document.createElement("nav");
     nav.className = "af-bottom-nav";
 
@@ -222,9 +224,8 @@ export function buildBottomNav(opts: {
     nav.appendChild(buildHaNavLink(haUrl, true));
 
     const secondary: { key: View; icon: IconName; label: string }[] = [
-        { key: "fuseki", icon: "hexagon", label: "Graph" },
-        { key: "identity", icon: "key", label: "Identity" },
-        { key: "settings", icon: "settings", label: "Settings" },
+        ...extraViews,
+        { key: SETTINGS_VIEW.key, icon: SETTINGS_VIEW.icon, label: SETTINGS_VIEW.label },
     ];
     secondary.forEach(({ key, icon, label }) => {
         const btn = bottomTab(key, icon, label, view, " af-bottom-sheet-btn");

@@ -58,4 +58,10 @@ describe("uploads", () => {
         await expect(uploadFile(file("shot.png", "image/png"))).rejects.toThrow();
         globalThis.fetch = orig;
     });
+
+    it("uploadFile rejects a file larger than 25 MB", async () => {
+        const bigFile = file("big.csv", "text/csv");
+        Object.defineProperty(bigFile, "size", { value: 30 * 1024 * 1024 });
+        await expect(uploadFile(bigFile)).rejects.toThrow(/larger than/);
+    });
 });

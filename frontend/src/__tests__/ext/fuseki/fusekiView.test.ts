@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { buildFusekiView } from "../ui/dashboard/fusekiView";
+import { buildFusekiView } from "../../../ext/fuseki/fusekiView";
 
 const DS_KEY = "wactorz-fuseki-dataset";
 
@@ -115,5 +115,23 @@ describe("fusekiView", () => {
         await flush();
         expect(el.querySelector(".af-fuseki-status")?.textContent).toContain("Error 400");
         expect(el.querySelector(".af-fuseki-error")?.textContent).toContain("syntax error");
+    });
+
+    it("renders 'Update OK' on a successful SPARQL UPDATE", async () => {
+        mockFetch(() => ({
+            ok: true,
+            status: 200,
+            text: async () => "",
+            json: async () => ({}),
+        }));
+        const el = buildFusekiView(() => {});
+        // Wait for the auto-run preset query to finish first.
+        await flush();
+        // Now type an UPDATE query and click Run.
+        const editor = el.querySelector<HTMLTextAreaElement>(".af-fuseki-editor")!;
+        editor.value = "INSERT DATA { <urn:x> <urn:y> <urn:z> }";
+        el.querySelector<HTMLButtonElement>(".af-fuseki-run-btn")!.click();
+        await flush();
+        expect(el.querySelector(".af-fuseki-status")?.textContent).toContain("Update OK");
     });
 });

@@ -24,10 +24,13 @@ frontend/
 │   ├── config/            # App-level config: fetches /api/config, seeds safeStorage
 │   │   └── serverConfig.ts
 │   ├── ext/               # Extensions — self-contained feature modules (mirrors backend wactorz/ext/)
-│   │   └── tts/           # TTS extension: TTSManager, types, register()
+│   │   ├── tts/           # TTS extension: TTSManager, types, register()
+│   │   │   ├── index.ts
+│   │   │   ├── TTSManager.ts
+│   │   │   └── types.ts
+│   │   └── fuseki/        # Fuseki extension: SPARQL Graph tab, register()
 │   │       ├── index.ts
-│   │       ├── TTSManager.ts
-│   │       └── types.ts
+│   │       └── fusekiView.ts
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
 │   ├── io/                # IO/transport: WSClient (the /ws connection), ServerEventRouter
 │   │                      #   (topic→typed-event decoder), IOManager, SpeechToText,
@@ -133,7 +136,10 @@ TTS (`src/ext/tts/`) is the reference implementation. An extension:
    typed events on `AppEventMap` (`src/events.ts`)
 4. **Reads config from safeStorage** — `/api/config` results are seeded by
    `config/serverConfig.ts`; add a whitelist entry there for your extension's fields
-5. **Tests mirror the layout** — `src/__tests__/ext/<name>/`
+5. **Registers custom icons** via `registerIcon(name, svgPaths)` from
+   `ui/dashboard/icons.ts` before calling `registerView` — core never needs to
+   know your icon names
+6. **Tests mirror the layout** — `src/__tests__/ext/<name>/`
 
 ## Adding a new UI component
 

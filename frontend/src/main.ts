@@ -30,6 +30,7 @@ import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
+import { register as registerFuseki } from "./ext/fuseki";
 import { register as registerTTS } from "./ext/tts";
 import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
@@ -463,6 +464,17 @@ import("./config/serverConfig")
         // Boot TTS after config is seeded — reads availability from safeStorage.
         const available = safeStorage.get("wactorz-tts-available") === "1";
         registerTTS({ apiBase: _apiBase, available });
+
+        // Boot Fuseki — registers the Graph tab if FUSEKI_URL is configured.
+        const fusekiUrl = safeStorage.get("wactorz-fuseki-url");
+        if (fusekiUrl && agentStore.cardDashboard) {
+            registerFuseki({
+                url: fusekiUrl,
+                dataset: safeStorage.get("wactorz-fuseki-dataset") || "wactorz",
+                onRender: () => agentStore.cardDashboard!.renderView(),
+                registerView: (k, i, l, b) => agentStore.cardDashboard!.registerView(k, i, l, b),
+            });
+        }
     })
     .catch(() => {
         // Config fetch failed — boot TTS anyway, it probes /api/tts/voices itself.

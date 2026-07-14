@@ -2521,6 +2521,10 @@ async def config_handler(request: web.Request) -> Response:
                 "defaultLocation": CONFIG.weather_default_location,
             },
             "ws_url": ws_url,
+            "fuseki": {
+                "url": CONFIG.fuseki_url,
+                "dataset": CONFIG.fuseki_dataset,
+            },
         }
     )
 

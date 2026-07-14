@@ -2494,6 +2494,7 @@ async def tts_handler(request: web.Request) -> Response:
 async def config_handler(request: web.Request) -> Response:
     """Expose non-secret runtime config so the frontend can seed its defaults."""
     from .config import CONFIG
+    from .ext import collect_public_config
 
     # The /ws proxy is served by *this* server, so point the frontend at the
     # monitor's actual port (WS_PORT), not a hardcoded one.
@@ -2503,27 +2504,26 @@ async def config_handler(request: web.Request) -> Response:
 
     ws_url = f"{protocol}://{ws_host}/ws"
 
-    return web.json_response(
-        {
-            "ha": {
-                # URL only — the dashboard links out to the HA UI and never talks to
-                # HA directly, so the long-lived token must NOT reach the browser.
-                "url": CONFIG.ha_url,
-            },
-            "llm": {
-                "provider": CONFIG.llm_provider,
-                "model": CONFIG.llm_model,
-            },
-            "weather": {
-                "defaultLocation": CONFIG.weather_default_location,
-            },
-            "ws_url": ws_url,
-            "fuseki": {
-                "url": os.getenv("FUSEKI_URL", ""),
-                "dataset": os.getenv("FUSEKI_DATASET", "wactorz"),
-            },
-        }
-    )
+    # Core config (non-secret fields from AppConfig)
+    response: dict = {
+        "ha": {
+            "url": CONFIG.ha_url,
+        },
+        "llm": {
+            "provider": CONFIG.llm_provider,
+            "model": CONFIG.llm_model,
+        },
+        "weather": {
+            "defaultLocation": CONFIG.weather_default_location,
+        },
+        "ws_url": ws_url,
+    }
+
+    # Merge extension public_config — each extension's key maps to its
+    # non-secret browser config (e.g. {"fuseki": {url, dataset}}).
+    response.update(collect_public_config(request.app))
+
+    return web.json_response(response)
 
 
 async def feed_handler(request: web.Request) -> Response:

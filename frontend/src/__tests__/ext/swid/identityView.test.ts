@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { buildIdentityView, shortDid } from "../ui/dashboard/identityView";
+import { buildIdentityView, shortDid } from "../../../ext/swid/identityView";
 
 const DID = "did:swid:zQmcn8EtYXq3CETZxfom5FJzHJYy2BBchWMGbAB5NnvyKpX";
 const IDENT = { handle: "swid:agent:home:main-abc123de", did: DID, entityClass: "agent" };
@@ -113,5 +113,25 @@ describe("identityView", () => {
         resolve.click();
         await flush();
         expect(el.querySelector(".af-identity-detail")!.textContent).toContain("resolution failed");
+    });
+
+    it("search filter hides rows not matching the query", async () => {
+        const alice = { handle: "Alice", did: DID, entityClass: "agent" };
+        const bob = { handle: "Bob", did: DID, entityClass: "agent" };
+        mockFetch({ "/api/swid/identities": { enabled: true, identities: [alice, bob] } });
+        const el = buildIdentityView();
+        await flush();
+        const search = el.querySelector<HTMLInputElement>(".af-identity-search")!;
+        const rows = () => [...el.querySelectorAll<HTMLElement>(".af-identity-row")];
+
+        // Type "Alice" — only Alice visible.
+        search.value = "Alice";
+        search.dispatchEvent(new Event("input"));
+        expect(rows().filter(r => r.hidden).length).toBe(1); // Bob hidden
+
+        // Clear — both visible.
+        search.value = "";
+        search.dispatchEvent(new Event("input"));
+        expect(rows().filter(r => r.hidden).length).toBe(0);
     });
 });

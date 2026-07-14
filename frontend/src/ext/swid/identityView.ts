@@ -130,10 +130,26 @@ function renderList(root: HTMLElement, data: IdentitiesResponse): void {
         root.appendChild(emptyState(data.enabled));
         return;
     }
+
+    const search = document.createElement("input");
+    search.type = "text";
+    search.className = "af-identity-search";
+    search.placeholder = `Filter ${data.identities.length} identities…`;
+    search.setAttribute("aria-label", "Filter identities");
+    root.appendChild(search);
+
     const list = document.createElement("div");
     list.className = "af-identity-list";
     data.identities.forEach(ident => list.appendChild(identityRow(ident)));
     root.appendChild(list);
+
+    search.addEventListener("input", () => {
+        const q = search.value.toLowerCase();
+        list.querySelectorAll<HTMLElement>(".af-identity-row").forEach(row => {
+            const text = (row.textContent ?? "").toLowerCase();
+            (row as HTMLElement).hidden = q !== "" && !text.includes(q);
+        });
+    });
 }
 
 /** Build the Identity view; fetches the register once on mount. */

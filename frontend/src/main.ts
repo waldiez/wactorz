@@ -31,6 +31,7 @@ import { log } from "./io/logger";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
 import { register as registerFuseki } from "./ext/fuseki";
+import { register as registerSwid } from "./ext/swid";
 import { register as registerTTS } from "./ext/tts";
 import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
@@ -475,6 +476,13 @@ import("./config/serverConfig")
                 registerView: (k, i, l, b) => agentStore.cardDashboard!.registerView(k, i, l, b),
             });
         }
+
+        // SWID — always registered (no config gate; the backend endpoint
+        // returns empty when minting is disabled).
+        registerSwid({
+            onRender: () => agentStore.cardDashboard!.renderView(),
+            registerView: (k, i, l, b) => agentStore.cardDashboard!.registerView(k, i, l, b),
+        });
     })
     .catch(() => {
         // Config fetch failed — boot TTS anyway, it probes /api/tts/voices itself.

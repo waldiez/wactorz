@@ -102,6 +102,14 @@ vi.mock("../agents/AgentStore", () => ({
 vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
 vi.mock("../config/serverConfig", () => ({
     seedServerConfig: vi.fn(async () => {
+        localStorage.setItem("wactorz-fuseki-url", "http://fuseki:3030/wactorz");
+        localStorage.setItem("wactorz-fuseki-dataset", "wactorz");
+        localStorage.setItem("wactorz-tts-available", "1");
+        return true;
+    }),
+}));
+vi.mock("../config/serverConfig", () => ({
+    seedServerConfig: vi.fn(async () => {
         // Set up safeStorage so fuseki/TTS registration paths are covered.
         localStorage.setItem("wactorz-fuseki-url", "http://fuseki:3030/wactorz");
         localStorage.setItem("wactorz-fuseki-dataset", "wactorz");
@@ -132,6 +140,7 @@ describe("main.ts bootstrap", () => {
 
     afterAll(() => {
         globalThis.fetch = origFetch;
+        localStorage.clear();
         localStorage.clear();
     });
 

@@ -9,6 +9,7 @@
   box-sizing: border-box;
   padding: 18px 22px;
   max-width: 1100px;
+  width: 100%;
   margin: 0 auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
@@ -53,10 +54,30 @@
   max-width: 560px;
   line-height: 1.5;
 }
+.af-identity-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  outline: none;
+}
+.af-identity-search::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+.af-identity-search:focus {
+  border-color: rgba(255, 255, 255, 0.25);
+}
 .af-identity-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 180px;
+  width: 100%;
 }
 .af-identity-row {
   background: rgba(255, 255, 255, 0.03);

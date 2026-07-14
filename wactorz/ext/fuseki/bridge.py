@@ -1,4 +1,4 @@
-"""wactorz/fuseki.py  -  Home Assistant + Agent Manifest → Apache Jena Fuseki bridge.
+"""wactorz - fuseki bridge  -  Home Assistant + Agent Manifest → Apache Jena Fuseki bridge.
 
 Two bridges run concurrently:
 
@@ -1066,7 +1066,7 @@ class HAFusekiBridge:
         # (swidns:did / swidns:handle). Typed against the core IdentityMinter
         # port, not the concrete impl. None -> no identity triples.
         self._swid_minter: IdentityMinter | None = swid_minter
-        self._swid_namespace = swid_namespace
+        self._ha_namespace = swid_namespace
 
     async def _mint(
         self, entity_class: str, natural_key: str, name: str | None
@@ -1076,7 +1076,7 @@ class HAFusekiBridge:
             return None, None
         try:
             res = await self._swid_minter.ensure_did(
-                entity_class, self._swid_namespace, natural_key, name=name
+                entity_class, self._ha_namespace, natural_key, name=name
             )
             return res.did, res.handle
         except Exception as exc:  # pylint: disable=broad-exception-caught

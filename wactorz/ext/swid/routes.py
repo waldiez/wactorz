@@ -16,17 +16,6 @@ from .service import SwidMinter
 logger = logging.getLogger(__name__)
 
 
-def _resolution_status(error: str | None) -> int:
-    """Map ``didResolutionMetadata.error`` to HTTP per the DIF binding."""
-    if error is None:
-        return 200
-    if error == "invalidDid":
-        return 400
-    if error == "notFound":
-        return 404
-    return 500
-
-
 def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) -> web.RouteTableDef:
     """Build the did:swid routes: DIF resolution, plus the identity index.
 
@@ -64,7 +53,7 @@ def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) ->
             app_registry = request.app.get(contract.ACTOR_REGISTRY)
             id_map = request.app.get(contract.AGENT_IDENTITY)
             if app_registry is not None and id_map is not None:
-                namespace = os.getenv("SWID_NAMESPACE", "home")
+                namespace = os.getenv("HA_NAMESPACE", "home")
                 for actor in app_registry.all_actors():
                     if actor.actor_id in id_map:
                         continue
@@ -91,3 +80,14 @@ def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) ->
             return web.json_response({"enabled": minter.enabled, "identities": identities})
 
     return routes
+
+
+def _resolution_status(error: str | None) -> int:
+    """Map ``didResolutionMetadata.error`` to HTTP per the DIF binding."""
+    if error is None:
+        return 200
+    if error == "invalidDid":
+        return 400
+    if error == "notFound":
+        return 404
+    return 500

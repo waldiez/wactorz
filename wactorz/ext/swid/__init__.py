@@ -55,7 +55,7 @@ async def mint_agent_dids(app: Application) -> None:
         return
     minter = cast(SwidMinter, app_minter)
     id_map = app[contract.AGENT_IDENTITY]
-    namespace = os.getenv("SWID_NAMESPACE", "home")
+    namespace = os.getenv("HA_NAMESPACE", "home")
     for actor in registry.all_actors():
         try:
             id_map[actor.actor_id] = await minter.ensure_did(

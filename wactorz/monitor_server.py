@@ -2395,21 +2395,24 @@ async def _link_agent_dids_to_graph(app: web.Application) -> None:
     """Attach each agent's minted DID/handle onto its urn:wactorz:agents node.
 
     Runs last (registered after setup_all), so both the swid extension's mint
-    hook (populates AGENT_IDENTITY) and _start_agent_bridges (seeds the agent
+    hook (populates AGENT_IDENTITY) and start_agent_bridges (seeds the agent
     nodes) have already completed. Mirrors the device/space linkage the HA
     bridge does inline. Best-effort and a no-op when minting is off (did is
-    None) or Fuseki is unconfigured.
+    None) or Fuseki is not configured.
 
-    TODO(ext/fuseki): when fuseki becomes an extension, this moves into its
-    setup() as its own on_startup hook — the consumer (fuseki) reads the
-    producer's (swid) AGENT_IDENTITY via the contract, so core keeps no wiring.
+    (ext/fuseki): link_agent_dids() moved to ext/fuseki/bridge.py, but the
+    orchestration hook stays in core — core registers it AFTER setup_all() so
+    it runs after both swid (mints DIDs => AGENT_IDENTITY) and fuseki (seeds
+    agent nodes). Cross-extension hook ordering is core's responsibility.
     """
-    from .config import CONFIG
     from .core import contract
 
-    if not CONFIG.fuseki_url:
+    fuseki_url = os.getenv("FUSEKI_URL", "")
+    if not fuseki_url:
         return
     id_map = app.get(contract.AGENT_IDENTITY) or {}
+    if not isinstance(id_map, dict):
+        return
     links = {
         actor_id: (rec.did, rec.handle) for actor_id, rec in id_map.items() if rec.did is not None
     }
@@ -2420,10 +2423,10 @@ async def _link_agent_dids_to_graph(app: web.Application) -> None:
 
         await link_agent_dids(
             links,
-            CONFIG.fuseki_url,
-            CONFIG.fuseki_dataset,
-            CONFIG.fuseki_user,
-            CONFIG.fuseki_password,
+            fuseki_url,
+            os.getenv("FUSEKI_DATASET", "wactorz"),
+            os.getenv("FUSEKI_USER", "admin"),
+            os.getenv("FUSEKI_PASSWORD", "admin"),
         )
     except Exception as exc:
         logger.warning("[swid] agent DID → graph linkage failed: %s", exc)
@@ -2522,8 +2525,8 @@ async def config_handler(request: web.Request) -> Response:
             },
             "ws_url": ws_url,
             "fuseki": {
-                "url": CONFIG.fuseki_url,
-                "dataset": CONFIG.fuseki_dataset,
+                "url": os.getenv("FUSEKI_URL", ""),
+                "dataset": os.getenv("FUSEKI_DATASET", "wactorz"),
             },
         }
     )

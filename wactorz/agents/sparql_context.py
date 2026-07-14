@@ -244,16 +244,6 @@ async def build_sparql_context(
     unreachable or returned no useful data.
     """
     if not fuseki_url:
-        try:
-            from ..config import CONFIG
-
-            fuseki_url = getattr(CONFIG, "fuseki_url", None) or getattr(
-                CONFIG, "fuseki_endpoint", None
-            )
-        except Exception:
-            pass
-
-    if not fuseki_url:
         # Build from env vars the same way fuseki.py does:
         # FUSEKI_URL (base) + FUSEKI_DATASET → {base}/{dataset}/sparql
         import os

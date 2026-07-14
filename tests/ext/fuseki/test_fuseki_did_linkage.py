@@ -119,12 +119,12 @@ async def test_bridge_mint_disabled_minter_passes_none_did_through():
 
 # ── agent DID → graph linkage hook (monitor_server) ──────────────────────────
 
-_FUSEKI_CFG = SimpleNamespace(
-    fuseki_url="http://fuseki:3030",
-    fuseki_dataset="wactorz",
-    fuseki_user="admin",
-    fuseki_password="admin",
-)
+_FUSEKI_ENV = {
+    "FUSEKI_URL": "http://fuseki:3030",
+    "FUSEKI_DATASET": "wactorz",
+    "FUSEKI_USER": "admin",
+    "FUSEKI_PASSWORD": "admin",
+}
 
 
 async def test_link_hook_links_only_minted_agent_dids(monkeypatch):
@@ -133,7 +133,8 @@ async def test_link_hook_links_only_minted_agent_dids(monkeypatch):
         "main": SimpleNamespace(did=DID, handle="swid:agent:home:main-aa11"),
         "handles-only": SimpleNamespace(did=None, handle="swid:agent:home:x-bb22"),
     }
-    monkeypatch.setattr("wactorz.config.CONFIG", _FUSEKI_CFG)
+    for k, v in _FUSEKI_ENV.items():
+        monkeypatch.setenv(k, v)
     fake = AsyncMock()
     monkeypatch.setattr("wactorz.ext.fuseki.bridge.link_agent_dids", fake)
 
@@ -148,7 +149,7 @@ async def test_link_hook_links_only_minted_agent_dids(monkeypatch):
 async def test_link_hook_noop_without_fuseki(monkeypatch):
     app = web.Application()
     app[contract.AGENT_IDENTITY] = {"main": SimpleNamespace(did=DID, handle="h")}
-    monkeypatch.setattr("wactorz.config.CONFIG", SimpleNamespace(fuseki_url=""))
+    monkeypatch.setenv("FUSEKI_URL", "")
     fake = AsyncMock()
     monkeypatch.setattr("wactorz.ext.fuseki.bridge.link_agent_dids", fake)
 
@@ -160,7 +161,8 @@ async def test_link_hook_noop_without_fuseki(monkeypatch):
 async def test_link_hook_noop_when_no_dids_minted(monkeypatch):
     app = web.Application()
     app[contract.AGENT_IDENTITY] = {"x": SimpleNamespace(did=None, handle="h")}
-    monkeypatch.setattr("wactorz.config.CONFIG", _FUSEKI_CFG)
+    for k, v in _FUSEKI_ENV.items():
+        monkeypatch.setenv(k, v)
     fake = AsyncMock()
     monkeypatch.setattr("wactorz.ext.fuseki.bridge.link_agent_dids", fake)
 

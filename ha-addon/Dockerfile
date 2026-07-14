@@ -3,8 +3,11 @@ FROM $BUILD_FROM
 
 RUN apk add --no-cache \
     curl git jq gcc musl-dev linux-headers libffi-dev openssl-dev \
-    mosquitto mosquitto-clients
+    mosquitto mosquitto-clients build-base cmake libjpeg-turbo-dev libpng-dev openblas-dev
 
+
+RUN pip3 install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+RUN pip3 install --no-cache-dir ultralytics
 # Git ref of wactorz to install.
 ARG WACTORZ_REF=main
 ARG BUILD_VERSION=main

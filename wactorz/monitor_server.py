@@ -1936,6 +1936,31 @@ async def delete_actor_handler(request):
     return web.Response(status=200, text=f"stopping ({routed})")
 
 
+# Home-Assistant system agents: supervised on a fresh boot like the protected
+# actors, but intentionally left NON-protected so a user can still delete one
+# individually. A factory reset must keep them anyway (a clean boot recreates
+# them), so they are named explicitly here rather than inferred from protection.
+_HA_SYSTEM_AGENTS = frozenset(
+    {
+        "home-assistant-agent",
+        "home-assistant-map-agent",
+        "home-assistant-state-bridge",
+    }
+)
+
+
+def _survives_factory_reset(name: str, protected: bool) -> bool:
+    """Whether an agent is kept by ``reset all`` (factory reset).
+
+    Kept if it is a system-protected actor (main / monitor / io-agent / installer
+    / catalog) OR one of the HA system agents — i.e. exactly the set a fresh,
+    empty boot brings up. Everything else (user- and catalog-spawned agents) is
+    wiped. Note this is independent of manual delete, which keys off ``protected``
+    alone, so the HA agents stay individually deletable.
+    """
+    return protected or name in _HA_SYSTEM_AGENTS
+
+
 async def reset_handler(request):
     """POST /api/reset  —  clear stored state and broadcast a reset event.
 
@@ -1971,23 +1996,32 @@ async def reset_handler(request):
                 getattr(registry, "_supervisor_ref", None) if registry is not None else None
             )
             all_actors = list(registry.all_actors()) if registry is not None else []
-            # Only stop user-spawned (non-protected) actors — system actors keep running
-            stoppable = [a for a in all_actors if not getattr(a, "protected", False)]
+
+            # Factory reset keeps the protected system actors and the HA system
+            # agents; only user- and catalog-spawned agents are stopped.
+            def _kept(name: str, protected: bool) -> bool:
+                return _survives_factory_reset(name, protected)
+
+            stoppable = [a for a in all_actors if not _kept(a.name, getattr(a, "protected", False))]
             # The registry is the AUTHORITATIVE source of the protected flag — the
             # dashboard entry's "protected" is only set when a heartbeat happened to
             # carry it, so trusting it alone wrongly tears down system agents (main /
-            # monitor / installer / catalog) and they flicker back on the next beat.
-            protected_ids = {a.actor_id for a in all_actors if getattr(a, "protected", False)}
-            protected_names = {a.name for a in all_actors if getattr(a, "protected", False)}
-            # Tear down every NON-protected agent the dashboard knows about (covers an
+            # monitor / installer / catalog / the HA family) and they flicker back.
+            kept_ids = {
+                a.actor_id for a in all_actors if _kept(a.name, getattr(a, "protected", False))
+            }
+            kept_names = {
+                a.name for a in all_actors if _kept(a.name, getattr(a, "protected", False))
+            }
+            # Tear down every non-kept agent the dashboard knows about (covers an
             # agent present only via MQTT, or a remote agent absent from this registry),
-            # but never one that maps to a protected registry actor.
+            # but never a fresh-boot or protected one.
             dash_ids = [
                 aid
                 for aid, ag in state["agents"].items()
-                if not ag.get("protected", False)
-                and aid not in protected_ids
-                and ag.get("name") not in protected_names
+                if not _kept(ag.get("name", ""), ag.get("protected", False))
+                and aid not in kept_ids
+                and ag.get("name") not in kept_names
             ]
             agent_ids = list({a.actor_id for a in stoppable} | set(dash_ids))
 
@@ -2045,9 +2079,10 @@ async def reset_handler(request):
             # restart nor a runner reconnect can resurrect the wiped agents. Runs
             # before reset_all() wipes the kv on disk (it reads the registry first).
             await _purge_spawn_reconcile(None)
-            # Reset in-memory metrics + history on protected (system) actors
-            protected_actors = [a for a in all_actors if getattr(a, "protected", False)]
-            for actor in protected_actors:
+            # Reset in-memory metrics + history on the KEPT actors (protected +
+            # fresh-boot) so they too return to factory state, not just stay alive.
+            kept_actors = [a for a in all_actors if _kept(a.name, getattr(a, "protected", False))]
+            for actor in kept_actors:
                 actor.metrics.messages_processed = 0
                 actor.metrics.errors = 0
                 actor.metrics.tasks_completed = 0

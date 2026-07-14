@@ -42,8 +42,8 @@ async def mint_agent_dids(app: Application) -> None:
     Identity view stays current without a restart.
 
     Note: agent DIDs are linked onto their Fuseki graph nodes by
-    ``monitor_server._link_agent_dids_to_graph`` (registered after this hook so
-    AGENT_IDENTITY is populated first); device/space linkage happens inside the
+    ``ext/fuseki/__init__.py`` on_ready() hook (runs after setup via __deps__
+    so AGENT_IDENTITY is populated first); device/space linkage happens inside the
     HA bridge via the minter.
     """
     app_registry = app.get(contract.ACTOR_REGISTRY)

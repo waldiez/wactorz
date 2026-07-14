@@ -12,9 +12,8 @@ from unittest.mock import AsyncMock
 
 from aiohttp import web
 
-import wactorz.monitor_server as ms
 from wactorz.core import contract
-from wactorz.ext.fuseki import TTL_PREFIXES, HAFusekiBridge, area_body, device_body
+from wactorz.ext.fuseki import TTL_PREFIXES, HAFusekiBridge, area_body, device_body, on_ready
 
 DID = "did:swid:zQmcn8EtYXq3CETZxfom5FJzHJYy2BBchWMGbAB5NnvyKpX"
 HANDLE = "swid:device:home:kitchen-light-ab12cd34"
@@ -117,7 +116,7 @@ async def test_bridge_mint_disabled_minter_passes_none_did_through():
     assert handle == HANDLE  # handle still flows (label-only mode)
 
 
-# ── agent DID → graph linkage hook (monitor_server) ──────────────────────────
+# ── agent DID → graph linkage (on_ready) ─────────────────────────────────────
 
 _FUSEKI_ENV = {
     "FUSEKI_URL": "http://fuseki:3030",
@@ -136,9 +135,9 @@ async def test_link_hook_links_only_minted_agent_dids(monkeypatch):
     for k, v in _FUSEKI_ENV.items():
         monkeypatch.setenv(k, v)
     fake = AsyncMock()
-    monkeypatch.setattr("wactorz.ext.fuseki.bridge.link_agent_dids", fake)
+    monkeypatch.setattr("wactorz.ext.fuseki.link_agent_dids", fake)
 
-    await ms._link_agent_dids_to_graph(app)
+    await on_ready(app)
 
     fake.assert_awaited_once()
     links = fake.await_args.args[0]  # pyright: ignore[reportOptionalMemberAccess]
@@ -151,9 +150,9 @@ async def test_link_hook_noop_without_fuseki(monkeypatch):
     app[contract.AGENT_IDENTITY] = {"main": SimpleNamespace(did=DID, handle="h")}
     monkeypatch.setenv("FUSEKI_URL", "")
     fake = AsyncMock()
-    monkeypatch.setattr("wactorz.ext.fuseki.bridge.link_agent_dids", fake)
+    monkeypatch.setattr("wactorz.ext.fuseki.link_agent_dids", fake)
 
-    await ms._link_agent_dids_to_graph(app)
+    await on_ready(app)
 
     fake.assert_not_awaited()
 
@@ -164,8 +163,8 @@ async def test_link_hook_noop_when_no_dids_minted(monkeypatch):
     for k, v in _FUSEKI_ENV.items():
         monkeypatch.setenv(k, v)
     fake = AsyncMock()
-    monkeypatch.setattr("wactorz.ext.fuseki.bridge.link_agent_dids", fake)
+    monkeypatch.setattr("wactorz.ext.fuseki.link_agent_dids", fake)
 
-    await ms._link_agent_dids_to_graph(app)
+    await on_ready(app)
 
     fake.assert_not_awaited()

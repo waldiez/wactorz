@@ -2391,47 +2391,6 @@ async def chat_log_handler(request: web.Request) -> Response:
 _tts_voices_cache: list | None = None
 
 
-async def _link_agent_dids_to_graph(app: web.Application) -> None:
-    """Attach each agent's minted DID/handle onto its urn:wactorz:agents node.
-
-    Runs last (registered after setup_all), so both the swid extension's mint
-    hook (populates AGENT_IDENTITY) and start_agent_bridges (seeds the agent
-    nodes) have already completed. Mirrors the device/space linkage the HA
-    bridge does inline. Best-effort and a no-op when minting is off (did is
-    None) or Fuseki is not configured.
-
-    (ext/fuseki): link_agent_dids() moved to ext/fuseki/bridge.py, but the
-    orchestration hook stays in core — core registers it AFTER setup_all() so
-    it runs after both swid (mints DIDs => AGENT_IDENTITY) and fuseki (seeds
-    agent nodes). Cross-extension hook ordering is core's responsibility.
-    """
-    from .core import contract
-
-    fuseki_url = os.getenv("FUSEKI_URL", "")
-    if not fuseki_url:
-        return
-    id_map = app.get(contract.AGENT_IDENTITY) or {}
-    if not isinstance(id_map, dict):
-        return
-    links = {
-        actor_id: (rec.did, rec.handle) for actor_id, rec in id_map.items() if rec.did is not None
-    }
-    if not links:
-        return
-    try:
-        from wactorz.ext.fuseki.bridge import link_agent_dids
-
-        await link_agent_dids(
-            links,
-            fuseki_url,
-            os.getenv("FUSEKI_DATASET", "wactorz"),
-            os.getenv("FUSEKI_USER", "admin"),
-            os.getenv("FUSEKI_PASSWORD", "admin"),
-        )
-    except Exception as exc:
-        logger.warning("[swid] agent DID → graph linkage failed: %s", exc)
-
-
 async def _warm_tts_voices(_app=None) -> None:
     """Load edge-tts voice list once at startup and cache it."""
     global _tts_voices_cache
@@ -2714,11 +2673,6 @@ async def main(exit_on_failure: bool = False):
     from .ext import setup_all
 
     setup_all(app)
-    # Registered after setup_all so it runs after the swid mint hook (which fills
-    # AGENT_IDENTITY) and after the agent-registry seed — then links agent DIDs
-    # onto their graph nodes, matching device/space linkage.
-    # TODO(ext/fuseki)
-    app.on_startup.append(_link_agent_dids_to_graph)
 
     app.router.add_get("/docs", docs_redirect)
     app.router.add_get("/docs/", docs_handler)

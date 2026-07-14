@@ -330,12 +330,13 @@ def _build_catalog() -> dict:
             "type": "dynamic",
             "description": (
                 "Controls a Reachy Mini: wake/sleep, head pose, antennas, gaze, "
-                "speech, gestures, and optional Home Assistant actions."
+                "speech, opt-in voice conversation, gestures, and optional "
+                "Home Assistant actions."
             ),
             "docs": (
                 "Setup:\n"
                 "1. Install the recipe dependencies when prompted, or preinstall: "
-                "pip install reachy-mini numpy edge-tts.\n"
+                "pip install reachy-mini numpy edge-tts webrtcvad-wheels.\n"
                 "2. For Reachy Mini Wireless, put the robot and Wactorz host on the "
                 "same WiFi network. Stop any Hugging Face app running on the robot.\n"
                 "3. For Reachy Mini Lite, start the local daemon first: "
@@ -353,10 +354,13 @@ def _build_catalog() -> dict:
                 "- say hello\n"
                 "- take a photo\n"
                 "- listen\n"
+                "- listen and ask Wactorz\n"
+                "- start conversation\n"
                 "- turn on the light and nod\n"
                 "\n"
                 "For structured control, send a dict with cmd wake, sleep, pose, "
-                "antennas, look_at, camera, listen, doa, emotion, say, volume, ha, "
+                "antennas, look_at, camera, listen, ask_voice, conversation_start, "
+                "conversation_stop, doa, emotion, say, volume, ha, "
                 "bind, unbind, or stop."
             ),
             "capabilities": [
@@ -379,9 +383,9 @@ def _build_catalog() -> dict:
                 "perception",
                 "sensors",
             ],
-            "install": ["reachy-mini", "numpy", "edge-tts", "pillow"],
+            "install": ["reachy-mini", "numpy", "edge-tts", "pillow", "webrtcvad-wheels"],
             "input_schema": {
-                "cmd": "str  — wake|sleep|pose|antennas|look_at|look_pixel|camera|listen|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
+                "cmd": "str  — wake|sleep|pose|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
                 "voice": "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
                 "gain_db": "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
@@ -409,6 +413,13 @@ def _build_catalog() -> dict:
                 "path": "str   — save the frame/clip to this file (cmd=camera|listen)",
                 "publish": "bool  — also emit on custom/reachy/camera|audio (cmd=camera|listen)",
                 "include_b64": "bool  — include the base64 blob in the result (cmd=camera|listen), default true",
+                "stt_backend": "str — ask_voice/conversation backend: faster-whisper (default)|whisper|openai",
+                "stt_model": "str — optional voice transcription model override",
+                "inactivity_timeout": "float - conversation speech-start timeout (default 30s)",
+                "max_turns": "int - conversation turn limit (default 10)",
+                "silence_s": "float - post-speech VAD silence (default 0.8s)",
+                "cooldown_s": "float - post-TTS mic drain time (default 0.7s)",
+                "vad_min_rms": "float - minimum speech-frame RMS (default 0.01)",
                 "name": "str   — emotion clip name (e.g. curious1, success1)",
                 "topic": "str   — MQTT topic to bind/unbind",
                 "when": "dict  — dotted-path equality matcher for bindings",

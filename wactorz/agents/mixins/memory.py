@@ -36,6 +36,9 @@ class MemoryMixin:
         if not self._registry:
             return ""
         skip = {"main", "monitor", "installer"}
+        source = getattr(self, "_current_interface_source", lambda: "")()
+        if source:
+            skip.add(source)
         lines = []
         for actor in self._registry.all_actors():
             if actor.name in skip:
@@ -70,9 +73,12 @@ class MemoryMixin:
         The prefix is wrapped in clear delimiters so it's visually obvious to the
         model that it's context, not the user's actual question.
         """
+        source = getattr(self, "_current_interface_source", lambda: "")()
         live_names = []
         if self._registry:
             skip = {"main", "monitor", "installer"}
+            if source:
+                skip.add(source)
             for actor in self._registry.all_actors():
                 if actor.name in skip:
                     continue
@@ -80,6 +86,12 @@ class MemoryMixin:
                     continue
                 live_names.append(actor.name)
         live_names.sort()
+        interface_note = ""
+        if source:
+            interface_note = (
+                f"[INTERFACE ROUTING: request arrived through {source}. "
+                f"Treat {source} only as the response transport; never delegate back to it.]\n"
+            )
 
         if live_names:
             ctx = (
@@ -87,6 +99,7 @@ class MemoryMixin:
                 f"Currently running agents (live, just queried): {', '.join(live_names)}\n"
                 "If the user asks what agents exist or are running, answer using EXACTLY\n"
                 "this list. Do not add agents from your memory of earlier turns.\n"
+                f"{interface_note}"
                 "[END SYSTEM STATE]\n\n"
             )
         else:
@@ -95,6 +108,7 @@ class MemoryMixin:
                 "Currently running agents (live, just queried): NONE\n"
                 "No user-spawned agents exist right now. If the user asks what's running,\n"
                 "say so plainly. Do not invent agents from earlier in the conversation.\n"
+                f"{interface_note}"
                 "[END SYSTEM STATE]\n\n"
             )
         return ctx + user_text

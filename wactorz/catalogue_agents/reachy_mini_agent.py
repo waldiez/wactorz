@@ -5,6 +5,7 @@ embodied output channel for the wactorz fleet. Subscribes to:
 
     custom/reachy/cmd            — structured commands (one verb per payload)
     custom/reachy/cmd/<verb>     — per-verb shortcut topics
+                                      (includes conversation_start/stop)
     custom/reachy/config         — runtime config (currently: robot_host)
     <bound topics>               — dynamically bound via cmd=bind
 
@@ -15,6 +16,10 @@ Publishes:
     custom/reachy/cmd_result/<id>— per-correlated-command ack
     custom/reachy/camera         — one-shot camera frame (only when cmd=camera publish=true)
     custom/reachy/audio          — one-shot mic clip   (only when cmd=listen publish=true)
+
+Push-to-talk voice input is explicit: cmd=ask_voice captures one bounded WAV,
+transcribes it, and sends the transcript through the existing Wactorz interface
+bridge. It never enables always-on listening or wake-word detection.
 
 Reactive bindings are persisted so they survive /agents restart.
 
@@ -99,7 +104,7 @@ Motor torque (the control app's enable/disable — needed to move at all):
 Stop talking right now (cut the current utterance):
     {"cmd": "shutup"}    # or say "shut up" / "stop talking" / "be quiet"
     # Different from volume mute (persistent): shutup cuts what's playing NOW.
-    # {"cmd":"stop"} also cuts speech (plus motion and sound-tracking).
+    # {"cmd":"stop"} also cuts speech and motion.
 
 Diagnose "won't move" (daemon version vs SDK + a real move self-test):
     {"cmd": "diag"}      # or say "diag" / "why won't you move"
@@ -400,11 +405,11 @@ async def setup(agent):
     # Speech interrupt state — a 'shutup'/'stop' sets stop_speaking to cut a say.
     agent.state["stop_speaking"] = False
     agent.state["_speaking"] = False
+    # Opt-in multi-turn voice session. The task and cancellation event are
+    # process-local only; a restart always returns to idle.
+    agent.state["conversation_session"] = None
+    agent.state["conversation_state"] = "idle"
 
-    # ---- Continuous sound tracking (opt-in, off by default) ----
-    agent.state["tracking"] = False
-    agent.state["track_cfg"] = {}
-    agent.state["track_last_target"] = None
 
     # ---- Reactive bindings ----
     # bindings :: { topic_pattern: { 'when': {field: value}, 'do': {cmd, payload} } }
@@ -459,8 +464,8 @@ async def setup(agent):
     for verb in ("wake", "sleep", "pose", "antennas", "look_at",
                  "look_pixel", "emotion", "motors", "diag", "set_pose", "bind",
                  "unbind", "list_emotions", "stop", "shutup", "say", "volume",
-                 "camera", "describe", "look_around", "listen", "doa", "turn_to_sound",
-                 "track_sound"):
+                 "camera", "describe", "look_around", "listen", "doa", "ask_voice",
+                 "conversation_start", "conversation_stop"):
         def _make_cb(v):
             async def cb(payload):
                 p = dict(payload or {})
@@ -487,6 +492,7 @@ async def setup(agent):
         "volume_level":  agent.state.get("volume_level", 100),
         "muted":         bool(agent.state.get("muted")),
         "motors_enabled": bool(agent.state.get("motors_enabled")),
+        "conversation_state": agent.state.get("conversation_state", "idle"),
         "ts":            _time.time(),
     })
 
@@ -511,6 +517,7 @@ async def process(agent):
         "volume_level":  agent.state.get("volume_level", 100),
         "muted":         bool(agent.state.get("muted")),
         "motors_enabled": bool(agent.state.get("motors_enabled")),
+        "conversation_state": agent.state.get("conversation_state", "idle"),
         "ts":            _time.time(),
     })
 
@@ -530,9 +537,9 @@ Robot commands:
   {"cmd":"describe","question":"<q>"}       ← answer a specific question about the current view
   {"cmd":"look_around"}                      ← pan the head across the room and describe the WHOLE scene
   {"cmd":"listen","duration":<sec>}        ← record a short mic clip (returns audio + direction of arrival)
-  {"cmd":"turn_to_sound"}                    ← turn ONCE toward whatever sound the mic array hears (needs motors)
-  {"cmd":"track_sound","on":true}            ← KEEP turning toward whoever is speaking (continuous, until stopped)
-  {"cmd":"track_sound","on":false}           ← stop the continuous sound-tracking
+  {"cmd":"ask_voice","duration":<sec>}     ← push-to-talk: transcribe one clip, ask Wactorz, speak answer
+  {"cmd":"conversation_start"}              ← opt-in VAD multi-turn voice session
+  {"cmd":"conversation_stop"}               ← safely stop the active voice session
   {"cmd":"say","text":"<what to say>"}
   {"cmd":"say","text":"<what to say>","voice":"<edge-tts voice name>"}
   {"cmd":"volume","preset":"whisper|normal|louder|presenter"}  ← human speaking modes (whisper=70, normal=85, louder=93, presenter=100)
@@ -612,15 +619,11 @@ Decision rules — CRITICAL:
   which pans across several angles. NEVER emit camera+say for vision: camera only
   captures a raw frame, and say would invent a description; describe/look_around
   actually look and speak.
-- HEARING / SOUND-FACING: a ONE-OFF "turn toward the sound/voice", "look at whoever
-  just spoke", "face the noise" → {"cmd":"turn_to_sound"}. A CONTINUOUS "KEEP turning
-  toward whoever is speaking", "follow the speaker", "track the voices", "as the
-  students present, look at each one" → {"cmd":"track_sound","on":true}. To end it —
-  "stop tracking/following the sound/voices", "stop turning toward the sound" →
-  {"cmd":"track_sound","on":false}. Continuous tracking is OPT-IN: only emit
-  track_sound on=true when the user clearly wants an ongoing behaviour, never for a
-  single turn.
-
+- If the request is not a robot, camera, microphone, explicit speech, or Home
+  Assistant action, return an empty JSON array: []. General questions about the
+  time, weather, calendar, news, knowledge, or other Wactorz capabilities are
+  handled by the main orchestrator. NEVER invent their answer in a say command.
+  Only emit say when the user explicitly asks Reachy to say/announce/repeat words.
 Examples:
 User: "turn on the light"
   -> [{"cmd":"ha","request":"turn on the light"}]
@@ -665,14 +668,11 @@ User: "what do you see?"   (and "what's in front of you", "describe the scene", 
 User: "how many people are in the room?"   (any question ABOUT the view)
   → [{"cmd":"describe","question":"how many people are in the room?"}]
 
-User: "turn toward the sound"   (and "face whoever is talking", "look at the noise")
-  → [{"cmd":"turn_to_sound"}]
+User: "what time is it in Athens?"
+  -> []
 
-User: "keep turning toward whoever is talking"   (and "follow the speaker", "track the voices as we present")
-  → [{"cmd":"track_sound","on":true}]
-
-User: "stop following the voices"   (and "stop tracking the sound", "quit turning toward the noise")
-  → [{"cmd":"track_sound","on":false}]
+User: "summarize my calendar today"
+  -> []
 
 User: "wiggle your antennas"
   → [{"cmd":"wake"},
@@ -720,6 +720,54 @@ def _parse_speak_compound(text):
         if said and said.lower() not in _STOP:
             return [{"cmd": "volume", "preset": preset}, {"cmd": "say", "text": said}]
     return None
+
+
+def _is_explicit_speech_request(text):
+    """True only when the user actually asked Reachy to speak supplied words."""
+    import re
+
+    t = (text or "").strip()
+    patterns = (
+        r"^(?:please\s+)?(?:say|announce|repeat|speak)\b",
+        r"^(?:can|could|would|will)\s+you\s+(?:please\s+)?"
+        r"(?:say|announce|repeat|speak)\b",
+        r"^(?:please\s+)?tell\s+(?:them|everyone|the\s+room)\b",
+    )
+    return any(re.search(pattern, t, re.IGNORECASE) for pattern in patterns)
+
+
+def _is_invented_say_plan(cmds, original_text):
+    """Reject a classifier-generated answer disguised as a robot say command.
+
+    The local planner decides robot actions; Wactorz main answers general
+    requests. Some LLMs nevertheless answer a question by emitting a lone say
+    command. Treat that as unhandled unless the user explicitly requested speech.
+    """
+    if not isinstance(cmds, list) or len(cmds) != 1:
+        return False
+    command = cmds[0]
+    if not isinstance(command, dict):
+        return False
+    cmd = (command.get("cmd") or command.get("action") or "").lower().strip()
+    return cmd == "say" and not _is_explicit_speech_request(original_text)
+
+def _explicit_interface_request(text):
+    """Return text after an explicit request to route through Wactorz main."""
+    import re
+
+    raw = (text or "").strip()
+    patterns = (
+        r"^(?:please\s+)?ask\s+wactorz(?:\s+to)?[:,]?\s+(.+)$",
+        r"^wactorz[:,]\s*(.+)$",
+        r"^(?:please\s+)?use\s+wactorz\s+to\s+(.+)$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, raw, re.IGNORECASE)
+        if match and match.group(1).strip():
+            return match.group(1).strip()
+    return None
+
+
 
 
 
@@ -772,7 +820,12 @@ async def _nl_to_commands(agent, text):
     # while empty so a not-yet-ready HA agent eventually populates it.
     ents = agent.state.get("ha_entities") or {}
     have = ents.get("lights") or ents.get("switches")
-    if not have and (_time.time() - agent.state.get("ha_entities_ts", 0.0)) > 60:
+    low_text = str(text).lower()
+    needs_inventory = any(phrase in low_text for phrase in (
+        "bind", "whenever", "when the", "when my", "react to", "follow the",
+    ))
+    if (needs_inventory and not have
+            and (_time.time() - agent.state.get("ha_entities_ts", 0.0)) > 60):
         ents = await _ha_entities_via_agent(agent)
         agent.state["ha_entities"] = ents
         agent.state["ha_entities_ts"] = _time.time()
@@ -845,6 +898,16 @@ async def handle_task(agent, payload):
                 text = " ".join(text_bits)
         if isinstance(text, str):
             stripped = text.strip()
+            interface_text = _explicit_interface_request(stripped)
+            if interface_text:
+                await agent.log(f"routing explicit interface request to main: {interface_text[:80]}")
+                bridged = await _bridge_to_main(agent, interface_text, _tid)
+                if bridged is not None:
+                    return bridged
+                return {"ok": False, "cmd": "bridge",
+                        "error": "Wactorz main is unavailable",
+                        "result": "I could not reach Wactorz main.",
+                        "_task_id": _tid, "task": _tid}
             # Structured JSON object: if it has cmd/action, adopt as the new payload.
             # If it's a payload-dict without cmd (e.g. planner-generated {gesture,
             # description, context}), flatten its text-ish fields back to NL input
@@ -902,15 +965,19 @@ async def handle_task(agent, payload):
                 elif low in ("take a photo", "take a picture", "take a snapshot",
                              "snapshot", "photo", "picture", "capture", "camera"):
                     payload = {"cmd": "camera"}
+                elif low in ("start conversation", "start a conversation",
+                              "conversation mode", "begin conversation"):
+                    payload = {"cmd": "conversation_start"}
+                elif low in ("stop conversation", "end conversation",
+                              "stop the conversation", "end the conversation"):
+                    payload = {"cmd": "conversation_stop"}
+                elif low in ("listen and ask wactorz", "listen then ask wactorz",
+                              "ask wactorz by voice", "voice ask wactorz",
+                              "push to talk", "push-to-talk"):
+                    payload = {"cmd": "ask_voice"}
                 elif low in ("listen", "record", "record audio", "take a listen",
                              "what do you hear"):
                     payload = {"cmd": "listen"}
-                elif low in ("turn to the sound", "turn toward the sound",
-                             "turn towards the sound", "face the speaker",
-                             "look toward the sound", "look at the sound",
-                             "turn to the noise", "face the sound",
-                             "who's talking", "who is talking"):
-                    payload = {"cmd": "turn_to_sound"}
                 # Motor torque toggle — the control app's enable/disable.
                 elif low in ("enable motors", "motors on", "enable your motors",
                              "turn on motors", "turn your motors on", "stiffen"):
@@ -956,7 +1023,7 @@ async def handle_task(agent, payload):
                     # a few short motions fits comfortably).
                     cmds = _parse_speak_compound(stripped) or await _nl_to_commands(agent, stripped)
                     cmds = _repair_ha_commands(cmds, stripped)
-                    if not cmds:
+                    if not cmds or _is_invented_say_plan(cmds, stripped):
                         # Not a robot/HA command — act as an interface: pipe it
                         # through the main orchestrator and voice the answer.
                         bridged = await _bridge_to_main(agent, stripped, _tid)
@@ -1021,7 +1088,19 @@ async def handle_task(agent, payload):
                             summary_parts.append(label)
 
                     successes = sum(1 for s in steps if not (isinstance(s, dict) and s.get("ok") is False))
-                    result_msg = f"ran {successes} of {len(cmds)}: [{' -> '.join(summary_parts)}]"
+                    # A single successful command's own result is more useful in
+                    # chat than an execution receipt. Keep the receipt for say /
+                    # describe because their spoken text is delivered separately,
+                    # and for multi-step plans where the compact summary matters.
+                    single_result = None
+                    if len(cmds) == 1 and len(steps) == 1 and isinstance(steps[0], dict):
+                        only_cmd = cmds[0].get("cmd") if isinstance(cmds[0], dict) else None
+                        if (only_cmd not in ("say", "describe")
+                                and steps[0].get("ok") is not False
+                                and steps[0].get("result")):
+                            single_result = str(steps[0]["result"])
+                    result_msg = (single_result
+                                  or f"ran {successes} of {len(cmds)}: [{' -> '.join(summary_parts)}]")
                     if skipped:
                         result_msg += f"  (skipped {len(skipped)}: {link_reason})"
                     _queue_spoken_replies(agent, spoken_replies)
@@ -1040,7 +1119,7 @@ async def handle_task(agent, payload):
     # Friendly fail-fast for ROBOT commands when reachy isn't connected.
     # HA-only commands ("ha") still work — that's the whole point of the
     # "stay alive in disconnected mode" design.
-    if cmd not in ("ha", "list_emotions", None):
+    if cmd not in ("ha", "list_emotions", "conversation_stop", None):
         ok, reason = _is_connected(agent)
         if not ok:
             return {"ok": False, "error": reason, "result": reason,
@@ -1080,7 +1159,8 @@ def _pending_look_closer(agent):
     return bool(ts and (_time.time() - ts) < 60)
 
 
-async def _bridge_to_main(agent, text, task_id=None):
+async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
+                          before_speak=None, session_id=None):
     """Reachy-as-interface bridge.
 
     Anything Reachy can't turn into a robot/HA command is piped to the MAIN
@@ -1090,8 +1170,14 @@ async def _bridge_to_main(agent, text, task_id=None):
     the caller can fall back to the local parse-error hint.
     """
     try:
-        resp = await agent.send_to(
-            "main", {"text": text, "_via_interface": True}, timeout=60.0)
+        bridge_payload = {
+            "text": text,
+            "_via_interface": True,
+            "_interface_source": getattr(agent, "name", "reachy-mini"),
+        }
+        if session_id:
+            bridge_payload["_interface_session_id"] = session_id
+        resp = await agent.send_to("main", bridge_payload, timeout=60.0)
     except Exception as e:
         await agent.log(f"bridge to main failed: {e}", level="warning")
         return None
@@ -1111,21 +1197,33 @@ async def _bridge_to_main(agent, text, task_id=None):
     # Voice it through the robot when connected; the text is returned either way
     # (and is the only channel when the robot is offline).
     spoke = False
-    ok_link, _reason = _is_connected(agent)
+    speech_error = None
+    ok_link, link_reason = _is_connected(agent)
     if ok_link:
         try:
-            # Non-blocking so a "shut up" can interrupt a long spoken answer.
-            await _say(agent, {"text": reply, "await_playback": False})
+            if before_speak is not None:
+                await before_speak(reply)
+            # One-shot bridge calls remain non-blocking. Conversation mode opts
+            # into the existing duration-based playback wait.
+            await _say(agent, {"text": reply, "await_playback": await_playback})
             spoke = True
         except Exception as e:
+            speech_error = str(e)
             await agent.log(f"bridge speak failed: {e}", level="warning")
+    else:
+        speech_error = link_reason or "reachy is not connected"
     return {"ok": True, "cmd": "bridge", "bridged": True, "spoke": spoke,
             "said": reply if spoke else None, "result": reply,
+            "speech_error": speech_error,
             "_task_id": task_id, "task": task_id}
 
 
 async def cleanup(agent):
-    agent.state["tracking"] = False  # stop the tracking loop on shutdown
+    # Stop a voice session before releasing the SDK/media objects it may use.
+    try:
+        await _conversation_stop(agent, {"reason": "cleanup"})
+    except Exception:
+        pass
     mini = agent.state.get("mini")
     if not mini:
         return
@@ -1170,6 +1268,15 @@ def _is_connected(agent):
 # Dispatcher — the single place every command flows through.
 # ============================================================
 
+class _CommandStageError(RuntimeError):
+    """A command failed at a named stage and has useful partial event fields."""
+
+    def __init__(self, stage, message, fields=None):
+        super().__init__(f"{stage}: {message}")
+        self.stage = stage
+        self.fields = dict(fields or {})
+
+
 async def _dispatch(agent, cmd, payload, return_result=False):
     if not cmd:
         if return_result:
@@ -1190,9 +1297,10 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "describe":      result = await _describe(agent, payload)
         elif cmd == "look_around":   result = await _look_around(agent, payload)
         elif cmd == "listen":        result = await _listen(agent, payload)
+        elif cmd == "ask_voice":     result = await _ask_voice(agent, payload)
+        elif cmd == "conversation_start": result = await _conversation_start(agent, payload)
+        elif cmd == "conversation_stop":  result = await _conversation_stop(agent, payload)
         elif cmd == "doa":           result = await _doa(agent, payload)
-        elif cmd == "turn_to_sound": result = await _turn_to_sound(agent, payload)
-        elif cmd == "track_sound":   result = await _track_sound(agent, payload)
         elif cmd == "emotion":       result = await _emotion(agent, payload)
         elif cmd == "motors":        result = await _motors(agent, payload)
         elif cmd == "diag":          result = await _diag(agent, payload)
@@ -1215,15 +1323,25 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         rid = payload.get("id")
         if rid:
             await agent.publish(f"custom/reachy/cmd_result/{rid}", ack)
-        await agent.publish("custom/reachy/events", {"type": cmd, "ok": True, "ts": _time.time()})
+        # Publish the same command result fields on the shared event topic.  The
+        # envelope is applied last so a handler cannot replace type/ok/ts.
+        event = dict(ack)
+        event.update({"type": cmd, "ok": True, "ts": _time.time()})
+        await agent.publish("custom/reachy/events", event)
         if return_result:
             return ack
     except Exception as e:
-        err = {"ok": False, "cmd": cmd, "error": str(e), "duration_s": round(_time.time() - started, 3)}
+        err = dict(getattr(e, "fields", {}) or {})
+        if isinstance(e, _CommandStageError):
+            err["stage"] = e.stage
+        err.update({"ok": False, "cmd": cmd, "error": str(e),
+                    "duration_s": round(_time.time() - started, 3)})
         rid = payload.get("id")
         if rid:
             await agent.publish(f"custom/reachy/cmd_result/{rid}", err)
-        await agent.publish("custom/reachy/events", {"type": cmd, "ok": False, "error": str(e), "ts": _time.time()})
+        event = dict(err)
+        event.update({"type": cmd, "ok": False, "ts": _time.time()})
+        await agent.publish("custom/reachy/events", event)
         await agent.log(f"cmd '{cmd}' failed: {e}", level="error")
         if return_result:
             return err
@@ -1373,7 +1491,6 @@ async def _sleep(agent):
     """Animated 'sleep' — head droops, antennas fall. We DO NOT call mini.goto_sleep()
     because that disables motors and often loses the daemon connection, requiring a
     full agent restart. This is purely cosmetic."""
-    agent.state["tracking"] = False  # a sleeping robot shouldn't chase sounds
     mini = agent.state["mini"]
     np   = agent.state["np"]
     create_head_pose = agent.state["create_head_pose"]
@@ -1576,7 +1693,6 @@ async def _shutup(agent, payload=None):
 
 async def _stop(agent):
     """Best-effort motion abort — not all SDK versions have a stop primitive, so we re-target current pose."""
-    agent.state["tracking"] = False  # halt continuous sound tracking, if running
     await _stop_audio(agent)          # a full 'stop' also cuts any speech
     mini = agent.state["mini"]
     # If the SDK exposes a stop, use it.
@@ -1754,13 +1870,17 @@ async def _say(agent, payload):
     # of blocking for its full length.
     pad = _say_playback_pad(speech_seconds, payload)
     waited = 0.0
-    while waited < pad:
-        if agent.state.get("stop_speaking"):
-            break
-        chunk = min(0.1, pad - waited)
-        await asyncio.sleep(chunk)
-        waited += chunk
-    agent.state["_speaking"] = False
+    try:
+        while waited < pad:
+            if agent.state.get("stop_speaking"):
+                break
+            chunk = min(0.1, pad - waited)
+            await asyncio.sleep(chunk)
+            waited += chunk
+    finally:
+        # Cancellation (conversation_stop) must never leave the microphone
+        # gate believing Reachy is still speaking.
+        agent.state["_speaking"] = False
 
     # Clean up the previous utterance now that a new one is playing.
     prev = agent.state.get("_say_tmp")
@@ -2158,23 +2278,71 @@ def _require_mic(agent, *, record=False, doa=False):
     return media
 
 
-async def _read_doa(agent, media):
-    """Read the mic array's direction of arrival, surfacing SDK failures instead
-    of swallowing them.
-
-    Returns the raw SDK DoA (a tuple-like of (angle_deg, voice_detected?)) or
-    None when nothing is currently localized. Raises RuntimeError — with the
-    backend context, and after logging — when the get_DoA call itself fails, so
-    callers report a real error rather than silently "hearing nothing".
-    """
+async def _read_daemon_doa(agent):
+    """Read onboard DoA from the robot daemon for network/WebRTC clients."""
+    import aiohttp
+    url = _daemon_url(agent)
+    if not url:
+        return None
+    endpoint = f"{url.rstrip('/')}/api/state/doa"
     try:
-        return await _do(media.get_DoA)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(endpoint, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                if response.status == 404:
+                    return None
+                if response.status != 200:
+                    raise RuntimeError(f"daemon DoA endpoint returned HTTP {response.status}")
+                data = await response.json()
+        angle = data.get("angle")
+        if angle is None:
+            return None
+        return float(angle), bool(data.get("speech_detected", False))
     except Exception as e:
+        await agent.log(f"remote DoA read failed ({endpoint}): {e}", level="warning")
+        return None
+
+
+async def _read_doa(agent, media):
+    """Read DoA locally, falling back to the robot daemon for WebRTC clients."""
+    local_error = None
+    try:
+        doa = await _do(media.get_DoA)
+        if doa:
+            return doa
+    except Exception as e:
+        local_error = e
+
+    # reachy_mini 1.8.0 WebRTC get_DoA() probes USB on this host instead of
+    # transporting the robot's reading. The daemon exposes the onboard value.
+    remote = await _read_daemon_doa(agent)
+    if remote:
+        return remote
+
+    if local_error is not None:
         await agent.log(
             f"get_DoA failed (media_backend="
-            f"'{agent.state.get('media_backend') or 'default'}'): {e}",
+            f"'{agent.state.get('media_backend') or 'default'}'): {local_error}",
             level="error")
-        raise RuntimeError(f"direction-of-arrival read failed: {e}")
+        raise RuntimeError(f"direction-of-arrival read failed: {local_error}")
+    return None
+
+def _doa_angle_deg(doa):
+    """Convert a raw SDK DoA reading to degrees — the single DoA-unit boundary.
+
+    reachy_mini (1.8.x) reports direction-of-arrival in RADIANS (the ReSpeaker
+    DOA_VALUE_RADIANS register); the rest of the mic path uses degrees for
+    human-facing reporting. Convert here and NOWHERE else.
+    Raises ValueError when the reading is non-numeric or non-finite (NaN / +/-inf)
+    so a garbage value is never mapped to a motor target.
+    """
+    import math
+    try:
+        rad = float(doa[0])
+    except (TypeError, ValueError, IndexError) as e:
+        raise ValueError(f"unreadable DoA value: {doa!r}") from e
+    if not math.isfinite(rad):
+        raise ValueError(f"non-finite DoA value: {doa!r}")
+    return math.degrees(rad)
 
 
 def _encode_frame(frame, fmt="jpeg", quality=85):
@@ -2518,6 +2686,29 @@ async def _look_around(agent, payload):
     return {"description": answer, "result": answer, "said": answer, "views": len(frames)}
 
 
+def _flush_audio_queue(media, max_reads=64, max_seconds=0.15):
+    """Discard a bounded amount of queued WebRTC audio before push-to-talk starts."""
+    import time as _t
+    deadline = _t.monotonic() + max(0.0, float(max_seconds))
+    reads = 0
+    while reads < max_reads and _t.monotonic() < deadline:
+        if media.get_audio_sample() is None:
+            break
+        reads += 1
+    return reads
+
+
+def _trim_audio_window(audio, samplerate, channels, duration):
+    """Keep only the newest requested-duration samples from an SDK buffer."""
+    import numpy as _np
+    arr = _np.asarray(audio)
+    target_frames = max(1, int(round(float(duration) * int(samplerate or 16000))))
+    if arr.ndim == 2:
+        return arr[-target_frames:]
+    target_values = target_frames * max(1, int(channels or 1))
+    return arr[-target_values:]
+
+
 def _record_audio_blocking(media, duration, max_frames):
     """Blocking: record ~`duration` seconds of mic audio off the event loop.
 
@@ -2527,10 +2718,14 @@ def _record_audio_blocking(media, duration, max_frames):
     """
     import time as _t
     import numpy as _np
+    from collections import deque
     media.start_recording()
-    chunks = []
+    chunks = deque()
     total = 0
     try:
+        # WebRTC may retain audio from before the command. Drain a short bounded
+        # pre-roll, then capture for the full wall-clock window below.
+        _flush_audio_queue(media)
         deadline = _t.time() + max(0.05, float(duration))
         while _t.time() < deadline:
             s = media.get_audio_sample()
@@ -2539,8 +2734,10 @@ def _record_audio_blocking(media, duration, max_frames):
                 continue
             chunks.append(s)
             total += s.shape[0]
-            if max_frames and total >= max_frames:
-                break
+            # The SDK can yield queued samples faster than real time. Keep a
+            # bounded rolling buffer but never end the requested wall window early.
+            while max_frames and total > max_frames and len(chunks) > 1:
+                total -= chunks.popleft().shape[0]
     finally:
         try:
             media.stop_recording()
@@ -2554,7 +2751,11 @@ def _record_audio_blocking(media, duration, max_frames):
         ch = int(media.get_input_channels())
     except Exception:
         ch = 1
-    audio = _np.concatenate(chunks, axis=0) if chunks else _np.zeros((0,), dtype=_np.float32)
+    audio = (_np.concatenate(list(chunks), axis=0)
+             if chunks else _np.zeros((0,), dtype=_np.float32))
+    if max_frames and audio.shape[0] > max_frames:
+        audio = audio[-max_frames:]
+    audio = _trim_audio_window(audio, sr, ch, duration)
     return audio, sr, ch
 
 
@@ -2604,7 +2805,9 @@ async def _listen(agent, payload):
     backend = agent.state.get("media_backend") or "default"
     duration = max(0.1, min(30.0, float(payload.get("duration", 3.0))))
     # Defensive frame cap: 30 s at 48 kHz.
+    capture_started = _time.time()
     audio, sr, ch = await _do(_record_audio_blocking, media, duration, 30 * 48000)
+    capture_duration = round(_time.time() - capture_started, 3)
     b64, frames = await _do(_pcm_to_wav_b64, audio, sr, ch)
     # Silent-failure guard: an initialized-but-dead mic yields an empty buffer.
     # Fail loudly instead of returning ok:true with a 0-second WAV.
@@ -2616,13 +2819,14 @@ async def _listen(agent, payload):
             "retry.")
     actual = round(frames / sr, 3) if sr else 0.0
     result = {"samplerate": sr, "channels": ch, "duration_s": actual,
+              "capture_duration_s": capture_duration,
               "frames": frames, "format": "wav"}
     # DoA here is a best-effort supplement to the clip: log a failure (never
     # swallow it) but still return the audio we captured.
     try:
-        doa = await _do(media.get_DoA)
+        doa = await _read_doa(agent, media)
         if doa:
-            result["doa_deg"] = float(doa[0])
+            result["doa_deg"] = _doa_angle_deg(doa)
             if len(doa) > 1:
                 result["voice_detected"] = bool(doa[1])
     except Exception as e:
@@ -2650,6 +2854,424 @@ async def _listen(agent, payload):
     return result
 
 
+def _voice_stage_failure(stage, message, fields, started):
+    fields["total_duration_s"] = round(_time.time() - started, 3)
+    raise _CommandStageError(stage, message, fields)
+
+
+async def _ask_voice(agent, payload):
+    """Push-to-talk: capture WAV -> STT -> existing main bridge -> Reachy speech."""
+    import base64 as _b64
+    started = _time.time()
+    fields = {
+        "transcript": "",
+        "capture_duration_s": 0.0,
+        "transcription_duration_s": 0.0,
+        "response_text": "",
+        "total_duration_s": 0.0,
+        "error": None,
+    }
+    listen_payload = {
+        "duration": payload.get("duration", 5.0),
+        "include_b64": True,
+        "publish": False,
+    }
+    try:
+        clip = await _listen(agent, listen_payload)
+        fields["capture_duration_s"] = float(clip.get("capture_duration_s")
+                                                or clip.get("duration_s") or 0.0)
+        wav_bytes = _b64.b64decode(clip.get("audio_b64") or "", validate=True)
+        if not wav_bytes:
+            raise RuntimeError("captured WAV is empty")
+    except Exception as e:
+        _voice_stage_failure("capture_failed", str(e), fields, started)
+
+    transcription_started = _time.time()
+    try:
+        from wactorz.catalogue_agents.reachy_stt import transcribe_wav
+        transcription = await transcribe_wav(wav_bytes, payload)
+        fields["transcription_duration_s"] = round(
+            _time.time() - transcription_started, 3)
+        fields["transcript"] = str(transcription.text or "").strip()
+        fields["stt_backend"] = transcription.backend
+        fields["stt_model"] = transcription.model
+    except Exception as e:
+        fields["transcription_duration_s"] = round(
+            _time.time() - transcription_started, 3)
+        _voice_stage_failure("transcription_failed", str(e), fields, started)
+    if not fields["transcript"]:
+        _voice_stage_failure(
+            "empty_transcript", "speech-to-text returned no words", fields, started)
+
+    task_id = payload.get("_task_id") or payload.get("task") or payload.get("id")
+    try:
+        bridged = await _bridge_to_main(agent, fields["transcript"], task_id)
+    except Exception as e:
+        _voice_stage_failure("routing_failed", str(e), fields, started)
+    if bridged is None:
+        _voice_stage_failure(
+            "routing_failed", "main returned no usable response", fields, started)
+    fields["response_text"] = str(bridged.get("result") or "").strip()
+    if not fields["response_text"]:
+        _voice_stage_failure(
+            "routing_failed", "main returned an empty response", fields, started)
+    fields["result"] = fields["response_text"]
+    if not bridged.get("spoke"):
+        _voice_stage_failure(
+            "speech_failed",
+            bridged.get("speech_error") or "Reachy did not play the response",
+            fields,
+            started,
+        )
+    fields["total_duration_s"] = round(_time.time() - started, 3)
+    fields["said"] = fields["response_text"]
+    fields["bridged"] = True
+    fields["spoke"] = True
+    return fields
+
+
+
+
+_CONVERSATION_STOP_PHRASES = {
+    "stop listening",
+    "end conversation",
+    "goodbye reachy",
+}
+
+
+def _conversation_stop_phrase(text):
+    import re as _re
+    normalized = _re.sub(r"[^a-z0-9 ]+", " ", str(text or "").lower())
+    normalized = " ".join(normalized.split())
+    return normalized in _CONVERSATION_STOP_PHRASES
+
+
+def _conversation_turn(session):
+    return {
+        "session_id": session.get("session_id"),
+        "turn_index": int(session.get("turn_index") or 0),
+        "state": session.get("state", "idle"),
+        "transcript": "",
+        "response": "",
+        "capture_duration_s": 0.0,
+        "transcription_duration_s": 0.0,
+        "routing_duration_s": 0.0,
+        "stop_reason": None,
+        "ok": True,
+        "error": None,
+    }
+
+
+async def _conversation_publish(agent, session, state, turn=None, *, ok=True,
+                                error=None, stop_reason=None):
+    session["state"] = state
+    agent.state["conversation_state"] = state
+    event = _conversation_turn(session)
+    if turn:
+        event.update(turn)
+    event.update({
+        "session_id": session.get("session_id"),
+        "turn_index": int(session.get("turn_index") or 0),
+        "state": state,
+        "stop_reason": stop_reason,
+        "ok": bool(ok),
+        "error": str(error) if error else None,
+        "type": "conversation",
+        "ts": _time.time(),
+    })
+    await agent.publish("custom/reachy/events", event)
+    return event
+
+
+def _conversation_route_text(transcript, history):
+    """Add only enough prior context to resolve follow-ups such as 'turn it on'."""
+    if not history:
+        return transcript
+    lines = []
+    for item in history[-2:]:
+        lines.append(f"Previous user request: {item.get('transcript', '')}")
+        lines.append(f"Previous Wactorz response: {item.get('response', '')}")
+    context = "\n".join(lines)
+    return (
+        f"Current request: {transcript}\n\n"
+        "[Conversation context only; execute only the current request.\n"
+        f"{context}\n]"
+    )
+
+
+async def _conversation_blocking_worker(session, fn, *args):
+    """Await a cancellable mic worker and let its thread observe the stop event."""
+    worker = asyncio.create_task(_do(fn, *args))
+    session["worker"] = worker
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        session["cancel_event"].set()
+        try:
+            await worker
+        except Exception:
+            pass
+        raise
+    finally:
+        if session.get("worker") is worker:
+            session["worker"] = None
+
+
+async def _conversation_capture(agent, session, vad_config):
+    from wactorz.catalogue_agents.reachy_vad import capture_utterance
+    media = _require_mic(agent, record=True)
+    return await _conversation_blocking_worker(
+        session, capture_utterance, media, session["cancel_event"], vad_config)
+
+
+async def _conversation_cooldown(agent, session, turn, seconds):
+    from wactorz.catalogue_agents.reachy_vad import drain_audio
+    await _conversation_publish(agent, session, "cooldown", turn)
+    media = _require_mic(agent, record=True)
+    await _conversation_blocking_worker(
+        session, drain_audio, media, seconds, session["cancel_event"])
+
+
+async def _conversation_start(agent, payload):
+    import threading as _threading
+    import uuid as _uuid
+    existing = agent.state.get("conversation_session")
+    if existing and existing.get("task") and not existing["task"].done():
+        fields = _conversation_turn(existing)
+        raise _CommandStageError(
+            "session_active",
+            f"conversation {existing['session_id']} is already active",
+            fields,
+        )
+
+    session = {
+        "session_id": str(payload.get("session_id") or _uuid.uuid4().hex[:12]),
+        "turn_index": 0,
+        "state": "idle",
+        "cancel_event": _threading.Event(),
+        "stop_reason": None,
+        "task": None,
+        "worker": None,
+        "payload": dict(payload),
+        "history": [],
+        "consecutive_errors": 0,
+    }
+    agent.state["conversation_session"] = session
+    agent.state["conversation_state"] = "idle"
+    session["task"] = agent.run_in_background(_conversation_loop(agent, session))
+    result = _conversation_turn(session)
+    result.update({
+        "started": True,
+        "result": "Conversation started. Speak to Reachy; say 'stop listening' to end.",
+    })
+    return result
+
+
+async def _conversation_stop(agent, payload=None):
+    payload = payload or {}
+    session = agent.state.get("conversation_session")
+    if not session:
+        return {
+            "session_id": None, "turn_index": 0, "state": "stopped",
+            "transcript": "", "response": "", "capture_duration_s": 0.0,
+            "transcription_duration_s": 0.0, "routing_duration_s": 0.0,
+            "stop_reason": payload.get("reason") or "already_stopped",
+            "ok": True, "error": None, "already_stopped": True,
+            "result": "No conversation is active.",
+        }
+    reason = str(payload.get("reason") or "explicit_stop")
+    session["stop_reason"] = reason
+    session["cancel_event"].set()
+    if session.get("state") == "speaking" or agent.state.get("_speaking"):
+        await _stop_audio(agent)
+    task = session.get("task")
+    if task and not task.done() and task is not asyncio.current_task():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    result = _conversation_turn(session)
+    result.update({"state": "stopped", "stop_reason": reason, "stopped": True,
+                   "result": f"Conversation stopped ({reason})."})
+    return result
+
+
+async def _conversation_turn_error(agent, session, turn, error, max_errors):
+    session["consecutive_errors"] = int(session.get("consecutive_errors") or 0) + 1
+    await _conversation_publish(agent, session, "error", turn, ok=False, error=error)
+    return session["consecutive_errors"] < max_errors
+
+
+async def _conversation_loop(agent, session):
+    import base64 as _b64
+    from wactorz.catalogue_agents.reachy_stt import transcribe_wav
+    from wactorz.catalogue_agents.reachy_vad import VADConfig
+
+    payload = session["payload"]
+    max_turns = max(1, min(100, int(payload.get("max_turns", 10))))
+    max_errors = max(1, min(10, int(payload.get("max_consecutive_errors", 3))))
+    cooldown_s = max(0.1, min(5.0, float(payload.get("cooldown_s", 0.7))))
+    vad_config = VADConfig(
+        speech_start_timeout_s=max(1.0, min(300.0, float(
+            payload.get("inactivity_timeout", 30.0)))),
+        silence_s=max(0.3, min(3.0, float(payload.get("silence_s", 0.8)))),
+        max_utterance_s=max(1.0, min(30.0, float(
+            payload.get("max_utterance_s", 12.0)))),
+        min_speech_s=max(0.09, min(2.0, float(payload.get("min_speech_s", 0.18)))),
+        pre_roll_s=max(0.0, min(1.0, float(payload.get("pre_roll_s", 0.3)))),
+        flush_s=max(0.05, min(2.0, float(payload.get("flush_s", 0.35)))),
+        mode=max(0, min(3, int(payload.get("vad_mode", 2)))),
+        min_rms=max(0.0, min(1.0, float(payload.get("vad_min_rms", 0.01)))),
+    )
+    stopped_published = False
+    turn = _conversation_turn(session)
+    try:
+        for turn_index in range(1, max_turns + 1):
+            session["turn_index"] = turn_index
+            turn = _conversation_turn(session)
+            await _conversation_publish(agent, session, "listening", turn)
+
+            try:
+                capture = await _conversation_capture(agent, session, vad_config)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await _conversation_publish(
+                    agent, session, "error", turn, ok=False, error=exc,
+                    stop_reason="capture_failed")
+                session["stop_reason"] = "capture_failed"
+                break
+            if capture.stop_reason == "cancelled":
+                raise asyncio.CancelledError
+            if capture.stop_reason == "inactivity_timeout":
+                session["stop_reason"] = "inactivity_timeout"
+                break
+            if not capture.audio.size:
+                keep_going = await _conversation_turn_error(
+                    agent, session, turn, "capture returned no speech", max_errors)
+                if not keep_going:
+                    session["stop_reason"] = "too_many_errors"
+                    break
+                continue
+
+            turn["capture_duration_s"] = capture.duration_s
+            wav_b64, _frames = await _do(
+                _pcm_to_wav_b64, capture.audio, capture.samplerate, capture.channels)
+            wav_bytes = _b64.b64decode(wav_b64)
+            await _conversation_publish(agent, session, "transcribing", turn)
+            transcription_started = _time.time()
+            try:
+                transcription = await transcribe_wav(wav_bytes, payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                turn["transcription_duration_s"] = round(
+                    _time.time() - transcription_started, 3)
+                keep_going = await _conversation_turn_error(
+                    agent, session, turn, f"transcription_failed: {exc}", max_errors)
+                if not keep_going:
+                    session["stop_reason"] = "too_many_errors"
+                    break
+                await _conversation_cooldown(agent, session, turn, cooldown_s)
+                continue
+            turn["transcription_duration_s"] = round(
+                _time.time() - transcription_started, 3)
+            turn["transcript"] = str(transcription.text or "").strip()
+            if not turn["transcript"]:
+                keep_going = await _conversation_turn_error(
+                    agent, session, turn, "empty_transcript", max_errors)
+                if not keep_going:
+                    session["stop_reason"] = "too_many_errors"
+                    break
+                await _conversation_cooldown(agent, session, turn, cooldown_s)
+                continue
+            if _conversation_stop_phrase(turn["transcript"]):
+                session["stop_reason"] = "stop_phrase"
+                break
+
+            route_text = _conversation_route_text(
+                turn["transcript"], session.get("history", []))
+            await _conversation_publish(agent, session, "routing", turn)
+            routing_started = _time.time()
+
+            async def _before_speak(reply):
+                turn["routing_duration_s"] = round(_time.time() - routing_started, 3)
+                turn["response"] = str(reply or "").strip()
+                await _conversation_publish(agent, session, "speaking", turn)
+
+            try:
+                bridged = await _bridge_to_main(
+                    agent, route_text, f"{session['session_id']}:{turn_index}",
+                    await_playback=True, before_speak=_before_speak,
+                    session_id=session["session_id"])
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                turn["routing_duration_s"] = round(_time.time() - routing_started, 3)
+                keep_going = await _conversation_turn_error(
+                    agent, session, turn, f"routing_failed: {exc}", max_errors)
+                if not keep_going:
+                    session["stop_reason"] = "too_many_errors"
+                    break
+                await _conversation_cooldown(agent, session, turn, cooldown_s)
+                continue
+            if bridged is None:
+                turn["routing_duration_s"] = round(_time.time() - routing_started, 3)
+                keep_going = await _conversation_turn_error(
+                    agent, session, turn, "routing_failed: no response", max_errors)
+                if not keep_going:
+                    session["stop_reason"] = "too_many_errors"
+                    break
+                await _conversation_cooldown(agent, session, turn, cooldown_s)
+                continue
+            if not turn["response"]:
+                turn["response"] = str(bridged.get("result") or "").strip()
+            if not bridged.get("spoke"):
+                keep_going = await _conversation_turn_error(
+                    agent, session, turn,
+                    f"speech_failed: {bridged.get('speech_error') or 'not spoken'}",
+                    max_errors)
+                if not keep_going:
+                    session["stop_reason"] = "too_many_errors"
+                    break
+                await _conversation_cooldown(agent, session, turn, cooldown_s)
+                continue
+
+            session["consecutive_errors"] = 0
+            session["history"].append({
+                "transcript": turn["transcript"], "response": turn["response"]})
+            await agent.notify_user(turn["response"])
+            if turn_index >= max_turns:
+                session["stop_reason"] = "max_turns"
+                break
+            await _conversation_cooldown(agent, session, turn, cooldown_s)
+    except asyncio.CancelledError:
+        session["stop_reason"] = session.get("stop_reason") or "cancelled"
+    except Exception as exc:
+        session["stop_reason"] = "error"
+        try:
+            await _conversation_publish(
+                agent, session, "error", turn, ok=False, error=exc,
+                stop_reason="error")
+        except Exception:
+            pass
+    finally:
+        reason = session.get("stop_reason") or "stopped"
+        try:
+            await _conversation_publish(
+                agent, session, "stopped", turn,
+                ok=reason not in ("error", "capture_failed", "too_many_errors"),
+                error=(reason if reason in ("error", "capture_failed", "too_many_errors")
+                       else None),
+                stop_reason=reason)
+            stopped_published = True
+        except Exception:
+            pass
+        agent.state["conversation_state"] = "stopped"
+        if agent.state.get("conversation_session") is session:
+            agent.state["conversation_session"] = None
+        if not stopped_published:
+            agent.state["conversation_state"] = "error"
+
+
 async def _doa(agent, payload):
     """Report the mic array's current direction of arrival: angle in degrees
     plus whether a voice/source is presently detected."""
@@ -2657,228 +3279,13 @@ async def _doa(agent, payload):
     doa = await _read_doa(agent, media)
     if not doa:
         return {"detected": False, "result": "No sound localized."}
-    result = {"angle_deg": float(doa[0]), "detected": True}
+    result = {"angle_deg": _doa_angle_deg(doa), "detected": True}
     if len(doa) > 1:
         result["voice_detected"] = bool(doa[1])
     v = result.get("voice_detected")
     vstr = "" if v is None else (", voice detected" if v else ", no voice")
     result["result"] = f"Sound from {result['angle_deg']:.0f}°{vstr}."
     return result
-
-
-def _doa_to_yaw(angle_deg, max_yaw=90.0, offset_deg=0.0, invert=False):
-    """Map a mic-array direction-of-arrival angle to a head-yaw command (degrees).
-
-    DoA is reported in degrees; we add an optional calibration offset, normalise
-    to [-180, 180], optionally invert (array vs head handedness), then clamp to
-    +/- max_yaw. Head-yaw convention here is left = +, right = -. The offset and
-    invert knobs exist because the array's 0-reference and rotation sense are
-    robot-specific and may need a one-time tune on the real hardware.
-    """
-    a = float(angle_deg) + float(offset_deg)
-    a = ((a + 180.0) % 360.0) - 180.0  # normalise to [-180, 180]
-    if invert:
-        a = -a
-    m = abs(float(max_yaw))
-    return max(-m, min(m, a))
-
-
-async def _turn_to_sound(agent, payload):
-    """Turn the head toward wherever the mic array last localized a sound.
-
-    Sensing (DoA) works whenever the mic is live; the head turn itself needs the
-    motors. If nothing is localized (or require_voice is set and no voice is
-    present), this does nothing rather than snapping to a stale angle.
-
-      {"cmd":"turn_to_sound"}                      -> face the localized sound
-      {"cmd":"turn_to_sound","require_voice":true} -> only turn for a human voice
-      {"cmd":"turn_to_sound","duration":0.6}       -> head-move duration (s)
-      {"cmd":"turn_to_sound","max_yaw":90}         -> clamp the yaw (deg)
-      {"cmd":"turn_to_sound","offset_deg":0,"invert":false} -> one-time calibration
-    """
-    media = _require_mic(agent, doa=True)
-    doa = await _read_doa(agent, media)
-    if not doa:
-        return {"detected": False, "turned": False, "result": "No sound to turn toward."}
-    # Validate the reading before turning: a garbled or non-finite angle must
-    # never be handed to the motors as a yaw target.
-    try:
-        angle = float(doa[0])
-    except (TypeError, ValueError, IndexError):
-        raise RuntimeError(f"mic array returned an unreadable DoA value: {doa!r}")
-    if angle != angle or abs(angle) == float("inf"):  # NaN or +/-inf
-        return {"detected": False, "turned": False,
-                "result": "Sound direction was indeterminate; not turning."}
-    voice = bool(doa[1]) if len(doa) > 1 else None
-    if payload.get("require_voice") and voice is False:
-        return {"detected": True, "angle_deg": angle, "voice_detected": voice,
-                "turned": False,
-                "result": f"Heard a non-voice sound from {angle:.0f}°; not turning."}
-    yaw = _doa_to_yaw(angle,
-                      max_yaw=float(payload.get("max_yaw", 90.0)),
-                      offset_deg=float(payload.get("offset_deg", 0.0)),
-                      invert=bool(payload.get("invert", False)))
-    await _pose(agent, {"yaw": yaw, "duration": float(payload.get("duration", 0.6))})
-    return {"detected": True, "angle_deg": angle, "voice_detected": voice,
-            "turned": True, "yaw": yaw,
-            "result": f"Turned toward sound at {angle:.0f}° (yaw {yaw:.0f}°)."}
-
-
-# ============================================================
-# Continuous sound tracking (opt-in) — face whoever is speaking
-# ============================================================
-# turn_to_sound is one-shot. track_sound runs a background loop that keeps
-# facing the current speaker until told to stop. It only starts when the user
-# explicitly asks for an ongoing behaviour and stops on
-# {"cmd":"track_sound","on":false} or on stop / sleep / disconnect. A deadband
-# keeps the head from chasing tiny fluctuations and thrashing the motors, and
-# large angles rotate the BODY (body_yaw) so the robot can face anywhere in the
-# room, not just the +/-max_head_yaw arc a head turn alone can reach.
-
-def _split_track_yaw(target_deg, max_head_yaw=45.0, max_body_yaw=150.0):
-    """Split a desired facing angle into (body_yaw, head_yaw), body-first.
-
-    The body takes as much of the turn as its limit allows and the head covers
-    only the residual, so Reachy faces the source with a roughly centred head
-    (looks attentive) and can still reach angles a head turn alone could not.
-    """
-    t = ((float(target_deg) + 180.0) % 360.0) - 180.0
-    body = max(-abs(max_body_yaw), min(abs(max_body_yaw), t))
-    head = max(-abs(max_head_yaw), min(abs(max_head_yaw), t - body))
-    return body, head
-
-
-def _angle_delta(a, b):
-    """Smallest signed difference a-b on a circle, in [-180, 180]."""
-    return ((float(a) - float(b) + 180.0) % 360.0) - 180.0
-
-
-def _track_decision(angle_deg, last_target, deadband_deg,
-                    offset_deg=0.0, invert=False,
-                    max_head_yaw=45.0, max_body_yaw=150.0):
-    """Pure planner for one tracking tick.
-
-    Applies the array's calibration (offset/invert), normalises to [-180, 180],
-    and returns whether to move plus the body/head split. Suppresses the move
-    when the new source is within deadband of the last angle we turned to, so
-    the robot holds still instead of twitching at every sample.
-    """
-    a = float(angle_deg) + float(offset_deg)
-    a = ((a + 180.0) % 360.0) - 180.0
-    if invert:
-        a = -a
-    if last_target is not None and abs(_angle_delta(a, last_target)) < float(deadband_deg):
-        return {"turn": False, "target": a}
-    body, head = _split_track_yaw(a, max_head_yaw, max_body_yaw)
-    return {"turn": True, "target": a, "body_yaw": body, "head_yaw": head}
-
-
-async def _track_step(agent):
-    """One tracking iteration: read DoA, decide, and turn if warranted.
-
-    Returns the decision dict, or None when there is no reading to act on. Kept
-    separate from the loop so it is unit-testable without a real robot.
-    """
-    media = _media(agent)
-    cfg = agent.state.get("track_cfg", {})
-    # Capability is validated once when tracking starts (_track_sound); here we
-    # stay resilient — log a read failure and skip this tick rather than raising
-    # out of the background loop.
-    try:
-        doa = await _do(media.get_DoA)
-    except Exception as e:
-        await agent.log(f"track_sound: DoA read failed: {e}", level="warning")
-        return {"turn": False, "reason": "doa-error", "error": str(e)}
-    if not doa:
-        return None
-    angle = float(doa[0])
-    voice = bool(doa[1]) if len(doa) > 1 else True
-    if cfg.get("require_voice", True) and not voice:
-        return {"turn": False, "reason": "no-voice", "angle_deg": angle}
-    decision = _track_decision(
-        angle, agent.state.get("track_last_target"),
-        deadband_deg=float(cfg.get("deadband_deg", 15.0)),
-        offset_deg=float(cfg.get("offset_deg", 0.0)),
-        invert=bool(cfg.get("invert", False)),
-        max_head_yaw=float(cfg.get("max_head_yaw", 45.0)),
-        max_body_yaw=float(cfg.get("max_body_yaw", 150.0)),
-    )
-    if decision.get("turn"):
-        agent.state["track_last_target"] = decision["target"]
-        await _pose(agent, {"yaw": decision["head_yaw"],
-                            "body_yaw": decision["body_yaw"],
-                            "duration": float(cfg.get("duration", 0.5))})
-    return decision
-
-
-async def _track_loop(agent):
-    """Background loop: step, sleep, repeat while tracking stays enabled."""
-    await agent.log("sound tracking started")
-    try:
-        while agent.state.get("tracking"):
-            try:
-                await _track_step(agent)
-            except Exception as e:
-                await agent.log(f"track_sound step failed: {e}", level="warning")
-            await asyncio.sleep(float(agent.state.get("track_cfg", {}).get("interval", 0.4)))
-    finally:
-        agent.state["tracking"] = False
-        await agent.log("sound tracking stopped")
-
-
-async def _track_sound(agent, payload):
-    """Start/stop continuously turning toward the current speaker.
-
-      {"cmd":"track_sound","on":true}    -> start (only when the user asks for it)
-      {"cmd":"track_sound","on":false}   -> stop  (also: {"stop":true} / {"off":true})
-      knobs (optional): interval, require_voice, deadband_deg, duration,
-                        max_head_yaw, max_body_yaw, offset_deg, invert
-
-    Runs a single background loop; a second start just updates the settings. The
-    loop stops on its own on stop / sleep / disconnect.
-    """
-    on = payload.get("on")
-    if on is None:
-        on = payload.get("enable", payload.get("start"))
-    if (payload.get("off") or payload.get("stop")
-            or (isinstance(on, str) and on.lower() in ("off", "false", "stop", "no"))):
-        on = False
-    if on is None:
-        on = True  # bare {"cmd":"track_sound"} means start
-
-    if not on:
-        agent.state["tracking"] = False
-        return {"tracking": False, "result": "Stopped turning toward sound."}
-
-    # A failed START raises so _dispatch reports ok:false (same convention as
-    # listen / doa / turn_to_sound), rather than an ok:true with tracking:false.
-    ok, reason = _is_connected(agent)
-    if not ok:
-        raise RuntimeError(reason)
-
-    # Fail fast if the mic array can't localize sound, rather than launching a
-    # background loop that could never turn. _require_mic raises on its own.
-    _require_mic(agent, doa=True)
-
-    cfg = {
-        "interval":      max(0.1, min(5.0, float(payload.get("interval", 0.4)))),
-        "require_voice": bool(payload.get("require_voice", True)),
-        "deadband_deg":  max(0.0, float(payload.get("deadband_deg", 15.0))),
-        "duration":      max(0.1, float(payload.get("duration", 0.5))),
-        "max_head_yaw":  abs(float(payload.get("max_head_yaw", 45.0))),
-        "max_body_yaw":  abs(float(payload.get("max_body_yaw", 150.0))),
-        "offset_deg":    float(payload.get("offset_deg", 0.0)),
-        "invert":        bool(payload.get("invert", False)),
-    }
-    agent.state["track_cfg"] = cfg
-    if agent.state.get("tracking"):
-        return {"tracking": True, "cfg": cfg,
-                "result": "Already tracking sound; updated the settings."}
-    agent.state["tracking"] = True
-    agent.state["track_last_target"] = None
-    agent.run_in_background(_track_loop(agent))
-    return {"tracking": True, "cfg": cfg,
-            "result": "Now turning toward whoever's speaking. Say 'stop tracking the sound' to stop."}
 
 
 # ============================================================

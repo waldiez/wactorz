@@ -9,6 +9,7 @@ sys.modules.setdefault("aiohttp", types.ModuleType("aiohttp"))
 sys.modules.setdefault("websockets", types.ModuleType("websockets"))
 sys.modules.setdefault("openai", types.ModuleType("openai"))
 
+from wactorz.agents.dynamic_agent import DynamicAgent
 from wactorz.agents.llm_agent import OpenAIProvider
 from wactorz.agents.main_actor import MainActor
 from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
@@ -68,6 +69,35 @@ class MainActorActuateRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(llm.complete.await_args.kwargs["reasoning_effort"], "none")
 
 
+class DynamicHandleTaskMailboxTest(unittest.IsolatedAsyncioTestCase):
+    async def test_handle_task_runs_in_background_so_results_can_be_received(self):
+        from wactorz.core.actor import Message, MessageType
+
+        actor = DynamicAgent(code="", name="bridge-agent")
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        replied = asyncio.Event()
+        sent = []
+
+        async def _handle_task(_api, _payload):
+            entered.set()
+            await release.wait()
+            return {"result": "done"}
+
+        async def _send(target, message_type, payload):
+            sent.append((target, message_type, payload))
+            replied.set()
+
+        actor._fn_handle_task = _handle_task
+        actor.send = _send
+        msg = Message(type=MessageType.TASK, sender_id="caller", payload={})
+
+        await asyncio.wait_for(actor.handle_message(msg), timeout=0.1)
+        await asyncio.wait_for(entered.wait(), timeout=0.1)
+        self.assertEqual(sent, [])
+        release.set()
+        await asyncio.wait_for(replied.wait(), timeout=0.1)
+        self.assertEqual(sent[0][2]["result"], "done")
 class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
     """An interface bridge (e.g. reachy) routes through the FULL orchestrator."""
 
@@ -75,7 +105,18 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
         from wactorz.core.actor import Message, MessageType
 
         actor = MainActor(llm_provider=None)
-        actor.process_user_input = AsyncMock(return_value="It is sunny.")
+        seen = {}
+
+        async def _process(text):
+            seen["source"] = actor._current_interface_source()
+            seen["prefix"] = actor._prefix_with_live_context(text)
+            return "It is sunny."
+
+        actor.process_user_input = AsyncMock(side_effect=_process)
+        actor._registry = types.SimpleNamespace(all_actors=lambda: [
+            types.SimpleNamespace(name="reachy-mini"),
+            types.SimpleNamespace(name="weather-agent"),
+        ])
         sent = []
 
         async def _send(target, mtype, payload):
@@ -87,11 +128,18 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
             type=MessageType.TASK,
             sender_id="reachy-1",
             payload={"text": "weather?", "_via_interface": True,
+                     "_interface_source": "reachy-mini",
                      "_task_id": "abc", "_reply_to": "reachy-1"},
         )
         await actor._handle_task(msg)
         await asyncio.sleep(0.05)  # the request runs as a background task
 
+        self.assertEqual(seen["source"], "reachy-mini")
+        running_line = next(line for line in seen["prefix"].splitlines()
+                            if line.startswith("Currently running agents"))
+        self.assertIn("weather-agent", running_line)
+        self.assertNotIn("reachy-mini", running_line)
+        self.assertIn("never delegate back", seen["prefix"])
         actor.process_user_input.assert_awaited_once_with("weather?")
         self.assertEqual(len(sent), 1)
         target, mtype, payload = sent[0]
@@ -99,6 +147,29 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mtype, MessageType.RESULT)
         self.assertEqual(payload["_task_id"], "abc")
         self.assertEqual(payload["result"], "It is sunny.")
+
+    async def test_interface_source_cannot_be_redelegated(self):
+        from wactorz.agents import main_actor as main_module
+
+        actor = MainActor(llm_provider=None)
+        actor._resolve_or_spawn = AsyncMock()
+        token = main_module._INTERFACE_SOURCE.set("reachy-mini")
+        try:
+            structured, results = await actor._process_delegate_commands(
+                '<delegate>{"agent":"reachy-mini","task":"say four"}</delegate>'
+            )
+            loose = await actor._execute_llm_delegations(
+                "@reachy-mini say four"
+            )
+        finally:
+            main_module._INTERFACE_SOURCE.reset(token)
+
+        marker = "[interface loop prevented: reachy-mini]"
+        self.assertEqual(structured, marker)
+        self.assertEqual(results, [marker])
+        self.assertEqual(loose, marker)
+        actor._resolve_or_spawn.assert_not_awaited()
+
 
     async def test_plain_task_does_not_use_orchestrator(self):
         from wactorz.core.actor import Message, MessageType

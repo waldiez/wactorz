@@ -27,7 +27,7 @@ The catalogue installer can install recipe dependencies on first spawn. To insta
 manually:
 
 ```bash
-pip install reachy-mini numpy edge-tts
+pip install reachy-mini numpy edge-tts webrtcvad-wheels
 ```
 
 `edge-tts` is required for the `say` command (speech synthesis); the other
@@ -117,6 +117,139 @@ await agent.send_to("reachy-mini", "do a happy gesture")
 await agent.send_to("reachy-mini", "say hello")
 ```
 
+## Use Reachy as the Wactorz interface
+
+Use the explicit `ask Wactorz` prefix in chat to bypass Reachy's local robot planner:
+
+~~~
+@reachy-mini ask Wactorz what's the weather in Athens?
+@reachy-mini ask Wactorz turn off the living-room light
+@reachy-mini ask Wactorz summarize my calendar today
+~~~
+
+The prefix forwards the remaining text to main with `_via_interface=True`, so it uses
+the same intent routing, agents, tools, and Home Assistant actuator path as normal
+Wactorz chat. The final text is returned to chat and spoken through Reachy's speaker.
+Without the prefix, Reachy handles its own robot, camera, speech, microphone, and
+Home Assistant commands first; unhandled text can still fall through to main, but
+`ask Wactorz` is the deterministic interface route.
+
+The full path is:
+
+~~~
+text to @reachy-mini -> reachy-mini -> main -> selected Wactorz agent/tool
+                    <- spoken and text answer <-
+~~~
+
+### Push-to-talk voice input
+
+Voice input is an explicit, one-shot command. It records a bounded clip, transcribes
+the WAV, sends the transcript through the same `_bridge_to_main` interface path above,
+returns the answer to chat, and speaks it through Reachy:
+
+~~~
+@reachy-mini listen and ask Wactorz
+~~~
+
+Or over MQTT:
+
+~~~json
+topic: custom/reachy/cmd/ask_voice
+payload: {"duration": 5}
+~~~
+
+`ask_voice` remains one-shot. There is deliberately no always-on microphone or wake
+word.
+The default backend is local `faster-whisper`; install and configure one backend before
+using `ask_voice`:
+
+~~~bash
+# Local, recommended default
+pip install faster-whisper
+REACHY_STT_BACKEND=faster-whisper
+REACHY_STT_MODEL=base
+
+# Alternative local implementation
+pip install openai-whisper
+REACHY_STT_BACKEND=whisper
+REACHY_STT_MODEL=base
+
+# Hosted OpenAI transcription (explicit opt-in; audio leaves the host)
+pip install 'wactorz[openai]'
+REACHY_STT_BACKEND=openai
+REACHY_STT_MODEL=whisper-1
+OPENAI_API_KEY=...
+~~~
+
+Optional `REACHY_STT_LANGUAGE`, `REACHY_STT_DEVICE`, and
+`REACHY_STT_COMPUTE_TYPE` settings tune language and local inference. The MQTT
+payload can override them per request with `stt_backend`, `stt_model`, `language`,
+`stt_device`, and `stt_compute_type`. Keys are read from the environment and are
+never embedded in the recipe.
+
+`custom/reachy/events` reports `transcript`, `capture_duration_s`,
+`transcription_duration_s`, `response_text`, `total_duration_s`, `ok`, `error`,
+`type`, and `ts`. Failures also carry a `stage`: `capture_failed`,
+`transcription_failed`, `empty_transcript`, `routing_failed`, or `speech_failed`.
+Completed-stage fields remain present on failures for diagnosis.
+
+Before each clip the recorder drains a short, bounded queued WebRTC pre-roll. It
+captures for the requested wall-clock duration even if the SDK yields buffered samples
+faster than real time, and then retains only the newest requested-duration audio. This
+prevents old queued audio from becoming the start of a new transcription.
+
+
+### Opt-in conversation mode
+
+Start a bounded multi-turn session explicitly:
+
+~~~
+@reachy-mini start conversation
+~~~
+
+Or over MQTT:
+
+~~~json
+topic: custom/reachy/cmd/conversation_start
+payload: {"inactivity_timeout": 30, "max_turns": 10}
+~~~
+
+Reachy uses the same STT provider and `_bridge_to_main` route as `ask_voice`, so
+Home Assistant actions and normal Wactorz tools follow the existing path. Each turn
+uses voice-activity detection and ends after about 0.8 seconds of silence. Reachy
+then speaks the result, waits for the duration reported by TTS, and drains the
+WebRTC microphone queue during a short cooldown before listening again. Previous
+turns are supplied as context so follow-ups such as "turn it back on" can resolve
+without duplicating routing logic.
+
+Stop with any of these phrases: `stop listening`, `end conversation`, or `goodbye
+Reachy`. You can also stop from chat or MQTT at any stage:
+
+~~~
+@reachy-mini stop conversation
+~~~
+
+~~~json
+topic: custom/reachy/cmd/conversation_stop
+payload: {}
+~~~
+
+Only one conversation can run at a time. A session also stops after its inactivity
+timeout or maximum turn count. Optional start payload fields include `silence_s`,
+`max_utterance_s`, `min_speech_s`, `pre_roll_s`, `flush_s`, `vad_mode`,
+`vad_min_rms`, and `cooldown_s`. The default RMS floor rejects very quiet WebRTC
+codec noise. Events on `custom/reachy/events` have `type: conversation` and report
+`session_id`, `turn_index`, `state`, `transcript`, `response`, capture/transcription/
+routing timings, `stop_reason`, `ok`, `error`, and `ts`.
+
+The current Reachy WebRTC playback API is fire-and-forget: it does not expose a
+remote playback-complete callback. Conversation mode therefore gates the microphone
+using the Edge TTS word-boundary duration plus a tail pad and cooldown. An explicit
+stop still interrupts playback immediately. Local transcription work already running
+inside a native STT library cannot be forcibly terminated, but its result is discarded
+and never routed after session cancellation.
+
+
 ## Structured commands
 
 For direct control, send a dict with `cmd`:
@@ -130,8 +263,9 @@ For direct control, send a dict with `cmd`:
 | `camera` | Capture one still frame from the onboard camera (base64 JPEG/PNG) |
 | `describe` | Look through the camera and speak a description of the scene (vision LLM) |
 | `listen` | Record a short mic-array clip (base64 WAV) with direction of arrival |
+| `ask_voice` | Push-to-talk WAV → STT → main Wactorz route → spoken answer |
+| `conversation_start`, `conversation_stop` | Opt-in VAD multi-turn Wactorz interface |
 | `doa` | Report the mic array's current direction of arrival, no recording |
-| `turn_to_sound` | Turn the head toward the direction the mic array localizes a sound (needs motors) |
 | `emotion`, `list_emotions` | Recorded gesture clips |
 | `say`, `volume` | Speech and speaker volume |
 | `ha` | Home Assistant request |
@@ -181,35 +315,12 @@ Direction of arrival only, without recording:
 {"cmd": "doa"}
 ```
 
-## Turn toward a sound
+These commands require a video/audio-capable media backend and that the daemon holds
+the camera and microphone (no Hugging Face app running on the robot).
 
-The mic is an array, so it can estimate the direction a sound came from. `turn_to_sound`
-reads that direction and turns the head toward it. Plain English "turn toward the sound",
-"face the speaker", and "who's talking?" route here.
-
-```json
-{"cmd": "turn_to_sound"}
-```
-
-```json
-{"cmd": "turn_to_sound", "require_voice": true, "duration": 0.6}
-```
-
-The *sensing* works whenever the mic is live, but the head turn needs the motors. The
-array's zero-reference and rotation sense are robot-specific — if the head turns the wrong
-way, calibrate once with `offset_deg` and/or `invert`:
-
-```json
-{"cmd": "turn_to_sound", "offset_deg": 0, "invert": false}
-```
-
-These require a video/audio-capable media backend and that the daemon holds the
-camera and microphone (no Hugging Face app running on the robot). Plain English
-also works: `take a photo`, `listen`.
-
-> `camera` does not save the frame anywhere by default — the image comes back as
-> base64 in the command result. Pass `path` to write it to disk or `publish` to
-> emit it on `custom/reachy/camera`.
+> camera does not save the frame anywhere by default — the image comes back as
+> base64 in the command result. Pass path to write it to disk or publish to
+> emit it on custom/reachy/camera.
 
 ## See and describe
 

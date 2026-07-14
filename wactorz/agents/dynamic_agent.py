@@ -1074,6 +1074,16 @@ class DynamicAgent(Actor):
 
     async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:
+            # Keep the mailbox free while handle_task awaits agent.send_to().
+            # Its RESULT must be consumed by this same actor to resolve the future.
+            if self._fn_handle_task and not getattr(msg, "_dynamic_task_background", False):
+                msg._dynamic_task_background = True
+                task = asyncio.create_task(self.handle_message(msg))
+                self._tasks.append(task)
+                task.add_done_callback(
+                    lambda done: self._tasks.remove(done) if done in self._tasks else None
+                )
+                return
             self.metrics.messages_processed += 1
 
             # Correlation id for request/reply. main.delegate_task() and

@@ -19,9 +19,11 @@ What we guard:
 import asyncio
 import base64
 import io
+import math
 import types
 import unittest
 import wave
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -157,97 +159,73 @@ class CameraCommandTest(unittest.TestCase):
 
 class ListenCommandTest(unittest.TestCase):
     def test_listen_returns_wav_and_doa(self):
-        agent = FakeAgent(FakeMedia(samplerate=16000, channels=1, doa=(42.0, True)))
+        # SDK reports DoA in RADIANS; the agent must surface it in degrees.
+        agent = FakeAgent(FakeMedia(samplerate=16000, channels=1,
+                                    doa=(math.radians(42.0), True)))
         res = _run(NS["_dispatch"](agent, "listen", {"duration": 0.1}, return_result=True))
         self.assertTrue(res["ok"])
         self.assertEqual(res["samplerate"], 16000)
         self.assertEqual(res["channels"], 1)
         self.assertEqual(res["format"], "wav")
         self.assertGreater(res["frames"], 0)
-        self.assertEqual(res["doa_deg"], 42.0)
+        self.assertAlmostEqual(res["doa_deg"], 42.0, places=6)
         self.assertTrue(res["voice_detected"])
         raw = base64.b64decode(res["audio_b64"])
         with wave.open(io.BytesIO(raw), "rb") as w:
             self.assertEqual(w.getframerate(), 16000)
 
     def test_doa_reports_direction_without_recording(self):
-        media = FakeMedia(doa=(90.0, False))
+        media = FakeMedia(doa=(math.radians(90.0), False))  # radians in
         agent = FakeAgent(media)
         res = _run(NS["_dispatch"](agent, "doa", {}, return_result=True))
         self.assertTrue(res["ok"])
         self.assertTrue(res["detected"])
-        self.assertEqual(res["angle_deg"], 90.0)
+        self.assertAlmostEqual(res["angle_deg"], 90.0, places=6)  # degrees out
         self.assertFalse(res["voice_detected"])
         self.assertFalse(media.recording)  # never started a recording
 
     def test_listen_result_summary_has_no_base64_blob(self):
-        agent = FakeAgent(FakeMedia(samplerate=16000, channels=1, doa=(42.0, True)))
+        agent = FakeAgent(FakeMedia(samplerate=16000, channels=1,
+                                    doa=(math.radians(42.0), True)))
         res = _run(NS["_dispatch"](agent, "listen", {"duration": 0.1}, return_result=True))
         # The human-facing summary is a short line, and the blob lives elsewhere.
         self.assertIn("Recorded", res["result"])
-        self.assertIn("42", res["result"])
+        self.assertIn("42", res["result"])  # "sound from 42°" — degrees
         self.assertNotIn(res["audio_b64"], res["result"])
 
 
-class DoaToYawTest(unittest.TestCase):
-    def test_passthrough_and_clamp(self):
-        f = NS["_doa_to_yaw"]
-        self.assertEqual(f(0), 0)
-        self.assertEqual(f(45), 45)
-        self.assertEqual(f(120, max_yaw=90), 90)
-        self.assertEqual(f(-120, max_yaw=90), -90)
+class RemoteDoaFallbackTest(unittest.TestCase):
+    """WebRTC clients use the robot daemon when local USB has no mic array."""
 
-    def test_normalises_wraparound(self):
-        f = NS["_doa_to_yaw"]
-        self.assertEqual(f(200, max_yaw=180), -160)
-        self.assertEqual(f(-200, max_yaw=180), 160)
+    def test_doa_uses_daemon_when_sdk_returns_none(self):
+        agent = FakeAgent(FakeMedia(doa=None))
+        remote = mock.AsyncMock(return_value=(math.pi / 2, True))
 
-    def test_offset_and_invert(self):
-        f = NS["_doa_to_yaw"]
-        self.assertEqual(f(10, offset_deg=5), 15)
-        self.assertEqual(f(30, invert=True), -30)
+        with mock.patch.dict(NS, {"_read_daemon_doa": remote}):
+            res = _run(NS["_dispatch"](agent, "doa", {}, return_result=True))
 
-
-class TurnToSoundTest(unittest.TestCase):
-    def _agent(self, doa):
-        media = FakeMedia(doa=doa)
-        calls: list[dict] = []
-        agent = FakeAgent(media)
-        agent.state["mini"] = types.SimpleNamespace(
-            media=media, goto_target=lambda **kw: calls.append(kw))
-        agent.state["np"] = np
-        agent.state["create_head_pose"] = lambda **kw: ("HEAD", kw)
-        agent.state["motion_lock"] = asyncio.Lock()
-        agent.state["busy"] = False
-        agent.calls = calls
-        return agent
-
-    def test_turns_toward_localized_voice(self):
-        agent = self._agent((42.0, True))
-        res = _run(NS["_dispatch"](agent, "turn_to_sound", {}, return_result=True))
         self.assertTrue(res["ok"])
-        self.assertTrue(res["turned"])
-        self.assertAlmostEqual(res["yaw"], 42.0, places=3)
-        self.assertEqual(res["angle_deg"], 42.0)
-        self.assertTrue(agent.calls)          # goto_target actually called
-        self.assertIn("head", agent.calls[0])
+        self.assertTrue(res["detected"])
+        self.assertAlmostEqual(res["angle_deg"], 90.0, places=6)
+        self.assertTrue(res["voice_detected"])
+        remote.assert_awaited_once_with(agent)
 
-    def test_no_doa_does_not_turn(self):
-        agent = self._agent(None)
-        res = _run(NS["_dispatch"](agent, "turn_to_sound", {}, return_result=True))
-        self.assertTrue(res["ok"])
-        self.assertFalse(res["turned"])
-        self.assertFalse(agent.calls)         # no motion issued
 
-    def test_require_voice_skips_non_voice(self):
-        agent = self._agent((30.0, False))
-        res = _run(NS["_dispatch"](
-            agent, "turn_to_sound", {"require_voice": True}, return_result=True))
-        self.assertTrue(res["ok"])
-        self.assertFalse(res["turned"])
-        self.assertEqual(res["angle_deg"], 30.0)
-        self.assertFalse(agent.calls)
+class RemovedSoundFacingTest(unittest.TestCase):
+    """Sound-facing commands are no longer exposed as reliable robot actions."""
 
+    def test_removed_commands_fail_clearly(self):
+        for cmd in ("turn_to_sound", "track_sound"):
+            agent = FakeAgent(FakeMedia())
+            res = _run(NS["_dispatch"](agent, cmd, {}, return_result=True))
+
+            self.assertFalse(res["ok"], msg=cmd)
+            self.assertEqual(res["cmd"], cmd)
+            self.assertIn("unknown cmd", res["error"])
+            event = [p for topic, p in agent.published
+                     if topic == "custom/reachy/events"][-1]
+            self.assertFalse(event["ok"])
+            self.assertEqual(event["type"], cmd)
 
 class FakeLLM:
     """Records the messages it is asked to complete and returns a canned reply."""
@@ -511,171 +489,6 @@ class ConnectionModeTest(unittest.TestCase):
             )
 
 
-class TrackSoundYawSplitTest(unittest.TestCase):
-    """Pure geometry: how a facing angle is split into body_yaw + head_yaw."""
-
-    def test_small_angle_body_first_head_centered(self):
-        body, head = NS["_split_track_yaw"](30.0)
-        self.assertAlmostEqual(body, 30.0)
-        self.assertAlmostEqual(head, 0.0)  # body covers it; head stays centred
-
-    def test_beyond_body_limit_head_takes_residual(self):
-        body, head = NS["_split_track_yaw"](170.0, max_head_yaw=45.0, max_body_yaw=150.0)
-        self.assertAlmostEqual(body, 150.0)  # body maxes out
-        self.assertAlmostEqual(head, 20.0)   # head covers the remaining 20°
-
-    def test_residual_past_reach_is_clamped(self):
-        # 210° normalises to -150°; body maxes at -150, head residual 0.
-        body, head = NS["_split_track_yaw"](210.0, max_head_yaw=45.0, max_body_yaw=150.0)
-        self.assertAlmostEqual(body, -150.0)
-        self.assertAlmostEqual(head, 0.0)
-
-
-class TrackDecisionTest(unittest.TestCase):
-    """Pure planner: when to turn and to what, with deadband + calibration."""
-
-    def test_turns_when_no_prior_target(self):
-        d = NS["_track_decision"](60.0, None, 15.0)
-        self.assertTrue(d["turn"])
-        self.assertAlmostEqual(d["target"], 60.0)
-
-    def test_deadband_suppresses_small_change(self):
-        d = NS["_track_decision"](40.0, 35.0, 15.0)  # only 5° away
-        self.assertFalse(d["turn"])
-
-    def test_turns_past_deadband(self):
-        d = NS["_track_decision"](60.0, 35.0, 15.0)  # 25° away
-        self.assertTrue(d["turn"])
-
-    def test_normalises_wrapped_angle(self):
-        d = NS["_track_decision"](190.0, None, 15.0)
-        self.assertAlmostEqual(d["target"], -170.0)
-
-    def test_offset_and_invert_calibration(self):
-        d = NS["_track_decision"](30.0, None, 0.0, offset_deg=10.0, invert=True)
-        self.assertAlmostEqual(d["target"], -40.0)  # (30+10) then inverted
-
-    def test_deadband_uses_circular_distance(self):
-        # 179 vs -179 is 2° apart on the circle, not 358°.
-        d = NS["_track_decision"](179.0, -179.0, 15.0)
-        self.assertFalse(d["turn"])
-
-
-class _TrackAgent(FakeAgent):
-    """FakeAgent plus the surface track_sound touches: motion lock + bg tasks."""
-
-    def __init__(self, media):
-        super().__init__(media)
-        self.state["motion_lock"] = asyncio.Lock()
-        self.state["tracking"] = False
-        self.state["track_cfg"] = {}
-        self.state["track_last_target"] = None
-        self.bg: list = []
-
-    def run_in_background(self, coro):
-        # Record the scheduled loop but don't run the infinite coroutine here;
-        # closing it avoids an "un-awaited coroutine" warning in the test.
-        self.bg.append(coro)
-        coro.close()
-        return None
-
-
-class TrackStepTest(unittest.TestCase):
-    """One tracking iteration against a fake mic, with _pose stubbed to a recorder."""
-
-    def setUp(self):
-        self._orig_pose = NS["_pose"]
-        self.pose_calls: list = []
-
-        async def _fake_pose(agent, payload):
-            self.pose_calls.append(payload)
-            return {}
-
-        NS["_pose"] = _fake_pose
-
-    def tearDown(self):
-        NS["_pose"] = self._orig_pose
-
-    def _agent(self, doa, cfg=None):
-        agent = _TrackAgent(FakeMedia(doa=doa))
-        agent.state["track_cfg"] = cfg or {"require_voice": True, "deadband_deg": 15.0}
-        return agent
-
-    def test_turns_toward_a_voice(self):
-        agent = self._agent((60.0, True))
-        d = _run(NS["_track_step"](agent))
-        self.assertTrue(d["turn"])
-        self.assertEqual(len(self.pose_calls), 1)
-        self.assertIn("body_yaw", self.pose_calls[0])
-        self.assertAlmostEqual(agent.state["track_last_target"], 60.0)
-
-    def test_ignores_non_voice_when_require_voice(self):
-        agent = self._agent((60.0, False))
-        d = _run(NS["_track_step"](agent))
-        self.assertFalse(d["turn"])
-        self.assertEqual(len(self.pose_calls), 0)  # no motor command
-
-    def test_holds_still_within_deadband(self):
-        agent = self._agent((60.0, True))
-        agent.state["track_last_target"] = 55.0  # already facing ~here
-        d = _run(NS["_track_step"](agent))
-        self.assertFalse(d["turn"])
-        self.assertEqual(len(self.pose_calls), 0)
-
-
-class TrackSoundToggleTest(unittest.TestCase):
-    """The command that turns the continuous behaviour on and off."""
-
-    def _agent(self):
-        return _TrackAgent(FakeMedia(doa=(30.0, True)))
-
-    def test_start_enables_and_schedules_one_loop(self):
-        agent = self._agent()
-        res = _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
-        self.assertTrue(res["ok"])
-        self.assertTrue(res["tracking"])
-        self.assertTrue(agent.state["tracking"])
-        self.assertEqual(len(agent.bg), 1)  # exactly one background loop
-
-    def test_bare_command_starts_tracking(self):
-        agent = self._agent()
-        res = _run(NS["_dispatch"](agent, "track_sound", {}, return_result=True))
-        self.assertTrue(agent.state["tracking"])
-        self.assertTrue(res["tracking"])
-
-    def test_second_start_updates_cfg_without_new_loop(self):
-        agent = self._agent()
-        _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
-        _run(NS["_dispatch"](agent, "track_sound", {"on": True, "interval": 0.2}, return_result=True))
-        self.assertTrue(agent.state["tracking"])
-        self.assertEqual(len(agent.bg), 1)  # no second loop spawned
-        self.assertEqual(agent.state["track_cfg"]["interval"], 0.2)
-
-    def test_off_stops_tracking(self):
-        agent = self._agent()
-        _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
-        res = _run(NS["_dispatch"](agent, "track_sound", {"on": False}, return_result=True))
-        self.assertFalse(res["tracking"])
-        self.assertFalse(agent.state["tracking"])
-
-    def test_stop_alias_stops_tracking(self):
-        agent = self._agent()
-        _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
-        _run(NS["_dispatch"](agent, "track_sound", {"stop": True}, return_result=True))
-        self.assertFalse(agent.state["tracking"])
-
-    def test_stop_command_halts_tracking(self):
-        # The generic {"cmd":"stop"} abort must also cancel sound tracking.
-        agent = self._agent()
-        agent.state["mini"] = types.SimpleNamespace(
-            media=agent.state["mini"].media, stop=lambda: None
-        )
-        _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
-        self.assertTrue(agent.state["tracking"])
-        _run(NS["_dispatch"](agent, "stop", {}, return_result=True))
-        self.assertFalse(agent.state["tracking"])
-
-
 class NotConnectedMessageTest(unittest.TestCase):
     """The 'not connected' reason must be actionable: surface the real connect
     error and how to run without the control app."""
@@ -771,11 +584,9 @@ class ShutupTest(unittest.TestCase):
     def test_stop_command_also_cuts_audio(self):
         agent = self._agent()
         agent.state["mini"].stop = lambda: None  # SDK motion-stop present
-        agent.state["tracking"] = True
         res = _run(NS["_dispatch"](agent, "stop", {}, return_result=True))
         self.assertTrue(res["ok"])
         self.assertIn("stop_playing", agent.calls)   # speech cut too
-        self.assertFalse(agent.state["tracking"])    # and tracking halted
 
     def test_shutup_when_nothing_playing_is_graceful(self):
         agent = FakeAgent(FakeMedia())
@@ -835,6 +646,80 @@ class DiagCommandTest(unittest.TestCase):
         self.assertGreater(res["joint_delta_max_rad"], 0.01)
 
 
+class CommandEventPayloadTest(unittest.TestCase):
+    """The shared MQTT event retains each handler's command-specific result."""
+
+    @staticmethod
+    def _event(agent):
+        events = [payload for topic, payload in agent.published
+                  if topic == "custom/reachy/events"]
+        if len(events) != 1:
+            raise AssertionError(f"expected one command event, got {events!r}")
+        return events[0]
+
+    def test_doa_event_preserves_handler_result(self):
+        agent = FakeAgent(FakeMedia(doa=(math.pi / 2, True)))
+
+        _run(NS["_dispatch"](agent, "doa", {}))
+
+        event = self._event(agent)
+        self.assertEqual(event["type"], "doa")
+        self.assertTrue(event["ok"])
+        self.assertIsInstance(event["ts"], float)
+        self.assertTrue(event["detected"])
+        self.assertAlmostEqual(event["angle_deg"], 90.0, places=6)
+        self.assertTrue(event["voice_detected"])
+        self.assertIn("Sound from", event["result"])
+
+    def test_listen_event_preserves_handler_result(self):
+        agent = FakeAgent(FakeMedia(
+            samplerate=16000, channels=1, doa=(math.radians(42.0), True)))
+
+        _run(NS["_dispatch"](
+            agent, "listen", {"duration": 0.1, "include_b64": False}))
+
+        event = self._event(agent)
+        self.assertEqual(event["type"], "listen")
+        self.assertTrue(event["ok"])
+        self.assertIsInstance(event["ts"], float)
+        self.assertEqual(event["samplerate"], 16000)
+        self.assertEqual(event["channels"], 1)
+        self.assertEqual(event["format"], "wav")
+        self.assertGreater(event["frames"], 0)
+        self.assertAlmostEqual(event["doa_deg"], 42.0, places=6)
+        self.assertNotIn("audio_b64", event)
+
+    def test_diag_event_preserves_handler_result(self):
+        import reachy_mini as rm
+
+        agent = DiagCommandTest()._agent(
+            rm.__version__, [0.0] * 7, [0.0, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0])
+        with mock.patch.object(NS["asyncio"], "sleep", new=mock.AsyncMock()):
+            _run(NS["_dispatch"](agent, "diag", {}))
+
+        event = self._event(agent)
+        self.assertEqual(event["type"], "diag")
+        self.assertTrue(event["ok"])
+        self.assertIsInstance(event["ts"], float)
+        self.assertEqual(event["sdk_version"], rm.__version__)
+        self.assertEqual(event["daemon_version"], rm.__version__)
+        self.assertTrue(event["moved"])
+        self.assertGreater(event["joint_delta_max_rad"], 0.01)
+        self.assertIn("Robot moved", event["result"])
+
+    def test_failure_event_keeps_error_envelope(self):
+        agent = FakeAgent(FakeMedia())
+        agent.state["mini"] = types.SimpleNamespace(media=NoMicMedia())
+
+        _run(NS["_dispatch"](agent, "doa", {}))
+
+        event = self._event(agent)
+        self.assertEqual(event["type"], "doa")
+        self.assertFalse(event["ok"])
+        self.assertIsInstance(event["ts"], float)
+        self.assertIn("microphone array is unavailable", event["error"].lower())
+
+
 class BridgeToMainTest(unittest.TestCase):
     """Reachy-as-interface: input that isn't a robot/HA command is piped to the
     main orchestrator and the answer comes back. Robot offline here, so we
@@ -863,8 +748,58 @@ class BridgeToMainTest(unittest.TestCase):
         name, payload = agent.sent[0]
         self.assertEqual(name, "main")
         self.assertTrue(payload["_via_interface"])
+        self.assertEqual(payload["_interface_source"], "reachy-mini")
         self.assertEqual(payload["text"], "what's the weather in Paris?")
 
+    def test_handle_task_rejects_invented_say_and_bridges_to_main(self):
+        agent = self._agent(lambda _p: {"text": "It is 8:45 PM in Athens."})
+
+        async def invented_say(_agent, _text):
+            return [{"cmd": "say", "text": "It is 8:45 PM in Athens."}]
+
+        with mock.patch.dict(NS, {"_nl_to_commands": invented_say}):
+            res = _run(NS["handle_task"](
+                agent,
+                {"text": "What time is it in Athens?", "_task_id": "tid2"},
+            ))
+
+        self.assertTrue(res["bridged"])
+        self.assertEqual(res["cmd"], "bridge")
+        self.assertEqual(res["result"], "It is 8:45 PM in Athens.")
+        self.assertEqual(agent.sent[0][0], "main")
+        self.assertEqual(agent.sent[0][1]["text"], "What time is it in Athens?")
+
+    def test_only_explicit_speech_requests_keep_a_say_plan(self):
+        f = NS["_is_invented_say_plan"]
+        plan = [{"cmd": "say", "text": "hello"}]
+
+        self.assertFalse(f(plan, "say hello"))
+        self.assertFalse(f(plan, "Can you please announce dinner is ready?"))
+        self.assertTrue(f(plan, "What time is it in Athens?"))
+        self.assertTrue(f(plan, "What did you say yesterday?"))
+
+    def test_ask_wactorz_prefix_bypasses_robot_planner(self):
+        agent = self._agent(lambda _p: {"text": "Four."})
+
+        async def must_not_plan(_agent, _text):
+            self.fail("explicit interface request reached the robot planner")
+
+        with mock.patch.dict(NS, {"_nl_to_commands": must_not_plan}):
+            res = _run(NS["handle_task"](
+                agent,
+                {"text": "ask Wactorz what is two plus two?", "_task_id": "tid3"},
+            ))
+
+        self.assertTrue(res["bridged"])
+        self.assertEqual(res["result"], "Four.")
+        self.assertEqual(agent.sent[0][1]["text"], "what is two plus two?")
+
+    def test_explicit_interface_prefix_variants(self):
+        parse = NS["_explicit_interface_request"]
+        self.assertEqual(parse("Wactorz, check my calendar"), "check my calendar")
+        self.assertEqual(parse("use Wactorz to check the weather"),
+                         "check the weather")
+        self.assertIsNone(parse("wiggle your antennas"))
     def test_returns_none_when_main_unreachable(self):
         agent = self._agent(lambda _p: {"error": "Agent 'main' not found"})
         self.assertIsNone(_run(NS["_bridge_to_main"](agent, "hi", "t")))
@@ -886,7 +821,7 @@ class NoMicMedia:
 
 
 class MicBackendGuardTest(unittest.TestCase):
-    """listen / doa / turn_to_sound / track_sound must refuse with an actionable
+    """listen and doa must refuse with an actionable
     message when the media backend has no mic array — never an opaque
     AttributeError or a silent success."""
 
@@ -906,18 +841,6 @@ class MicBackendGuardTest(unittest.TestCase):
         self.assertFalse(res["ok"])
         self.assertIn("microphone array is unavailable", res["error"].lower())
         self.assertIn("get_DoA", res["error"])
-
-    def test_turn_to_sound_without_mic_backend_is_actionable(self):
-        res = _run(NS["_dispatch"](self._agent(), "turn_to_sound", {}, return_result=True))
-        self.assertFalse(res["ok"])
-        self.assertIn("microphone array is unavailable", res["error"].lower())
-
-    def test_track_sound_start_without_mic_backend_refuses(self):
-        agent = self._agent()
-        res = _run(NS["_dispatch"](agent, "track_sound", {"on": True}, return_result=True))
-        self.assertFalse(res["ok"])  # a failed START reports ok:false, like its siblings
-        self.assertIn("microphone array is unavailable", res["error"].lower())
-        self.assertFalse(agent.state.get("tracking"))  # no background loop armed
 
     def test_require_mic_ignores_output_audio_object(self):
         # A working-mic backend can still have media.audio (playback) == None;
@@ -961,12 +884,6 @@ class DoaExceptionTest(unittest.TestCase):
         self.assertIn("direction-of-arrival", res["error"].lower())
         self.assertTrue(any("get_DoA failed" in m for m in agent.logs))
 
-    def test_turn_to_sound_surfaces_doa_exception(self):
-        agent = self._agent()
-        res = _run(NS["_dispatch"](agent, "turn_to_sound", {}, return_result=True))
-        self.assertFalse(res["ok"])
-        self.assertIn("direction-of-arrival", res["error"].lower())
-
     def test_listen_keeps_audio_when_doa_read_fails(self):
         # DoA is a best-effort supplement to a listen clip: its failure is logged
         # and reported, but the recorded audio is still returned.
@@ -982,47 +899,6 @@ class DoaExceptionTest(unittest.TestCase):
         self.assertIn("audio_b64", res)
         self.assertIn("doa_error", res)
         self.assertTrue(any("DoA read failed" in m for m in agent.logs))
-
-
-class TurnToSoundDoaValidationTest(unittest.TestCase):
-    """turn_to_sound must validate the DoA before commanding a yaw: None / NaN /
-    unreadable readings must not reach the motors."""
-
-    def _agent(self, doa):
-        media = FakeMedia(doa=doa)
-        agent = FakeAgent(media)
-        agent.state["mini"] = types.SimpleNamespace(
-            media=media, goto_target=lambda **kw: None)
-        agent.state["np"] = np
-        agent.state["create_head_pose"] = lambda **kw: ("HEAD", kw)
-        agent.state["motion_lock"] = asyncio.Lock()
-        agent.state["busy"] = False
-        return agent
-
-    def test_none_doa_does_not_turn(self):
-        res = _run(NS["_dispatch"](self._agent(None), "turn_to_sound", {}, return_result=True))
-        self.assertTrue(res["ok"])
-        self.assertFalse(res["turned"])
-
-    def test_nan_angle_is_indeterminate_not_a_turn(self):
-        res = _run(NS["_dispatch"](
-            self._agent((float("nan"), True)), "turn_to_sound", {}, return_result=True))
-        self.assertTrue(res["ok"])
-        self.assertFalse(res["turned"])
-        self.assertIn("indeterminate", res["result"].lower())
-
-    def test_unreadable_doa_is_clear_error(self):
-        res = _run(NS["_dispatch"](
-            self._agent(("north", True)), "turn_to_sound", {}, return_result=True))
-        self.assertFalse(res["ok"])
-        self.assertIn("unreadable", res["error"].lower())
-
-    def test_valid_doa_turns_and_reports_angle(self):
-        res = _run(NS["_dispatch"](
-            self._agent((42.0, True)), "turn_to_sound", {}, return_result=True))
-        self.assertTrue(res["ok"])
-        self.assertTrue(res["turned"])
-        self.assertEqual(res["angle_deg"], 42.0)
 
 
 class EmptyDoaTest(unittest.TestCase):
@@ -1044,18 +920,238 @@ class EmptyDoaTest(unittest.TestCase):
             self.assertNotIn("doa_deg", res)      # nothing localized
             self.assertNotIn("doa_error", res)    # and it wasn't an error, just empty
 
-    def test_turn_to_sound_handles_empty_doa(self):
-        for empty in (None, (), []):
-            agent = FakeAgent(FakeMedia(doa=empty))
-            res = _run(NS["_dispatch"](agent, "turn_to_sound", {}, return_result=True))
-            self.assertTrue(res["ok"], msg=f"doa={empty!r}")
-            self.assertFalse(res["turned"])
 
-    def test_track_step_skips_on_empty_doa(self):
-        for empty in (None, (), []):
-            agent = _TrackAgent(FakeMedia(doa=empty))
-            agent.state["track_cfg"] = {"require_voice": True, "deadband_deg": 15.0}
-            self.assertIsNone(_run(NS["_track_step"](agent)), msg=f"doa={empty!r}")
+class DoaAngleDegTest(unittest.TestCase):
+    """The single DoA-unit boundary: SDK radians -> degrees, with validation.
+
+    reachy_mini 1.8.1 reports DoA in radians (ReSpeaker DOA_VALUE_RADIANS); this
+    helper is the ONLY place that conversion happens."""
+
+    def setUp(self):
+        self.f = NS["_doa_angle_deg"]
+
+    def test_zero(self):
+        self.assertAlmostEqual(self.f((0.0, True)), 0.0, places=9)
+
+    def test_half_pi_is_ninety(self):
+        self.assertAlmostEqual(self.f((math.pi / 2, True)), 90.0, places=9)
+
+    def test_negative_half_pi_is_minus_ninety(self):
+        self.assertAlmostEqual(self.f((-math.pi / 2, False)), -90.0, places=9)
+
+    def test_pi_is_one_eighty(self):
+        self.assertAlmostEqual(self.f((math.pi, True)), 180.0, places=9)
+
+    def test_nan_raises(self):
+        with self.assertRaises(ValueError):
+            self.f((float("nan"), True))
+
+    def test_positive_infinity_raises(self):
+        with self.assertRaises(ValueError):
+            self.f((float("inf"), True))
+
+    def test_negative_infinity_raises(self):
+        with self.assertRaises(ValueError):
+            self.f((float("-inf"), True))
+
+    def test_unreadable_value_raises(self):
+        for bad in (("north", True), (None, True), (), object()):
+            with self.assertRaises(ValueError, msg=f"doa={bad!r}"):
+                self.f(bad)
+
+
+class AudioCaptureWindowTest(unittest.TestCase):
+    def test_trim_keeps_newest_requested_window_for_interleaved_stereo(self):
+        audio = np.arange(40, dtype=np.float32)
+        trimmed = NS["_trim_audio_window"](audio, samplerate=10, channels=2, duration=1)
+        np.testing.assert_array_equal(trimmed, np.arange(20, 40, dtype=np.float32))
+
+    def test_sample_cap_does_not_end_capture_window_early(self):
+        media = FakeMedia(samplerate=16000, channels=1)
+        started = __import__("time").monotonic()
+        audio, _sr, _ch = NS["_record_audio_blocking"](media, 0.05, 64)
+        elapsed = __import__("time").monotonic() - started
+
+        self.assertGreaterEqual(elapsed, 0.04)
+        self.assertLessEqual(len(audio), 64)
+        self.assertFalse(media.recording)
+
+
+class AskVoiceCommandTest(unittest.TestCase):
+    @staticmethod
+    def _clip():
+        b64, frames = NS["_pcm_to_wav_b64"](
+            np.full(1600, 0.1, dtype=np.float32), 16000, 1)
+        return {
+            "audio_b64": b64,
+            "duration_s": frames / 16000,
+            "capture_duration_s": 0.12,
+        }
+
+    @staticmethod
+    def _event(agent):
+        return [payload for topic, payload in agent.published
+                if topic == "custom/reachy/events"][-1]
+
+    def test_integration_wav_to_transcript_to_main_to_spoken_answer(self):
+        agent = FakeAgent(FakeMedia())
+        agent.name = "reachy-mini"
+        agent.sent = []
+
+        async def send_to(name, payload, timeout=60.0):
+            agent.sent.append((name, payload, timeout))
+            return {"text": "The living-room light is on."}
+
+        async def fake_listen(_agent, payload):
+            self.assertEqual(payload["duration"], 5)
+            return self._clip()
+
+        async def fake_transcribe(wav_bytes, payload):
+            self.assertTrue(wav_bytes.startswith(b"RIFF"))
+            self.assertEqual(payload["stt_backend"], "whisper")
+            from wactorz.catalogue_agents.reachy_stt import Transcription
+            return Transcription("turn on the living-room light", "whisper", "tiny")
+
+        spoken = mock.AsyncMock(return_value={"said": "The living-room light is on."})
+        agent.send_to = send_to
+        with mock.patch.dict(NS, {"_listen": fake_listen, "_say": spoken}), \
+             mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav",
+                        new=fake_transcribe):
+            res = _run(NS["_dispatch"](
+                agent, "ask_voice",
+                {"duration": 5, "stt_backend": "whisper", "stt_model": "tiny"},
+                return_result=True))
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["transcript"], "turn on the living-room light")
+        self.assertEqual(res["response_text"], "The living-room light is on.")
+        self.assertEqual(res["stt_backend"], "whisper")
+        self.assertEqual(agent.sent[0][0], "main")
+        self.assertTrue(agent.sent[0][1]["_via_interface"])
+        spoken.assert_awaited_once()
+        self.assertEqual(spoken.await_args.args[1]["text"], "The living-room light is on.")
+        event = self._event(agent)
+        for field in ("transcript", "capture_duration_s", "transcription_duration_s",
+                      "response_text", "total_duration_s", "ok", "error", "type", "ts"):
+            self.assertIn(field, event)
+        self.assertEqual(event["type"], "ask_voice")
+        self.assertTrue(event["ok"])
+
+    def test_capture_failure_is_structured(self):
+        async def fail_capture(_agent, _payload):
+            raise RuntimeError("microphone unavailable")
+
+        agent = FakeAgent(FakeMedia())
+        with mock.patch.dict(NS, {"_listen": fail_capture}):
+            res = _run(NS["_dispatch"](
+                agent, "ask_voice", {}, return_result=True))
+
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["stage"], "capture_failed")
+        self.assertIn("capture_failed", res["error"])
+        self.assertIn("microphone unavailable", res["error"])
+        self.assertEqual(self._event(agent)["type"], "ask_voice")
+
+    def test_transcription_failure_is_structured(self):
+        async def fake_listen(_agent, _payload):
+            return self._clip()
+
+        async def fail_transcription(_wav, _payload):
+            raise RuntimeError("model missing")
+
+        agent = FakeAgent(FakeMedia())
+        with mock.patch.dict(NS, {"_listen": fake_listen}), \
+             mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav",
+                        new=fail_transcription):
+            res = _run(NS["_dispatch"](
+                agent, "ask_voice", {}, return_result=True))
+
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["stage"], "transcription_failed")
+        self.assertIn("model missing", res["error"])
+        self.assertEqual(res["capture_duration_s"], 0.12)
+
+    def test_empty_transcript_is_structured(self):
+        async def fake_listen(_agent, _payload):
+            return self._clip()
+
+        async def empty(_wav, _payload):
+            from wactorz.catalogue_agents.reachy_stt import Transcription
+            return Transcription("   ", "faster-whisper", "base")
+
+        agent = FakeAgent(FakeMedia())
+        with mock.patch.dict(NS, {"_listen": fake_listen}), \
+             mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", new=empty):
+            res = _run(NS["_dispatch"](
+                agent, "ask_voice", {}, return_result=True))
+
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["stage"], "empty_transcript")
+
+    def test_routing_failure_preserves_transcript(self):
+        async def fake_listen(_agent, _payload):
+            return self._clip()
+
+        async def transcribe(_wav, _payload):
+            from wactorz.catalogue_agents.reachy_stt import Transcription
+            return Transcription("what time is it", "faster-whisper", "base")
+
+        async def no_main(_agent, _text, _task_id):
+            return None
+
+        agent = FakeAgent(FakeMedia())
+        with mock.patch.dict(NS, {"_listen": fake_listen, "_bridge_to_main": no_main}), \
+             mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav",
+                        new=transcribe):
+            res = _run(NS["_dispatch"](
+                agent, "ask_voice", {}, return_result=True))
+
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["stage"], "routing_failed")
+        self.assertEqual(res["transcript"], "what time is it")
+
+    def test_speech_failure_preserves_main_response(self):
+        async def fake_listen(_agent, _payload):
+            return self._clip()
+
+        async def transcribe(_wav, _payload):
+            from wactorz.catalogue_agents.reachy_stt import Transcription
+            return Transcription("hello", "faster-whisper", "base")
+
+        async def bridge(_agent, _text, _task_id):
+            return {"result": "Hello there", "spoke": False,
+                    "speech_error": "speaker offline"}
+
+        agent = FakeAgent(FakeMedia())
+        with mock.patch.dict(NS, {"_listen": fake_listen, "_bridge_to_main": bridge}), \
+             mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav",
+                        new=transcribe):
+            res = _run(NS["_dispatch"](
+                agent, "ask_voice", {}, return_result=True))
+
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["stage"], "speech_failed")
+        self.assertEqual(res["response_text"], "Hello there")
+        self.assertEqual(res["result"], "Hello there")
+        self.assertIn("speaker offline", res["error"])
+
+    def test_chat_phrase_dispatches_push_to_talk_without_planner(self):
+        agent = FakeAgent(FakeMedia())
+
+        async def fake_ask(_agent, _payload):
+            return {"response_text": "Done", "result": "Done", "spoke": True}
+
+        async def must_not_plan(_agent, _text):
+            self.fail("push-to-talk phrase reached the robot planner")
+
+        with mock.patch.dict(NS, {"_ask_voice": fake_ask,
+                                  "_nl_to_commands": must_not_plan}):
+            res = _run(NS["handle_task"](
+                agent, {"text": "listen and ask Wactorz", "_task_id": "voice1"}))
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["cmd"], "ask_voice")
+        self.assertEqual(res["response_text"], "Done")
 
 
 if __name__ == "__main__":

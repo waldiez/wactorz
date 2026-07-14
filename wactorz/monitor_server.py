@@ -539,7 +539,10 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
     stream_end_fn()       — signal that streaming is done (optional)
     """
     _chunk_fn = stream_fn or reply_fn
-    _end_fn = stream_end_fn or (lambda: None)
+    async def _noop_end():
+        pass
+
+    _end_fn = stream_end_fn or _noop_end
 
     if content.startswith("/"):
         handled = await handle_slash(content, reply_fn)
@@ -747,6 +750,9 @@ async def handle_chat_mqtt(data: dict):
     """Called when io/chat arrives via MQTT and registry is wired in."""
     if registry is None:
         return  # IOAgent handles it
+    # This subscriber is a legacy fallback. The live IOAgent owns io/chat when present.
+    if registry.find_by_name("io-agent") is not None:
+        return
     content = (data.get("content") or "").strip()
     if not content:
         return

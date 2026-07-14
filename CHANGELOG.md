@@ -5,8 +5,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Added
+
+- **Reachy Mini opt-in conversation mode** - Chat `start conversation` / `stop
+  conversation` and MQTT `conversation_start` / `conversation_stop` run one
+  cancellable VAD-driven session through the existing STT, main routing, and TTS
+  bridge. Sessions enforce a single active loop, inactivity and turn limits,
+  spoken stop phrases, duration-gated playback, and a post-speech queue drain so
+  Reachy does not transcribe its own response. Conversation events expose session,
+  turn, state, transcript/response, timing, stop-reason, and error fields. A
+  configurable RMS floor rejects quiet WebRTC codec noise that the binary VAD can
+  otherwise misclassify as speech.
+- **Reachy Mini push-to-talk Wactorz interface** - `@reachy-mini listen and ask
+  Wactorz` and MQTT `custom/reachy/cmd/ask_voice` now capture one bounded WAV,
+  transcribe it with a configurable local `faster-whisper` / `whisper` provider
+  or an explicitly selected hosted OpenAI provider, route the transcript through
+  the existing main interface bridge, return the response to chat, and speak it
+  through Reachy. MQTT results include transcript/response and capture,
+  transcription, and total timings; failures identify `capture_failed`,
+  `transcription_failed`, `empty_transcript`, `routing_failed`, or
+  `speech_failed` while preserving completed-stage fields. WebRTC capture now
+  drains a bounded queued pre-roll, runs for the requested wall-clock window,
+  and trims to the newest requested-duration samples so stale buffered audio is
+  not transcribed. No always-on listening or wake-word behavior was added.
+
 ### Fixed
 
+- **Removed unreliable Reachy sound-facing movement** - turn_to_sound and
+  track_sound are no longer exposed through MQTT, natural-language planning,
+  or direct dispatch because the linear microphone array cannot distinguish
+  front from behind reliably. Microphone capture (listen), DoA reporting
+  (doa), camera/vision, speech, and diagnostics remain available.
+- **Documented Reachy as a Wactorz interface** -
+  `@reachy-mini ask Wactorz ...` now bypasses the local robot planner and routes
+  deterministically through the main orchestrator; its answer is spoken by the
+  robot. The interface source is excluded from main's routing context so main
+  cannot delegate the request back to Reachy. A guard also rejects invented `say`
+  answers while explicit say/announce requests remain local robot actions. The
+  remaining hands-free input step is a separate speech-to-text layer.
+- **Dynamic-agent inter-agent calls deadlocked inside `handle_task()`** - dynamic
+  task handlers now execute as tracked background tasks, leaving their actor mailbox
+  free to receive the correlated `RESULT` that resolves `agent.send_to()`.
+
+- **MQTT chat fallback duplicated turns and crashed at completion** -
+  The monitor now defers `io/chat` handling to the live IO agent and uses an
+  awaitable no-op for the optional stream-end callback, preventing duplicate agent
+  execution and `NoneType` await errors.
+- **Reachy network DoA always reported no sound and NL chat hid the outcome** -
+  WebRTC clients now fall back to the robot daemon's `/api/state/doa` endpoint
+  because reachy_mini 1.8.0 probes for a ReSpeaker USB device on the client PC
+  instead of transporting the robot's DoA reading. Single-command natural-language
+  plans also return the handler's useful result instead of replacing it with
+  a generic execution receipt, and robot-only NL requests no longer wait for the
+  unrelated Home Assistant binding inventory.
+- **Reachy command events omitted their useful results** -
+  `custom/reachy/events` now retains the command handler's result fields for
+  commands such as `doa`, `listen`, and `diag`, while preserving the stable
+  `type` / `ok` / `ts` envelope and clear `ok:false` errors.
+- **Reachy turned barely at all toward sounds (DoA radians read as degrees)** -
+  reachy_mini 1.8.x reports direction-of-arrival in **radians** (the ReSpeaker
+  `DOA_VALUE_RADIANS` register), but the agent consumed `doa[0]` as **degrees**,
+  so a source at 90° (~1.57 rad) was treated as ~1.6° and `turn_to_sound` /
+  `track_sound` moved only a couple of degrees. A single conversion boundary
+  (`_doa_angle_deg`) now turns the SDK radians into degrees for `doa`, `listen`,
+  `turn_to_sound` and `track_sound`, so reported angles and head turns match the
+  real direction. A non-numeric or non-finite reading (NaN / ±inf) is rejected as
+  a clear `ok:false` error instead of reaching the motors.
 - **Reachy mic commands failed silently when the mic array wasn't usable** -
   `listen`, `doa`, `turn_to_sound` and `track_sound` now check the microphone
   input capability (`start_recording` / `get_audio_sample` / `get_DoA`) is

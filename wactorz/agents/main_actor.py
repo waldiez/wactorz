@@ -3,6 +3,7 @@ Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import re
@@ -33,6 +34,9 @@ from .prompts.main_actor_prompts import (
 logger = logging.getLogger(__name__)
 
 
+_INTERFACE_SOURCE = contextvars.ContextVar("wactorz_interface_source", default="")
+
+
 class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     DESCRIPTION = "Main orchestrator: spawns agents, routes tasks, manages the multi-agent system"
     CAPABILITIES: ClassVar[list[str]] = [
@@ -58,6 +62,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._agent_manifests: dict[
             str, dict
         ] = {}  # agent name → latest manifest (includes schemas)
+
+    def _current_interface_source(self) -> str:
+        """Task-local interface actor excluded from delegation for this turn."""
+        return _INTERFACE_SOURCE.get()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -262,7 +270,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     async def _handle_interface_request(self, payload: dict, msg: Message):
         """Run an interface bridge's text through the orchestrator and reply on
-        the sender's correlation id so its ``send_to`` future resolves."""
+        the sender's correlation id so its ``send_to`` future resolves.
+        """
         text = (
             payload.get("text")
             or payload.get("message")
@@ -272,11 +281,19 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         ).strip()
         task_id = payload.get("_task_id")
         reply_to = payload.get("_reply_to") or msg.reply_to or msg.sender_id
+        token = _INTERFACE_SOURCE.set(str(payload.get("_interface_source") or ""))
+        source = self._current_interface_source()
+        logger.info(
+            f"[{self.name}] interface request from {source or 'unknown'}: {text[:80]!r}"
+        )
         try:
-            reply = await self.process_user_input(text) if text else ""
-        except Exception as e:
-            logger.warning(f"[{self.name}] interface request failed: {e}")
-            reply = f"[error] {e}"
+            try:
+                reply = await self.process_user_input(text) if text else ""
+            except Exception as e:
+                logger.warning(f"[{self.name}] interface request failed: {e}")
+                reply = f"[error] {e}"
+        finally:
+            _INTERFACE_SOURCE.reset(token)
         if reply_to:
             result = {"text": reply, "result": reply, "task": text}
             if task_id:
@@ -1746,6 +1763,15 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             if agent_name == self.name:
                 response = response.replace(m.group(0), "")
                 continue
+            source = self._current_interface_source()
+            if source and _normalize_agent_name(agent_name) == _normalize_agent_name(source):
+                marker = f"[interface loop prevented: {source}]"
+                logger.warning(
+                    f"[{self.name}] Refusing to delegate an interface request back to {source}"
+                )
+                response = response.replace(m.group(0), marker)
+                results.append(marker)
+                continue
 
             if isinstance(cfg.get("payload"), dict):
                 payload = cfg["payload"]
@@ -1841,6 +1867,15 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         replacements = []
         for full_match, agent_name, payload, is_bare in delegations:
+            source = self._current_interface_source()
+            if source and _normalize_agent_name(agent_name) == _normalize_agent_name(source):
+                logger.warning(
+                    f"[{self.name}] Refusing to delegate an interface request back to {source}"
+                )
+                replacements.append(
+                    (full_match, f"[interface loop prevented: {source}]")
+                )
+                continue
             target, spawnable = await self._resolve_or_spawn(agent_name)
             if not target:
                 # A bare prose mention of an unknown, non-spawnable name is almost

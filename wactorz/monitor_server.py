@@ -24,7 +24,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import secrets
 import socket
 import sys
@@ -2423,74 +2422,6 @@ async def chat_log_handler(request: web.Request) -> Response:
         return web.json_response({"error": str(exc)}, status=500)
 
 
-_tts_voices_cache: list | None = None
-
-
-async def _warm_tts_voices(_app=None) -> None:
-    """Load edge-tts voice list once at startup and cache it."""
-    global _tts_voices_cache
-    try:
-        import edge_tts
-
-        voices = await edge_tts.list_voices()
-        _tts_voices_cache = [
-            {"name": v["ShortName"], "locale": v["Locale"], "gender": v["Gender"]}
-            for v in sorted(voices, key=lambda v: v["ShortName"])
-        ]
-    except Exception:
-        _tts_voices_cache = []
-
-
-async def tts_voices_handler(request: web.Request) -> Response:
-    """GET /api/tts/voices — list available edge-tts voices."""
-    try:
-        import edge_tts  # noqa: F401  # pylint: disable=unused-import  # pyright: ignore[reportUnusedImport]
-    except ImportError:
-        return web.json_response([])
-    if _tts_voices_cache is None:
-        await _warm_tts_voices()
-    return web.json_response(_tts_voices_cache or [])
-
-
-async def tts_handler(request: web.Request) -> Response:
-    """GET /api/tts?text=...&voice=... — synthesize speech via edge-tts.
-
-    Returns audio/mpeg. Falls back 503 if edge-tts is not installed so the
-    frontend can transparently fall back to the Web Speech API.
-    """
-    try:
-        import edge_tts
-    except ImportError:
-        return web.Response(status=503, text="edge-tts not installed — pip install 'wactorz[tts]'")
-
-    text = request.rel_url.query.get("text", "").strip()
-    if not text:
-        return web.Response(status=400, text="text param required")
-
-    # Mirror TTSManager: strip code blocks, cap at 300 chars
-    text = re.sub(r"```[\s\S]*?```", "code block", text)[:300]
-
-    default_voice = os.environ.get("TTS_VOICE", "en-US-JennyNeural")
-    voice = request.rel_url.query.get("voice", default_voice) or default_voice
-
-    try:
-        communicate = edge_tts.Communicate(text, voice)
-        chunks: list[bytes] = []
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                chunk_data = chunk.get("data")
-                if chunk_data:
-                    chunks.append(chunk_data)
-        audio = b"".join(chunks)
-        return web.Response(
-            body=audio,
-            content_type="audio/mpeg",
-            headers={"Cache-Control": "no-store"},
-        )
-    except Exception as exc:
-        return web.Response(status=500, text=str(exc))
-
-
 async def config_handler(request: web.Request) -> Response:
     """Expose non-secret runtime config so the frontend can seed its defaults."""
     from .config import CONFIG
@@ -2691,9 +2622,6 @@ async def main(exit_on_failure: bool = False):
 
     app.router.add_get("/api/chats", chat_log_handler)
     app.router.add_get("/chats", chat_log_handler)
-    app.router.add_get("/api/tts/voices", tts_voices_handler)
-    app.router.add_get("/api/tts", tts_handler)
-    app.on_startup.append(_warm_tts_voices)
 
     app.router.add_get("/api/config", config_handler)
     app.router.add_get("/config", config_handler)

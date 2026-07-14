@@ -671,5 +671,46 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
             ms._deleted_agent_ids = orig_deleted
 
 
+class FactoryResetKeepSetTest(unittest.TestCase):
+    """`reset all` (factory reset) keeps the fresh-boot set — protected system
+    actors plus the HA system agents — and wipes user/catalog-spawned agents."""
+
+    def test_protected_system_actors_are_kept(self):
+        import wactorz.monitor_server as ms
+
+        for name in ("main", "monitor", "io-agent", "installer", "catalog"):
+            self.assertTrue(ms._survives_factory_reset(name, True), name)
+
+    def test_ha_system_agents_kept_despite_being_unprotected(self):
+        import wactorz.monitor_server as ms
+
+        # Unprotected → still individually deletable, but a factory reset keeps them.
+        for name in ms._HA_SYSTEM_AGENTS:
+            self.assertTrue(ms._survives_factory_reset(name, False), name)
+
+    def test_user_and_catalog_spawned_agents_are_wiped(self):
+        import wactorz.monitor_server as ms
+
+        self.assertFalse(ms._survives_factory_reset("weather-agent", False))
+        self.assertFalse(ms._survives_factory_reset("my-catalog-spawn", False))
+
+    def test_keep_set_covers_every_app_py_supervised_agent(self):
+        """Drift guard: every fresh-boot agent (app.py .supervise chain) must be
+        kept. If a new .supervise("x") is added, either mark it protected or add
+        it to _HA_SYSTEM_AGENTS — otherwise a factory reset would wipe it."""
+        import re
+
+        import wactorz.monitor_server as ms
+
+        app_src = Path(__file__).resolve().parents[1] / "wactorz" / "app.py"
+        supervised = re.findall(r'supervise\(\s*"([^"]+)"', app_src.read_text())
+        self.assertGreaterEqual(len(supervised), 8, "app.py supervise chain not found")
+        # Protection lives on the actor class; treat the known protected names as
+        # protected here so the guard checks name-coverage, not the flag itself.
+        protected = {"main", "monitor", "io-agent", "installer", "catalog"}
+        missing = [n for n in supervised if not ms._survives_factory_reset(n, n in protected)]
+        self.assertEqual(missing, [], f"fresh-boot agents not kept by reset: {missing}")
+
+
 if __name__ == "__main__":
     unittest.main()

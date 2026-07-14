@@ -98,7 +98,7 @@ vi.mock("../agents/AgentStore", () => ({
     },
 }));
 
-vi.mock("../io/TTSManager", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() } }));
+vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 vi.mock("../ui/DropZone", () => ({ DropZone: class {} }));
 

@@ -29,7 +29,7 @@ import { buildIdentityView } from "./dashboard/identityView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import { MetricsController } from "./dashboard/metrics";
-import { seedServerConfig } from "./dashboard/serverConfig";
+import { seedServerConfig } from "../config/serverConfig";
 import { emit, listen } from "../events";
 
 export class CardDashboard {

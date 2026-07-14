@@ -23,6 +23,22 @@
 - [ ] `bun run docs` — TypeDoc builds with no warnings
 - [ ] Tested in browser against a live backend (or at minimum the MQTT mock stack)
 
+### New extension
+
+Extensions live in `src/ext/<name>/` and mirror `wactorz/ext/<name>/` on the backend.
+TTS (`src/ext/tts/`) is the reference implementation. When adding one:
+
+- [ ] Create `src/ext/<name>/index.ts` — barrel exporting types + a `register(config)` function
+- [ ] `register(config)` is called once from `main.ts` during startup; it self-wires hooks,
+      probes the backend endpoint, and registers event listeners — no other file imports
+      the extension directly
+- [ ] Extension talks to other modules **only** via the typed event bus (`AppEventMap` in
+      `src/events.ts`) — never imports from other extensions or `ui/` directly
+- [ ] Config fields (e.g. `available`, `url`) are added to the whitelist in
+      `config/serverConfig.ts` and read from `safeStorage`
+- [ ] Unit test in `src/__tests__/ext/<name>/` mirroring the extension layout
+- [ ] Extension docs in `backend` and `frontend` READMEs
+
 ### New UI component
 
 - [ ] File lives in `src/ui/`

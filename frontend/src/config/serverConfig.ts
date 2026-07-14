@@ -18,7 +18,7 @@
  * even if the server starts sending them.
  */
 
-import { safeStorage } from "../../safeStorage";
+import { safeStorage } from "../safeStorage";
 
 /** Seed a single key from the server value; returns whether it wrote. */
 export function seedKeyFromServer(key: string, value: string | undefined | null): boolean {
@@ -49,6 +49,16 @@ const CONFIG_ENTRIES = [
         "wactorz-fuseki-dataset",
         (c: Record<string, unknown>) =>
             (c.fuseki as Record<string, unknown> | undefined)?.dataset as string | undefined,
+    ],
+    [
+        "wactorz-tts-available",
+        (c: Record<string, unknown>) =>
+            (c.tts as Record<string, unknown> | undefined)?.available ? "1" : "0",
+    ],
+    [
+        "wactorz-tts-voice",
+        (c: Record<string, unknown>) =>
+            (c.tts as Record<string, unknown> | undefined)?.voice as string | undefined,
     ],
 ] as const;
 

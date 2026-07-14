@@ -5,11 +5,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
-vi.mock("../io/TTSManager", () => ({ tts: { notify: vi.fn() } }));
+vi.mock("../ext/tts", () => ({ tts: { notify: vi.fn() } }));
 
 import { IOManager } from "../io/IOManager";
 import { toast } from "../ui/ToastManager";
-import { tts } from "../io/TTSManager";
+import { tts } from "../ext/tts";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { WSClient } from "../io/WSClient";
 import type { ServerEventRouter } from "../io/ServerEventRouter";

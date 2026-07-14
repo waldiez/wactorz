@@ -29,7 +29,7 @@ import { buildIdentityView } from "./dashboard/identityView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import { MetricsController } from "./dashboard/metrics";
-import { seedHaConfigFromServer } from "./dashboard/haConfig";
+import { seedServerConfig } from "./dashboard/serverConfig";
 import { emit, listen } from "../events";
 
 export class CardDashboard {
@@ -105,9 +105,9 @@ export class CardDashboard {
         void this._loadServerConfig();
     }
 
-    /** Seed the HA URL from /api/config and point the Devices nav link at it. */
+    /** Seed runtime config from /api/config and point the Devices nav link at it. */
     private async _loadServerConfig(): Promise<void> {
-        if (!(await seedHaConfigFromServer())) {
+        if (!(await seedServerConfig())) {
             return;
         }
         setHaNavUrl(this.root, this.haUrl);

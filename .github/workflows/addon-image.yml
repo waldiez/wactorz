@@ -26,6 +26,7 @@ jobs:
       fail-fast: false
       matrix:
         arch: [aarch64, amd64]
+        variant: [wactorz, wactorz-ultra]
 
     steps:
       - uses: actions/checkout@v4
@@ -49,13 +50,18 @@ jobs:
             echo "ref=${{ github.event.inputs.ref }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Map arch → platform + base image
+      - name: Map arch + variant → platform + base image
         id: arch
         run: |
           case "${{ matrix.arch }}" in
-            aarch64) platform=linux/arm64; base=ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.20 ;;
-            amd64)   platform=linux/amd64; base=ghcr.io/home-assistant/amd64-base-python:3.12-alpine3.20 ;;
+            aarch64) platform=linux/arm64; arch_prefix=aarch64 ;;
+            amd64)   platform=linux/amd64; arch_prefix=amd64 ;;
             *) echo "unknown arch ${{ matrix.arch }}"; exit 1 ;;
+          esac
+          case "${{ matrix.variant }}" in
+            wactorz)       base="ghcr.io/home-assistant/${arch_prefix}-base-python:3.12-alpine3.20" ;;
+            wactorz-ultra) base="ghcr.io/home-assistant/${arch_prefix}-base-debian:trixie" ;;
+            *) echo "unknown variant ${{ matrix.variant }}"; exit 1 ;;
           esac
           echo "platform=${platform}" >> "$GITHUB_OUTPUT"
           echo "base=${base}" >> "$GITHUB_OUTPUT"
@@ -66,10 +72,10 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build & push ${{ matrix.arch }}
+      - name: Build & push ${{ matrix.variant }} (${{ matrix.arch }})
         uses: docker/build-push-action@v6
         with:
-          context: ./ha-addon
+          context: ./ha-addon/${{ matrix.variant }}
           platforms: ${{ steps.arch.outputs.platform }}
           push: true
           provenance: false
@@ -77,8 +83,8 @@ jobs:
             BUILD_FROM=${{ steps.arch.outputs.base }}
             WACTORZ_REF=${{ steps.meta.outputs.ref }}
             BUILD_VERSION=${{ steps.meta.outputs.tag }}
-          tags: ghcr.io/waldiez/wactorz-addon-${{ matrix.arch }}:${{ steps.meta.outputs.tag }}
+          tags: ghcr.io/waldiez/${{ matrix.variant }}-addon-${{ matrix.arch }}:${{ steps.meta.outputs.tag }}
           labels: |
-            org.opencontainers.image.title=Wactorz Home Assistant add-on
+            org.opencontainers.image.title=${{ matrix.variant == 'wactorz' && 'Wactorz' || 'Wactorz Ultra' }} Home Assistant add-on
             org.opencontainers.image.source=https://github.com/waldiez/wactorz
             org.opencontainers.image.licenses=Apache-2.0

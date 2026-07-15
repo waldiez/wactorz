@@ -1,17 +1,23 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.20
+ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base-debian:trixie
 FROM $BUILD_FROM
 
-RUN apk add --no-cache \
-    curl git jq gcc musl-dev linux-headers libffi-dev openssl-dev \
-    mosquitto mosquitto-clients build-base cmake libjpeg-turbo-dev libpng-dev openblas-dev
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND="noninteractive"
+ENV DEBCONF_NONINTERACTIVE_SEEN=true
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl git jq gcc linux-libc-dev libffi-dev libssl-dev python3-pip locales \
+    mosquitto mosquitto-clients build-essential cmake libjpeg62-turbo-dev libpng-dev libopenblas-dev \
+    && sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
+    && locale-gen en_US.UTF-8 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir opencv-python
-RUN pip3 install --no-cache-dir matplotlib
-RUN pip3 install --no-cache-dir torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
-
-RUN wget https://download-r2.pytorch.org/whl/cpu/torchvision-0.25.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl -O torchvision-0.25.0+cpu-cp312-cp312-linux_aarch64.whl
-RUN pip3 install torchvision-0.25.0+cpu-cp312-cp312-linux_aarch64.whl && rm torchvision-0.25.0+cpu-cp312-cp312-linux_aarch64.whl
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    LC_CTYPE=en_US.UTF-8 \
+    TZ=Etc/UTC
 
 RUN pip3 install --no-cache-dir ultralytics
 # Git ref of wactorz to install.

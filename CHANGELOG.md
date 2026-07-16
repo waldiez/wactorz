@@ -15,7 +15,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   agents, and running arbitrary code are no longer reachable from a social channel. These channels
   previously routed straight to the main orchestrator. A channel whose token is set but whose
   library is missing is now skipped with a clear warning naming the pip package, instead of failing
-  silently.
+  silently. Both `discord.py` and `python-telegram-bot` now ship in `wactorz[all]` (new `telegram`
+  extra), so the Home Assistant add-on includes them out of the box.
 
 ### Changed
 

@@ -7,6 +7,7 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
+from ..config import CONFIG
 from ..core.mqtt import mqtt_client
 from ..monitoring import PrometheusMonitor
 from .social_guard import SocialCommandGuard
@@ -15,6 +16,39 @@ if TYPE_CHECKING:
     from ..agents.main_actor import MainActor
 
 logger = logging.getLogger(__name__)
+
+
+def build_social_companions(main_actor: "MainActor", primary: str) -> list:
+    """Discord/Telegram interfaces to run ALONGSIDE the primary interface.
+
+    Social channels are notification companions (gated by ``SocialCommandGuard``),
+    not the main control surface — so whenever their token is configured they run
+    next to the dashboard/CLI/etc. rather than instead of it. This is how the HA
+    add-on exposes them: the ingress dashboard stays primary and the bots ride
+    along. A channel is skipped when it is already the chosen ``primary``, to
+    avoid a duplicate bot login. Returns interface objects (not coroutines) so the
+    selection logic is easy to unit-test.
+    """
+    companions: list = []
+    if CONFIG.discord_token and primary != "discord":
+        companions.append(DiscordInterface(main_actor, token=CONFIG.discord_token))
+        logger.info("Discord companion interface enabled (alongside '%s').", primary)
+    if CONFIG.telegram_token and primary != "telegram":
+        companions.append(
+            TelegramInterface(
+                main_actor,
+                token=CONFIG.telegram_token,
+                allowed_user_id=CONFIG.telegram_allowed_user_id or None,
+            )
+        )
+        logger.info("Telegram companion interface enabled (alongside '%s').", primary)
+    return companions
+
+
+def run_all_interfaces(interfaces: list) -> list:
+    """Turn companion interface objects into their ``.run()`` coroutines for gather."""
+    return [iface.run() for iface in interfaces]
+
 
 # Path to remote_runner.py inside the wactorz package.
 _HERE = os.path.dirname(os.path.abspath(__file__))

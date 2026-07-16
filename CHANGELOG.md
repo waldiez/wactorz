@@ -7,11 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **Social channels (Discord/Telegram) run whitelisted safe commands only.** Inbound messages now
-  pass through a deny-by-default guard that allows a small read-mostly set (`status`, `summarize`,
-  `workflows`, `run <existing-workflow>`, `help`) and refuses everything else — so spawning agents,
-  deleting agents, and running arbitrary code are no longer reachable from a social channel. These
-  channels previously routed straight to the main orchestrator.
+- **Social channels (Discord/Telegram) as guarded notification companions.** They now run
+  *alongside* the primary interface (e.g. the HA add-on dashboard) whenever their token is set,
+  instead of only as a standalone `--interface`. Inbound messages pass through a deny-by-default
+  guard that allows a small read-mostly set (`status`, `summarize`, `workflows`,
+  `run <existing-workflow>`, `help`) and refuses everything else — so spawning agents, deleting
+  agents, and running arbitrary code are no longer reachable from a social channel. These channels
+  previously routed straight to the main orchestrator.
 
 ### Changed
 

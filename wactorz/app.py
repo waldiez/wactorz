@@ -313,15 +313,25 @@ async def app(args: argparse.Namespace):
         RESTInterface,
         TelegramInterface,
         WhatsAppInterface,
+        build_social_companions,
+    )
+    from wactorz.interfaces.chat_interfaces import (
+        run_all_interfaces as _run_all,
     )
 
     interface = args.interface or CONFIG.interface
+
+    # Social channels (Discord/Telegram) run ALONGSIDE the primary interface,
+    # not instead of it: whenever their token is configured they come up as
+    # notification companions next to the dashboard/CLI/etc. This is what the HA
+    # add-on wants — the ingress dashboard stays primary and the bots ride along.
+    companions = build_social_companions(main_actor, interface)
 
     try:
         if interface == "cli":
             if sys.stdin.isatty():
                 iface = CLIInterface(main_actor)
-                await asyncio.gather(iface.run(), system.run_forever())
+                await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
             else:
                 # No TTY (piped/Docker/systemd): input() would raise EOFError on
                 # the first read, finishing iface.run() instantly and — paired
@@ -329,18 +339,18 @@ async def app(args: argparse.Namespace):
                 # after boot. Skip the interactive loop and just stay up.
                 logger.info("stdin is not a TTY — running headless (no interactive CLI)")
                 system._running = True
-                await system.run_forever()
+                await asyncio.gather(system.run_forever(), *_run_all(companions))
         elif interface == "rest":
             port = args.port or CONFIG.port
             iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)
-            await asyncio.gather(iface.run(), system.run_forever())
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "discord":
             discord_token = args.discord_token or CONFIG.discord_token
             if not discord_token:
                 logger.error("DISCORD_BOT_TOKEN not set.")
                 sys.exit(1)
             iface = DiscordInterface(main_actor, token=discord_token)
-            await asyncio.gather(iface.run(), system.run_forever())
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "whatsapp":
             port = args.port or CONFIG.port
             iface = WhatsAppInterface(
@@ -350,7 +360,7 @@ async def app(args: argparse.Namespace):
                 from_number=CONFIG.twilio_whatsapp_number,
                 port=port,
             )
-            await asyncio.gather(iface.run(), system.run_forever())
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "telegram":
             telegram_token = args.telegram_token or CONFIG.telegram_token
             if not telegram_token:
@@ -362,7 +372,7 @@ async def app(args: argparse.Namespace):
             iface = TelegramInterface(
                 main_actor, token=telegram_token, allowed_user_id=allowed_user_id
             )
-            await asyncio.gather(iface.run(), system.run_forever())
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     except Exception as exc:
         logger.error(f"System error: {exc}", exc_info=True)
     finally:

@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any
 from ..config import CONFIG
 from ..core.mqtt import mqtt_client
 from ..monitoring import PrometheusMonitor
-from .social_guard import SocialCommandGuard
 
 if TYPE_CHECKING:
     from ..agents.main_actor import MainActor
@@ -43,8 +42,9 @@ def missing_dependency(channel: str) -> str | None:
 def build_social_companions(main_actor: "MainActor", primary: str) -> list:
     """Discord/Telegram interfaces to run ALONGSIDE the primary interface.
 
-    Social channels are notification companions (gated by ``SocialCommandGuard``),
-    not the main control surface — so whenever their token is configured they run
+    Social channels are notification companions (they talk to the main agent in
+    restricted mode — no spawn/delete/code), not a second control surface — so
+    whenever their token is configured they run
     next to the dashboard/CLI/etc. rather than instead of it. This is how the HA
     add-on exposes them: the ingress dashboard stays primary and the bots ride
     along. A channel is skipped when it is already the chosen ``primary``, to
@@ -611,7 +611,6 @@ class DiscordInterface:
         self.agent = main_actor
         self.token = token
         self.channel_id = channel_id
-        self._guard = SocialCommandGuard(main_actor)
 
     async def run(self):
         try:
@@ -642,10 +641,11 @@ class DiscordInterface:
                 .replace(f"<@!{client.user.id}>", "")
                 .strip()
             )
-            # Social channels are notification-first: run only whitelisted safe
-            # commands, never the full orchestrator (no spawn/delete/code here).
+            # Social channels talk to the main agent in RESTRICTED mode: full
+            # conversation + device control + queries, but no spawn/delete/code
+            # (enforced inside process_user_input_restricted).
             async with message.channel.typing():
-                response = await self._guard.handle(text)
+                response = await self.agent.process_user_input_restricted(text)
             for i in range(0, len(response), 2000):
                 await message.channel.send(response[i : i + 2000])
 
@@ -660,7 +660,6 @@ class TelegramInterface:
         self.agent = main_actor
         self.token = token
         self.allowed_user_id = allowed_user_id
-        self._guard = SocialCommandGuard(main_actor)
 
     async def run(self):
         try:
@@ -708,8 +707,9 @@ class TelegramInterface:
                 chat_id=update.effective_chat.id, action=ChatAction.TYPING
             )
 
-            # Notification-first channel: whitelisted safe commands only.
-            response = await self._guard.handle(text)
+            # Restricted mode: full conversation + device control + queries, but
+            # no spawn/delete/code (enforced in process_user_input_restricted).
+            response = await self.agent.process_user_input_restricted(text)
             response = response or "(no response)"
 
             for i in range(0, len(response), 4096):

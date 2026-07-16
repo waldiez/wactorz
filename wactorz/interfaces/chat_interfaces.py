@@ -3,6 +3,7 @@ Supported: CLI (terminal), Discord, WhatsApp (via Twilio), REST.
 """
 
 import asyncio
+import importlib.util
 import logging
 import os
 from typing import TYPE_CHECKING, Any
@@ -17,6 +18,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Import name → pip package for each social channel's optional dependency.
+_INTERFACE_DEPENDENCIES = {
+    "discord": ("discord", "discord.py"),
+    "telegram": ("telegram", "python-telegram-bot"),
+}
+
+
+def missing_dependency(channel: str) -> str | None:
+    """Return the pip package a social channel needs, or None if it's importable.
+
+    Lets startup fail LOUD instead of silent: without this, a channel whose
+    library isn't installed would log one buried line deep inside ``run()`` and
+    quietly do nothing — the exact trap where a configured Telegram bot appears
+    dead with no visible reason.
+    """
+    spec = _INTERFACE_DEPENDENCIES.get(channel)
+    if not spec:
+        return None
+    module_name, pip_name = spec
+    return None if importlib.util.find_spec(module_name) else pip_name
+
 
 def build_social_companions(main_actor: "MainActor", primary: str) -> list:
     """Discord/Telegram interfaces to run ALONGSIDE the primary interface.
@@ -28,20 +50,41 @@ def build_social_companions(main_actor: "MainActor", primary: str) -> list:
     along. A channel is skipped when it is already the chosen ``primary``, to
     avoid a duplicate bot login. Returns interface objects (not coroutines) so the
     selection logic is easy to unit-test.
+
+    A channel whose token is set but whose library is missing is skipped with a
+    prominent WARNING (naming the pip package) rather than failing silently.
     """
     companions: list = []
     if CONFIG.discord_token and primary != "discord":
-        companions.append(DiscordInterface(main_actor, token=CONFIG.discord_token))
-        logger.info("Discord companion interface enabled (alongside '%s').", primary)
-    if CONFIG.telegram_token and primary != "telegram":
-        companions.append(
-            TelegramInterface(
-                main_actor,
-                token=CONFIG.telegram_token,
-                allowed_user_id=CONFIG.telegram_allowed_user_id or None,
+        missing = missing_dependency("discord")
+        if missing:
+            logger.warning(
+                "Discord companion NOT started: '%s' is not installed. "
+                "Run `pip install %s` (or `pip install 'wactorz[all]'`) to enable it.",
+                missing,
+                missing,
             )
-        )
-        logger.info("Telegram companion interface enabled (alongside '%s').", primary)
+        else:
+            companions.append(DiscordInterface(main_actor, token=CONFIG.discord_token))
+            logger.info("Discord companion interface enabled (alongside '%s').", primary)
+    if CONFIG.telegram_token and primary != "telegram":
+        missing = missing_dependency("telegram")
+        if missing:
+            logger.warning(
+                "Telegram companion NOT started: '%s' is not installed. "
+                "Run `pip install %s` (or `pip install 'wactorz[all]'`) to enable it.",
+                missing,
+                missing,
+            )
+        else:
+            companions.append(
+                TelegramInterface(
+                    main_actor,
+                    token=CONFIG.telegram_token,
+                    allowed_user_id=CONFIG.telegram_allowed_user_id or None,
+                )
+            )
+            logger.info("Telegram companion interface enabled (alongside '%s').", primary)
     return companions
 
 

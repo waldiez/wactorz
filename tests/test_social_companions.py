@@ -21,7 +21,7 @@ class _DummyMain:
     name = "main"
 
 
-def _set_tokens(monkeypatch, *, discord="", telegram="", allowed=0):
+def _set_tokens(monkeypatch, *, discord="", telegram="", allowed=0, deps_present=True):
     # CONFIG is a frozen dataclass, so swap the whole module reference for a fake.
     monkeypatch.setattr(
         ci,
@@ -32,6 +32,10 @@ def _set_tokens(monkeypatch, *, discord="", telegram="", allowed=0):
             telegram_allowed_user_id=allowed,
         ),
     )
+    # Default to "libraries installed" so selection tests don't depend on which
+    # optional deps happen to be present in the test environment.
+    if deps_present:
+        monkeypatch.setattr(ci, "missing_dependency", lambda channel: None)
 
 
 def test_both_tokens_start_alongside_rest(monkeypatch):
@@ -69,3 +73,24 @@ def test_run_all_returns_coroutines(monkeypatch):
     assert len(coros) == 1
     # Close the coroutine so it doesn't warn about never being awaited.
     coros[0].close()
+
+
+def test_missing_library_is_skipped_with_loud_warning(monkeypatch, caplog):
+    import logging
+
+    _set_tokens(monkeypatch, telegram="t-tok")
+    # Simulate python-telegram-bot not installed (the exact silent-failure trap).
+    monkeypatch.setattr(
+        ci,
+        "missing_dependency",
+        lambda channel: "python-telegram-bot" if channel == "telegram" else None,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        companions = build_social_companions(_DummyMain(), primary="rest")
+
+    assert companions == []  # not started — but loudly, not silently
+    assert any(
+        "Telegram companion NOT started" in r.message and "python-telegram-bot" in r.message
+        for r in caplog.records
+    )

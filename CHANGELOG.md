@@ -13,7 +13,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   guard that allows a small read-mostly set (`status`, `summarize`, `workflows`,
   `run <existing-workflow>`, `help`) and refuses everything else — so spawning agents, deleting
   agents, and running arbitrary code are no longer reachable from a social channel. These channels
-  previously routed straight to the main orchestrator.
+  previously routed straight to the main orchestrator. A channel whose token is set but whose
+  library is missing is now skipped with a clear warning naming the pip package, instead of failing
+  silently.
 
 ### Changed
 

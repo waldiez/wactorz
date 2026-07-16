@@ -16,7 +16,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   previously routed straight to the main orchestrator. A channel whose token is set but whose
   library is missing is now skipped with a clear warning naming the pip package, instead of failing
   silently. Both `discord.py` and `python-telegram-bot` now ship in `wactorz[all]` (new `telegram`
-  extra), so the Home Assistant add-on includes them out of the box.
+  extra), so the Home Assistant add-on includes them out of the box. The add-on now also exposes
+  `discord_bot_token`, `telegram_bot_token`, and `telegram_allowed_user_id` as configurable options
+  (both variants), so users can enter their tokens from the add-on UI.
 
 ### Changed
 

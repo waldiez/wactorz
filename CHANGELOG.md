@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Added
+
+- **Catalog recognises experimental/beta agents.** A curated set of beta agents (`code`, `news`,
+  `qa`, `chron`, `wif`, `wiz`) is exposed through the catalog, each tagged `stability: beta` with a
+  warning. They are **hidden by default** in `@catalog list` (shown behind a hint; reveal with
+  `list experimental`), the catalog warns before spawning one, and the first message to a running
+  beta agent shows a one-time instability warning.
+
 ### Changed
 
 - **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant

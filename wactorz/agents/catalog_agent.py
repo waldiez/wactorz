@@ -51,6 +51,16 @@ def _chat_message_with_beta_warning(message: str, beta_warning: str) -> str:
     return f"{message}\n\nWarning: {beta_warning}"
 
 
+# Words that opt a `list` request into showing the (hidden-by-default) beta agents.
+_EXPERIMENTAL_REVEAL_WORDS = ("experimental", "beta", "unstable", "all")
+
+
+def _wants_experimental(text: str) -> bool:
+    """True when a catalog `list` request explicitly asks to include beta agents."""
+    low = (text or "").lower()
+    return any(word in low for word in _EXPERIMENTAL_REVEAL_WORDS)
+
+
 def _load_recipe(filename: str) -> str | None:
     import importlib.util
 
@@ -650,7 +660,8 @@ class CatalogAgent(Actor):
         if isinstance(payload, dict) and payload.get("action"):
             action = payload["action"].lower().strip()
             if action == "list":
-                return self._action_list()
+                filt = str(payload.get("filter", "") or payload.get("agent", ""))
+                return self._action_list(include_experimental=_wants_experimental(filt))
             if action == "info":
                 return self._action_info(payload.get("agent", ""))
             if action == "spawn":
@@ -674,7 +685,7 @@ class CatalogAgent(Actor):
             cmd = parts[0].lower()
             arg = parts[1].strip() if len(parts) > 1 else ""
             if cmd == "list":
-                return self._action_list()
+                return self._action_list(include_experimental=_wants_experimental(arg))
             if cmd == "info":
                 return self._action_info(arg)
             if cmd == "spawn":
@@ -727,7 +738,13 @@ class CatalogAgent(Actor):
 
     # ── Actions ────────────────────────────────────────────────────────────────
 
-    def _action_list(self) -> dict:
+    def _action_list(self, include_experimental: bool = False) -> dict:
+        """List catalog agents. The full set (including beta) is always returned
+        in ``agents`` so other consumers get complete data; ``show_experimental``
+        tells the chat formatter whether to display the beta agents or hide them
+        behind a hint. Beta agents are hidden by default — the caller opts in with
+        a request like "list experimental".
+        """
         agents = []
         for name, recipe in self._catalog.items():
             agents.append(
@@ -744,6 +761,7 @@ class CatalogAgent(Actor):
             "ok": True,
             "message": f"{len(agents)} agent(s) available in catalog",
             "agents": agents,
+            "show_experimental": include_experimental,
         }
 
     def _action_info(self, name: str) -> dict:

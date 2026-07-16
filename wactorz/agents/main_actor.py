@@ -1401,10 +1401,14 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         return note_prefix + clean
 
-    # Agents whose whole purpose is to create / install / spawn things.
-    # Delegating to them from a restricted (social) channel would launder around
-    # the spawn gate, so they are off-limits there.
-    _RESTRICTED_DELEGATION_DENY = frozenset({"catalog", "installer", "planner"})
+    # Delegation from a restricted (social) channel is ALLOW-listed, not
+    # deny-listed: a deny-list can't enumerate every dangerous target (any
+    # DynamicAgent or the experimental code-agent executes code, so delegating
+    # arbitrary text to one would launder code execution around the gate). Only
+    # these provably-safe *native* agents — which run bounded, non-code
+    # operations — may be reached. Everything else (code agents, installer,
+    # catalog, planner, user-built agents) is denied. Fails closed.
+    _RESTRICTED_DELEGATION_ALLOW = frozenset({"weather-agent", "home-assistant-agent"})
 
     @staticmethod
     def _neutralize_action_blocks(response: str) -> tuple[str, bool]:
@@ -1851,8 +1855,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
             if restricted:
                 # Social channels: never spawn on delegation (resolve-only) and
-                # never delegate to the create/install/spawn agents.
-                if agent_name.lower() in self._RESTRICTED_DELEGATION_DENY:
+                # only reach the allow-listed safe agents (fails closed).
+                if agent_name.lower() not in self._RESTRICTED_DELEGATION_ALLOW:
                     result_str = f"[{agent_name} isn't available from this channel]"
                     results.append(result_str)
                     response = response.replace(m.group(0), result_str)

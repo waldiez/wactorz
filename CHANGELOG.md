@@ -11,11 +11,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   *alongside* the primary interface (e.g. the HA add-on dashboard) whenever their token is set,
   instead of only as a standalone `--interface`. Messages reach the main agent in a **restricted
   mode**: full conversation, Home Assistant queries, and device control are allowed, but spawning
-  agents, deleting agents, running code, pipelines/automations, admin (slash) commands, and
-  delegation to the create/install/spawn agents are all unreachable — enforced at the actions
-  (intent routing, `<spawn>`/`<delete>` execution, delegation targets), not by guessing intent from
-  the text. These channels previously routed straight to the unrestricted orchestrator. A channel
-  whose token is set but whose
+  agents, deleting agents, running code, pipelines/automations, and admin (slash) commands are all
+  unreachable — enforced at the actions (intent routing, `<spawn>`/`<delete>` execution) rather than
+  by guessing intent from the text, so it can't be talked around. Delegation is limited to an
+  allow-list of safe native agents (fails closed), so it can't be used to launder code execution
+  through a running `DynamicAgent`/`code-agent`. These channels previously routed straight to the
+  unrestricted orchestrator. A channel whose token is set but whose
   library is missing is now skipped with a clear warning naming the pip package, instead of failing
   silently. Both `discord.py` and `python-telegram-bot` now ship in `wactorz[all]` (new `telegram`
   extra), so the Home Assistant add-on includes them out of the box. The add-on now also exposes

@@ -10,6 +10,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant
   activity now stream to the browser as server-push over `/ws`; the dashboard no longer opens its own
   MQTT connection to the broker, and the browser receives no broker credentials.
+- **Home Assistant add-on split into two variants.** The store now offers **Wactorz** (slim, Alpine,
+  ~200 MB) and **Wactorz Ultra** (Debian + ML/`ultralytics`, ~3 GB) as separate cards; both share the
+  same options and entrypoint. CI builds and pushes both variants across `aarch64`/`amd64`.
 
 ### Fixed
 

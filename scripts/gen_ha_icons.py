@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Generate ha-addon/icon.png (128x128) and ha-addon/logo.png (250x100) from the SVG."""
+"""Generate icon.png (128x128) and logo.png (250x100) for each HA addon variant from the SVG."""
 
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-OUT = ROOT / "ha-addon"
+OUT_DIRS = [ROOT / "ha-addon" / "wactorz", ROOT / "ha-addon" / "wactorz-ultra"]
 
 # Static "hold" state SVG — all dots + lines visible, no animations, no number labels
 ICON_SVG = """\
@@ -131,10 +131,11 @@ def convert(svg_content: str, out_path: Path) -> None:
 
 
 def main() -> None:
-    OUT.mkdir(parents=True, exist_ok=True)
     print("Generating HA addon icons...")
-    convert(ICON_SVG, OUT / "icon.png")
-    convert(LOGO_SVG, OUT / "logo.png")
+    for out_dir in OUT_DIRS:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        convert(ICON_SVG, out_dir / "icon.png")
+        convert(LOGO_SVG, out_dir / "logo.png")
     print("Done.")
 
 

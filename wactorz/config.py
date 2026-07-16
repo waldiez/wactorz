@@ -63,6 +63,7 @@ class AppConfig:
     ha_state_bridge_output_topic: str
     ha_state_bridge_domains: str
     ha_state_bridge_per_entity: bool
+    ha_namespace: str
     discord_token: str
     telegram_token: str
     telegram_allowed_user_id: int
@@ -81,14 +82,6 @@ class AppConfig:
     energy_rate: float
     energy_currency: str
     openai_url: str
-    fuseki_url: str
-    fuseki_dataset: str
-    fuseki_user: str
-    fuseki_password: str
-    swid_namespace: str
-    swid_keystore_passphrase: str
-    swid_data_dir: str
-    swid_hstp_base: str
 
 
 CONFIG = AppConfig(
@@ -110,6 +103,7 @@ CONFIG = AppConfig(
     ha_state_bridge_domains=os.getenv("HA_STATE_BRIDGE_DOMAINS", ""),
     ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0")
     not in ("0", "false", "no"),
+    ha_namespace=os.getenv("HA_NAMESPACE", "home"),
     discord_token=os.getenv("DISCORD_BOT_TOKEN", ""),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
@@ -128,12 +122,4 @@ CONFIG = AppConfig(
     energy_rate=_env_float("ENERGY_RATE", 0.138),
     energy_currency=os.getenv("ENERGY_CURRENCY", "EUR"),
     openai_url=os.getenv("OPENAI_URL", ""),
-    fuseki_url=os.getenv("FUSEKI_URL", ""),
-    fuseki_dataset=os.getenv("FUSEKI_DATASET", "wactorz"),
-    fuseki_user=os.getenv("FUSEKI_USER", "admin"),
-    fuseki_password=os.getenv("FUSEKI_PASSWORD", "admin"),
-    swid_namespace=os.getenv("SWID_NAMESPACE", "home"),
-    swid_keystore_passphrase=os.getenv("SWID_KEYSTORE_PASSPHRASE", ""),
-    swid_data_dir=os.getenv("SWID_DATA_DIR", "data/swid"),
-    swid_hstp_base=os.getenv("SWID_HSTP_BASE", "https://hstp.waldiez.io"),
 )

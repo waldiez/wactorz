@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import swid
 
-from wactorz.core.swid import FileSWIDRegistry
+from wactorz.ext.swid import FileSWIDRegistry
 
 
 def _genesis():

@@ -14,7 +14,7 @@ import { STALE_MS } from "../ui/dashboard/agentState";
 
 export class AgentStore {
     private agents: Map<string, AgentInfo> = new Map();
-    private cardDashboard: CardDashboard | null = null;
+    readonly cardDashboard: CardDashboard | null = null;
     private _remoteNodeLastSeen: Map<string, number> = new Map();
 
     /** Create the store and mount an (initially empty) CardDashboard. */

@@ -14,7 +14,7 @@
 import type { Attachment, ChatMessage } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import type { ConnState } from "./ui/dashboard/types";
-import type { TTSVoice } from "./types/tts";
+import type { TTSVoice } from "./ext/tts/types";
 
 /** Detail payload for each application event, keyed by event name. `void` = no detail. */
 export interface AppEventMap {
@@ -30,6 +30,10 @@ export interface AppEventMap {
     "af-wipe-all": void;
     "af-clear-feed": void;
     "tts-voices-loaded": { voices: TTSVoice[] };
+    /** TTS started playing server audio — duck ambient. */
+    "tts-audio-start": void;
+    /** TTS finished playing (or failed) — restore ambient. */
+    "tts-audio-end": void;
 }
 
 /** Dispatch an application event; the detail argument is required iff the map entry isn't `void`. */

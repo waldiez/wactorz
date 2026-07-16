@@ -18,15 +18,15 @@ Commands (prefix @fern-agent or @fuseki-agent stripped automatically):
 from __future__ import annotations
 
 import logging
+import os
 import time
 
-from ..config import CONFIG
 from ..core.actor import Actor, Message, MessageType
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_URL = CONFIG.fuseki_url
-_DEFAULT_DATASET = CONFIG.fuseki_dataset
+_DEFAULT_URL = os.getenv("FUSEKI_URL", "")
+_DEFAULT_DATASET = os.getenv("FUSEKI_DATASET", "wactorz")
 _TIMEOUT = 20
 
 _COMMON_PREFIXES = """\

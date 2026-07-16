@@ -16,7 +16,7 @@ describe("TTSManager", () => {
     });
 
     async function freshTTS() {
-        const mod = await import("../io/TTSManager");
+        const mod = await import("../../../ext/tts");
         return { TTSManager: mod.TTSManager, tts: mod.tts };
     }
 
@@ -566,7 +566,7 @@ describe("TTSManager", () => {
 
         const { TTSManager } = await freshTTS();
         // Same fresh module graph → this is the exact singleton TTSManager ducks.
-        const { ambient } = await import("../io/AmbientManager");
+        const { ambient } = await import("../../../io/AmbientManager");
         const duckSpy = vi.spyOn(ambient, "duck");
 
         const m = new TTSManager();

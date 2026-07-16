@@ -95,10 +95,28 @@ vi.mock("../agents/AgentStore", () => ({
         setHostStats = vi.fn();
         clearAll = vi.fn();
         dispose = vi.fn();
+        cardDashboard = { renderView: vi.fn(), registerView: vi.fn() };
     },
 }));
 
-vi.mock("../io/TTSManager", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() } }));
+vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
+vi.mock("../config/serverConfig", () => ({
+    seedServerConfig: vi.fn(async () => {
+        localStorage.setItem("wactorz-fuseki-url", "http://fuseki:3030/wactorz");
+        localStorage.setItem("wactorz-fuseki-dataset", "wactorz");
+        localStorage.setItem("wactorz-tts-available", "1");
+        return true;
+    }),
+}));
+vi.mock("../config/serverConfig", () => ({
+    seedServerConfig: vi.fn(async () => {
+        // Set up safeStorage so fuseki/TTS registration paths are covered.
+        localStorage.setItem("wactorz-fuseki-url", "http://fuseki:3030/wactorz");
+        localStorage.setItem("wactorz-fuseki-dataset", "wactorz");
+        localStorage.setItem("wactorz-tts-available", "1");
+        return true; // haChanged → covers line 462
+    }),
+}));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 vi.mock("../ui/DropZone", () => ({ DropZone: class {} }));
 
@@ -122,6 +140,8 @@ describe("main.ts bootstrap", () => {
 
     afterAll(() => {
         globalThis.fetch = origFetch;
+        localStorage.clear();
+        localStorage.clear();
     });
 
     it("registers every router handler and the WS handlers", () => {
@@ -212,7 +232,7 @@ describe("main.ts bootstrap", () => {
         expect(true).toBe(true);
     });
 
-    it("drives the WebSocket handlers", () => {
+    it("routes uncaught errors and unhandled rejections to a toast", () => {
         wsHandler("serverEvent")("agents/a/heartbeat", { cpu: 1 }); // forwarded to router.route
         wsHandler("chat")("hi", "A", 1);
         wsHandler("statePatch")(

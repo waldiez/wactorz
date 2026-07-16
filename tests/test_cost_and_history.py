@@ -16,10 +16,10 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # ── Minimal stubs so heavy optional deps don't need to be installed ──────────
-sys.modules.setdefault("aiohttp", types.ModuleType("aiohttp"))
-sys.modules.setdefault("websockets", types.ModuleType("websockets"))
+# aiohttp is a hard dependency and monitor_server imports it fully at module
+# level (web, WSMsgType, …), so it must NOT be stubbed — handler responses are
+# real aiohttp Response objects, read via _payload() below.
 sys.modules.setdefault("openai", types.ModuleType("openai"))
-sys.modules.setdefault("aiomqtt", types.ModuleType("aiomqtt"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -511,17 +511,9 @@ class SnapshotTotalsTest(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _make_web_stub():
-    """Minimal aiohttp.web stub for handler tests."""
-
-    class _JsonResponse:
-        def __init__(self, data, status=200):
-            self.data = data
-            self.status = status
-
-    return types.SimpleNamespace(
-        json_response=lambda data, **kw: _JsonResponse(data, **kw),
-    )
+def _payload(resp):
+    """Decode the JSON body of a real aiohttp ``web.json_response``."""
+    return json.loads(resp.body)
 
 
 class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
@@ -540,10 +532,9 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
     async def test_returns_empty_list_when_registry_none(self):
         self._ms.registry = None
 
-        with patch("aiohttp.web", _make_web_stub(), create=True):
-            resp = await self._ms.actor_history_handler(self._make_request("any"))
+        resp = await self._ms.actor_history_handler(self._make_request("any"))
 
-        self.assertEqual(resp.data, [])
+        self.assertEqual(_payload(resp), [])
         self.assertEqual(resp.status, 200)
 
     async def test_returns_empty_list_when_actor_not_found(self):
@@ -551,10 +542,9 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = None
         self._ms.registry = registry
 
-        with patch("aiohttp.web", _make_web_stub(), create=True):
-            resp = await self._ms.actor_history_handler(self._make_request("ghost"))
+        resp = await self._ms.actor_history_handler(self._make_request("ghost"))
 
-        self.assertEqual(resp.data, [])
+        self.assertEqual(_payload(resp), [])
 
     async def test_returns_only_user_and_assistant_turns(self):
         history = [
@@ -569,12 +559,12 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = actor
         self._ms.registry = registry
 
-        with patch("aiohttp.web", _make_web_stub(), create=True):
-            resp = await self._ms.actor_history_handler(self._make_request("test-agent"))
+        resp = await self._ms.actor_history_handler(self._make_request("test-agent"))
 
-        self.assertEqual(len(resp.data), 2)
-        self.assertEqual(resp.data[0]["role"], "user")
-        self.assertEqual(resp.data[1]["role"], "assistant")
+        payload = _payload(resp)
+        self.assertEqual(len(payload), 2)
+        self.assertEqual(payload[0]["role"], "user")
+        self.assertEqual(payload[1]["role"], "assistant")
 
     async def test_returns_empty_list_when_history_empty(self):
         actor = MagicMock()
@@ -583,10 +573,9 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = actor
         self._ms.registry = registry
 
-        with patch("aiohttp.web", _make_web_stub(), create=True):
-            resp = await self._ms.actor_history_handler(self._make_request("quiet-agent"))
+        resp = await self._ms.actor_history_handler(self._make_request("quiet-agent"))
 
-        self.assertEqual(resp.data, [])
+        self.assertEqual(_payload(resp), [])
 
     async def test_handles_actor_without_recall(self):
         """Actors without a recall() method (non-LLM) return empty history."""
@@ -595,10 +584,9 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = actor
         self._ms.registry = registry
 
-        with patch("aiohttp.web", _make_web_stub(), create=True):
-            resp = await self._ms.actor_history_handler(self._make_request("dumb-agent"))
+        resp = await self._ms.actor_history_handler(self._make_request("dumb-agent"))
 
-        self.assertEqual(resp.data, [])
+        self.assertEqual(_payload(resp), [])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

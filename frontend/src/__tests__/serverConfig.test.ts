@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { seedServerConfig, seedKeyFromServer } from "../ui/dashboard/serverConfig";
+import { seedServerConfig, seedKeyFromServer } from "../config/serverConfig";
 
 describe("seedKeyFromServer", () => {
     beforeEach(() => localStorage.clear());

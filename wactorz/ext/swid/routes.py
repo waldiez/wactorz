@@ -2,29 +2,21 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import logging
+import os
 
 import swid as swid_lib
+from aiohttp import web
+
+from wactorz.core import contract
 
 from .registry import FileSWIDRegistry
 from .service import SwidMinter
 
-if TYPE_CHECKING:
-    from aiohttp import web as _web
+logger = logging.getLogger(__name__)
 
 
-def _resolution_status(error: str | None) -> int:
-    """Map ``didResolutionMetadata.error`` to HTTP per the DIF binding."""
-    if error is None:
-        return 200
-    if error == "invalidDid":
-        return 400
-    if error == "notFound":
-        return 404
-    return 500
-
-
-def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) -> _web.RouteTableDef:
+def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) -> web.RouteTableDef:
     """Build the did:swid routes: DIF resolution, plus the identity index.
 
     ``GET /1.0/identifiers/{did}`` resolves over ``registry``. When ``minter``
@@ -32,10 +24,6 @@ def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) ->
     (handle → did, with the entity class parsed from the handle) for the
     dashboard's Identity view.
     """
-    # Call-time import: parts of the test suite install a partial aiohttp stub
-    # in sys.modules; binding `web` at module import would freeze that stub in.
-    from aiohttp import web
-
     routes = web.RouteTableDef()
 
     @routes.get("/1.0/identifiers/{did}")
@@ -57,7 +45,28 @@ def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) ->
     if minter is not None:
 
         @routes.get("/api/swid/identities")
-        async def identities_handler(_request: web.Request) -> web.Response:
+        async def identities_handler(request: web.Request) -> web.Response:
+            # Reconcile before listing: mint a DID for any live actor not yet
+            # minted, so agents spawned *after* startup show up on refresh
+            # (the boot-time mint hook only covers actors present at startup).
+            # Idempotent — already-minted actors skip via the id-map / index.
+            app_registry = request.app.get(contract.ACTOR_REGISTRY)
+            id_map = request.app.get(contract.AGENT_IDENTITY)
+            if app_registry is not None and id_map is not None:
+                namespace = os.getenv("HA_NAMESPACE", "home")
+                for actor in app_registry.all_actors():
+                    if actor.actor_id in id_map:
+                        continue
+                    try:
+                        id_map[actor.actor_id] = await minter.ensure_did(
+                            "agent", namespace, actor.actor_id, name=actor.name
+                        )
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        logger.warning(
+                            "[swid] minting DID for agent '%s' failed: %s",
+                            actor.actor_id,
+                            exc,
+                        )
             index = await minter.identities()
             identities = [
                 {
@@ -71,3 +80,14 @@ def swid_routes(registry: FileSWIDRegistry, minter: SwidMinter | None = None) ->
             return web.json_response({"enabled": minter.enabled, "identities": identities})
 
     return routes
+
+
+def _resolution_status(error: str | None) -> int:
+    """Map ``didResolutionMetadata.error`` to HTTP per the DIF binding."""
+    if error is None:
+        return 200
+    if error == "invalidDid":
+        return 400
+    if error == "notFound":
+        return 404
+    return 500

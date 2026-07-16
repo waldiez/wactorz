@@ -1,4 +1,4 @@
-"""wactorz/fuseki.py  -  Home Assistant + Agent Manifest → Apache Jena Fuseki bridge.
+"""wactorz - fuseki bridge  -  Home Assistant + Agent Manifest → Apache Jena Fuseki bridge.
 
 Two bridges run concurrently:
 
@@ -47,6 +47,7 @@ Environment variables:
 """
 
 # cspell: disable
+# pylint: disable=line-too-long,too-many-lines
 # pyright: reportAny=false,reportExplicitAny=false,reportUnusedCallResult=false
 # pyright: reportUnknownVariableType=false,reportUnknownMemberType=false,reportUnknownArgumentType=false
 
@@ -57,9 +58,10 @@ import json
 import logging
 import os
 import re
+import sys
 import time
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlparse
 
 import aiohttp
@@ -68,6 +70,10 @@ from wactorz.core.integrations.home_assistant.ha_web_socket_client import (
     HAWebSocketClient,
 )
 from wactorz.core.mqtt import mqtt_client
+
+if TYPE_CHECKING:
+    from wactorz.core.contract import IdentityMinter
+
 
 log = logging.getLogger("wactorz.fuseki")
 
@@ -263,7 +269,7 @@ def _dt_from_ha(ts: str | None) -> str:
     try:
         dt = datetime.fromisoformat(ts)
         return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught
         return _dt_now()
 
 
@@ -282,7 +288,7 @@ def _bridge_agent_body() -> str:
     )
 
 
-def _area_body(area: dict[str, Any], *, did: str | None = None, handle: str | None = None) -> str:
+def area_body(area: dict[str, Any], *, did: str | None = None, handle: str | None = None) -> str:
     """RDF triples for one HA area (room) using BOT ontology.
 
     ``did``/``handle`` link the node to its Spatial Web identity when minted
@@ -312,7 +318,8 @@ def _area_body(area: dict[str, Any], *, did: str | None = None, handle: str | No
     return "\n".join(lines)
 
 
-def _device_body(
+# pylint: disable=too-many-locals,too-many-arguments
+def device_body(
     entity_id: str,
     state_obj: dict[str, Any],
     area_id: str | None = None,
@@ -659,12 +666,12 @@ class FusekiClient:
         fuseki_url: str,
         dataset: str,
         session: aiohttp.ClientSession,
-        auth: aiohttp.BasicAuth | None = None,
+        auth_header: str | None = None,
     ) -> None:
         self._base = fuseki_url.rstrip("/")
         self._ds = dataset
         self._session = session
-        self._auth = auth
+        self._auth_header = auth_header
 
     def _query_url(self) -> str:
         return f"{self._base}/{self._ds}/sparql"
@@ -678,11 +685,13 @@ class FusekiClient:
     async def replace_graph(self, graph: str, ttl: str) -> None:
         """PUT — replace the whole named graph."""
         url = self._gsp_url(graph)
+        headers: dict[str, str] = {"Content-Type": "text/turtle"}
+        if self._auth_header:
+            headers["Authorization"] = self._auth_header
         async with self._session.put(
             url,
             data=ttl.encode(),
-            headers={"Content-Type": "text/turtle"},
-            auth=self._auth,
+            headers=headers,
         ) as resp:
             if resp.status not in (200, 201, 204):
                 body = await resp.text()
@@ -691,11 +700,13 @@ class FusekiClient:
     async def append_graph(self, graph: str, ttl: str) -> None:
         """POST — append triples to a named graph."""
         url = self._gsp_url(graph)
+        headers: dict[str, str] = {"Content-Type": "text/turtle"}
+        if self._auth_header:
+            headers["Authorization"] = self._auth_header
         async with self._session.post(
             url,
             data=ttl.encode(),
-            headers={"Content-Type": "text/turtle"},
-            auth=self._auth,
+            headers=headers,
         ) as resp:
             if resp.status not in (200, 201, 204):
                 body = await resp.text()
@@ -703,10 +714,13 @@ class FusekiClient:
 
     async def sparql_update(self, query: str) -> None:
         """Execute a SPARQL Update statement."""
+        hdrs: dict[str, str] = {}
+        if self._auth_header:
+            hdrs["Authorization"] = self._auth_header
         async with self._session.post(
             self._update_url(),
             data={"update": query},
-            auth=self._auth,
+            headers=hdrs,
         ) as resp:
             if resp.status not in (200, 204):
                 body = await resp.text()
@@ -721,9 +735,9 @@ class FusekiClient:
         """
         params = {"query": query, "format": "json"}
         headers = {"Accept": "application/sparql-results+json,application/json"}
-        async with self._session.get(
-            self._query_url(), params=params, headers=headers, auth=self._auth
-        ) as resp:
+        if self._auth_header:
+            headers["Authorization"] = self._auth_header
+        async with self._session.get(self._query_url(), params=params, headers=headers) as resp:
             if resp.status != 200:
                 body = await resp.text()
                 log.warning("SPARQL SELECT - %s: %s", resp.status, body[:300])
@@ -736,9 +750,9 @@ class FusekiClient:
         """Run a SPARQL ASK; return the boolean (``False`` on any error)."""
         params = {"query": query, "format": "json"}
         headers = {"Accept": "application/sparql-results+json,application/json"}
-        async with self._session.get(
-            self._query_url(), params=params, headers=headers, auth=self._auth
-        ) as resp:
+        if self._auth_header:
+            headers["Authorization"] = self._auth_header
+        async with self._session.get(self._query_url(), params=params, headers=headers) as resp:
             if resp.status != 200:
                 return False
             data = await resp.json(content_type=None)
@@ -753,14 +767,17 @@ class FusekiClient:
         """
         url = f"{self._base}/$/compact/{self._ds}?deleteOld=true"
         try:
-            async with self._session.post(url, auth=self._auth) as resp:
+            hdrs: dict[str, str] = {}
+            if self._auth_header:
+                hdrs["Authorization"] = self._auth_header
+            async with self._session.post(url, headers=hdrs) as resp:
                 if resp.status in (200, 201, 204):
                     log.info("Fuseki compact(%s) complete", self._ds)
                     return True
                 body = await resp.text()
                 log.warning("Fuseki compact → %s: %s", resp.status, body[:200])
                 return False
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             log.warning("Fuseki compact failed: %s", exc)
             return False
 
@@ -768,11 +785,9 @@ class FusekiClient:
         """Delete observations from *graph* older than *retain_days* days.
         Prevents unbounded growth of the HA state-change history graph.
         """
-        import datetime
-
-        cutoff = (
-            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=retain_days)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retain_days)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
 
         query = f"""
 PREFIX sosa: <http://www.w3.org/ns/sosa/>
@@ -1001,6 +1016,7 @@ WHERE {{
         await self.sparql_update(query)
 
     async def replace_entity_in_graph(self, graph: str, entity_id: str, ttl: str) -> None:
+        """Replace an entity in the graph."""
         full_iri = f"urn:ha:entity:{_safe(entity_id)}"
 
         delete_q = f"""
@@ -1042,24 +1058,25 @@ class HAFusekiBridge:
         fuseki_user: str = "",
         fuseki_password: str = "",
         domains: frozenset[str] | None = None,
-        swid_minter: Any = None,
+        swid_minter: IdentityMinter | None = None,
         swid_namespace: str = "home",
     ) -> None:
         self._ha_url = ha_url.rstrip("/")
         self._ha_token = ha_token
         self._fuseki_url = fuseki_url
         self._fuseki_dataset = fuseki_dataset
-        self._fuseki_auth: aiohttp.BasicAuth | None = (
-            aiohttp.BasicAuth(fuseki_user, fuseki_password) if fuseki_user else None
+        self._fuseki_auth_header: str | None = (
+            aiohttp.encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
         )
         self._domains: frozenset[str] = domains if domains is not None else DEFAULT_DOMAINS
         # area_id → area name lookup built during seed
         self._area_names: dict[str, str] = {}
-        # Optional SwidMinter: mints a did:swid per space/device during seed and
-        # links it on the graph node (swidns:did / swidns:handle). Duck-typed so
-        # fuseki.py needs no import from core.swid; None ⇒ no identity triples.
-        self._swid_minter = swid_minter
-        self._swid_namespace = swid_namespace
+        # Optional identity minter (the swid extension supplies one): mints a
+        # did:swid per space/device during seed and links it on the graph node
+        # (swidns:did / swidns:handle). Typed against the core IdentityMinter
+        # port, not the concrete impl. None -> no identity triples.
+        self._swid_minter: IdentityMinter | None = swid_minter
+        self._ha_namespace = swid_namespace
 
     async def _mint(
         self, entity_class: str, natural_key: str, name: str | None
@@ -1069,10 +1086,10 @@ class HAFusekiBridge:
             return None, None
         try:
             res = await self._swid_minter.ensure_did(
-                entity_class, self._swid_namespace, natural_key, name=name
+                entity_class, self._ha_namespace, natural_key, name=name
             )
             return res.did, res.handle
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             log.warning("SWID minting for %s '%s' failed: %s", entity_class, natural_key, exc)
             return None, None
 
@@ -1088,10 +1105,14 @@ class HAFusekiBridge:
     _TRIM_INTERVAL = 24 * 3600
     _HISTORY_RETAIN_DAYS = 30
 
+    # pylint: disable=broad-exception-caught
     async def run(self) -> None:
+        """Start the ha-fuseki bridge."""
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as http:
-            fuseki = FusekiClient(self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth)
+            fuseki = FusekiClient(
+                self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth_header
+            )
             ws_url = self._ws_url()
             backoff = 5
 
@@ -1145,8 +1166,8 @@ class HAFusekiBridge:
                                 except Exception as exc:
                                     log.warning("Periodic history trim failed: %s", exc)
 
-                except asyncio.CancelledError:
-                    raise
+                except asyncio.CancelledError as err:
+                    raise asyncio.CancelledError(str(err)) from err
                 except Exception as exc:
                     # Concise one-line log (no full traceback) — the socket is
                     # gone, we know why, and we're reconnecting.
@@ -1217,7 +1238,7 @@ class HAFusekiBridge:
             area_body_parts = [_bridge_agent_body()]
             for area in areas:
                 did, handle = await self._mint("space", area.get("area_id", ""), area.get("name"))
-                area_body_parts.append(_area_body(area, did=did, handle=handle))
+                area_body_parts.append(area_body(area, did=did, handle=handle))
             try:
                 await fuseki.replace_graph(GRAPH_AREAS, _ttl("\n".join(area_body_parts)))
                 log.info("Areas graph replaced (%d areas).", len(areas))
@@ -1240,7 +1261,7 @@ class HAFusekiBridge:
             friendly = (s.get("attributes") or {}).get("friendly_name") or eid
             did, handle = await self._mint("device", eid, friendly)
             catalog_body_parts.append(
-                _device_body(eid, s, area_id=area_id, area_name=area_name, did=did, handle=handle)
+                device_body(eid, s, area_id=area_id, area_name=area_name, did=did, handle=handle)
             )
 
         try:
@@ -1284,6 +1305,7 @@ class HAFusekiBridge:
 # ── Agent registry seed ──────────────────────────────────────────────────────
 
 
+# pylint: disable=broad-exception-caught
 async def seed_agent_registry(
     actors: list[Any],
     fuseki_url: str,
@@ -1303,11 +1325,11 @@ async def seed_agent_registry(
     """
     if not fuseki_url or not fuseki_dataset:
         return
-    auth = aiohttp.BasicAuth(fuseki_user, fuseki_password) if fuseki_user else None
+    auth_header = aiohttp.encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
     connector = aiohttp.TCPConnector(ssl=False, force_close=True)
     try:
         async with aiohttp.ClientSession(connector=connector) as http:
-            fuseki = FusekiClient(fuseki_url, fuseki_dataset, http, auth)
+            fuseki = FusekiClient(fuseki_url, fuseki_dataset, http, auth_header)
 
             # Remove stale name-keyed orphan nodes from older builds (idempotent;
             # deletes nothing on a clean graph).
@@ -1375,11 +1397,11 @@ async def link_agent_dids(
             f'  swidns:did "{_esc(did)}" ;\n'
             f'  swidns:handle "{_esc(handle)}" .\n'
         )
-    auth = aiohttp.BasicAuth(fuseki_user, fuseki_password) if fuseki_user else None
+    auth_header = aiohttp.encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
     connector = aiohttp.TCPConnector(ssl=False, force_close=True)
     try:
         async with aiohttp.ClientSession(connector=connector) as http:
-            fuseki = FusekiClient(fuseki_url, fuseki_dataset, http, auth)
+            fuseki = FusekiClient(fuseki_url, fuseki_dataset, http, auth_header)
             await fuseki.append_graph(GRAPH_AGENTS, _ttl("\n".join(body_parts)))
             log.info("Agent DID linkage written: %d agents → Fuseki", len(links))
     except Exception as exc:
@@ -1405,14 +1427,17 @@ class AgentManifestBridge:
         self._mqtt_port = mqtt_port  # pyright: ignore[reportUnannotatedClassAttribute]
         self._fuseki_url = fuseki_url  # pyright: ignore[reportUnannotatedClassAttribute]
         self._fuseki_dataset = fuseki_dataset  # pyright: ignore[reportUnannotatedClassAttribute]
-        self._fuseki_auth: aiohttp.BasicAuth | None = (  # pyright: ignore[reportUnannotatedClassAttribute]
-            aiohttp.BasicAuth(fuseki_user, fuseki_password) if fuseki_user else None
+        self._fuseki_auth_header: str | None = (  # pyright: ignore[reportUnannotatedClassAttribute]
+            aiohttp.encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
         )
 
     async def run(self) -> None:
+        """Start the agents manifest bridge."""
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as http:
-            fuseki = FusekiClient(self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth)
+            fuseki = FusekiClient(
+                self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth_header
+            )
             # Register the bridge itself (best-effort — Fuseki may not be ready yet)
             bridge_body = (
                 f"{MANIFEST_BRIDGE_IRI}\n"
@@ -1489,17 +1514,20 @@ class MetricsBridge:
         self._mqtt_port = mqtt_port
         self._fuseki_url = fuseki_url
         self._fuseki_dataset = fuseki_dataset
-        self._fuseki_auth: aiohttp.BasicAuth | None = (
-            aiohttp.BasicAuth(fuseki_user, fuseki_password) if fuseki_user else None
+        self._fuseki_auth_header: str | None = (
+            aiohttp.encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
         )
 
     # Compact every 6 hours to reclaim TDB2 journal space
     _COMPACT_INTERVAL = 6 * 3600
 
     async def run(self) -> None:
+        """Start the metrics bridge."""
         connector = aiohttp.TCPConnector(ssl=False, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as http:
-            fuseki = FusekiClient(self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth)
+            fuseki = FusekiClient(
+                self._fuseki_url, self._fuseki_dataset, http, self._fuseki_auth_header
+            )
             last_compact = time.time()
 
             async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
@@ -1662,8 +1690,6 @@ async def _main() -> None:
 
 def _cli_main() -> None:
     """Sync entry point for the ``wactorz-fuseki`` console script."""
-    import sys
-
     if sys.platform == "win32":
         loop = asyncio.SelectorEventLoop()
         asyncio.set_event_loop(loop)

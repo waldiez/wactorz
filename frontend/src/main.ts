@@ -30,7 +30,9 @@ import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
-import { tts } from "./io/TTSManager";
+import { register as registerFuseki } from "./ext/fuseki";
+import { register as registerSwid } from "./ext/swid";
+import { register as registerTTS } from "./ext/tts";
 import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
@@ -448,14 +450,44 @@ fetch(`${_apiBase}/api/feed`)
     )
     .catch(err => log.debug("[feed] /api/feed seed failed:", err));
 
-// The HA URL is seeded from /api/config by CardDashboard (see ui/dashboard/haConfig)
-// for the Devices link; no token ever reaches the browser. No broker address is
-// seeded either — the browser never connects to MQTT; it gets everything over /ws.
+// The HA URL is seeded from /api/config at startup (see config/serverConfig.ts);
+// the Devices nav link reads it from safeStorage. No token ever reaches the
+// browser. The broker address isn't seeded either — the browser never connects
+// to MQTT; it gets everything over /ws.
 
-// Probe server TTS availability + load voice list (base must be set first so
-// the request stays inside the ingress prefix instead of bare "/api").
-tts.setApiBase(_apiBase);
-void tts.init();
+// Seed server config early so TTS availability is known before probing.
+import("./config/serverConfig")
+    .then(async m => {
+        const haChanged = await m.seedServerConfig();
+        if (haChanged) {
+            emit("af-connection-status", { status: _feedLive ? "live" : "demo" });
+        }
+        // Boot TTS after config is seeded — reads availability from safeStorage.
+        const available = safeStorage.get("wactorz-tts-available") === "1";
+        registerTTS({ apiBase: _apiBase, available });
+
+        // Boot Fuseki — registers the Graph tab if FUSEKI_URL is configured.
+        const fusekiUrl = safeStorage.get("wactorz-fuseki-url");
+        if (fusekiUrl && agentStore.cardDashboard) {
+            registerFuseki({
+                url: fusekiUrl,
+                dataset: safeStorage.get("wactorz-fuseki-dataset") || "wactorz",
+                onRender: () => agentStore.cardDashboard!.renderView(),
+                registerView: (k, i, l, b) => agentStore.cardDashboard!.registerView(k, i, l, b),
+            });
+        }
+
+        // SWID — always registered (no config gate; the backend endpoint
+        // returns empty when minting is disabled).
+        registerSwid({
+            onRender: () => agentStore.cardDashboard!.renderView(),
+            registerView: (k, i, l, b) => agentStore.cardDashboard!.registerView(k, i, l, b),
+        });
+    })
+    .catch(() => {
+        // Config fetch failed — boot TTS anyway, it probes /api/tts/voices itself.
+        registerTTS({ apiBase: _apiBase, available: true });
+    });
 
 // ═══ 8 · Teardown ════════════════════════════════════════════════════════════
 

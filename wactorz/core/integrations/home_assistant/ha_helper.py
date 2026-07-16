@@ -11,10 +11,9 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-logger = logging.getLogger(__name__)
+from .ha_web_socket_client import HAWebSocketClient
 
-from ...handles import make_handle  # noqa: E402
-from .ha_web_socket_client import HAWebSocketClient  # noqa: E402
+logger = logging.getLogger(__name__)
 
 
 # ── SWID handle ────────────────────────────────────────────────────────
@@ -29,10 +28,13 @@ def generate_swid(
     fingerprint covers the stable HA device registry ``id`` only, so the handle
     is room-independent: location is a graph relationship, not part of the id.
     """
-    if namespace is None:
-        from ....config import CONFIG
+    # pylint: disable=import-outside-toplevel
+    from wactorz.core.handles import make_handle
 
-        namespace = CONFIG.swid_namespace
+    if namespace is None:
+        from wactorz.config import CONFIG
+
+        namespace = CONFIG.ha_namespace
     return make_handle("device", namespace, device_id, name=name)
 
 
@@ -382,26 +384,13 @@ async def get_devices(ws_url: str, token: str) -> list[dict[str, Any]]:
     async with HAWebSocketClient(ws_url, token) as ha:
         devices = await ha.call("config/device_registry/list")
         for d in devices or []:
+            device_id = d["id"]
+            device_name = d.get("name_by_user") or d.get("name")
             d["swid"] = generate_swid(
-                d["id"],
-                name=d.get("name_by_user") or d.get("name"),
+                device_id,
+                name=device_name,
             )
         return devices or []
-
-
-async def get_devices_simple(ws_url: str, token: str) -> list[dict[str, Any]]:
-    ws_url = normalize_ha_ws_url(ws_url)
-    devices = await get_devices(ws_url, token)
-    return [
-        {
-            "device_id": d["id"],
-            "name": d.get("name_by_user") or d.get("name"),
-            "swid": d.get("swid", ""),
-            "manufacturer": d.get("manufacturer"),
-            "model": d.get("model"),
-        }
-        for d in (devices or [])
-    ]
 
 
 async def get_entities(ws_url: str, token: str) -> list[dict[str, Any]]:
@@ -476,21 +465,6 @@ async def get_exposed_entities(ws_url: str, token: str) -> dict[str, Any]:
     async with HAWebSocketClient(ws_url, token) as ha:
         entities = await ha.call("homeassistant/expose_entity/list")
         return entities or {}
-
-
-async def get_entities_simple(ws_url: str, token: str) -> list[dict[str, Any]]:
-    ws_url = normalize_ha_ws_url(ws_url)
-    entities = await get_entities(ws_url, token)
-    return [
-        {
-            "entity_id": e.get("entity_id"),
-            "unique_id": e.get("unique_id"),
-            "platform": e.get("platform"),
-            "original_name": e.get("original_name"),
-            "name": e.get("name"),
-        }
-        for e in (entities or [])
-    ]
 
 
 async def get_states(ws_url: str, token: str) -> list[dict[str, Any]]:

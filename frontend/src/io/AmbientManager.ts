@@ -11,6 +11,7 @@
  */
 
 import { safeStorage } from "../safeStorage";
+import { listen } from "../events";
 
 const DUCK_VOLUME = 0.12;
 const LS_TRACK = "wactorz.ambientTrack";
@@ -253,6 +254,11 @@ export class AmbientManager {
     constructor() {
         this._track = readTrack();
         this._volume = readVolume();
+
+        // Listen for TTS audio events — decoupled via the event bus so
+        // TTSManager doesn't need to import AmbientManager directly.
+        listen("tts-audio-start", () => this.duck(true));
+        listen("tts-audio-end", () => this.duck(false));
     }
 
     /** Currently selected track id. */

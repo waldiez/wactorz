@@ -15,17 +15,15 @@ so the frontend knows whether to send chat over /ws or publish to io/chat.
 
 # pylint: disable=global-statement,invalid-name,logging-fstring-interpolation
 # pylint: disable=broad-exception-caught,protected-access,line-too-long
-# pylint: disable=missing-function-docstring,unused-argument
+# pylint: disable=missing-function-docstring,unused-argument,too-many-lines
 # pylint: disable=import-outside-toplevel,wrong-import-position,wrong-import-order
 
 # pyright: reportAttributeAccessIssue=false,reportUnusedParameter=false,reportUnusedImport=false
 
-from ._bootstrap import WACTORZ_BOOTSTRAP  # noqa: I001,F401 # pylint: disable=unused-import
 import asyncio
 import json
 import logging
 import os
-import re
 import secrets
 import socket
 import sys
@@ -35,11 +33,16 @@ from pathlib import Path
 from typing import Any, cast
 
 from aiohttp import WSMsgType, web
+from aiohttp.typedefs import Handler
 
+from ._bootstrap import WACTORZ_BOOTSTRAP  # noqa: F401 # pylint: disable=unused-import
 from .agents.main_actor import MainActor
 from .core.mqtt import mqtt_client
 from .core.persistence import WactorzDB
 from .core.registry import ActorRegistry
+
+Response = web.Response | web.FileResponse | web.StreamResponse
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +53,14 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+# Injected by cli.py after the actor system is built.
+# None  → legacy MQTT/IOAgent mode
+# <registry> → direct mode (Option B)
+registry: ActorRegistry | None = None
+
+# Injected by cli.py — used to query historical cost data for deleted agents.
+db: WactorzDB | None = None
 
 MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
@@ -62,14 +73,6 @@ MQTT_TOPICS = [
     "io/chat",
     "homeassistant/state_changes/#",
 ]
-
-# Injected by cli.py after the actor system is built.
-# None  → legacy MQTT/IOAgent mode
-# <registry> → direct mode (Option B)
-registry: ActorRegistry | None = None
-
-# Injected by cli.py — used to query historical cost data for deleted agents.
-db: WactorzDB | None = None
 
 IO_GATEWAY_ID = "io-gateway"
 
@@ -787,7 +790,7 @@ async def handle_chat_mqtt(data: dict):
 # ── WebSocket handler ──────────────────────────────────────────────────────
 
 
-async def ws_handler(request):
+async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     ws_clients.add(ws)
@@ -1604,7 +1607,7 @@ FRONTEND_PUBLIC = _find_dir("frontend", "public")
 DOCS_SITE = _find_dir("static", "docs")
 
 
-def _with_no_cache(response):
+def _with_no_cache(response: Response) -> Response:
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
@@ -1640,7 +1643,7 @@ def _csp_policy(nonce: str) -> str:
     )
 
 
-async def index_handler(request):
+async def index_handler(request: web.Request) -> Response:
     if request.path.endswith("favicon.svg"):
         for candidate in [FRONTEND_PUBLIC / "favicon.svg", FRONTEND_DIST / "favicon.svg"]:
             if candidate.exists():
@@ -1675,7 +1678,7 @@ async def index_handler(request):
     raise web.HTTPNotFound()
 
 
-async def static_handler(request):
+async def static_handler(request: web.Request) -> Response:
     rel = request.match_info["path"]
 
     # Special case for favicon if it's requested at root
@@ -1715,11 +1718,11 @@ async def static_handler(request):
     raise web.HTTPNotFound()
 
 
-async def docs_redirect(request):
+async def docs_redirect(request: web.Request) -> web.HTTPFound:
     return web.HTTPFound("/docs/")
 
 
-async def docs_handler(request):
+async def docs_handler(request: web.Request) -> web.FileResponse:
     if not DOCS_SITE.is_dir():
         raise web.HTTPNotFound(
             reason="Docs not built — run: python3 scripts/build_docs.py  (or: make docs-build)"
@@ -1830,17 +1833,17 @@ def _best_msgs(ag, actor) -> int:
         return 0
 
 
-async def health_handler(request):
+async def health_handler(request: web.Request) -> Response:
     return web.json_response({"status": "ok"})
 
 
-async def cost_handler(request):
+async def cost_handler(request: web.Request) -> Response:
     from .agents.llm_agent import get_global_cost_info
 
     return web.json_response(get_global_cost_info())
 
 
-async def cost_limit_handler(request):
+async def cost_limit_handler(request: web.Request) -> Response:
     from .agents.llm_agent import set_cost_limit
 
     try:
@@ -1857,9 +1860,7 @@ async def cost_limit_handler(request):
         return web.json_response({"error": str(e)}, status=400)
 
 
-async def cost_reset_handler(request):
-    from aiohttp import web
-
+async def cost_reset_handler(request: web.Request) -> Response:
     from .agents.llm_agent import reset_global_cost
 
     try:
@@ -1877,7 +1878,7 @@ async def cost_reset_handler(request):
         return web.json_response({"error": str(e)}, status=400)
 
 
-async def send_message_handler(request):
+async def send_message_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -1900,7 +1901,7 @@ async def send_message_handler(request):
     return web.json_response({"status": "sent"})
 
 
-async def delete_actor_handler(request):
+async def delete_actor_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     # Resolve the dashboard's record first so remote agents (which aren't in
     # the local registry) can still be deleted via this endpoint. The earlier
@@ -1949,15 +1950,13 @@ def _survives_factory_reset(name: str, protected: bool) -> bool:
     return protected or name in _HA_SYSTEM_AGENTS
 
 
-async def reset_handler(request):
+async def reset_handler(request: web.Request) -> Response:
     """POST /api/reset  —  clear stored state and broadcast a reset event.
 
     Body (JSON):
       scope   : "chat" | "state" | "metrics" | "spawns" | "all"  (required)
       agent   : str  (optional — limit to one agent by name)
     """
-    from aiohttp import web
-
     try:
         body = await request.json()
     except Exception:
@@ -2201,7 +2200,7 @@ async def reset_handler(request):
     return web.json_response({"status": "ok", "scope": scope, "agent": agent})
 
 
-async def pause_actor_handler(request):
+async def pause_actor_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -2218,7 +2217,7 @@ async def pause_actor_handler(request):
     return web.json_response({"status": "pausing"})
 
 
-async def resume_actor_handler(request):
+async def resume_actor_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -2235,7 +2234,7 @@ async def resume_actor_handler(request):
     return web.json_response({"status": "resuming"})
 
 
-async def actor_metrics_handler(request):
+async def actor_metrics_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     ag = state["agents"].get(actor_id)
     actor = None
@@ -2261,7 +2260,7 @@ async def actor_metrics_handler(request):
     )
 
 
-async def rest_chat_handler(request):
+async def rest_chat_handler(request: web.Request) -> Response:
     """POST /chat — fire-and-forget a message to a named agent."""
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -2283,7 +2282,7 @@ async def rest_chat_handler(request):
     return web.json_response({"status": "sent", "agent": agent_name})
 
 
-async def rest_chat_stop_handler(request):
+async def rest_chat_stop_handler(request: web.Request) -> Response:
     """POST /chat/stop — cancel any in-flight generation. No request body needed.
 
     Works in both runtime modes:
@@ -2294,8 +2293,6 @@ async def rest_chat_stop_handler(request):
     The user-facing confirmation rides the usual chat reply path, so the UI
     needs no extra subscription.
     """
-    from aiohttp import web
-
     # direct_ws: cancel the in-process generation task(s).
     tasks = [t for t in _inflight_chat_tasks if not t.done()]
     for t in tasks:
@@ -2323,7 +2320,7 @@ async def rest_chat_stop_handler(request):
     )
 
 
-async def actors_handler(request):
+async def actors_handler(request: web.Request) -> Response:
     # Prefer the live registry (injected by cli.py) — actor objects carry the
     # authoritative protected flag.  Fall back to MQTT-derived state dict when
     # the registry is unavailable (standalone monitor_server mode).
@@ -2334,19 +2331,23 @@ async def actors_handler(request):
     # but present via MQTT heartbeat with a "node" field is a remote agent and
     # must NOT be evicted by the 15-second REST reconcile cycle.
     if registry is not None:
+        from wactorz.core import contract
+
+        id_map = request.app.get(contract.AGENT_IDENTITY) or {}
         result = []
         for actor in registry.all_actors():
             if _is_deleted(actor.actor_id):
                 continue
             ag = state["agents"].get(actor.actor_id, {})
-            mint = _agent_dids.get(actor.actor_id)
+            rec = id_map.get(actor.actor_id)
             result.append(
                 {
                     "id": actor.actor_id,
                     "name": actor.name,
-                    # Display-only identity labels (did is None when minting is off).
-                    "did": getattr(mint, "did", None),
-                    "handle": getattr(mint, "handle", None),
+                    # Display-only identity labels (did is None when minting is off;
+                    # rec is None entirely when the swid extension is absent).
+                    "did": getattr(rec, "did", None),
+                    "handle": getattr(rec, "handle", None),
                     "state": ag.get("state", "unknown"),
                     "protected": bool(getattr(actor, "protected", False)),
                     "cpu": ag.get("cpu"),
@@ -2362,7 +2363,7 @@ async def actors_handler(request):
     return web.json_response([_actor_payload(ag) for ag in state["agents"].values()])
 
 
-async def actor_handler(request):
+async def actor_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     ag = state["agents"].get(actor_id)
     if ag is None:
@@ -2370,9 +2371,7 @@ async def actor_handler(request):
     return web.json_response(_actor_payload(ag))
 
 
-async def actor_history_handler(request):
-    from aiohttp import web
-
+async def actor_history_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
 
     # Resolve actor: the frontend sends the agent NAME (not UUID), so try
@@ -2401,7 +2400,7 @@ async def actor_history_handler(request):
     return web.json_response(visible)
 
 
-async def chat_log_handler(request):
+async def chat_log_handler(request: web.Request) -> Response:
     """GET /api/chats — query the persistent chat_log table.
 
     Query params:
@@ -2423,284 +2422,10 @@ async def chat_log_handler(request):
         return web.json_response({"error": str(exc)}, status=500)
 
 
-_tts_voices_cache: list | None = None
-_ha_bridge_task: asyncio.Task | None = None
-_agent_bridge_tasks: list[asyncio.Task] = []
-
-# did:swid minting (built at app construction; None in standalone tests). The
-# bare name `registry` is the ACTOR registry — swid objects use swid_* names.
-swid_minter = None
-# actor_id → MintResult (did + handle), filled by _mint_agent_dids at startup
-# and served display-only on the per-agent records.
-_agent_dids: dict[str, Any] = {}
-
-
-async def _mint_agent_dids(_app=None) -> None:
-    """Mint (or look up) a did:swid for every local actor at startup.
-
-    Best-effort: minting failure must never abort server startup. With an empty
-    keystore passphrase the minter is disabled and agents get handles only.
-    """
-    if swid_minter is None or registry is None:
-        return
-    from .config import CONFIG
-
-    for actor in registry.all_actors():
-        try:
-            res = await swid_minter.ensure_did(
-                "agent", CONFIG.swid_namespace, actor.actor_id, name=actor.name
-            )
-            _agent_dids[actor.actor_id] = res
-        except Exception as exc:
-            logger.warning("[swid] minting DID for agent '%s' failed: %s", actor.name, exc)
-
-    # Link the minted identities onto the agents' Fuseki nodes (best-effort;
-    # no-op when Fuseki is unconfigured or minting is disabled → did is None).
-    links = {
-        actor_id: (res.did, res.handle)
-        for actor_id, res in _agent_dids.items()
-        if res.did is not None
-    }
-    if links and CONFIG.fuseki_url:
-        try:
-            from .fuseki import link_agent_dids
-
-            await link_agent_dids(
-                links,
-                CONFIG.fuseki_url,
-                CONFIG.fuseki_dataset,
-                CONFIG.fuseki_user,
-                CONFIG.fuseki_password,
-            )
-        except Exception as exc:
-            logger.warning("[swid] agent DID linkage failed: %s", exc)
-
-
-async def _start_ha_bridge(_app=None) -> None:
-    """Launch HAFusekiBridge as a background task if HA_TOKEN is configured."""
-    global _ha_bridge_task
-    from .config import CONFIG
-
-    if not CONFIG.ha_token or not CONFIG.fuseki_url:
-        return
-    try:
-        from .fuseki import HAFusekiBridge, _run_with_retry, fuseki_reachable
-    except Exception as exc:
-        logger.warning("[ha-bridge] Could not import HAFusekiBridge: %s", exc)
-        return
-
-    # Don't start the bridge if Fuseki isn't actually running — otherwise it
-    # connects to HA and then fails to write every state change, flooding the
-    # log. If you're not using Fuseki, the bridge simply stays off.
-    if not await fuseki_reachable(CONFIG.fuseki_url):
-        logger.info(
-            "[ha-bridge] Fuseki not reachable at %s — HA→Fuseki bridge "
-            "disabled. (Start Fuseki and POST /api/ha/sync to enable, "
-            "or ignore if you don't use Fuseki.)",
-            CONFIG.fuseki_url,
-        )
-        return
-
-    bridge = HAFusekiBridge(
-        ha_url=CONFIG.ha_url,
-        ha_token=CONFIG.ha_token,
-        fuseki_url=CONFIG.fuseki_url,
-        fuseki_dataset=CONFIG.fuseki_dataset,
-        fuseki_user=CONFIG.fuseki_user,
-        fuseki_password=CONFIG.fuseki_password,
-        # Mint a did:swid per space/device during seed and link it on the graph
-        # node (no-op when minting is disabled — handles only, no triples).
-        swid_minter=swid_minter,
-        swid_namespace=CONFIG.swid_namespace,
-    )
-    _ha_bridge_task = asyncio.create_task(
-        _run_with_retry(bridge.run, "HAFusekiBridge"),
-        name="ha-fuseki-bridge",
-    )
-    logger.info(
-        "[ha-bridge] HAFusekiBridge started (ha=%s → fuseki=%s/%s)",
-        CONFIG.ha_url,
-        CONFIG.fuseki_url,
-        CONFIG.fuseki_dataset,
-    )
-
-
-async def _start_agent_bridges(_app=None) -> None:
-    """Launch the agent-manifest and metrics Fuseki bridges in-process.
-
-    Agents publish their capability manifests as *retained* MQTT messages on
-    ``agents/{id}/manifest``, but something has to consume them and upsert them
-    into the ``urn:wactorz:agents`` named graph that the dashboard's "Agents"
-    panel queries. In the standalone ``wactorz-fuseki`` process that is the job
-    of AgentManifestBridge/MetricsBridge — but the single-process app (``wactorz``,
-    the HA add-on, ``make run``) only ran HAFusekiBridge, so ``urn:ha:devices`` /
-    ``urn:ha:areas`` were rebuilt on startup and showed up while the agents graph
-    stayed empty. Starting the bridges here consumes the retained manifests
-    without needing a separate bridge container.
-
-    Also seeds the registry once so agents that never publish a manifest (main,
-    planner, monitor, io) still appear as typed, labelled nodes.
-    """
-    global _agent_bridge_tasks
-    from .config import CONFIG
-
-    if not CONFIG.fuseki_url:
-        return
-    try:
-        from .fuseki import (
-            AgentManifestBridge,
-            MetricsBridge,
-            _run_with_retry,
-            fuseki_reachable,
-            seed_agent_registry,
-        )
-    except Exception as exc:
-        logger.warning("[agent-bridge] Could not import Fuseki agent bridges: %s", exc)
-        return
-
-    # Skip if Fuseki isn't up — otherwise the bridges retry-loop forever writing
-    # nowhere. The agents graph simply stays empty until Fuseki is reachable.
-    if not await fuseki_reachable(CONFIG.fuseki_url):
-        logger.info(
-            "[agent-bridge] Fuseki not reachable at %s — agent manifest bridge "
-            "disabled. (Start Fuseki to populate the agents graph.)",
-            CONFIG.fuseki_url,
-        )
-        return
-
-    # Seed registry-owned fields (state/protected) plus a fallback node for every
-    # running actor, so agents without a manifest still show. Best-effort.
-    if registry is not None:
-        try:
-            await seed_agent_registry(
-                registry.all_actors(),
-                CONFIG.fuseki_url,
-                CONFIG.fuseki_dataset,
-                CONFIG.fuseki_user,
-                CONFIG.fuseki_password,
-            )
-        except Exception as exc:
-            logger.warning("[agent-bridge] Agent registry seed failed: %s", exc)
-
-    manifest_bridge = AgentManifestBridge(
-        mqtt_broker=MQTT_BROKER,
-        mqtt_port=MQTT_PORT,
-        fuseki_url=CONFIG.fuseki_url,
-        fuseki_dataset=CONFIG.fuseki_dataset,
-        fuseki_user=CONFIG.fuseki_user,
-        fuseki_password=CONFIG.fuseki_password,
-    )
-    metrics_bridge = MetricsBridge(
-        mqtt_broker=MQTT_BROKER,
-        mqtt_port=MQTT_PORT,
-        fuseki_url=CONFIG.fuseki_url,
-        fuseki_dataset=CONFIG.fuseki_dataset,
-        fuseki_user=CONFIG.fuseki_user,
-        fuseki_password=CONFIG.fuseki_password,
-    )
-    _agent_bridge_tasks = [
-        asyncio.create_task(
-            _run_with_retry(manifest_bridge.run, "AgentManifestBridge"),
-            name="agent-manifest-bridge",
-        ),
-        asyncio.create_task(
-            _run_with_retry(metrics_bridge.run, "MetricsBridge"),
-            name="agent-metrics-bridge",
-        ),
-    ]
-    logger.info(
-        "[agent-bridge] AgentManifestBridge + MetricsBridge started (mqtt=%s:%d → fuseki=%s/%s)",
-        MQTT_BROKER,
-        MQTT_PORT,
-        CONFIG.fuseki_url,
-        CONFIG.fuseki_dataset,
-    )
-
-
-async def ha_sync_handler(request):
-    """POST /api/ha/sync — cancel and restart the HA→Fuseki bridge immediately."""
-    from .config import CONFIG
-
-    if not CONFIG.ha_token:
-        return web.json_response({"error": "HA_TOKEN not configured"}, status=400)
-    if _ha_bridge_task and not _ha_bridge_task.done():
-        _ha_bridge_task.cancel()
-        try:
-            await _ha_bridge_task
-        except (asyncio.CancelledError, Exception):
-            pass
-    await _start_ha_bridge()
-    return web.json_response({"status": "restarted"})
-
-
-async def _warm_tts_voices(_app=None) -> None:
-    """Load edge-tts voice list once at startup and cache it."""
-    global _tts_voices_cache
-    try:
-        import edge_tts
-
-        voices = await edge_tts.list_voices()
-        _tts_voices_cache = [
-            {"name": v["ShortName"], "locale": v["Locale"], "gender": v["Gender"]}
-            for v in sorted(voices, key=lambda v: v["ShortName"])
-        ]
-    except Exception:
-        _tts_voices_cache = []
-
-
-async def tts_voices_handler(request):
-    """GET /api/tts/voices — list available edge-tts voices."""
-    try:
-        import edge_tts  # noqa: F401  # pylint: disable=unused-import  # pyright: ignore[reportUnusedImport]
-    except ImportError:
-        return web.json_response([])
-    if _tts_voices_cache is None:
-        await _warm_tts_voices()
-    return web.json_response(_tts_voices_cache or [])
-
-
-async def tts_handler(request):
-    """GET /api/tts?text=...&voice=... — synthesize speech via edge-tts.
-
-    Returns audio/mpeg. Falls back 503 if edge-tts is not installed so the
-    frontend can transparently fall back to the Web Speech API.
-    """
-    try:
-        import edge_tts
-    except ImportError:
-        return web.Response(status=503, text="edge-tts not installed — pip install 'wactorz[tts]'")
-
-    text = request.rel_url.query.get("text", "").strip()
-    if not text:
-        return web.Response(status=400, text="text param required")
-
-    # Mirror TTSManager: strip code blocks, cap at 300 chars
-    text = re.sub(r"```[\s\S]*?```", "code block", text)[:300]
-
-    default_voice = os.environ.get("TTS_VOICE", "en-US-JennyNeural")
-    voice = request.rel_url.query.get("voice", default_voice) or default_voice
-
-    try:
-        communicate = edge_tts.Communicate(text, voice)
-        chunks: list[bytes] = []
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                chunk_data = chunk.get("data")
-                if chunk_data:
-                    chunks.append(chunk_data)
-        audio = b"".join(chunks)
-        return web.Response(
-            body=audio,
-            content_type="audio/mpeg",
-            headers={"Cache-Control": "no-store"},
-        )
-    except Exception as exc:
-        return web.Response(status=500, text=str(exc))
-
-
-async def config_handler(request):
+async def config_handler(request: web.Request) -> Response:
     """Expose non-secret runtime config so the frontend can seed its defaults."""
     from .config import CONFIG
+    from .ext import collect_public_config
 
     # The /ws proxy is served by *this* server, so point the frontend at the
     # monitor's actual port (WS_PORT), not a hardcoded one.
@@ -2710,30 +2435,29 @@ async def config_handler(request):
 
     ws_url = f"{protocol}://{ws_host}/ws"
 
-    return web.json_response(
-        {
-            "ha": {
-                # URL only — the dashboard links out to the HA UI and never talks to
-                # HA directly, so the long-lived token must NOT reach the browser.
-                "url": CONFIG.ha_url,
-            },
-            "llm": {
-                "provider": CONFIG.llm_provider,
-                "model": CONFIG.llm_model,
-            },
-            "weather": {
-                "defaultLocation": CONFIG.weather_default_location,
-            },
-            "ws_url": ws_url,
-            "fuseki": {
-                "url": CONFIG.fuseki_url,
-                "dataset": CONFIG.fuseki_dataset,
-            },
-        }
-    )
+    # Core config (non-secret fields from AppConfig)
+    response: dict = {
+        "ha": {
+            "url": CONFIG.ha_url,
+        },
+        "llm": {
+            "provider": CONFIG.llm_provider,
+            "model": CONFIG.llm_model,
+        },
+        "weather": {
+            "defaultLocation": CONFIG.weather_default_location,
+        },
+        "ws_url": ws_url,
+    }
+
+    # Merge extension public_config — each extension's key maps to its
+    # non-secret browser config (e.g. {"fuseki": {url, dataset}}).
+    response.update(collect_public_config(request.app))
+
+    return web.json_response(response)
 
 
-async def feed_handler(request):
+async def feed_handler(request: web.Request) -> Response:
     """Return recent chat events for the UI feed, with REAL persisted timestamps.
 
     Previously this read from kv_store.conversation_history, which is just a
@@ -2836,7 +2560,7 @@ async def main(exit_on_failure: bool = False):
         return
 
     @web.middleware
-    async def _cors_middleware(request, handler):
+    async def _cors_middleware(request: web.Request, handler: Handler) -> Response:
         if request.method == "OPTIONS":
             return web.Response(
                 headers={
@@ -2854,7 +2578,10 @@ async def main(exit_on_failure: bool = False):
             pass
         return response
 
+    from wactorz.core import contract
+
     app = web.Application(middlewares=[_cors_middleware])
+    app[contract.ACTOR_REGISTRY] = registry
     app.router.add_get("/", index_handler)
     app.router.add_get("/health", health_handler)
     app.router.add_get("/api/cost", cost_handler)
@@ -2895,11 +2622,6 @@ async def main(exit_on_failure: bool = False):
 
     app.router.add_get("/api/chats", chat_log_handler)
     app.router.add_get("/chats", chat_log_handler)
-    app.router.add_get("/api/tts/voices", tts_voices_handler)
-    app.router.add_get("/api/tts", tts_handler)
-    app.on_startup.append(_warm_tts_voices)
-    app.on_startup.append(_start_ha_bridge)
-    app.on_startup.append(_start_agent_bridges)
 
     app.router.add_get("/api/config", config_handler)
     app.router.add_get("/config", config_handler)
@@ -2907,23 +2629,13 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/feed", feed_handler)
     app.router.add_post("/api/reset", reset_handler)
     app.router.add_get("/favicon.svg", index_handler)
-    from .fuseki_proxy import fuseki_proxy_handler
 
-    app.router.add_post("/api/fuseki/{dataset}/sparql", fuseki_proxy_handler)
-    app.router.add_post("/api/fuseki/{dataset}/update", fuseki_proxy_handler)
+    # Extensions (wactorz/ext/): additive features register their own routes
+    # and startup/teardown hooks here. Must run BEFORE the docs/static
+    # catch-alls below, or the /{path:.+} route shadows extension routes.
+    from .ext import setup_all
 
-    # did:swid — DIF resolution over the file-backed CEL registry, plus the
-    # minting service (disabled when SWID_KEYSTORE_PASSPHRASE is empty).
-    from .config import CONFIG as _cfg
-    from .core.swid import FileSWIDRegistry, SwidMinter, swid_routes
-
-    global swid_minter
-    swid_registry = FileSWIDRegistry(Path(_cfg.swid_data_dir))
-    swid_minter = SwidMinter(
-        Path(_cfg.swid_data_dir), _cfg.swid_keystore_passphrase, _cfg.swid_hstp_base
-    )
-    app.add_routes(swid_routes(swid_registry, swid_minter))
-    app.on_startup.append(_mint_agent_dids)
+    setup_all(app)
 
     app.router.add_get("/docs", docs_redirect)
     app.router.add_get("/docs/", docs_handler)

@@ -3,8 +3,6 @@ import sys
 import types
 import unittest
 
-sys.modules.setdefault("aiohttp", types.ModuleType("aiohttp"))
-sys.modules.setdefault("websockets", types.ModuleType("websockets"))
 sys.modules.setdefault("openai", types.ModuleType("openai"))
 
 from wactorz.agents.llm_agent import OllamaProvider
@@ -57,6 +55,19 @@ class _FakeSession:
 
 
 class OllamaProviderTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # These tests swap sys.modules["aiohttp"] for a fake. IsolatedAsyncioTestCase
+        # isolates the event loop, NOT sys.modules — restore it so the fake does not
+        # leak into later modules that legitimately import aiohttp at module level.
+        self._real_aiohttp = sys.modules.get("aiohttp")
+        self.addCleanup(self._restore_aiohttp)
+
+    def _restore_aiohttp(self):
+        if self._real_aiohttp is not None:
+            sys.modules["aiohttp"] = self._real_aiohttp
+        else:
+            sys.modules.pop("aiohttp", None)
+
     async def test_complete_sends_system_prompt_as_system_message(self):
         calls = []
         fake_aiohttp = types.SimpleNamespace(

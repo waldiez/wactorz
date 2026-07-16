@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..core.mqtt import mqtt_client
 from ..monitoring import PrometheusMonitor
+from .social_guard import SocialCommandGuard
 
 if TYPE_CHECKING:
     from ..agents.main_actor import MainActor
@@ -533,6 +534,7 @@ class DiscordInterface:
         self.agent = main_actor
         self.token = token
         self.channel_id = channel_id
+        self._guard = SocialCommandGuard(main_actor)
 
     async def run(self):
         try:
@@ -563,8 +565,10 @@ class DiscordInterface:
                 .replace(f"<@!{client.user.id}>", "")
                 .strip()
             )
+            # Social channels are notification-first: run only whitelisted safe
+            # commands, never the full orchestrator (no spawn/delete/code here).
             async with message.channel.typing():
-                response = await self.agent.process_user_input(text)
+                response = await self._guard.handle(text)
             for i in range(0, len(response), 2000):
                 await message.channel.send(response[i : i + 2000])
 
@@ -579,6 +583,7 @@ class TelegramInterface:
         self.agent = main_actor
         self.token = token
         self.allowed_user_id = allowed_user_id
+        self._guard = SocialCommandGuard(main_actor)
 
     async def run(self):
         try:
@@ -626,7 +631,8 @@ class TelegramInterface:
                 chat_id=update.effective_chat.id, action=ChatAction.TYPING
             )
 
-            response = await self.agent.process_user_input(text)
+            # Notification-first channel: whitelisted safe commands only.
+            response = await self._guard.handle(text)
             response = response or "(no response)"
 
             for i in range(0, len(response), 4096):

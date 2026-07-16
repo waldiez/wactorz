@@ -128,7 +128,9 @@ def test_pipeline_intent_refused():
 def test_spawn_block_in_reply_is_not_executed():
     # The LLM's prose falsely confirms a spawn; the whole reply must be discarded
     # in favor of an honest refusal, and nothing spawned.
-    m = make_main(chat_response='I\'ve spawned poet-agent! <spawn>{"name":"poet","code":"x"}</spawn>')
+    m = make_main(
+        chat_response='I\'ve spawned poet-agent! <spawn>{"name":"poet","code":"x"}</spawn>'
+    )
     out = run(m.process_user_input_restricted("make me a poem agent"))
     # _process_spawn_commands would raise if reached — reaching here proves it didn't.
     assert "<spawn>" not in out

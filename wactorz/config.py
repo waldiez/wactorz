@@ -94,8 +94,7 @@ CONFIG = AppConfig(
     ha_state_bridge_domains=os.getenv("HA_STATE_BRIDGE_DOMAINS", ""),
     ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0")
     not in ("0", "false", "no"),
-    # Accept the shorter DISCORD_TOKEN / TELEGRAM_TOKEN as fallbacks — both are
-    # common names and users often already have them set.
+    # Also accept the shorter DISCORD_TOKEN / TELEGRAM_TOKEN names.
     discord_token=os.getenv("DISCORD_BOT_TOKEN", "") or os.getenv("DISCORD_TOKEN", ""),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "") or os.getenv("TELEGRAM_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),

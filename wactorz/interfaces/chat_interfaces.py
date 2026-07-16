@@ -27,10 +27,8 @@ _INTERFACE_DEPENDENCIES = {
 def missing_dependency(channel: str) -> str | None:
     """Return the pip package a social channel needs, or None if it's importable.
 
-    Lets startup fail LOUD instead of silent: without this, a channel whose
-    library isn't installed would log one buried line deep inside ``run()`` and
-    quietly do nothing — the exact trap where a configured Telegram bot appears
-    dead with no visible reason.
+    Checked up front so a missing library warns at startup instead of failing
+    silently inside run().
     """
     spec = _INTERFACE_DEPENDENCIES.get(channel)
     if not spec:
@@ -40,19 +38,13 @@ def missing_dependency(channel: str) -> str | None:
 
 
 def build_social_companions(main_actor: "MainActor", primary: str) -> list:
-    """Discord/Telegram interfaces to run ALONGSIDE the primary interface.
+    """Discord/Telegram interfaces to run alongside the primary interface.
 
-    Social channels are notification companions (they talk to the main agent in
-    restricted mode — no spawn/delete/code), not a second control surface — so
-    whenever their token is configured they run
-    next to the dashboard/CLI/etc. rather than instead of it. This is how the HA
-    add-on exposes them: the ingress dashboard stays primary and the bots ride
-    along. A channel is skipped when it is already the chosen ``primary``, to
-    avoid a duplicate bot login. Returns interface objects (not coroutines) so the
-    selection logic is easy to unit-test.
-
-    A channel whose token is set but whose library is missing is skipped with a
-    prominent WARNING (naming the pip package) rather than failing silently.
+    These talk to the main agent in restricted mode (no spawn/delete/code), so
+    they run next to the dashboard rather than replacing it — how the HA add-on
+    exposes them. Skips a channel that's already the primary (no duplicate login)
+    and one whose library is missing (logged, not silent). Returns interface
+    objects, not coroutines, so the selection is easy to unit-test.
     """
     companions: list = []
     if CONFIG.discord_token and primary != "discord":
@@ -641,9 +633,7 @@ class DiscordInterface:
                 .replace(f"<@!{client.user.id}>", "")
                 .strip()
             )
-            # Social channels talk to the main agent in RESTRICTED mode: full
-            # conversation + device control + queries, but no spawn/delete/code
-            # (enforced inside process_user_input_restricted).
+            # Restricted mode: converse + control devices, no spawn/delete/code.
             async with message.channel.typing():
                 response = await self.agent.process_user_input_restricted(text)
             for i in range(0, len(response), 2000):
@@ -707,8 +697,7 @@ class TelegramInterface:
                 chat_id=update.effective_chat.id, action=ChatAction.TYPING
             )
 
-            # Restricted mode: full conversation + device control + queries, but
-            # no spawn/delete/code (enforced in process_user_input_restricted).
+            # Restricted mode: converse + control devices, no spawn/delete/code.
             response = await self.agent.process_user_input_restricted(text)
             response = response or "(no response)"
 

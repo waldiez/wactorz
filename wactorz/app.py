@@ -321,10 +321,8 @@ async def app(args: argparse.Namespace):
 
     interface = args.interface or CONFIG.interface
 
-    # Social channels (Discord/Telegram) run ALONGSIDE the primary interface,
-    # not instead of it: whenever their token is configured they come up as
-    # notification companions next to the dashboard/CLI/etc. This is what the HA
-    # add-on wants — the ingress dashboard stays primary and the bots ride along.
+    # Configured social channels run alongside the primary interface, not
+    # instead of it (the dashboard stays primary; the bots ride along).
     companions = build_social_companions(main_actor, interface)
 
     try:

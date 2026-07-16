@@ -1401,43 +1401,32 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         return note_prefix + clean
 
-    # Delegation from a restricted (social) channel is ALLOW-listed, not
-    # deny-listed: a deny-list can't enumerate every dangerous target (any
-    # DynamicAgent or the experimental code-agent executes code, so delegating
-    # arbitrary text to one would launder code execution around the gate). Only
-    # these provably-safe *native* agents — which run bounded, non-code
-    # operations — may be reached. Everything else (code agents, installer,
-    # catalog, planner, user-built agents) is denied. Fails closed.
+    # Delegation allow-list for social channels. A deny-list won't hold: any
+    # DynamicAgent or code-agent runs code, so delegating to one launders code
+    # execution. Allow only bounded native agents; fail closed.
     _RESTRICTED_DELEGATION_ALLOW = frozenset({"weather-agent", "home-assistant-agent"})
 
     @staticmethod
     def _neutralize_action_blocks(response: str) -> tuple[str, bool]:
-        """Strip ``<spawn>``/``<delete>`` blocks from a response WITHOUT running
-        them. Returns ``(cleaned, had_any)``. Lets a restricted agent talk about
-        actions while never taking them.
-        """
+        """Strip <spawn>/<delete> blocks without running them; return (cleaned, had_any)."""
         had = bool(re.search(r"<(spawn|delete)>", response))
         cleaned = re.sub(r"<spawn>.*?</spawn>", "", response, flags=re.DOTALL)
         cleaned = re.sub(r"<delete>.*?</delete>", "", cleaned, flags=re.DOTALL)
         return cleaned.strip(), had
 
     async def process_user_input_restricted(self, text: str) -> str:
-        """Entry point for social channels (Discord/Telegram).
+        """Social-channel (Discord/Telegram) entry point — the untrusted-surface
+        counterpart of process_user_input.
 
-        Full conversation with the main agent, plus device control (ACTUATE) and
-        Home Assistant queries — but the dangerous capabilities are unreachable:
-        no spawning, no deleting, no code execution, no pipelines/automations, no
-        admin (slash) commands, and no delegation to the create/install/spawn
-        agents. Enforcement is at the ACTIONS (intent routing, spawn/delete
-        execution, delegation targets), never by guessing intent from the text,
-        so it can't be talked around. This is the counterpart of
-        ``process_user_input`` for untrusted surfaces.
+        Conversation, device control (ACTUATE), and HA queries only. Spawning,
+        deleting, code, pipelines, admin commands, and delegation to
+        non-allowlisted agents are blocked — at the action, not by classifying
+        the text, so it can't be talked around.
         """
         note_prefix = self._drain_notifications()
         stripped = text.strip()
 
-        # Admin/slash/bang commands are the explicit gateway to
-        # delete/deploy/pipeline/etc. — not available here. Ask naturally instead.
+        # Slash / pipeline! commands are the admin surface — not exposed here.
         if stripped.startswith("/") or stripped.lower().startswith("pipeline!"):
             reply = (
                 "Admin commands aren't available on this channel — just talk to me "
@@ -1448,8 +1437,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             await self._record_external_exchange(text, reply)
             return note_prefix + reply
 
-        # Same intent classifier as the main path; PIPELINE (create a rule /
-        # spawn agents) is refused on this channel.
+        # Reuse the main intent classifier; PIPELINE (creates rules/agents) is refused.
         intent = await self._classify_intent(text)
         logger.info(f"[{self.name}] Intent (restricted): {intent} — {text[:60]}")
 
@@ -1478,7 +1466,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             await self._record_external_exchange(text, response)
             return note_prefix + response
 
-        # OTHER → normal conversation, but NONE of the action executors run.
+        # OTHER: converse, but run no action executors.
         self._rebuild_system_prompt()
         prefixed_text = self._prefix_with_live_context(text)
         response = await self.chat(prefixed_text)
@@ -1489,10 +1477,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 break
         self.persist("conversation_history", self._conversation_history)
 
-        # Hard block. If the LLM tried to spawn/delete, its prose is written
-        # AROUND that action ("I've spawned poet-agent, just say @poet-agent…") —
-        # stripping the block alone would leave a confident lie. So when an action
-        # was attempted, discard the reply entirely and answer honestly instead.
+        # The prose around a spawn/delete block asserts the action happened, so
+        # stripping the block would leave a false claim. Discard the whole reply.
         clean, had_actions = self._neutralize_action_blocks(response)
         if had_actions:
             reply = (
@@ -1503,8 +1489,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             await self._record_external_exchange(text, reply)
             return note_prefix + reply
 
-        # No action attempted — run only the structured delegation (existing,
-        # non-spawn agents). The looser @mention delegation is skipped here.
+        # Structured delegation only (allow-listed, no spawn); skip loose @mentions.
         clean, _ = await self._process_delegate_commands(clean, restricted=True)
         return note_prefix + clean.strip()
 
@@ -1854,8 +1839,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 payload = {"text": str(cfg.get("task", "")).strip()}
 
             if restricted:
-                # Social channels: never spawn on delegation (resolve-only) and
-                # only reach the allow-listed safe agents (fails closed).
+                # Resolve-only (no spawn), allow-listed targets only.
                 if agent_name.lower() not in self._RESTRICTED_DELEGATION_ALLOW:
                     result_str = f"[{agent_name} isn't available from this channel]"
                     results.append(result_str)

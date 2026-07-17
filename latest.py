@@ -8,6 +8,7 @@ Usage:
     python latest.py --table ha_state_changes --n 50
     python latest.py --all                     # latest from every table with ts
 """
+
 from __future__ import annotations
 import sqlite3
 import argparse
@@ -36,15 +37,11 @@ def show(conn: sqlite3.Connection, table: str, n: int) -> None:
 
     other = [c for c in col_names if c != "ts"][:5]  # first 5 non-ts columns
     sel = "ts," + ",".join(other)
-    rows = conn.execute(
-        f"SELECT {sel} FROM {table} ORDER BY ts DESC LIMIT ?", (n,)
-    ).fetchall()
+    rows = conn.execute(f"SELECT {sel} FROM {table} ORDER BY ts DESC LIMIT ?", (n,)).fetchall()
 
     for r in rows:
         ts = r[0]
-        rest = " | ".join(
-            f"{name}={str(v)[:50]}" for name, v in zip(other, r[1:])
-        )
+        rest = " | ".join(f"{name}={str(v)[:50]}" for name, v in zip(other, r[1:]))
         print(f"  {fmt(ts)}   {rest}")
 
 
@@ -53,8 +50,7 @@ def main() -> None:
     p.add_argument("--db", default="./state/wactorz.db")
     p.add_argument("--table", default="ha_state_changes")
     p.add_argument("--n", type=int, default=20)
-    p.add_argument("--all", action="store_true",
-                   help="Show every table that has a ts column")
+    p.add_argument("--all", action="store_true", help="Show every table that has a ts column")
     args = p.parse_args()
 
     if not Path(args.db).exists():
@@ -65,10 +61,8 @@ def main() -> None:
 
     if args.all:
         names = [
-            r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' ORDER BY name"
-            )
+            r[0]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         ]
         for name in names:
             cols = [c[1] for c in conn.execute(f"PRAGMA table_info({name})")]

@@ -6,7 +6,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — pending
 
 ### Added
+- **Reachy Mini SDK/daemon version alignment** - The catalog now pins the Reachy
+  Mini Python SDK to `1.8.4`, matching the supported robot daemon, and detects an
+  older importable SDK as needing an upgrade instead of silently reusing it.
 
+- **Reachy Mini assistant-style conversation UX** - Voice sessions are persistent
+  by default and end on inactivity or a natural stop phrase instead of an arbitrary
+  ten-turn ceiling. Recognized speech is published to the Reachy chat thread as a
+  real user bubble, while punctuation-only STT noise is discarded before routing.
+  Full dashboard answers are converted to concise spoken text and split into
+  sentence-sized TTS chunks, while emoji, Markdown role-play, and raw Home Assistant
+  service/entity acknowledgements never reach audio. English is the default session
+  language unless explicitly configured, and common "Richie" STT spellings are
+  corrected to the robot's actual name, Reachy. Obvious embodied requests (`dance`,
+  `nod`, head shake, antenna wiggle, curious pose) now execute deterministic physical
+  gestures locally instead of eliciting orchestrator role-play. Optional antenna-only
+  idle motion never resets the head.
+  Barge-in
+  remains available per session, but is off by default because robot-speaker echo
+  can otherwise cut off Reachy and become a false command on WebRTC backends without
+  acoustic echo cancellation. State-transition motion remains opt-in. Speech
+  formatting, idle/state motion, language, VAD sensitivity, and an optional positive
+  turn limit remain configurable per session.
+
+- **Reachy Mini `reconnect` — recover a robot that was off at spawn** - `setup()`
+  opened the robot link exactly once, so a robot powered on *after* the agent
+  spawned stayed unreachable for the agent's whole life and the only fix was
+  restarting the agent. Chat `reconnect` / `connect` / `try again` and MQTT
+  `custom/reachy/cmd/reconnect` now re-run the same connection ladder in place and
+  bring the robot back up (audio routing report, daemon volume sync, motor torque,
+  wake). The ladder reads the *current* `robot_host` / `connection_mode` /
+  `media_backend`, so publishing to `custom/reachy/config` and then reconnecting
+  applies a new host without a restart. `reconnect` is exempt from the offline
+  fail-fast that refuses robot commands (it is the command you reach for *because*
+  the robot is offline), a stale handle is released before a new one is opened,
+  `{"force": true}` re-opens an apparently-live link, and concurrent attempts are
+  rejected. A failed reconnect reports `ok:false` with the retry hint rather than a
+  success envelope. Disconnected errors, connect-failure logs, and `config` updates
+  now point at `reconnect` instead of telling users to restart the agent.
 - **Reachy Mini opt-in conversation mode** - Chat `start conversation` / `stop
   conversation` and MQTT `conversation_start` / `conversation_stop` run one
   cancellable VAD-driven session through the existing STT, main routing, and TTS
@@ -31,6 +68,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Reachy listening could become deaf and hallucinate speech from antenna noise** -
+  The original idle loop stepped directly between asymmetric antenna targets while
+  the microphone remained live. A shivering servo could repeatedly satisfy the VAD
+  onset detector, keeping Whisper busy on 1-2 second noise clips until it invented a
+  fluent sentence. Physical motion is now off by default while the microphone is live;
+  the opt-in mode uses low-amplitude eased sweeps, stops at confirmed speech onset, and
+  recenters only after recording ends. VAD also requires the configured minimum
+  duration of actual voiced frames; brief motor bursts are discarded before
+  transcription without consuming a turn or error budget.
+
+- **Clear light commands no longer fail on empty actuator JSON** - The one-shot
+  actuator previously passed an empty LLM response to `json.loads`, exposing
+  `Expecting value: line 1 column 1` in chat. Simple light commands now resolve
+  deterministically, including Reachy's `man light` transcription for `main light`.
+  Empty or invalid output for other commands becomes a safe no-match response.
+
+- **Reachy answered connection questions with an invented reconnection** - "reconnect"
+  was not a known command, so it fell through the robot planner to the main
+  orchestrator bridge, which has no robot state and replied with a confident,
+  fabricated "I'm here! Connection re-established." while the robot was still
+  offline and nothing had been dispatched. Connection phrasings are now
+  deterministic keywords that dispatch the real `reconnect` command and report what
+  actually happened.
 - **Removed unreliable Reachy sound-facing movement** - turn_to_sound and
   track_sound are no longer exposed through MQTT, natural-language planning,
   or direct dispatch because the linear microphone array cannot distinguish

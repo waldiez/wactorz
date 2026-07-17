@@ -219,7 +219,7 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = OneOffActuatorAgent(
                 request="turn on the mystery light",
-                llm_provider=_FakeLLM("[]"),
+                llm_provider=_FakeLLM(""),
                 task_id="actuate_test",
                 reply_to_id="main-actor",
                 persistence_dir=tmpdir,
@@ -238,6 +238,47 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
                 result = await agent._execute_request()
 
             self.assertEqual(result, "I couldn't identify a matching device for that request.")
+    async def test_simple_main_light_command_bypasses_empty_llm_json(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            llm = types.SimpleNamespace(complete=AsyncMock(return_value=("", {})))
+            agent = OneOffActuatorAgent(
+                request="Turn off the man light",
+                llm_provider=llm,
+                task_id="actuate_test",
+                reply_to_id="main-actor",
+                persistence_dir=tmpdir,
+            )
+            devices = [
+                {
+                    "entity_id": "light.tapo_l920",
+                    "name": "Light Strip",
+                    "state": {"attributes": {"friendly_name": "Light Strip"}},
+                },
+                {
+                    "entity_id": "light.main_light",
+                    "name": "Main Light",
+                    "state": {"attributes": {"friendly_name": "Main Light"}},
+                },
+            ]
+
+            actions = await agent._resolve_actions(devices)
+
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(actions[0].service, "turn_off")
+            self.assertEqual(actions[0].entity_id, "light.main_light")
+            llm.complete.assert_not_awaited()
+
+    def test_empty_or_invalid_resolver_output_is_a_safe_no_match(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = OneOffActuatorAgent(
+                request="turn on the mystery light",
+                llm_provider=_FakeLLM(""),
+                task_id="actuate_test",
+                reply_to_id="main-actor",
+                persistence_dir=tmpdir,
+            )
+            self.assertEqual(agent._parse_actions_json(""), [])
+            self.assertEqual(agent._parse_actions_json("not json"), [])
 
     async def test_execute_request_runs_service_calls(self):
         with tempfile.TemporaryDirectory() as tmpdir:

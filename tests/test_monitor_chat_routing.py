@@ -44,3 +44,24 @@ async def test_route_chat_without_stream_end_callback(monkeypatch):
     await monitor._route_chat("hello", reply)
 
     assert replies == ["handled: hello"]
+
+
+def test_voice_transcript_is_forwarded_as_user_chat():
+    agent_id = "reachy-id"
+    monitor.state["agents"][agent_id] = {"name": "reachy-mini"}
+    try:
+        event = monitor.parse_topic(
+            f"agents/{agent_id}/chat",
+            '{"from":"user","to":"reachy-mini","content":"turn on the light",'
+            '"timestamp":123.5}',
+        )
+    finally:
+        monitor.state["agents"].pop(agent_id, None)
+
+    assert event["_push_chat"] == {
+        "type": "chat",
+        "from": "user",
+        "to": "reachy-mini",
+        "content": "turn on the light",
+        "timestamp": 123.5,
+    }

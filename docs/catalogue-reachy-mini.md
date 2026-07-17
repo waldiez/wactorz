@@ -27,7 +27,7 @@ The catalogue installer can install recipe dependencies on first spawn. To insta
 manually:
 
 ```bash
-pip install reachy-mini numpy edge-tts webrtcvad-wheels
+pip install "reachy-mini==1.8.4" numpy edge-tts webrtcvad-wheels
 ```
 
 `edge-tts` is required for the `say` command (speech synthesis); the other
@@ -59,7 +59,7 @@ If the robot was disconnected and reconnected:
 ## Pin a Wireless host
 
 The Reachy SDK usually auto-detects the robot. If discovery is unreliable, publish the host
-once and restart the agent:
+once, then say `reconnect` to apply it (no restart needed):
 
 ```text
 topic: custom/reachy/config
@@ -68,6 +68,27 @@ payload: {"robot_host": "192.168.1.42"}
 
 Use the robot's IP address or hostname. The current host is reported in
 `custom/reachy/state` as `robot_host`.
+
+## Reconnect after the robot was off
+
+The agent connects once at spawn. If the robot was powered off then — or the daemon
+link drops — the agent stays up and refuses robot commands with a `reachy not
+connected` message. Power the robot on and say:
+
+```text
+@reachy-mini reconnect
+```
+
+`connect`, `try again`, and `retry` work too, as does publishing `{"cmd": "reconnect"}`
+to `custom/reachy/cmd`. It re-runs the same connection ladder `setup()` uses and brings
+the robot back up (volume sync, motor torque, wake), reporting what actually happened —
+a failed attempt says so rather than claiming success. Use `reconnect force` to re-open
+a link that looks alive but isn't behaving.
+
+Because the ladder reads the *current* config, a `custom/reachy/config` publish followed
+by `reconnect` re-targets a new host or mode without a restart. Values set in `.env`
+(`REACHY_ROBOT_HOST`, `REACHY_CONNECTION_MODE`, `REACHY_MEDIA_BACKEND`) are read only at
+spawn, so changing those still needs a restart.
 
 ## Choose a connection mode
 
@@ -88,8 +109,9 @@ topic: custom/reachy/config
 payload: {"connection_mode": "local"}
 ```
 
-You can also set `REACHY_CONNECTION_MODE=network` (or `local`) in the environment.
-Restart the agent to apply; the active mode is reported in `custom/reachy/state` as
+After publishing, say `reconnect` to apply the new mode. You can also set
+`REACHY_CONNECTION_MODE=network` (or `local`) in the environment, which is read at spawn
+and so needs a restart. The active mode is reported in `custom/reachy/state` as
 `connection_mode`. This only selects *where* the agent connects — speaker/host audio
 routing is set separately by `media_backend`.
 
@@ -201,7 +223,7 @@ prevents old queued audio from becoming the start of a new transcription.
 
 ### Opt-in conversation mode
 
-Start a bounded multi-turn session explicitly:
+Start a natural multi-turn session explicitly:
 
 ~~~
 @reachy-mini start conversation
@@ -211,19 +233,39 @@ Or over MQTT:
 
 ~~~json
 topic: custom/reachy/cmd/conversation_start
-payload: {"inactivity_timeout": 30, "max_turns": 10}
+payload: {"inactivity_timeout": 30}
 ~~~
 
 Reachy uses the same STT provider and `_bridge_to_main` route as `ask_voice`, so
 Home Assistant actions and normal Wactorz tools follow the existing path. Each turn
-uses voice-activity detection and ends after about 0.8 seconds of silence. Reachy
-then speaks the result, waits for the duration reported by TTS, and drains the
-WebRTC microphone queue during a short cooldown before listening again. Previous
-turns are supplied as context so follow-ups such as "turn it back on" can resolve
-without duplicating routing logic.
+uses voice-activity detection and ends after about 0.8 seconds of silence. Replies
+are converted to concise, voice-friendly text and spoken in sentence-sized chunks;
+the complete Wactorz answer is still sent to chat. Every meaningful STT result also
+appears immediately in the Reachy thread as a user bubble, so you can see exactly
+what the robot heard. Punctuation-only recognition noise is ignored.
 
-Stop with any of these phrases: `stop listening`, `end conversation`, or `goodbye
-Reachy`. You can also stop from chat or MQTT at any stage:
+Conversation sessions default to English STT to avoid low-confidence language
+auto-detection turning a short English phrase into unrelated Portuguese/Hindi text.
+Set `stt_language` (or `REACHY_STT_LANGUAGE`) for another language. Common vocative
+spellings such as "Hey Richie" are corrected to "Hey Reachy" before routing; Reachy
+is always treated as the robot's name, never inferred as the user's name.
+
+Audio is intentionally plainer than the dashboard response. Emoji, Markdown
+role-play directions such as `*waves*`, links, and raw Home Assistant service/entity
+syntax stay visual. Reachy speaks a short human acknowledgement instead; for example,
+`Done: light.turn_on -> light.main_light` becomes "Okay, the light is on", or
+"Okay, the light is pink" when that was the request.
+
+Barge-in is opt-in with `"barge_in": true`. When the media backend supports
+simultaneous recording and playback, sustained speech stops Reachy's current
+utterance, retains the interrupting audio, and routes it as the next turn. It is off
+by default because the robot speaker can be captured as microphone input on setups
+without acoustic echo cancellation, causing Reachy to cut itself off and route its
+own speech. Leave it off for reliable alternating turns.
+
+Stop with any of these phrases: `stop listening`, `end conversation`, `goodbye
+Reachy`, `goodbye`, `bye`, or `that's all`. You can also stop from chat or MQTT at
+any stage:
 
 ~~~
 @reachy-mini stop conversation
@@ -234,20 +276,40 @@ topic: custom/reachy/cmd/conversation_stop
 payload: {}
 ~~~
 
-Only one conversation can run at a time. A session also stops after its inactivity
-timeout or maximum turn count. Optional start payload fields include `silence_s`,
-`max_utterance_s`, `min_speech_s`, `pre_roll_s`, `flush_s`, `vad_mode`,
-`vad_min_rms`, and `cooldown_s`. The default RMS floor rejects very quiet WebRTC
-codec noise. Events on `custom/reachy/events` have `type: conversation` and report
-`session_id`, `turn_index`, `state`, `transcript`, `response`, capture/transcription/
-routing timings, `stop_reason`, `ok`, `error`, and `ts`.
+Only one conversation can run at a time. By default it is persistent and stops on
+its inactivity timeout, a spoken stop phrase, or `conversation_stop`. Set a positive
+`max_turns` only when a bounded session is wanted. Optional start payload fields
+include `silence_s`, `max_utterance_s`, `min_speech_s`, `pre_roll_s`, `flush_s`,
+`vad_mode`, `vad_min_rms`, `cooldown_s`, `barge_in`, `barge_silence_s`,
+`barge_min_speech_s`, `barge_flush_s`, `barge_min_rms`, `voice_friendly`,
+`state_motion`, `idle_motion`, `stt_language`, and `max_turns`. Barge-in and
+all physical conversation motion default to `false`.
 
-The current Reachy WebRTC playback API is fire-and-forget: it does not expose a
-remote playback-complete callback. Conversation mode therefore gates the microphone
-using the Edge TTS word-boundary duration plus a tail pad and cooldown. An explicit
-stop still interrupts playback immediately. Local transcription work already running
-inside a native STT library cannot be forcibly terminated, but its result is discarded
-and never routed after session cancellation.
+Set `state_motion:true` for subtle listening/speaking antenna cues. These use
+antenna-only `set_target` calls and do not command or reset the head. Conversation
+states are published on `custom/reachy/events`; events also report `session_id`,
+`turn_index`, `transcript`, full `response`, `spoken_response`, `interrupted`,
+timings, `stop_reason`, `ok`, `error`, and `ts`.
+
+Physical idle motion defaults to `false` because Reachy's antenna servos are audible to
+its live microphone and can become convincing Whisper hallucinations. The robot stays
+mechanically still while recording; personality remains in deliberate response
+gestures. Set `idle_motion:true` only to experiment on hardware with quiet servos. The
+opt-in motion uses small, eased antenna sweeps, stops when voice activity is confirmed,
+and never moves the head. Short mechanical bursts that trip VAD are rejected before
+Whisper and do not consume a turn or error budget, but keeping motors still is the
+reliable default.
+
+Embodied requests stay on the robot. "Do a little dance", "nod", "shake your head",
+"wiggle your antennas", and "look curious" run safe, explicit physical poses instead
+of going to the Wactorz LLM for pretend role-play. The dance ends with a short spoken
+"Ta-da!"; the full action result remains visible in chat.
+
+The Reachy playback API remains fire-and-forget, so non-interrupted turns use Edge
+TTS word-boundary duration plus a tail pad and cooldown. Explicit stop and barge-in
+both cut playback immediately. Local transcription already running inside a native
+STT library cannot be forcibly terminated, but its result is discarded after session
+cancellation.
 
 
 ## Structured commands
@@ -259,6 +321,7 @@ For direct control, send a dict with `cmd`:
 | `wake`, `sleep`, `stop` | Basic robot state |
 | `pose` | Head yaw, pitch, roll, x/y/z |
 | `antennas` | Left and right antenna angles |
+| `gesture` | Physical `dance`, `nod`, `shake`, `wiggle`, or `curious` choreography |
 | `look_at`, `look_pixel` | Gaze target |
 | `camera` | Capture one still frame from the onboard camera (base64 JPEG/PNG) |
 | `describe` | Look through the camera and speak a description of the scene (vision LLM) |

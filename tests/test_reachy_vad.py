@@ -79,6 +79,20 @@ class ReachyVadTest(unittest.TestCase):
         self.assertEqual(result.stop_reason, "inactivity_timeout")
         self.assertEqual(result.audio.size, 0)
 
+
+    def test_short_mechanical_burst_is_rejected_before_stt(self):
+        media = Media([stereo(0.3)] * 2 + [stereo(0)] * 5)
+        config = VADConfig(
+            flush_s=0,
+            speech_start_timeout_s=0.2,
+            silence_s=0.09,
+            min_speech_s=0.18,
+            pre_roll_s=0.09,
+        )
+        with mock.patch.dict(sys.modules, {"webrtcvad": self.vad_module}):
+            result = capture_utterance(media, config=config)
+        self.assertEqual(result.stop_reason, "noise_rejected")
+        self.assertEqual(result.audio.size, 0)
     def test_cancellation_stops_recording(self):
         media, cancel = Media([stereo(0.3)]), threading.Event()
         cancel.set()
@@ -100,6 +114,25 @@ class ReachyVadTest(unittest.TestCase):
             result = capture_utterance(media, config=config)
         self.assertLessEqual(result.duration_s, 0.12)
         self.assertGreater(result.duration_s, 0)
+
+    def test_speech_start_callback_fires_once_at_confirmed_onset(self):
+        media = Media([stereo(0)] + [stereo(0.3)] * 5 + [stereo(0)] * 4)
+        started = mock.Mock()
+        config = VADConfig(
+            flush_s=0,
+            speech_start_timeout_s=0.2,
+            silence_s=0.09,
+            min_speech_s=0.03,
+            pre_roll_s=0,
+        )
+        with mock.patch.dict(sys.modules, {"webrtcvad": self.vad_module}):
+            result = capture_utterance(
+                media,
+                config=config,
+                on_speech_start=started,
+            )
+        self.assertGreater(result.audio.size, 0)
+        started.assert_called_once()
 
     def test_drain_discards_queued_samples(self):
         media = Media([stereo(0)] * 100)

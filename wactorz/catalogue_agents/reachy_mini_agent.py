@@ -94,6 +94,14 @@ TASK PAYLOAD EXAMPLES
 Wake / sleep:
     {"cmd": "wake"}      {"cmd": "sleep"}
 
+Reconnect after the robot was off at spawn (no agent restart needed):
+    {"cmd": "reconnect"}   # or say "reconnect" / "connect" / "try again"
+    # Re-runs the same connection ladder setup() uses, reading the CURRENT
+    # robot_host / connection_mode / media_backend (so a custom/reachy/config
+    # publish then a reconnect applies without a restart), then brings the robot
+    # back up: audio routing, volume sync, motor torque, wake.
+    # {"cmd": "reconnect", "force": true} re-opens even if the link looks alive.
+
 Motor torque (the control app's enable/disable — needed to move at all):
     {"cmd": "motors", "on": true}    # torque ON so the robot can move
     {"cmd": "motors", "on": false}   # torque OFF (compliant; hand-pose it)
@@ -221,10 +229,114 @@ def _build_connection_attempts(robot_host, media_backend, conn_mode):
     return attempts
 
 
+def _describe_attempt(kw):
+    """Human-readable label for one ReachyMini(**kwargs) attempt."""
+    parts = []
+    if kw.get("host"):
+        parts.append(f"host={kw['host']}")
+    if kw.get("connection_mode"):
+        parts.append(kw["connection_mode"])
+    return "+".join(parts) or "autodetect(localhost-first)"
+
+
+async def _open_robot(agent):
+    """Run the connection ladder once. Returns (mini, last_err, tried_label).
+
+    Reads the CURRENT robot_host / media_backend / connection_mode off
+    agent.state, so a custom/reachy/config update followed by cmd=reconnect
+    applies without a restart. Shared by setup() and _reconnect() so both take
+    exactly the same path — there is no second, drifting connect implementation.
+    """
+    from reachy_mini import ReachyMini
+
+    conn_mode = agent.state.get("connection_mode") or ""
+    if conn_mode == "auto":      # state's sentinel for "no explicit mode"
+        conn_mode = ""
+    attempts = _build_connection_attempts(
+        agent.state.get("robot_host") or "",
+        agent.state.get("media_backend") or "",
+        conn_mode,
+    )
+
+    # IMPORTANT: ReachyMini().__enter__() does blocking websocket / media handshakes
+    # that take 5–10 seconds. Running it directly here freezes the asyncio event
+    # loop long enough for MQTT keepalives to time out and the monitor server
+    # (port 8887) to fail to bind. Always run it in an executor.
+    loop = asyncio.get_event_loop()
+
+    def _open_sync(kw):
+        return ReachyMini(**kw).__enter__()
+
+    mini = None
+    last_err = None
+    for kwargs in attempts:
+        try:
+            mini = await loop.run_in_executor(None, _open_sync, kwargs)
+            await agent.log(f"Connected to Reachy via {kwargs or 'autodetect'}")
+            break
+        except TypeError as e:
+            # Older SDK without connection_mode/host kwargs — keep trying simpler forms.
+            last_err = e
+            continue
+        except Exception as e:
+            last_err = e
+            continue
+
+    tried = ", ".join(_describe_attempt(kw) for kw in attempts) or "autodetect"
+    agent.state["last_connect_error"] = str(last_err) if mini is None else None
+    return mini, last_err, tried
+
+
+async def _bring_up_robot(agent):
+    """Post-connect bring-up. Requires agent.state['mini'] to be a live handle.
+
+    Runs on both the setup() path and cmd=reconnect, so a reconnected robot is
+    in the same state a freshly-spawned one is: audio routing reported, volume
+    synced from the daemon, motor torque on, awake.
+    """
+    mini = agent.state.get("mini")
+
+    # Report where speech will come out: only the WebRTC backend reaches the
+    # robot speaker (play_sound -> daemon). LOCAL/gstreamer plays on this host.
+    try:
+        _audio = getattr(getattr(mini, "media", None), "audio", None)
+        _on_robot = bool(getattr(_audio, "daemon_url", None))
+        agent.state["audio_on_robot"] = _on_robot
+        if _on_robot:
+            await agent.log("Audio routes to the ROBOT speaker (WebRTC backend).")
+        else:
+            await agent.log(
+                "Audio will play on THIS HOST, not the robot. For robot "
+                'speech publish {"media_backend": "webrtc"} to '
+                "custom/reachy/config and reconnect.", level="warning")
+    except Exception:
+        pass
+
+    # The daemon persists its own volume, so sync FROM it (a GET, no test sound)
+    # rather than re-applying ours. Caller has already seeded the persisted value.
+    live = await _get_daemon_volume(agent)
+    if live is not None:
+        agent.state["volume_level"] = live
+        await agent.log(f"Robot speaker volume is {live}/100 (from daemon).")
+
+    # Enable motor torque so the robot actually MOVES: wake_up()/goto_target()
+    # only stream target positions; with torque OFF the daemon accepts them and
+    # plays sounds but nothing moves ("talks but won't move"). The control app
+    # enables motors for you; running direct over `network` the daemon can come
+    # up with motors disabled, so do it here.
+    await _ensure_motors_enabled(agent)
+
+    try:
+        await _do(mini.wake_up)
+        agent.state["awake"] = True
+        await agent.publish("custom/reachy/events", {"type": "wake", "ts": _time.time()})
+    except Exception as e:
+        await agent.alert(f"wake_up failed: {e}", severity="warning")
+
+
 async def setup(agent):
     # ---- Heavy imports inside setup (never at module level) ----
     import numpy as np
-    from reachy_mini import ReachyMini
     from reachy_mini.utils import create_head_pose
 
     # ---- Resolve robot host (Wireless on LAN OR Lite via USB) ----
@@ -249,17 +361,17 @@ async def setup(agent):
             h = payload["robot_host"]
             agent.persist("robot_host", h)
             agent.state["robot_host"] = h
-            await agent.log(f"robot_host updated to {h} — restart agent to reconnect")
+            await agent.log(f'robot_host updated to {h} — say "reconnect" to apply')
         if "media_backend" in payload:
             m = payload["media_backend"]
             agent.persist("media_backend", m)
             agent.state["media_backend"] = m
-            await agent.log(f"media_backend updated to {m} — restart agent to apply")
+            await agent.log(f'media_backend updated to {m} — say "reconnect" to apply')
         if "connection_mode" in payload:
             c = payload["connection_mode"]
             agent.persist("connection_mode", c)
             agent.state["connection_mode"] = _normalize_connection_mode(c) or "auto"
-            await agent.log(f"connection_mode updated to {c} — restart agent to apply")
+            await agent.log(f'connection_mode updated to {c} — say "reconnect" to apply')
     agent.subscribe("custom/reachy/config", on_config)
 
     # ---- Open robot with a small fallback chain ----
@@ -296,75 +408,30 @@ async def setup(agent):
         or _os.environ.get("REACHY_CONNECTION_MODE") or "")
     agent.state["connection_mode"] = conn_mode or "auto"
 
-    mini = None
-    last_err = None
-    attempts = _build_connection_attempts(robot_host, media_backend, conn_mode)
-
-    # IMPORTANT: ReachyMini().__enter__() does blocking websocket / media handshakes
-    # that take 5–10 seconds. Running it directly here freezes the asyncio event
-    # loop long enough for MQTT keepalives to time out and the monitor server
-    # (port 8887) to fail to bind. Always run it in an executor.
-    loop = asyncio.get_event_loop()
-    def _open_sync(kw):
-        return ReachyMini(**kw).__enter__()
-    for kwargs in attempts:
-        try:
-            mini = await loop.run_in_executor(None, _open_sync, kwargs)
-            await agent.log(f"Connected to Reachy via {kwargs or 'autodetect'}")
-            break
-        except TypeError as e:
-            # Older SDK without connection_mode/host kwargs — keep trying simpler forms.
-            last_err = e
-            continue
-        except Exception as e:
-            last_err = e
-            continue
+    mini, last_err, tried = await _open_robot(agent)
 
     # Note: numpy + create_head_pose are stored regardless — they're pure helpers
     # that the LLM-planning path doesn't actually need a live robot to use.
     agent.state["np"] = np
     agent.state["create_head_pose"] = create_head_pose
-    agent.state["last_connect_error"] = str(last_err) if mini is None else None
+    agent.state["mini"] = mini
 
     if mini is None:
         # Stay alive in a "disconnected" mode so HA-only commands keep working
         # and so users get a friendly "reachy not connected" instead of a crash
         # loop. Setup() must NOT raise — the supervisor would auto-restart us.
-        agent.state["mini"] = None
-        def _descr(kw):
-            parts = []
-            if kw.get("host"):
-                parts.append(f"host={kw['host']}")
-            if kw.get("connection_mode"):
-                parts.append(kw["connection_mode"])
-            return "+".join(parts) or "autodetect(localhost-first)"
-        tried = ", ".join(_descr(kw) for kw in attempts) or "autodetect"
         await agent.log(
             f"Reachy daemon unreachable (tried: {tried}). Last error: {last_err}. "
             f"Agent stays up and refuses robot commands with 'reachy not connected'. "
-            f"To run WITHOUT the Reachy Mini control app, set REACHY_CONNECTION_MODE=network "
-            f"and REACHY_ROBOT_HOST=<robot ip/hostname> in your .env (or publish "
-            f'{{"connection_mode":"network","robot_host":"<ip>"}} to custom/reachy/config), '
-            f"then restart the agent.",
+            f'Power the robot on, then say "reconnect" (or publish {{"cmd":"reconnect"}} '
+            f"to custom/reachy/cmd) to retry — no agent restart needed. "
+            f"To run WITHOUT the Reachy Mini control app, publish "
+            f'{{"connection_mode":"network","robot_host":"<ip>"}} to custom/reachy/config '
+            f'and say "reconnect" — or set REACHY_CONNECTION_MODE=network and '
+            f"REACHY_ROBOT_HOST=<robot ip/hostname> in .env, which is only re-read on "
+            f"a restart.",
             level="warning",
         )
-    else:
-        agent.state["mini"] = mini
-        # Report where speech will come out: only the WebRTC backend reaches the
-        # robot speaker (play_sound -> daemon). LOCAL/gstreamer plays on this host.
-        try:
-            _audio = getattr(getattr(mini, "media", None), "audio", None)
-            _on_robot = bool(getattr(_audio, "daemon_url", None))
-            agent.state["audio_on_robot"] = _on_robot
-            if _on_robot:
-                await agent.log("Audio routes to the ROBOT speaker (WebRTC backend).")
-            else:
-                await agent.log(
-                    "Audio will play on THIS HOST, not the robot. For robot "
-                    'speech publish {"media_backend": "webrtc"} to '
-                    "custom/reachy/config and restart.", level="warning")
-        except Exception:
-            pass
 
     # ---- HA is delegated to the home-assistant-agent ----
     # reachy never calls HA's REST API directly. The entity inventory (only used to
@@ -421,30 +488,13 @@ async def setup(agent):
     # test sound) rather than re-applying our value. Fall back to persisted.
     agent.state["muted"] = bool(agent.recall("muted"))
     agent.state["premute_level"] = int(agent.recall("premute_level") or 100)
-    live = await _get_daemon_volume(agent) if mini is not None else None
-    if live is not None:
-        agent.state["volume_level"] = live
-        await agent.log(f"Robot speaker volume is {live}/100 (from daemon).")
-    else:
-        agent.state["volume_level"] = int(agent.recall("volume_level") or 100)
-
-    # ---- Enable motor torque so the robot actually MOVES ----
-    # wake_up()/goto_target() only stream target positions; with torque OFF the
-    # daemon accepts them and plays sounds but nothing moves ("talks but won't
-    # move"). The Reachy Mini control app enables motors for you; running direct
-    # over `network` the daemon can come up with motors disabled, so do it here.
+    agent.state["volume_level"] = int(agent.recall("volume_level") or 100)
     agent.state["motors_enabled"] = False
-    if mini is not None:
-        await _ensure_motors_enabled(agent)
 
-    # ---- Wake up so the robot is ready for commands (skip if disconnected) ----
+    # ---- Bring the robot up (audio report, volume sync, torque, wake) ----
+    # Skipped while disconnected; cmd=reconnect runs the same helper on success.
     if mini is not None:
-        try:
-            await _do(mini.wake_up)
-            agent.state["awake"] = True
-            await agent.publish("custom/reachy/events", {"type": "wake", "ts": _time.time()})
-        except Exception as e:
-            await agent.alert(f"wake_up failed: {e}", severity="warning")
+        await _bring_up_robot(agent)
 
     # ---- Direct command bus ----
     async def on_cmd(payload):
@@ -461,7 +511,7 @@ async def setup(agent):
     agent.subscribe("custom/reachy/cmd", on_cmd)
 
     # Convenience: per-verb topics rewrite payload through the same dispatcher.
-    for verb in ("wake", "sleep", "pose", "antennas", "look_at",
+    for verb in ("wake", "sleep", "reconnect", "pose", "antennas", "gesture", "look_at",
                  "look_pixel", "emotion", "motors", "diag", "set_pose", "bind",
                  "unbind", "list_emotions", "stop", "shutup", "say", "volume",
                  "camera", "describe", "look_around", "listen", "doa", "ask_voice",
@@ -530,6 +580,7 @@ Robot commands:
   {"cmd":"sleep"}
   {"cmd":"stop"}
   {"cmd":"pose","yaw":<deg>,"pitch":<deg>,"roll":<deg>,"duration":<sec>}
+  {"cmd":"gesture","name":"dance|nod|shake|wiggle|curious"}
   {"cmd":"antennas","left":<deg>,"right":<deg>,"duration":<sec>}
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
   {"cmd":"camera"}                         ← capture one still frame from the robot camera (returns an image)
@@ -875,6 +926,23 @@ async def _nl_to_commands(agent, text):
     return None
 
 
+def _embodied_command_for_text(text):
+    """Return a deterministic physical command for obvious body requests."""
+    import re as _re
+    low = str(text or "").lower()
+    if _re.search(r"\b(dance|boogie|robot shuffle)\b", low):
+        return {"cmd": "gesture", "name": "dance"}
+    if _re.search(r"\b(nod|nod your head)\b", low):
+        return {"cmd": "gesture", "name": "nod"}
+    if _re.search(r"\b(shake your head|head shake)\b", low):
+        return {"cmd": "gesture", "name": "shake"}
+    if _re.search(r"\b(wiggle|move)\b.*\b(antenna|antennas)\b", low):
+        return {"cmd": "gesture", "name": "wiggle"}
+    if _re.search(r"\b(look curious|be curious|curious gesture)\b", low):
+        return {"cmd": "gesture", "name": "curious"}
+    return None
+
+
 async def handle_task(agent, payload):
     # Direct send_to(reachy-mini, {...}) — same dispatch as MQTT.
     # IOAgent wraps user text as: {"text": "...", "_task_id": ..., "reply_to": ...}
@@ -935,7 +1003,9 @@ async def handle_task(agent, payload):
             if "cmd" not in payload and "action" not in payload and stripped:
                 low = stripped.lower().rstrip("!.?")
                 # Single-verb shortcuts (no LLM call needed)
-                if   low in ("wake", "wake up"):           payload = {"cmd": "wake"}
+                embodied = _embodied_command_for_text(stripped)
+                if embodied:                                payload = embodied
+                elif low in ("wake", "wake up"):          payload = {"cmd": "wake"}
                 elif low in ("sleep", "go to sleep"):      payload = {"cmd": "sleep"}
                 elif low in ("stop",):                     payload = {"cmd": "stop"}
                 elif low in ("list emotions", "emotions"): payload = {"cmd": "list_emotions"}
@@ -986,6 +1056,20 @@ async def handle_task(agent, payload):
                              "turn off motors", "turn your motors off", "go limp",
                              "relax your motors"):
                     payload = {"cmd": "motors", "on": False}
+                # Re-open the robot link. Deterministic keywords (not the LLM
+                # planner) because these are asked exactly when the robot is
+                # offline — the planner would otherwise fall through to the main
+                # bridge, which has no robot state and answers connection
+                # questions with a confident, invented "I'm reconnected!".
+                elif low in ("reconnect", "re-connect", "connect", "reconnect reachy",
+                             "connect to reachy", "try again", "try to connect",
+                             "try connecting", "try connecting again", "retry",
+                             "retry connection", "reconnect to the robot",
+                             "connection", "reconnect now"):
+                    payload = {"cmd": "reconnect"}
+                elif low in ("reconnect force", "force reconnect", "reconnect anyway",
+                             "reconnect force it"):
+                    payload = {"cmd": "reconnect", "force": True}
                 elif low in ("diag", "diagnostics", "diagnose", "self test", "self-test",
                              "why won't you move", "why wont you move", "why aren't you moving",
                              "why arent you moving", "run diagnostics"):
@@ -1045,7 +1129,7 @@ async def handle_task(agent, payload):
                         if not isinstance(c, dict):
                             continue
                         c_cmd = c.get("cmd") or c.get("action")
-                        if not ok_link and c_cmd not in ("ha", "list_emotions"):
+                        if not ok_link and c_cmd not in ("ha", "list_emotions", "reconnect"):
                             skipped.append(c_cmd)
                             continue
                         r = await _dispatch(agent, c_cmd, c, return_result=True)
@@ -1118,8 +1202,9 @@ async def handle_task(agent, payload):
     cmd = payload.get("cmd") or payload.get("action")
     # Friendly fail-fast for ROBOT commands when reachy isn't connected.
     # HA-only commands ("ha") still work — that's the whole point of the
-    # "stay alive in disconnected mode" design.
-    if cmd not in ("ha", "list_emotions", "conversation_stop", None):
+    # "stay alive in disconnected mode" design. "reconnect" is exempt for the
+    # obvious reason: it is the command you reach for BECAUSE we're offline.
+    if cmd not in ("ha", "list_emotions", "conversation_stop", "reconnect", None):
         ok, reason = _is_connected(agent)
         if not ok:
             return {"ok": False, "error": reason, "result": reason,
@@ -1159,8 +1244,146 @@ def _pending_look_closer(agent):
     return bool(ts and (_time.time() - ts) < 60)
 
 
+def _normalize_reachy_transcript(text):
+    """Repair common STT spellings when the user is addressing Reachy."""
+    import re as _re
+    value = str(text or "").strip()
+    variants = r"(?:richie|ritchie|richy|reachie|rechi)"
+    value = _re.sub(
+        rf"\b(hey|hi|hello|okay|ok|listen)\s*,?\s+{variants}\b",
+        lambda match: f"{match.group(1)} Reachy",
+        value,
+        flags=_re.IGNORECASE,
+    )
+    if _re.fullmatch(variants + r"[.!?]?", value, flags=_re.IGNORECASE):
+        return "Reachy"
+    value = _re.sub(r"\bman light\b", "main light", value, flags=_re.IGNORECASE)
+    return value
+
+
+def _sanitize_reachy_identity_reply(text):
+    """Keep the robot named Reachy and never mistake that name for the user."""
+    import re as _re
+    value = str(text or "")
+    variants = r"(?:Richie|Ritchie|Richy|Reachie|Rechi)"
+    value = _re.sub(rf"\bI(?:'m| am)\s+{variants}\b", "I'm Reachy", value)
+    value = _re.sub(rf",\s*{variants}(?=[?!.])", "", value)
+    return value
+
+
+def _natural_actuation_speech(value, user_text):
+    """Turn technical HA acknowledgements into short human confirmations."""
+    import re as _re
+    match = _re.search(
+        r"\b(?:done|success)\s*:\s*([a-z_]+)\.([a-z_]+)\s*->\s*[^\s]+",
+        value,
+        flags=_re.IGNORECASE,
+    )
+    if not match:
+        return None
+    domain, service = match.group(1).lower(), match.group(2).lower()
+    request = str(user_text or "").lower()
+    if domain == "light":
+        if service == "turn_off":
+            return "Okay, the light is off."
+        if service == "turn_on":
+            colors = (
+                "pink", "red", "orange", "yellow", "green", "blue",
+                "purple", "violet", "white", "warm white", "cool white",
+            )
+            color = next((item for item in colors if item in request), None)
+            if color:
+                return f"Okay, the light is {color}."
+            if any(word in request for word in ("dim", "bright", "brightness")):
+                return "Okay, I've adjusted the light."
+            return "Okay, the light is on."
+    return "Okay, done."
+
+
+def _voice_friendly_reply(text, limit=420, user_text=""):
+    """Turn a visual dashboard answer into natural human-only spoken text."""
+    import re as _re
+    value = _sanitize_reachy_identity_reply(text).strip()
+    if not value:
+        return ""
+    actuation = _natural_actuation_speech(value, user_text)
+    if actuation:
+        return actuation
+    value = _re.sub(r"```[\s\S]*?```", " I've put the code in Wactorz chat. ", value)
+    value = _re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", value)
+    # Italic role-play directions and emoji are visual flourishes, not speech.
+    value = _re.sub(r"(?<!\*)\*[^*\n]+\*(?!\*)", " ", value)
+    value = "".join(
+        " " if (
+            0x1F1E6 <= ord(ch) <= 0x1FAFF
+            or 0x2600 <= ord(ch) <= 0x27BF
+            or ord(ch) in (0x200D, 0xFE0F)
+        ) else ch
+        for ch in value
+    )
+    had_url = bool(_re.search(r"https?://\S+", value))
+    value = _re.sub(r"https?://\S+", "", value)
+    value = _re.sub(r"(?m)^\s{0,3}(?:#{1,6}\s*|[-*+]\s+|\d+[.)]\s+)", "", value)
+    value = _re.sub(r"[*_~`]+", "", value)
+    value = " ".join(value.split())
+    if had_url:
+        value = f"{value} The link is in Wactorz chat.".strip()
+    if len(value) <= limit:
+        return value or "Okay."
+    cut = max(value.rfind(mark, 0, limit) for mark in (". ", "! ", "? ", "; "))
+    if cut < max(80, limit // 2):
+        cut = value.rfind(" ", 0, limit)
+    cut = cut if cut > 0 else limit
+    return value[:cut + 1].rstrip() + " I've put the rest in Wactorz chat."
+
+
+def _speech_chunks(text, max_chars=180):
+    """Split spoken text at sentence boundaries for quicker TTS startup."""
+    import re as _re
+    words = str(text or "").split()
+    if not words:
+        return []
+    chunks, current = [], ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        sentence_end = bool(_re.search(r"[.!?][\"')\]]*$", word))
+        if current and len(candidate) > max_chars:
+            chunks.append(current)
+            current = word
+        else:
+            current = candidate
+        if current and sentence_end and len(current) >= 45:
+            chunks.append(current)
+            current = ""
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+async def _speak_reply(agent, text, *, await_playback=False, session=None):
+    """Speak a voice-friendly answer in chunks and preserve a barged-in turn."""
+    chunks = _speech_chunks(text) if await_playback else [text]
+    spoken, interrupted = [], False
+    for chunk in chunks:
+        result = await _say(agent, {
+            "text": chunk,
+            "await_playback": await_playback,
+            "_barge_in_session": session,
+        })
+        spoken.append(chunk)
+        if result.get("interrupted"):
+            interrupted = True
+            break
+    return {
+        "spoke": bool(spoken),
+        "interrupted": interrupted,
+        "spoken_result": " ".join(spoken).strip(),
+    }
+
+
 async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
-                          before_speak=None, session_id=None):
+                          before_speak=None, session_id=None, voice_friendly=False,
+                          barge_in_session=None):
     """Reachy-as-interface bridge.
 
     Anything Reachy can't turn into a robot/HA command is piped to the MAIN
@@ -1194,26 +1417,38 @@ async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
     if not reply:
         return None
 
+    reply = _sanitize_reachy_identity_reply(reply)
     # Voice it through the robot when connected; the text is returned either way
     # (and is the only channel when the robot is offline).
     spoke = False
+    interrupted = False
+    spoken_reply = _voice_friendly_reply(reply, user_text=text) if voice_friendly else reply
+    spoken_result = ""
     speech_error = None
     ok_link, link_reason = _is_connected(agent)
     if ok_link:
         try:
             if before_speak is not None:
                 await before_speak(reply)
-            # One-shot bridge calls remain non-blocking. Conversation mode opts
-            # into the existing duration-based playback wait.
-            await _say(agent, {"text": reply, "await_playback": await_playback})
-            spoke = True
+            # Conversation mode speaks short chunks, which gets the first phrase
+            # onto the speaker sooner and gives barge-in a clean cancellation point.
+            speech = await _speak_reply(
+                agent,
+                spoken_reply,
+                await_playback=await_playback,
+                session=barge_in_session,
+            )
+            spoke = speech["spoke"]
+            interrupted = speech["interrupted"]
+            spoken_result = speech["spoken_result"]
         except Exception as e:
             speech_error = str(e)
             await agent.log(f"bridge speak failed: {e}", level="warning")
     else:
         speech_error = link_reason or "reachy is not connected"
     return {"ok": True, "cmd": "bridge", "bridged": True, "spoke": spoke,
-            "said": reply if spoke else None, "result": reply,
+            "interrupted": interrupted, "said": spoken_result if spoke else None,
+            "spoken_result": spoken_result, "result": reply,
             "speech_error": speech_error,
             "_task_id": task_id, "task": task_id}
 
@@ -1237,6 +1472,81 @@ async def cleanup(agent):
     agent.persist("bindings", agent.state.get("bindings", {}))
 
 
+async def _reconnect(agent, payload=None):
+    """Re-open the robot link on a live agent — the recovery for 'robot was off
+    at spawn'.
+
+    setup() connects once; before this existed a robot powered on afterwards was
+    unreachable for the agent's whole life and the only fix was a restart. Runs
+    the same _open_robot ladder against the CURRENT config, so a
+    custom/reachy/config change lands here too.
+    """
+    payload = payload or {}
+    # NOTE: failures RAISE rather than return {"ok": False} — _dispatch stamps
+    # ok:true over any returned dict, so a returned failure would publish a
+    # successful-looking event for a robot that is still offline.
+    if agent.state.get("_reconnecting"):
+        raise _CommandStageError(
+            "reconnect", "already in progress",
+            {"connected": False,
+             "result": "Already trying to reconnect — give it a few seconds."})
+
+    ok, _reason = _is_connected(agent)
+    if ok and not payload.get("force"):
+        where = agent.state.get("robot_host") or "autodetect"
+        return {"connected": True, "reconnected": False, "robot_host": where,
+                "connection_mode": agent.state.get("connection_mode", "auto"),
+                "result": (f"Already connected to Reachy ({where}, "
+                           f"{agent.state.get('connection_mode', 'auto')} mode). "
+                           'Say "reconnect force" if you want to re-open the link anyway.')}
+
+    # Claim the slot BEFORE the first await: the guard above and this set must
+    # not be separated by a suspension point, or two concurrent reconnects both
+    # get past the check and race to open a second link.
+    agent.state["_reconnecting"] = True
+    try:
+        # A dropped-link handle still holds a websocket + media objects; release
+        # it before opening a new one so we don't leak a connection per reconnect.
+        old = agent.state.get("mini")
+        if old is not None:
+            agent.state["mini"] = None      # refuse robot commands mid-reconnect
+            try:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: old.__exit__(None, None, None))
+            except Exception as e:
+                await agent.log(f"releasing stale handle failed (continuing): {e}",
+                                level="warning")
+
+        mini, last_err, tried = await _open_robot(agent)
+        agent.state["mini"] = mini
+        if mini is None:
+            hint = ""
+            if not (agent.state.get("robot_host") or "").strip():
+                # No pinned host is the usual reason a wireless robot is missed:
+                # autodetect leans on mDNS, which is what fails on most LANs.
+                # Point at the config topic, not .env: only the topic is picked
+                # up by a reconnect (.env is read once, at spawn).
+                hint = (' No robot host is pinned — publish '
+                        '{"robot_host":"<robot ip>","connection_mode":"network"} to '
+                        'custom/reachy/config, then say "reconnect" again.')
+            raise _CommandStageError(
+                "connect", f"{last_err} (tried: {tried})",
+                {"connected": False, "reconnected": False, "tried": tried,
+                 "result": (f"Still can't reach Reachy (tried: {tried}). "
+                            f"Last error: {last_err}. Check the robot is powered on "
+                            f'and on the network, then say "reconnect" to try again.'
+                            + hint)})
+        await _bring_up_robot(agent)
+    finally:
+        agent.state["_reconnecting"] = False
+
+    where = agent.state.get("robot_host") or "autodetect"
+    return {"connected": True, "reconnected": True, "robot_host": where,
+            "connection_mode": agent.state.get("connection_mode", "auto"),
+            "audio_on_robot": bool(agent.state.get("audio_on_robot")),
+            "result": f"Reconnected to Reachy ({where}) — awake and ready."}
+
+
 def _is_connected(agent):
     """Quick check that the SDK handle is alive. Returns (ok, reason)."""
     mini = agent.state.get("mini")
@@ -1246,9 +1556,12 @@ def _is_connected(agent):
         err = agent.state.get("last_connect_error")
         base = f"reachy not connected: {err}" if err else "reachy not connected (no SDK handle)"
         return False, (
-            base + " — to run without the Reachy Mini control app, set "
+            base + ' — power the robot on, then say "reconnect" to try again '
+            "(no agent restart needed). To run without the Reachy Mini control app, "
+            'publish {"connection_mode":"network","robot_host":"<robot ip/hostname>"} '
+            'to custom/reachy/config and say "reconnect" — or set '
             "REACHY_CONNECTION_MODE=network and REACHY_ROBOT_HOST=<robot ip/hostname> "
-            "and restart the agent"
+            "in .env, which is only re-read on a restart"
         )
     # The SDK exposes _connected / _is_connected / ws on various versions — be tolerant.
     for attr in ("_connected", "is_connected", "connected"):
@@ -1256,11 +1569,13 @@ def _is_connected(agent):
         if callable(v):
             try:
                 if not v():
-                    return False, "reachy not connected (daemon link dropped)"
+                    return False, ('reachy not connected (daemon link dropped) — say '
+                               '"reconnect" to re-open the link')
             except Exception:
                 pass
         elif v is False:
-            return False, "reachy not connected (daemon link dropped)"
+            return False, ('reachy not connected (daemon link dropped) — say '
+                           '"reconnect" to re-open the link')
     return True, None
 
 
@@ -1289,8 +1604,10 @@ async def _dispatch(agent, cmd, payload, return_result=False):
     try:
         if   cmd == "wake":          result = await _wake(agent)
         elif cmd == "sleep":         result = await _sleep(agent)
+        elif cmd == "reconnect":     result = await _reconnect(agent, payload)
         elif cmd == "pose":          result = await _pose(agent, payload)
         elif cmd == "antennas":      result = await _antennas(agent, payload)
+        elif cmd == "gesture":       result = await _gesture(agent, payload)
         elif cmd == "look_at":       result = await _look_at(agent, payload)
         elif cmd == "look_pixel":    result = await _look_pixel(agent, payload)
         elif cmd == "camera":        result = await _camera(agent, payload)
@@ -1613,6 +1930,78 @@ async def _look_pixel(agent, payload):
     return {"pixel": {"u": u, "v": v}}
 
 
+
+
+async def _gesture(agent, payload):
+    """Play a small safe physical gesture with every pose field explicit."""
+    name = str(payload.get("name") or payload.get("gesture") or "").lower().strip()
+    duration = max(0.12, min(0.8, float(payload.get("duration", 0.3))))
+    gestures = {
+        "dance": [
+            (-10, -3, -8, 28, 52, -12),
+            (10, -3, 8, 52, 28, 12),
+            (-8, -5, -5, 35, 58, -8),
+            (8, -5, 5, 58, 35, 8),
+            (0, -6, 0, 45, 45, 0),
+            (0, 0, 0, 0, 0, 0),
+        ],
+        "nod": [
+            (0, -10, 0, 18, 18, 0),
+            (0, 12, 0, 5, 5, 0),
+            (0, -8, 0, 18, 18, 0),
+            (0, 0, 0, 0, 0, 0),
+        ],
+        "shake": [
+            (-14, 0, 0, 12, 5, -5),
+            (14, 0, 0, 5, 12, 5),
+            (-10, 0, 0, 12, 5, -4),
+            (10, 0, 0, 5, 12, 4),
+            (0, 0, 0, 0, 0, 0),
+        ],
+        "wiggle": [
+            (0, 0, 0, 55, 20, 0),
+            (0, 0, 0, 20, 55, 0),
+            (0, 0, 0, 55, 20, 0),
+            (0, 0, 0, 0, 0, 0),
+        ],
+        "curious": [
+            (8, -5, 12, 38, 55, 4),
+            (0, 0, 0, 12, 12, 0),
+        ],
+    }
+    steps = gestures.get(name)
+    if not steps:
+        raise ValueError("gesture name must be dance, nod, shake, wiggle, or curious")
+    mini = agent.state["mini"]
+    np = agent.state["np"]
+    create_head_pose = agent.state["create_head_pose"]
+    await _ensure_motors_enabled(agent)
+    async with agent.state["motion_lock"]:
+        agent.state["busy"] = True
+        try:
+            for yaw, pitch, roll, left, right, body_yaw in steps:
+                await _do(
+                    mini.goto_target,
+                    head=create_head_pose(
+                        yaw=yaw, pitch=pitch, roll=roll, degrees=True
+                    ),
+                    antennas=np.deg2rad([right, left]),
+                    body_yaw=float(np.deg2rad(body_yaw)),
+                    duration=duration,
+                )
+                await asyncio.sleep(duration + 0.04)
+        finally:
+            agent.state["busy"] = False
+    labels = {
+        "dance": "Ta-da! I did a little dance.",
+        "nod": "I nodded.",
+        "shake": "I shook my head.",
+        "wiggle": "I wiggled my antennas.",
+        "curious": "Curious mode.",
+    }
+    return {"gesture": name, "result": labels[name]}
+
+
 async def _emotion(agent, payload):
     """Play a recorded emotion clip from the HF dataset (e.g. 'happy', 'curious1', 'success1')."""
     moves = agent.state.get("moves")
@@ -1747,6 +2136,66 @@ def _say_playback_pad(speech_seconds, payload):
     return float(speech_seconds) + float(payload.get("tail_pad", 0.35))
 
 
+async def _begin_barge_in_monitor(agent, session, speech_seconds):
+    """Listen during playback and signal as soon as sustained user speech starts."""
+    if not session or not session.get("payload", {}).get("barge_in", False):
+        return None
+    if session.get("cancel_event") and session["cancel_event"].is_set():
+        return None
+
+    import threading as _threading
+    from wactorz.catalogue_agents.reachy_vad import VADConfig, capture_utterance
+
+    media = _require_mic(agent, record=True)
+    onset = _threading.Event()
+    cancel = _threading.Event()
+    payload = session.get("payload", {})
+    config = VADConfig(
+        speech_start_timeout_s=max(0.5, float(speech_seconds or 0) + 1.0),
+        silence_s=max(0.3, min(1.5, float(payload.get("barge_silence_s", 0.65)))),
+        max_utterance_s=max(1.0, min(30.0, float(
+            payload.get("max_utterance_s", 12.0)))),
+        min_speech_s=max(0.09, min(1.0, float(
+            payload.get("barge_min_speech_s", 0.18)))),
+        pre_roll_s=max(0.0, min(0.5, float(payload.get("pre_roll_s", 0.3)))),
+        flush_s=max(0.0, min(0.5, float(payload.get("barge_flush_s", 0.05)))),
+        mode=max(0, min(3, int(payload.get("vad_mode", 2)))),
+        min_rms=max(0.0, min(1.0, float(
+            payload.get("barge_min_rms", payload.get("vad_min_rms", 0.015))))),
+    )
+    task = asyncio.create_task(
+        _do(capture_utterance, media, cancel, config, onset.set)
+    )
+    session["barge_task"] = task
+    session["barge_cancel_event"] = cancel
+    return task, onset, cancel
+
+
+async def _finish_barge_in_monitor(session, monitor, interrupted):
+    """Stop a playback monitor and retain a completed interruption as next input."""
+    if monitor is None:
+        return None
+    task, _onset, cancel = monitor
+    if not interrupted:
+        cancel.set()
+    try:
+        capture = await asyncio.shield(task)
+    except asyncio.CancelledError:
+        cancel.set()
+        await asyncio.gather(task, return_exceptions=True)
+        raise
+    except Exception:
+        return None
+    finally:
+        if session.get("barge_task") is task:
+            session["barge_task"] = None
+            session["barge_cancel_event"] = None
+    if interrupted and getattr(capture, "audio", None) is not None and capture.audio.size:
+        session["pending_capture"] = capture
+        return capture
+    return None
+
+
 async def _say(agent, payload):
     """Speak text through Reachy's speaker using edge-tts for synthesis.
 
@@ -1789,7 +2238,7 @@ async def _say(agent, payload):
         raise RuntimeError(
             "reachy audio backend is not initialized — media_backend is "
             f"'{agent.state.get('media_backend') or 'default'}'. Publish "
-            '{"media_backend": ""} to custom/reachy/config and restart the agent.'
+            '{"media_backend": ""} to custom/reachy/config, then say "reconnect".'
         )
 
     # Where will the sound come out? Only the WebRTC backend routes to the ROBOT
@@ -1869,18 +2318,39 @@ async def _say(agent, payload):
     # stop_speaking (and cuts the audio), so a long utterance ends early instead
     # of blocking for its full length.
     pad = _say_playback_pad(speech_seconds, payload)
+    session = payload.get("_barge_in_session")
+    monitor = None
+    interrupted = False
+    if pad > 0 and session is not None:
+        try:
+            monitor = await _begin_barge_in_monitor(agent, session, speech_seconds)
+        except Exception as e:
+            # Some SDK/media combinations cannot record while playing. Keep
+            # ordinary playback working and expose the degraded UX in the log.
+            await agent.log(f"barge-in unavailable for this utterance: {e}",
+                            level="warning")
     waited = 0.0
     try:
         while waited < pad:
             if agent.state.get("stop_speaking"):
                 break
-            chunk = min(0.1, pad - waited)
+            if monitor is not None and monitor[1].is_set():
+                interrupted = True
+                await _stop_audio(agent)
+                try:
+                    await _conversation_publish(
+                        agent, session, "listening", {"interrupted": True})
+                except Exception:
+                    pass
+                break
+            chunk = min(0.05, pad - waited)
             await asyncio.sleep(chunk)
             waited += chunk
     finally:
         # Cancellation (conversation_stop) must never leave the microphone
         # gate believing Reachy is still speaking.
         agent.state["_speaking"] = False
+        await _finish_barge_in_monitor(session, monitor, interrupted)
 
     # Clean up the previous utterance now that a new one is playing.
     prev = agent.state.get("_say_tmp")
@@ -1892,6 +2362,7 @@ async def _say(agent, payload):
     agent.state["_say_tmp"] = play_path
 
     return {"said": text, "voice": voice, "trim_db": trim_db,
+            "interrupted": interrupted,
             "duration_s": round(speech_seconds, 2),
             "volume_level": agent.state.get("volume_level", 100),
             "boosted": play_path != raw_path,
@@ -2272,9 +2743,9 @@ def _require_mic(agent, *, record=False, doa=False):
             "capability is not exposed by the current backend or SDK build "
             f"(backend '{backend}'; missing {', '.join(missing)}). A media-capable "
             'backend may help — e.g. publish {"media_backend": ""} to '
-            "custom/reachy/config (or set REACHY_MEDIA_BACKEND= and leave it "
-            "blank) and restart the agent — but this is not guaranteed to be the "
-            "cause.")
+            'custom/reachy/config then say "reconnect" (or set '
+            "REACHY_MEDIA_BACKEND= blank and restart) — but this is not "
+            "guaranteed to be the cause.")
     return media
 
 
@@ -2936,6 +3407,10 @@ _CONVERSATION_STOP_PHRASES = {
     "stop listening",
     "end conversation",
     "goodbye reachy",
+    "bye",
+    "goodbye",
+    "that s all",
+    "that is all",
 }
 
 
@@ -2944,6 +3419,42 @@ def _conversation_stop_phrase(text):
     normalized = _re.sub(r"[^a-z0-9 ]+", " ", str(text or "").lower())
     normalized = " ".join(normalized.split())
     return normalized in _CONVERSATION_STOP_PHRASES
+
+
+def _conversation_stt_payload(payload):
+    """Default voice sessions to English while preserving explicit config."""
+    import os as _os
+    resolved = dict(payload or {})
+    configured = (
+        resolved.get("language")
+        or resolved.get("stt_language")
+        or _os.environ.get("REACHY_STT_LANGUAGE")
+    )
+    if not configured:
+        resolved["stt_language"] = "en"
+    return resolved
+
+
+def _conversation_transcript_is_meaningful(text):
+    """Reject punctuation-only/blank STT output before it reaches Wactorz."""
+    import re as _re
+    return bool(_re.search(r"[a-z0-9]", str(text or "").lower()))
+
+
+async def _conversation_show_transcript(agent, session, transcript):
+    """Publish recognized speech as a user-authored dashboard chat turn."""
+    try:
+        await agent.notify_user(
+            transcript,
+            **{
+                "from": "user",
+                "to": agent.name,
+                "source": "voice",
+                "session_id": session.get("session_id", ""),
+            },
+        )
+    except Exception as e:
+        await agent.log(f"voice transcript chat publish failed: {e}", level="warning")
 
 
 def _conversation_turn(session):
@@ -2956,16 +3467,134 @@ def _conversation_turn(session):
         "capture_duration_s": 0.0,
         "transcription_duration_s": 0.0,
         "routing_duration_s": 0.0,
+        "spoken_response": "",
+        "interrupted": False,
         "stop_reason": None,
         "ok": True,
         "error": None,
     }
 
 
+async def _conversation_state_motion(agent, state):
+    """Set optional antenna cues without issuing a whole-head pose command."""
+    poses = {
+        "listening": (10, 10),
+        "speaking": (3, 3),
+        "stopped": (0, 0),
+    }
+    angles = poses.get(state)
+    mini = agent.state.get("mini")
+    np = agent.state.get("np")
+    lock = agent.state.get("motion_lock")
+    if angles is None or mini is None or np is None or lock is None:
+        return
+    fn = getattr(mini, "set_target", None)
+    if not callable(fn):
+        return
+    try:
+        async with lock:
+            await _do(
+                fn,
+                antennas=np.deg2rad([angles[1], angles[0]]),
+            )
+    except Exception as e:
+        await agent.log(f"conversation {state} motion skipped: {e}", level="warning")
+
+
+async def _conversation_idle_antenna_target(agent, left, right):
+    """Move only antennas; never send an implicit head or body target."""
+    mini = agent.state.get("mini")
+    np = agent.state.get("np")
+    lock = agent.state.get("motion_lock")
+    fn = getattr(mini, "set_target", None) if mini is not None else None
+    if not callable(fn) or np is None or lock is None:
+        return
+    async with lock:
+        await _do(fn, antennas=np.deg2rad([right, left]))
+
+
+def _cancel_conversation_idle_motion(session):
+    """Stop antenna motion without issuing another motor command."""
+    task = session.get("_idle_motion_task")
+    if task is not None and not task.done():
+        task.cancel()
+    session["_idle_motion_task"] = None
+
+
+async def _conversation_idle_sweep(agent, session, start, end, duration=2.8):
+    """Ease between tiny antenna poses instead of stepping the servos."""
+    steps = max(8, int(duration / 0.14))
+    for step in range(1, steps + 1):
+        if (
+            session.get("state") != "listening"
+            or session.get("cancel_event").is_set()
+        ):
+            return
+        progress = step / steps
+        eased = progress * progress * (3.0 - 2.0 * progress)
+        left = start[0] + (end[0] - start[0]) * eased
+        right = start[1] + (end[1] - start[1]) * eased
+        await _conversation_idle_antenna_target(agent, left, right)
+        session["_idle_angles"] = (left, right)
+        await asyncio.sleep(duration / steps)
+
+
+async def _conversation_idle_motion_loop(agent, session):
+    """Give listening an occasional, fluid, low-amplitude antenna breath."""
+    patterns = ((5, 7), (7, 5), (4, 6), (6, 4), (0, 0))
+    index = int(session.get("turn_index") or 0) % len(patterns)
+    current = tuple(session.get("_idle_angles") or (0.0, 0.0))
+    try:
+        await asyncio.sleep(1.8)
+        while (
+            session.get("state") == "listening"
+            and not session.get("cancel_event").is_set()
+        ):
+            target = patterns[index % len(patterns)]
+            await _conversation_idle_sweep(agent, session, current, target)
+            current = target
+            index += 1
+            await asyncio.sleep(2.5)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        await agent.log(f"listening idle motion skipped: {e}", level="warning")
+
+
+def _schedule_conversation_idle_motion(agent, session, state):
+    """Run opt-in idle motion only during listening."""
+    previous = session.get("_idle_motion_task")
+    enabled = session.get("payload", {}).get("idle_motion", False)
+    if state != "listening" or not enabled:
+        _cancel_conversation_idle_motion(session)
+        return
+    if previous is not None and not previous.done():
+        return
+    session["_idle_motion_task"] = agent.run_in_background(
+        _conversation_idle_motion_loop(agent, session)
+    )
+
+
+def _schedule_conversation_state_motion(agent, session, state):
+    if not session.get("payload", {}).get("state_motion", False):
+        return
+    if session.get("_motion_state") == state:
+        return
+    previous = session.get("_motion_task")
+    if previous is not None and not previous.done():
+        previous.cancel()
+    session["_motion_state"] = state
+    session["_motion_task"] = agent.run_in_background(
+        _conversation_state_motion(agent, state)
+    )
+
+
 async def _conversation_publish(agent, session, state, turn=None, *, ok=True,
                                 error=None, stop_reason=None):
     session["state"] = state
     agent.state["conversation_state"] = state
+    _schedule_conversation_state_motion(agent, session, state)
+    _schedule_conversation_idle_motion(agent, session, state)
     event = _conversation_turn(session)
     if turn:
         event.update(turn)
@@ -2999,6 +3628,50 @@ def _conversation_route_text(transcript, history):
     )
 
 
+async def _conversation_embodied_bridge(
+    agent, transcript, command, task_id, before_speak, session
+):
+    """Execute a physical request locally, then acknowledge it naturally."""
+    action = await _dispatch(agent, command["cmd"], command, return_result=True)
+    name = command.get("name")
+    if action and action.get("ok"):
+        reply = str(action.get("result") or "Done.")
+        spoken = {
+            "dance": "Ta-da!",
+            "nod": "Mm-hm.",
+            "shake": "Nope.",
+            "wiggle": "How's that?",
+            "curious": "Hmm?",
+        }.get(name, "Okay.")
+    else:
+        reply = "I wanted to move, but my motors aren't responding right now."
+        spoken = reply
+    await before_speak(reply)
+    speech_error = None
+    try:
+        speech = await _speak_reply(
+            agent,
+            spoken,
+            await_playback=True,
+            session=session,
+        )
+    except Exception as e:
+        speech_error = str(e)
+        speech = {"spoke": False, "interrupted": False, "spoken_result": ""}
+        await agent.log(f"gesture acknowledgement failed: {e}", level="warning")
+    return {
+        "ok": bool(action and action.get("ok")),
+        "cmd": command["cmd"],
+        "physical": True,
+        "spoke": speech["spoke"],
+        "interrupted": speech["interrupted"],
+        "spoken_result": speech["spoken_result"],
+        "speech_error": speech_error,
+        "result": reply,
+        "_task_id": task_id,
+    }
+
+
 async def _conversation_blocking_worker(session, fn, *args):
     """Await a cancellable mic worker and let its thread observe the stop event."""
     worker = asyncio.create_task(_do(fn, *args))
@@ -3018,10 +3691,19 @@ async def _conversation_blocking_worker(session, fn, *args):
 
 
 async def _conversation_capture(agent, session, vad_config):
+    pending = session.pop("pending_capture", None)
+    if pending is not None:
+        return pending
     from wactorz.catalogue_agents.reachy_vad import capture_utterance
     media = _require_mic(agent, record=True)
+    loop = asyncio.get_running_loop()
+
+    def _speech_started():
+        loop.call_soon_threadsafe(_cancel_conversation_idle_motion, session)
+
     return await _conversation_blocking_worker(
-        session, capture_utterance, media, session["cancel_event"], vad_config)
+        session, capture_utterance, media, session["cancel_event"], vad_config,
+        _speech_started)
 
 
 async def _conversation_cooldown(agent, session, turn, seconds):
@@ -3052,6 +3734,12 @@ async def _conversation_start(agent, payload):
         "stop_reason": None,
         "task": None,
         "worker": None,
+        "pending_capture": None,
+        "barge_task": None,
+        "barge_cancel_event": None,
+        "barge_in_count": 0,
+        "_idle_motion_task": None,
+        "_idle_angles": (0.0, 0.0),
         "payload": dict(payload),
         "history": [],
         "consecutive_errors": 0,
@@ -3082,6 +3770,9 @@ async def _conversation_stop(agent, payload=None):
     reason = str(payload.get("reason") or "explicit_stop")
     session["stop_reason"] = reason
     session["cancel_event"].set()
+    barge_cancel = session.get("barge_cancel_event")
+    if barge_cancel is not None:
+        barge_cancel.set()
     if session.get("state") == "speaking" or agent.state.get("_speaking"):
         await _stop_audio(agent)
     task = session.get("task")
@@ -3106,7 +3797,9 @@ async def _conversation_loop(agent, session):
     from wactorz.catalogue_agents.reachy_vad import VADConfig
 
     payload = session["payload"]
-    max_turns = max(1, min(100, int(payload.get("max_turns", 10))))
+    stt_payload = _conversation_stt_payload(payload)
+    # Zero means a Siri-like persistent session; inactivity or an explicit phrase ends it.
+    max_turns = max(0, min(1000, int(payload.get("max_turns", 0))))
     max_errors = max(1, min(10, int(payload.get("max_consecutive_errors", 3))))
     cooldown_s = max(0.1, min(5.0, float(payload.get("cooldown_s", 0.7))))
     vad_config = VADConfig(
@@ -3124,7 +3817,9 @@ async def _conversation_loop(agent, session):
     stopped_published = False
     turn = _conversation_turn(session)
     try:
-        for turn_index in range(1, max_turns + 1):
+        turn_index = 0
+        while max_turns == 0 or turn_index < max_turns:
+            turn_index += 1
             session["turn_index"] = turn_index
             turn = _conversation_turn(session)
             await _conversation_publish(agent, session, "listening", turn)
@@ -3139,11 +3834,22 @@ async def _conversation_loop(agent, session):
                     stop_reason="capture_failed")
                 session["stop_reason"] = "capture_failed"
                 break
+            _cancel_conversation_idle_motion(session)
+            if tuple(session.get("_idle_angles") or (0, 0)) != (0, 0):
+                await _conversation_idle_antenna_target(agent, 0, 0)
+                session["_idle_angles"] = (0.0, 0.0)
+
             if capture.stop_reason == "cancelled":
                 raise asyncio.CancelledError
             if capture.stop_reason == "inactivity_timeout":
                 session["stop_reason"] = "inactivity_timeout"
                 break
+            if capture.stop_reason == "noise_rejected":
+                # Mechanical clicks are not user turns and must not consume a
+                # bounded session's turn count or its error budget.
+                turn_index = max(0, turn_index - 1)
+                session["turn_index"] = turn_index
+                continue
             if not capture.audio.size:
                 keep_going = await _conversation_turn_error(
                     agent, session, turn, "capture returned no speech", max_errors)
@@ -3159,7 +3865,7 @@ async def _conversation_loop(agent, session):
             await _conversation_publish(agent, session, "transcribing", turn)
             transcription_started = _time.time()
             try:
-                transcription = await transcribe_wav(wav_bytes, payload)
+                transcription = await transcribe_wav(wav_bytes, stt_payload)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -3174,15 +3880,11 @@ async def _conversation_loop(agent, session):
                 continue
             turn["transcription_duration_s"] = round(
                 _time.time() - transcription_started, 3)
-            turn["transcript"] = str(transcription.text or "").strip()
-            if not turn["transcript"]:
-                keep_going = await _conversation_turn_error(
-                    agent, session, turn, "empty_transcript", max_errors)
-                if not keep_going:
-                    session["stop_reason"] = "too_many_errors"
-                    break
-                await _conversation_cooldown(agent, session, turn, cooldown_s)
+            turn["transcript"] = _normalize_reachy_transcript(
+                str(transcription.text or "").strip())
+            if not _conversation_transcript_is_meaningful(turn["transcript"]):
                 continue
+            await _conversation_show_transcript(agent, session, turn["transcript"])
             if _conversation_stop_phrase(turn["transcript"]):
                 session["stop_reason"] = "stop_phrase"
                 break
@@ -3198,10 +3900,19 @@ async def _conversation_loop(agent, session):
                 await _conversation_publish(agent, session, "speaking", turn)
 
             try:
-                bridged = await _bridge_to_main(
-                    agent, route_text, f"{session['session_id']}:{turn_index}",
-                    await_playback=True, before_speak=_before_speak,
-                    session_id=session["session_id"])
+                task_id = f"{session['session_id']}:{turn_index}"
+                embodied = _embodied_command_for_text(turn["transcript"])
+                if embodied:
+                    bridged = await _conversation_embodied_bridge(
+                        agent, turn["transcript"], embodied, task_id,
+                        _before_speak, session)
+                else:
+                    bridged = await _bridge_to_main(
+                        agent, route_text, task_id,
+                        await_playback=True, before_speak=_before_speak,
+                        session_id=session["session_id"],
+                        voice_friendly=payload.get("voice_friendly", True),
+                        barge_in_session=session)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -3236,10 +3947,22 @@ async def _conversation_loop(agent, session):
                 continue
 
             session["consecutive_errors"] = 0
+            turn["spoken_response"] = str(bridged.get("spoken_result") or "").strip()
+            turn["interrupted"] = bool(bridged.get("interrupted"))
+            heard_response = (turn["spoken_response"] if turn["interrupted"]
+                              else turn["response"])
             session["history"].append({
-                "transcript": turn["transcript"], "response": turn["response"]})
+                "transcript": turn["transcript"],
+                "response": heard_response,
+                "interrupted": turn["interrupted"],
+            })
             await agent.notify_user(turn["response"])
-            if turn_index >= max_turns:
+            if turn["interrupted"]:
+                session["barge_in_count"] += 1
+                # The monitor retained the user's utterance. Start its STT/routing
+                # immediately instead of flushing it during the normal cooldown.
+                continue
+            if max_turns and turn_index >= max_turns:
                 session["stop_reason"] = "max_turns"
                 break
             await _conversation_cooldown(agent, session, turn, cooldown_s)

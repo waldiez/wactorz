@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Event
 from typing import Any
@@ -44,6 +45,8 @@ class VoiceCapture:
     duration_s: float
     stop_reason: str | None = None
     flushed_reads: int = 0
+    voiced_duration_s: float = 0.0
+    voiced_ratio: float = 0.0
 
 
 def _cancelled(cancel_event: Event | None) -> bool:
@@ -85,6 +88,7 @@ def capture_utterance(
     media: Any,
     cancel_event: Event | None = None,
     config: VADConfig | None = None,
+    on_speech_start: Callable[[], None] | None = None,
 ) -> VoiceCapture:
     """Capture one utterance, ending after post-speech silence or a limit.
 
@@ -115,10 +119,11 @@ def capture_utterance(
     media.start_recording()
     flushed = 0
     pending = np.zeros((0,), dtype=np.float32)
-    pre_roll: deque[npt.NDArray[np.float32]] = deque(maxlen=pre_roll_frames)
+    pre_roll: deque[tuple[npt.NDArray[np.float32], bool]] = deque(maxlen=pre_roll_frames)
     onset: deque[bool] = deque(maxlen=3)
     captured: list[npt.NDArray[np.float32]] = []
     speech_started = False
+    voiced_frames = 0
     trailing_silence = 0
     listen_started = time.monotonic()
     try:
@@ -157,16 +162,21 @@ def capture_utterance(
                 )
 
                 if not speech_started:
-                    pre_roll.append(frame.copy())
+                    pre_roll.append((frame.copy(), voiced))
                     onset.append(voiced)
                     if len(onset) == onset.maxlen and sum(onset) >= 2:
                         speech_started = True
-                        captured.extend(pre_roll)
+                        captured.extend(item[0] for item in pre_roll)
+                        voiced_frames = sum(1 for _, was_voiced in pre_roll if was_voiced)
                         trailing_silence = 0
+                        if on_speech_start is not None:
+                            on_speech_start()
                     continue
 
                 captured.append(frame.copy())
                 trailing_silence = 0 if voiced else trailing_silence + 1
+                if voiced:
+                    voiced_frames += 1
                 if len(captured) >= max_frames:
                     pending = np.zeros((0,), dtype=np.float32)
                     break
@@ -194,6 +204,22 @@ def capture_utterance(
         if captured
         else np.zeros((0,), dtype=np.float32)
     )
+    voiced_duration_s = round(voiced_frames * cfg.frame_ms / 1000, 3)
+    voiced_ratio = round(voiced_frames / len(captured), 3) if captured else 0.0
+    # Two short mechanical clicks can satisfy the onset detector. Do not hand
+    # those clips to Whisper: on near-silence it may invent a fluent sentence,
+    # and repeated false transcriptions make a live session appear deaf.
+    if audio.size and voiced_frames < min_speech_frames:
+        return VoiceCapture(
+            np.zeros((0,), dtype=np.float32),
+            samplerate,
+            1,
+            0.0,
+            "noise_rejected",
+            flushed,
+            voiced_duration_s,
+            voiced_ratio,
+        )
     return VoiceCapture(
         audio,
         samplerate,
@@ -201,4 +227,6 @@ def capture_utterance(
         round(audio.size / samplerate, 3) if samplerate else 0.0,
         None if audio.size else "empty_audio",
         flushed,
+        voiced_duration_s,
+        voiced_ratio,
     )

@@ -1801,12 +1801,12 @@ class _AgentAPI:
             },
         )
 
-    async def notify_user(self, text: str):
+    async def notify_user(self, text: str, **extra):
         """Push a user-facing chat message to the chat panel (see Actor.notify_user).
         Use this — not log() or alert() — when the user should see the message in
         chat, e.g. when a long task finishes or an autonomous agent has news.
         """
-        await self._actor.notify_user(text)
+        await self._actor.notify_user(text, **extra)
 
     def run_in_background(self, coro):
         """Schedule a coroutine on the actor's event loop and track it on the actor

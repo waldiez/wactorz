@@ -198,6 +198,29 @@ def test_ha_actuator_internal_rename(main_host):
     assert name != "lights-on" and name.startswith("lights-on-")
 
 
+def test_route_native(main_host):
+    # Native agents carry no code/prompt — the factory is re-resolved by name
+    # from the catalog. weather-agent has no optional deps, so it always resolves.
+    actor = run(main_host._spawn_local_from_config({"name": "weather-agent", "type": "native"}))
+    assert actor is not None
+    cls, kw = main_host.spawn_calls[-1]
+    assert cls.__name__ == "WeatherAgent"
+    assert kw["name"] == "weather-agent"
+
+
+def test_native_persisted_for_restore(main_host):
+    # The regression under fix: a native agent must land in the spawn registry
+    # so it is restored after a process restart (previously it never was).
+    run(main_host._spawn_local_from_config({"name": "weather-agent", "type": "native"}))
+    assert [c["name"] for c in main_host.registered] == ["weather-agent"]
+
+
+def test_native_unknown_returns_none(main_host):
+    actor = run(main_host._spawn_local_from_config({"name": "no-such-native", "type": "native"}))
+    assert actor is None
+    assert not main_host.spawn_calls
+
+
 def test_unknown_type_returns_none(main_host):
     assert run(main_host._spawn_local_from_config({"name": "x", "type": "wat"})) is None
 
@@ -355,3 +378,28 @@ def test_peer_resolves_timezone_from_main(peer_setup):
         )
     )
     assert host.spawn_calls[-1][1]["timezone"] == "Europe/Athens"
+
+
+# ── Native catalog resolver & registry safety ────────────────────────────────
+
+
+def test_get_native_factory_resolves_and_misses():
+    from wactorz.agents.catalog_agent import get_native_factory
+
+    assert get_native_factory("weather-agent").__name__ == "WeatherAgent"
+    assert get_native_factory("not-a-catalog-name") is None
+
+
+def test_native_recipes_are_json_safe_without_factory():
+    # CatalogAgent persists each native recipe minus its 'factory' class object;
+    # that descriptor must be JSON-serializable for every native recipe so the
+    # spawn registry (SQLite/JSON) can store and later restore it.
+    import json
+
+    from wactorz.agents.catalog_agent import _build_native_catalog
+
+    native = _build_native_catalog()
+    assert native, "expected at least one native catalog recipe (weather-agent)"
+    for recipe in native.values():
+        save_config = {k: v for k, v in recipe.items() if k != "factory"}
+        json.dumps(save_config)  # must not raise for any native recipe

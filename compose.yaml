@@ -117,7 +117,7 @@ services:
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
-      - ./infra/otelcol/config.yaml:/etc/otelcol/config.yaml:ro
+      - ./infra/otelcol/otel_config.yaml:/etc/otelcol/config.yaml:ro
     ports:
       - "${OTELCOL_OTLP_PORT:-4318}:4318"
       - "${OTELCOL_METRICS_PORT:-8889}:8889"

@@ -30,9 +30,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant
   activity now stream to the browser as server-push over `/ws`; the dashboard no longer opens its own
   MQTT connection to the broker, and the browser receives no broker credentials.
+- **Home Assistant add-on split into two variants.** The store now offers **Wactorz** (slim, Alpine,
+  ~200 MB) and **Wactorz Ultra** (Debian + ML/`ultralytics`, ~3 GB) as separate cards; both share the
+  same options and entrypoint. CI builds and pushes both variants across `aarch64`/`amd64`.
 
 ### Fixed
 
+- **Native catalog agents vanished after a restart** — `weather-agent`, `gmail-agent`, and `google-calendar-agent` (the `type: native` catalog agents) were spawned but never written to the spawn registry, so a process restart dropped them while code-recipe agents survived. They are now persisted on spawn (as a JSON-safe descriptor) and re-resolved to their class and restored on startup.
 - **Remote agent vanish-detection** — a remote agent missing from a single node heartbeat is no longer pruned from the registry (which broke delete and node-reboot recovery); pruning now needs several consecutive misses, and never touches an agent that hasn't appeared yet or has migrated away.
 - **Chat input** — up-arrow history recall now grows the textarea to fit a multi-line message instead of clipping it to one line.
 - **Nodes panel** — remote-runner agents no longer also appear under the local node; each agent is listed only on the node it runs on.

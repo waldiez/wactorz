@@ -28,14 +28,17 @@ def update_package_json(new_version):
 
 
 def update_ha_addon_config(new_version):
-    ha_file = Path("ha-addon/config.yaml")
-    if ha_file.exists():
-        content = ha_file.read_text()
-        new_content = re.sub(
-            r'^version: ".*"', f'version: "{new_version}"', content, flags=re.MULTILINE
-        )
-        ha_file.write_text(new_content)
-        print(f"Updated {ha_file}")
+    for ha_file in (
+        Path("ha-addon/wactorz/config.yaml"),
+        Path("ha-addon/wactorz-ultra/config.yaml"),
+    ):
+        if ha_file.exists():
+            content = ha_file.read_text()
+            new_content = re.sub(
+                r'^version: ".*"', f'version: "{new_version}"', content, flags=re.MULTILINE
+            )
+            ha_file.write_text(new_content)
+            print(f"Updated {ha_file}")
 
 
 def update_docs_landing(new_version):

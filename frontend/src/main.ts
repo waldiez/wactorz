@@ -8,7 +8,7 @@
  * This file only *wires*: it instantiates the services, derives the deployment
  * URLs, and connects transports → store → UI. Every decision/transform lives in
  * a tested module (agents/mapping, agents/deletionGuard, ui/haFeed,
- * ui/dashboard/haConfig); the handlers below are thin delegators. Keep it that
+ * config/serverConfig); the handlers below are thin delegators. Keep it that
  * way — if a handler grows real logic, extract it (see CONTRIBUTING).
  *
  * The chat lives entirely in CardDashboard's in-card bar (DashboardChat), which
@@ -448,14 +448,26 @@ fetch(`${_apiBase}/api/feed`)
     )
     .catch(err => log.debug("[feed] /api/feed seed failed:", err));
 
-// The HA URL is seeded from /api/config by CardDashboard (see ui/dashboard/haConfig)
-// for the Devices link; no token ever reaches the browser. No broker address is
-// seeded either — the browser never connects to MQTT; it gets everything over /ws.
+// The HA URL is seeded from /api/config at startup (see config/serverConfig.ts);
+// the Devices nav link reads it from safeStorage. No token ever reaches the
+// browser. The broker address isn't seeded either — the browser never connects
+// to MQTT; it gets everything over /ws.
 
-// Boot the TTS extension: it probes /api/tts/voices and self-wires via the
-// event bus. Base must be set first so the request stays inside the ingress
-// prefix instead of bare "/api".
-registerTTS({ apiBase: _apiBase, available: true });
+// Seed server config early so TTS availability is known before probing.
+import("./config/serverConfig")
+    .then(async m => {
+        const haChanged = await m.seedServerConfig();
+        if (haChanged) {
+            emit("af-connection-status", { status: _feedLive ? "live" : "demo" });
+        }
+        // Boot TTS after config is seeded — reads availability from safeStorage.
+        const available = safeStorage.get("wactorz-tts-available") === "1";
+        registerTTS({ apiBase: _apiBase, available });
+    })
+    .catch(() => {
+        // Config fetch failed — boot TTS anyway, it probes /api/tts/voices itself.
+        registerTTS({ apiBase: _apiBase, available: true });
+    });
 
 // ═══ 8 · Teardown ════════════════════════════════════════════════════════════
 

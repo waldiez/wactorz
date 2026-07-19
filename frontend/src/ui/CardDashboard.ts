@@ -23,11 +23,11 @@ import type { FeedItem } from "../types/feed";
 import { buildHeader, buildBottomNav, setHaNavUrl } from "./dashboard/header";
 import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
 import type { View, ConnState } from "./dashboard/types";
+import { IconName } from "./dashboard/icons";
 import { buildFeedView, appendFeedItemToView, feedKey } from "./dashboard/feedView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import { MetricsController } from "./dashboard/metrics";
-import { seedHaConfigFromServer } from "./dashboard/haConfig";
 import { emit, listen } from "../events";
 
 export class CardDashboard {
@@ -51,6 +51,11 @@ export class CardDashboard {
 
     /** Cost / message totals + host-resource telemetry live in their own controller. */
     private _metrics: MetricsController;
+
+    /** Extension-registered view builders (name → element factory). */
+    private _viewBuilders = new Map<string, () => HTMLElement>();
+    /** Extra nav buttons registered by extensions. */
+    private _extraViews: { key: string; label: string; icon: IconName }[] = [];
 
     // Event listeners (stored for cleanup)
     private _evFeed: ((e: Event) => void) | null = null;
@@ -103,12 +108,14 @@ export class CardDashboard {
         void this._loadServerConfig();
     }
 
-    /** Seed the HA URL from /api/config and point the Devices nav link at it. */
-    private async _loadServerConfig(): Promise<void> {
-        if (!(await seedHaConfigFromServer())) {
-            return;
-        }
-        setHaNavUrl(this.root, this.haUrl);
+    /** Seed runtime config from /api/config and point the Devices nav link at it. */
+    private _loadServerConfig(): void {
+        import("../config/serverConfig")
+            .then(async m => {
+                await m.seedServerConfig();
+                setHaNavUrl(this.root, this.haUrl);
+            })
+            .catch(() => {});
     }
 
     /** Reveal the dashboard, seed it with `agents`, wire events, and start the refresh timers. */
@@ -341,6 +348,10 @@ export class CardDashboard {
         this._evFeed = this._evConn = this._wipeAll = this._clearFeed = null;
     }
 
+    renderView(): void {
+        this._renderView();
+    }
+
     private _renderView(): void {
         const body = this.root.querySelector<HTMLElement>(".af-body")!;
         body.innerHTML = "";
@@ -358,9 +369,12 @@ export class CardDashboard {
             body.appendChild(this._buildSettingsView());
         } else if (this.view === "chat") {
             body.appendChild(this._chat.buildChatView());
-            // buildChatView()'s renders run before the element is in the DOM
-            // (querySelector returns null); re-run + load history once attached.
             this._chat.afterMount();
+        } else {
+            const builder = this._viewBuilders.get(this.view);
+            if (builder) {
+                body.appendChild(builder());
+            }
         }
     }
 
@@ -465,6 +479,47 @@ export class CardDashboard {
         });
     }
 
+    /** Register an extension view (nav button + content builder).
+     *  Extensions call this once during startup. */
+    registerView(key: string, icon: IconName, label: string, builder: () => HTMLElement): void {
+        this._viewBuilders.set(key, builder);
+        this._extraViews.push({ key, icon, label });
+        // Rebuild nav if dashboard is already visible — header buttons
+        // were built with the old extraViews list.
+        if (this.root.classList.contains("cd-visible")) {
+            this._rebuildNav();
+        }
+    }
+
+    private _rebuildNav(): void {
+        const oldHeader = this.root.querySelector<HTMLElement>(".af-header");
+        const oldBottomNav = this.root.querySelector<HTMLElement>(".af-bottom-nav");
+        const onSetView = (v: View) => this._setView(v);
+        const haUrl = this.haUrl;
+
+        if (oldHeader) {
+            const newHeader = buildHeader({
+                view: this.view,
+                connState: this.connState,
+                onSetView,
+                haUrl,
+                extraViews: this._extraViews,
+            });
+            oldHeader.replaceWith(newHeader);
+            this._renderConnBadge();
+            this._renderHealth();
+        }
+        if (oldBottomNav) {
+            const newNav = buildBottomNav({
+                view: this.view,
+                onSetView,
+                haUrl,
+                extraViews: this._extraViews,
+            });
+            oldBottomNav.replaceWith(newNav);
+        }
+    }
+
     private buildRoot(): HTMLElement {
         const root = document.createElement("div");
         root.id = "card-dashboard";
@@ -477,9 +532,15 @@ export class CardDashboard {
         const onSetView = (v: View) => this._setView(v);
         const haUrl = this.haUrl;
         root.append(
-            buildHeader({ view: this.view, connState: this.connState, onSetView, haUrl }),
+            buildHeader({
+                view: this.view,
+                connState: this.connState,
+                onSetView,
+                haUrl,
+                extraViews: this._extraViews,
+            }),
             body,
-            buildBottomNav({ view: this.view, onSetView, haUrl }),
+            buildBottomNav({ view: this.view, onSetView, haUrl, extraViews: this._extraViews }),
         );
         return root;
     }

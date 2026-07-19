@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 > (server container, HA→Fuseki bridge, `/api/fuseki` proxy, Graph tab), extra
 > agents, and the `sinergym/` + `models/` experiment trees.
 
+### Changed
+
+- **Fuseki is now an opt-in compose overlay.** The `fuseki` server and RDF bridge moved out
+  of the base `compose.yaml`/`compose.dev.yaml` into an additive `compose.fuseki.yaml`; the
+  base stacks are Fuseki-free and identical to `dev`. Bring Fuseki up by layering the overlay
+  (`docker compose -f compose.yaml -f compose.fuseki.yaml --profile full up -d`) and set
+  `FUSEKI_URL` in `.env`. The `python-full` compose profile is renamed `full`.
+
 ### Added
 
 - **Identity view** — a new dashboard tab listing every minted Spatial Web identity

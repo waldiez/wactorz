@@ -7,17 +7,16 @@
 # Profiles:
 #   python      — Python multi-agent app (REST on :8000, monitor on :8888)
 #                 docker compose --profile python up -d
-#   python-full — Python app + Fuseki + Home Assistant
-#                 docker compose --profile python-full up -d
+#   full        — Python app + Home Assistant
+#                 docker compose --profile full up -d
 #
 # External ports (defaults, override via .env):
 #   :1883  → MQTT TCP                  MQTT_EXTERNAL_PORT
 #   :9001  → MQTT WebSocket            MQTT_WS_EXTERNAL_PORT
-#   :8000  → Python REST API           REST_EXTERNAL_PORT       (python/python-full)
-#   :8888  → Python monitor Web UI     MONITOR_EXTERNAL_PORT    (python/python-full)
-#   :9090  → Prometheus UI            (python/python-full profile)
-#   :3030  → Fuseki                    FUSEKI_EXTERNAL_PORT     (python-full)
-#   :8123  → Home Assistant                                      (python-full)
+#   :8000  → Python REST API           REST_EXTERNAL_PORT       (python/full)
+#   :8888  → Python monitor Web UI     MONITOR_EXTERNAL_PORT    (python/full)
+#   :9090  → Prometheus UI            (python profile)
+#   :8123  → Home Assistant                                      (full)
 #
 # Copy .env.template → .env and fill in secrets before running.
 
@@ -47,10 +46,9 @@ services:
       retries: 5
 
   # ── Wactorz Python app ───────────────────────────────────────────────────────
-  # docker compose --profile python up -d
-  # docker compose --profile python-full up -d   (includes Fuseki + bridge)
+  # docker compose --profile python up -d   (or --profile full for Python + HA)
   wactorz-python:
-    profiles: [python, python-full]
+    profiles: [python, full]
     build:
       context: .
       dockerfile: Dockerfile
@@ -62,7 +60,6 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      FUSEKI_URL: http://fuseki:3030
       INTERFACE: "${INTERFACE:-rest}"
     networks:
       - wactorz-net
@@ -79,31 +76,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # ── Wactorz Fuseki bridge ─────────────────────────────────────────────────────
-  # Subscribes to agents/+/manifest MQTT and pushes RDF to Fuseki.
-  # Only started with python-full (requires Fuseki).
-  wactorz-fuseki:
-    profiles: [python-full]
-    image: wactorz-python:latest
-    container_name: wactorz-fuseki-bridge
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      MQTT_BROKER: mosquitto
-      MQTT_PORT: "1883"
-      FUSEKI_URL: http://fuseki:3030
-      FUSEKI_USER: "${FUSEKI_USER:-admin}"
-      FUSEKI_PASSWORD: "${FUSEKI_PASSWORD:-admin}"
-    networks:
-      - wactorz-net
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      fuseki:
-        condition: service_healthy
-    command: ["wactorz-fuseki"]
 
   # ── OpenTelemetry Collector ──────────────────────────────────────────────────
   # docker compose --profile otel up -d
@@ -130,7 +102,7 @@ services:
       retries: 3
 
   prometheus:
-    profiles: [python, python-full]
+    profiles: [python]
     image: prom/prometheus:v2.54.1
     container_name: wactorz-prometheus
     restart: unless-stopped
@@ -141,7 +113,6 @@ services:
       PROMETHEUS_SCRAPE_INTERVAL: "${PROMETHEUS_SCRAPE_INTERVAL:-15s}"
       PROMETHEUS_PYTHON_TARGET: "${PROMETHEUS_PYTHON_TARGET:-wactorz-python}"
       PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
-      PROMETHEUS_MONITOR_FUSEKI: "${PROMETHEUS_MONITOR_FUSEKI:-0}"
       PROMETHEUS_MONITOR_OTELCOL: "${PROMETHEUS_MONITOR_OTELCOL:-0}"
       REST_EXTERNAL_PORT: "${REST_EXTERNAL_PORT:-8000}"
     ports:
@@ -170,7 +141,7 @@ services:
     networks:
       - wactorz-net
   blackbox-exporter:
-    profiles: [python, python-full]
+    profiles: [python]
     image: prom/blackbox-exporter:v0.25.0
     container_name: wactorz-blackbox
     restart: unless-stopped
@@ -208,43 +179,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Apache Jena Fuseki ───────────────────────────────────────────────────────
-  # docker compose --profile python-full up -d
-  fuseki:
-    profiles: [python-full]
-    container_name: wactorz-fuseki
-    image: wactorz-fuseki
-    build:
-      context: config/fuseki-container
-      dockerfile: Containerfile
-    restart: unless-stopped
-    ports:
-      - "${FUSEKI_EXTERNAL_PORT:-3030}:3030"
-    environment:
-      - ADMIN_USER=${FUSEKI_USER:-admin}
-      - ADMIN_PASSWORD="${FUSEKI_PASSWORD:-${FUSEKI_ADMIN_PASSWORD:-admin}}"
-      - JVM_ARGS=-Xmx2g
-      - TBD=2
-      - FUSEKI_CREATE_DATASETS=true
-      - FUSEKI_DATASET_1=wactorz
-      - FUSEKI_DATASET_2=synapse
-      - FUSEKI_DATASET_3=spatial
-    volumes:
-      - fuseki-data:/fuseki/databases
-      - ./infra/fuseki/ontology:/fuseki/ontology:ro
-    networks:
-      - wactorz-net
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:3030/$/ping"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
   # ── Home Assistant ───────────────────────────────────────────────────────────
-  # docker compose --profile python-full up -d
+  # docker compose --profile full up -d
   homeassistant:
-    profiles: [python-full]
+    profiles: [full]
     image: homeassistant/home-assistant:stable
     container_name: wactorz-homeassistant
     restart: unless-stopped
@@ -270,6 +208,5 @@ networks:
 volumes:
   mosquitto-data:
   mosquitto-logs:
-  fuseki-data:
   influxdb-data:
   prometheus-data:

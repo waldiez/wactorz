@@ -15,7 +15,7 @@ environment plumbing differs.
 | --- | --- | --- |
 | EnergyPlus + Sinergym | hand-built devcontainer: 3.11.0 source, Dockerfile edited to force EnergyPlus 24.1.0 (§3a/§3b) | `docker/Dockerfile.bridge`: base `sailugr/sinergym:v3.12.0-lite` (already Sinergym 3.12.0 + EnergyPlus 25.1.0) — no from-source EnergyPlus build |
 | Image size | full devcontainer | `-lite` base (0.7 GB pull) — the DRL/torch stack is dropped because inference runs host-side in wactorz |
-| MQTT + Fuseki | three Docker services started by hand | already running via repo `compose.yaml` (`wactorz-mosquitto`, `wactorz-fuseki`); only the `sinergym` dataset had to be created |
+| MQTT + Fuseki | three Docker services started by hand | already running via `docker compose -f compose.yaml -f compose.fuseki.yaml --profile full up -d` (`wactorz-mosquitto`, `wactorz-fuseki` — Fuseki is now an opt-in overlay); only the `sinergym` dataset had to be created |
 | Model/detector dir | `C:/Users/yuu/.../state/maddpg_office/` | `models/maddpg/` & `models/aif/` (loaded straight from the repo; relative paths work in the launch payload — no staging copy) |
 | Host Python deps | n/a (host = Windows GUI) | `torch==2.12.0+cpu` + `numpy` added to the wactorz `.venv` (py3.14) |
 | `host.docker.internal` | automatic on Docker Desktop | mapped explicitly on Linux via `--add-host=host.docker.internal:host-gateway` (in `run-bridge.sh`) |
@@ -29,7 +29,8 @@ Files added by this path (everything else is the original branch):
 ## One-time setup
 
 ```text
-# 0. (services already up via compose.yaml: wactorz-mosquitto :1883, wactorz-fuseki :3030)
+# 0. (services already up via: docker compose -f compose.yaml -f compose.fuseki.yaml --profile full up -d
+#     → wactorz-mosquitto :1883, wactorz-fuseki :3030)
 
 # 1. Create the persistent Fuseki dataset the bridge writes to
 FUSEKI_USER="${FUSEKI_USER:-admin}"

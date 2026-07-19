@@ -15,7 +15,7 @@ import { tts } from "./TTSManager";
 export { tts, TTSManager } from "./TTSManager";
 export type { TTSVoice } from "./types";
 
-/** Extension config seeded from /api/config by seedServerConfig(). */
+/** Extension config passed to register() once at startup (see main.ts). */
 export interface TTSConfig {
     apiBase: string;
     available: boolean;

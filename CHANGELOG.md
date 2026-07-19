@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Added
+
+- **Extension seam (`wactorz/ext/`).** Optional features live in self-contained folders that expose a
+  `setup(app)` hook; the monitor auto-discovers and wires them at startup, and each may contribute
+  non-secret browser config to `/api/config`. Text-to-speech is now packaged as the first such
+  extension (`wactorz/ext/tts/` + `frontend/src/ext/tts/`), with no change to its behavior.
+
 ### Changed
 
 - **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant

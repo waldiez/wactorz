@@ -30,7 +30,7 @@ import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
-import { tts } from "./io/TTSManager";
+import { register as registerTTS } from "./ext/tts";
 import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
@@ -452,10 +452,10 @@ fetch(`${_apiBase}/api/feed`)
 // for the Devices link; no token ever reaches the browser. No broker address is
 // seeded either — the browser never connects to MQTT; it gets everything over /ws.
 
-// Probe server TTS availability + load voice list (base must be set first so
-// the request stays inside the ingress prefix instead of bare "/api").
-tts.setApiBase(_apiBase);
-void tts.init();
+// Boot the TTS extension: it probes /api/tts/voices and self-wires via the
+// event bus. Base must be set first so the request stays inside the ingress
+// prefix instead of bare "/api".
+registerTTS({ apiBase: _apiBase, available: true });
 
 // ═══ 8 · Teardown ════════════════════════════════════════════════════════════
 

@@ -11,6 +11,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `setup(app)` hook; the monitor auto-discovers and wires them at startup, and each may contribute
   non-secret browser config to `/api/config`. Text-to-speech is now packaged as the first such
   extension (`wactorz/ext/tts/` + `frontend/src/ext/tts/`), with no change to its behavior.
+- **Frontend extension registries.** Extensions can now add dashboard tabs
+  (`CardDashboard.registerView`), custom icons (`registerIcon`), and `/api/config`-seeded settings
+  (`registerConfigEntry` in the new `config/serverConfig.ts`) without touching core files. The HA
+  URL seeding moved into the same mechanism; TTS availability is now read from the server config
+  instead of always probing.
 
 ### Changed
 

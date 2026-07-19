@@ -14,8 +14,12 @@ wactorz/
 │   └── tts/                #     TTS — edge-tts voice synthesis
 
 frontend/src/
-└── ext/                    # Frontend extensions (TypeScript) — mirror backend
-    └── tts/index.ts        #     register({ apiBase, available })
+├── ext/                    # Frontend extensions (TypeScript) — mirror backend
+│   └── tts/index.ts        #     register({ apiBase, available })
+├── ui/dashboard/
+│   └── icons.ts            #     Icon registry — registerIcon(name, svg)
+├── ui/CardDashboard.ts     #     View registry — registerView(key, icon, label, builder)
+└── config/serverConfig.ts  #     Config-seeding registry — registerConfigEntry(key, extract)
 ```
 
 At startup the monitor calls `setup_all(app)`, which auto-discovers every module
@@ -106,13 +110,60 @@ export function register(config: MyConfig): void {
 
 ### Wiring in main.ts
 
-`register()` is called once during startup:
+`register()` is called once during startup, after `/api/config` is seeded:
 
 ```ts
 import { register as registerMyExt } from "./ext/myname";
 
-registerMyExt({ apiBase: _apiBase, available: true });
+registerMyExt({ apiBase: _apiBase, available });
 ```
+
+### Config seeding
+
+`config/serverConfig.ts` fetches `/api/config` once and seeds registered keys
+into `safeStorage` (paired with a `__server` baseline so a user's local edit
+survives until the server value itself changes). Core registers only its own
+keys; your barrel contributes the extension's at module load — before
+`seedServerConfig()` runs:
+
+```ts
+import { registerConfigEntry } from "../../config/serverConfig";
+
+// Fields your backend public_config() returns, namespaced by ext name.
+registerConfigEntry("wactorz-myext-flag", c =>
+    (c.myext as Record<string, unknown> | undefined)?.flag as string | undefined,
+);
+```
+
+Keys not registered are never stored, even if the server sends them.
+
+### Dashboard views and icons
+
+An extension that adds a dashboard tab uses the two registries — core never
+imports extension views or icon names:
+
+```ts
+import { registerIcon } from "../../ui/dashboard/icons";
+
+export function register(config: MyConfig): void {
+    // 1. Register the icon BEFORE registerView() uses its name.
+    registerIcon("hexagon", '<path d="M21 16V8a2 …"/>');
+
+    // 2. Register the tab: nav button + lazy view builder.
+    config.registerView("mytab", "hexagon", "My Tab", () => buildMyView(config.onRender));
+}
+```
+
+`registerView(key, icon, label, builder)` is a `CardDashboard` method; `main.ts`
+passes it (plus an `onRender` re-render thunk) into `register()`. The builder is
+a `() => HTMLElement` thunk called lazily on navigation — keep it pure and build
+a fresh element tree per call.
+
+| Registry                | Module                   | Purpose                      |
+|-------------------------|--------------------------|------------------------------|
+| `registerIcon()`        | `ui/dashboard/icons.ts`  | Add SVG icons by name        |
+| `registerView()`        | `CardDashboard` (method) | Add a nav tab + view builder |
+| `registerConfigEntry()` | `config/serverConfig.ts` | Seed `/api/config` fields    |
 
 ### Event bus
 
@@ -171,6 +222,8 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 - [ ] Config is read from `os.getenv(…)`, not `wactorz.config.CONFIG`
 - [ ] Extension no-ops gracefully when its env var / dependency is absent
 - [ ] Frontend barrel exports a `register(config)` function; wires via the event bus
+- [ ] Config fields registered from the barrel via `registerConfigEntry()`
+- [ ] Icons registered via `registerIcon()` before `registerView()`
 - [ ] New event types added to `AppEventMap` in `src/events.ts`
 - [ ] Any external service ships as an additive `compose.<ext>.yaml` overlay
 - [ ] Tests in `wactorz`/`tests/ext/` and `src/__tests__/ext/<name>/`

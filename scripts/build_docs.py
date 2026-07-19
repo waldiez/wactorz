@@ -60,6 +60,7 @@ NAV = [
             ("Pipelines", "pipelines.md"),
             ("Remote Nodes", "remote-nodes.md"),
             ("Prometheus", "prometheus.md"),
+            ("Extensions", "extensions.md"),
         ],
     ),
     (

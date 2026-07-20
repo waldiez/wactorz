@@ -12,6 +12,7 @@ so the frontend knows whether to send chat over /ws or publish to io/chat.
 import asyncio
 import secrets
 import sys
+from typing import Any
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -51,7 +52,13 @@ MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_WS_PORT = 9001
 WS_PORT = 8888
-MQTT_TOPICS = ["agents/#", "system/#", "nodes/#", "io/chat"]
+MQTT_TOPICS = [
+    "agents/#",
+    "system/#",
+    "nodes/#",
+    "io/chat",
+    "homeassistant/state_changes/#",
+]
 
 # Injected by cli.py after the actor system is built.
 # None  → legacy MQTT/IOAgent mode
@@ -348,7 +355,7 @@ async def broadcast(msg: dict):
         return
     payload = json.dumps(msg)
     dead = set()
-    for ws in ws_clients:
+    for ws in list(ws_clients):
         try:
             await ws.send_str(payload)
         except Exception as e:
@@ -793,6 +800,9 @@ async def ws_handler(request):
     # Advertise chat mode so the frontend knows where to send messages
     await ws.send_str(json.dumps({"type": "config", "chat_mode": _chat_mode()}))
 
+    # Current server↔broker state so the "live" badge is right immediately on load.
+    await ws.send_str(json.dumps({"type": "mqtt_status", "connected": _mqtt_connected}))
+
     # Per-connection accumulator for streamed assistant replies.
     # We only persist once at stream_end so chat_log gets one row per turn
     # with the full content, not a row per chunk.
@@ -879,6 +889,25 @@ async def ws_handler(request):
                 _stream_buffer.clear()
                 _persist_chat("assistant", full, _reply_from["name"])
 
+    async def _relay_chat_to_ioagent(content: str) -> None:
+        """Standalone monitor (no in-process registry): forward the browser's turn
+        to the IOAgent over MQTT `io/chat`. The reply returns on
+        `agents/{id}/chat`, which this process relays to the browser over /ws.
+
+        Only used in the legacy `wactorz-monitor` (registry-None) mode; remove it
+        when that entry point is retired from pyproject scripts.
+        """
+        if not mqtt_client_ref:
+            await ws_reply("[system] Chat unavailable — no broker connection.")
+            return
+        who = "main" if content.startswith("/") else _parse_mention(content)[0]
+        _persist_chat("user", content, who)
+        await mqtt_client_ref.publish(
+            "io/chat",
+            json.dumps({"content": content, "from": "user", "timestamp": time.time()}),
+            qos=1,
+        )
+
     try:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
@@ -932,10 +961,7 @@ async def ws_handler(request):
 
                             _track_chat_task(asyncio.create_task(_safe_route()))
                         elif content:
-                            # No registry — tell the browser to use MQTT
-                            await ws_reply(
-                                "[system] Chat not available over WebSocket in this mode."
-                            )
+                            await _relay_chat_to_ioagent(content)
 
                 except Exception as e:
                     logger.warning(f"[ws] Bad message: {e}")
@@ -1132,9 +1158,7 @@ def parse_topic(topic: str, payload_str: str):
                 source = data.get("source") if isinstance(data.get("source"), str) else ""
                 surface = data.get("surface") if isinstance(data.get("surface"), str) else ""
                 surface_label = (
-                    data.get("surface_label")
-                    if isinstance(data.get("surface_label"), str)
-                    else ""
+                    data.get("surface_label") if isinstance(data.get("surface_label"), str) else ""
                 )
                 brain = data.get("brain") if isinstance(data.get("brain"), str) else ""
                 try:
@@ -1442,6 +1466,32 @@ def _snapshot() -> dict:
     }
 
 
+async def _broadcast_mqtt_msg(topic: str, payload: str) -> None:
+    """Broadcast a received mqtt message."""
+    parsed: Any = payload
+    try:
+        parsed = json.loads(payload)
+    except Exception:
+        # non-JSON: pass the string through
+        pass
+    await broadcast({"type": "server_event", "topic": topic, "payload": parsed})
+
+
+# Server-broker connection state, mirrored to browsers so the dashboard's "live"
+# badge reflects whether real events are actually flowing (not just whether the
+# browser's own /ws is up). The browser treats "live" as: /ws open AND this True.
+_mqtt_connected: bool = False
+
+
+async def _set_mqtt_status(connected: bool) -> None:
+    """Broadcast a change in the server↔broker connection state to all browsers."""
+    global _mqtt_connected
+    if _mqtt_connected == connected:
+        return
+    _mqtt_connected = connected
+    await broadcast({"type": "mqtt_status", "connected": connected})
+
+
 async def mqtt_listener():
     global mqtt_client_ref
     logger.info(f"Connecting to MQTT {MQTT_BROKER}:{MQTT_PORT}...")
@@ -1468,6 +1518,8 @@ async def mqtt_listener():
                     for topic in MQTT_TOPICS:
                         await client.subscribe(topic)
 
+                    await _set_mqtt_status(True)
+
                     async for message in client.messages:
                         topic = str(message.topic)
                         payload = message.payload.decode(errors="replace")
@@ -1480,19 +1532,20 @@ async def mqtt_listener():
                                     logger.error(f"[io/chat] error: {exc}")
                             continue
 
-                        event = parse_topic(topic, payload)
+                        event: dict[str, Any] | None = parse_topic(topic, payload)
+                        await _broadcast_mqtt_msg(topic, payload)
                         if event and not _hard_resetting:
                             metric = event.get("metric", "")
                             log_event = None if metric == "heartbeat" else event
                             await broadcast(
                                 {"type": "patch", "event": log_event, "state": _snapshot()}
                             )
-                            # Agent-originated user-facing message → push to the
-                            # chat panel as a live chat frame, and persist it so
-                            # it survives a browser reload like any other turn.
+                            # Agent-originated user-facing message. The browser already
+                            # renders it from the agents/{id}/chat (the broadcast above)
+                            # so we do NOT broadcast a second frame here. We only persist
+                            # it so it survives a browser reload like any other turn.
                             push = event.get("_push_chat")
                             if push:
-                                await broadcast(push)
                                 try:
                                     if db is not None and push.get("content"):
                                         role = "user" if push.get("from") == "user" else "assistant"
@@ -1512,6 +1565,7 @@ async def mqtt_listener():
 
             except Exception as e:
                 mqtt_client_ref = None
+                await _set_mqtt_status(False)
                 logger.warning(f"MQTT error: {e}. Reconnecting in 5s...")
                 await asyncio.sleep(5)
     finally:
@@ -1526,21 +1580,33 @@ async def mqtt_listener():
 # ── Startup checks ─────────────────────────────────────────────────────────
 
 
-async def _check_mqtt() -> bool:
-    """Return True if MQTT broker is reachable."""
-    try:
-        _, writer = await asyncio.wait_for(
-            asyncio.open_connection(MQTT_BROKER, MQTT_PORT), timeout=3
-        )
-        writer.close()
+async def _check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
+    """Return True if MQTT broker is reachable.
+
+    Retries briefly so a transient blip (or a broker mid-restart) does not fatally
+    abort startup: the aiomqtt client itself reconnects, so this pre-flight probe
+    must be at least as tolerant, or it aborts a server whose MQTT is actually fine.
+    """
+    last = ""
+    for i in range(attempts):
         try:
-            await writer.wait_closed()
-        except Exception:
-            pass
-        return True
-    except Exception as exc:
-        logger.error(f"[startup] MQTT broker {MQTT_BROKER}:{MQTT_PORT} unreachable — {exc}")
-        return False
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(MQTT_BROKER, MQTT_PORT), timeout=3
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True
+        except Exception as exc:
+            last = repr(exc)
+            if i < attempts - 1:
+                await asyncio.sleep(delay)
+    logger.error(
+        f"[startup] MQTT broker {MQTT_BROKER}:{MQTT_PORT} unreachable after {attempts} tries — {last}"
+    )
+    return False
 
 
 async def _check_ws_port() -> bool:
@@ -1674,17 +1740,9 @@ async def static_handler(request):
                     content = content.replace('"/config"', f'"{ingress_path}/config"')
                     content = content.replace('"/actors"', f'"{ingress_path}/actors"')
                     # Point the WebSocket at the monitor's actual port (WS_PORT),
-                    # not HA's 8123. WS_PORT is where the /ws and /mqtt proxies live.
-                    host = request.host.split(":")[0]
-                    content = content.replace(
-                        '"ws://localhost:9001"', f'"ws://{host}:{WS_PORT}/mqtt"'
-                    )
+                    # not HA's 8123. WS_PORT is where the /ws proxy lives.
                     content = content.replace(
                         "`ws://${location.host}/ws`", f"`ws://${{location.hostname}}:{WS_PORT}/ws`"
-                    )
-                    content = content.replace(
-                        "`ws://${location.host}/mqtt`",
-                        f"`ws://${{location.hostname}}:{WS_PORT}/mqtt`",
                     )
 
                     return _with_no_cache(
@@ -1723,174 +1781,6 @@ async def docs_handler(request):
     except Exception:
         pass
     raise web.HTTPNotFound()
-
-
-def _encode_mqtt_str(s: str) -> bytes:
-    b = s.encode("utf-8")
-    return bytes((len(b) >> 8, len(b) & 0xFF)) + b
-
-
-def _inject_connect_credentials(pkt: bytes, username: str, password: str) -> bytes:
-    """Add username/password to an anonymous MQTT CONNECT packet, in-flight.
-
-    The browser's mqtt.js client connects with no credentials, so an
-    authenticated broker rejects it ("Not authorized") and the dashboard falls
-    back to demo data. This rewrites the CONNECT as it passes through the proxy
-    so the broker accepts it — without ever sending the credentials to the
-    browser. Works for MQTT 3.1.1 and 5.0; username/password are the last two
-    payload fields in both, so they're appended at the end.
-
-    Any non-CONNECT packet, an already-credentialed CONNECT, or a malformed /
-    partial buffer is returned unchanged.
-    """
-    if len(pkt) < 2 or pkt[0] != 0x10:  # not a CONNECT (packet type 1, flags 0)
-        return pkt
-    rem_len = 0
-    mult = 1
-    idx = 1
-    while True:  # decode Remaining Length (variable byte integer)
-        if idx >= len(pkt):
-            return pkt
-        b = pkt[idx]
-        rem_len += (b & 0x7F) * mult
-        idx += 1
-        if not (b & 0x80):
-            break
-        mult *= 128
-        if mult > 128**3:
-            return pkt
-    body = pkt[idx : idx + rem_len]
-    if len(body) < rem_len or len(body) < 4:
-        return pkt  # split across frames — don't risk corrupting it
-    pn_len = (body[0] << 8) | body[1]
-    flags_pos = 2 + pn_len + 1  # protocol name + 1-byte protocol level
-    if flags_pos >= len(body):
-        return pkt
-    if body[flags_pos] & 0x80:  # username flag already set — leave it alone
-        return pkt
-    new_body = bytearray(body)
-    new_body[flags_pos] |= 0xC0  # set username + password flags
-    new_body += _encode_mqtt_str(username) + _encode_mqtt_str(password)
-    rl = bytearray()  # re-encode Remaining Length
-    x = len(new_body)
-    while True:
-        d = x % 128
-        x //= 128
-        if x:
-            d |= 0x80
-        rl.append(d)
-        if not x:
-            break
-    return bytes((0x10,)) + bytes(rl) + bytes(new_body)
-
-
-def _proxy_mqtt_creds():
-    """Broker creds for the dashboard's MQTT proxy, or None when anonymous."""
-    from .config import CONFIG
-
-    if CONFIG.mqtt_username:
-        return (CONFIG.mqtt_username, CONFIG.mqtt_password)
-    return None
-
-
-async def _bridge_mqtt_tcp(client_ws, broker: str, port: int) -> None:
-    from aiohttp import WSMsgType
-
-    try:
-        reader, writer = await asyncio.wait_for(asyncio.open_connection(broker, port), timeout=3)
-    except Exception as exc:
-        logger.warning("MQTT TCP bridge: cannot connect to %s:%s — %s", broker, port, exc)
-        return
-
-    creds = _proxy_mqtt_creds()
-
-    async def ws_to_tcp():
-        first = creds is not None  # inject creds into the browser's CONNECT
-        try:
-            async for msg in client_ws:
-                if msg.type == WSMsgType.BINARY:
-                    data = msg.data
-                    if first:
-                        first = False
-                        data = _inject_connect_credentials(data, creds[0], creds[1])
-                    writer.write(data)
-                    await writer.drain()
-                elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
-                    break
-        finally:
-            writer.close()
-
-    async def tcp_to_ws():
-        try:
-            while not reader.at_eof():
-                data = await reader.read(4096)
-                if not data:
-                    break
-                await client_ws.send_bytes(data)
-        finally:
-            await client_ws.close()
-
-    await asyncio.gather(ws_to_tcp(), tcp_to_ws(), return_exceptions=True)
-
-
-async def mqtt_proxy_handler(request):
-    import aiohttp
-    from aiohttp import WSMsgType, web
-
-    raw_proto = request.headers.get("Sec-WebSocket-Protocol", "")
-    protocols = [p.strip() for p in raw_proto.split(",") if p.strip()]
-    client_ws = web.WebSocketResponse(protocols=protocols)
-    try:
-        await client_ws.prepare(request)
-    except Exception as exc:
-        logger.error(
-            "[MQTT proxy] WebSocket handshake failed — %s | headers: %s", exc, dict(request.headers)
-        )
-        raise
-
-    logger.debug("[MQTT proxy] WS accepted from %s proto=%s", request.remote, protocols)
-
-    upstream_url = f"ws://{MQTT_BROKER}:{MQTT_WS_PORT}/"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(
-                upstream_url,
-                protocols=protocols,
-                headers={"Sec-WebSocket-Protocol": ",".join(protocols)} if protocols else {},
-                timeout=aiohttp.ClientTimeout(connect=2),
-            ) as upstream_ws:
-                logger.debug("[MQTT proxy] upstream WS connected → %s", upstream_url)
-                creds = _proxy_mqtt_creds()
-
-                async def forward(src, dst, inject=False):
-                    first = inject  # inject creds into the browser's CONNECT
-                    async for msg in src:
-                        if msg.type == WSMsgType.BINARY:
-                            data = msg.data
-                            if first:
-                                first = False
-                                data = _inject_connect_credentials(data, creds[0], creds[1])
-                            await dst.send_bytes(data)
-                        elif msg.type == WSMsgType.TEXT:
-                            await dst.send_str(msg.data)
-                        elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
-                            break
-
-                await asyncio.gather(
-                    forward(client_ws, upstream_ws, inject=creds is not None),
-                    forward(upstream_ws, client_ws),
-                )
-        return client_ws
-    except Exception as exc:
-        logger.info(
-            "[MQTT proxy] upstream WS unavailable (%s), falling back to TCP bridge %s:%s",
-            exc,
-            MQTT_BROKER,
-            MQTT_PORT,
-        )
-
-    await _bridge_mqtt_tcp(client_ws, MQTT_BROKER, MQTT_PORT)
-    return client_ws
 
 
 def _actor_payload(ag: dict) -> dict:
@@ -2084,6 +1974,31 @@ async def delete_actor_handler(request):
     return web.Response(status=200, text=f"stopping ({routed})")
 
 
+# Home-Assistant system agents: supervised on a fresh boot like the protected
+# actors, but intentionally left NON-protected so a user can still delete one
+# individually. A factory reset must keep them anyway (a clean boot recreates
+# them), so they are named explicitly here rather than inferred from protection.
+_HA_SYSTEM_AGENTS = frozenset(
+    {
+        "home-assistant-agent",
+        "home-assistant-map-agent",
+        "home-assistant-state-bridge",
+    }
+)
+
+
+def _survives_factory_reset(name: str, protected: bool) -> bool:
+    """Whether an agent is kept by ``reset all`` (factory reset).
+
+    Kept if it is a system-protected actor (main / monitor / io-agent / installer
+    / catalog) OR one of the HA system agents — i.e. exactly the set a fresh,
+    empty boot brings up. Everything else (user- and catalog-spawned agents) is
+    wiped. Note this is independent of manual delete, which keys off ``protected``
+    alone, so the HA agents stay individually deletable.
+    """
+    return protected or name in _HA_SYSTEM_AGENTS
+
+
 async def reset_handler(request):
     """POST /api/reset  —  clear stored state and broadcast a reset event.
 
@@ -2119,23 +2034,32 @@ async def reset_handler(request):
                 getattr(registry, "_supervisor_ref", None) if registry is not None else None
             )
             all_actors = list(registry.all_actors()) if registry is not None else []
-            # Only stop user-spawned (non-protected) actors — system actors keep running
-            stoppable = [a for a in all_actors if not getattr(a, "protected", False)]
+
+            # Factory reset keeps the protected system actors and the HA system
+            # agents; only user- and catalog-spawned agents are stopped.
+            def _kept(name: str, protected: bool) -> bool:
+                return _survives_factory_reset(name, protected)
+
+            stoppable = [a for a in all_actors if not _kept(a.name, getattr(a, "protected", False))]
             # The registry is the AUTHORITATIVE source of the protected flag — the
             # dashboard entry's "protected" is only set when a heartbeat happened to
             # carry it, so trusting it alone wrongly tears down system agents (main /
-            # monitor / installer / catalog) and they flicker back on the next beat.
-            protected_ids = {a.actor_id for a in all_actors if getattr(a, "protected", False)}
-            protected_names = {a.name for a in all_actors if getattr(a, "protected", False)}
-            # Tear down every NON-protected agent the dashboard knows about (covers an
+            # monitor / installer / catalog / the HA family) and they flicker back.
+            kept_ids = {
+                a.actor_id for a in all_actors if _kept(a.name, getattr(a, "protected", False))
+            }
+            kept_names = {
+                a.name for a in all_actors if _kept(a.name, getattr(a, "protected", False))
+            }
+            # Tear down every non-kept agent the dashboard knows about (covers an
             # agent present only via MQTT, or a remote agent absent from this registry),
-            # but never one that maps to a protected registry actor.
+            # but never a fresh-boot or protected one.
             dash_ids = [
                 aid
                 for aid, ag in state["agents"].items()
-                if not ag.get("protected", False)
-                and aid not in protected_ids
-                and ag.get("name") not in protected_names
+                if not _kept(ag.get("name", ""), ag.get("protected", False))
+                and aid not in kept_ids
+                and ag.get("name") not in kept_names
             ]
             agent_ids = list({a.actor_id for a in stoppable} | set(dash_ids))
 
@@ -2193,9 +2117,10 @@ async def reset_handler(request):
             # restart nor a runner reconnect can resurrect the wiped agents. Runs
             # before reset_all() wipes the kv on disk (it reads the registry first).
             await _purge_spawn_reconcile(None)
-            # Reset in-memory metrics + history on protected (system) actors
-            protected_actors = [a for a in all_actors if getattr(a, "protected", False)]
-            for actor in protected_actors:
+            # Reset in-memory metrics + history on the KEPT actors (protected +
+            # fresh-boot) so they too return to factory state, not just stay alive.
+            kept_actors = [a for a in all_actors if _kept(a.name, getattr(a, "protected", False))]
+            for actor in kept_actors:
                 actor.metrics.messages_processed = 0
                 actor.metrics.errors = 0
                 actor.metrics.tasks_completed = 0
@@ -2436,7 +2361,7 @@ async def rest_chat_stop_handler(request):
 
     # legacy MQTT: tell the IOAgent to stop whatever it is generating.
     published = False
-    if mqtt_client_ref:
+    if registry is None and mqtt_client_ref:
         try:
             await mqtt_client_ref.publish(
                 "io/chat/control",
@@ -2560,117 +2485,40 @@ async def chat_log_handler(request):
         return web.json_response({"error": str(exc)}, status=500)
 
 
-_tts_voices_cache: list | None = None
-
-
-async def _warm_tts_voices(_app=None) -> None:
-    """Load edge-tts voice list once at startup and cache it."""
-    global _tts_voices_cache
-    try:
-        import edge_tts
-
-        voices = await edge_tts.list_voices()
-        _tts_voices_cache = [
-            {"name": v["ShortName"], "locale": v["Locale"], "gender": v["Gender"]}
-            for v in sorted(voices, key=lambda v: v["ShortName"])
-        ]
-    except Exception:
-        _tts_voices_cache = []
-
-
-async def tts_voices_handler(request):
-    """GET /api/tts/voices — list available edge-tts voices."""
-    from aiohttp import web
-
-    try:
-        import edge_tts as _  # noqa: F401 — check installed
-    except ImportError:
-        return web.json_response([])
-    if _tts_voices_cache is None:
-        await _warm_tts_voices()
-    return web.json_response(_tts_voices_cache or [])
-
-
-async def tts_handler(request):
-    """GET /api/tts?text=...&voice=... — synthesize speech via edge-tts.
-
-    Returns audio/mpeg. Falls back 503 if edge-tts is not installed so the
-    frontend can transparently fall back to the Web Speech API.
-    """
-    import os
-
-    from aiohttp import web
-
-    try:
-        import edge_tts
-    except ImportError:
-        return web.Response(status=503, text="edge-tts not installed — pip install 'wactorz[tts]'")
-
-    text = request.rel_url.query.get("text", "").strip()
-    if not text:
-        return web.Response(status=400, text="text param required")
-
-    # Mirror TTSManager: strip code blocks, cap at 300 chars
-    import re
-
-    text = re.sub(r"```[\s\S]*?```", "code block", text)[:300]
-
-    default_voice = os.environ.get("TTS_VOICE", "en-US-JennyNeural")
-    voice = request.rel_url.query.get("voice", default_voice) or default_voice
-
-    try:
-        communicate = edge_tts.Communicate(text, voice)
-        chunks: list[bytes] = []
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                chunks.append(chunk["data"])
-        audio = b"".join(chunks)
-        return web.Response(
-            body=audio,
-            content_type="audio/mpeg",
-            headers={"Cache-Control": "no-store"},
-        )
-    except Exception as exc:
-        return web.Response(status=500, text=str(exc))
-
-
 async def config_handler(request):
     """Expose non-secret runtime config so the frontend can seed its defaults."""
     from aiohttp import web
 
     from .config import CONFIG
+    from .ext import collect_public_config
 
-    # The /mqtt and /ws proxies are served by *this* server, so point the
-    # frontend at the monitor's actual port (WS_PORT), not a hardcoded one.
+    # The /ws proxy is served by *this* server, so point the frontend at the
+    # monitor's actual port (WS_PORT), not a hardcoded one.
     raw_host = request.host.split(":")[0]
     ws_host = f"{raw_host}:{WS_PORT}"
     protocol = "wss" if request.secure else "ws"
 
-    mqtt_url = f"{protocol}://{ws_host}/mqtt"
     ws_url = f"{protocol}://{ws_host}/ws"
 
-    return web.json_response(
-        {
-            "ha": {
-                # URL only — the dashboard links out to the HA UI and never talks to
-                # HA directly, so the long-lived token must NOT reach the browser.
-                "url": CONFIG.ha_url,
-            },
-            "mqtt": {
-                "host": MQTT_BROKER,
-                "port": MQTT_PORT,
-                "url": mqtt_url,
-            },
-            "llm": {
-                "provider": CONFIG.llm_provider,
-                "model": CONFIG.llm_model,
-            },
-            "weather": {
-                "defaultLocation": CONFIG.weather_default_location,
-            },
-            "ws_url": ws_url,
-        }
-    )
+    payload = {
+        "ha": {
+            # URL only — the dashboard links out to the HA UI and never talks to
+            # HA directly, so the long-lived token must NOT reach the browser.
+            "url": CONFIG.ha_url,
+        },
+        "llm": {
+            "provider": CONFIG.llm_provider,
+            "model": CONFIG.llm_model,
+        },
+        "weather": {
+            "defaultLocation": CONFIG.weather_default_location,
+        },
+        "ws_url": ws_url,
+    }
+    # Merge each extension's non-secret browser config (e.g. tts availability),
+    # namespaced by extension name.
+    payload.update(collect_public_config(request.app))
+    return web.json_response(payload)
 
 
 async def feed_handler(request):
@@ -2810,7 +2658,6 @@ async def main(exit_on_failure: bool = False):
     app.router.add_post("/api/cost/reset", cost_reset_handler)
     app.router.add_post("/cost/reset", cost_reset_handler)
     app.router.add_get("/ws", ws_handler)
-    app.router.add_get("/mqtt", mqtt_proxy_handler)
 
     # Actor collection
     app.router.add_get("/api/actors", actors_handler)
@@ -2842,9 +2689,6 @@ async def main(exit_on_failure: bool = False):
 
     app.router.add_get("/api/chats", chat_log_handler)
     app.router.add_get("/chats", chat_log_handler)
-    app.router.add_get("/api/tts/voices", tts_voices_handler)
-    app.router.add_get("/api/tts", tts_handler)
-    app.on_startup.append(_warm_tts_voices)
 
     app.router.add_get("/api/config", config_handler)
     app.router.add_get("/config", config_handler)
@@ -2855,6 +2699,13 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/docs", lambda r: web.HTTPFound("/docs/"))
     app.router.add_get("/docs/", docs_handler)
     app.router.add_get("/docs/{path:.+}", docs_handler)
+
+    # Discover and wire optional extensions (routes, on_startup, public config).
+    # Registered before the static catch-all so extension routes take precedence.
+    from .ext import setup_all
+
+    setup_all(app)
+
     app.router.add_get("/{path:.+}", static_handler)
 
     runner = web.AppRunner(app)

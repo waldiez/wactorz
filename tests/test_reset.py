@@ -14,6 +14,7 @@ import sys
 import tempfile
 import types
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -511,21 +512,21 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "wactorz.db")
-            db = self._db(tmp)
-            db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
-            reset_spawns(db_path=db_path)
-            self.assertIsNone(db.kv_get("main", "_spawned_agents", None))
+            with closing(self._db(tmp)) as db:
+                db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
+                reset_spawns(db_path=db_path)
+                self.assertIsNone(db.kv_get("main", "_spawned_agents", None))
 
     def test_single_agent_pops_only_that_entry(self):
         from wactorz.reset import reset_spawns
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "wactorz.db")
-            db = self._db(tmp)
-            db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
-            reset_spawns(agent_name="a", db_path=db_path)
-            reg = db.kv_get("main", "_spawned_agents", None)
-            self.assertEqual(reg, {"b": {"node": "n1"}})
+            with closing(self._db(tmp)) as db:
+                db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
+                reset_spawns(agent_name="a", db_path=db_path)
+                reg = db.kv_get("main", "_spawned_agents", None)
+                self.assertEqual(reg, {"b": {"node": "n1"}})
 
     def test_restart_read_sees_empty_registry_after_wipe(self):
         """End-to-end of the actual symptom: after a wipe, the registry read
@@ -542,15 +543,16 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "wactorz.db")
-            db = self._db(tmp)
-            api = PersistenceAPI(db, RedisStore(), PickleStore(tmp), "main")
-            api.set("_spawned_agents", {"ghost1": {"node": ""}, "ghost2": {"node": "n1"}})
-            self.assertTrue(api.get("_spawned_agents"))  # sanity
+            with closing(self._db(tmp)) as db:
+                api = PersistenceAPI(db, RedisStore(), PickleStore(tmp), "main")
+                api.set("_spawned_agents", {"ghost1": {"node": ""}, "ghost2": {"node": "n1"}})
+                self.assertTrue(api.get("_spawned_agents"))  # sanity
 
-            reset_all(db_path=db_path, state_dir=tmp)
+                reset_all(db_path=db_path, state_dir=tmp)
 
-            fresh = PersistenceAPI(self._db(tmp), RedisStore(), PickleStore(tmp), "main")
-            self.assertFalse(fresh.get("_spawned_agents") or {})
+                with closing(self._db(tmp)) as fresh_db:
+                    fresh = PersistenceAPI(fresh_db, RedisStore(), PickleStore(tmp), "main")
+                    self.assertFalse(fresh.get("_spawned_agents") or {})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -669,6 +671,47 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
             ms.state["nodes"] = orig_nodes
             ms.state["agents"] = orig_agents
             ms._deleted_agent_ids = orig_deleted
+
+
+class FactoryResetKeepSetTest(unittest.TestCase):
+    """`reset all` (factory reset) keeps the fresh-boot set — protected system
+    actors plus the HA system agents — and wipes user/catalog-spawned agents."""
+
+    def test_protected_system_actors_are_kept(self):
+        import wactorz.monitor_server as ms
+
+        for name in ("main", "monitor", "io-agent", "installer", "catalog"):
+            self.assertTrue(ms._survives_factory_reset(name, True), name)
+
+    def test_ha_system_agents_kept_despite_being_unprotected(self):
+        import wactorz.monitor_server as ms
+
+        # Unprotected → still individually deletable, but a factory reset keeps them.
+        for name in ms._HA_SYSTEM_AGENTS:
+            self.assertTrue(ms._survives_factory_reset(name, False), name)
+
+    def test_user_and_catalog_spawned_agents_are_wiped(self):
+        import wactorz.monitor_server as ms
+
+        self.assertFalse(ms._survives_factory_reset("weather-agent", False))
+        self.assertFalse(ms._survives_factory_reset("my-catalog-spawn", False))
+
+    def test_keep_set_covers_every_app_py_supervised_agent(self):
+        """Drift guard: every fresh-boot agent (app.py .supervise chain) must be
+        kept. If a new .supervise("x") is added, either mark it protected or add
+        it to _HA_SYSTEM_AGENTS — otherwise a factory reset would wipe it."""
+        import re
+
+        import wactorz.monitor_server as ms
+
+        app_src = Path(__file__).resolve().parents[1] / "wactorz" / "app.py"
+        supervised = re.findall(r'supervise\(\s*"([^"]+)"', app_src.read_text())
+        self.assertGreaterEqual(len(supervised), 8, "app.py supervise chain not found")
+        # Protection lives on the actor class; treat the known protected names as
+        # protected here so the guard checks name-coverage, not the flag itself.
+        protected = {"main", "monitor", "io-agent", "installer", "catalog"}
+        missing = [n for n in supervised if not ms._survives_factory_reset(n, n in protected)]
+        self.assertEqual(missing, [], f"fresh-boot agents not kept by reset: {missing}")
 
 
 if __name__ == "__main__":

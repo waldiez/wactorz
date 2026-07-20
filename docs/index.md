@@ -29,6 +29,7 @@ pip install wactorz[all]
 - **[Pipelines](pipelines.md)** — Reactive rules, canonical patterns, planner workflow
 - **[MQTT Topics](mqtt_topics.md)** — Full topic reference with payload schemas
 - **[Remote Nodes](remote-nodes.md)** — Edge deployment via `remote_runner.py`
+- **[Extensions](extensions.md)** — How to write backend/frontend extensions
 - **[Python API](python-api.md)** — Core classes, supervision, persistence
 - **[Home Assistant Addon](../ha-addon/DOCS.md)** — Install and configure the HA Supervisor addon (requires HAOS or Supervised)
 <!-- - **[JS/TS Docs](https://waldiez.github.io/wactorz/api/js/)** — TypeDoc for the card-dashboard frontend -->

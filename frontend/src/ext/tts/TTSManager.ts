@@ -16,10 +16,9 @@
  * Persistence: toggle state and selected voice are stored in localStorage.
  */
 
-import { ambient } from "./AmbientManager";
-import { safeStorage } from "../safeStorage";
-import { emit } from "../events";
-import type { TTSVoice } from "../types/tts";
+import { safeStorage } from "../../safeStorage";
+import { emit } from "../../events";
+import type { TTSVoice } from "./types";
 
 const LS_BEEP = "wactorz.beep";
 const LS_TTS = "wactorz.tts";
@@ -209,11 +208,10 @@ export class TTSManager {
     }
 
     private _speakServer(text: string): void {
-        // Duck ambient while server audio plays; release it the instant we know the
-        // audio won't play (any failure/fallback below) or when it finishes. Every
-        // early-return path must call unduck() or ambient stays pinned at DUCK_VOLUME.
-        ambient.duck(true);
-        const unduck = () => ambient.duck(false);
+        // Emit audio-start so AmbientManager ducks; every return path must emit
+        // audio-end or ambient stays ducked.
+        emit("tts-audio-start");
+        const unduck = () => emit("tts-audio-end");
         const params = new URLSearchParams({ text });
         const voice = this.selectedVoice;
         if (voice) {

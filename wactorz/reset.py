@@ -19,6 +19,7 @@ import argparse
 import logging
 import os
 import sys
+from contextlib import closing
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -50,20 +51,22 @@ def _pickle_store(state_dir: str | None = None):
 
 def reset_chat(agent_name: str | None = None, db_path: str | None = None) -> None:
     """Clear chat_log and conversation kv entries (optionally for one agent)."""
-    db = _db(db_path)
-    rows = db.clear_chat_log(agent_name)
-    logger.info(
-        "[reset] chat_log: deleted %d rows%s", rows, f" for {agent_name!r}" if agent_name else ""
-    )
+    with closing(_db(db_path)) as db:
+        rows = db.clear_chat_log(agent_name)
+        logger.info(
+            "[reset] chat_log: deleted %d rows%s",
+            rows,
+            f" for {agent_name!r}" if agent_name else "",
+        )
 
-    agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
-    for agent in agents:
-        for key in _CHAT_KV_KEYS:
-            db.kv_delete(agent, key)
-    logger.info(
-        "[reset] conversation kv cleared%s",
-        f" for {agent_name!r}" if agent_name else " (all agents)",
-    )
+        agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
+        for agent in agents:
+            for key in _CHAT_KV_KEYS:
+                db.kv_delete(agent, key)
+        logger.info(
+            "[reset] conversation kv cleared%s",
+            f" for {agent_name!r}" if agent_name else " (all agents)",
+        )
 
 
 def reset_agent_state(agent_name: str, state_dir: str | None = None) -> None:
@@ -75,20 +78,21 @@ def reset_agent_state(agent_name: str, state_dir: str | None = None) -> None:
 
 def reset_metrics(agent_name: str | None = None, db_path: str | None = None) -> None:
     """Clear cost and message-count kv entries (optionally for one agent)."""
-    db = _db(db_path)
-    agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
-    for agent in agents:
-        for key in _METRIC_KV_KEYS:
-            db.kv_delete(agent, key)
-    # The monitor's durable lifetime cost ledger (keyed by actor_id under the
-    # _system agent) is monotonic and outlives individual agents, so a full
-    # metrics reset must clear it too or the headline total never zeroes. A
-    # single-agent reset can't map name->actor_id here, so it's left intact.
-    if not agent_name:
-        db.kv_delete("_system", "_lifetime_cost_ledger")
-    logger.info(
-        "[reset] metrics kv cleared%s", f" for {agent_name!r}" if agent_name else " (all agents)"
-    )
+    with closing(_db(db_path)) as db:
+        agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
+        for agent in agents:
+            for key in _METRIC_KV_KEYS:
+                db.kv_delete(agent, key)
+        # The monitor's durable lifetime cost ledger (keyed by actor_id under the
+        # _system agent) is monotonic and outlives individual agents, so a full
+        # metrics reset must clear it too or the headline total never zeroes. A
+        # single-agent reset can't map name->actor_id here, so it's left intact.
+        if not agent_name:
+            db.kv_delete("_system", "_lifetime_cost_ledger")
+        logger.info(
+            "[reset] metrics kv cleared%s",
+            f" for {agent_name!r}" if agent_name else " (all agents)",
+        )
 
 
 _SPAWN_REGISTRY_KV_KEY = "_spawned_agents"
@@ -107,32 +111,32 @@ def reset_spawns(agent_name: str | None = None, db_path: str | None = None) -> N
     "deleted" agent on the next restart. ``agent_name`` here is the *spawned*
     agent's name; the registry is keyed by that name inside the owner's entry.
     """
-    db = _db(db_path)
-    rows = db.clear_spawn_registry(agent_name)
-    logger.info(
-        "[reset] spawn_registry table: deleted %d rows%s",
-        rows,
-        f" for {agent_name!r}" if agent_name else "",
-    )
+    with closing(_db(db_path)) as db:
+        rows = db.clear_spawn_registry(agent_name)
+        logger.info(
+            "[reset] spawn_registry table: deleted %d rows%s",
+            rows,
+            f" for {agent_name!r}" if agent_name else "",
+        )
 
-    cleared = 0
-    for owner in _all_kv_agents(db):
-        reg = db.kv_get(owner, _SPAWN_REGISTRY_KV_KEY, None)
-        if not isinstance(reg, dict):
-            continue
-        if agent_name:
-            if agent_name in reg:
-                reg.pop(agent_name, None)
-                db.kv_set(owner, _SPAWN_REGISTRY_KV_KEY, reg)
+        cleared = 0
+        for owner in _all_kv_agents(db):
+            reg = db.kv_get(owner, _SPAWN_REGISTRY_KV_KEY, None)
+            if not isinstance(reg, dict):
+                continue
+            if agent_name:
+                if agent_name in reg:
+                    reg.pop(agent_name, None)
+                    db.kv_set(owner, _SPAWN_REGISTRY_KV_KEY, reg)
+                    cleared += 1
+            else:
+                db.kv_delete(owner, _SPAWN_REGISTRY_KV_KEY)
                 cleared += 1
-        else:
-            db.kv_delete(owner, _SPAWN_REGISTRY_KV_KEY)
-            cleared += 1
-    logger.info(
-        "[reset] kv spawn registry cleared for %d owner(s)%s",
-        cleared,
-        f" (agent {agent_name!r})" if agent_name else "",
-    )
+        logger.info(
+            "[reset] kv spawn registry cleared for %d owner(s)%s",
+            cleared,
+            f" (agent {agent_name!r})" if agent_name else "",
+        )
 
 
 def reset_logs(log_dir: str | None = None) -> None:

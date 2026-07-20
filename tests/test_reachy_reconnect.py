@@ -166,8 +166,7 @@ class ReconnectCommandTest(unittest.TestCase):
             return fresh, None, "x"
 
         with mock.patch.dict(NS, {"_open_robot": fake_open}):
-            res = _run(NS["_dispatch"](agent, "reconnect", {"force": True},
-                                       return_result=True))
+            res = _run(NS["_dispatch"](agent, "reconnect", {"force": True}, return_result=True))
 
         self.assertTrue(res["reconnected"])
         self.assertIs(agent.state["mini"], fresh)
@@ -190,8 +189,7 @@ class ReconnectReachabilityTest(unittest.TestCase):
             bridged.append(text)
             return {"ok": True, "result": "I'm here! Connection re-established."}
 
-        with mock.patch.dict(NS, {"_open_robot": fake_open,
-                                  "_bridge_to_main": fake_bridge}):
+        with mock.patch.dict(NS, {"_open_robot": fake_open, "_bridge_to_main": fake_bridge}):
             res = _run(NS["handle_task"](agent, {"text": "reconnect"}))
 
         # The bug this guards: "reconnect" reaching main, which has no robot
@@ -262,10 +260,13 @@ class ConfigThenReconnectTest(unittest.TestCase):
         mini = _fake_mini()
         fake_sdk = types.ModuleType("reachy_mini")
         fake_sdk.ReachyMini = mock.Mock(
-            return_value=types.SimpleNamespace(__enter__=lambda *_: mini))
+            return_value=types.SimpleNamespace(__enter__=lambda *_: mini)
+        )
 
-        with mock.patch.dict("sys.modules", {"reachy_mini": fake_sdk}), \
-             mock.patch.dict(NS, {"_build_connection_attempts": fake_build}):
+        with (
+            mock.patch.dict("sys.modules", {"reachy_mini": fake_sdk}),
+            mock.patch.dict(NS, {"_build_connection_attempts": fake_build}),
+        ):
             got, err, _tried = _run(NS["_open_robot"](agent))
 
         self.assertEqual(seen["host"], "192.168.68.64")
@@ -299,13 +300,13 @@ class ConcurrentReconnectTest(unittest.TestCase):
         the second attempt would sail past the check and open a second link.
         """
         stale = _fake_mini()
-        stale.connected = False          # dropped link -> reconnect proceeds
+        stale.connected = False  # dropped link -> reconnect proceeds
         release_started = threading.Event()
         allow_release = threading.Event()
 
         def blocking_exit(*_a):
             release_started.set()
-            allow_release.wait(timeout=5)   # hold the first attempt mid-release
+            allow_release.wait(timeout=5)  # hold the first attempt mid-release
             return False
 
         stale.__exit__ = blocking_exit
@@ -319,19 +320,20 @@ class ConcurrentReconnectTest(unittest.TestCase):
         async def scenario():
             with mock.patch.dict(NS, {"_open_robot": fake_open}):
                 first = asyncio.create_task(
-                    NS["_dispatch"](agent, "reconnect", {}, return_result=True))
+                    NS["_dispatch"](agent, "reconnect", {}, return_result=True)
+                )
                 # Wait until the first attempt is genuinely parked in the release.
                 while not release_started.is_set():
                     await asyncio.sleep(0.01)
-                second = await NS["_dispatch"](agent, "reconnect", {},
-                                               return_result=True)
+                second = await NS["_dispatch"](agent, "reconnect", {}, return_result=True)
                 allow_release.set()
                 return await first, second
 
         first, second = _run(scenario())
 
-        self.assertEqual(len(opens), 1, "a second link was opened — the "
-                                        "in-progress guard let a racer through")
+        self.assertEqual(
+            len(opens), 1, "a second link was opened — the in-progress guard let a racer through"
+        )
         self.assertTrue(first["ok"])
         self.assertFalse(second["ok"])
         self.assertIn("already in progress", second["error"])

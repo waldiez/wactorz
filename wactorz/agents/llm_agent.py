@@ -475,6 +475,43 @@ def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
         return {}
 
 
+def _apply_openai_reasoning(
+    params: dict[str, Any], model: str, reasoning_effort: str | None
+) -> None:
+    """Wire reasoning controls into an OpenAI-compatible request, in place.
+
+    OpenAI-compatible reasoning endpoints (NVIDIA NIM, vLLM, SGLang, …) leave
+    chain-of-thought ON by default. When the caller wants no reasoning
+    (``reasoning_effort`` "none" or unset) we must *explicitly* disable it via
+    the chat-template flag — otherwise a small ``max_tokens`` budget is spent
+    entirely on hidden reasoning tokens and ``message.content`` comes back empty
+    (this is why the NIM intent classifier always returned "OTHER"). When a real
+    effort level is requested, pass it straight through. Mistral models on these
+    endpoints reject both knobs, so they are skipped.
+    """
+    if "mistral" in model.lower():
+        return
+    if reasoning_effort in (None, "none"):
+        extra = params.setdefault("extra_body", {})
+        extra.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+    else:
+        params["reasoning_effort"] = reasoning_effort
+
+
+def _content_or_reasoning(message: Any) -> str:
+    """Text of an OpenAI-compatible message, falling back to reasoning_content.
+
+    Reasoning models can return an empty ``content`` while placing everything in
+    ``reasoning_content`` (e.g. when thinking could not be disabled or the answer
+    budget was exhausted). Surfacing the reasoning text is far better than
+    returning an empty string that silently collapses to a default.
+    """
+    text = getattr(message, "content", None)
+    if text:
+        return text
+    return getattr(message, "reasoning_content", None) or ""
+
+
 def _usage_from_openai(model: str, usage_obj: Any) -> dict[str, Any]:
     input_tok = getattr(usage_obj, "prompt_tokens", 0) if usage_obj else 0
     output_tok = getattr(usage_obj, "completion_tokens", 0) if usage_obj else 0
@@ -664,9 +701,13 @@ class OpenAIProvider(LLMProvider):
             "max_completion_tokens": kwargs.get("max_tokens", 16384),
         }
         reasoning_effort = kwargs.get("reasoning_effort")
-        if (reasoning_effort == "none" or reasoning_effort is None) and self.base_url is not None:
+        if (
+            (reasoning_effort == "none" or reasoning_effort is None)
+            and self.base_url is not None
+            and "mistral" not in self.model.lower()
+        ):
             params["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
-        if reasoning_effort:
+        if reasoning_effort and "mistral" not in self.model.lower():
             params["reasoning_effort"] = reasoning_effort
         try:
             response = await self.client.chat.completions.create(**params)
@@ -750,7 +791,7 @@ class OpenAIProvider(LLMProvider):
             "stream_options": {"include_usage": True},
         }
         reasoning_effort = kwargs.get("reasoning_effort")
-        if reasoning_effort:
+        if reasoning_effort and "mistral" not in self.model.lower():
             params["reasoning_effort"] = reasoning_effort
         try:
             stream = await self.client.chat.completions.create(**params)
@@ -928,19 +969,43 @@ class NIMProvider(LLMProvider):
         import openai
 
         self.model = model
+        self.base_url = base_url
         self.client = openai.AsyncOpenAI(
             api_key=api_key or "dummy",  # NIM free tier may not require a key locally
             base_url=base_url,
         )
 
+    async def _create_completion(self, params: dict[str, Any]):
+        """Create a completion, retrying without reasoning knobs if rejected.
+
+        Some NIM models don't accept the ``enable_thinking`` chat-template flag
+        or ``reasoning_effort``; rather than fail the whole turn, drop those
+        knobs and retry once so non-reasoning models keep working.
+        """
+        try:
+            return await self.client.chat.completions.create(**params)
+        except Exception as exc:
+            msg = str(exc).lower()
+            retryable = any(
+                token in msg
+                for token in ("reasoning", "enable_thinking", "chat_template", "extra_body")
+            )
+            if retryable and ("extra_body" in params or "reasoning_effort" in params):
+                params.pop("extra_body", None)
+                params.pop("reasoning_effort", None)
+                return await self.client.chat.completions.create(**params)
+            raise
+
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=full_messages,
-            max_tokens=kwargs.get("max_tokens", 8192),
-        )
-        text = response.choices[0].message.content or ""
+        params: dict[str, Any] = {
+            "model": self.model,
+            "messages": full_messages,
+            "max_tokens": kwargs.get("max_tokens", 8192),
+        }
+        _apply_openai_reasoning(params, self.model, kwargs.get("reasoning_effort"))
+        response = await self._create_completion(params)
+        text = _content_or_reasoning(response.choices[0].message)
         input_tok = response.usage.prompt_tokens if response.usage else 0
         output_tok = response.usage.completion_tokens if response.usage else 0
         usage = {
@@ -1011,14 +1076,26 @@ class NIMProvider(LLMProvider):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
         input_tokens = output_tokens = 0
-        async with await self.client.chat.completions.create(
-            model=self.model,
-            messages=full_messages,
-            max_tokens=kwargs.get("max_tokens", 8192),
-            stream=True,
-        ) as s:
+        params: dict[str, Any] = {
+            "model": self.model,
+            "messages": full_messages,
+            "max_tokens": kwargs.get("max_tokens", 8192),
+            "stream": True,
+        }
+        _apply_openai_reasoning(params, self.model, kwargs.get("reasoning_effort"))
+        stream_cm = await self._create_completion(params)
+        async with stream_cm as s:
             async for chunk in s:
-                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if not chunk.choices:
+                    if chunk.usage:
+                        input_tokens = chunk.usage.prompt_tokens
+                        output_tokens = chunk.usage.completion_tokens
+                    continue
+                delta = chunk.choices[0].delta.content
+                if not delta:
+                    # Reasoning models stream chain-of-thought on a separate
+                    # field; surface it so a thinking response isn't silent.
+                    delta = getattr(chunk.choices[0].delta, "reasoning_content", None)
                 if delta:
                     yield delta
                 if chunk.usage:

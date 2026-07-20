@@ -564,7 +564,7 @@ class DiscordInterface:
                 .strip()
             )
             async with message.channel.typing():
-                response = await self.agent.process_user_input(text)
+                response = await self.agent.process_user_input(text, allow_spawn=False)
             for i in range(0, len(response), 2000):
                 await message.channel.send(response[i : i + 2000])
 
@@ -626,7 +626,7 @@ class TelegramInterface:
                 chat_id=update.effective_chat.id, action=ChatAction.TYPING
             )
 
-            response = await self.agent.process_user_input(text)
+            response = await self.agent.process_user_input(text, allow_spawn=False)
             response = response or "(no response)"
 
             for i in range(0, len(response), 4096):
@@ -683,7 +683,7 @@ class WhatsAppInterface:
             from_number = data.get("From", "")
             logger.info(f"[WhatsApp] Message from {from_number}: {user_msg[:60]}")
 
-            response_text = await self.agent.process_user_input(user_msg)
+            response_text = await self.agent.process_user_input(user_msg, allow_spawn=False)
 
             twilio.messages.create(
                 body=response_text,

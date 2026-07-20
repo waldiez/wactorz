@@ -14,9 +14,9 @@
  */
 
 import type { AgentInfo, ChatMessage } from "../types/agent";
-import type { MQTTClient } from "../mqtt/MQTTClient";
-import type { WSChatClient } from "./WSChatClient";
-import { tts } from "./TTSManager";
+import type { ServerEventRouter } from "./ServerEventRouter";
+import type { WSClient } from "./WSClient";
+import { tts } from "../ext/tts";
 import { toast } from "../ui/ToastManager";
 import { emit } from "../events";
 import { uid } from "../ids";
@@ -29,12 +29,12 @@ export class IOManager {
     private _lastStreamFrom = "";
     /** Accumulates the current streamed reply so stream-end can emit the full text. */
     private _streamText = "";
-    private _ws: WSChatClient | null = null;
+    private _ws: WSClient | null = null;
 
-    constructor(private readonly mqtt: MQTTClient) {}
+    constructor(private readonly router: ServerEventRouter) {}
 
-    /** Wire in a WSChatClient so send() can use direct WebSocket when available. */
-    setWSClient(ws: WSChatClient): void {
+    /** Wire in a WSClient so send() can use direct WebSocket when available. */
+    setWSClient(ws: WSClient): void {
         this._ws = ws;
 
         ws.onStreamChunk((chunk, from) => {
@@ -87,33 +87,13 @@ export class IOManager {
             item: { type: "chat", label: content, agentName: "user", timestamp: msg.timestampMs },
         });
 
-        // direct_ws mode: send over WebSocket only — never fall back to MQTT.
-        // Falling back would let IOAgent pick up the message and double-handle it.
-        if (this._ws?.chatMode === "direct_ws") {
-            const sent = this._ws.send(content, agent?.name ?? "main-actor");
-            if (!sent) {
-                toast.show({
-                    type: "alert-error",
-                    title: "Disconnected",
-                    message: "WebSocket disconnected — reconnecting, please retry.",
-                });
-            }
-            return;
-        }
-
-        // mqtt mode (legacy / no registry): publish to io/chat.
-        const published = this.mqtt.publish("io/chat", {
-            id: msg.id,
-            from: "user",
-            to: msg.to,
-            content,
-            timestampMs: msg.timestampMs,
-        });
-        if (!published) {
+        // direct_ws mode
+        const sent = this._ws?.send(content, agent?.name ?? "main-actor");
+        if (!sent) {
             toast.show({
                 type: "alert-error",
-                title: "Not connected",
-                message: "Start the backend:  docker compose up -d  &&  wactorz",
+                title: "Disconnected",
+                message: "WebSocket disconnected — reconnecting, please retry.",
             });
         }
     }

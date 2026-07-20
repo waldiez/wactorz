@@ -90,6 +90,13 @@ describe("toAgentInfo", () => {
         expect(out.costUsd).toBeUndefined();
         expect(out.agentType).toBeUndefined();
     });
+
+    it("carries the remote node through so reconcile won't evict remote agents", () => {
+        // /api/actors returns local actors only; the node marks an agent as remote
+        // so the REST reconcile (which excludes remotes) doesn't drop it.
+        const out = toAgentInfo({ agent_id: "a", name: "remote-1", node: "rpi-test" } as StatePatchAgent);
+        expect(out.node).toBe("rpi-test");
+    });
 });
 
 describe("buildNameIndex", () => {

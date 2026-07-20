@@ -93,8 +93,7 @@ class MemoryMixin:
             display_name = context.get("display_name") or source
             if context.get("kind") == "embodied_robot" and capabilities:
                 rendered = ", ".join(
-                    f"{command}({', '.join(options)})"
-                    for command, options in capabilities.items()
+                    f"{command}({', '.join(options)})" for command, options in capabilities.items()
                 )
                 example_command, example_options = next(iter(capabilities.items()))
                 example = (

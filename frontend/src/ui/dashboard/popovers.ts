@@ -9,7 +9,7 @@
  * and the reset REST endpoint), so they live outside the CardDashboard class.
  */
 import { ambient, AMBIENT_TRACKS } from "../../io/AmbientManager";
-import { tts } from "../../io/TTSManager";
+import { tts } from "../../ext/tts";
 import { toast } from "../ToastManager";
 import { listen } from "../../events";
 

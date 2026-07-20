@@ -79,6 +79,11 @@ export function toAgentInfo(a: StatePatchAgent): AgentInfo {
     if (a.agent_type != null) {
         update.agentType = a.agent_type;
     }
+    // Remote agents aren't in the /api/actors REST list; the node marks them so the
+    // REST reconcile doesn't evict them (see AgentStore.reconcileAgents).
+    if (a.node != null) {
+        update.node = a.node;
+    }
     return update;
 }
 
@@ -344,7 +349,7 @@ export function nodeHeartbeatFeedItem(p: NodeHeartbeatPayload, now = Date.now())
 // ── Extensible raw-topic feed rows ─────────────────────────────────────────
 // Agent topics that are feed-only (not part of the typed MQTTEvents route) reach
 // the browser via the `raw` catch-all. Map `agents/{id}/{suffix}` → a feed row
-// here; surfacing another topic is a single entry + test, no MQTTClient changes.
+// here; surfacing another topic is a single entry + test, no ServerEventRouter changes.
 
 const RAW_AGENT_FEED_MAPPERS: Record<
     string,

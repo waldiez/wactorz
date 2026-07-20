@@ -61,9 +61,7 @@ CUSTOM_BLOCK = (
 
 def test_custom_spawn_blocked_on_social_channel():
     main = FakeMain()  # no catalog match → genuinely custom
-    clean, spawned = run(
-        MainActor._process_spawn_commands(main, CUSTOM_BLOCK, allow_spawn=False)
-    )
+    clean, spawned = run(MainActor._process_spawn_commands(main, CUSTOM_BLOCK, allow_spawn=False))
     assert spawned == []
     assert main.spawn_calls == []  # nothing was actually created
     assert clean == SOCIAL_SPAWN_REFUSAL
@@ -86,9 +84,7 @@ def test_catalog_recipe_still_allowed_on_social_channel():
         catalog_match="smart-energy",
     )
     block = '<spawn>{"name": "smart energy agent", "type": "llm", "system_prompt": "x"}</spawn>'
-    clean, spawned = run(
-        MainActor._process_spawn_commands(main, block, allow_spawn=False)
-    )
+    clean, spawned = run(MainActor._process_spawn_commands(main, block, allow_spawn=False))
     assert spawned == [running]
     assert main.spawn_calls == []  # served by catalog, not a custom spawn
     assert clean != SOCIAL_SPAWN_REFUSAL

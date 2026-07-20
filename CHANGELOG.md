@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — pending
 
 ### Added
+
 - **Reachy Mini speech interruption and full rear turn** - Speaking over Reachy
   now uses a more sensitive barge-in gate and stops robot-speaker playback via
   the daemon directly; "stop", "silence", "quiet", and "shut up" stay silent
@@ -65,7 +66,117 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and trims to the newest requested-duration samples so stale buffered audio is
   not transcribed. No always-on listening or wake-word behavior was added.
 
+- **Reachy looks before it describes** - `describe` now orients the head to the look aim
+  BEFORE capturing (default level/forward), so a prior gesture or a droop no longer leaves
+  Reachy staring at the desk/floor when you ask "what do you see". Aim it with "look
+  down/up/left/right" or `{"pitch":..,"yaw":..}`; `{"orient":false}` keeps the old
+  capture-from-current-pose behaviour. Each look waits for the head move to finish before
+  grabbing the frame (goto_target is fire-and-forget), so the shot is sharp, not blurred
+  mid-turn.
+- **Reachy `look_around`** - a new command that pans the head across several angles
+  (left / ahead / right / up by default), captures a sharp frame at each (waiting out each
+  move so it isn't motion-blurred), and describes the whole room in one combined vision
+  call, then re-centres. "look around" / "what's in the room" /
+  "scan the room" route here (they used to collapse to a single-frame `describe`). Tune with
+  `angles`, `question`, `quality`, `look_duration`.
+- **Reachy `describe` is brief by default** - "what do you see?" now gets one short spoken
+  sentence (the gist) that ends by offering a closer look, instead of a whole paragraph
+  monologue every glance. Ask for more with `{"cmd":"describe","detail":true}` or plain
+  "look closer" / "in detail" / "tell me more" for the full description — and a plain **"yes"**
+  right after the "Want me to look closer?" offer now does the detailed look (the offer is
+  remembered for 60s) instead of being echoed back. A specific question ("how many people?")
+  is answered concisely with no nudge, and unreadable/black frames skip the offer.
+- **Reachy `shutup` / "stop talking"** - cut the current utterance immediately, instead
+  of being stuck listening to a long spoken reply with no way to stop it. `{"cmd":"shutup"}`
+  (or "shut up" / "stop talking" / "be quiet") stops playback now; `{"cmd":"stop"}` also
+  cuts speech (on top of motion and sound-tracking). Distinct from volume `mute`, which is
+  persistent. Long spoken replies (`describe`, and the main-interface bridge) now play
+  non-blocking so a "shut up" typed while Reachy is talking actually gets through - the
+  actor mailbox is serial, so a blocking utterance used to freeze it until it finished.
+  Verbose command output (e.g. `diag`) is returned to chat only and never spoken.
+- **Reachy `diag` command** - diagnoses "the robot won't move". Motion commands are
+  fire-and-forget over the websocket, so a clean `goto_target` only means the daemon
+  RECEIVED the command. `{"cmd":"diag"}` (or "why won't you move") reports the SDK vs
+  robot-daemon version (a mismatch makes the daemon silently ignore motion while audio
+  still works), then runs a real self-test: enable torque, read joint angles, command a
+  small move, re-read, and report whether the angles actually changed - so you find out
+  it's a version mismatch / torque / hardware issue instead of guessing.
+- **Reachy without the Reachy Mini control app** - the reachy-mini agent can now connect
+  straight to a powered-on robot over WiFi with no control app running on your machine:
+  set `REACHY_CONNECTION_MODE=network` plus the new `REACHY_ROBOT_HOST=<ip|hostname>` env
+  var. The env var is the reliable way to pin the robot (survives a wiped state folder, no
+  config topic or mDNS needed). And when a connection can't be made, the reason is no
+  longer an opaque "no SDK handle": the real connect error and the exact env vars to set
+  now appear in the startup log AND in the "reachy not connected: ..." reply to any robot
+  command, so you don't have to hunt logs. `.env.template` documents the new keys.
+- **Reachy as a Wactorz interface (text bridge)** - anything you say to the reachy-mini
+  agent that it can't turn into a robot or Home Assistant command is now piped through the
+  MAIN orchestrator (full intent routing, HA, and sub-agent delegation - not just a bare
+  single-turn LLM reply) and the answer is spoken back through the robot. So "what's the
+  weather in Paris?" or "add milk to my shopping list" reach the same agents the CLI/web
+  chat would, embodied. Under the hood the agent forwards unhandled text with
+  `send_to('main', _via_interface=True)`; `MainActor` routes any `_via_interface` task
+  through `process_user_input` (run as a background task so it never blocks main's message
+  loop) and replies on the caller's correlation id. Speaking to the robot out loud
+  (speech-to-text) layers on top of this later; for now the bridge is reached via
+  chat/delegation to the agent.
+- **Reachy continuous sound tracking (`track_sound`)** — an opt-in mode that keeps turning Reachy
+  toward whoever is currently speaking, not just once like `turn_to_sound`. "Keep turning toward
+  whoever's talking", "follow the speaker", "track the voices as we present" start it; "stop
+  tracking/following the sound" stops it (it also stops on `stop`, `sleep`, and shutdown). A
+  background loop polls the mic array on an `interval`, and a `deadband_deg` keeps the head from
+  chasing tiny fluctuations and thrashing the motors. Large angles rotate the body (`body_yaw`)
+  with the head covering the residual, so Reachy can face anywhere in the room, not just the
+  `max_head_yaw` arc a head turn alone reaches. `require_voice` (default on) ignores non-speech
+  noise. Tuning knobs: `interval`, `deadband_deg`, `duration`, `max_head_yaw`, `max_body_yaw`,
+  `offset_deg`, `invert`.
+- **Reachy sound localization (`turn_to_sound`)** — turns the head toward the direction the mic
+  array localizes a sound (`doa` angle → head yaw, clamped, with `offset_deg`/`invert` calibration).
+  "Turn toward the sound", "face the speaker", and "who's talking?" route here. Sensing works
+  whenever the mic is live; the turn itself needs the motors. `listen`/`camera`/`doa` now also
+  return a short human-readable `result` summary so the base64 blob no longer floods the chat.
+- **Reachy vision (`describe`)** — a new `describe` command captures a camera frame, sends it to
+  the vision-capable LLM, and speaks the real description of what the robot sees. "What do you
+  see?", "what's in front of you?", "look around", and questions about the view now route here
+  (deterministically and via the NL planner) instead of the old capture-then-invent-a-line path.
+  Optional `question` asks something specific; `say: false` returns the text without speaking.
+- **Reachy connection mode toggle** — a `connection_mode` config (via `custom/reachy/config` or
+  `REACHY_CONNECTION_MODE`) selects `network` (wireless: connect straight to the robot, skip the
+  localhost probe, no control app needed), `local` (the Reachy Mini control app or simulator on
+  localhost), or the default auto-detect. The active mode is reported in `custom/reachy/state`.
+- **Reachy camera & microphone access** — new `camera`, `listen`, and `doa` commands on the
+  reachy-mini agent read the robot's onboard sensors through the SDK media manager. `camera`
+  returns one still frame as base64 (JPEG/PNG); `listen` records a short mic-array clip as base64
+  WAV with the current direction of arrival; `doa` reports the mic direction without recording.
+  Each can also save to a file (`path`) or emit a one-shot event (`publish` →
+  `custom/reachy/camera` / `custom/reachy/audio`); the blobs never enter the retained state
+  heartbeat. Plain English ("take a photo", "listen") and the NL planner both reach them.
+
+- **Extension seam (`wactorz/ext/`).** Optional features live in self-contained folders that expose a
+  `setup(app)` hook; the monitor auto-discovers and wires them at startup, and each may contribute
+  non-secret browser config to `/api/config`. Text-to-speech is now packaged as the first such
+  extension (`wactorz/ext/tts/` + `frontend/src/ext/tts/`), with no change to its behavior.
+- **Frontend extension registries.** Extensions can now add dashboard tabs
+  (`CardDashboard.registerView`), custom icons (`registerIcon`), and `/api/config`-seeded settings
+  (`registerConfigEntry` in the new `config/serverConfig.ts`) without touching core files. The HA
+  URL seeding moved into the same mechanism; TTS availability is now read from the server config
+  instead of always probing.
+
+### Changed
+
+- **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant
+  activity now stream to the browser as server-push over `/ws`; the dashboard no longer opens its own
+  MQTT connection to the broker, and the browser receives no broker credentials.
+- **Home Assistant add-on split into two variants.** The store now offers **Wactorz** (slim, Alpine,
+  ~200 MB) and **Wactorz Ultra** (Debian + ML/`ultralytics`, ~3 GB) as separate cards; both share the
+  same options and entrypoint. CI builds and pushes both variants across `aarch64`/`amd64`.
+
 ### Fixed
+
+- **Social chat custom-spawn gate.** Discord, Telegram, and WhatsApp may
+  start maintained catalogue agents, but refuse LLM-authored custom agents that
+  cannot be inspected or stopped from those interfaces; custom spawning remains
+  available from the Wactorz dashboard.
 
 - **Reachy action traces and rear-view behavior now match conversational UX** -
   Internal `ran N of N` execution receipts are hidden by default and can be toggled
@@ -216,93 +327,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   length from the edge-tts word boundaries and waits it out before returning, so sequential
   says (and their volume changes) play fully and in order. Opt out with `await_playback: false`.
 
+- **Native catalog agents vanished after a restart** — `weather-agent`, `gmail-agent`, and `google-calendar-agent` (the `type: native` catalog agents) were spawned but never written to the spawn registry, so a process restart dropped them while code-recipe agents survived. They are now persisted on spawn (as a JSON-safe descriptor) and re-resolved to their class and restored on startup.
+- **Remote agent vanish-detection** — a remote agent missing from a single node heartbeat is no longer pruned from the registry (which broke delete and node-reboot recovery); pruning now needs several consecutive misses, and never touches an agent that hasn't appeared yet or has migrated away.
+- **Chat input** — up-arrow history recall now grows the textarea to fit a multi-line message instead of clipping it to one line.
+- **Nodes panel** — remote-runner agents no longer also appear under the local node; each agent is listed only on the node it runs on.
+- **Remote agent delete** — deleting an agent that runs on a remote node now stops it on the node instead of only clearing the server's records, so it no longer keeps running and reappearing.
+- **Remote agents flicker / chat misroutes to main** — the dashboard dropped the `node` field when mapping WS state patches, so the 15s /api/actors reconcile (local-only) repeatedly evicted remote agents. They now keep their node marker and survive the reconcile.
+
+## [0.5.1] - 2026-07-06
+
 ### Added
 
-- **Reachy looks before it describes** - `describe` now orients the head to the look aim
-  BEFORE capturing (default level/forward), so a prior gesture or a droop no longer leaves
-  Reachy staring at the desk/floor when you ask "what do you see". Aim it with "look
-  down/up/left/right" or `{"pitch":..,"yaw":..}`; `{"orient":false}` keeps the old
-  capture-from-current-pose behaviour. Each look waits for the head move to finish before
-  grabbing the frame (goto_target is fire-and-forget), so the shot is sharp, not blurred
-  mid-turn.
-- **Reachy `look_around`** - a new command that pans the head across several angles
-  (left / ahead / right / up by default), captures a sharp frame at each (waiting out each
-  move so it isn't motion-blurred), and describes the whole room in one combined vision
-  call, then re-centres. "look around" / "what's in the room" /
-  "scan the room" route here (they used to collapse to a single-frame `describe`). Tune with
-  `angles`, `question`, `quality`, `look_duration`.
-- **Reachy `describe` is brief by default** - "what do you see?" now gets one short spoken
-  sentence (the gist) that ends by offering a closer look, instead of a whole paragraph
-  monologue every glance. Ask for more with `{"cmd":"describe","detail":true}` or plain
-  "look closer" / "in detail" / "tell me more" for the full description — and a plain **"yes"**
-  right after the "Want me to look closer?" offer now does the detailed look (the offer is
-  remembered for 60s) instead of being echoed back. A specific question ("how many people?")
-  is answered concisely with no nudge, and unreadable/black frames skip the offer.
-- **Reachy `shutup` / "stop talking"** - cut the current utterance immediately, instead
-  of being stuck listening to a long spoken reply with no way to stop it. `{"cmd":"shutup"}`
-  (or "shut up" / "stop talking" / "be quiet") stops playback now; `{"cmd":"stop"}` also
-  cuts speech (on top of motion and sound-tracking). Distinct from volume `mute`, which is
-  persistent. Long spoken replies (`describe`, and the main-interface bridge) now play
-  non-blocking so a "shut up" typed while Reachy is talking actually gets through - the
-  actor mailbox is serial, so a blocking utterance used to freeze it until it finished.
-  Verbose command output (e.g. `diag`) is returned to chat only and never spoken.
-- **Reachy `diag` command** - diagnoses "the robot won't move". Motion commands are
-  fire-and-forget over the websocket, so a clean `goto_target` only means the daemon
-  RECEIVED the command. `{"cmd":"diag"}` (or "why won't you move") reports the SDK vs
-  robot-daemon version (a mismatch makes the daemon silently ignore motion while audio
-  still works), then runs a real self-test: enable torque, read joint angles, command a
-  small move, re-read, and report whether the angles actually changed - so you find out
-  it's a version mismatch / torque / hardware issue instead of guessing.
-- **Reachy without the Reachy Mini control app** - the reachy-mini agent can now connect
-  straight to a powered-on robot over WiFi with no control app running on your machine:
-  set `REACHY_CONNECTION_MODE=network` plus the new `REACHY_ROBOT_HOST=<ip|hostname>` env
-  var. The env var is the reliable way to pin the robot (survives a wiped state folder, no
-  config topic or mDNS needed). And when a connection can't be made, the reason is no
-  longer an opaque "no SDK handle": the real connect error and the exact env vars to set
-  now appear in the startup log AND in the "reachy not connected: ..." reply to any robot
-  command, so you don't have to hunt logs. `.env.template` documents the new keys.
-- **Reachy as a Wactorz interface (text bridge)** - anything you say to the reachy-mini
-  agent that it can't turn into a robot or Home Assistant command is now piped through the
-  MAIN orchestrator (full intent routing, HA, and sub-agent delegation - not just a bare
-  single-turn LLM reply) and the answer is spoken back through the robot. So "what's the
-  weather in Paris?" or "add milk to my shopping list" reach the same agents the CLI/web
-  chat would, embodied. Under the hood the agent forwards unhandled text with
-  `send_to('main', _via_interface=True)`; `MainActor` routes any `_via_interface` task
-  through `process_user_input` (run as a background task so it never blocks main's message
-  loop) and replies on the caller's correlation id. Speaking to the robot out loud
-  (speech-to-text) layers on top of this later; for now the bridge is reached via
-  chat/delegation to the agent.
-- **Reachy continuous sound tracking (`track_sound`)** — an opt-in mode that keeps turning Reachy
-  toward whoever is currently speaking, not just once like `turn_to_sound`. "Keep turning toward
-  whoever's talking", "follow the speaker", "track the voices as we present" start it; "stop
-  tracking/following the sound" stops it (it also stops on `stop`, `sleep`, and shutdown). A
-  background loop polls the mic array on an `interval`, and a `deadband_deg` keeps the head from
-  chasing tiny fluctuations and thrashing the motors. Large angles rotate the body (`body_yaw`)
-  with the head covering the residual, so Reachy can face anywhere in the room, not just the
-  `max_head_yaw` arc a head turn alone reaches. `require_voice` (default on) ignores non-speech
-  noise. Tuning knobs: `interval`, `deadband_deg`, `duration`, `max_head_yaw`, `max_body_yaw`,
-  `offset_deg`, `invert`.
-- **Reachy sound localization (`turn_to_sound`)** — turns the head toward the direction the mic
-  array localizes a sound (`doa` angle → head yaw, clamped, with `offset_deg`/`invert` calibration).
-  "Turn toward the sound", "face the speaker", and "who's talking?" route here. Sensing works
-  whenever the mic is live; the turn itself needs the motors. `listen`/`camera`/`doa` now also
-  return a short human-readable `result` summary so the base64 blob no longer floods the chat.
-- **Reachy vision (`describe`)** — a new `describe` command captures a camera frame, sends it to
-  the vision-capable LLM, and speaks the real description of what the robot sees. "What do you
-  see?", "what's in front of you?", "look around", and questions about the view now route here
-  (deterministically and via the NL planner) instead of the old capture-then-invent-a-line path.
-  Optional `question` asks something specific; `say: false` returns the text without speaking.
-- **Reachy connection mode toggle** — a `connection_mode` config (via `custom/reachy/config` or
-  `REACHY_CONNECTION_MODE`) selects `network` (wireless: connect straight to the robot, skip the
-  localhost probe, no control app needed), `local` (the Reachy Mini control app or simulator on
-  localhost), or the default auto-detect. The active mode is reported in `custom/reachy/state`.
-- **Reachy camera & microphone access** — new `camera`, `listen`, and `doa` commands on the
-  reachy-mini agent read the robot's onboard sensors through the SDK media manager. `camera`
-  returns one still frame as base64 (JPEG/PNG); `listen` records a short mic-array clip as base64
-  WAV with the current direction of arrival; `doa` reports the mic direction without recording.
-  Each can also save to a file (`path`) or emit a one-shot event (`publish` →
-  `custom/reachy/camera` / `custom/reachy/audio`); the blobs never enter the retained state
-  heartbeat. Plain English ("take a photo", "listen") and the NL planner both reach them.
+- **`openai_url` add-on option** — surfaces the existing OpenAI-compatible endpoint support in the
+  Home Assistant add-on settings, so the `openai` provider can be pointed at a LiteLLM proxy or any
+  compatible API (Groq, Together, vLLM, LM Studio) without editing env vars.
 - **Named volume presets for reachy** - `whisper` (70), `normal` (85), `louder` (93)
   and `presenter` (100) speaking modes, mapped to the robot speaker's usable loudness band.
   Deterministic "whisper X" / "say X softly|loudly" set the level and speak aloud.

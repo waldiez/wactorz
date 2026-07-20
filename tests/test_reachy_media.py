@@ -20,6 +20,7 @@ import asyncio
 import base64
 import io
 import math
+import sys
 import types
 import unittest
 import wave
@@ -38,6 +39,26 @@ def _load_recipe_namespace():
 
 
 NS = _load_recipe_namespace()
+
+
+_FAKE_REACHY_SDK = None
+
+
+def setUpModule():
+    """Provide only the SDK metadata these unit tests exercise."""
+    global _FAKE_REACHY_SDK
+    try:
+        __import__("reachy_mini")
+    except ModuleNotFoundError:
+        sdk = types.ModuleType("reachy_mini")
+        sdk.__version__ = "1.8.4"
+        _FAKE_REACHY_SDK = sdk
+        sys.modules["reachy_mini"] = sdk
+
+
+def tearDownModule():
+    if _FAKE_REACHY_SDK is not None and sys.modules.get("reachy_mini") is _FAKE_REACHY_SDK:
+        sys.modules.pop("reachy_mini", None)
 
 
 class FakeMedia:

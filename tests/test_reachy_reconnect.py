@@ -20,6 +20,7 @@ What we guard:
 """
 
 import asyncio
+import sys
 import threading
 import types
 import unittest
@@ -35,6 +36,26 @@ def _load_recipe_namespace():
 
 
 NS = _load_recipe_namespace()
+
+
+_FAKE_REACHY_SDK = None
+
+
+def setUpModule():
+    """Provide a minimal SDK module while testing reconnect without hardware."""
+    global _FAKE_REACHY_SDK
+    try:
+        __import__("reachy_mini")
+    except ModuleNotFoundError:
+        sdk = types.ModuleType("reachy_mini")
+        sdk.ReachyMini = mock.Mock()
+        _FAKE_REACHY_SDK = sdk
+        sys.modules["reachy_mini"] = sdk
+
+
+def tearDownModule():
+    if _FAKE_REACHY_SDK is not None and sys.modules.get("reachy_mini") is _FAKE_REACHY_SDK:
+        sys.modules.pop("reachy_mini", None)
 
 
 class FakeAgent:

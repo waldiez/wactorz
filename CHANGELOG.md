@@ -6,6 +6,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — pending
 
 ### Added
+- **Reachy Mini speech interruption and full rear turn** - Speaking over Reachy
+  now uses a more sensitive barge-in gate and stops robot-speaker playback via
+  the daemon directly; "stop", "silence", "quiet", and "shut up" stay silent
+  without ending the conversation. Explicit turn-around commands now drive the
+  body joint to its mechanically safe rear limit instead of letting automatic
+  head/body IK shorten the turn to roughly 90 degrees.
+
 - **Reachy Mini SDK/daemon version alignment** - The catalog now pins the Reachy
   Mini Python SDK to `1.8.4`, matching the supported robot daemon, and detects an
   older importable SDK as needing an upgrade instead of silently reusing it.

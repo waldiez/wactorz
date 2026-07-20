@@ -697,6 +697,15 @@ class ShutupTest(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertIn("stop_playing", agent.calls)  # speech cut too
 
+    def test_robot_backend_prefers_direct_daemon_stop(self):
+        agent = self._agent()
+        direct = mock.AsyncMock(return_value=True)
+        with mock.patch.dict(NS, {"_stop_daemon_sound": direct}):
+            res = _run(NS["_dispatch"](agent, "shutup", {}, return_result=True))
+        self.assertTrue(res["stopped_speaking"])
+        direct.assert_awaited_once_with(agent)
+        self.assertEqual(agent.calls, [])
+
     def test_shutup_when_nothing_playing_is_graceful(self):
         agent = FakeAgent(FakeMedia())
         agent.state["mini"] = types.SimpleNamespace(media=types.SimpleNamespace(audio=None))

@@ -467,6 +467,39 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(monitor)
             await NS["_finish_barge_in_monitor"](session, monitor, False)
 
+    async def test_barge_in_defaults_are_tuned_for_quiet_close_speech(self):
+        agent, seen = FakeAgent(), {}
+        capture = VoiceCapture(np.zeros((0,), dtype=np.float32), 16000, 1, 0.0, "cancelled")
+
+        async def fake_do(_fn, _media, _cancel, config, _onset):
+            seen["config"] = config
+            return capture
+
+        with mock.patch.dict(NS, {"_do": fake_do}):
+            session = {"payload": {}, "cancel_event": None}
+            monitor = await NS["_begin_barge_in_monitor"](agent, session, 2.0)
+            await NS["_finish_barge_in_monitor"](session, monitor, False)
+
+        self.assertEqual(seen["config"].mode, 1)
+        self.assertEqual(seen["config"].flush_s, 0.0)
+        self.assertAlmostEqual(seen["config"].min_rms, 0.006)
+        self.assertAlmostEqual(seen["config"].min_speech_s, 0.12)
+
+    async def test_silence_phrase_does_not_trigger_another_reply(self):
+        agent, bridge = FakeAgent(), mock.AsyncMock()
+        _, session = await self.run_session(
+            agent,
+            {},
+            [captured(), captured()],
+            ["shut up", "bye"],
+            bridge,
+        )
+
+        self.assertEqual(session["stop_reason"], "stop_phrase")
+        bridge.assert_not_awaited()
+        user_turns = [text for text, extra in agent.chat_messages if extra.get("from") == "user"]
+        self.assertEqual(user_turns, ["shut up", "bye"])
+
     async def test_optional_state_motion_changes_only_antennas(self):
         agent = FakeAgent()
         calls = []
@@ -909,29 +942,34 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(calls[0]["body_yaw"])
         self.assertEqual(agent.state["_facing_body_yaw_deg"], 155.0)
 
-    async def test_turn_around_choreography_uses_bounded_body_yaw(self):
+    async def test_turn_around_choreography_drives_body_joint_to_rear_limit(self):
         agent, calls = FakeAgent(), []
 
-        def goto_target(**kwargs):
+        def goto_joint_positions(**kwargs):
             calls.append(kwargs)
 
+        mini = types.SimpleNamespace(
+            media=FakeMedia(),
+            get_current_joint_positions=lambda: (np.zeros(7), np.zeros(2)),
+            goto_joint_positions=goto_joint_positions,
+        )
         agent.state.update(
             {
-                "mini": types.SimpleNamespace(media=FakeMedia(), goto_target=goto_target),
+                "mini": mini,
                 "np": np,
                 "create_head_pose": lambda **kwargs: kwargs,
                 "motion_lock": asyncio.Lock(),
             }
         )
 
-        with mock.patch.object(NS["asyncio"], "sleep", mock.AsyncMock()):
-            result = await NS["_gesture"](agent, {"name": "turn_around", "duration": 0.12})
+        result = await NS["_gesture"](agent, {"name": "turn_around", "duration": 0.12})
 
         self.assertEqual(result["gesture"], "turn_around")
         self.assertEqual(result["facing"], "rear")
         self.assertEqual(len(calls), 1)
-        self.assertAlmostEqual(float(calls[0]["body_yaw"]), float(np.deg2rad(155)))
-        self.assertEqual(calls[0]["head"]["yaw"], 155.0)
+        joints = calls[0]["head_joint_positions"]
+        self.assertAlmostEqual(float(joints[0]), float(np.deg2rad(155)))
+        self.assertTrue(np.allclose(joints[1:], np.zeros(6)))
         self.assertEqual(agent.state["_facing_body_yaw_deg"], 155.0)
 
 

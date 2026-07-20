@@ -2111,7 +2111,7 @@ async def _current_body_yaw_deg(agent):
     try:
         positions = await _do(getter)
         head = positions[0] if isinstance(positions, (tuple, list)) and positions else None
-        if isinstance(head, (tuple, list)) and head:
+        if head is not None and len(head):
             value = float(agent.state["np"].rad2deg(float(head[0])))
             agent.state["_facing_body_yaw_deg"] = value
             return value
@@ -2121,24 +2121,48 @@ async def _current_body_yaw_deg(agent):
 
 
 async def _face_body(agent, target_degrees, payload=None):
-    """Face an absolute body direction and leave Reachy there."""
+    """Face an absolute body direction and leave Reachy there.
+
+    Reachy's automatic IK is intentionally free to redistribute a world-space
+    head yaw onto the body. A 155-degree gaze can therefore stop the body near
+    90 degrees (155 - the 65-degree neck allowance). For an explicit embodied
+    turn, interpolate the body joint directly while preserving every other
+    joint. That makes the physical base reach the requested rear-facing limit.
+    """
     payload = payload or {}
     target = max(-155.0, min(155.0, float(target_degrees)))
     duration = max(0.5, min(3.0, float(payload.get("duration", 1.2))))
     mini = agent.state["mini"]
     np = agent.state["np"]
-    create_head_pose = agent.state["create_head_pose"]
     await _ensure_motors_enabled(agent)
     async with agent.state["motion_lock"]:
         agent.state["busy"] = True
         try:
-            await _do(
-                mini.goto_target,
-                head=create_head_pose(yaw=target, degrees=True),
-                body_yaw=float(np.deg2rad(target)),
-                duration=duration,
-            )
-            await asyncio.sleep(duration + 0.12)
+            goto_joints = getattr(mini, "goto_joint_positions", None)
+            getter = getattr(mini, "get_current_joint_positions", None)
+            if callable(goto_joints) and callable(getter):
+                positions = await _do(getter)
+                head = positions[0] if isinstance(positions, (tuple, list)) else None
+                joints = np.asarray(head, dtype=float).reshape(-1) if head is not None else []
+            else:
+                joints = []
+            if len(joints) >= 7:
+                joints[0] = float(np.deg2rad(target))
+                await _do(
+                    goto_joints,
+                    head_joint_positions=joints.tolist(),
+                    duration=duration,
+                )
+            else:
+                # Compatibility fallback for older SDKs without joint-space
+                # interpolation. These may still redistribute some yaw.
+                create_head_pose = agent.state["create_head_pose"]
+                await _do(
+                    mini.goto_target,
+                    head=create_head_pose(yaw=target, degrees=True),
+                    body_yaw=float(np.deg2rad(target)),
+                    duration=duration,
+                )
             agent.state["_facing_body_yaw_deg"] = target
         finally:
             agent.state["busy"] = False
@@ -2303,18 +2327,50 @@ async def _stop_audio(agent):
         return False
     media = getattr(mini, "media", None) or getattr(mini, "media_manager", None)
     audio = getattr(media, "audio", None) if media else None
-    stopped = False
-    for obj, meth in ((audio, "stop_playing"), (media, "stop_playing"),
-                      (media, "stop_sound"), (audio, "stop_sound")):
+    # For the WebRTC backend, go straight to the daemon endpoint that owns the
+    # robot speaker. This avoids depending on SDK wrapper versions and gives a
+    # spoken interruption the shortest possible path to silence.
+    stopped = await _stop_daemon_sound(agent)
+    candidates = () if stopped else (
+        (media, "stop_playing"),
+        (audio, "stop_playing"),
+        (media, "stop_sound"),
+        (audio, "stop_sound"),
+    )
+    for obj, meth in candidates:
         fn = getattr(obj, meth, None) if obj is not None else None
         if callable(fn):
             try:
                 await _do(fn)
                 stopped = True
+                break
             except Exception as e:
                 await agent.log(f"{meth} failed: {e}", level="warning")
     agent.state["_speaking"] = False
     return stopped
+
+
+async def _stop_daemon_sound(agent):
+    """Stop robot-speaker file playback through the daemon's canonical API."""
+    url = _daemon_url(agent)
+    if not url:
+        return False
+    import aiohttp
+    try:
+        timeout = aiohttp.ClientTimeout(total=2.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{url.rstrip('/')}/api/media/stop_sound"
+            ) as response:
+                if response.status < 400:
+                    return True
+                await agent.log(
+                    f"robot speaker stop returned HTTP {response.status}",
+                    level="warning",
+                )
+    except Exception as e:
+        await agent.log(f"robot speaker stop failed: {e}", level="warning")
+    return False
 
 
 async def _shutup(agent, payload=None):
@@ -2421,12 +2477,12 @@ async def _begin_barge_in_monitor(agent, session, speech_seconds):
         max_utterance_s=max(1.0, min(30.0, float(
             payload.get("max_utterance_s", 12.0)))),
         min_speech_s=max(0.09, min(1.0, float(
-            payload.get("barge_min_speech_s", 0.18)))),
+            payload.get("barge_min_speech_s", 0.12)))),
         pre_roll_s=max(0.0, min(0.5, float(payload.get("pre_roll_s", 0.3)))),
-        flush_s=max(0.0, min(0.5, float(payload.get("barge_flush_s", 0.05)))),
-        mode=max(0, min(3, int(payload.get("vad_mode", 2)))),
+        flush_s=max(0.0, min(0.5, float(payload.get("barge_flush_s", 0.0)))),
+        mode=max(0, min(3, int(payload.get("barge_vad_mode", 1)))),
         min_rms=max(0.0, min(1.0, float(
-            payload.get("barge_min_rms", payload.get("vad_min_rms", 0.015))))),
+            payload.get("barge_min_rms", 0.006)))),
     )
     task = asyncio.create_task(
         _do(capture_utterance, media, cancel, config, onset.set)
@@ -3727,6 +3783,26 @@ def _conversation_stop_phrase(text):
     return normalized in _CONVERSATION_STOP_PHRASES
 
 
+_CONVERSATION_SILENCE_PHRASES = {
+    "stop",
+    "silence",
+    "quiet",
+    "be quiet",
+    "shut up",
+    "stop talking",
+    "stop speaking",
+    "hush",
+    "enough",
+}
+
+
+def _conversation_silence_phrase(text):
+    """True when the user wants silence without ending the voice session."""
+    import re as _re
+    normalized = _re.sub(r"[^\w ]+", " ", str(text or "").lower(), flags=_re.UNICODE)
+    return " ".join(normalized.replace("_", " ").split()) in _CONVERSATION_SILENCE_PHRASES
+
+
 def _conversation_stt_payload(payload):
     """Resolve voice-session STT hints without forcing a spoken language."""
     import os as _os
@@ -4307,6 +4383,11 @@ async def _conversation_loop(agent, session):
             if _conversation_stop_phrase(turn["transcript"]):
                 session["stop_reason"] = "stop_phrase"
                 break
+            if _conversation_silence_phrase(turn["transcript"]):
+                # Barge-in already cut playback at speech onset. Do not answer
+                # a request for silence with another spoken acknowledgement.
+                session["consecutive_errors"] = 0
+                continue
 
             route_text = _conversation_route_text(
                 turn["transcript"], session.get("history", []))

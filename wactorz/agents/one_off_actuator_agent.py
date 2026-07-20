@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 _COLOR_RGB = {
     "cyan": [0, 255, 255],
     "blue": [0, 0, 255],
+    "yellow": [255, 255, 0],
+    "orange": [255, 165, 0],
     "pink": [255, 105, 180],
     "red": [255, 0, 0],
     "green": [0, 255, 0],
@@ -257,16 +259,18 @@ class OneOffActuatorAgent(Actor):
         request = self._clean_request()
         brightness_step = self._requested_brightness_step_pct()
         brightness_request = brightness_step is not None or "brightness" in request
+        normal_request = self._requests_normal_light()
         if not re.search(r"\blights?\b", request) and not brightness_request:
             return None
 
-        rgb = self._requested_rgb()
+        rgb = [255, 255, 255] if normal_request else self._requested_rgb()
         if re.search(r"\b(turn|then|switch|shut)\s+off\b", request):
             service = "turn_off"
         elif (
             re.search(r"\b(turn|then|switch)\s+on\b", request)
             or rgb is not None
             or brightness_request
+            or normal_request
         ):
             service = "turn_on"
         else:
@@ -281,7 +285,7 @@ class OneOffActuatorAgent(Actor):
         else:
             entity_id = (
                 self._find_color_light(devices)
-                if rgb is not None
+                if rgb is not None and not normal_request
                 else self._find_requested_light(lights, request)
             )
             if not entity_id:
@@ -293,7 +297,7 @@ class OneOffActuatorAgent(Actor):
             service_data["rgb_color"] = rgb
         if brightness_step is not None and service == "turn_on":
             service_data["brightness_step_pct"] = brightness_step
-        elif self._requests_max_brightness() and service == "turn_on":
+        elif (self._requests_max_brightness() and service == "turn_on") or (normal_request and service == "turn_on"):
             service_data["brightness_pct"] = 100
         return [
             ActuatorAction(
@@ -352,6 +356,9 @@ class OneOffActuatorAgent(Actor):
             "bit",
             "some",
             *list(_COLOR_RGB),
+            "normal",
+            "regular",
+            "default",
         }
         specific = {
             token
@@ -406,6 +413,17 @@ class OneOffActuatorAgent(Actor):
             )
         )
         return explicit or bool(re.search(r"\b(bright|brighter|brightly)\b", request))
+
+    def _requests_normal_light(self) -> bool:
+        """Return whether the user wants a neutral, fully lit default state."""
+        request = self._clean_request()
+        return bool(
+            re.search(
+                r"\b(?:(?:normal|regular|default)(?:\s+(?:white\s+)?)?light|"
+                r"light\s+(?:normal|regular|default))\b",
+                request,
+            )
+        )
 
     def _requested_brightness_step_pct(self) -> int | None:
         """Return a conservative relative brightness change, when requested."""

@@ -538,6 +538,27 @@ class GenericColorLightCollapseTest(unittest.TestCase):
         self.assertEqual(actions[0].entity_id, "light.main")
         self.assertEqual(actions[0].service_data, {"brightness_step_pct": -15})
 
+    def test_yellow_is_resolved_without_llm_json(self):
+        agent = self._agent("Make the light yellow")
+
+        actions = agent._resolve_simple_light_actions(self._two_color_lights())
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].entity_id, "light.main")
+        self.assertEqual(actions[0].service_data, {"rgb_color": [255, 255, 0]})
+
+    def test_normal_light_resets_white_at_full_brightness(self):
+        agent = self._agent("Make the main light normal")
+
+        actions = agent._resolve_simple_light_actions(self._two_color_lights())
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].entity_id, "light.main")
+        self.assertEqual(
+            actions[0].service_data,
+            {"rgb_color": [255, 255, 255], "brightness_pct": 100},
+        )
+
     def test_non_color_request_is_untouched(self):
         # No colour requested -> repair is a passthrough, both lights stay.
         agent = self._agent("turn on the light")

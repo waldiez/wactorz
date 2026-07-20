@@ -258,7 +258,14 @@ class HomeAssistantAgent(LLMAgent):
 
             # entities = self._extract_entity_ids_from_hardware(hardware_result)
             # return await self._create_automation(text, entities, hardware_result.get("hardware", []))
-            return await self._recommend_hardware(text, devices)
+            recommendation = await self._recommend_hardware(text, devices)
+            details = str(recommendation.get("result") or "").strip()
+            notice = (
+                "I did not create the automation because automation creation is currently disabled."
+            )
+            recommendation["created"] = False
+            recommendation["result"] = f"{notice}\n{details}".strip()
+            return recommendation
 
         if action == "other":
             return await self._handle_other_request(text)

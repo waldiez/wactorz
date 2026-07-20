@@ -776,8 +776,21 @@ class HomeAssistantAgentEntrypointDispatchTest(unittest.IsolatedAsyncioTestCase)
             with self.subTest(action=action):
                 agent._classify_action = AsyncMock(return_value=action)
                 agent._get_devices = AsyncMock(return_value=_devices())
-                agent._recommend_hardware = AsyncMock(return_value={"can_fulfill": True})
-                self.assertEqual(await agent._process("make automation"), {"can_fulfill": True})
+                agent._recommend_hardware = AsyncMock(
+                    return_value={"can_fulfill": True, "result": "Use the main light."}
+                )
+
+                result = await agent._process("make automation")
+
+                if action == "create_automation":
+                    self.assertFalse(result["created"])
+                    self.assertIn("did not create the automation", result["result"])
+                    self.assertIn("Use the main light.", result["result"])
+                else:
+                    self.assertEqual(
+                        result,
+                        {"can_fulfill": True, "result": "Use the main light."},
+                    )
                 agent._recommend_hardware.assert_awaited_once_with("make automation", _devices())
 
         agent._classify_action = AsyncMock(return_value="edit_automation")

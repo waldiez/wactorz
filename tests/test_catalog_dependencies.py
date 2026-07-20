@@ -4,6 +4,7 @@ from unittest import mock
 
 from wactorz.agents.catalog_agent import (
     _REACHY_MINI_REQUIREMENT,
+    CatalogAgent,
     _build_catalog,
     _dependency_is_satisfied,
 )
@@ -46,3 +47,30 @@ def test_unversioned_dependency_only_needs_to_import():
         assert _dependency_is_satisfied("numpy")
 
     version.assert_not_called()
+
+
+async def test_natural_spawn_requests_do_not_degrade_to_catalog_list():
+    catalog = CatalogAgent(name="catalog-test")
+    catalog._catalog = {
+        "weather-agent": {
+            "name": "weather-agent",
+            "description": "Weather",
+        }
+    }
+    catalog._action_spawn = mock.AsyncMock(
+        return_value={"ok": True, "message": "'weather-agent' spawned and running"}
+    )
+
+    for request in (
+        "Can you spawn weather agents from catalogs?",
+        "Spawn weather agent from Catalog",
+        "Tell Catalog Agent to Spawn Weather Agent",
+    ):
+        result = await catalog._handle(request)
+        assert result["ok"] is True
+
+    assert [call.args[0] for call in catalog._action_spawn.await_args_list] == [
+        "weather-agent",
+        "weather-agent",
+        "weather-agent",
+    ]

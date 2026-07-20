@@ -247,7 +247,8 @@ async def _configure_conversation_audio(agent):
     agent.state["conversation_echo_control"] = configured
     if configured:
         await agent.log(
-            f"Conversation echo control configured via {route}; voice interruption enabled."
+            f"Conversation echo control configured via {route}; automatic voice "
+            "interruption remains off unless barge_in=true is requested."
         )
     else:
         await agent.log(
@@ -4397,9 +4398,12 @@ async def _conversation_start(agent, payload):
         )
 
     resolved_payload = dict(payload)
-    resolved_payload.setdefault(
-        "barge_in", bool(agent.state.get("conversation_echo_control", False))
-    )
+    # The XVF configuration improves capture, but on some physical robots the
+    # microphone still hears Reachy's speaker clearly enough to trip VAD for
+    # the whole utterance. A cascaded STT -> LLM -> TTS pipeline cannot tell
+    # that echo from a real interruption reliably, so uninterrupted speech is
+    # the safe default. Full-duplex remains an explicit experimental option.
+    resolved_payload.setdefault("barge_in", False)
     session = {
         "session_id": str(payload.get("session_id") or _uuid.uuid4().hex[:12]),
         "turn_index": 0,

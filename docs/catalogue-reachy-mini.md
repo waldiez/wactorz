@@ -292,19 +292,22 @@ syntax stay visual. Reachy speaks a short human acknowledgement instead; for exa
 `Done: light.turn_on -> light.main_light` becomes "Okay, the light is on", or
 "Okay, the light is pink" when that was the request.
 
-Barge-in is enabled automatically when Reachy successfully applies the compatible
-parts of Pollen's conversation tuning to the XVF3800 audio processor. A
-firmware-owned nonlinear-attenuation flag is intentionally left untouched; the
-robot can force its readback even after applying all useful echo/noise settings.
-The interruption monitor ignores the first 450 ms of speaker startup and then
-requires about 210 ms of sustained voice onset. This prevents Reachy's own first
-syllable from stopping playback while keeping natural barge-in available. Confirmed
-speech stops the current utterance, retains the interrupting audio, and routes it as
-the next turn. If the audio processor cannot be configured,
-barge-in defaults off so Reachy cannot mistake its own speaker for an interruption.
-An explicit `"barge_in": true` or `false` overrides the automatic choice for that
-session. Say `stop`, `silence`, `quiet`, or `shut up` to cut only the current reply
-and keep the conversation listening.
+Reachy applies the compatible parts of Pollen's conversation tuning to the XVF3800
+audio processor. A firmware-owned nonlinear-attenuation flag is intentionally left
+untouched; the robot can force its readback even after applying all useful
+echo/noise settings. On some physical robots the microphone still hears the entire
+speaker utterance, so a simple VAD monitor cannot reliably distinguish Reachy's
+voice from a human interruption. Automatic barge-in therefore defaults off and
+normal replies play to completion.
+
+Set `"barge_in": true` only as an experiment on hardware with verified acoustic echo
+cancellation. In that mode the monitor ignores the first 450 ms of speaker startup,
+then requires about 210 ms of sustained voice onset; confirmed speech stops playback,
+retains the interrupting audio, and routes it as the next turn. A typed `stop`,
+`silence`, `quiet`, or `shut up` still cuts the current reply immediately without
+ending the conversation. Spoken stop phrases work while Reachy is listening, but
+reliable spoken interruption during TTS requires a true full-duplex realtime audio
+pipeline rather than this cascaded STT -> LLM -> TTS path.
 
 Stop with `stop listening`, `end conversation`, `goodbye Reachy`, `goodbye`, `bye`,
 `that's all`, `σταμάτα`, `σταμάτα να ακούς`, `τέλος συζήτησης`, or `αντίο`.
@@ -327,9 +330,9 @@ start fields include `silence_s`, `max_utterance_s`, `min_speech_s`, `pre_roll_s
 `barge_onset_s`, `barge_silence_s`, `barge_min_speech_s`, `barge_flush_s`,
 `barge_min_rms`, `voice_friendly`,
 `state_motion`, `idle_motion`, `stt_language`, `stt_hotwords`,
-`stt_min_confidence`, `stt_max_no_speech`, and `max_turns`. Barge-in follows the
-verified echo-control capability unless explicitly overridden; all physical
-conversation motion defaults to false.
+`stt_min_confidence`, `stt_max_no_speech`, and `max_turns`. Barge-in defaults to
+false and is enabled only by an explicit `barge_in:true`; all physical conversation
+motion defaults to false.
 
 Set `state_motion:true` for subtle listening/speaking antenna cues. These use
 antenna-only `set_target` calls and do not command or reset the head. Conversation

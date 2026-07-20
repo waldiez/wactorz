@@ -255,13 +255,19 @@ class OneOffActuatorAgent(Actor):
     ) -> list[ActuatorAction] | None:
         """Resolve ordinary light commands without relying on generated JSON."""
         request = self._clean_request()
-        if not re.search(r"\blights?\b", request):
+        brightness_step = self._requested_brightness_step_pct()
+        brightness_request = brightness_step is not None or "brightness" in request
+        if not re.search(r"\blights?\b", request) and not brightness_request:
             return None
 
         rgb = self._requested_rgb()
         if re.search(r"\b(turn|then|switch|shut)\s+off\b", request):
             service = "turn_off"
-        elif re.search(r"\b(turn|then|switch)\s+on\b", request) or rgb is not None:
+        elif (
+            re.search(r"\b(turn|then|switch)\s+on\b", request)
+            or rgb is not None
+            or brightness_request
+        ):
             service = "turn_on"
         else:
             return None
@@ -285,7 +291,9 @@ class OneOffActuatorAgent(Actor):
         service_data = {}
         if rgb is not None and service == "turn_on":
             service_data["rgb_color"] = rgb
-        if self._requests_max_brightness() and service == "turn_on":
+        if brightness_step is not None and service == "turn_on":
+            service_data["brightness_step_pct"] = brightness_step
+        elif self._requests_max_brightness() and service == "turn_on":
             service_data["brightness_pct"] = 100
         return [
             ActuatorAction(
@@ -322,6 +330,27 @@ class OneOffActuatorAgent(Actor):
             "on",
             "off",
             "and",
+            "can",
+            "could",
+            "would",
+            "will",
+            "you",
+            "brightness",
+            "bright",
+            "brighter",
+            "dim",
+            "dimmer",
+            "lower",
+            "raise",
+            "increase",
+            "decrease",
+            "reduce",
+            "down",
+            "up",
+            "little",
+            "slightly",
+            "bit",
+            "some",
             *list(_COLOR_RGB),
         }
         specific = {
@@ -329,6 +358,10 @@ class OneOffActuatorAgent(Actor):
             for token in re.findall(r"[a-z0-9]+", request)
             if len(token) > 2 and token not in ignored
         }
+        recent_entity = self._recent_context_light(lights) if not specific else None
+        if recent_entity:
+            return recent_entity
+
         ranked: list[tuple[int, int, str]] = []
         for entity in lights:
             entity_id = str(entity.get("entity_id") or "")
@@ -373,6 +406,34 @@ class OneOffActuatorAgent(Actor):
             )
         )
         return explicit or bool(re.search(r"\b(bright|brighter|brightly)\b", request))
+
+    def _requested_brightness_step_pct(self) -> int | None:
+        """Return a conservative relative brightness change, when requested."""
+        request = self._clean_request()
+        down = bool(re.search(r"\b(dim|dimmer|lower|decrease|reduce|turn\s+down)\b", request))
+        up = bool(re.search(r"\b(brighter|raise|increase|turn\s+up)\b", request))
+        if down == up:
+            return None
+        small = bool(re.search(r"\b(a\s+little|little\s+bit|a\s+bit|slightly)\b", request))
+        amount = 15 if small else 25
+        return -amount if down else amount
+
+    def _recent_context_light(self, lights: list[dict[str, Any]]) -> str | None:
+        """Resolve generic follow-ups to the most recently controlled light."""
+        available = {
+            str(entity.get("entity_id") or "") for entity in lights if entity.get("entity_id")
+        }
+        for item in reversed(self.conversation_context):
+            if not isinstance(item, dict):
+                continue
+            context = " ".join(
+                str(item.get(key) or "") for key in ("response", "raw_response", "transcript")
+            )
+            matches = re.findall(r"\blight\.[a-z0-9_]+\b", context.lower())
+            for entity_id in reversed(matches):
+                if entity_id in available:
+                    return entity_id
+        return None
 
     def _repair_color_actions(
         self,

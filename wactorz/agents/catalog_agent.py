@@ -475,7 +475,7 @@ def _build_catalog() -> dict:
                 "stt_hotwords": "str — optional comma-separated recognition hints",
                 "stt_fallback_language": "str — retry language for uncertain short speech",
                 "stt_min_language_probability": "float - reject/retry auto-language guesses below this (default 0.60)",
-                "barge_in": "bool - interrupt Reachy by speaking (default true)",
+                "barge_in": "bool - experimental speech interruption (default false)",
                 "inactivity_timeout": "float - optional conversation idle timeout; 0 keeps listening (default 0)",
                 "max_turns": "int - optional conversation turn limit; 0 is unbounded (default 0)",
                 "silence_s": "float - post-speech VAD silence (default 1.0s)",

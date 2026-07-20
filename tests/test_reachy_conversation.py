@@ -508,7 +508,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(monitor)
             await NS["_finish_barge_in_monitor"](session, monitor, False)
 
-    async def test_conversation_start_resolves_barge_in_from_echo_control(self):
+    async def test_conversation_start_keeps_barge_in_opt_in(self):
         async def finished_loop(_agent, _session):
             return None
 
@@ -527,9 +527,15 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             forced_off = await NS["_conversation_start"](overridden, {"barge_in": False})
             await overridden.state["conversation_session"]["task"]
 
+            opted_in = FakeAgent()
+            opted_in.state["conversation_echo_control"] = True
+            forced_on = await NS["_conversation_start"](opted_in, {"barge_in": True})
+            await opted_in.state["conversation_session"]["task"]
+
         self.assertFalse(off["barge_in"])
-        self.assertTrue(on["barge_in"])
+        self.assertFalse(on["barge_in"])
         self.assertFalse(forced_off["barge_in"])
+        self.assertTrue(forced_on["barge_in"])
 
     async def test_barge_in_defaults_are_tuned_for_quiet_close_speech(self):
         agent, seen = FakeAgent(), {}

@@ -501,6 +501,43 @@ class GenericColorLightCollapseTest(unittest.TestCase):
         self.assertEqual(actions[0].service_data["rgb_color"], [0, 255, 255])
         self.assertEqual(actions[0].service_data["brightness_pct"], 100)
 
+    def test_brightness_follow_up_uses_recent_controlled_light(self):
+        agent = OneOffActuatorAgent(
+            request="Can you turn down the brightness a little bit?",
+            conversation_context=[
+                {
+                    "transcript": "turn on the light",
+                    "response": "Done: light.turn_on -> light.led_strip.",
+                }
+            ],
+            llm_provider=_FakeLLM("[]"),
+            task_id="actuate_test",
+            reply_to_id="main-actor",
+            persistence_dir=tempfile.gettempdir(),
+        )
+
+        actions = agent._resolve_simple_light_actions(self._two_color_lights())
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].entity_id, "light.led_strip")
+        self.assertEqual(actions[0].service, "turn_on")
+        self.assertEqual(actions[0].service_data, {"brightness_step_pct": -15})
+
+    def test_brightness_follow_up_with_light_uses_recent_entity(self):
+        agent = OneOffActuatorAgent(
+            request="Turn down the brightness of the light a little bit",
+            conversation_context=[{"response": "Done: light.turn_on -> light.main."}],
+            llm_provider=_FakeLLM("[]"),
+            task_id="actuate_test",
+            reply_to_id="main-actor",
+            persistence_dir=tempfile.gettempdir(),
+        )
+
+        actions = agent._resolve_simple_light_actions(self._two_color_lights())
+
+        self.assertEqual(actions[0].entity_id, "light.main")
+        self.assertEqual(actions[0].service_data, {"brightness_step_pct": -15})
+
     def test_non_color_request_is_untouched(self):
         # No colour requested -> repair is a passthrough, both lights stay.
         agent = self._agent("turn on the light")

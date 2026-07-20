@@ -7,13 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **Reachy Mini echo-safe speech interruption** - Reachy now applies the same
-  XVF3800 conversation audio tuning used by Pollen's conversation app, through
-  the robot daemon for wireless connections or the SDK for local connections.
-  Barge-in defaults on only after that configuration succeeds; otherwise it
-  safely defaults off instead of mistaking Reachy's speaker for a user and
-  cutting every reply down to its first syllable. Explicit per-session
-  `barge_in` settings still override the automatic capability check.
+- **Reachy Mini echo-safe conversation audio** - Reachy now applies the compatible
+  XVF3800 conversation audio tuning through the robot daemon for wireless
+  connections or the SDK for local connections. Automatic barge-in remains
+  opt-in because some physical setups still feed speaker audio into the
+  microphone after tuning; normal sessions now prioritize complete, uninterrupted
+  replies. Explicit per-session `barge_in=true` remains available for setups with
+  verified acoustic echo cancellation.
 
 - **Reachy Mini speech interruption and full rear turn** - Speaking over Reachy
   now uses a more sensitive barge-in gate and stops robot-speaker playback via
@@ -32,8 +32,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Assistant syntax out of audio. STT now auto-detects languages including Greek,
   biases recognition toward Reachy/Wactorz/device names, rejects low-confidence
   hallucinations without consuming a turn, and supports Greek stop phrases.
-  Barge-in is on by default for natural interruption and can be disabled on setups
-  without acoustic echo cancellation. Direct dance, turn-around, nod, shake, antenna,
+  Experimental barge-in can be enabled on setups with verified acoustic echo
+  cancellation. Direct dance, turn-around, nod, shake, antenna,
   and curious requests execute physical gestures; background antenna/head motion remains off by
   default to avoid servo shiver and microphone contamination.
 
@@ -181,14 +181,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- **Reachy voice conversations respond like the physical robot again.** Spoken
-  interruption uses the compatible XVF3800 echo-control profile, ignores the
-  speaker's startup transient, and requires sustained voice onset so Reachy no
-  longer cuts itself off after one syllable. Plain "stop" cuts speech without a raw
-  command receipt. "Riti", "Ritzy", "Lizzy", and similar STT variants normalize to
-  Reachy and cannot silently become the user's name. Camera questions scan with
-  Reachy's onboard camera, full replies appear before playback, concise audio
-  remains conversational, and debug receipts stay opt-in.
+- **Reachy voice conversations respond like the physical robot again.** Normal
+  sessions no longer monitor the echo-prone microphone during TTS, so complete
+  replies play instead of stopping after one syllable; barge-in stays available
+  as an explicit experiment. "Riti", "Ritzy", "Lizzy", and similar STT variants
+  normalize to Reachy and cannot silently become the user's name. Camera questions
+  scan with Reachy's onboard camera, full replies appear before playback, concise
+  audio remains conversational, and debug receipts stay opt-in. Relative brightness
+  follow-ups now reuse the light controlled in the preceding conversation turn.
 
 - **Social chat custom-spawn gate.** Discord, Telegram, and WhatsApp may
   start maintained catalogue agents, but refuse LLM-authored custom agents that

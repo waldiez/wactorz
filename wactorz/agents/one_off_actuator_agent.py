@@ -297,7 +297,9 @@ class OneOffActuatorAgent(Actor):
             service_data["rgb_color"] = rgb
         if brightness_step is not None and service == "turn_on":
             service_data["brightness_step_pct"] = brightness_step
-        elif (self._requests_max_brightness() and service == "turn_on") or (normal_request and service == "turn_on"):
+        elif (self._requests_max_brightness() and service == "turn_on") or (
+            normal_request and service == "turn_on"
+        ):
             service_data["brightness_pct"] = 100
         return [
             ActuatorAction(

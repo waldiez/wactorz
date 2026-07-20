@@ -601,7 +601,7 @@ async def setup(agent):
     agent.subscribe("custom/reachy/cmd", on_cmd)
 
     # Convenience: per-verb topics rewrite payload through the same dispatcher.
-    for verb in ("wake", "sleep", "reconnect", "pose", "antennas", "gesture", "look_at",
+    for verb in ("wake", "sleep", "reconnect", "pose", "turn", "antennas", "gesture", "look_at",
                  "look_pixel", "emotion", "motors", "diag", "set_pose", "bind",
                  "unbind", "list_emotions", "stop", "shutup", "say", "volume",
                  "camera", "describe", "look_behind", "look_around", "listen", "doa",
@@ -673,6 +673,7 @@ Robot commands:
   {"cmd":"sleep"}
   {"cmd":"stop"}
   {"cmd":"pose","yaw":<deg>,"pitch":<deg>,"roll":<deg>,"duration":<sec>}
+  {"cmd":"turn","angle":<signed-deg>}       - relative body turn; left positive, right negative
   {"cmd":"gesture","name":"dance|nod|shake|wiggle|curious|turn_around"}
   {"cmd":"face_forward"}
   {"cmd":"look_behind"}                    - turn toward the rear, capture there, and stay facing rearward
@@ -1100,6 +1101,33 @@ def _embodied_command_for_text(text):
     ):
         delta = 15 if _re.search(r"\b(a little|a bit|slightly)\b", low) else 25
         return {"cmd": "volume", "delta": delta}
+
+    turn_prefix = (
+        r"(?:(?:can|could|would) you\s+)?(?:please\s+)?"
+        r"(?:turn|rotate)(?:\s+yourself)?"
+    )
+    turn_suffix = r"(?:\s+please)?"
+    direction_first = _re.fullmatch(
+        rf"{turn_prefix}\s+(left|right)"
+        rf"(?:\s+(?:by\s+)?(\d+(?:\.\d+)?)\s*(?:degrees?|°)?)?"
+        rf"{turn_suffix}",
+        normalized,
+    )
+    amount_first = _re.fullmatch(
+        rf"{turn_prefix}\s+(\d+(?:\.\d+)?)\s*(?:degrees?|°)?\s+(left|right)"
+        rf"{turn_suffix}",
+        normalized,
+    )
+    if direction_first or amount_first:
+        if direction_first:
+            direction = direction_first.group(1)
+            magnitude = float(direction_first.group(2) or 45.0)
+        else:
+            magnitude = float(amount_first.group(1))
+            direction = amount_first.group(2)
+        magnitude = max(1.0, min(155.0, magnitude))
+        angle = magnitude if direction == "left" else -magnitude
+        return {"cmd": "turn", "angle": int(angle) if angle.is_integer() else angle}
 
     if _re.search(
         r"\b(behind you|look behind(?: you)?|what(?:'s| is) behind you|check behind you)\b",
@@ -1583,7 +1611,7 @@ def _voice_workflow_reply(value):
     return None
 
 
-def _voice_friendly_reply(text, limit=220, user_text=""):
+def _voice_friendly_reply(text, limit=None, user_text=""):
     """Turn a visual dashboard answer into natural human-only spoken text."""
     import re as _re
     value = _sanitize_reachy_identity_reply(text, user_text=user_text).strip()
@@ -1614,7 +1642,7 @@ def _voice_friendly_reply(text, limit=220, user_text=""):
     value = " ".join(value.split())
     if had_url:
         value = f"{value} The link is in Wactorz chat.".strip()
-    if len(value) <= limit:
+    if limit is None or len(value) <= limit:
         return value or "Okay."
     cut = max(value.rfind(mark, 0, limit) for mark in (". ", "! ", "? ", "; "))
     if cut < max(80, limit // 2):
@@ -1944,6 +1972,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "sleep":         result = await _sleep(agent)
         elif cmd == "reconnect":     result = await _reconnect(agent, payload)
         elif cmd == "pose":          result = await _pose(agent, payload)
+        elif cmd == "turn":          result = await _turn(agent, payload)
         elif cmd == "antennas":      result = await _antennas(agent, payload)
         elif cmd == "gesture":       result = await _gesture(agent, payload)
         elif cmd == "look_at":       result = await _look_at(agent, payload)
@@ -2347,6 +2376,32 @@ async def _face_body(agent, target_degrees, payload=None):
         finally:
             agent.state["busy"] = False
     return {"body_yaw": target, "facing": "rear" if abs(target) >= 80 else "forward"}
+
+
+async def _turn(agent, payload=None):
+    """Turn the body relative to its current heading; left is positive."""
+    payload = payload or {}
+    delta = max(-155.0, min(155.0, float(payload.get("angle", 45.0))))
+    current = await _current_body_yaw_deg(agent)
+    target = max(-155.0, min(155.0, current + delta))
+    actual = target - current
+    direction = "left" if delta >= 0 else "right"
+    if abs(actual) < 0.5:
+        return {
+            "body_yaw": current,
+            "turn_degrees": 0.0,
+            "result": f"I can't turn any farther {direction}.",
+        }
+    result = await _face_body(agent, target, payload)
+    degrees = round(abs(actual), 1)
+    shown = int(degrees) if degrees.is_integer() else degrees
+    result.update(
+        {
+            "turn_degrees": actual,
+            "result": f"I turned {direction} {shown} degrees.",
+        }
+    )
+    return result
 
 
 async def _turn_around(agent, payload=None):
@@ -4344,7 +4399,7 @@ async def _conversation_embodied_bridge(
         "ok": bool(action and action.get("ok")),
         "cmd": command["cmd"],
         "physical": command["cmd"]
-        in ("gesture", "look_behind", "look_around", "face_forward"),
+        in ("gesture", "turn", "look_behind", "look_around", "face_forward"),
         "spoke": speech["spoke"],
         "interrupted": speech["interrupted"],
         "spoken_result": speech["spoken_result"],

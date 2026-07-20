@@ -27,7 +27,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   older importable SDK as needing an upgrade instead of silently reusing it.
 
 - **Reachy Mini assistant-style conversation UX** - Voice sessions listen until a
-  natural stop phrase by default, publish recognized speech and concise replies in
+  natural stop phrase by default, publish recognized speech and sanitized replies in
   Reachy's own interface thread, and keep planner details, emoji, role-play, and raw Home
   Assistant syntax out of audio. STT now auto-detects languages including Greek,
   biases recognition toward Reachy/Wactorz/device names, rejects low-confidence
@@ -181,12 +181,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Reachy speaks complete replies and turns predictably.** Voice-friendly
+  sanitization no longer truncates long answers with a "rest in Wactorz chat"
+  announcement. Natural `turn left` / `turn right` commands rotate the body 45
+  degrees by default, while explicit angles are honored within the safe range.
+
 - **Reachy voice conversations respond like the physical robot again.** Normal
   sessions no longer monitor the echo-prone microphone during TTS, so complete
   replies play instead of stopping after one syllable; barge-in stays available
   as an explicit experiment. "Riti", "Ritzy", "Lizzy", and similar STT variants
   normalize to Reachy and cannot silently become the user's name. Camera questions
-  scan with Reachy's onboard camera, full replies appear before playback, concise
+  scan with Reachy's onboard camera, full replies appear before playback, complete
   audio remains conversational, and debug receipts stay opt-in. Relative brightness
   follow-ups now reuse the light controlled in the preceding conversation turn.
   Natural room-view phrasing is routed to Reachy's onboard camera instead of

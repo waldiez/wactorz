@@ -255,8 +255,9 @@ delegation loop. Wactorz core contains no Reachy dependency; without the catalog
 agent, Main behaves exactly as before.
 
 Each turn uses voice-activity detection and ends after about one second of silence.
-The complete reply appears in Reachy's dashboard thread before playback begins, while
-a concise voice-friendly version is spoken in sentence-sized chunks. Recognized
+The complete reply appears in Reachy's dashboard thread before playback begins, and
+the same sanitized reply is spoken in sentence-sized chunks without replacing its
+ending with a "rest in Wactorz chat" notice. Recognized
 speech stays in the same thread, labelled as an interface-mediated exchange; Main
 remains internal reasoning metadata. Raw service calls and planner details remain
 available in conversation diagnostics as `raw_response`, not ordinary chat.
@@ -349,7 +350,10 @@ and never moves the head. Short mechanical bursts that trip VAD are rejected bef
 Whisper and do not consume a turn or error budget, but keeping motors still is the
 reliable default.
 
-Embodied requests stay on the robot. "Do a little dance", "turn around", "nod",
+Embodied requests stay on the robot. "Turn left" and "turn right" rotate the body
+45 degrees relative to its current heading; an explicit angle such as "turn left
+90 degrees" overrides the default within Reachy's safe range. "Do a little dance",
+"turn around", "nod",
 "shake your head", "wiggle your antennas", and "look curious" run safe, explicit
 physical poses instead of going to the Wactorz LLM for pretend role-play. "What do
 you see?" and other room-view questions make Reachy scan with its own camera; requests

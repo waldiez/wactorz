@@ -418,7 +418,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(chunks), 2)
         self.assertTrue(all(len(chunk) <= 120 for chunk in chunks))
 
-    async def test_full_reply_is_displayed_before_short_speech_begins(self):
+    async def test_full_reply_is_displayed_before_full_speech_begins(self):
         agent = FakeAgent()
         full_reply = (
             "I can help with lights, automations, camera vision, and physical gestures. "
@@ -451,8 +451,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(events[0], ("display", full_reply))
         self.assertEqual(events[1][0], "speak")
-        self.assertLess(len(events[1][1]), len(full_reply))
-        self.assertIn("rest in Wactorz chat", events[1][1])
+        self.assertEqual(events[1][1], full_reply)
         self.assertEqual(result["result"], full_reply)
 
     async def test_punctuation_only_transcript_is_ignored(self):
@@ -804,6 +803,48 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         command = NS["_embodied_command_for_text"]("Turn around")
 
         self.assertEqual(command, {"cmd": "gesture", "name": "turn_around"})
+
+    def test_left_right_turns_default_to_45_and_honor_explicit_angles(self):
+        cases = {
+            "Turn left": {"cmd": "turn", "angle": 45},
+            "Turn right": {"cmd": "turn", "angle": -45},
+            "Could you turn left?": {"cmd": "turn", "angle": 45},
+            "Turn left by 90 degrees": {"cmd": "turn", "angle": 90},
+            "Turn 120 degrees right": {"cmd": "turn", "angle": -120},
+        }
+        for phrase, expected in cases.items():
+            with self.subTest(phrase=phrase):
+                self.assertEqual(NS["_embodied_command_for_text"](phrase), expected)
+
+    async def test_relative_turn_moves_body_joint_by_requested_angle(self):
+        calls = []
+
+        def goto_joint_positions(**kwargs):
+            calls.append(kwargs)
+
+        head = np.zeros(7)
+        head[0] = np.deg2rad(30)
+        mini = types.SimpleNamespace(
+            media=FakeMedia(),
+            get_current_joint_positions=lambda: (head, np.zeros(2)),
+            goto_joint_positions=goto_joint_positions,
+        )
+        agent = FakeAgent()
+        agent.state.update(
+            {
+                "mini": mini,
+                "np": np,
+                "create_head_pose": lambda **kwargs: kwargs,
+                "motion_lock": asyncio.Lock(),
+            }
+        )
+
+        result = await NS["_turn"](agent, {"angle": 45, "duration": 0.5})
+
+        self.assertEqual(len(calls), 1)
+        self.assertAlmostEqual(calls[0]["head_joint_positions"][0], np.deg2rad(75))
+        self.assertEqual(result["turn_degrees"], 45)
+        self.assertEqual(agent.state["_facing_body_yaw_deg"], 75)
 
     def test_behind_you_is_a_deterministic_rear_view(self):
         command = NS["_embodied_command_for_text"]("Behind you!")

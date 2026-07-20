@@ -441,7 +441,7 @@ def _build_catalog() -> dict:
                 "webrtcvad-wheels",
             ],
             "input_schema": {
-                "cmd": "str  — wake|sleep|pose|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
+                "cmd": "str  — wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
                 "voice": "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
                 "gain_db": "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
@@ -454,6 +454,7 @@ def _build_catalog() -> dict:
                 "duration": "float — motion duration in seconds (pose/antennas/look_at)",
                 "method": "str  — interpolation: linear|minjerk|ease_in_out|cartoon (default minjerk)",
                 "yaw": "float — head yaw, degrees by default",
+                "angle": "float — cmd=turn relative body angle; left positive, right negative",
                 "pitch": "float — head pitch, degrees by default",
                 "roll": "float — head roll, degrees by default",
                 "x": "float — head x (mm) or look_at world x (m)",

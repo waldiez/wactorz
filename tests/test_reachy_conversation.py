@@ -539,11 +539,20 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             seen["config"] = config
             return capture
 
-        with mock.patch.dict(NS, {"_do": fake_do}):
+        async def fake_guard(_cancel, seconds):
+            seen["guard_s"] = seconds
+            return True
+
+        with mock.patch.dict(
+            NS,
+            {"_do": fake_do, "_wait_for_barge_guard": fake_guard},
+        ):
             session = {"payload": {"barge_in": True}, "cancel_event": None}
             monitor = await NS["_begin_barge_in_monitor"](agent, session, 2.0)
             await NS["_finish_barge_in_monitor"](session, monitor, False)
 
+        self.assertAlmostEqual(seen["guard_s"], 0.45)
+        self.assertAlmostEqual(seen["config"].speech_start_s, 0.21)
         self.assertEqual(seen["config"].mode, 1)
         self.assertEqual(seen["config"].flush_s, 0.0)
         self.assertAlmostEqual(seen["config"].min_rms, 0.006)
@@ -626,13 +635,40 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_reachy_name_is_repaired_without_naming_the_user(self):
-        self.assertEqual(NS["_normalize_reachy_transcript"]("Hey Richie"), "Hey Reachy")
-        self.assertIn("I'm Reachy", NS["_sanitize_reachy_identity_reply"]("I'm Richie"))
-        self.assertEqual(
-            NS["_sanitize_reachy_identity_reply"]("Need anything, Richie?"), "Need anything?"
+        for alias in ("Richie", "Riti", "Ritzy", "Lizzy"):
+            with self.subTest(alias=alias):
+                self.assertEqual(
+                    NS["_normalize_reachy_transcript"](f"Hey {alias}"),
+                    "Hey Reachy",
+                )
+        self.assertIn(
+            "I'm Reachy",
+            NS["_sanitize_reachy_identity_reply"]("I'm Lizzy"),
         )
         self.assertEqual(
-            NS["_normalize_reachy_transcript"]("Turn off the man light"), "Turn off the main light"
+            NS["_sanitize_reachy_identity_reply"](
+                "Of course, Amalia! And it's Lizzy, not Ritzy!",
+                user_text="Hey Ritzy, do you remember me?",
+            ),
+            "Of course, Amalia! I'm Reachy.",
+        )
+        self.assertEqual(
+            NS["_sanitize_reachy_identity_reply"](
+                "Hello Riti!",
+                user_text="Hey Reachy!",
+            ),
+            "Hello!",
+        )
+        self.assertEqual(
+            NS["_sanitize_reachy_identity_reply"](
+                "Nice to meet you, Lizzy!",
+                user_text="My name is Lizzy.",
+            ),
+            "Nice to meet you, Lizzy!",
+        )
+        self.assertEqual(
+            NS["_normalize_reachy_transcript"]("Turn off the man light"),
+            "Turn off the main light",
         )
 
     def test_conversation_stt_auto_detects_language_and_honors_configuration(self):
@@ -641,8 +677,12 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("stt_language", resolved)
         self.assertIn("Reachy", resolved["stt_hotwords"])
 
-        explicit = NS["_conversation_stt_payload"]({"stt_language": "el"})
+        explicit = NS["_conversation_stt_payload"](
+            {"stt_language": "el", "stt_hotwords": "kitchen lamp"}
+        )
         self.assertEqual(explicit["stt_language"], "el")
+        self.assertIn("Reachy", explicit["stt_hotwords"])
+        self.assertIn("kitchen lamp", explicit["stt_hotwords"])
 
     def test_unicode_transcripts_are_meaningful(self):
         self.assertTrue(NS["_conversation_transcript_is_meaningful"]("Άναψε το φως"))

@@ -259,8 +259,9 @@ The complete reply appears in Reachy's dashboard thread before playback begins, 
 a concise voice-friendly version is spoken in sentence-sized chunks. Recognized
 speech stays in the same thread, labelled as an interface-mediated exchange; Main
 remains internal reasoning metadata. Raw service calls and planner details remain
-available in conversation diagnostics as `raw_response`, not ordinary chat. Execution receipts
-such as `ran 4 of 4` are also hidden by default; say `enable debug` to show them and
+available in conversation diagnostics as `raw_response`, not ordinary chat.
+Execution receipts such as `ran 4 of 4` are also hidden by default; say
+`enable debug` to show them and
 `disable debug` to return to the normal user-facing view. Debug always starts off
 after an agent restart. Punctuation-only recognition noise is ignored.
 
@@ -268,9 +269,11 @@ Conversation sessions auto-detect the spoken language, so English and Greek can 
 used without restarting the session. Set `stt_language` (or `REACHY_STT_LANGUAGE`)
 only when you deliberately want to lock recognition to one language. Common names
 and device terms are supplied as hotwords; override them with `stt_hotwords` or
-`REACHY_STT_HOTWORDS`. Common vocative spellings such as "Hey Richie" are corrected
-to "Hey Reachy" before routing; Reachy is always treated as the robot's name, never
-inferred as the user's name. Local Faster Whisper also enables its VAD, disables
+`REACHY_STT_HOTWORDS`. Common mishearings such as "Richie", "Riti", "Ritzy", and
+"Lizzy" are corrected to "Reachy" when used as the robot's name. Main is explicitly
+told that these variants refer to Reachy, never the user, and it addresses the user
+by name only after a clear naming statement or a durable saved fact. Local Faster
+Whisper also enables its VAD, disables
 previous-transcript conditioning, and reports confidence/no-speech scores. Results
 below `stt_min_confidence` (default `0.25`) or above `stt_max_no_speech` (default
 `0.60`) are silently discarded without consuming a turn.
@@ -293,8 +296,11 @@ Barge-in is enabled automatically when Reachy successfully applies the compatibl
 parts of Pollen's conversation tuning to the XVF3800 audio processor. A
 firmware-owned nonlinear-attenuation flag is intentionally left untouched; the
 robot can force its readback even after applying all useful echo/noise settings.
-Sustained speech then stops Reachy's current utterance, retains the interrupting
-audio, and routes it as the next turn. If the audio processor cannot be configured,
+The interruption monitor ignores the first 450 ms of speaker startup and then
+requires about 210 ms of sustained voice onset. This prevents Reachy's own first
+syllable from stopping playback while keeping natural barge-in available. Confirmed
+speech stops the current utterance, retains the interrupting audio, and routes it as
+the next turn. If the audio processor cannot be configured,
 barge-in defaults off so Reachy cannot mistake its own speaker for an interruption.
 An explicit `"barge_in": true` or `false` overrides the automatic choice for that
 session. Say `stop`, `silence`, `quiet`, or `shut up` to cut only the current reply
@@ -317,8 +323,9 @@ Only one conversation can run at a time. By default it listens until a spoken st
 phrase or `conversation_stop`; set a positive `inactivity_timeout` to add an idle
 timeout. Set a positive `max_turns` only when a bounded session is wanted. Optional
 start fields include `silence_s`, `max_utterance_s`, `min_speech_s`, `pre_roll_s`,
-`flush_s`, `vad_mode`, `vad_min_rms`, `cooldown_s`, `barge_in`, `barge_silence_s`,
-`barge_min_speech_s`, `barge_flush_s`, `barge_min_rms`, `voice_friendly`,
+`flush_s`, `vad_mode`, `vad_min_rms`, `cooldown_s`, `barge_in`, `barge_guard_s`,
+`barge_onset_s`, `barge_silence_s`, `barge_min_speech_s`, `barge_flush_s`,
+`barge_min_rms`, `voice_friendly`,
 `state_motion`, `idle_motion`, `stt_language`, `stt_hotwords`,
 `stt_min_confidence`, `stt_max_no_speech`, and `max_turns`. Barge-in follows the
 verified echo-control capability unless explicitly overridden; all physical

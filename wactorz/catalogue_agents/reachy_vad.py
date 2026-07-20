@@ -25,6 +25,7 @@ class VADConfig:
     """Timing and sensitivity settings for one conversation listen turn."""
 
     speech_start_timeout_s: float = 0.0
+    speech_start_s: float = 0.06
     silence_s: float = 0.8
     max_utterance_s: float = 12.0
     min_speech_s: float = 0.18
@@ -92,8 +93,8 @@ def capture_utterance(
 ) -> VoiceCapture:
     """Capture one utterance, ending after post-speech silence or a limit.
 
-    Speech onset requires two voiced frames in a three-frame window. A short
-    pre-roll avoids clipping the first consonant. Before listening, queued
+    Speech onset requires a configurable duration of voiced frames in a slightly
+    wider window. A short pre-roll avoids clipping the first consonant. Before listening, queued
     WebRTC frames are discarded for ``flush_s``.
     """
     try:
@@ -112,6 +113,8 @@ def capture_utterance(
     vad = webrtcvad.Vad(max(0, min(3, int(cfg.mode))))
     frame_samples = samplerate * cfg.frame_ms // 1000
     pre_roll_frames = max(1, math.ceil(cfg.pre_roll_s * 1000 / cfg.frame_ms))
+    speech_start_frames = max(2, math.ceil(cfg.speech_start_s * 1000 / cfg.frame_ms))
+    speech_start_window = max(3, speech_start_frames + 1)
     silence_frames = max(1, math.ceil(cfg.silence_s * 1000 / cfg.frame_ms))
     min_speech_frames = max(1, math.ceil(cfg.min_speech_s * 1000 / cfg.frame_ms))
     max_frames = max(1, math.ceil(cfg.max_utterance_s * 1000 / cfg.frame_ms))
@@ -120,7 +123,7 @@ def capture_utterance(
     flushed = 0
     pending = np.zeros((0,), dtype=np.float32)
     pre_roll: deque[tuple[npt.NDArray[np.float32], bool]] = deque(maxlen=pre_roll_frames)
-    onset: deque[bool] = deque(maxlen=3)
+    onset: deque[bool] = deque(maxlen=speech_start_window)
     captured: list[npt.NDArray[np.float32]] = []
     speech_started = False
     voiced_frames = 0
@@ -167,7 +170,7 @@ def capture_utterance(
                 if not speech_started:
                     pre_roll.append((frame.copy(), voiced))
                     onset.append(voiced)
-                    if len(onset) == onset.maxlen and sum(onset) >= 2:
+                    if len(onset) == onset.maxlen and sum(onset) >= speech_start_frames:
                         speech_started = True
                         captured.extend(item[0] for item in pre_roll)
                         voiced_frames = sum(1 for _, was_voiced in pre_roll if was_voiced)

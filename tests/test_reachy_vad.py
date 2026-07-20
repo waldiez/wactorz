@@ -133,6 +133,49 @@ class ReachyVadTest(unittest.TestCase):
         self.assertLessEqual(result.duration_s, 0.12)
         self.assertGreater(result.duration_s, 0)
 
+    def test_configurable_onset_rejects_a_short_speaker_transient(self):
+        media = Media([stereo(0.3)] * 3 + [stereo(0)] * 4)
+        started = mock.Mock()
+        config = VADConfig(
+            flush_s=0,
+            speech_start_timeout_s=0.02,
+            speech_start_s=0.21,
+            silence_s=0.09,
+            min_speech_s=0.03,
+            pre_roll_s=0,
+        )
+        with mock.patch.dict(sys.modules, {"webrtcvad": self.vad_module}):
+            result = capture_utterance(
+                media,
+                config=config,
+                on_speech_start=started,
+            )
+
+        self.assertEqual(result.stop_reason, "inactivity_timeout")
+        self.assertEqual(result.audio.size, 0)
+        started.assert_not_called()
+
+    def test_configurable_onset_accepts_sustained_human_speech(self):
+        media = Media([stereo(0.3)] * 8 + [stereo(0)] * 4)
+        started = mock.Mock()
+        config = VADConfig(
+            flush_s=0,
+            speech_start_timeout_s=0.2,
+            speech_start_s=0.21,
+            silence_s=0.09,
+            min_speech_s=0.03,
+            pre_roll_s=0,
+        )
+        with mock.patch.dict(sys.modules, {"webrtcvad": self.vad_module}):
+            result = capture_utterance(
+                media,
+                config=config,
+                on_speech_start=started,
+            )
+
+        self.assertGreater(result.audio.size, 0)
+        started.assert_called_once()
+
     def test_speech_start_callback_fires_once_at_confirmed_onset(self):
         media = Media([stereo(0)] + [stereo(0.3)] * 5 + [stereo(0)] * 4)
         started = mock.Mock()

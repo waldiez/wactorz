@@ -167,6 +167,8 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("weather-agent", running_line)
         self.assertNotIn("reachy-mini", running_line)
         self.assertIn("physical robot Reachy", seen["prefix"])
+        self.assertIn("The robot's name is Reachy", seen["prefix"])
+        self.assertIn("never to the user", seen["prefix"])
         self.assertIn("one or two short, natural sentences", seen["prefix"])
         self.assertIn("return interface actions instead", seen["prefix"])
         actor.process_user_input.assert_awaited_once_with("weather?")

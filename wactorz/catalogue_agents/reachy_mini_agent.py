@@ -1438,11 +1438,17 @@ def _pending_look_closer(agent):
     return bool(ts and (_time.time() - ts) < 60)
 
 
+_REACHY_NAME_VARIANTS = (
+    r"(?:reachy|richie|ritchie|richy|reachie|rechi|"
+    r"riti|rity|ritty|ritzi|ritzie|ritzy|lizzy|lizzie|lizi|lissy)"
+)
+
+
 def _normalize_reachy_transcript(text):
     """Repair common STT spellings when the user is addressing Reachy."""
     import re as _re
     value = str(text or "").strip()
-    variants = r"(?:richie|ritchie|richy|reachie|rechi)"
+    variants = _REACHY_NAME_VARIANTS
     value = _re.sub(
         rf"\b(hey|hi|hello|okay|ok|listen)\s*,?\s+{variants}\b",
         lambda match: f"{match.group(1)} Reachy",
@@ -1467,13 +1473,53 @@ def _normalize_reachy_transcript(text):
     return value
 
 
-def _sanitize_reachy_identity_reply(text):
+def _explicit_user_name(text):
+    """Return a name only from an unmistakable user naming statement."""
+    import re as _re
+    match = _re.search(
+        r"\b(?:my name is|please call me|call me)\s+([^\W\d_][\w'’-]{0,39})\b",
+        str(text or ""),
+        flags=_re.IGNORECASE | _re.UNICODE,
+    )
+    return match.group(1).casefold() if match else None
+
+
+def _sanitize_reachy_identity_reply(text, user_text=""):
     """Keep the robot named Reachy and never mistake that name for the user."""
     import re as _re
     value = str(text or "")
-    variants = r"(?:Richie|Ritchie|Richy|Reachie|Rechi)"
-    value = _re.sub(rf"\bI(?:'m| am)\s+{variants}\b", "I'm Reachy", value)
-    value = _re.sub(rf",\s*{variants}(?=[?!.])", "", value)
+    variants = _REACHY_NAME_VARIANTS
+    value = _re.sub(
+        rf"\b(?:and\s+)?it(?:'s| is)\s+{variants}\s*,?\s*not\s+{variants}\b[.!]?",
+        "I'm Reachy.",
+        value,
+        flags=_re.IGNORECASE,
+    )
+    value = _re.sub(
+        rf"\b(?:I(?:'m| am)|my name is)\s+{variants}\b",
+        "I'm Reachy",
+        value,
+        flags=_re.IGNORECASE,
+    )
+
+    explicit_name = _explicit_user_name(user_text)
+    explicit_is_alias = bool(
+        explicit_name
+        and _re.fullmatch(variants, explicit_name, flags=_re.IGNORECASE)
+    )
+    if not explicit_is_alias:
+        value = _re.sub(
+            rf"\b(hey|hi|hello)\s*,?\s+{variants}\b",
+            lambda match: match.group(1),
+            value,
+            flags=_re.IGNORECASE,
+        )
+        value = _re.sub(
+            rf",\s*{variants}(?=[?!.])",
+            "",
+            value,
+            flags=_re.IGNORECASE,
+        )
     return value
 
 
@@ -1526,7 +1572,7 @@ def _voice_workflow_reply(value):
 def _voice_friendly_reply(text, limit=220, user_text=""):
     """Turn a visual dashboard answer into natural human-only spoken text."""
     import re as _re
-    value = _sanitize_reachy_identity_reply(text).strip()
+    value = _sanitize_reachy_identity_reply(text, user_text=user_text).strip()
     if not value:
         return ""
     workflow = _voice_workflow_reply(value)
@@ -1688,7 +1734,7 @@ async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
     elif not reply:
         reply = "Okay."
 
-    reply = _sanitize_reachy_identity_reply(reply)
+    reply = _sanitize_reachy_identity_reply(reply, user_text=text)
     # Voice it through the robot when connected; the text is returned either way
     # (and is the only channel when the robot is offline).
     spoke = False
@@ -2577,6 +2623,17 @@ def _edge_tts_communicate(edge_tts, text, voice):
         return edge_tts.Communicate(text, voice)
 
 
+async def _wait_for_barge_guard(cancel, seconds):
+    """Ignore the robot speaker's startup transient without delaying playback."""
+    deadline = asyncio.get_running_loop().time() + max(0.0, float(seconds))
+    while not cancel.is_set():
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return True
+        await asyncio.sleep(min(0.05, remaining))
+    return False
+
+
 async def _begin_barge_in_monitor(agent, session, speech_seconds):
     """Listen during playback and signal as soon as sustained user speech starts."""
     if not session or not session.get("payload", {}).get("barge_in", False):
@@ -2591,8 +2648,12 @@ async def _begin_barge_in_monitor(agent, session, speech_seconds):
     onset = _threading.Event()
     cancel = _threading.Event()
     payload = session.get("payload", {})
+    guard_s = max(0.0, min(2.0, float(payload.get("barge_guard_s", 0.45))))
     config = VADConfig(
         speech_start_timeout_s=max(0.5, float(speech_seconds or 0) + 1.0),
+        speech_start_s=max(
+            0.06, min(1.0, float(payload.get("barge_onset_s", 0.21)))
+        ),
         silence_s=max(0.3, min(1.5, float(payload.get("barge_silence_s", 0.65)))),
         max_utterance_s=max(1.0, min(30.0, float(
             payload.get("max_utterance_s", 12.0)))),
@@ -2604,9 +2665,11 @@ async def _begin_barge_in_monitor(agent, session, speech_seconds):
         min_rms=max(0.0, min(1.0, float(
             payload.get("barge_min_rms", 0.006)))),
     )
-    task = asyncio.create_task(
-        _do(capture_utterance, media, cancel, config, onset.set)
-    )
+    async def _capture_after_guard():
+        await _wait_for_barge_guard(cancel, guard_s)
+        return await _do(capture_utterance, media, cancel, config, onset.set)
+
+    task = asyncio.create_task(_capture_after_guard())
     session["barge_task"] = task
     session["barge_cancel_event"] = cancel
     return task, onset, cancel
@@ -3834,10 +3897,14 @@ async def _ask_voice(agent, payload):
     transcription_started = _time.time()
     try:
         from wactorz.catalogue_agents.reachy_stt import transcribe_wav
-        transcription = await transcribe_wav(wav_bytes, payload)
+        transcription = await transcribe_wav(
+            wav_bytes, _conversation_stt_payload(payload)
+        )
         fields["transcription_duration_s"] = round(
             _time.time() - transcription_started, 3)
-        fields["transcript"] = str(transcription.text or "").strip()
+        fields["transcript"] = _normalize_reachy_transcript(
+            str(transcription.text or "").strip()
+        )
         fields["stt_backend"] = transcription.backend
         fields["stt_model"] = transcription.model
     except Exception as e:
@@ -3928,9 +3995,22 @@ def _conversation_stt_payload(payload):
     import os as _os
 
     resolved = dict(payload or {})
-    if not resolved.get("stt_hotwords") and not _os.environ.get("REACHY_STT_HOTWORDS"):
+    reachy_hotwords = "Reachy, Reachy Mini, hey Reachy"
+    configured_hotwords = str(
+        resolved.get("stt_hotwords")
+        or _os.environ.get("REACHY_STT_HOTWORDS")
+        or ""
+    ).strip()
+    if configured_hotwords:
         resolved["stt_hotwords"] = (
-            "Reachy, Wactorz, Home Assistant, main light, light strip, Tapo"
+            configured_hotwords
+            if "reachy" in configured_hotwords.casefold()
+            else f"{reachy_hotwords}, {configured_hotwords}"
+        )
+    else:
+        resolved["stt_hotwords"] = (
+            f"{reachy_hotwords}, Wactorz, Home Assistant, "
+            "main light, light strip, Tapo"
         )
     fallback = (
         resolved.get("stt_fallback_language")

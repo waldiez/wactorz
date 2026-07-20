@@ -417,6 +417,46 @@ class DescribeOrientTest(unittest.TestCase):
         )
         self.assertEqual(self.poses, [])
 
+    def test_rear_facing_description_preserves_body_orientation(self):
+        agent = self._agent()
+        agent.state["_facing_body_yaw_deg"] = 155.0
+
+        _run(
+            NS["_dispatch"](
+                agent, "describe", {"say": False, "look_duration": 0}, return_result=True
+            )
+        )
+
+        self.assertEqual(self.poses[0]["yaw"], 155.0)
+        self.assertEqual(self.poses[0]["body_yaw"], 155.0)
+
+
+class LookBehindTest(unittest.TestCase):
+    def test_turns_captures_without_recentering_and_stays_rear_facing(self):
+        agent = FakeAgent(FakeMedia(frame=np.zeros((16, 16, 3), dtype=np.uint8)))
+        current = mock.AsyncMock(return_value=0.0)
+        face = mock.AsyncMock(return_value={"body_yaw": 155.0})
+        describe = mock.AsyncMock(
+            return_value={"description": "Books.", "result": "Books.", "said": "Books."}
+        )
+
+        with mock.patch.dict(
+            NS,
+            {
+                "_current_body_yaw_deg": current,
+                "_face_body": face,
+                "_describe": describe,
+            },
+        ):
+            result = _run(NS["_look_behind"](agent, {}))
+
+        face.assert_awaited_once_with(agent, 155.0, {})
+        describe_payload = describe.await_args.args[1]
+        self.assertFalse(describe_payload["orient"])
+        self.assertEqual(describe_payload["question"], "Describe what is behind you.")
+        self.assertEqual(result["facing"], "rear")
+        self.assertEqual(result["body_yaw"], 155.0)
+
 
 class LookAroundTest(unittest.TestCase):
     """look_around sweeps a few angles and describes the whole room in one call."""

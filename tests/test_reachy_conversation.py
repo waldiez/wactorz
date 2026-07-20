@@ -612,6 +612,94 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(command, {"cmd": "gesture", "name": "turn_around"})
 
+    def test_behind_you_is_a_deterministic_rear_view(self):
+        command = NS["_embodied_command_for_text"]("Behind you!")
+
+        self.assertEqual(
+            command,
+            {"cmd": "look_behind", "question": "What is behind you?"},
+        )
+        compound = NS["_embodied_command_for_text"]("Turn around and tell me what you see")
+        self.assertEqual(compound["cmd"], "look_behind")
+
+    async def test_debug_commands_toggle_execution_receipts(self):
+        agent = FakeAgent()
+        self.assertEqual(
+            NS["_embodied_command_for_text"]("enable debug"),
+            {"cmd": "debug", "enabled": True},
+        )
+
+        enabled = await NS["handle_task"](agent, {"text": "enable debug"})
+        disabled = await NS["handle_task"](agent, {"text": "disable debug"})
+
+        self.assertTrue(enabled["debug"])
+        self.assertEqual(enabled["result"], "Debug details enabled.")
+        self.assertFalse(disabled["debug"])
+        self.assertEqual(disabled["result"], "Debug details disabled.")
+        self.assertFalse(agent.state["debug"])
+
+    async def test_action_receipt_is_hidden_until_debug_is_enabled(self):
+        async def planner(_agent, _text):
+            return [{"cmd": "wake"}, {"cmd": "describe"}]
+
+        async def dispatch(_agent, cmd, _payload, return_result=False):
+            if cmd == "describe":
+                return {
+                    "ok": True,
+                    "cmd": cmd,
+                    "said": "There are books behind me.",
+                    "result": "There are books behind me.",
+                }
+            return {"ok": True, "cmd": cmd, "result": "awake"}
+
+        agent = FakeAgent()
+        with mock.patch.dict(NS, {"_nl_to_commands": planner, "_dispatch": dispatch}):
+            quiet = await NS["handle_task"](agent, {"text": "perform a visual inspection"})
+            agent.state["debug"] = True
+            verbose = await NS["handle_task"](agent, {"text": "perform a visual inspection"})
+            await asyncio.sleep(0.12)
+
+        self.assertEqual(quiet["result"], "There are books behind me.")
+        self.assertNotIn("ran", quiet["result"])
+        self.assertIn("ran 2 of 2", verbose["result"])
+        self.assertEqual(agent.notifications, ["There are books behind me."])
+
+    async def test_voice_behind_you_speaks_the_rear_description_once(self):
+        agent = FakeAgent()
+        dispatch = mock.AsyncMock(
+            return_value={
+                "ok": True,
+                "cmd": "look_behind",
+                "result": "There are books behind me.",
+            }
+        )
+        speak = mock.AsyncMock(
+            return_value={
+                "spoke": True,
+                "interrupted": False,
+                "spoken_result": "There are books behind me.",
+            }
+        )
+        before_speak = mock.AsyncMock()
+        command = {"cmd": "look_behind", "question": "What is behind you?"}
+
+        with mock.patch.dict(NS, {"_dispatch": dispatch, "_speak_reply": speak}):
+            result = await NS["_conversation_embodied_bridge"](
+                agent,
+                "Behind you!",
+                command,
+                "task-behind",
+                before_speak,
+                {},
+            )
+
+        dispatched = dispatch.await_args.args[2]
+        self.assertFalse(dispatched["say"])
+        before_speak.assert_awaited_once_with("There are books behind me.")
+        self.assertEqual(speak.await_args.args[1], "There are books behind me.")
+        self.assertTrue(result["physical"])
+        self.assertEqual(result["result"], "There are books behind me.")
+
     async def test_direct_dance_request_dispatches_a_real_gesture(self):
         agent, seen = FakeAgent(), []
 
@@ -646,9 +734,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
 
         payload = agent.send_to.await_args.args[1]
         self.assertEqual(payload["_interface_context"]["display_name"], "Reachy")
-        self.assertIn(
-            "turn_around", payload["_interface_context"]["capabilities"]["gesture"]
-        )
+        self.assertIn("turn_around", payload["_interface_context"]["capabilities"]["gesture"])
         dispatch.assert_awaited_once_with(
             agent,
             "gesture",
@@ -802,6 +888,27 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         required = {"head", "antennas", "body_yaw", "duration"}
         self.assertTrue(all(set(call) == required for call in calls))
 
+    async def test_head_pose_does_not_reset_persistent_body_yaw(self):
+        agent, calls = FakeAgent(), []
+
+        def goto_target(**kwargs):
+            calls.append(kwargs)
+
+        agent.state.update(
+            {
+                "mini": types.SimpleNamespace(media=FakeMedia(), goto_target=goto_target),
+                "np": np,
+                "create_head_pose": lambda **kwargs: kwargs,
+                "motion_lock": asyncio.Lock(),
+                "_facing_body_yaw_deg": 155.0,
+            }
+        )
+
+        await NS["_pose"](agent, {"yaw": 155, "duration": 0.1})
+
+        self.assertIsNone(calls[0]["body_yaw"])
+        self.assertEqual(agent.state["_facing_body_yaw_deg"], 155.0)
+
     async def test_turn_around_choreography_uses_bounded_body_yaw(self):
         agent, calls = FakeAgent(), []
 
@@ -818,15 +925,14 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with mock.patch.object(NS["asyncio"], "sleep", mock.AsyncMock()):
-            result = await NS["_gesture"](
-                agent, {"name": "turn_around", "duration": 0.12}
-            )
+            result = await NS["_gesture"](agent, {"name": "turn_around", "duration": 0.12})
 
         self.assertEqual(result["gesture"], "turn_around")
-        self.assertEqual(len(calls), 4)
-        yaws = [abs(float(call["body_yaw"])) for call in calls]
-        self.assertLessEqual(max(yaws), float(np.deg2rad(42)) + 1e-9)
-        self.assertEqual(yaws[-1], 0.0)
+        self.assertEqual(result["facing"], "rear")
+        self.assertEqual(len(calls), 1)
+        self.assertAlmostEqual(float(calls[0]["body_yaw"]), float(np.deg2rad(155)))
+        self.assertEqual(calls[0]["head"]["yaw"], 155.0)
+        self.assertEqual(agent.state["_facing_body_yaw_deg"], 155.0)
 
 
 if __name__ == "__main__":

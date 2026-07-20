@@ -469,6 +469,10 @@ async def setup(agent):
     agent.state["busy"] = False
     agent.state["awake"] = False
     agent.state["last_cmd"] = None
+    # Execution receipts are internal by default. Users can opt in from chat
+    # with "enable debug"; restarts always return to the quiet UX.
+    agent.state["debug"] = False
+    agent.state["_facing_body_yaw_deg"] = 0.0
     # Speech interrupt state — a 'shutup'/'stop' sets stop_speaking to cut a say.
     agent.state["stop_speaking"] = False
     agent.state["_speaking"] = False
@@ -514,8 +518,9 @@ async def setup(agent):
     for verb in ("wake", "sleep", "reconnect", "pose", "antennas", "gesture", "look_at",
                  "look_pixel", "emotion", "motors", "diag", "set_pose", "bind",
                  "unbind", "list_emotions", "stop", "shutup", "say", "volume",
-                 "camera", "describe", "look_around", "listen", "doa", "ask_voice",
-                 "conversation_start", "conversation_stop"):
+                 "camera", "describe", "look_behind", "look_around", "listen", "doa",
+                 "ask_voice", "conversation_start", "conversation_stop", "debug",
+                 "face_forward"):
         def _make_cb(v):
             async def cb(payload):
                 p = dict(payload or {})
@@ -580,7 +585,9 @@ Robot commands:
   {"cmd":"sleep"}
   {"cmd":"stop"}
   {"cmd":"pose","yaw":<deg>,"pitch":<deg>,"roll":<deg>,"duration":<sec>}
-  {"cmd":"gesture","name":"dance|nod|shake|wiggle|curious"}
+  {"cmd":"gesture","name":"dance|nod|shake|wiggle|curious|turn_around"}
+  {"cmd":"face_forward"}
+  {"cmd":"look_behind"}                    - turn toward the rear, capture there, and stay facing rearward
   {"cmd":"antennas","left":<deg>,"right":<deg>,"duration":<sec>}
   {"cmd":"look_at","x":<m>,"y":<m>,"z":<m>,"duration":<sec>}
   {"cmd":"camera"}                         ← capture one still frame from the robot camera (returns an image)
@@ -670,6 +677,9 @@ Decision rules — CRITICAL:
   which pans across several angles. NEVER emit camera+say for vision: camera only
   captures a raw frame, and say would invent a description; describe/look_around
   actually look and speak.
+- REAR VIEW: "behind you", "look behind you", or "turn around and describe it"
+  becomes one {"cmd":"look_behind"}. Never build pose(yaw=180) + gesture + describe:
+  later steps recenter the view and photograph the user instead of the rear scene.
 - If the request is not a robot, camera, microphone, explicit speech, or Home
   Assistant action, return an empty JSON array: []. General questions about the
   time, weather, calendar, news, knowledge, or other Wactorz capabilities are
@@ -931,6 +941,11 @@ def _embodied_command_for_text(text):
     import re as _re
 
     low = str(text or "").lower()
+    normalized = low.strip().rstrip("!.?")
+    if normalized in ("enable debug", "debug on", "show debug", "show action sequences"):
+        return {"cmd": "debug", "enabled": True}
+    if normalized in ("disable debug", "debug off", "hide debug", "hide action sequences"):
+        return {"cmd": "debug", "enabled": False}
     greek_voice = any(stem in low for stem in ("φων", "έντασ", "τόνο"))
     greek_softer = any(
         stem in low for stem in ("χαμήλω", "χαμηλώ", "πιο σιγά", "σιγανά")
@@ -957,6 +972,18 @@ def _embodied_command_for_text(text):
         delta = 15 if _re.search(r"\b(a little|a bit|slightly)\b", low) else 25
         return {"cmd": "volume", "delta": delta}
 
+    if _re.search(
+        r"\b(behind you|look behind(?: you)?|what(?:'s| is) behind you|check behind you)\b",
+        low,
+    ):
+        return {"cmd": "look_behind", "question": "What is behind you?"}
+    if (
+        _re.search(r"\b(turn around|face (?:the )?other way)\b", low)
+        and _re.search(r"\b(describe|what|tell me|look|see)\b", low)
+    ):
+        return {"cmd": "look_behind", "question": str(text).strip()}
+    if _re.search(r"\b(face me|face forward|turn back|turn back around|look at me)\b", low):
+        return {"cmd": "face_forward"}
     if _re.search(r"\b(turn around|face (?:the )?other way|spin around)\b", low):
         return {"cmd": "gesture", "name": "turn_around"}
     if _re.search(r"\b(dance|boogie|robot shuffle)\b", low):
@@ -1200,23 +1227,39 @@ async def handle_task(agent, payload):
                         else:
                             summary_parts.append(label)
 
-                    successes = sum(1 for s in steps if not (isinstance(s, dict) and s.get("ok") is False))
-                    # A single successful command's own result is more useful in
-                    # chat than an execution receipt. Keep the receipt for say /
-                    # describe because their spoken text is delivered separately,
-                    # and for multi-step plans where the compact summary matters.
+                    successes = sum(
+                        1
+                        for step in steps
+                        if not (isinstance(step, dict) and step.get("ok") is False)
+                    )
                     single_result = None
                     if len(cmds) == 1 and len(steps) == 1 and isinstance(steps[0], dict):
-                        only_cmd = cmds[0].get("cmd") if isinstance(cmds[0], dict) else None
-                        if (only_cmd not in ("say", "describe")
-                                and steps[0].get("ok") is not False
-                                and steps[0].get("result")):
+                        if steps[0].get("ok") is not False and steps[0].get("result"):
                             single_result = str(steps[0]["result"])
-                    result_msg = (single_result
-                                  or f"ran {successes} of {len(cmds)}: [{' -> '.join(summary_parts)}]")
+                    receipt = f"ran {successes} of {len(cmds)}: [{' -> '.join(summary_parts)}]"
                     if skipped:
-                        result_msg += f"  (skipped {len(skipped)}: {link_reason})"
-                    _queue_spoken_replies(agent, spoken_replies)
+                        receipt += f"  (skipped {len(skipped)}: {link_reason})"
+
+                    if agent.state.get("debug"):
+                        result_msg = receipt if len(cmds) > 1 else (single_result or receipt)
+                        _queue_spoken_replies(agent, spoken_replies)
+                    elif failures:
+                        result_msg = f"I couldn't complete that: {failures[0]['error']}."
+                    elif skipped:
+                        result_msg = f"I couldn't complete that: {link_reason}."
+                    elif spoken_replies:
+                        # The final human-facing output is the useful answer. Keep
+                        # the execution plan in structured fields, not chat bubbles.
+                        result_msg = "\n\n".join(spoken_replies)
+                    elif single_result:
+                        result_msg = single_result
+                    else:
+                        natural_results = [
+                            str(step.get("result")).strip()
+                            for step in steps
+                            if isinstance(step, dict) and step.get("result")
+                        ]
+                        result_msg = natural_results[-1] if natural_results else "Done."
                     return {
                         "ok": not failures and not skipped,
                         "cmd": "nl",
@@ -1233,7 +1276,9 @@ async def handle_task(agent, payload):
     # HA-only commands ("ha") still work — that's the whole point of the
     # "stay alive in disconnected mode" design. "reconnect" is exempt for the
     # obvious reason: it is the command you reach for BECAUSE we're offline.
-    if cmd not in ("ha", "list_emotions", "conversation_stop", "reconnect", None):
+    if cmd not in (
+        "ha", "list_emotions", "conversation_stop", "reconnect", "debug", None
+    ):
         ok, reason = _is_connected(agent)
         if not ok:
             return {"ok": False, "error": reason, "result": reason,
@@ -1241,8 +1286,11 @@ async def handle_task(agent, payload):
     result = await _dispatch(agent, cmd, payload, return_result=True)
     if isinstance(result, dict):
         if cmd in ("say", "describe") and result.get("said"):
-            _queue_spoken_replies(agent, [str(result["said"])])
-            result["result"] = f"ran 1 of 1: [{cmd}]"
+            if agent.state.get("debug"):
+                _queue_spoken_replies(agent, [str(result["said"])])
+                result["result"] = f"ran 1 of 1: [{cmd}]"
+            else:
+                result["result"] = str(result["said"])
         result.setdefault("_task_id", _tid)
         result.setdefault("task", _tid)
     return result
@@ -1722,6 +1770,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "look_pixel":    result = await _look_pixel(agent, payload)
         elif cmd == "camera":        result = await _camera(agent, payload)
         elif cmd == "describe":      result = await _describe(agent, payload)
+        elif cmd == "look_behind":   result = await _look_behind(agent, payload)
         elif cmd == "look_around":   result = await _look_around(agent, payload)
         elif cmd == "listen":        result = await _listen(agent, payload)
         elif cmd == "ask_voice":     result = await _ask_voice(agent, payload)
@@ -1739,6 +1788,8 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "shutup":        result = await _shutup(agent, payload)
         elif cmd == "say":           result = await _say(agent, payload)
         elif cmd == "volume":        result = await _volume(agent, payload)
+        elif cmd == "debug":         result = await _debug(agent, payload)
+        elif cmd == "face_forward":  result = await _face_forward(agent, payload)
         elif cmd == "ha":            result = await _ha(agent, payload)
         else:
             raise ValueError(f"unknown cmd: {cmd}")
@@ -1961,7 +2012,13 @@ async def _pose(agent, payload):
             kw["antennas"] = np.array(a, dtype=float)
     if "body_yaw" in payload:
         by = float(payload["body_yaw"])
-        kw["body_yaw"] = float(np.deg2rad(by)) if payload.get("body_yaw_degrees", True) else by
+        by_degrees = by if payload.get("body_yaw_degrees", True) else float(np.rad2deg(by))
+        kw["body_yaw"] = float(np.deg2rad(by_degrees))
+    else:
+        # Reachy Mini's goto_target defaults body_yaw to 0.0. Explicit None is
+        # required to preserve a persistent rear-facing orientation.
+        by_degrees = None
+        kw["body_yaw"] = None
     method = payload.get("method")
     if method:
         kw["method"] = str(method)
@@ -1970,6 +2027,8 @@ async def _pose(agent, payload):
         agent.state["busy"] = True
         try:
             await _do(mini.goto_target, **kw)
+            if by_degrees is not None:
+                agent.state["_facing_body_yaw_deg"] = by_degrees
         finally:
             agent.state["busy"] = False
     return {}
@@ -2042,10 +2101,83 @@ async def _look_pixel(agent, payload):
 
 
 
+async def _current_body_yaw_deg(agent):
+    """Read body yaw from the robot, falling back to the last commanded value."""
+    fallback = float(agent.state.get("_facing_body_yaw_deg", 0.0))
+    mini = agent.state.get("mini")
+    getter = getattr(mini, "get_current_joint_positions", None) if mini else None
+    if not callable(getter):
+        return fallback
+    try:
+        positions = await _do(getter)
+        head = positions[0] if isinstance(positions, (tuple, list)) and positions else None
+        if isinstance(head, (tuple, list)) and head:
+            value = float(agent.state["np"].rad2deg(float(head[0])))
+            agent.state["_facing_body_yaw_deg"] = value
+            return value
+    except Exception as e:
+        await agent.log(f"could not read body yaw ({e}); using last target", level="warning")
+    return fallback
+
+
+async def _face_body(agent, target_degrees, payload=None):
+    """Face an absolute body direction and leave Reachy there."""
+    payload = payload or {}
+    target = max(-155.0, min(155.0, float(target_degrees)))
+    duration = max(0.5, min(3.0, float(payload.get("duration", 1.2))))
+    mini = agent.state["mini"]
+    np = agent.state["np"]
+    create_head_pose = agent.state["create_head_pose"]
+    await _ensure_motors_enabled(agent)
+    async with agent.state["motion_lock"]:
+        agent.state["busy"] = True
+        try:
+            await _do(
+                mini.goto_target,
+                head=create_head_pose(yaw=target, degrees=True),
+                body_yaw=float(np.deg2rad(target)),
+                duration=duration,
+            )
+            await asyncio.sleep(duration + 0.12)
+            agent.state["_facing_body_yaw_deg"] = target
+        finally:
+            agent.state["busy"] = False
+    return {"body_yaw": target, "facing": "rear" if abs(target) >= 80 else "forward"}
+
+
+async def _turn_around(agent, payload=None):
+    """Toggle between forward and a persistent, mechanically safe rear view."""
+    current = await _current_body_yaw_deg(agent)
+    if abs(current) >= 80:
+        target = 0.0
+    else:
+        target = -155.0 if current < 0 else 155.0
+    result = await _face_body(agent, target, payload)
+    result.update({"gesture": "turn_around", "result": "I turned around."})
+    return result
+
+
+async def _face_forward(agent, payload=None):
+    result = await _face_body(agent, 0.0, payload)
+    result["result"] = "I'm facing you again."
+    return result
+
+
+async def _debug(agent, payload):
+    enabled = bool(payload.get("enabled", payload.get("on", True)))
+    agent.state["debug"] = enabled
+    return {
+        "debug": enabled,
+        "result": "Debug details enabled." if enabled else "Debug details disabled.",
+    }
+
+
 async def _gesture(agent, payload):
     """Play a small safe physical gesture with every pose field explicit."""
     name = str(payload.get("name") or payload.get("gesture") or "").lower().strip()
     duration = max(0.12, min(0.8, float(payload.get("duration", 0.3))))
+    if name == "turn_around":
+        return await _turn_around(agent, payload)
     gestures = {
         "dance": [
             (-10, -3, -8, 28, 52, -12),
@@ -2078,12 +2210,6 @@ async def _gesture(agent, payload):
             (8, -5, 12, 38, 55, 4),
             (0, 0, 0, 12, 12, 0),
         ],
-        "turn_around": [
-            (24, 0, 0, 18, 18, 42),
-            (-24, 0, 0, 18, 18, -42),
-            (24, 0, 0, 18, 18, 42),
-            (0, 0, 0, 0, 0, 0),
-        ],
     }
     steps = gestures.get(name)
     if not steps:
@@ -2108,6 +2234,7 @@ async def _gesture(agent, payload):
                     duration=duration,
                 )
                 await asyncio.sleep(duration + 0.04)
+                agent.state["_facing_body_yaw_deg"] = float(body_yaw)
         finally:
             agent.state["busy"] = False
     labels = {
@@ -2116,7 +2243,6 @@ async def _gesture(agent, payload):
         "shake": "I shook my head.",
         "wiggle": "I wiggled my antennas.",
         "curious": "Curious mode.",
-        "turn_around": "I turned around.",
     }
     return {"gesture": name, "result": labels[name]}
 
@@ -2210,7 +2336,7 @@ async def _stop(agent):
         return {"stopped": True}
     # Fallback: short re-target to current pose with very short duration.
     create_head_pose = agent.state["create_head_pose"]
-    await _do(mini.goto_target, head=create_head_pose(), duration=0.1)
+    await _do(mini.goto_target, head=create_head_pose(), body_yaw=None, duration=0.1)
     return {"stopped": True, "fallback": True}
 
 
@@ -3114,10 +3240,19 @@ async def _orient_head(agent, payload, q_low):
     ok, _reason = _is_connected(agent)
     if not ok:
         return
-    pitch, yaw = _describe_aim(payload, q_low)
+    pitch, relative_yaw = _describe_aim(payload, q_low)
     dur = float(payload.get("look_duration", 0.5))
+    body_yaw = await _current_body_yaw_deg(agent)
     try:
-        await _pose(agent, {"pitch": pitch, "yaw": yaw, "duration": dur})
+        await _pose(
+            agent,
+            {
+                "pitch": pitch,
+                "yaw": body_yaw + relative_yaw,
+                "body_yaw": body_yaw,
+                "duration": dur,
+            },
+        )
         # goto_target is fire-and-forget, so wait out the move + a short settle
         # BEFORE the caller captures — otherwise the frame is blurred mid-turn.
         await asyncio.sleep(dur + 0.25)
@@ -3211,6 +3346,26 @@ async def _describe(agent, payload):
         except Exception as e:
             await agent.log(f"describe: speaking failed ({e}); returning text only",
                             level="warning")
+    return result
+
+
+async def _look_behind(agent, payload):
+    """Turn toward the rear, capture that view, and keep the rear orientation."""
+    current = await _current_body_yaw_deg(agent)
+    if abs(current) < 80:
+        target = -155.0 if current < 0 else 155.0
+    else:
+        target = current
+    await _face_body(agent, target, payload)
+
+    describe_payload = dict(payload)
+    describe_payload["orient"] = False
+    describe_payload["question"] = str(
+        payload.get("question") or "Describe what is behind you."
+    )
+    result = await _describe(agent, describe_payload)
+    result["facing"] = "rear"
+    result["body_yaw"] = target
     return result
 
 
@@ -3844,7 +3999,13 @@ async def _conversation_embodied_bridge(
     agent, transcript, command, task_id, before_speak, session
 ):
     """Execute an obvious local request, then acknowledge it naturally."""
-    action = await _dispatch(agent, command["cmd"], command, return_result=True)
+    local_command = dict(command)
+    if command["cmd"] in ("describe", "look_behind", "look_around"):
+        # Conversation mode owns TTS so visual answers are spoken exactly once.
+        local_command["say"] = False
+    action = await _dispatch(
+        agent, command["cmd"], local_command, return_result=True
+    )
     name = command.get("name")
     if action and action.get("ok"):
         if command["cmd"] == "volume":
@@ -3858,13 +4019,16 @@ async def _conversation_embodied_bridge(
                 spoken = "Okay, a little quieter." if quieter else "Okay, a little louder."
         else:
             reply = str(action.get("result") or "Done.")
-            spoken = {
-                "dance": "Ta-da!",
-                "nod": "Mm-hm.",
-                "shake": "Nope.",
-                "wiggle": "How's that?",
-                "curious": "Hmm?",
-            }.get(name, "Okay.")
+            if command["cmd"] in ("describe", "look_behind", "look_around", "debug", "face_forward"):
+                spoken = reply
+            else:
+                spoken = {
+                    "dance": "Ta-da!",
+                    "nod": "Mm-hm.",
+                    "shake": "Nope.",
+                    "wiggle": "How's that?",
+                    "curious": "Hmm?",
+                }.get(name, "Okay.")
     else:
         if command["cmd"] == "volume":
             reply = "I couldn't change my speaker volume right now."
@@ -3887,7 +4051,7 @@ async def _conversation_embodied_bridge(
     return {
         "ok": bool(action and action.get("ok")),
         "cmd": command["cmd"],
-        "physical": command["cmd"] == "gesture",
+        "physical": command["cmd"] in ("gesture", "look_behind", "face_forward"),
         "spoke": speech["spoke"],
         "interrupted": speech["interrupted"],
         "spoken_result": speech["spoken_result"],

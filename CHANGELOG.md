@@ -60,6 +60,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Reachy action traces and rear-view behavior now match conversational UX** -
+  Internal `ran N of N` execution receipts are hidden by default and can be toggled
+  with natural `enable debug` / `disable debug` commands. `turn around` now leaves
+  the body at a persistent, mechanically safe rear orientation, while `behind you`
+  turns first, captures without recentering, describes the rear camera view once,
+  and stays facing it. `face me` and `turn back` restore the forward orientation.
+
 - **Reachy speech chunks no longer replace one another mid-reply** - Reachy's
   Edge TTS integration now requests word timing explicitly, accepts sentence timing,
   and falls back to a conservative text-duration estimate when an older provider

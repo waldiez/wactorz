@@ -259,8 +259,10 @@ Replies are converted to concise, voice-friendly text and spoken in sentence-siz
 chunks. Recognized speech and the concise reply stay in Reachy's dashboard thread,
 labelled as an interface-mediated exchange; Main remains internal reasoning metadata.
 Raw service calls and planner details remain available in
-conversation diagnostics as `raw_response`, not ordinary chat. Punctuation-only
-recognition noise is ignored.
+conversation diagnostics as `raw_response`, not ordinary chat. Execution receipts
+such as `ran 4 of 4` are also hidden by default; say `enable debug` to show them and
+`disable debug` to return to the normal user-facing view. Debug always starts off
+after an agent restart. Punctuation-only recognition noise is ignored.
 
 Conversation sessions auto-detect the spoken language, so English and Greek can be
 used without restarting the session. Set `stt_language` (or `REACHY_STT_LANGUAGE`)
@@ -353,10 +355,13 @@ For direct control, send a dict with `cmd`:
 | `wake`, `sleep`, `stop` | Basic robot state |
 | `pose` | Head yaw, pitch, roll, x/y/z |
 | `antennas` | Left and right antenna angles |
-| `gesture` | Physical `dance`, `turn_around`, `nod`, `shake`, `wiggle`, or `curious` choreography |
+| `gesture` | Physical `dance`, persistent `turn_around`, `nod`, `shake`, `wiggle`, or `curious` choreography |
+| `face_forward` | Return from a rear-facing orientation to the user |
 | `look_at`, `look_pixel` | Gaze target |
 | `camera` | Capture one still frame from the onboard camera (base64 JPEG/PNG) |
 | `describe` | Look through the camera and speak a description of the scene (vision LLM) |
+| `look_behind` | Turn rearward, describe that camera view, and remain rear-facing |
+| `debug` | Opt in or out of action-sequence receipts (`enabled: true/false`) |
 | `listen` | Record a short mic-array clip (base64 WAV) with direction of arrival |
 | `ask_voice` | Push-to-talk WAV → STT → main Wactorz route → spoken answer |
 | `conversation_start`, `conversation_stop` | Opt-in VAD multi-turn Wactorz interface |
@@ -422,7 +427,10 @@ the camera and microphone (no Hugging Face app running on the robot).
 `describe` captures a frame, sends it to the vision-capable LLM, and **speaks the
 real description** — unlike `camera` + `say`, which would only capture a frame and
 then make up a line. Plain English "what do you see?", "what's in front of you?",
-"describe the scene", and "look around" all route here.
+"describe the scene", and "look around" all route here. "Behind you" and "look
+behind you" use the dedicated `look_behind` path: Reachy turns to a mechanically safe
+155-degree rear view, captures without recentering, and stays there. Say "face me" or
+"turn back" to return forward.
 
 ```json
 {"cmd": "describe"}

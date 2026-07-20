@@ -70,6 +70,10 @@ docs      = [
 # The pre-built static/docs/ is committed to the repo and bundled into the wheel as-is.
 dev       = [
     "wactorz[docs]",
+    # Test-only support for optional catalogue-agent media paths. These stay out
+    # of core and all, so Reachy Mini remains an opt-in catalogue agent.
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
     "pre-commit>=4.5.1",
     "coverage>=7.13.5",
     "twine>=6.2.0",

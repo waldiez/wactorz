@@ -639,13 +639,78 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             "I can set that up as an automation. Say yes to approve it, no to cancel, or tell me what to change.",
         )
 
+    def test_literal_tell_requests_stay_on_reachy_and_can_add_a_dance(self):
+        self.assertEqual(
+            NS["_parse_speak_compound"](
+                "Hey Ritsy, please tell my brother that he's really stupid and do a little dance"
+            ),
+            [
+                {"cmd": "say", "text": "he's really stupid"},
+                {"cmd": "gesture", "name": "dance"},
+            ],
+        )
+        self.assertEqual(
+            NS["_parse_speak_compound"]("tell my sister she is a big bunny with red hair"),
+            [{"cmd": "say", "text": "she is a big bunny with red hair"}],
+        )
+
+    async def test_literal_speech_is_displayed_then_spoken_without_main(self):
+        agent = FakeAgent()
+        calls = []
+
+        async def dispatch(_agent, cmd, payload, return_result=False):
+            calls.append((cmd, dict(payload)))
+            result = {"ok": True, "cmd": cmd}
+            if cmd == "say":
+                result.update({"said": payload["text"], "interrupted": False})
+            return result
+
+        before_speak = mock.AsyncMock()
+        commands = NS["_parse_speak_compound"](
+            "Tell my brother that dinner is ready and do a little dance"
+        )
+        with mock.patch.dict(NS, {"_dispatch": dispatch}):
+            result = await NS["_conversation_speech_bridge"](
+                agent,
+                "Tell my brother that dinner is ready and do a little dance",
+                commands,
+                "speech-task",
+                before_speak,
+                {},
+            )
+
+        before_speak.assert_awaited_once_with("dinner is ready")
+        self.assertEqual([cmd for cmd, _ in calls], ["say", "gesture"])
+        self.assertTrue(calls[0][1]["await_playback"])
+        self.assertTrue(result["spoke"])
+        self.assertTrue(result["physical"])
+        self.assertEqual(result["result"], "dinner is ready")
+
+    async def test_ha_delegation_exposes_its_human_result(self):
+        agent = FakeAgent()
+        agent.send_to = mock.AsyncMock(
+            return_value={
+                "result": "Automation creation is disabled; here is the available hardware."
+            }
+        )
+
+        result = await NS["_ha"](
+            agent,
+            {"request": "make an automation based on the sun position"},
+        )
+
+        self.assertEqual(result["delegated_to"], "home-assistant-agent")
+        self.assertEqual(result["result"], result["ha_result"])
+        self.assertIn("creation is disabled", result["result"])
+
     def test_reachy_name_is_repaired_without_naming_the_user(self):
-        for alias in ("Richie", "Riti", "Ritzy", "Lizzy"):
+        for alias in ("Richie", "Riti", "Ritsy", "Ritzy", "Rizzi", "Lizzy"):
             with self.subTest(alias=alias):
                 self.assertEqual(
                     NS["_normalize_reachy_transcript"](f"Hey {alias}"),
                     "Hey Reachy",
                 )
+        self.assertEqual(NS["_normalize_reachy_transcript"]("E Rizzi"), "Hey Reachy")
         self.assertIn(
             "I'm Reachy",
             NS["_sanitize_reachy_identity_reply"]("I'm Lizzy"),

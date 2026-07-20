@@ -843,7 +843,7 @@ User: "whisper hello"   (and "say X softly/quietly", "whisper that you love me")
 Reply with ONLY the JSON array, no markdown, no prose."""
 
 
-def _parse_speak_compound(text):
+def _parse_volume_speak_compound(text):
     """Deterministically handle 'whisper X' / 'say X softly|loudly' so they NEVER
     get answered as chat. Returns a [volume-preset, say] command list, or None.
 
@@ -872,6 +872,58 @@ def _parse_speak_compound(text):
     return None
 
 
+def _parse_speak_compound(text):
+    """Resolve literal speech requests locally instead of asking Main to role-play."""
+    import re
+
+    t = (text or "").strip()
+    # STT commonly misspells Reachy in an address. The transcript normalizer fixes
+    # voice turns; this prefix also protects typed/direct agent requests.
+    aliases = (
+        r"(?:reachy|richie|ritchie|richy|reachie|rechi|riti|rity|ritty|"
+        r"ritsi|ritsie|ritsy|ritzi|ritzie|ritzy|rizzi|rizzy|lizzy|lizzie|lizi|lissy)"
+    )
+    t = re.sub(
+        rf"^(?:(?:hey|hi|hello)\s+)?{aliases}\s*[,;:]?\s*",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    )
+    t = re.sub(r"^please\s+", "", t, flags=re.IGNORECASE)
+
+    volume_commands = _parse_volume_speak_compound(t)
+    if volume_commands:
+        return volume_commands
+
+    # "Tell my brother/sister/friend ..." is a literal robot speech request.
+    direct = re.match(
+        r"^tell\s+(?:(?:my|the)\s+)?"
+        r"(?:brother|bro|sister|friend|mother|mom|mum|father|dad|"
+        r"him|her|them|someone|everybody|everyone)\s+"
+        r"(?:that\s+)?(.+)$",
+        t,
+        re.IGNORECASE,
+    )
+    if not direct:
+        return None
+
+    said = direct.group(1).strip()
+    dance = re.search(
+        r"\s+(?:and|while)\s+(?:do(?:ing)?\s+)?(?:a\s+)?"
+        r"(?:little\s+)?dance(?:\s+for\s+me)?[.!?]*$",
+        said,
+        re.IGNORECASE,
+    )
+    commands = []
+    if dance:
+        said = said[: dance.start()].rstrip(" ,.;")
+    if said:
+        commands.append({"cmd": "say", "text": said})
+    if dance:
+        commands.append({"cmd": "gesture", "name": "dance"})
+    return commands or None
+
+
 def _is_explicit_speech_request(text):
     """True only when the user actually asked Reachy to speak supplied words."""
     import re
@@ -882,6 +934,8 @@ def _is_explicit_speech_request(text):
         r"^(?:can|could|would|will)\s+you\s+(?:please\s+)?"
         r"(?:say|announce|repeat|speak)\b",
         r"^(?:please\s+)?tell\s+(?:them|everyone|the\s+room)\b",
+        r"\btell\s+(?:(?:my|the)\s+)?"
+        r"(?:brother|bro|sister|friend|mother|mom|mum|father|dad|him|her|them)\b",
     )
     return any(re.search(pattern, t, re.IGNORECASE) for pattern in patterns)
 
@@ -1216,7 +1270,10 @@ async def handle_task(agent, payload):
             if "cmd" not in payload and "action" not in payload and stripped:
                 low = stripped.lower().rstrip("!.?")
                 # Single-verb shortcuts (no LLM call needed)
-                embodied = _embodied_command_for_text(stripped)
+                embodied = (
+                    None if _parse_speak_compound(stripped)
+                    else _embodied_command_for_text(stripped)
+                )
                 if embodied:                                payload = embodied
                 elif low in ("wake", "wake up"):          payload = {"cmd": "wake"}
                 elif low in ("sleep", "go to sleep"):      payload = {"cmd": "sleep"}
@@ -1482,7 +1539,7 @@ def _pending_look_closer(agent):
 
 _REACHY_NAME_VARIANTS = (
     r"(?:reachy|richie|ritchie|richy|reachie|rechi|"
-    r"riti|rity|ritty|ritzi|ritzie|ritzy|lizzy|lizzie|lizi|lissy)"
+    r"riti|rity|ritty|ritsi|ritsie|ritsy|ritzi|ritzie|ritzy|rizzi|rizzy|lizzy|lizzie|lizi|lissy)"
 )
 
 
@@ -1491,6 +1548,12 @@ def _normalize_reachy_transcript(text):
     import re as _re
     value = str(text or "").strip()
     variants = _REACHY_NAME_VARIANTS
+    if _re.fullmatch(
+        rf"(?:e|a)\s+{variants}[.!?]?",
+        value,
+        flags=_re.IGNORECASE,
+    ):
+        return "Hey Reachy"
     value = _re.sub(
         rf"\b(hey|hi|hello|okay|ok|listen)\s*,?\s+{variants}\b",
         lambda match: f"{match.group(1)} Reachy",
@@ -3224,13 +3287,20 @@ async def _ha(agent, payload):
     if isinstance(result, dict):
         if result.get("error") and not result.get("result"):
             raise RuntimeError(f"{delegate} error: {result['error']}")
+        human_result = result.get("result") or result.get("response") or str(result)
         return {
             "delegated_to": delegate,
             "request": request,
-            "ha_result": result.get("result") or result.get("response") or str(result),
+            "ha_result": human_result,
+            "result": human_result,
             "data": result.get("data"),
         }
-    return {"delegated_to": delegate, "request": request, "ha_result": str(result)}
+    return {
+        "delegated_to": delegate,
+        "request": request,
+        "ha_result": str(result),
+        "result": str(result),
+    }
 
 
 def _ha_delegate_for_request(request):
@@ -4340,6 +4410,65 @@ def _conversation_route_text(transcript, history):
     return transcript
 
 
+async def _conversation_speech_bridge(
+    agent, transcript, commands, task_id, before_speak, session
+):
+    """Speak user-supplied words locally, with optional volume and gesture steps."""
+    reply = next(
+        (
+            str(command.get("text") or "").strip()
+            for command in commands
+            if isinstance(command, dict) and command.get("cmd") == "say"
+        ),
+        "",
+    )
+    if not reply:
+        return None
+
+    # Put the words in chat before playback begins, matching normal conversation UX.
+    await before_speak(reply)
+    action_results = []
+    interrupted = False
+    speech_error = None
+    for command in commands:
+        if not isinstance(command, dict):
+            continue
+        local_command = dict(command)
+        cmd = str(local_command.get("cmd") or "").strip().lower()
+        if cmd == "say":
+            local_command["await_playback"] = True
+            local_command["_barge_in_session"] = session
+        action = await _dispatch(agent, cmd, local_command, return_result=True)
+        action = action or {"ok": False, "cmd": cmd, "error": "no result"}
+        action_results.append(action)
+        if not action.get("ok"):
+            speech_error = str(action.get("error") or f"{cmd} failed")
+            break
+        if cmd == "say" and action.get("interrupted"):
+            interrupted = True
+            break
+
+    ok = bool(action_results) and all(item.get("ok") for item in action_results)
+    spoke = any(
+        item.get("ok") and item.get("cmd") == "say" for item in action_results
+    )
+    return {
+        "ok": ok,
+        "cmd": "speech_sequence",
+        "physical": any(
+            isinstance(command, dict) and command.get("cmd") == "gesture"
+            for command in commands
+        ),
+        "spoke": spoke,
+        "interrupted": interrupted,
+        "spoken_result": reply if spoke else "",
+        "speech_error": speech_error,
+        "result": reply,
+        "action_results": action_results,
+        "_task_id": task_id,
+    }
+
+
 async def _conversation_embodied_bridge(
     agent, transcript, command, task_id, before_speak, session
 ):
@@ -4695,12 +4824,18 @@ async def _conversation_loop(agent, session):
 
             try:
                 task_id = f"{session['session_id']}:{turn_index}"
-                embodied = _embodied_command_for_text(turn["transcript"])
-                if embodied:
+                speech_commands = _parse_speak_compound(turn["transcript"])
+                if speech_commands:
+                    bridged = await _conversation_speech_bridge(
+                        agent, turn["transcript"], speech_commands, task_id,
+                        _before_speak, session)
+                else:
+                    embodied = _embodied_command_for_text(turn["transcript"])
+                if not speech_commands and embodied:
                     bridged = await _conversation_embodied_bridge(
                         agent, turn["transcript"], embodied, task_id,
                         _before_speak, session)
-                else:
+                elif not speech_commands:
                     bridged = await _bridge_to_main(
                         agent, route_text, task_id,
                         await_playback=True, before_speak=_before_speak,

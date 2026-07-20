@@ -181,6 +181,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Agent command reliability.** Natural catalogue spawn requests now launch the
+  named recipe instead of merely listing the catalogue. Common yellow and
+  neutral-light requests resolve deterministically, and Home Assistant management
+  replies no longer collapse to a misleading "Done" or imply that a disabled
+  automation-creation flow succeeded.
+- **Reachy literal delivery speech.** "Tell my..." requests are spoken directly by
+  Reachy instead of being judged or role-played by Main, and can be combined with
+  a real dance. Name normalization also covers additional Ritsy/Rizzi STT variants.
+
 - **Reachy speaks complete replies and turns predictably.** Voice-friendly
   sanitization no longer truncates long answers with a "rest in Wactorz chat"
   announcement. Natural `turn left` / `turn right` commands rotate the body 45

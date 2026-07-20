@@ -289,11 +289,12 @@ syntax stay visual. Reachy speaks a short human acknowledgement instead; for exa
 `Done: light.turn_on -> light.main_light` becomes "Okay, the light is on", or
 "Okay, the light is pink" when that was the request.
 
-Barge-in is enabled by default. When the media backend supports simultaneous
-recording and playback, sustained speech stops Reachy's current utterance, retains
-the interrupting audio, and routes it as the next turn. If a particular setup lacks
-acoustic echo cancellation and Reachy cuts itself off on speaker echo, start that
-session with `"barge_in": false`.
+Barge-in is enabled automatically when Reachy successfully applies Pollen's
+conversation tuning to the XVF3800 audio processor. Sustained speech then stops
+Reachy's current utterance, retains the interrupting audio, and routes it as the
+next turn. If the audio processor cannot be configured, barge-in defaults off so
+Reachy cannot mistake its own speaker for an interruption. An explicit
+`"barge_in": true` or `false` overrides the automatic choice for that session.
 
 Stop with `stop listening`, `end conversation`, `goodbye Reachy`, `goodbye`, `bye`,
 `that's all`, `σταμάτα`, `σταμάτα να ακούς`, `τέλος συζήτησης`, or `αντίο`.
@@ -315,8 +316,9 @@ start fields include `silence_s`, `max_utterance_s`, `min_speech_s`, `pre_roll_s
 `flush_s`, `vad_mode`, `vad_min_rms`, `cooldown_s`, `barge_in`, `barge_silence_s`,
 `barge_min_speech_s`, `barge_flush_s`, `barge_min_rms`, `voice_friendly`,
 `state_motion`, `idle_motion`, `stt_language`, `stt_hotwords`,
-`stt_min_confidence`, `stt_max_no_speech`, and `max_turns`. Barge-in defaults to
-true; all physical conversation motion defaults to false.
+`stt_min_confidence`, `stt_max_no_speech`, and `max_turns`. Barge-in follows the
+verified echo-control capability unless explicitly overridden; all physical
+conversation motion defaults to false.
 
 Set `state_motion:true` for subtle listening/speaking antenna cues. These use
 antenna-only `set_target` calls and do not command or reset the head. Conversation

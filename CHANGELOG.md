@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Reachy Mini echo-safe speech interruption** - Reachy now applies the same
+  XVF3800 conversation audio tuning used by Pollen's conversation app, through
+  the robot daemon for wireless connections or the SDK for local connections.
+  Barge-in defaults on only after that configuration succeeds; otherwise it
+  safely defaults off instead of mistaking Reachy's speaker for a user and
+  cutting every reply down to its first syllable. Explicit per-session
+  `barge_in` settings still override the automatic capability check.
+
 - **Reachy Mini speech interruption and full rear turn** - Speaking over Reachy
   now uses a more sensitive barge-in gate and stops robot-speaker playback via
   the daemon directly; "stop", "silence", "quiet", and "shut up" stay silent

@@ -179,6 +179,85 @@ async def _do(fn, *args, **kwargs):
     return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
 
 
+# Pollen's conversation app applies these XVF3800 values before opening its
+# realtime audio loop. In particular, they keep the board's acoustic echo
+# cancellation usable for close-field speech while Reachy's speaker is active.
+_CONVERSATION_AUDIO_CONFIG = (
+    ("PP_AGCMAXGAIN", (10.0,)),
+    ("PP_MIN_NS", (0.8,)),
+    ("PP_MIN_NN", (0.8,)),
+    ("PP_GAMMA_E", (0.5,)),
+    ("PP_GAMMA_ETAIL", (0.5,)),
+    ("PP_NLATTENONOFF", (0,)),
+    ("PP_MGSCALE", (4.0, 1.0, 1.0)),
+)
+
+
+async def _configure_conversation_audio(agent):
+    """Apply Pollen's conversation tuning locally or through the robot daemon.
+
+    Barge-in is unsafe unless this succeeds: without echo cancellation Reachy's
+    microphone hears its own first syllable and immediately stops playback.
+    """
+    mini = agent.state.get("mini")
+    media = getattr(mini, "media", None) or getattr(mini, "media_manager", None)
+    audio = getattr(media, "audio", None) if media is not None else None
+    configured = False
+    route = "unavailable"
+    try:
+        daemon_url = str(getattr(audio, "daemon_url", None) or "").rstrip("/")
+        if daemon_url:
+            route = "robot daemon"
+
+            def _apply_remote():
+                import requests
+
+                response = requests.post(
+                    f"{daemon_url}/api/audio/config/apply",
+                    json={
+                        "config": [
+                            {"name": name, "values": list(values)}
+                            for name, values in _CONVERSATION_AUDIO_CONFIG
+                        ],
+                        "verify": True,
+                    },
+                    timeout=5,
+                )
+                response.raise_for_status()
+                return bool(response.json().get("applied"))
+
+            configured = bool(await _do(_apply_remote))
+        else:
+            apply_config = getattr(audio, "apply_audio_config", None)
+            if callable(apply_config):
+                route = "local audio board"
+                configured = bool(await _do(
+                    apply_config,
+                    _CONVERSATION_AUDIO_CONFIG,
+                    verify=True,
+                    write_settle_seconds=0.1,
+                ))
+    except Exception as exc:
+        await agent.log(
+            f"Conversation echo-control setup via {route} failed: {exc}",
+            level="warning",
+        )
+
+    agent.state["conversation_echo_control"] = configured
+    if configured:
+        await agent.log(
+            f"Conversation echo control configured via {route}; voice interruption enabled."
+        )
+    else:
+        await agent.log(
+            "Conversation echo control is unavailable; automatic voice interruption "
+            "is disabled so Reachy cannot cut off its own speech. Set barge_in=true "
+            "explicitly only if this audio setup has working echo cancellation.",
+            level="warning",
+        )
+    return configured
+
+
 def _normalize_connection_mode(raw):
     """Map user-facing connection words to 'network' | 'local' | '' (auto).
 
@@ -311,6 +390,11 @@ async def _bring_up_robot(agent):
                 "custom/reachy/config and reconnect.", level="warning")
     except Exception:
         pass
+
+    # Tune the XVF3800 before conversation playback begins. Wireless clients use
+    # the daemon REST endpoint because the USB audio board lives on the robot;
+    # Lite/local clients can configure the board through the SDK directly.
+    await _configure_conversation_audio(agent)
 
     # The daemon persists its own volume, so sync FROM it (a GET, no test sound)
     # rather than re-applying ours. Caller has already seeded the persisted value.
@@ -547,6 +631,7 @@ async def setup(agent):
         "volume_level":  agent.state.get("volume_level", 100),
         "muted":         bool(agent.state.get("muted")),
         "motors_enabled": bool(agent.state.get("motors_enabled")),
+        "conversation_echo_control": bool(agent.state.get("conversation_echo_control")),
         "conversation_state": agent.state.get("conversation_state", "idle"),
         "ts":            _time.time(),
     })
@@ -572,6 +657,7 @@ async def process(agent):
         "volume_level":  agent.state.get("volume_level", 100),
         "muted":         bool(agent.state.get("muted")),
         "motors_enabled": bool(agent.state.get("motors_enabled")),
+        "conversation_echo_control": bool(agent.state.get("conversation_echo_control")),
         "conversation_state": agent.state.get("conversation_state", "idle"),
         "ts":            _time.time(),
     })
@@ -2459,7 +2545,7 @@ def _edge_tts_communicate(edge_tts, text, voice):
 
 async def _begin_barge_in_monitor(agent, session, speech_seconds):
     """Listen during playback and signal as soon as sustained user speech starts."""
-    if not session or not session.get("payload", {}).get("barge_in", True):
+    if not session or not session.get("payload", {}).get("barge_in", False):
         return None
     if session.get("cancel_event") and session["cancel_event"].is_set():
         return None
@@ -4193,6 +4279,10 @@ async def _conversation_start(agent, payload):
             fields,
         )
 
+    resolved_payload = dict(payload)
+    resolved_payload.setdefault(
+        "barge_in", bool(agent.state.get("conversation_echo_control", False))
+    )
     session = {
         "session_id": str(payload.get("session_id") or _uuid.uuid4().hex[:12]),
         "turn_index": 0,
@@ -4207,7 +4297,7 @@ async def _conversation_start(agent, payload):
         "barge_in_count": 0,
         "_idle_motion_task": None,
         "_idle_angles": (0.0, 0.0),
-        "payload": dict(payload),
+        "payload": resolved_payload,
         "history": [],
         "stt_language_hint": None,
         "stt_retry_count": 0,
@@ -4219,6 +4309,7 @@ async def _conversation_start(agent, payload):
     result = _conversation_turn(session)
     result.update({
         "started": True,
+        "barge_in": bool(resolved_payload["barge_in"]),
         "result": "Conversation started. Speak normally; voice turns appear under Reachy.",
     })
     return result

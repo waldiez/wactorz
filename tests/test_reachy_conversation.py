@@ -454,18 +454,45 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(routed, ["Turn on the light"])
         self.assertEqual(session["turn_index"], 1)
 
-    async def test_barge_in_is_enabled_by_default_and_can_be_disabled(self):
+    async def test_barge_in_requires_echo_control_or_explicit_override(self):
         agent = FakeAgent()
         session = {"payload": {"barge_in": False}, "cancel_event": None}
         disabled = await NS["_begin_barge_in_monitor"](agent, session, 2.0)
         self.assertIsNone(disabled)
 
+        session = {"payload": {}, "cancel_event": None}
+        automatic_fallback = await NS["_begin_barge_in_monitor"](agent, session, 2.0)
+        self.assertIsNone(automatic_fallback)
+
         capture = VoiceCapture(np.zeros((0,), dtype=np.float32), 16000, 1, 0.0, "cancelled")
         with mock.patch.dict(NS, {"_do": mock.AsyncMock(return_value=capture)}):
-            session = {"payload": {}, "cancel_event": None}
+            session = {"payload": {"barge_in": True}, "cancel_event": None}
             monitor = await NS["_begin_barge_in_monitor"](agent, session, 2.0)
             self.assertIsNotNone(monitor)
             await NS["_finish_barge_in_monitor"](session, monitor, False)
+
+    async def test_conversation_start_resolves_barge_in_from_echo_control(self):
+        async def finished_loop(_agent, _session):
+            return None
+
+        with mock.patch.dict(NS, {"_conversation_loop": finished_loop}):
+            unavailable = FakeAgent()
+            off = await NS["_conversation_start"](unavailable, {})
+            await unavailable.state["conversation_session"]["task"]
+
+            configured = FakeAgent()
+            configured.state["conversation_echo_control"] = True
+            on = await NS["_conversation_start"](configured, {})
+            await configured.state["conversation_session"]["task"]
+
+            overridden = FakeAgent()
+            overridden.state["conversation_echo_control"] = True
+            forced_off = await NS["_conversation_start"](overridden, {"barge_in": False})
+            await overridden.state["conversation_session"]["task"]
+
+        self.assertFalse(off["barge_in"])
+        self.assertTrue(on["barge_in"])
+        self.assertFalse(forced_off["barge_in"])
 
     async def test_barge_in_defaults_are_tuned_for_quiet_close_speech(self):
         agent, seen = FakeAgent(), {}
@@ -476,7 +503,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             return capture
 
         with mock.patch.dict(NS, {"_do": fake_do}):
-            session = {"payload": {}, "cancel_event": None}
+            session = {"payload": {"barge_in": True}, "cancel_event": None}
             monitor = await NS["_begin_barge_in_monitor"](agent, session, 2.0)
             await NS["_finish_barge_in_monitor"](session, monitor, False)
 

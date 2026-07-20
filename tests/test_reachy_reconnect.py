@@ -107,11 +107,48 @@ def _fake_mini():
     mini.connected = True
     mini.wake_up = mock.Mock()
     mini.__exit__ = mock.Mock(return_value=False)
-    mini.media = types.SimpleNamespace(audio=types.SimpleNamespace(daemon_url="http://robot"))
+    mini.media = types.SimpleNamespace(
+        audio=types.SimpleNamespace(
+            daemon_url="",
+            apply_audio_config=mock.Mock(return_value=True),
+        )
+    )
     return mini
 
 
 class ReconnectCommandTest(unittest.TestCase):
+    def test_remote_conversation_audio_config_uses_daemon(self):
+        agent = FakeAgent(mini=_fake_mini())
+        agent.state["mini"].media.audio.daemon_url = "http://robot/"
+        response = mock.Mock()
+        response.json.return_value = {"applied": True}
+
+        with mock.patch("requests.post", return_value=response) as post:
+            configured = _run(NS["_configure_conversation_audio"](agent))
+
+        self.assertTrue(configured)
+        self.assertTrue(agent.state["conversation_echo_control"])
+        response.raise_for_status.assert_called_once()
+        args, kwargs = post.call_args
+        self.assertEqual(args[0], "http://robot/api/audio/config/apply")
+        self.assertTrue(kwargs["json"]["verify"])
+        params = {item["name"]: item["values"] for item in kwargs["json"]["config"]}
+        self.assertEqual(params["PP_AGCMAXGAIN"], [10.0])
+        self.assertEqual(params["PP_MGSCALE"], [4.0, 1.0, 1.0])
+
+    def test_failed_audio_config_disables_automatic_barge_in(self):
+        agent = FakeAgent(mini=_fake_mini())
+        agent.state["mini"].media.audio.daemon_url = "http://robot"
+
+        with mock.patch("requests.post", side_effect=OSError("no endpoint")):
+            configured = _run(NS["_configure_conversation_audio"](agent))
+
+        self.assertFalse(configured)
+        self.assertFalse(agent.state["conversation_echo_control"])
+        self.assertTrue(
+            any("automatic voice interruption is disabled" in line for line in agent.logs)
+        )
+
     def test_reconnect_opens_link_and_brings_robot_up(self):
         agent = FakeAgent(mini=None)
         mini = _fake_mini()

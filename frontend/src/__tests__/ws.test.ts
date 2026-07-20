@@ -114,9 +114,19 @@ describe("WSChatClient", () => {
                 content: "Hello!",
                 from: "io-agent",
                 timestamp: 1_700_000_000,
+                source: "voice",
             }),
         });
-        expect(chatSpy).toHaveBeenCalledWith("Hello!", "io-agent", 1_700_000_000_000, "user");
+        expect(chatSpy).toHaveBeenCalledWith(
+            "Hello!",
+            "io-agent",
+            1_700_000_000_000,
+            "user",
+            "voice",
+            "",
+            "",
+            "",
+        );
     });
 
     it("converts ms timestamp correctly in chat", () => {

@@ -426,12 +426,20 @@ export function normaliseHeartbeat(p: unknown): HeartbeatPayload {
 export function normaliseChat(p: unknown): ChatMessage {
     const o = asObj(p);
     const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
+    const source = optStr(o["source"]);
+    const surface = optStr(o["surface"]);
+    const surfaceLabel = optStr(o["surfaceLabel"] ?? o["surface_label"]);
+    const brain = optStr(o["brain"]);
     return {
         id: str(o["id"]) || uid("chat"), // WID, not `chat-${ms}`: same-ms ids collide and dedupe-drop
         from: str(o["from"] ?? o["agentName"] ?? o["name"]),
         to: str(o["to"]) || "user", // default to "user" when field absent
         content: str(o["content"]),
         timestampMs,
+        ...(source !== undefined && { source }),
+        ...(surface !== undefined && { surface }),
+        ...(surfaceLabel !== undefined && { surfaceLabel }),
+        ...(brain !== undefined && { brain }),
     };
 }
 

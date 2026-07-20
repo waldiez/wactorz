@@ -8,7 +8,7 @@
  * picker, so the UI resolves the same target, keeps the picker on a messageable
  * agent, and strips the now-redundant prefix from what it shows.
  */
-import type { AgentInfo } from "../../types/agent";
+import type { AgentInfo, ChatMessage } from "../../types/agent";
 import { looksLikeAgentId } from "../../agents/naming";
 import { canDirectMessage } from "./agentState";
 
@@ -56,4 +56,25 @@ export function resolveSendTarget(content: string, agentNames: string[], fallbac
 export function stripLeadingMention(content: string, target: string): string {
     const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return content.replace(new RegExp(`^@${escaped}\\b\\s*`, "i"), "");
+}
+
+/**
+ * Keep an interface-mediated voice turn in that surface's user-facing thread.
+ * The reasoning agent remains internal metadata and never becomes a second persona.
+ */
+export function voiceThreadTarget(msg: ChatMessage, current: string, agents: AgentInfo[]): string | null {
+    const surface = msg.surface?.trim();
+    if (msg.source !== "voice" || !surface) {
+        return null;
+    }
+    const available = agents.find(a => a.name === surface);
+    if (!available) {
+        return null;
+    }
+    const brain = msg.brain?.trim();
+    const currentIsBrain = current === brain || (!brain && (current === "main" || current === "main-actor"));
+    if (current !== surface && !currentIsBrain) {
+        return null;
+    }
+    return surface;
 }

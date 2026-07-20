@@ -253,6 +253,33 @@ describe("DashboardChat — sending & live events", () => {
         expect(thread(host).textContent).toContain("hi back");
     });
 
+    it("keeps a voice session in its embodied surface thread", () => {
+        dc.unwire();
+        host = makeHost([agent("main"), agent("reachy-mini")]);
+        dc = mount(host);
+        dc.setTarget("main");
+        dc.renderSidebar();
+        dc.renderChatPaneHeader();
+        dc.renderChatThread();
+        dc.wire();
+
+        const msg: ChatMessage = {
+            id: "voice-1",
+            from: "user",
+            to: "reachy-mini",
+            content: "turn on the light",
+            timestampMs: Date.now(),
+            source: "voice",
+            surface: "reachy-mini",
+            surfaceLabel: "Reachy",
+            brain: "main",
+        };
+        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+
+        expect(dc.chatTarget).toBe("reachy-mini");
+        expect(thread(host).textContent).toContain("turn on the light");
+    });
+
     it("streams chunks into a live bubble then commits on stream-end", () => {
         document.dispatchEvent(
             new CustomEvent("af-stream-chunk", { detail: { chunk: "Hel", from: "main-actor" } }),

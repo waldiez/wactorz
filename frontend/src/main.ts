@@ -179,7 +179,7 @@ function refreshLiveActors(): void {
 // ═══ 4 · Wiring — WebSocket transport (chat replies · state patches · log feed)
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
-wsChat.onChat((content, from, timestampMs, to) => {
+wsChat.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain) => {
     if (from !== "user") {
         toast.show({ type: "chat", title: from, message: content.slice(0, 120) });
     }
@@ -189,6 +189,10 @@ wsChat.onChat((content, from, timestampMs, to) => {
         to,
         content,
         timestampMs,
+        ...(source ? { source } : {}),
+        ...(surface ? { surface } : {}),
+        ...(surfaceLabel ? { surfaceLabel } : {}),
+        ...(brain ? { brain } : {}),
     };
     ioManager.receiveAgentMessage(msg);
     agentStore.onChat(from, "user");

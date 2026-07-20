@@ -1035,6 +1035,19 @@ def _embodied_command_for_text(text):
     if normalized in ("disable debug", "debug off", "hide debug", "hide action sequences"):
         return {"cmd": "debug", "enabled": False}
 
+    room_scope = bool(
+        _re.search(
+            r"\b(around (?:the )?room|around you|around here|surroundings?|"
+            r"whole room|in the room|(?:the|this|my) room)\b",
+            normalized,
+        )
+    )
+    vision_intent = bool(
+        _re.search(r"\b(describe|look|scan|survey|see|show|tell|what)\b", normalized)
+    )
+    if room_scope and vision_intent:
+        return {"cmd": "look_around"}
+
     if normalized in (
         "what do you see",
         "what can you see",

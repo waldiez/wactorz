@@ -189,6 +189,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   scan with Reachy's onboard camera, full replies appear before playback, concise
   audio remains conversational, and debug receipts stay opt-in. Relative brightness
   follow-ups now reuse the light controlled in the preceding conversation turn.
+  Natural room-view phrasing is routed to Reachy's onboard camera instead of
+  falling through to the bodiless main assistant.
 
 - **Social chat custom-spawn gate.** Discord, Telegram, and WhatsApp may
   start maintained catalogue agents, but refuse LLM-authored custom agents that

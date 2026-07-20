@@ -759,6 +759,16 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             NS["_embodied_command_for_text"]("What's in front of you?"),
             {"cmd": "describe"},
         )
+        for phrase in (
+            "Can you describe what you see around the room?",
+            "Tell me what is around you",
+            "Could you describe the room for me?",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(
+                    NS["_embodied_command_for_text"](phrase),
+                    {"cmd": "look_around"},
+                )
 
     async def test_voice_vision_uses_reachy_camera_instead_of_main(self):
         agent = FakeAgent()
@@ -781,7 +791,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
                 agent,
                 {"max_turns": 1},
                 [captured()],
-                ["What do you see?"],
+                ["Can you describe what you see around the room?"],
                 main_bridge,
             )
 

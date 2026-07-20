@@ -142,9 +142,11 @@ class CameraCommandTest(unittest.TestCase):
     def test_camera_include_b64_false_and_publish(self):
         frame = np.zeros((8, 8, 3), dtype=np.uint8)
         agent = FakeAgent(FakeMedia(frame=frame))
-        res = _run(NS["_dispatch"](
-            agent, "camera", {"include_b64": False, "publish": True},
-            return_result=True))
+        res = _run(
+            NS["_dispatch"](
+                agent, "camera", {"include_b64": False, "publish": True}, return_result=True
+            )
+        )
         self.assertNotIn("image_b64", res)
         self.assertEqual(res["published"], "custom/reachy/camera")
         topics = [t for t, _ in agent.published]
@@ -160,8 +162,7 @@ class CameraCommandTest(unittest.TestCase):
 class ListenCommandTest(unittest.TestCase):
     def test_listen_returns_wav_and_doa(self):
         # SDK reports DoA in RADIANS; the agent must surface it in degrees.
-        agent = FakeAgent(FakeMedia(samplerate=16000, channels=1,
-                                    doa=(math.radians(42.0), True)))
+        agent = FakeAgent(FakeMedia(samplerate=16000, channels=1, doa=(math.radians(42.0), True)))
         res = _run(NS["_dispatch"](agent, "listen", {"duration": 0.1}, return_result=True))
         self.assertTrue(res["ok"])
         self.assertEqual(res["samplerate"], 16000)
@@ -185,8 +186,7 @@ class ListenCommandTest(unittest.TestCase):
         self.assertFalse(media.recording)  # never started a recording
 
     def test_listen_result_summary_has_no_base64_blob(self):
-        agent = FakeAgent(FakeMedia(samplerate=16000, channels=1,
-                                    doa=(math.radians(42.0), True)))
+        agent = FakeAgent(FakeMedia(samplerate=16000, channels=1, doa=(math.radians(42.0), True)))
         res = _run(NS["_dispatch"](agent, "listen", {"duration": 0.1}, return_result=True))
         # The human-facing summary is a short line, and the blob lives elsewhere.
         self.assertIn("Recorded", res["result"])
@@ -222,10 +222,10 @@ class RemovedSoundFacingTest(unittest.TestCase):
             self.assertFalse(res["ok"], msg=cmd)
             self.assertEqual(res["cmd"], cmd)
             self.assertIn("unknown cmd", res["error"])
-            event = [p for topic, p in agent.published
-                     if topic == "custom/reachy/events"][-1]
+            event = [p for topic, p in agent.published if topic == "custom/reachy/events"][-1]
             self.assertFalse(event["ok"])
             self.assertEqual(event["type"], cmd)
+
 
 class FakeLLM:
     """Records the messages it is asked to complete and returns a canned reply."""
@@ -269,8 +269,9 @@ class DescribeCommandTest(unittest.TestCase):
         frame = np.zeros((16, 16, 3), dtype=np.uint8)
         llm = FakeLLM("A long, detailed paragraph about the room.")
         agent = self._agent(frame, llm)
-        res = _run(NS["_dispatch"](
-            agent, "describe", {"detail": True, "say": False}, return_result=True))
+        res = _run(
+            NS["_dispatch"](agent, "describe", {"detail": True, "say": False}, return_result=True)
+        )
         self.assertTrue(res["detail"])
         self.assertEqual(res["said"], "A long, detailed paragraph about the room.")  # no nudge
         self.assertIn("paragraph", llm.calls[0]["system"].lower())  # detailed prompt
@@ -279,9 +280,14 @@ class DescribeCommandTest(unittest.TestCase):
         frame = np.zeros((16, 16, 3), dtype=np.uint8)
         llm = FakeLLM("Two people.")
         agent = self._agent(frame, llm)
-        res = _run(NS["_dispatch"](
-            agent, "describe", {"question": "how many people?", "say": False},
-            return_result=True))
+        res = _run(
+            NS["_dispatch"](
+                agent,
+                "describe",
+                {"question": "how many people?", "say": False},
+                return_result=True,
+            )
+        )
         self.assertEqual(res["said"], "Two people.")  # no "look closer" tacked on
 
     def test_brief_general_look_arms_the_yes_followup(self):
@@ -298,9 +304,14 @@ class DescribeCommandTest(unittest.TestCase):
     def test_specific_question_disarms_the_followup(self):
         agent = self._agent(np.zeros((16, 16, 3), dtype=np.uint8), FakeLLM("Two people."))
         agent.state["_pending_detail"] = __import__("time").time()
-        _run(NS["_dispatch"](
-            agent, "describe", {"question": "how many people?", "say": False},
-            return_result=True))
+        _run(
+            NS["_dispatch"](
+                agent,
+                "describe",
+                {"question": "how many people?", "say": False},
+                return_result=True,
+            )
+        )
         self.assertFalse(NS["_pending_look_closer"](agent))
 
     def test_offer_expires_after_a_minute(self):
@@ -312,9 +323,14 @@ class DescribeCommandTest(unittest.TestCase):
         frame = np.zeros((16, 16, 3), dtype=np.uint8)
         llm = FakeLLM("Two people.")
         agent = self._agent(frame, llm)
-        res = _run(NS["_dispatch"](
-            agent, "describe", {"question": "how many people?", "say": False},
-            return_result=True))
+        res = _run(
+            NS["_dispatch"](
+                agent,
+                "describe",
+                {"question": "how many people?", "say": False},
+                return_result=True,
+            )
+        )
         self.assertTrue(res["ok"])
         text_block = llm.calls[0]["messages"][0]["content"][0]
         self.assertEqual(text_block["type"], "text")
@@ -374,23 +390,31 @@ class DescribeOrientTest(unittest.TestCase):
 
     def test_levels_head_before_capturing(self):
         agent = self._agent()
-        _run(NS["_dispatch"](agent, "describe", {"say": False, "look_duration": 0},
-                             return_result=True))
+        _run(
+            NS["_dispatch"](
+                agent, "describe", {"say": False, "look_duration": 0}, return_result=True
+            )
+        )
         self.assertTrue(self.poses)
         self.assertEqual((self.poses[0]["pitch"], self.poses[0]["yaw"]), (0.0, 0.0))
 
     def test_aim_words_tilt_the_head(self):
         agent = self._agent()
-        _run(NS["_dispatch"](
-            agent, "describe",
-            {"question": "look down at my desk", "say": False, "look_duration": 0},
-            return_result=True))
+        _run(
+            NS["_dispatch"](
+                agent,
+                "describe",
+                {"question": "look down at my desk", "say": False, "look_duration": 0},
+                return_result=True,
+            )
+        )
         self.assertEqual(self.poses[0]["pitch"], 22)
 
     def test_orient_false_captures_without_moving(self):
         agent = self._agent()
-        _run(NS["_dispatch"](agent, "describe", {"orient": False, "say": False},
-                             return_result=True))
+        _run(
+            NS["_dispatch"](agent, "describe", {"orient": False, "say": False}, return_result=True)
+        )
         self.assertEqual(self.poses, [])
 
 
@@ -417,8 +441,11 @@ class LookAroundTest(unittest.TestCase):
 
     def test_sweeps_default_views_combines_and_recentres(self):
         agent = self._agent()
-        res = _run(NS["_dispatch"](
-            agent, "look_around", {"say": False, "look_duration": 0}, return_result=True))
+        res = _run(
+            NS["_dispatch"](
+                agent, "look_around", {"say": False, "look_duration": 0}, return_result=True
+            )
+        )
         self.assertTrue(res["ok"])
         self.assertEqual(res["said"], "A combined room overview.")
         self.assertEqual(res["views"], 4)  # default 4 angles
@@ -429,17 +456,21 @@ class LookAroundTest(unittest.TestCase):
 
     def test_custom_angles(self):
         agent = self._agent("ok")
-        res = _run(NS["_dispatch"](
-            agent, "look_around",
-            {"angles": [[0, 30], [0, -30]], "say": False, "look_duration": 0},
-            return_result=True))
+        res = _run(
+            NS["_dispatch"](
+                agent,
+                "look_around",
+                {"angles": [[0, 30], [0, -30]], "say": False, "look_duration": 0},
+                return_result=True,
+            )
+        )
         self.assertEqual(res["views"], 2)
 
 
 class SayPlaybackPadTest(unittest.TestCase):
     def test_waits_out_speech_plus_tail_by_default(self):
         pad = NS["_say_playback_pad"]
-        self.assertAlmostEqual(pad(2.0, {}), 2.35, places=3)  # default tail 0.35
+        self.assertAlmostEqual(pad(2.0, {}), 2.55, places=3)  # default tail 0.55
         self.assertAlmostEqual(pad(2.0, {"tail_pad": 0.5}), 2.5, places=3)
 
     def test_no_wait_when_opted_out_or_unknown_duration(self):
@@ -447,6 +478,44 @@ class SayPlaybackPadTest(unittest.TestCase):
         self.assertEqual(pad(2.0, {"await_playback": False}), 0.0)
         self.assertEqual(pad(0, {}), 0.0)
         self.assertEqual(pad(None, {}), 0.0)
+
+    def test_measured_duration_wins_over_estimate(self):
+        duration = NS["_speech_duration_seconds"]
+        self.assertEqual(duration("a deliberately long sentence", 20_000_000), 2.0)
+
+    def test_missing_metadata_gets_a_nonzero_duration_estimate(self):
+        duration = NS["_speech_duration_seconds"]
+        text = "Hello there. I am happy to help with anything you need today."
+        self.assertGreater(duration(text, 0), 3.0)
+        self.assertEqual(duration("", 0), 0.0)
+
+    def test_requests_word_boundary_metadata(self):
+        calls = []
+
+        def communicate(text, voice, **kwargs):
+            calls.append((text, voice, kwargs))
+            return "communicate"
+
+        edge_tts = types.SimpleNamespace(Communicate=communicate)
+        result = NS["_edge_tts_communicate"](edge_tts, "Hello", "voice")
+
+        self.assertEqual(result, "communicate")
+        self.assertEqual(calls, [("Hello", "voice", {"boundary": "WordBoundary"})])
+
+    def test_older_edge_tts_without_boundary_option_still_works(self):
+        calls = []
+
+        def communicate(text, voice, **kwargs):
+            calls.append(kwargs)
+            if kwargs:
+                raise TypeError("unexpected boundary")
+            return "legacy"
+
+        edge_tts = types.SimpleNamespace(Communicate=communicate)
+        result = NS["_edge_tts_communicate"](edge_tts, "Hello", "voice")
+
+        self.assertEqual(result, "legacy")
+        self.assertEqual(calls, [{"boundary": "WordBoundary"}, {}])
 
 
 class ConnectionModeTest(unittest.TestCase):
@@ -586,7 +655,7 @@ class ShutupTest(unittest.TestCase):
         agent.state["mini"].stop = lambda: None  # SDK motion-stop present
         res = _run(NS["_dispatch"](agent, "stop", {}, return_result=True))
         self.assertTrue(res["ok"])
-        self.assertIn("stop_playing", agent.calls)   # speech cut too
+        self.assertIn("stop_playing", agent.calls)  # speech cut too
 
     def test_shutup_when_nothing_playing_is_graceful(self):
         agent = FakeAgent(FakeMedia())
@@ -610,7 +679,9 @@ class DiagCommandTest(unittest.TestCase):
         mini = types.SimpleNamespace(
             client=types.SimpleNamespace(
                 get_status=lambda: types.SimpleNamespace(
-                    version=daemon_version, wlan_ip="10.0.0.5", no_media=False)),
+                    version=daemon_version, wlan_ip="10.0.0.5", no_media=False
+                )
+            ),
             enable_motors=lambda *a, **k: None,
             get_current_joint_positions=get_positions,
             goto_target=lambda **k: None,
@@ -623,6 +694,7 @@ class DiagCommandTest(unittest.TestCase):
 
     def test_flags_version_mismatch(self):
         import reachy_mini as rm
+
         other = "9.9.9" if rm.__version__ != "9.9.9" else "0.0.0"
         agent = self._agent(other, [0.0] * 7, [0.0] * 7)
         res = _run(NS["_dispatch"](agent, "diag", {}, return_result=True))
@@ -632,6 +704,7 @@ class DiagCommandTest(unittest.TestCase):
 
     def test_reports_no_movement_when_angles_unchanged(self):
         import reachy_mini as rm
+
         agent = self._agent(rm.__version__, [0.0] * 7, [0.0] * 7)  # matched version
         res = _run(NS["_dispatch"](agent, "diag", {}, return_result=True))
         self.assertFalse(res["version_mismatch"])
@@ -640,6 +713,7 @@ class DiagCommandTest(unittest.TestCase):
 
     def test_reports_movement_when_angles_change(self):
         import reachy_mini as rm
+
         agent = self._agent(rm.__version__, [0.0] * 7, [0.0, 0.3, 0.0, 0, 0, 0, 0])
         res = _run(NS["_dispatch"](agent, "diag", {}, return_result=True))
         self.assertTrue(res["moved"])
@@ -651,8 +725,7 @@ class CommandEventPayloadTest(unittest.TestCase):
 
     @staticmethod
     def _event(agent):
-        events = [payload for topic, payload in agent.published
-                  if topic == "custom/reachy/events"]
+        events = [payload for topic, payload in agent.published if topic == "custom/reachy/events"]
         if len(events) != 1:
             raise AssertionError(f"expected one command event, got {events!r}")
         return events[0]
@@ -672,11 +745,9 @@ class CommandEventPayloadTest(unittest.TestCase):
         self.assertIn("Sound from", event["result"])
 
     def test_listen_event_preserves_handler_result(self):
-        agent = FakeAgent(FakeMedia(
-            samplerate=16000, channels=1, doa=(math.radians(42.0), True)))
+        agent = FakeAgent(FakeMedia(samplerate=16000, channels=1, doa=(math.radians(42.0), True)))
 
-        _run(NS["_dispatch"](
-            agent, "listen", {"duration": 0.1, "include_b64": False}))
+        _run(NS["_dispatch"](agent, "listen", {"duration": 0.1, "include_b64": False}))
 
         event = self._event(agent)
         self.assertEqual(event["type"], "listen")
@@ -693,7 +764,8 @@ class CommandEventPayloadTest(unittest.TestCase):
         import reachy_mini as rm
 
         agent = DiagCommandTest()._agent(
-            rm.__version__, [0.0] * 7, [0.0, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0])
+            rm.__version__, [0.0] * 7, [0.0, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0]
+        )
         with mock.patch.object(NS["asyncio"], "sleep", new=mock.AsyncMock()):
             _run(NS["_dispatch"](agent, "diag", {}))
 
@@ -751,6 +823,20 @@ class BridgeToMainTest(unittest.TestCase):
         self.assertEqual(payload["_interface_source"], "reachy-mini")
         self.assertEqual(payload["text"], "what's the weather in Paris?")
 
+    def test_bridge_keeps_current_request_plain_and_history_structured(self):
+        agent = self._agent(lambda _p: {"text": "Okay."})
+        history = [
+            {
+                "transcript": "turn off the light",
+                "response": "Okay, the light is off.",
+            }
+        ]
+
+        _run(NS["_bridge_to_main"](agent, "Yes", "tid-context", conversation_history=history))
+
+        payload = agent.sent[0][1]
+        self.assertEqual(payload["text"], "Yes")
+
     def test_handle_task_rejects_invented_say_and_bridges_to_main(self):
         agent = self._agent(lambda _p: {"text": "It is 8:45 PM in Athens."})
 
@@ -758,10 +844,12 @@ class BridgeToMainTest(unittest.TestCase):
             return [{"cmd": "say", "text": "It is 8:45 PM in Athens."}]
 
         with mock.patch.dict(NS, {"_nl_to_commands": invented_say}):
-            res = _run(NS["handle_task"](
-                agent,
-                {"text": "What time is it in Athens?", "_task_id": "tid2"},
-            ))
+            res = _run(
+                NS["handle_task"](
+                    agent,
+                    {"text": "What time is it in Athens?", "_task_id": "tid2"},
+                )
+            )
 
         self.assertTrue(res["bridged"])
         self.assertEqual(res["cmd"], "bridge")
@@ -785,10 +873,12 @@ class BridgeToMainTest(unittest.TestCase):
             self.fail("explicit interface request reached the robot planner")
 
         with mock.patch.dict(NS, {"_nl_to_commands": must_not_plan}):
-            res = _run(NS["handle_task"](
-                agent,
-                {"text": "ask Wactorz what is two plus two?", "_task_id": "tid3"},
-            ))
+            res = _run(
+                NS["handle_task"](
+                    agent,
+                    {"text": "ask Wactorz what is two plus two?", "_task_id": "tid3"},
+                )
+            )
 
         self.assertTrue(res["bridged"])
         self.assertEqual(res["result"], "Four.")
@@ -797,9 +887,9 @@ class BridgeToMainTest(unittest.TestCase):
     def test_explicit_interface_prefix_variants(self):
         parse = NS["_explicit_interface_request"]
         self.assertEqual(parse("Wactorz, check my calendar"), "check my calendar")
-        self.assertEqual(parse("use Wactorz to check the weather"),
-                         "check the weather")
+        self.assertEqual(parse("use Wactorz to check the weather"), "check the weather")
         self.assertIsNone(parse("wiggle your antennas"))
+
     def test_returns_none_when_main_unreachable(self):
         agent = self._agent(lambda _p: {"error": "Agent 'main' not found"})
         self.assertIsNone(_run(NS["_bridge_to_main"](agent, "hi", "t")))
@@ -917,8 +1007,8 @@ class EmptyDoaTest(unittest.TestCase):
             agent = FakeAgent(FakeMedia(samplerate=16000, channels=1, doa=empty))
             res = _run(NS["_dispatch"](agent, "listen", {"duration": 0.1}, return_result=True))
             self.assertTrue(res["ok"], msg=f"doa={empty!r}")
-            self.assertNotIn("doa_deg", res)      # nothing localized
-            self.assertNotIn("doa_error", res)    # and it wasn't an error, just empty
+            self.assertNotIn("doa_deg", res)  # nothing localized
+            self.assertNotIn("doa_error", res)  # and it wasn't an error, just empty
 
 
 class DoaAngleDegTest(unittest.TestCase):
@@ -980,8 +1070,7 @@ class AudioCaptureWindowTest(unittest.TestCase):
 class AskVoiceCommandTest(unittest.TestCase):
     @staticmethod
     def _clip():
-        b64, frames = NS["_pcm_to_wav_b64"](
-            np.full(1600, 0.1, dtype=np.float32), 16000, 1)
+        b64, frames = NS["_pcm_to_wav_b64"](np.full(1600, 0.1, dtype=np.float32), 16000, 1)
         return {
             "audio_b64": b64,
             "duration_s": frames / 16000,
@@ -990,8 +1079,9 @@ class AskVoiceCommandTest(unittest.TestCase):
 
     @staticmethod
     def _event(agent):
-        return [payload for topic, payload in agent.published
-                if topic == "custom/reachy/events"][-1]
+        return [payload for topic, payload in agent.published if topic == "custom/reachy/events"][
+            -1
+        ]
 
     def test_integration_wav_to_transcript_to_main_to_spoken_answer(self):
         agent = FakeAgent(FakeMedia())
@@ -1010,17 +1100,23 @@ class AskVoiceCommandTest(unittest.TestCase):
             self.assertTrue(wav_bytes.startswith(b"RIFF"))
             self.assertEqual(payload["stt_backend"], "whisper")
             from wactorz.catalogue_agents.reachy_stt import Transcription
+
             return Transcription("turn on the living-room light", "whisper", "tiny")
 
         spoken = mock.AsyncMock(return_value={"said": "The living-room light is on."})
         agent.send_to = send_to
-        with mock.patch.dict(NS, {"_listen": fake_listen, "_say": spoken}), \
-             mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav",
-                        new=fake_transcribe):
-            res = _run(NS["_dispatch"](
-                agent, "ask_voice",
-                {"duration": 5, "stt_backend": "whisper", "stt_model": "tiny"},
-                return_result=True))
+        with (
+            mock.patch.dict(NS, {"_listen": fake_listen, "_say": spoken}),
+            mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", new=fake_transcribe),
+        ):
+            res = _run(
+                NS["_dispatch"](
+                    agent,
+                    "ask_voice",
+                    {"duration": 5, "stt_backend": "whisper", "stt_model": "tiny"},
+                    return_result=True,
+                )
+            )
 
         self.assertTrue(res["ok"])
         self.assertEqual(res["transcript"], "turn on the living-room light")
@@ -1028,11 +1124,21 @@ class AskVoiceCommandTest(unittest.TestCase):
         self.assertEqual(res["stt_backend"], "whisper")
         self.assertEqual(agent.sent[0][0], "main")
         self.assertTrue(agent.sent[0][1]["_via_interface"])
+        self.assertTrue(agent.sent[0][1]["_interface_voice"])
         spoken.assert_awaited_once()
         self.assertEqual(spoken.await_args.args[1]["text"], "The living-room light is on.")
         event = self._event(agent)
-        for field in ("transcript", "capture_duration_s", "transcription_duration_s",
-                      "response_text", "total_duration_s", "ok", "error", "type", "ts"):
+        for field in (
+            "transcript",
+            "capture_duration_s",
+            "transcription_duration_s",
+            "response_text",
+            "total_duration_s",
+            "ok",
+            "error",
+            "type",
+            "ts",
+        ):
             self.assertIn(field, event)
         self.assertEqual(event["type"], "ask_voice")
         self.assertTrue(event["ok"])
@@ -1043,8 +1149,7 @@ class AskVoiceCommandTest(unittest.TestCase):
 
         agent = FakeAgent(FakeMedia())
         with mock.patch.dict(NS, {"_listen": fail_capture}):
-            res = _run(NS["_dispatch"](
-                agent, "ask_voice", {}, return_result=True))
+            res = _run(NS["_dispatch"](agent, "ask_voice", {}, return_result=True))
 
         self.assertFalse(res["ok"])
         self.assertEqual(res["stage"], "capture_failed")
@@ -1060,11 +1165,13 @@ class AskVoiceCommandTest(unittest.TestCase):
             raise RuntimeError("model missing")
 
         agent = FakeAgent(FakeMedia())
-        with mock.patch.dict(NS, {"_listen": fake_listen}), \
-             mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav",
-                        new=fail_transcription):
-            res = _run(NS["_dispatch"](
-                agent, "ask_voice", {}, return_result=True))
+        with (
+            mock.patch.dict(NS, {"_listen": fake_listen}),
+            mock.patch(
+                "wactorz.catalogue_agents.reachy_stt.transcribe_wav", new=fail_transcription
+            ),
+        ):
+            res = _run(NS["_dispatch"](agent, "ask_voice", {}, return_result=True))
 
         self.assertFalse(res["ok"])
         self.assertEqual(res["stage"], "transcription_failed")
@@ -1077,13 +1184,15 @@ class AskVoiceCommandTest(unittest.TestCase):
 
         async def empty(_wav, _payload):
             from wactorz.catalogue_agents.reachy_stt import Transcription
+
             return Transcription("   ", "faster-whisper", "base")
 
         agent = FakeAgent(FakeMedia())
-        with mock.patch.dict(NS, {"_listen": fake_listen}), \
-             mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", new=empty):
-            res = _run(NS["_dispatch"](
-                agent, "ask_voice", {}, return_result=True))
+        with (
+            mock.patch.dict(NS, {"_listen": fake_listen}),
+            mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", new=empty),
+        ):
+            res = _run(NS["_dispatch"](agent, "ask_voice", {}, return_result=True))
 
         self.assertFalse(res["ok"])
         self.assertEqual(res["stage"], "empty_transcript")
@@ -1094,17 +1203,18 @@ class AskVoiceCommandTest(unittest.TestCase):
 
         async def transcribe(_wav, _payload):
             from wactorz.catalogue_agents.reachy_stt import Transcription
+
             return Transcription("what time is it", "faster-whisper", "base")
 
         async def no_main(_agent, _text, _task_id):
             return None
 
         agent = FakeAgent(FakeMedia())
-        with mock.patch.dict(NS, {"_listen": fake_listen, "_bridge_to_main": no_main}), \
-             mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav",
-                        new=transcribe):
-            res = _run(NS["_dispatch"](
-                agent, "ask_voice", {}, return_result=True))
+        with (
+            mock.patch.dict(NS, {"_listen": fake_listen, "_bridge_to_main": no_main}),
+            mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", new=transcribe),
+        ):
+            res = _run(NS["_dispatch"](agent, "ask_voice", {}, return_result=True))
 
         self.assertFalse(res["ok"])
         self.assertEqual(res["stage"], "routing_failed")
@@ -1116,18 +1226,18 @@ class AskVoiceCommandTest(unittest.TestCase):
 
         async def transcribe(_wav, _payload):
             from wactorz.catalogue_agents.reachy_stt import Transcription
+
             return Transcription("hello", "faster-whisper", "base")
 
-        async def bridge(_agent, _text, _task_id):
-            return {"result": "Hello there", "spoke": False,
-                    "speech_error": "speaker offline"}
+        async def bridge(_agent, _text, _task_id, **_kwargs):
+            return {"result": "Hello there", "spoke": False, "speech_error": "speaker offline"}
 
         agent = FakeAgent(FakeMedia())
-        with mock.patch.dict(NS, {"_listen": fake_listen, "_bridge_to_main": bridge}), \
-             mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav",
-                        new=transcribe):
-            res = _run(NS["_dispatch"](
-                agent, "ask_voice", {}, return_result=True))
+        with (
+            mock.patch.dict(NS, {"_listen": fake_listen, "_bridge_to_main": bridge}),
+            mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", new=transcribe),
+        ):
+            res = _run(NS["_dispatch"](agent, "ask_voice", {}, return_result=True))
 
         self.assertFalse(res["ok"])
         self.assertEqual(res["stage"], "speech_failed")
@@ -1144,10 +1254,10 @@ class AskVoiceCommandTest(unittest.TestCase):
         async def must_not_plan(_agent, _text):
             self.fail("push-to-talk phrase reached the robot planner")
 
-        with mock.patch.dict(NS, {"_ask_voice": fake_ask,
-                                  "_nl_to_commands": must_not_plan}):
-            res = _run(NS["handle_task"](
-                agent, {"text": "listen and ask Wactorz", "_task_id": "voice1"}))
+        with mock.patch.dict(NS, {"_ask_voice": fake_ask, "_nl_to_commands": must_not_plan}):
+            res = _run(
+                NS["handle_task"](agent, {"text": "listen and ask Wactorz", "_task_id": "voice1"})
+            )
 
         self.assertTrue(res["ok"])
         self.assertEqual(res["cmd"], "ask_voice")

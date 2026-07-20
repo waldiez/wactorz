@@ -88,10 +88,34 @@ class MemoryMixin:
         live_names.sort()
         interface_note = ""
         if source:
-            interface_note = (
-                f"[INTERFACE ROUTING: request arrived through {source}. "
-                f"Treat {source} only as the response transport; never delegate back to it.]\n"
-            )
+            context = getattr(self, "_current_interface_context", dict)()
+            capabilities = context.get("capabilities") or {}
+            display_name = context.get("display_name") or source
+            if context.get("kind") == "embodied_robot" and capabilities:
+                rendered = ", ".join(
+                    f"{command}({', '.join(options)})"
+                    for command, options in capabilities.items()
+                )
+                example_command, example_options = next(iter(capabilities.items()))
+                example = (
+                    f'<interface_action>{{"cmd":"{example_command}",'
+                    f'"name":"{example_options[0]}"}}</interface_action>'
+                )
+                interface_note = (
+                    f"[EMBODIED INTERFACE: the user is speaking to the physical robot "
+                    f"{display_name} through {source}. You are its conversational brain: "
+                    "speak naturally in first person and never claim that you have no body. "
+                    f"Supported interface actions: {rendered}. For a requested supported "
+                    "action, include one exact block such as "
+                    f"{example}. "
+                    "The interface executes validated blocks and removes them from speech/chat. "
+                    f"Do not delegate back to {source}; return interface actions instead.]\n"
+                )
+            else:
+                interface_note = (
+                    f"[INTERFACE ROUTING: request arrived through {source}. "
+                    f"Treat {source} only as the response transport; never delegate back to it.]\n"
+                )
 
         if live_names:
             ctx = (
@@ -220,6 +244,22 @@ class MemoryMixin:
         instead of 'pref_user_name'). We normalize on save so a stray unprefixed
         key still ends up in a sensible bucket rather than the OTHER catch-all.
         """
+        is_voice = getattr(self, "_current_interface_is_voice", lambda: False)()
+        lowered = user_message.lower()
+        explicit_voice_memory = any(
+            phrase in lowered
+            for phrase in (
+                "remember ",
+                "save this",
+                "save that",
+                "θυμήσου",
+                "να θυμάσαι",
+                "αποθήκευσε",
+            )
+        )
+        if is_voice and not explicit_voice_memory:
+            logger.info(f"[{self.name}] Facts extraction skipped for voice transcript")
+            return
         if self.llm is None:
             logger.warning(f"[{self.name}] Facts extraction skipped: no LLM provider")
             return

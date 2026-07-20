@@ -10,24 +10,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Mini Python SDK to `1.8.4`, matching the supported robot daemon, and detects an
   older importable SDK as needing an upgrade instead of silently reusing it.
 
-- **Reachy Mini assistant-style conversation UX** - Voice sessions are persistent
-  by default and end on inactivity or a natural stop phrase instead of an arbitrary
-  ten-turn ceiling. Recognized speech is published to the Reachy chat thread as a
-  real user bubble, while punctuation-only STT noise is discarded before routing.
-  Full dashboard answers are converted to concise spoken text and split into
-  sentence-sized TTS chunks, while emoji, Markdown role-play, and raw Home Assistant
-  service/entity acknowledgements never reach audio. English is the default session
-  language unless explicitly configured, and common "Richie" STT spellings are
-  corrected to the robot's actual name, Reachy. Obvious embodied requests (`dance`,
-  `nod`, head shake, antenna wiggle, curious pose) now execute deterministic physical
-  gestures locally instead of eliciting orchestrator role-play. Optional antenna-only
-  idle motion never resets the head.
-  Barge-in
-  remains available per session, but is off by default because robot-speaker echo
-  can otherwise cut off Reachy and become a false command on WebRTC backends without
-  acoustic echo cancellation. State-transition motion remains opt-in. Speech
-  formatting, idle/state motion, language, VAD sensitivity, and an optional positive
-  turn limit remain configurable per session.
+- **Reachy Mini assistant-style conversation UX** - Voice sessions listen until a
+  natural stop phrase by default, publish recognized speech and concise replies in
+  Reachy's own interface thread, and keep planner details, emoji, role-play, and raw Home
+  Assistant syntax out of audio. STT now auto-detects languages including Greek,
+  biases recognition toward Reachy/Wactorz/device names, rejects low-confidence
+  hallucinations without consuming a turn, and supports Greek stop phrases.
+  Barge-in is on by default for natural interruption and can be disabled on setups
+  without acoustic echo cancellation. Direct dance, turn-around, nod, shake, antenna,
+  and curious requests execute physical gestures; background antenna/head motion remains off by
+  default to avoid servo shiver and microphone contamination.
 
 - **Reachy Mini `reconnect` — recover a robot that was off at spawn** - `setup()`
   opened the robot link exactly once, so a robot powered on *after* the agent
@@ -68,15 +60,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Reachy speech chunks no longer replace one another mid-reply** - Reachy's
+  Edge TTS integration now requests word timing explicitly, accepts sentence timing,
+  and falls back to a conservative text-duration estimate when an older provider
+  returns no boundary metadata. Sequential clips wait through playback plus robot
+  transport latency, preventing replies such as ?Hello ?? from jumping directly to
+  their final sentence.
+
+- **Short Greek Reachy turns no longer become multilingual phonetic nonsense** -
+  Faster Whisper language probability is now preserved. Ambiguous short turns retry
+  in a configured fallback or confidently established session language, while
+  unresolved low-probability guesses are discarded before chat, routing, or memory.
+  Greek/English requests to change Reachy's own voice volume execute locally instead
+  of being misrouted to Home Assistant. Voice transcripts can no longer create
+  durable user facts without an explicit memory request, preventing hallucinated
+  names and household members.
+
+
 - **Reachy listening could become deaf and hallucinate speech from antenna noise** -
   The original idle loop stepped directly between asymmetric antenna targets while
   the microphone remained live. A shivering servo could repeatedly satisfy the VAD
-  onset detector, keeping Whisper busy on 1-2 second noise clips until it invented a
-  fluent sentence. Physical motion is now off by default while the microphone is live;
-  the opt-in mode uses low-amplitude eased sweeps, stops at confirmed speech onset, and
+  onset detector, keeping Whisper busy on short noise clips until it invented fluent
+  speech. Physical motion is now off by default while the microphone is live; the
+  opt-in mode uses low-amplitude eased sweeps, stops at confirmed speech onset, and
   recenters only after recording ends. VAD also requires the configured minimum
-  duration of actual voiced frames; brief motor bursts are discarded before
-  transcription without consuming a turn or error budget.
+  duration of actual voiced frames, so brief motor bursts never reach transcription.
+
+- **Reachy voice sessions now behave as one assistant instead of a second brain** -
+  Main owns the canonical conversation and Reachy is its embodied microphone,
+  speaker, and gesture surface. Current utterances are routed as pristine text while
+  recent turns travel as structured, non-executable context. Main receives generic
+  interface capabilities and can return allow-listed action blocks without delegating
+  back or exposing its internal identity; voice bubbles remain in Reachy's interface
+  thread. Planner internals and raw Home Assistant calls stay out of ordinary chat and
+  speech. Faster Whisper disables previous-text conditioning,
+  enables VAD, and exposes confidence/no-speech scores so likely hallucinations are
+  silently discarded. Deterministic light handling recognizes follow-up "then on",
+  cyan, and natural requests for full brightness.
 
 - **Clear light commands no longer fail on empty actuator JSON** - The one-shot
   actuator previously passed an empty LLM response to `json.loads`, exposing

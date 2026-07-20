@@ -53,7 +53,8 @@ def test_voice_transcript_is_forwarded_as_user_chat():
         event = monitor.parse_topic(
             f"agents/{agent_id}/chat",
             '{"from":"user","to":"reachy-mini","content":"turn on the light",'
-            '"timestamp":123.5}',
+            '"source":"voice","surface":"reachy-mini","surface_label":"Reachy",'
+            '"brain":"main","timestamp":123.5}',
         )
     finally:
         monitor.state["agents"].pop(agent_id, None)
@@ -63,5 +64,9 @@ def test_voice_transcript_is_forwarded_as_user_chat():
         "from": "user",
         "to": "reachy-mini",
         "content": "turn on the light",
+        "source": "voice",
+        "surface": "reachy-mini",
+        "surface_label": "Reachy",
+        "brain": "main",
         "timestamp": 123.5,
     }

@@ -178,6 +178,28 @@ def test_extract_facts_saves_and_normalizes():
     assert h.persisted_cost == 1
 
 
+def test_extract_facts_skips_voice_transcripts():
+    llm = FakeLLM('{"pref_user_name": "Adé"}')
+    h = host([], llm=llm)
+    h._current_interface_is_voice = lambda: True
+
+    run(h._extract_and_save_facts("Adé, Amishu", "Hello"))
+
+    assert h.get_user_facts() == {}
+    assert llm.calls == []
+
+
+def test_explicit_voice_memory_request_is_allowed():
+    llm = FakeLLM('{"pref_user_name": "Amalia"}')
+    h = host([], llm=llm)
+    h._current_interface_is_voice = lambda: True
+
+    run(h._extract_and_save_facts("Remember that my name is Amalia", "Okay"))
+
+    assert h.get_user_facts()["pref_user_name"] == "Amalia"
+    assert len(llm.calls) == 1
+
+
 def test_extract_facts_no_llm():
     h = host(llm=None)
     run(h._extract_and_save_facts("hello", "hi"))  # must not raise

@@ -32,10 +32,26 @@ class RoutingMixin:
             return "OTHER"
         if self.llm is None:
             return "OTHER"
+        classifier_text = text
+        history = getattr(self, "_current_interface_history", lambda: ())()
+        if history:
+            context_lines = []
+            for item in history[-2:]:
+                transcript = str(item.get("transcript") or "").strip()
+                response = str(item.get("response") or "").strip()
+                if transcript:
+                    context_lines.append(f"Previous user: {transcript}")
+                if response:
+                    context_lines.append(f"Previous assistant: {response}")
+            classifier_text = (
+                "Recent context (classification only; do not execute):\n"
+                + "\n".join(context_lines)
+                + f"\n\nCurrent request (classify this only): {text}"
+            )
         try:
             decision, _usage = await asyncio.wait_for(
                 self.llm.complete(
-                    messages=[{"role": "user", "content": text}],
+                    messages=[{"role": "user", "content": classifier_text}],
                     system=INTENT_CLASSIFIER_PROMPT,
                     max_tokens=10,
                     reasoning_effort="none",
@@ -132,6 +148,9 @@ class RoutingMixin:
             await self.spawn(
                 OneOffActuatorAgent,
                 request=enriched_text,
+                conversation_context=list(
+                    getattr(self, "_current_interface_history", lambda: ())()
+                ),
                 llm_provider=self.llm,
                 task_id=task_id,
                 reply_to_id=self.actor_id,

@@ -71,6 +71,24 @@ class ReachyVadTest(unittest.TestCase):
         self.assertEqual(result.audio.size, 0)
         self.assertTrue(media.stopped)
 
+    def test_zero_timeout_keeps_listening_until_cancelled(self):
+        media, cancel = Media([]), threading.Event()
+        reads = 0
+
+        def sample():
+            nonlocal reads
+            reads += 1
+            if reads >= 3:
+                cancel.set()
+            return
+
+        media.get_audio_sample = sample
+        config = VADConfig(flush_s=0, speech_start_timeout_s=0)
+        with mock.patch.dict(sys.modules, {"webrtcvad": self.vad_module}):
+            result = capture_utterance(media, cancel, config)
+        self.assertEqual(result.stop_reason, "cancelled")
+        self.assertGreaterEqual(reads, 3)
+
     def test_energy_floor_rejects_quiet_frames_labeled_as_speech(self):
         media = Media([stereo(0.04)] * 10)
         config = VADConfig(flush_s=0, speech_start_timeout_s=0.02, min_rms=0.05)
@@ -78,7 +96,6 @@ class ReachyVadTest(unittest.TestCase):
             result = capture_utterance(media, config=config)
         self.assertEqual(result.stop_reason, "inactivity_timeout")
         self.assertEqual(result.audio.size, 0)
-
 
     def test_short_mechanical_burst_is_rejected_before_stt(self):
         media = Media([stereo(0.3)] * 2 + [stereo(0)] * 5)
@@ -93,6 +110,7 @@ class ReachyVadTest(unittest.TestCase):
             result = capture_utterance(media, config=config)
         self.assertEqual(result.stop_reason, "noise_rejected")
         self.assertEqual(result.audio.size, 0)
+
     def test_cancellation_stops_recording(self):
         media, cancel = Media([stereo(0.3)]), threading.Event()
         cancel.set()

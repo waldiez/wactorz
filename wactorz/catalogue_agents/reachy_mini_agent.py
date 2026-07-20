@@ -927,9 +927,38 @@ async def _nl_to_commands(agent, text):
 
 
 def _embodied_command_for_text(text):
-    """Return a deterministic physical command for obvious body requests."""
+    """Return a deterministic local command for obvious embodiment requests."""
     import re as _re
+
     low = str(text or "").lower()
+    greek_voice = any(stem in low for stem in ("φων", "έντασ", "τόνο"))
+    greek_softer = any(
+        stem in low for stem in ("χαμήλω", "χαμηλώ", "πιο σιγά", "σιγανά")
+    )
+    greek_louder = any(
+        stem in low for stem in ("δυνάμω", "πιο δυνατά", "ανέβασε")
+    )
+    if greek_voice and greek_softer:
+        delta = -15 if "λίγο" in low else -25
+        return {"cmd": "volume", "delta": delta}
+    if greek_voice and greek_louder:
+        delta = 15 if "λίγο" in low else 25
+        return {"cmd": "volume", "delta": delta}
+
+    english_voice = bool(_re.search(r"\b(voice|volume|speak|talk)\b", low))
+    if english_voice and _re.search(
+        r"\b(lower|quieter|softer|turn (?:it|your voice) down)\b", low
+    ):
+        delta = -15 if _re.search(r"\b(a little|a bit|slightly)\b", low) else -25
+        return {"cmd": "volume", "delta": delta}
+    if english_voice and _re.search(
+        r"\b(louder|speak up|turn (?:it|your voice) up)\b", low
+    ):
+        delta = 15 if _re.search(r"\b(a little|a bit|slightly)\b", low) else 25
+        return {"cmd": "volume", "delta": delta}
+
+    if _re.search(r"\b(turn around|face (?:the )?other way|spin around)\b", low):
+        return {"cmd": "gesture", "name": "turn_around"}
     if _re.search(r"\b(dance|boogie|robot shuffle)\b", low):
         return {"cmd": "gesture", "name": "dance"}
     if _re.search(r"\b(nod|nod your head)\b", low):
@@ -1258,6 +1287,18 @@ def _normalize_reachy_transcript(text):
     if _re.fullmatch(variants + r"[.!?]?", value, flags=_re.IGNORECASE):
         return "Reachy"
     value = _re.sub(r"\bman light\b", "main light", value, flags=_re.IGNORECASE)
+    value = _re.sub(
+        r"\bthen\s+on\s+the\s+light\b",
+        "turn on the light",
+        value,
+        flags=_re.IGNORECASE,
+    )
+    value = _re.sub(
+        r"\bthey(?:'ve| have)\s+known\s+the\s+light\b",
+        "turn on the light",
+        value,
+        flags=_re.IGNORECASE,
+    )
     return value
 
 
@@ -1288,7 +1329,7 @@ def _natural_actuation_speech(value, user_text):
             return "Okay, the light is off."
         if service == "turn_on":
             colors = (
-                "pink", "red", "orange", "yellow", "green", "blue",
+                "pink", "red", "orange", "yellow", "green", "cyan", "blue",
                 "purple", "violet", "white", "warm white", "cool white",
             )
             color = next((item for item in colors if item in request), None)
@@ -1300,12 +1341,32 @@ def _natural_actuation_speech(value, user_text):
     return "Okay, done."
 
 
+def _voice_workflow_reply(value):
+    """Hide planner internals while keeping voice approvals unambiguous."""
+    lowered = str(value or "").lower()
+    if "proposed pipeline" in lowered and "reply" in lowered and "approve" in lowered:
+        return (
+            "I can set that up as an automation. Say yes to approve it, "
+            "no to cancel, or tell me what to change."
+        )
+    if "approved plan" in lowered:
+        return "Done. The automation is running."
+    if "discarded plan" in lowered:
+        return "Okay, I cancelled that automation."
+    if "revising plan" in lowered and "superseded" in lowered:
+        return "Okay, I updated the automation. Say yes to approve it or no to cancel."
+    return None
+
+
 def _voice_friendly_reply(text, limit=420, user_text=""):
     """Turn a visual dashboard answer into natural human-only spoken text."""
     import re as _re
     value = _sanitize_reachy_identity_reply(text).strip()
     if not value:
         return ""
+    workflow = _voice_workflow_reply(value)
+    if workflow:
+        return workflow
     actuation = _natural_actuation_speech(value, user_text)
     if actuation:
         return actuation
@@ -1381,9 +1442,20 @@ async def _speak_reply(agent, text, *, await_playback=False, session=None):
     }
 
 
+_REACHY_INTERFACE_GESTURES = (
+    "dance",
+    "nod",
+    "shake",
+    "wiggle",
+    "curious",
+    "turn_around",
+)
+
+
 async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
                           before_speak=None, session_id=None, voice_friendly=False,
-                          barge_in_session=None):
+                          barge_in_session=None, conversation_history=None,
+                          voice_input=False):
     """Reachy-as-interface bridge.
 
     Anything Reachy can't turn into a robot/HA command is piped to the MAIN
@@ -1393,11 +1465,23 @@ async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
     the caller can fall back to the local parse-error hint.
     """
     try:
+        interface_name = getattr(agent, "name", "reachy-mini")
         bridge_payload = {
             "text": text,
             "_via_interface": True,
-            "_interface_source": getattr(agent, "name", "reachy-mini"),
+            "_interface_source": interface_name,
+            "_interface_context": {
+                "display_name": "Reachy",
+                "kind": "embodied_robot",
+                "capabilities": {
+                    "gesture": list(_REACHY_INTERFACE_GESTURES),
+                },
+            },
         }
+        if voice_input:
+            bridge_payload["_interface_voice"] = True
+        if conversation_history:
+            bridge_payload["_interface_history"] = list(conversation_history)[-4:]
         if session_id:
             bridge_payload["_interface_session_id"] = session_id
         resp = await agent.send_to("main", bridge_payload, timeout=60.0)
@@ -1406,16 +1490,38 @@ async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
         return None
 
     reply = ""
+    interface_actions = []
     if isinstance(resp, dict):
         # A bare error with no answer text means the bridge didn't work.
         if resp.get("error") and not (resp.get("text") or resp.get("result")):
             return None
         reply = str(resp.get("text") or resp.get("result")
                     or resp.get("reply") or "").strip()
+        raw_actions = resp.get("interface_actions")
+        if isinstance(raw_actions, list):
+            for action in raw_actions[:3]:
+                if not isinstance(action, dict):
+                    continue
+                command = str(action.get("cmd") or "").lower().strip()
+                name = str(action.get("name") or "").lower().strip()
+                if command == "gesture" and name in _REACHY_INTERFACE_GESTURES:
+                    interface_actions.append({"cmd": command, "name": name})
     elif isinstance(resp, str):
         reply = resp.strip()
-    if not reply:
+    if not reply and not interface_actions:
         return None
+
+    raw_reply = reply
+    action_results = []
+    for action in interface_actions:
+        result = await _dispatch(
+            agent, action["cmd"], action, return_result=True
+        )
+        action_results.append(result or {"ok": False, "cmd": action["cmd"]})
+    if action_results and not all(result.get("ok") for result in action_results):
+        reply = "I wanted to move, but my motors aren't responding right now."
+    elif not reply:
+        reply = "Okay."
 
     reply = _sanitize_reachy_identity_reply(reply)
     # Voice it through the robot when connected; the text is returned either way
@@ -1423,13 +1529,14 @@ async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
     spoke = False
     interrupted = False
     spoken_reply = _voice_friendly_reply(reply, user_text=text) if voice_friendly else reply
+    display_reply = spoken_reply if voice_friendly else reply
     spoken_result = ""
     speech_error = None
     ok_link, link_reason = _is_connected(agent)
     if ok_link:
         try:
             if before_speak is not None:
-                await before_speak(reply)
+                await before_speak(display_reply)
             # Conversation mode speaks short chunks, which gets the first phrase
             # onto the speaker sooner and gives barge-in a clean cancellation point.
             speech = await _speak_reply(
@@ -1448,7 +1555,10 @@ async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
         speech_error = link_reason or "reachy is not connected"
     return {"ok": True, "cmd": "bridge", "bridged": True, "spoke": spoke,
             "interrupted": interrupted, "said": spoken_result if spoke else None,
-            "spoken_result": spoken_result, "result": reply,
+            "spoken_result": spoken_result, "result": display_reply,
+            "raw_result": raw_reply,
+            "interface_actions": interface_actions,
+            "interface_action_results": action_results,
             "speech_error": speech_error,
             "_task_id": task_id, "task": task_id}
 
@@ -1968,10 +2078,18 @@ async def _gesture(agent, payload):
             (8, -5, 12, 38, 55, 4),
             (0, 0, 0, 12, 12, 0),
         ],
+        "turn_around": [
+            (24, 0, 0, 18, 18, 42),
+            (-24, 0, 0, 18, 18, -42),
+            (24, 0, 0, 18, 18, 42),
+            (0, 0, 0, 0, 0, 0),
+        ],
     }
     steps = gestures.get(name)
     if not steps:
-        raise ValueError("gesture name must be dance, nod, shake, wiggle, or curious")
+        raise ValueError(
+            "gesture name must be dance, nod, shake, wiggle, curious, or turn_around"
+        )
     mini = agent.state["mini"]
     np = agent.state["np"]
     create_head_pose = agent.state["create_head_pose"]
@@ -1998,6 +2116,7 @@ async def _gesture(agent, payload):
         "shake": "I shook my head.",
         "wiggle": "I wiggled my antennas.",
         "curious": "Curious mode.",
+        "turn_around": "I turned around.",
     }
     return {"gesture": name, "result": labels[name]}
 
@@ -2133,12 +2252,32 @@ def _say_playback_pad(speech_seconds, payload):
         return 0.0
     if not speech_seconds or speech_seconds <= 0:
         return 0.0
-    return float(speech_seconds) + float(payload.get("tail_pad", 0.35))
+    return float(speech_seconds) + float(payload.get("tail_pad", 0.55))
+
+
+def _speech_duration_seconds(text, speech_ticks):
+    """Return measured TTS duration, with a conservative metadata-free fallback."""
+    measured = max(0.0, float(speech_ticks or 0) / 1e7)
+    if measured > 0:
+        return measured
+    value = str(text or "").strip()
+    if not value:
+        return 0.0
+    words = len(value.split())
+    return max(0.6, words / 2.6, len(value) / 15.0)
+
+
+def _edge_tts_communicate(edge_tts, text, voice):
+    """Request word timing when supported, retaining older edge-tts support."""
+    try:
+        return edge_tts.Communicate(text, voice, boundary="WordBoundary")
+    except TypeError:
+        return edge_tts.Communicate(text, voice)
 
 
 async def _begin_barge_in_monitor(agent, session, speech_seconds):
     """Listen during playback and signal as soon as sustained user speech starts."""
-    if not session or not session.get("payload", {}).get("barge_in", False):
+    if not session or not session.get("payload", {}).get("barge_in", True):
         return None
     if session.get("cancel_event") and session["cancel_event"].is_set():
         return None
@@ -2271,7 +2410,7 @@ async def _say(agent, payload):
         raise RuntimeError("edge-tts not installed — pip install edge-tts")
 
     raw_path = os.path.join(tempfile.gettempdir(), f"reachy_say_{uuid.uuid4().hex}.mp3")
-    communicate = edge_tts.Communicate(text, voice)
+    communicate = _edge_tts_communicate(edge_tts, text, voice)
     # Stream (what .save() does internally) so we can capture the total speech
     # duration from the WordBoundary offsets for free — used below to wait out
     # playback so sequential says don't cut each other off.
@@ -2280,12 +2419,16 @@ async def _say(agent, payload):
         async for chunk in communicate.stream():
             if chunk.get("type") == "audio":
                 _f.write(chunk["data"])
-            elif chunk.get("type") == "WordBoundary":
+            elif chunk.get("type") in ("WordBoundary", "SentenceBoundary"):
                 speech_ticks = max(
                     speech_ticks,
                     int(chunk.get("offset", 0)) + int(chunk.get("duration", 0)),
                 )
-    speech_seconds = speech_ticks / 1e7  # edge-tts uses 100-ns ticks
+    # edge-tts uses 100-ns ticks. Some versions default to SentenceBoundary
+    # metadata while older versions may emit no timing metadata at all. Never
+    # let an unknown duration become a zero wait: the next play_sound call would
+    # then replace this clip while it is still speaking.
+    speech_seconds = _speech_duration_seconds(text, speech_ticks)
 
     # -- Loudness boost (default on) --------------------------------------------
     # The boost compresses + limits the TTS file to the digital ceiling (loudest
@@ -3376,7 +3519,9 @@ async def _ask_voice(agent, payload):
 
     task_id = payload.get("_task_id") or payload.get("task") or payload.get("id")
     try:
-        bridged = await _bridge_to_main(agent, fields["transcript"], task_id)
+        bridged = await _bridge_to_main(
+            agent, fields["transcript"], task_id, voice_input=True
+        )
     except Exception as e:
         _voice_stage_failure("routing_failed", str(e), fields, started)
     if bridged is None:
@@ -3411,34 +3556,103 @@ _CONVERSATION_STOP_PHRASES = {
     "goodbye",
     "that s all",
     "that is all",
+    "σταμάτα",
+    "σταμάτα να ακούς",
+    "τέλος συζήτησης",
+    "αντίο",
+    "αντίο reachy",
 }
 
 
 def _conversation_stop_phrase(text):
     import re as _re
-    normalized = _re.sub(r"[^a-z0-9 ]+", " ", str(text or "").lower())
+    normalized = _re.sub(r"[^\w ]+", " ", str(text or "").lower(), flags=_re.UNICODE)
+    normalized = normalized.replace("_", " ")
     normalized = " ".join(normalized.split())
     return normalized in _CONVERSATION_STOP_PHRASES
 
 
 def _conversation_stt_payload(payload):
-    """Default voice sessions to English while preserving explicit config."""
+    """Resolve voice-session STT hints without forcing a spoken language."""
     import os as _os
+
     resolved = dict(payload or {})
-    configured = (
-        resolved.get("language")
-        or resolved.get("stt_language")
-        or _os.environ.get("REACHY_STT_LANGUAGE")
+    if not resolved.get("stt_hotwords") and not _os.environ.get("REACHY_STT_HOTWORDS"):
+        resolved["stt_hotwords"] = (
+            "Reachy, Wactorz, Home Assistant, main light, light strip, Tapo"
+        )
+    fallback = (
+        resolved.get("stt_fallback_language")
+        or _os.environ.get("REACHY_STT_FALLBACK_LANGUAGE")
     )
-    if not configured:
-        resolved["stt_language"] = "en"
+    if fallback:
+        resolved["stt_fallback_language"] = str(fallback).strip().lower()
     return resolved
 
 
+async def _conversation_transcribe(agent, wav_bytes, payload, session):
+    """Retry uncertain auto-language results with a stable session fallback."""
+    from wactorz.catalogue_agents.reachy_stt import transcribe_wav
+
+    initial = await transcribe_wav(wav_bytes, payload)
+    if payload.get("language") or payload.get("stt_language"):
+        return initial, False
+
+    language = str(getattr(initial, "language", "") or "").strip().lower()
+    probability = getattr(initial, "language_probability", None)
+    minimum = max(
+        0.0, min(1.0, float(payload.get("stt_min_language_probability", 0.60)))
+    )
+    if probability is None or float(probability) >= minimum:
+        if language:
+            session["stt_language_hint"] = language
+        return initial, False
+
+    fallback = str(
+        payload.get("stt_fallback_language")
+        or session.get("stt_language_hint")
+        or ""
+    ).strip().lower()
+    if not fallback or fallback == language:
+        return initial, False
+
+    await agent.log(
+        f"uncertain STT language {language or 'unknown'!r} "
+        f"({float(probability):.2f}); retrying as {fallback}",
+        level="info",
+    )
+    retry_payload = dict(payload)
+    retry_payload["stt_language"] = fallback
+    retried = await transcribe_wav(wav_bytes, retry_payload)
+    session["stt_retry_count"] = int(session.get("stt_retry_count") or 0) + 1
+    return retried, True
+
+
 def _conversation_transcript_is_meaningful(text):
-    """Reject punctuation-only/blank STT output before it reaches Wactorz."""
-    import re as _re
-    return bool(_re.search(r"[a-z0-9]", str(text or "").lower()))
+    """Accept words in any script while rejecting punctuation-only STT output."""
+    return any(character.isalnum() for character in str(text or ""))
+
+def _conversation_transcription_is_credible(transcription, payload):
+    """Reject model-declared no-speech, low-confidence, or uncertain-language text."""
+    confidence = getattr(transcription, "confidence", None)
+    no_speech = getattr(transcription, "no_speech_probability", None)
+    language_probability = getattr(transcription, "language_probability", None)
+    min_confidence = max(
+        0.0, min(1.0, float(payload.get("stt_min_confidence", 0.25)))
+    )
+    max_no_speech = max(
+        0.0, min(1.0, float(payload.get("stt_max_no_speech", 0.60)))
+    )
+    min_language = max(
+        0.0, min(1.0, float(payload.get("stt_min_language_probability", 0.60)))
+    )
+    if no_speech is not None and float(no_speech) > max_no_speech:
+        return False, f"no_speech_probability={float(no_speech):.3f}"
+    if confidence is not None and float(confidence) < min_confidence:
+        return False, f"confidence={float(confidence):.3f}"
+    if language_probability is not None and float(language_probability) < min_language:
+        return False, f"language_probability={float(language_probability):.3f}"
+    return True, ""
 
 
 async def _conversation_show_transcript(agent, session, transcript):
@@ -3448,8 +3662,10 @@ async def _conversation_show_transcript(agent, session, transcript):
             transcript,
             **{
                 "from": "user",
-                "to": agent.name,
+                "to": getattr(agent, "name", "reachy-mini"),
                 "source": "voice",
+                "surface": getattr(agent, "name", "reachy-mini"),
+                "surface_label": "Reachy",
                 "session_id": session.get("session_id", ""),
             },
         )
@@ -3464,8 +3680,14 @@ def _conversation_turn(session):
         "state": session.get("state", "idle"),
         "transcript": "",
         "response": "",
+        "raw_response": "",
         "capture_duration_s": 0.0,
         "transcription_duration_s": 0.0,
+        "stt_confidence": None,
+        "stt_no_speech_probability": None,
+        "stt_language": None,
+        "stt_language_probability": None,
+        "stt_retried": False,
         "routing_duration_s": 0.0,
         "spoken_response": "",
         "interrupted": False,
@@ -3613,38 +3835,41 @@ async def _conversation_publish(agent, session, state, turn=None, *, ok=True,
 
 
 def _conversation_route_text(transcript, history):
-    """Add only enough prior context to resolve follow-ups such as 'turn it on'."""
-    if not history:
-        return transcript
-    lines = []
-    for item in history[-2:]:
-        lines.append(f"Previous user request: {item.get('transcript', '')}")
-        lines.append(f"Previous Wactorz response: {item.get('response', '')}")
-    context = "\n".join(lines)
-    return (
-        f"Current request: {transcript}\n\n"
-        "[Conversation context only; execute only the current request.\n"
-        f"{context}\n]"
-    )
+    """Keep the executable request pristine; history travels as structured data."""
+    del history
+    return transcript
 
 
 async def _conversation_embodied_bridge(
     agent, transcript, command, task_id, before_speak, session
 ):
-    """Execute a physical request locally, then acknowledge it naturally."""
+    """Execute an obvious local request, then acknowledge it naturally."""
     action = await _dispatch(agent, command["cmd"], command, return_result=True)
     name = command.get("name")
     if action and action.get("ok"):
-        reply = str(action.get("result") or "Done.")
-        spoken = {
-            "dance": "Ta-da!",
-            "nod": "Mm-hm.",
-            "shake": "Nope.",
-            "wiggle": "How's that?",
-            "curious": "Hmm?",
-        }.get(name, "Okay.")
+        if command["cmd"] == "volume":
+            level = int(action.get("level", agent.state.get("volume_level", 0)))
+            reply = f"Speaker volume is now {level} percent."
+            greek = any("\u0370" <= char <= "\u03ff" for char in transcript.lower())
+            quieter = float(command.get("delta", 0)) < 0
+            if greek:
+                spoken = "Εντάξει, πιο σιγά." if quieter else "Εντάξει, πιο δυνατά."
+            else:
+                spoken = "Okay, a little quieter." if quieter else "Okay, a little louder."
+        else:
+            reply = str(action.get("result") or "Done.")
+            spoken = {
+                "dance": "Ta-da!",
+                "nod": "Mm-hm.",
+                "shake": "Nope.",
+                "wiggle": "How's that?",
+                "curious": "Hmm?",
+            }.get(name, "Okay.")
     else:
-        reply = "I wanted to move, but my motors aren't responding right now."
+        if command["cmd"] == "volume":
+            reply = "I couldn't change my speaker volume right now."
+        else:
+            reply = "I wanted to move, but my motors aren't responding right now."
         spoken = reply
     await before_speak(reply)
     speech_error = None
@@ -3658,11 +3883,11 @@ async def _conversation_embodied_bridge(
     except Exception as e:
         speech_error = str(e)
         speech = {"spoke": False, "interrupted": False, "spoken_result": ""}
-        await agent.log(f"gesture acknowledgement failed: {e}", level="warning")
+        await agent.log(f"local acknowledgement failed: {e}", level="warning")
     return {
         "ok": bool(action and action.get("ok")),
         "cmd": command["cmd"],
-        "physical": True,
+        "physical": command["cmd"] == "gesture",
         "spoke": speech["spoke"],
         "interrupted": speech["interrupted"],
         "spoken_result": speech["spoken_result"],
@@ -3708,6 +3933,8 @@ async def _conversation_capture(agent, session, vad_config):
 
 async def _conversation_cooldown(agent, session, turn, seconds):
     from wactorz.catalogue_agents.reachy_vad import drain_audio
+    if seconds <= 0:
+        return
     await _conversation_publish(agent, session, "cooldown", turn)
     media = _require_mic(agent, record=True)
     await _conversation_blocking_worker(
@@ -3742,6 +3969,8 @@ async def _conversation_start(agent, payload):
         "_idle_angles": (0.0, 0.0),
         "payload": dict(payload),
         "history": [],
+        "stt_language_hint": None,
+        "stt_retry_count": 0,
         "consecutive_errors": 0,
     }
     agent.state["conversation_session"] = session
@@ -3750,7 +3979,7 @@ async def _conversation_start(agent, payload):
     result = _conversation_turn(session)
     result.update({
         "started": True,
-        "result": "Conversation started. Speak to Reachy; say 'stop listening' to end.",
+        "result": "Conversation started. Speak normally; voice turns appear under Reachy.",
     })
     return result
 
@@ -3793,7 +4022,6 @@ async def _conversation_turn_error(agent, session, turn, error, max_errors):
 
 async def _conversation_loop(agent, session):
     import base64 as _b64
-    from wactorz.catalogue_agents.reachy_stt import transcribe_wav
     from wactorz.catalogue_agents.reachy_vad import VADConfig
 
     payload = session["payload"]
@@ -3801,16 +4029,18 @@ async def _conversation_loop(agent, session):
     # Zero means a Siri-like persistent session; inactivity or an explicit phrase ends it.
     max_turns = max(0, min(1000, int(payload.get("max_turns", 0))))
     max_errors = max(1, min(10, int(payload.get("max_consecutive_errors", 3))))
-    cooldown_s = max(0.1, min(5.0, float(payload.get("cooldown_s", 0.7))))
+    cooldown_s = max(0.0, min(5.0, float(payload.get("cooldown_s", 0.0))))
+    inactivity_timeout = float(payload.get("inactivity_timeout", 0.0))
     vad_config = VADConfig(
-        speech_start_timeout_s=max(1.0, min(300.0, float(
-            payload.get("inactivity_timeout", 30.0)))),
-        silence_s=max(0.3, min(3.0, float(payload.get("silence_s", 0.8)))),
+        speech_start_timeout_s=(
+            0.0 if inactivity_timeout <= 0 else max(1.0, min(86400.0, inactivity_timeout))
+        ),
+        silence_s=max(0.3, min(3.0, float(payload.get("silence_s", 1.0)))),
         max_utterance_s=max(1.0, min(30.0, float(
-            payload.get("max_utterance_s", 12.0)))),
-        min_speech_s=max(0.09, min(2.0, float(payload.get("min_speech_s", 0.18)))),
+            payload.get("max_utterance_s", 20.0)))),
+        min_speech_s=max(0.09, min(2.0, float(payload.get("min_speech_s", 0.2)))),
         pre_roll_s=max(0.0, min(1.0, float(payload.get("pre_roll_s", 0.3)))),
-        flush_s=max(0.05, min(2.0, float(payload.get("flush_s", 0.35)))),
+        flush_s=max(0.0, min(2.0, float(payload.get("flush_s", 0.08)))),
         mode=max(0, min(3, int(payload.get("vad_mode", 2)))),
         min_rms=max(0.0, min(1.0, float(payload.get("vad_min_rms", 0.01)))),
     )
@@ -3865,7 +4095,9 @@ async def _conversation_loop(agent, session):
             await _conversation_publish(agent, session, "transcribing", turn)
             transcription_started = _time.time()
             try:
-                transcription = await transcribe_wav(wav_bytes, stt_payload)
+                transcription, retried = await _conversation_transcribe(
+                    agent, wav_bytes, stt_payload, session
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -3880,9 +4112,32 @@ async def _conversation_loop(agent, session):
                 continue
             turn["transcription_duration_s"] = round(
                 _time.time() - transcription_started, 3)
+            turn["stt_confidence"] = getattr(transcription, "confidence", None)
+            turn["stt_no_speech_probability"] = getattr(
+                transcription, "no_speech_probability", None
+            )
+            turn["stt_language"] = getattr(transcription, "language", None)
+            turn["stt_language_probability"] = getattr(
+                transcription, "language_probability", None
+            )
+            turn["stt_retried"] = retried
             turn["transcript"] = _normalize_reachy_transcript(
                 str(transcription.text or "").strip())
             if not _conversation_transcript_is_meaningful(turn["transcript"]):
+                turn_index = max(0, turn_index - 1)
+                session["turn_index"] = turn_index
+                continue
+            credible, credibility_reason = _conversation_transcription_is_credible(
+                transcription, stt_payload
+            )
+            if not credible:
+                await agent.log(
+                    f"discarded low-confidence voice transcript: "
+                    f"{credibility_reason}; text={turn['transcript']!r}",
+                    level="info",
+                )
+                turn_index = max(0, turn_index - 1)
+                session["turn_index"] = turn_index
                 continue
             await _conversation_show_transcript(agent, session, turn["transcript"])
             if _conversation_stop_phrase(turn["transcript"]):
@@ -3912,7 +4167,10 @@ async def _conversation_loop(agent, session):
                         await_playback=True, before_speak=_before_speak,
                         session_id=session["session_id"],
                         voice_friendly=payload.get("voice_friendly", True),
-                        barge_in_session=session)
+                        barge_in_session=session,
+                        conversation_history=list(session.get("history", [])),
+                        voice_input=True,
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -3935,6 +4193,9 @@ async def _conversation_loop(agent, session):
                 continue
             if not turn["response"]:
                 turn["response"] = str(bridged.get("result") or "").strip()
+            turn["raw_response"] = str(
+                bridged.get("raw_result") or bridged.get("result") or ""
+            ).strip()
             if not bridged.get("spoke"):
                 keep_going = await _conversation_turn_error(
                     agent, session, turn,
@@ -3956,7 +4217,18 @@ async def _conversation_loop(agent, session):
                 "response": heard_response,
                 "interrupted": turn["interrupted"],
             })
-            await agent.notify_user(turn["response"])
+            await agent.notify_user(
+                turn["response"],
+                **{
+                    "from": getattr(agent, "name", "reachy-mini"),
+                    "to": "user",
+                    "source": "voice",
+                    "surface": getattr(agent, "name", "reachy-mini"),
+                "surface_label": "Reachy",
+                    "brain": "main",
+                    "session_id": session.get("session_id", ""),
+                },
+            )
             if turn["interrupted"]:
                 session["barge_in_count"] += 1
                 # The monitor retained the user's utterance. Start its STT/routing

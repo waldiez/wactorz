@@ -24,7 +24,7 @@ import numpy.typing as npt
 class VADConfig:
     """Timing and sensitivity settings for one conversation listen turn."""
 
-    speech_start_timeout_s: float = 20.0
+    speech_start_timeout_s: float = 0.0
     silence_s: float = 0.8
     max_utterance_s: float = 12.0
     min_speech_s: float = 0.18
@@ -131,7 +131,10 @@ def capture_utterance(
         listen_started = time.monotonic()
         while not _cancelled(cancel_event):
             if not speech_started:
-                if time.monotonic() - listen_started >= cfg.speech_start_timeout_s:
+                if (
+                    cfg.speech_start_timeout_s > 0
+                    and time.monotonic() - listen_started >= cfg.speech_start_timeout_s
+                ):
                     return VoiceCapture(
                         np.zeros((0,), dtype=np.float32),
                         samplerate,

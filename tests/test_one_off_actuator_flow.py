@@ -98,6 +98,8 @@ class DynamicHandleTaskMailboxTest(unittest.IsolatedAsyncioTestCase):
         release.set()
         await asyncio.wait_for(replied.wait(), timeout=0.1)
         self.assertEqual(sent[0][2]["result"], "done")
+
+
 class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
     """An interface bridge (e.g. reachy) routes through the FULL orchestrator."""
 
@@ -110,13 +112,18 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
         async def _process(text):
             seen["source"] = actor._current_interface_source()
             seen["prefix"] = actor._prefix_with_live_context(text)
+            seen["history"] = actor._current_interface_history()
+            seen["voice"] = actor._current_interface_is_voice()
+            seen["context"] = actor._current_interface_context()
             return "It is sunny."
 
         actor.process_user_input = AsyncMock(side_effect=_process)
-        actor._registry = types.SimpleNamespace(all_actors=lambda: [
-            types.SimpleNamespace(name="reachy-mini"),
-            types.SimpleNamespace(name="weather-agent"),
-        ])
+        actor._registry = types.SimpleNamespace(
+            all_actors=lambda: [
+                types.SimpleNamespace(name="reachy-mini"),
+                types.SimpleNamespace(name="weather-agent"),
+            ]
+        )
         sent = []
 
         async def _send(target, mtype, payload):
@@ -127,26 +134,72 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
         msg = Message(
             type=MessageType.TASK,
             sender_id="reachy-1",
-            payload={"text": "weather?", "_via_interface": True,
-                     "_interface_source": "reachy-mini",
-                     "_task_id": "abc", "_reply_to": "reachy-1"},
+            payload={
+                "text": "weather?",
+                "_via_interface": True,
+                "_interface_source": "reachy-mini",
+                "_interface_voice": True,
+                "_interface_context": {
+                    "display_name": "Reachy",
+                    "kind": "embodied_robot",
+                    "capabilities": {"gesture": ["dance", "turn_around"]},
+                },
+                "_interface_history": [{"transcript": "hello", "response": "Hi there."}],
+                "_task_id": "abc",
+                "_reply_to": "reachy-1",
+            },
         )
         await actor._handle_task(msg)
         await asyncio.sleep(0.05)  # the request runs as a background task
 
+        self.assertEqual(seen["history"][0]["transcript"], "hello")
+        self.assertEqual(actor._current_interface_history(), ())
+        self.assertTrue(seen["voice"])
+        self.assertFalse(actor._current_interface_is_voice())
+        self.assertEqual(actor._current_interface_context(), {})
         self.assertEqual(seen["source"], "reachy-mini")
-        running_line = next(line for line in seen["prefix"].splitlines()
-                            if line.startswith("Currently running agents"))
+        self.assertEqual(seen["context"]["display_name"], "Reachy")
+        running_line = next(
+            line
+            for line in seen["prefix"].splitlines()
+            if line.startswith("Currently running agents")
+        )
         self.assertIn("weather-agent", running_line)
         self.assertNotIn("reachy-mini", running_line)
-        self.assertIn("never delegate back", seen["prefix"])
+        self.assertIn("physical robot Reachy", seen["prefix"])
+        self.assertIn("return interface actions instead", seen["prefix"])
         actor.process_user_input.assert_awaited_once_with("weather?")
         self.assertEqual(len(sent), 1)
         target, mtype, payload = sent[0]
         self.assertEqual(target, "reachy-1")
         self.assertEqual(mtype, MessageType.RESULT)
         self.assertEqual(payload["_task_id"], "abc")
+        self.assertEqual(payload["agent"], "main")
         self.assertEqual(payload["result"], "It is sunny.")
+        self.assertEqual(payload["interface_actions"], [])
+        self.assertEqual(payload["interface_display_name"], "Reachy")
+
+    async def test_interface_action_is_validated_and_removed_from_reply(self):
+        from wactorz.agents import main_actor as main_module
+
+        actor = MainActor(llm_provider=None)
+        token = main_module._INTERFACE_CONTEXT.set(
+            {
+                "display_name": "Reachy",
+                "kind": "embodied_robot",
+                "capabilities": {"gesture": ("dance", "turn_around")},
+            }
+        )
+        try:
+            clean, actions = actor._extract_interface_actions(
+                'Okay. <interface_action>{"cmd":"gesture","name":"turn_around"}</interface_action>'
+                '<interface_action>{"cmd":"gesture","name":"unsafe"}</interface_action>'
+            )
+        finally:
+            main_module._INTERFACE_CONTEXT.reset(token)
+
+        self.assertEqual(clean, "Okay.")
+        self.assertEqual(actions, [{"cmd": "gesture", "name": "turn_around"}])
 
     async def test_interface_source_cannot_be_redelegated(self):
         from wactorz.agents import main_actor as main_module
@@ -158,9 +211,7 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
             structured, results = await actor._process_delegate_commands(
                 '<delegate>{"agent":"reachy-mini","task":"say four"}</delegate>'
             )
-            loose = await actor._execute_llm_delegations(
-                "@reachy-mini say four"
-            )
+            loose = await actor._execute_llm_delegations("@reachy-mini say four")
         finally:
             main_module._INTERFACE_SOURCE.reset(token)
 
@@ -169,7 +220,6 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results, [marker])
         self.assertEqual(loose, marker)
         actor._resolve_or_spawn.assert_not_awaited()
-
 
     async def test_plain_task_does_not_use_orchestrator(self):
         from wactorz.core.actor import Message, MessageType
@@ -238,6 +288,7 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
                 result = await agent._execute_request()
 
             self.assertEqual(result, "I couldn't identify a matching device for that request.")
+
     async def test_simple_main_light_command_bypasses_empty_llm_json(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             llm = types.SimpleNamespace(complete=AsyncMock(return_value=("", {})))
@@ -358,20 +409,26 @@ class GenericColorLightCollapseTest(unittest.TestCase):
     def _two_color_lights(self):
         # Both support rgb, so neither gets reassigned during colour repair.
         return [
-            {"entity_id": "light.led_strip",
-             "state": {"attributes": {"supported_color_modes": ["rgb"]}}},
-            {"entity_id": "light.main",
-             "state": {"attributes": {"supported_color_modes": ["rgb"]}}},
+            {
+                "entity_id": "light.led_strip",
+                "state": {"attributes": {"supported_color_modes": ["rgb"]}},
+            },
+            {
+                "entity_id": "light.main",
+                "state": {"attributes": {"supported_color_modes": ["rgb"]}},
+            },
         ]
 
     def _both_on(self):
         from wactorz.agents.home_assistant_actuator_agent import ActuatorAction
 
         return [
-            ActuatorAction(domain="light", service="turn_on",
-                           entity_id="light.led_strip", service_data={}),
-            ActuatorAction(domain="light", service="turn_on",
-                           entity_id="light.main", service_data={}),
+            ActuatorAction(
+                domain="light", service="turn_on", entity_id="light.led_strip", service_data={}
+            ),
+            ActuatorAction(
+                domain="light", service="turn_on", entity_id="light.main", service_data={}
+            ),
         ]
 
     def test_generic_color_request_collapses_to_one_light(self):
@@ -391,8 +448,9 @@ class GenericColorLightCollapseTest(unittest.TestCase):
         agent = self._agent("turn all the lights pink")
         repaired = agent._repair_color_actions(self._both_on(), self._two_color_lights())
         light_ons = [a for a in repaired if a.domain == "light" and a.service == "turn_on"]
-        self.assertEqual({a.entity_id for a in light_ons},
-                         {"light.led_strip", "light.main"})  # explicit plural -> all
+        self.assertEqual(
+            {a.entity_id for a in light_ons}, {"light.led_strip", "light.main"}
+        )  # explicit plural -> all
 
     def test_enrichment_block_does_not_make_singular_look_plural(self):
         # Main appends an entity list; a "Living Room Lights" entity in it must
@@ -408,6 +466,37 @@ class GenericColorLightCollapseTest(unittest.TestCase):
         repaired = agent._repair_color_actions(self._both_on(), self._two_color_lights())
         light_ons = [a for a in repaired if a.domain == "light" and a.service == "turn_on"]
         self.assertEqual(len(light_ons), 1)
+
+    def test_current_command_is_not_polluted_by_structured_history(self):
+        agent = OneOffActuatorAgent(
+            request="turn on the light",
+            conversation_context=[
+                {
+                    "transcript": "turn off all the lights",
+                    "response": "Okay, the lights are off.",
+                }
+            ],
+            llm_provider=_FakeLLM("[]"),
+            task_id="actuate_test",
+            reply_to_id="main-actor",
+            persistence_dir=tempfile.gettempdir(),
+        )
+
+        actions = agent._resolve_simple_light_actions(self._two_color_lights())
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].service, "turn_on")
+        self.assertEqual(actions[0].entity_id, "light.main")
+
+    def test_bright_cyan_request_sets_color_and_full_brightness(self):
+        agent = self._agent("Make the light bright cyan blue")
+
+        actions = agent._resolve_simple_light_actions(self._two_color_lights())
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].entity_id, "light.main")
+        self.assertEqual(actions[0].service_data["rgb_color"], [0, 255, 255])
+        self.assertEqual(actions[0].service_data["brightness_pct"], 100)
 
     def test_non_color_request_is_untouched(self):
         # No colour requested -> repair is a passthrough, both lights stay.

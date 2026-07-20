@@ -35,6 +35,13 @@ logger = logging.getLogger(__name__)
 
 
 _INTERFACE_SOURCE = contextvars.ContextVar("wactorz_interface_source", default="")
+_INTERFACE_HISTORY = contextvars.ContextVar("wactorz_interface_history", default=())
+_INTERFACE_VOICE = contextvars.ContextVar("wactorz_interface_voice", default=False)
+_INTERFACE_CONTEXT = contextvars.ContextVar("wactorz_interface_context", default=None)
+_INTERFACE_ACTION_RE = re.compile(
+    r"<interface_action>\s*(\{.*?\})\s*</interface_action>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
@@ -66,6 +73,80 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _current_interface_source(self) -> str:
         """Task-local interface actor excluded from delegation for this turn."""
         return _INTERFACE_SOURCE.get()
+
+    def _current_interface_history(self) -> tuple[dict, ...]:
+        """Structured recent turns supplied by an interface, never executable text."""
+        return _INTERFACE_HISTORY.get()
+
+    def _current_interface_is_voice(self) -> bool:
+        """Whether this task came from potentially fallible speech recognition."""
+        return bool(_INTERFACE_VOICE.get())
+
+    def _current_interface_context(self) -> dict:
+        """Sanitized capabilities of the surface carrying the current turn."""
+        return dict(_INTERFACE_CONTEXT.get() or {})
+
+    @staticmethod
+    def _sanitize_interface_context(raw_context, source: str) -> dict:
+        """Keep only bounded display metadata and explicit action allow-lists."""
+        if not isinstance(raw_context, dict):
+            return {}
+        display_name = str(raw_context.get("display_name") or source or "interface")[:80]
+        kind = str(raw_context.get("kind") or "interface")[:80]
+        capabilities = {}
+        raw_capabilities = raw_context.get("capabilities")
+        if isinstance(raw_capabilities, dict):
+            for raw_command, raw_options in list(raw_capabilities.items())[:12]:
+                command = str(raw_command).strip().lower()
+                if not re.fullmatch(r"[a-z][a-z0-9_]{0,39}", command):
+                    continue
+                if not isinstance(raw_options, (list, tuple)):
+                    continue
+                options = []
+                for raw_option in list(raw_options)[:20]:
+                    option = str(raw_option).strip().lower()
+                    if re.fullmatch(r"[a-z][a-z0-9_]{0,39}", option):
+                        options.append(option)
+                if options:
+                    capabilities[command] = tuple(dict.fromkeys(options))
+        return {
+            "display_name": display_name,
+            "kind": kind,
+            "capabilities": capabilities,
+        }
+
+    def _extract_interface_actions(self, response: str) -> tuple[str, list[dict]]:
+        """Remove and validate action blocks against the active surface allow-list."""
+        context = self._current_interface_context()
+        capabilities = context.get("capabilities") or {}
+        actions = []
+        for match in _INTERFACE_ACTION_RE.finditer(str(response or "")):
+            if len(actions) >= 3:
+                break
+            try:
+                candidate = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(candidate, dict):
+                continue
+            command = str(candidate.get("cmd") or candidate.get("action") or "").lower()
+            name = str(candidate.get("name") or "").lower()
+            allowed = capabilities.get(command, ())
+            if command and name and name in allowed:
+                actions.append({"cmd": command, "name": name})
+        clean = _INTERFACE_ACTION_RE.sub("", str(response or ""))
+        clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+        return clean, actions
+
+    def _replace_latest_interface_reply(self, raw_reply: str, clean_reply: str) -> None:
+        """Keep protocol tags out of Main's durable conversational history."""
+        if raw_reply == clean_reply:
+            return
+        for item in reversed(self._conversation_history):
+            if item.get("role") == "assistant" and item.get("content") == raw_reply:
+                item["content"] = clean_reply
+                self.persist("conversation_history", self._conversation_history)
+                return
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -247,11 +328,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _handle_task(self, msg: Message):
         """Peer TASK handler.
 
-        An interface bridge — e.g. the reachy-mini agent acting as a voice
-        front-end — sets ``_via_interface`` to route its message through the
+        An optional interface bridge sets ``_via_interface`` to route its message through the
         FULL orchestrator (``process_user_input``: intent classification, HA
         actuation, sub-agent delegation) instead of the base ``LLMAgent``'s raw
-        single-turn completion, so Reachy is as capable as the CLI/web chat.
+        single-turn completion, so the interface is as capable as CLI/web chat.
         Everything else keeps the inherited behaviour untouched.
         """
         payload = msg.payload if isinstance(msg.payload, dict) else {}
@@ -262,9 +342,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             # self._tasks so the loop doesn't garbage-collect it mid-flight.
             task = asyncio.create_task(self._handle_interface_request(payload, msg))
             self._tasks.append(task)
-            task.add_done_callback(
-                lambda t: self._tasks.remove(t) if t in self._tasks else None
-            )
+            task.add_done_callback(lambda t: self._tasks.remove(t) if t in self._tasks else None)
             return
         await super()._handle_task(msg)
 
@@ -281,21 +359,57 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         ).strip()
         task_id = payload.get("_task_id")
         reply_to = payload.get("_reply_to") or msg.reply_to or msg.sender_id
-        token = _INTERFACE_SOURCE.set(str(payload.get("_interface_source") or ""))
-        source = self._current_interface_source()
-        logger.info(
-            f"[{self.name}] interface request from {source or 'unknown'}: {text[:80]!r}"
+        raw_history = payload.get("_interface_history")
+        history = []
+        if isinstance(raw_history, list):
+            for item in raw_history[-4:]:
+                if not isinstance(item, dict):
+                    continue
+                transcript = str(item.get("transcript") or "").strip()
+                response = str(item.get("response") or "").strip()
+                if transcript or response:
+                    history.append(
+                        {
+                            "transcript": transcript[:1000],
+                            "response": response[:2000],
+                        }
+                    )
+        source_value = str(payload.get("_interface_source") or "")
+        interface_context = self._sanitize_interface_context(
+            payload.get("_interface_context"), source_value
         )
+        source_token = _INTERFACE_SOURCE.set(source_value)
+        history_token = _INTERFACE_HISTORY.set(tuple(history))
+        voice_token = _INTERFACE_VOICE.set(bool(payload.get("_interface_voice")))
+        context_token = _INTERFACE_CONTEXT.set(interface_context)
+        source = self._current_interface_source()
+        logger.info(f"[{self.name}] interface request from {source or 'unknown'}: {text[:80]!r}")
         try:
             try:
                 reply = await self.process_user_input(text) if text else ""
+                clean_reply, interface_actions = self._extract_interface_actions(reply)
+                if interface_actions and not clean_reply:
+                    clean_reply = "Okay."
+                self._replace_latest_interface_reply(reply, clean_reply)
+                reply = clean_reply
             except Exception as e:
                 logger.warning(f"[{self.name}] interface request failed: {e}")
                 reply = f"[error] {e}"
+                interface_actions = []
         finally:
-            _INTERFACE_SOURCE.reset(token)
+            _INTERFACE_CONTEXT.reset(context_token)
+            _INTERFACE_VOICE.reset(voice_token)
+            _INTERFACE_HISTORY.reset(history_token)
+            _INTERFACE_SOURCE.reset(source_token)
         if reply_to:
-            result = {"text": reply, "result": reply, "task": text}
+            result = {
+                "text": reply,
+                "result": reply,
+                "task": text,
+                "agent": "main",
+                "interface_actions": interface_actions,
+                "interface_display_name": interface_context.get("display_name", source),
+            }
             if task_id:
                 result["_task_id"] = task_id
             await self.send(reply_to, MessageType.RESULT, result)
@@ -1872,9 +1986,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 logger.warning(
                     f"[{self.name}] Refusing to delegate an interface request back to {source}"
                 )
-                replacements.append(
-                    (full_match, f"[interface loop prevented: {source}]")
-                )
+                replacements.append((full_match, f"[interface loop prevented: {source}]"))
                 continue
             target, spawnable = await self._resolve_or_spawn(agent_name)
             if not target:

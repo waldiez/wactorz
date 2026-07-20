@@ -189,7 +189,7 @@ using `ask_voice`:
 # Local, recommended default
 pip install faster-whisper
 REACHY_STT_BACKEND=faster-whisper
-REACHY_STT_MODEL=base
+REACHY_STT_MODEL=Infomaniak-AI/faster-whisper-large-v3-turbo
 
 # Alternative local implementation
 pip install openai-whisper
@@ -199,15 +199,20 @@ REACHY_STT_MODEL=base
 # Hosted OpenAI transcription (explicit opt-in; audio leaves the host)
 pip install 'wactorz[openai]'
 REACHY_STT_BACKEND=openai
-REACHY_STT_MODEL=whisper-1
+REACHY_STT_MODEL=gpt-4o-transcribe
 OPENAI_API_KEY=...
 ~~~
 
-Optional `REACHY_STT_LANGUAGE`, `REACHY_STT_DEVICE`, and
-`REACHY_STT_COMPUTE_TYPE` settings tune language and local inference. The MQTT
-payload can override them per request with `stt_backend`, `stt_model`, `language`,
-`stt_device`, and `stt_compute_type`. Keys are read from the environment and are
-never embedded in the recipe.
+Optional `REACHY_STT_LANGUAGE`, `REACHY_STT_FALLBACK_LANGUAGE`,
+`REACHY_STT_DEVICE`, `REACHY_STT_COMPUTE_TYPE`, and `REACHY_STT_HOTWORDS`
+settings tune language, uncertain-language fallback, local inference, and recognition
+bias. Leave the primary language unset to auto-detect. Short utterances whose language
+probability is below `stt_min_language_probability` (default `0.60`) are retried in
+the configured fallback language; unresolved guesses are silently discarded instead
+of being routed as commands. The MQTT payload can override these settings with
+`stt_backend`, `stt_model`, `language`, `stt_fallback_language`, `stt_device`,
+`stt_compute_type`, `stt_hotwords`, and `stt_min_language_probability`. Keys are read
+from the environment and are never embedded in the recipe.
 
 `custom/reachy/events` reports `transcript`, `capture_duration_s`,
 `transcription_duration_s`, `response_text`, `total_duration_s`, `ok`, `error`,
@@ -233,22 +238,48 @@ Or over MQTT:
 
 ~~~json
 topic: custom/reachy/cmd/conversation_start
-payload: {"inactivity_timeout": 30}
+payload: {}
 ~~~
 
-Reachy uses the same STT provider and `_bridge_to_main` route as `ask_voice`, so
-Home Assistant actions and normal Wactorz tools follow the existing path. Each turn
-uses voice-activity detection and ends after about 0.8 seconds of silence. Replies
-are converted to concise, voice-friendly text and spoken in sentence-sized chunks;
-the complete Wactorz answer is still sent to chat. Every meaningful STT result also
-appears immediately in the Reachy thread as a user bubble, so you can see exactly
-what the robot heard. Punctuation-only recognition noise is ignored.
+Main is the single conversational brain; the optional catalogue agent makes Reachy
+its embodied microphone, speaker, and gesture surface. Home Assistant actions and
+normal Wactorz tools follow Main's existing route. The current utterance is sent as
+plain executable text, while
+up to four prior turns travel separately as structured reference context. An older
+command can therefore help resolve "it" without becoming part of the new command.
 
-Conversation sessions default to English STT to avoid low-confidence language
-auto-detection turning a short English phrase into unrelated Portuguese/Hindi text.
-Set `stt_language` (or `REACHY_STT_LANGUAGE`) for another language. Common vocative
-spellings such as "Hey Richie" are corrected to "Hey Reachy" before routing; Reachy
-is always treated as the robot's name, never inferred as the user's name.
+Reachy declares its available gestures in generic interface metadata. Main may return
+a validated `<interface_action>` block for the catalogue agent to execute, so a
+less-literal embodied request can still move the robot without a Main → Reachy
+delegation loop. Wactorz core contains no Reachy dependency; without the catalogue
+agent, Main behaves exactly as before.
+
+Each turn uses voice-activity detection and ends after about one second of silence.
+Replies are converted to concise, voice-friendly text and spoken in sentence-sized
+chunks. Recognized speech and the concise reply stay in Reachy's dashboard thread,
+labelled as an interface-mediated exchange; Main remains internal reasoning metadata.
+Raw service calls and planner details remain available in
+conversation diagnostics as `raw_response`, not ordinary chat. Punctuation-only
+recognition noise is ignored.
+
+Conversation sessions auto-detect the spoken language, so English and Greek can be
+used without restarting the session. Set `stt_language` (or `REACHY_STT_LANGUAGE`)
+only when you deliberately want to lock recognition to one language. Common names
+and device terms are supplied as hotwords; override them with `stt_hotwords` or
+`REACHY_STT_HOTWORDS`. Common vocative spellings such as "Hey Richie" are corrected
+to "Hey Reachy" before routing; Reachy is always treated as the robot's name, never
+inferred as the user's name. Local Faster Whisper also enables its VAD, disables
+previous-transcript conditioning, and reports confidence/no-speech scores. Results
+below `stt_min_confidence` (default `0.25`) or above `stt_max_no_speech` (default
+`0.60`) are silently discarded without consuming a turn.
+
+Confident auto-detected languages become a session hint for later ambiguous turns.
+Voice-originated turns create no durable personal facts unless the user explicitly
+says to remember or save something. This prevents a bad transcript from becoming the
+user's name or household profile while preserving intentional voice memory.
+
+Greek and English requests to lower or raise Reachy's own voice are handled locally
+as robot speaker-volume changes rather than being sent to Home Assistant.
 
 Audio is intentionally plainer than the dashboard response. Emoji, Markdown
 role-play directions such as `*waves*`, links, and raw Home Assistant service/entity
@@ -256,16 +287,15 @@ syntax stay visual. Reachy speaks a short human acknowledgement instead; for exa
 `Done: light.turn_on -> light.main_light` becomes "Okay, the light is on", or
 "Okay, the light is pink" when that was the request.
 
-Barge-in is opt-in with `"barge_in": true`. When the media backend supports
-simultaneous recording and playback, sustained speech stops Reachy's current
-utterance, retains the interrupting audio, and routes it as the next turn. It is off
-by default because the robot speaker can be captured as microphone input on setups
-without acoustic echo cancellation, causing Reachy to cut itself off and route its
-own speech. Leave it off for reliable alternating turns.
+Barge-in is enabled by default. When the media backend supports simultaneous
+recording and playback, sustained speech stops Reachy's current utterance, retains
+the interrupting audio, and routes it as the next turn. If a particular setup lacks
+acoustic echo cancellation and Reachy cuts itself off on speaker echo, start that
+session with `"barge_in": false`.
 
-Stop with any of these phrases: `stop listening`, `end conversation`, `goodbye
-Reachy`, `goodbye`, `bye`, or `that's all`. You can also stop from chat or MQTT at
-any stage:
+Stop with `stop listening`, `end conversation`, `goodbye Reachy`, `goodbye`, `bye`,
+`that's all`, `σταμάτα`, `σταμάτα να ακούς`, `τέλος συζήτησης`, or `αντίο`.
+You can also stop from chat or MQTT at any stage:
 
 ~~~
 @reachy-mini stop conversation
@@ -276,19 +306,20 @@ topic: custom/reachy/cmd/conversation_stop
 payload: {}
 ~~~
 
-Only one conversation can run at a time. By default it is persistent and stops on
-its inactivity timeout, a spoken stop phrase, or `conversation_stop`. Set a positive
-`max_turns` only when a bounded session is wanted. Optional start payload fields
-include `silence_s`, `max_utterance_s`, `min_speech_s`, `pre_roll_s`, `flush_s`,
-`vad_mode`, `vad_min_rms`, `cooldown_s`, `barge_in`, `barge_silence_s`,
+Only one conversation can run at a time. By default it listens until a spoken stop
+phrase or `conversation_stop`; set a positive `inactivity_timeout` to add an idle
+timeout. Set a positive `max_turns` only when a bounded session is wanted. Optional
+start fields include `silence_s`, `max_utterance_s`, `min_speech_s`, `pre_roll_s`,
+`flush_s`, `vad_mode`, `vad_min_rms`, `cooldown_s`, `barge_in`, `barge_silence_s`,
 `barge_min_speech_s`, `barge_flush_s`, `barge_min_rms`, `voice_friendly`,
-`state_motion`, `idle_motion`, `stt_language`, and `max_turns`. Barge-in and
-all physical conversation motion default to `false`.
+`state_motion`, `idle_motion`, `stt_language`, `stt_hotwords`,
+`stt_min_confidence`, `stt_max_no_speech`, and `max_turns`. Barge-in defaults to
+true; all physical conversation motion defaults to false.
 
 Set `state_motion:true` for subtle listening/speaking antenna cues. These use
 antenna-only `set_target` calls and do not command or reset the head. Conversation
 states are published on `custom/reachy/events`; events also report `session_id`,
-`turn_index`, `transcript`, full `response`, `spoken_response`, `interrupted`,
+`turn_index`, `transcript`, `response`, `raw_response`, `spoken_response`, `interrupted`,
 timings, `stop_reason`, `ok`, `error`, and `ts`.
 
 Physical idle motion defaults to `false` because Reachy's antenna servos are audible to
@@ -300,8 +331,9 @@ and never moves the head. Short mechanical bursts that trip VAD are rejected bef
 Whisper and do not consume a turn or error budget, but keeping motors still is the
 reliable default.
 
-Embodied requests stay on the robot. "Do a little dance", "nod", "shake your head",
-"wiggle your antennas", and "look curious" run safe, explicit physical poses instead
+Embodied requests stay on the robot. "Do a little dance", "turn around", "nod",
+"shake your head", "wiggle your antennas", and "look curious" run safe, explicit
+physical poses instead
 of going to the Wactorz LLM for pretend role-play. The dance ends with a short spoken
 "Ta-da!"; the full action result remains visible in chat.
 
@@ -321,7 +353,7 @@ For direct control, send a dict with `cmd`:
 | `wake`, `sleep`, `stop` | Basic robot state |
 | `pose` | Head yaw, pitch, roll, x/y/z |
 | `antennas` | Left and right antenna angles |
-| `gesture` | Physical `dance`, `nod`, `shake`, `wiggle`, or `curious` choreography |
+| `gesture` | Physical `dance`, `turn_around`, `nod`, `shake`, `wiggle`, or `curious` choreography |
 | `look_at`, `look_pixel` | Gaze target |
 | `camera` | Capture one still frame from the onboard camera (base64 JPEG/PNG) |
 | `describe` | Look through the camera and speak a description of the scene (vision LLM) |

@@ -539,6 +539,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
     stream_end_fn()       — signal that streaming is done (optional)
     """
     _chunk_fn = stream_fn or reply_fn
+
     async def _noop_end():
         pass
 
@@ -1120,10 +1121,22 @@ def parse_topic(topic: str, payload_str: str):
             recipient = "user"
             content = ""
             timestamp = time.time()
+            source = ""
+            surface = ""
+            surface_label = ""
+            brain = ""
             if isinstance(data, dict):
                 content = (data.get("content") or data.get("text") or "").strip()
                 sender = data.get("from") or sender
                 recipient = data.get("to") or recipient
+                source = data.get("source") if isinstance(data.get("source"), str) else ""
+                surface = data.get("surface") if isinstance(data.get("surface"), str) else ""
+                surface_label = (
+                    data.get("surface_label")
+                    if isinstance(data.get("surface_label"), str)
+                    else ""
+                )
+                brain = data.get("brain") if isinstance(data.get("brain"), str) else ""
                 try:
                     timestamp = float(data.get("timestamp") or timestamp)
                 except (TypeError, ValueError):
@@ -1139,6 +1152,10 @@ def parse_topic(topic: str, payload_str: str):
                         "to": recipient,
                         "content": content,
                         "timestamp": timestamp,
+                        "source": source,
+                        "surface": surface,
+                        "surface_label": surface_label,
+                        "brain": brain,
                     }
                 )
                 return {
@@ -1152,6 +1169,10 @@ def parse_topic(topic: str, payload_str: str):
                         "to": recipient,
                         "content": content,
                         "timestamp": timestamp,
+                        "source": source,
+                        "surface": surface,
+                        "surface_label": surface_label,
+                        "brain": brain,
                     },
                 }
             return {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
@@ -1474,11 +1495,7 @@ async def mqtt_listener():
                                 await broadcast(push)
                                 try:
                                     if db is not None and push.get("content"):
-                                        role = (
-                                            "user"
-                                            if push.get("from") == "user"
-                                            else "assistant"
-                                        )
+                                        role = "user" if push.get("from") == "user" else "assistant"
                                         agent_name = (
                                             push.get("to", "agent")
                                             if role == "user"

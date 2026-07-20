@@ -8,6 +8,7 @@ merely because an API key happens to exist in the environment.
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import tempfile
 import threading
@@ -19,7 +20,7 @@ from typing import Any, Protocol
 _DEFAULT_MODELS = {
     "faster-whisper": "base",
     "whisper": "base",
-    "openai": "whisper-1",
+    "openai": "gpt-4o-transcribe",
 }
 _BACKEND_ALIASES = {
     "faster_whisper": "faster-whisper",
@@ -41,6 +42,7 @@ class STTConfig:
     language: str | None = None
     device: str = "auto"
     compute_type: str = "default"
+    hotwords: str | None = None
 
     @classmethod
     def resolve(
@@ -50,37 +52,38 @@ class STTConfig:
     ) -> STTConfig:
         payload = payload or {}
         environ = os.environ if environ is None else environ
-        raw_backend = str(
-            payload.get("stt_backend")
-            or environ.get("REACHY_STT_BACKEND")
-            or "faster-whisper"
-        ).strip().lower()
+        raw_backend = (
+            str(payload.get("stt_backend") or environ.get("REACHY_STT_BACKEND") or "faster-whisper")
+            .strip()
+            .lower()
+        )
         backend = _BACKEND_ALIASES.get(raw_backend, raw_backend)
         if backend not in _DEFAULT_MODELS:
             choices = ", ".join(sorted(_DEFAULT_MODELS))
             raise ValueError(f"unknown Reachy STT backend {raw_backend!r}; choose {choices}")
         model = str(
-            payload.get("stt_model")
-            or environ.get("REACHY_STT_MODEL")
-            or _DEFAULT_MODELS[backend]
+            payload.get("stt_model") or environ.get("REACHY_STT_MODEL") or _DEFAULT_MODELS[backend]
         ).strip()
-        language = str(
-            payload.get("language")
-            or payload.get("stt_language")
-            or environ.get("REACHY_STT_LANGUAGE")
-            or ""
-        ).strip() or None
+        language = (
+            str(
+                payload.get("language")
+                or payload.get("stt_language")
+                or environ.get("REACHY_STT_LANGUAGE")
+                or ""
+            ).strip()
+            or None
+        )
         device = str(
-            payload.get("stt_device")
-            or environ.get("REACHY_STT_DEVICE")
-            or "auto"
+            payload.get("stt_device") or environ.get("REACHY_STT_DEVICE") or "auto"
         ).strip()
         compute_type = str(
-            payload.get("stt_compute_type")
-            or environ.get("REACHY_STT_COMPUTE_TYPE")
-            or "default"
+            payload.get("stt_compute_type") or environ.get("REACHY_STT_COMPUTE_TYPE") or "default"
         ).strip()
-        return cls(backend, model, language, device, compute_type)
+        hotwords = (
+            str(payload.get("stt_hotwords") or environ.get("REACHY_STT_HOTWORDS") or "").strip()
+            or None
+        )
+        return cls(backend, model, language, device, compute_type, hotwords)
 
 
 @dataclass(frozen=True)
@@ -90,10 +93,23 @@ class Transcription:
     text: str
     backend: str
     model: str
+    confidence: float | None = None
+    no_speech_probability: float | None = None
+    language: str | None = None
+    language_probability: float | None = None
+
+
+@dataclass(frozen=True)
+class _BackendResult:
+    text: str
+    confidence: float | None = None
+    no_speech_probability: float | None = None
+    language: str | None = None
+    language_probability: float | None = None
 
 
 class STTBackend(Protocol):
-    async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str: ...
+    async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str | _BackendResult: ...
 
 
 def _temporary_wav(wav_bytes: bytes) -> Path:
@@ -105,8 +121,8 @@ def _temporary_wav(wav_bytes: bytes) -> Path:
 class FasterWhisperBackend:
     """Local transcription using the optional ``faster-whisper`` package."""
 
-    async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str:
-        def run() -> str:
+    async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> _BackendResult:
+        def run() -> _BackendResult:
             try:
                 from faster_whisper import WhisperModel
             except ImportError as exc:
@@ -126,10 +142,39 @@ class FasterWhisperBackend:
             path = _temporary_wav(wav_bytes)
             try:
                 kwargs = {"language": config.language} if config.language else {}
-                segments, _info = model.transcribe(str(path), **kwargs)
-                return " ".join(str(segment.text).strip() for segment in segments).strip()
+                kwargs.update({"vad_filter": True, "condition_on_previous_text": False})
+                if config.hotwords:
+                    kwargs["hotwords"] = config.hotwords
+                segments, info = model.transcribe(str(path), **kwargs)
+                segment_list = list(segments)
+                text = " ".join(str(segment.text).strip() for segment in segment_list).strip()
+                log_probs = [
+                    float(segment.avg_logprob)
+                    for segment in segment_list
+                    if getattr(segment, "avg_logprob", None) is not None
+                ]
+                no_speech = [
+                    float(segment.no_speech_prob)
+                    for segment in segment_list
+                    if getattr(segment, "no_speech_prob", None) is not None
+                ]
+                confidence = None
+                if log_probs:
+                    confidence = max(0.0, min(1.0, math.exp(sum(log_probs) / len(log_probs))))
+                no_speech_probability = sum(no_speech) / len(no_speech) if no_speech else None
             finally:
                 path.unlink(missing_ok=True)
+            language = str(getattr(info, "language", "") or "").strip() or None
+            language_probability = (
+                None if config.language else getattr(info, "language_probability", None)
+            )
+            return _BackendResult(
+                text=text,
+                confidence=confidence,
+                no_speech_probability=no_speech_probability,
+                language=language,
+                language_probability=language_probability,
+            )
 
         return await asyncio.to_thread(run)
 
@@ -169,9 +214,7 @@ class OpenAIBackend:
     async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            raise RuntimeError(
-                "OPENAI_API_KEY is required when REACHY_STT_BACKEND=openai"
-            )
+            raise RuntimeError("OPENAI_API_KEY is required when REACHY_STT_BACKEND=openai")
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:
@@ -202,5 +245,25 @@ async def transcribe_wav(
     if not wav_bytes:
         raise ValueError("WAV payload is empty")
     config = STTConfig.resolve(payload)
-    text = await _BACKENDS[config.backend].transcribe(wav_bytes, config)
-    return Transcription(text=text.strip(), backend=config.backend, model=config.model)
+    result = await _BACKENDS[config.backend].transcribe(wav_bytes, config)
+    if isinstance(result, _BackendResult):
+        text = result.text
+        confidence = result.confidence
+        no_speech_probability = result.no_speech_probability
+        language = result.language
+        language_probability = result.language_probability
+    else:
+        text = result
+        confidence = None
+        no_speech_probability = None
+        language = None
+        language_probability = None
+    return Transcription(
+        text=text.strip(),
+        backend=config.backend,
+        model=config.model,
+        confidence=confidence,
+        no_speech_probability=no_speech_probability,
+        language=language,
+        language_probability=language_probability,
+    )

@@ -188,7 +188,8 @@ _CONVERSATION_AUDIO_CONFIG = (
     ("PP_MIN_NN", (0.8,)),
     ("PP_GAMMA_E", (0.5,)),
     ("PP_GAMMA_ETAIL", (0.5,)),
-    ("PP_NLATTENONOFF", (0,)),
+    # The current robot firmware owns/forces PP_NLATTENONOFF. Verifying a
+    # requested value falsely marks the otherwise-applied profile as failed.
     ("PP_MGSCALE", (4.0, 1.0, 1.0)),
 )
 
@@ -1032,6 +1033,34 @@ def _embodied_command_for_text(text):
         return {"cmd": "debug", "enabled": True}
     if normalized in ("disable debug", "debug off", "hide debug", "hide action sequences"):
         return {"cmd": "debug", "enabled": False}
+
+    if normalized in (
+        "what do you see",
+        "what can you see",
+        "what do you see right now",
+        "tell me what you see",
+        "what's in the room",
+        "what is in the room",
+        "describe the room",
+        "look around",
+        "look around the room",
+        "scan the room",
+        "look around you",
+        "check out the room",
+        "survey the room",
+    ):
+        return {"cmd": "look_around"}
+    if normalized in (
+        "what's in front of you",
+        "what is in front of you",
+        "describe what you see",
+        "describe the scene",
+        "what's there",
+        "what is this",
+        "look at this",
+    ):
+        return {"cmd": "describe"}
+
     greek_voice = any(stem in low for stem in ("φων", "έντασ", "τόνο"))
     greek_softer = any(
         stem in low for stem in ("χαμήλω", "χαμηλώ", "πιο σιγά", "σιγανά")
@@ -1149,7 +1178,7 @@ async def handle_task(agent, payload):
                 if embodied:                                payload = embodied
                 elif low in ("wake", "wake up"):          payload = {"cmd": "wake"}
                 elif low in ("sleep", "go to sleep"):      payload = {"cmd": "sleep"}
-                elif low in ("stop",):                     payload = {"cmd": "stop"}
+                elif low in ("stop",):                     payload = {"cmd": "shutup"}
                 elif low in ("list emotions", "emotions"): payload = {"cmd": "list_emotions"}
                 # Perception: grab a camera frame / a short mic clip (no LLM needed).
                 elif low in ("what do you see", "what can you see", "what's in front of you",
@@ -1371,6 +1400,8 @@ async def handle_task(agent, payload):
                     "cmd": cmd, "_task_id": _tid, "task": _tid}
     result = await _dispatch(agent, cmd, payload, return_result=True)
     if isinstance(result, dict):
+        if cmd in ("stop", "shutup") and not agent.state.get("debug"):
+            result["_suppress_reply"] = True
         if cmd in ("say", "describe") and result.get("said"):
             if agent.state.get("debug"):
                 _queue_spoken_replies(agent, [str(result["said"])])
@@ -1492,7 +1523,7 @@ def _voice_workflow_reply(value):
     return None
 
 
-def _voice_friendly_reply(text, limit=420, user_text=""):
+def _voice_friendly_reply(text, limit=220, user_text=""):
     """Turn a visual dashboard answer into natural human-only spoken text."""
     import re as _re
     value = _sanitize_reachy_identity_reply(text).strip()
@@ -1663,14 +1694,17 @@ async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
     spoke = False
     interrupted = False
     spoken_reply = _voice_friendly_reply(reply, user_text=text) if voice_friendly else reply
-    display_reply = spoken_reply if voice_friendly else reply
+    display_reply = reply
     spoken_result = ""
     speech_error = None
+    if before_speak is not None:
+        try:
+            await before_speak(display_reply)
+        except Exception as exc:
+            await agent.log(f"reply display failed: {exc}", level="warning")
     ok_link, link_reason = _is_connected(agent)
     if ok_link:
         try:
-            if before_speak is not None:
-                await before_speak(display_reply)
             # Conversation mode speaks short chunks, which gets the first phrase
             # onto the speaker sooner and gives barge-in a clean cancellation point.
             speech = await _speak_reply(
@@ -4181,7 +4215,9 @@ async def _conversation_embodied_bridge(
                 spoken = "Okay, a little quieter." if quieter else "Okay, a little louder."
         else:
             reply = str(action.get("result") or "Done.")
-            if command["cmd"] in ("describe", "look_behind", "look_around", "debug", "face_forward"):
+            if command["cmd"] in ("describe", "look_behind", "look_around"):
+                spoken = _voice_friendly_reply(reply, user_text=transcript)
+            elif command["cmd"] in ("debug", "face_forward"):
                 spoken = reply
             else:
                 spoken = {
@@ -4213,7 +4249,8 @@ async def _conversation_embodied_bridge(
     return {
         "ok": bool(action and action.get("ok")),
         "cmd": command["cmd"],
-        "physical": command["cmd"] in ("gesture", "look_behind", "face_forward"),
+        "physical": command["cmd"]
+        in ("gesture", "look_behind", "look_around", "face_forward"),
         "spoke": speech["spoke"],
         "interrupted": speech["interrupted"],
         "spoken_result": speech["spoken_result"],
@@ -4489,6 +4526,20 @@ async def _conversation_loop(agent, session):
                 turn["routing_duration_s"] = round(_time.time() - routing_started, 3)
                 turn["response"] = str(reply or "").strip()
                 await _conversation_publish(agent, session, "speaking", turn)
+                if turn["response"] and not turn.get("_response_notified"):
+                    await agent.notify_user(
+                        turn["response"],
+                        **{
+                            "from": getattr(agent, "name", "reachy-mini"),
+                            "to": "user",
+                            "source": "voice",
+                            "surface": getattr(agent, "name", "reachy-mini"),
+                            "surface_label": "Reachy",
+                            "brain": "main",
+                            "session_id": session.get("session_id", ""),
+                        },
+                    )
+                    turn["_response_notified"] = True
 
             try:
                 task_id = f"{session['session_id']}:{turn_index}"
@@ -4553,18 +4604,6 @@ async def _conversation_loop(agent, session):
                 "response": heard_response,
                 "interrupted": turn["interrupted"],
             })
-            await agent.notify_user(
-                turn["response"],
-                **{
-                    "from": getattr(agent, "name", "reachy-mini"),
-                    "to": "user",
-                    "source": "voice",
-                    "surface": getattr(agent, "name", "reachy-mini"),
-                "surface_label": "Reachy",
-                    "brain": "main",
-                    "session_id": session.get("session_id", ""),
-                },
-            )
             if turn["interrupted"]:
                 session["barge_in_count"] += 1
                 # The monitor retained the user's utterance. Start its STT/routing

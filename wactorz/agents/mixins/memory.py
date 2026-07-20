@@ -108,6 +108,8 @@ class MemoryMixin:
                     "action, include one exact block such as "
                     f"{example}. "
                     "The interface executes validated blocks and removes them from speech/chat. "
+                    "Keep ordinary voice replies to one or two short, natural sentences; do not "
+                    "recite capability menus unless the user asks for one. "
                     f"Do not delegate back to {source}; return interface actions instead.]\n"
                 )
             else:

@@ -301,6 +301,9 @@ class IOAgent(Actor):
 
         elif msg.type == MessageType.RESULT:
             payload = msg.payload or {}
+            self._pending_replies.pop(next(iter(self._pending_replies), None), None)
+            if isinstance(payload, dict) and payload.get("_suppress_reply"):
+                return
             if isinstance(payload, dict):
                 reply_text = (
                     payload.get("reply")
@@ -311,7 +314,6 @@ class IOAgent(Actor):
                 )
             else:
                 reply_text = str(payload)
-            self._pending_replies.pop(next(iter(self._pending_replies), None), None)
             await self._reply(reply_text)
 
     def _current_task_description(self) -> str:

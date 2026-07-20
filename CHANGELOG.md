@@ -181,6 +181,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Reachy voice conversations respond like the physical robot again.** Spoken
+  interruption uses the compatible XVF3800 echo-control profile instead of being
+  disabled by a firmware-owned readback value. Plain "stop" cuts speech without a
+  raw command receipt, camera questions scan with Reachy's onboard camera instead
+  of being answered by Main, full replies appear in chat before playback, and audio
+  stays to a short conversational version. Debug receipts remain opt-in.
+
 - **Social chat custom-spawn gate.** Discord, Telegram, and WhatsApp may
   start maintained catalogue agents, but refuse LLM-authored custom agents that
   cannot be inspected or stopped from those interfaces; custom spawning remains

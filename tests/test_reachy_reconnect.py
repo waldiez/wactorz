@@ -135,6 +135,7 @@ class ReconnectCommandTest(unittest.TestCase):
         params = {item["name"]: item["values"] for item in kwargs["json"]["config"]}
         self.assertEqual(params["PP_AGCMAXGAIN"], [10.0])
         self.assertEqual(params["PP_MGSCALE"], [4.0, 1.0, 1.0])
+        self.assertNotIn("PP_NLATTENONOFF", params)
 
     def test_failed_audio_config_disables_automatic_barge_in(self):
         agent = FakeAgent(mini=_fake_mini())

@@ -255,11 +255,11 @@ delegation loop. Wactorz core contains no Reachy dependency; without the catalog
 agent, Main behaves exactly as before.
 
 Each turn uses voice-activity detection and ends after about one second of silence.
-Replies are converted to concise, voice-friendly text and spoken in sentence-sized
-chunks. Recognized speech and the concise reply stay in Reachy's dashboard thread,
-labelled as an interface-mediated exchange; Main remains internal reasoning metadata.
-Raw service calls and planner details remain available in
-conversation diagnostics as `raw_response`, not ordinary chat. Execution receipts
+The complete reply appears in Reachy's dashboard thread before playback begins, while
+a concise voice-friendly version is spoken in sentence-sized chunks. Recognized
+speech stays in the same thread, labelled as an interface-mediated exchange; Main
+remains internal reasoning metadata. Raw service calls and planner details remain
+available in conversation diagnostics as `raw_response`, not ordinary chat. Execution receipts
 such as `ran 4 of 4` are also hidden by default; say `enable debug` to show them and
 `disable debug` to return to the normal user-facing view. Debug always starts off
 after an agent restart. Punctuation-only recognition noise is ignored.
@@ -289,12 +289,16 @@ syntax stay visual. Reachy speaks a short human acknowledgement instead; for exa
 `Done: light.turn_on -> light.main_light` becomes "Okay, the light is on", or
 "Okay, the light is pink" when that was the request.
 
-Barge-in is enabled automatically when Reachy successfully applies Pollen's
-conversation tuning to the XVF3800 audio processor. Sustained speech then stops
-Reachy's current utterance, retains the interrupting audio, and routes it as the
-next turn. If the audio processor cannot be configured, barge-in defaults off so
-Reachy cannot mistake its own speaker for an interruption. An explicit
-`"barge_in": true` or `false` overrides the automatic choice for that session.
+Barge-in is enabled automatically when Reachy successfully applies the compatible
+parts of Pollen's conversation tuning to the XVF3800 audio processor. A
+firmware-owned nonlinear-attenuation flag is intentionally left untouched; the
+robot can force its readback even after applying all useful echo/noise settings.
+Sustained speech then stops Reachy's current utterance, retains the interrupting
+audio, and routes it as the next turn. If the audio processor cannot be configured,
+barge-in defaults off so Reachy cannot mistake its own speaker for an interruption.
+An explicit `"barge_in": true` or `false` overrides the automatic choice for that
+session. Say `stop`, `silence`, `quiet`, or `shut up` to cut only the current reply
+and keep the conversation listening.
 
 Stop with `stop listening`, `end conversation`, `goodbye Reachy`, `goodbye`, `bye`,
 `that's all`, `σταμάτα`, `σταμάτα να ακούς`, `τέλος συζήτησης`, or `αντίο`.
@@ -337,13 +341,16 @@ reliable default.
 
 Embodied requests stay on the robot. "Do a little dance", "turn around", "nod",
 "shake your head", "wiggle your antennas", and "look curious" run safe, explicit
-physical poses instead
-of going to the Wactorz LLM for pretend role-play. The dance ends with a short spoken
-"Ta-da!"; the full action result remains visible in chat.
+physical poses instead of going to the Wactorz LLM for pretend role-play. "What do
+you see?" and other room-view questions make Reachy scan with its own camera; requests
+specifically about the view in front capture a single forward frame. The dance ends
+with a short spoken "Ta-da!"; the full action result remains visible in chat.
 
 The Reachy playback API remains fire-and-forget, so non-interrupted turns use Edge
 TTS word-boundary duration plus a tail pad and cooldown. Explicit stop and barge-in
-both cut playback immediately. Local transcription already running inside a native
+both cut playback immediately. A plain chat "stop" is treated as "stop talking" and
+produces no acknowledgement bubble unless debug mode is enabled. Local transcription
+already running inside a native
 STT library cannot be forcibly terminated, but its result is discarded after session
 cancellation.
 
@@ -362,6 +369,7 @@ For direct control, send a dict with `cmd`:
 | `look_at`, `look_pixel` | Gaze target |
 | `camera` | Capture one still frame from the onboard camera (base64 JPEG/PNG) |
 | `describe` | Look through the camera and speak a description of the scene (vision LLM) |
+| `look_around` | Scan several camera angles and describe the surrounding room |
 | `look_behind` | Turn rearward, describe that camera view, and remain rear-facing |
 | `debug` | Opt in or out of action-sequence receipts (`enabled: true/false`) |
 | `listen` | Record a short mic-array clip (base64 WAV) with direction of arrival |

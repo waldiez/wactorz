@@ -418,6 +418,43 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(chunks), 2)
         self.assertTrue(all(len(chunk) <= 120 for chunk in chunks))
 
+    async def test_full_reply_is_displayed_before_short_speech_begins(self):
+        agent = FakeAgent()
+        full_reply = (
+            "I can help with lights, automations, camera vision, and physical gestures. "
+            "I can also coordinate other Wactorz agents when a task needs them. "
+            "The dashboard keeps this full answer available for you to read. "
+            "For more complex work, I can delegate without making you switch interfaces."
+        )
+        agent.send_to = mock.AsyncMock(return_value={"text": full_reply})
+        events = []
+
+        async def before_speak(text):
+            events.append(("display", text))
+
+        async def speak(_agent, text, **_kwargs):
+            events.append(("speak", text))
+            return {
+                "spoke": True,
+                "interrupted": False,
+                "spoken_result": text,
+            }
+
+        with mock.patch.dict(NS, {"_speak_reply": speak}):
+            result = await NS["_bridge_to_main"](
+                agent,
+                "What can you do?",
+                voice_friendly=True,
+                await_playback=True,
+                before_speak=before_speak,
+            )
+
+        self.assertEqual(events[0], ("display", full_reply))
+        self.assertEqual(events[1][0], "speak")
+        self.assertLess(len(events[1][1]), len(full_reply))
+        self.assertIn("rest in Wactorz chat", events[1][1])
+        self.assertEqual(result["result"], full_reply)
+
     async def test_punctuation_only_transcript_is_ignored(self):
         agent, bridge = FakeAgent(), mock.AsyncMock()
         _, session = await self.run_session(
@@ -667,6 +704,46 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(speak.await_args.args[1], "Εντάξει, πιο σιγά.")
         self.assertFalse(result["physical"])
 
+    def test_vision_questions_are_embodied_commands(self):
+        self.assertEqual(
+            NS["_embodied_command_for_text"]("What do you see?"),
+            {"cmd": "look_around"},
+        )
+        self.assertEqual(
+            NS["_embodied_command_for_text"]("What's in front of you?"),
+            {"cmd": "describe"},
+        )
+
+    async def test_voice_vision_uses_reachy_camera_instead_of_main(self):
+        agent = FakeAgent()
+        main_bridge = mock.AsyncMock()
+        local_commands = []
+
+        async def local_bridge(_agent, _transcript, command, _task_id, before_speak, _session):
+            local_commands.append(command)
+            await before_speak("I see books and a desk.")
+            return {
+                "result": "I see books and a desk.",
+                "spoken_result": "I see books and a desk.",
+                "spoke": True,
+                "interrupted": False,
+                "speech_error": None,
+            }
+
+        with mock.patch.dict(NS, {"_conversation_embodied_bridge": local_bridge}):
+            _, session = await self.run_session(
+                agent,
+                {"max_turns": 1},
+                [captured()],
+                ["What do you see?"],
+                main_bridge,
+            )
+
+        self.assertEqual(local_commands, [{"cmd": "look_around"}])
+        main_bridge.assert_not_awaited()
+        self.assertEqual(agent.notifications, ["I see books and a desk."])
+        self.assertEqual(session["stop_reason"], "max_turns")
+
     def test_turn_around_is_an_embodied_command(self):
         command = NS["_embodied_command_for_text"]("Turn around")
 
@@ -697,6 +774,24 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(disabled["debug"])
         self.assertEqual(disabled["result"], "Debug details disabled.")
         self.assertFalse(agent.state["debug"])
+
+    async def test_plain_stop_cuts_speech_without_a_receipt_unless_debug_is_on(self):
+        agent = FakeAgent()
+        dispatch = mock.AsyncMock(
+            side_effect=[
+                {"ok": True, "cmd": "shutup", "result": "Stopped talking."},
+                {"ok": True, "cmd": "shutup", "result": "Stopped talking."},
+            ]
+        )
+
+        with mock.patch.dict(NS, {"_dispatch": dispatch}):
+            quiet = await NS["handle_task"](agent, {"text": "stop"})
+            agent.state["debug"] = True
+            verbose = await NS["handle_task"](agent, {"text": "stop"})
+
+        self.assertEqual(dispatch.await_args_list[0].args[1], "shutup")
+        self.assertTrue(quiet["_suppress_reply"])
+        self.assertNotIn("_suppress_reply", verbose)
 
     async def test_action_receipt_is_hidden_until_debug_is_enabled(self):
         async def planner(_agent, _text):

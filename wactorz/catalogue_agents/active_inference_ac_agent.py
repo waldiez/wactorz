@@ -1,4 +1,5 @@
-"""CATALOG AGENT — aif-agent
+"""
+CATALOG AGENT — aif-agent
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Generic active-inference controller, commissioned by the `comfort-optimizer`
 (docs/design/automation-advisor.md — scenario step 4).
@@ -21,10 +22,18 @@ Generative model (pure Python — no torch; runs on a Pi):
 Planning minimizes expected free energy: comfort (pragmatic) − energy cost
 + curiosity (epistemic bonus for untried actions).
 
-PROPOSAL-ONLY (human-on-the-loop): the agent NEVER calls HA services itself.
-Every k minutes (or when its mind changes) it publishes the proposed actuation
-TOGETHER WITH its explanation on the suggestion topic. A downstream
-deterministic actuator (scenario step 5) — or the user — executes it.
+PROPOSAL-ONLY by default (human-on-the-loop): the agent NEVER calls HA services
+itself. Every k minutes (or when its mind changes) it publishes the proposed
+actuation TOGETHER WITH its explanation on the suggestion topic.
+
+EXECUTION VIA *STOCK* ha_actuators — no framework changes, no custom executors:
+because the action grid is DISCRETE, each action gets its own trigger topic
+(custom/{name}/execute/{action-slug}). One plain ha_actuator with STATIC
+service_data per action executes it — exactly what main/planner already know
+how to spawn. The `wiring` task returns those ready-to-spawn configs, and all
+execute topics are declared in the TopicContract/manifest for auto-wiring.
+Execute triggers fire only when `autopilot` is enabled (configure task);
+suggestions + explanations are always published regardless.
 
 MQTT CONTRACT
 ─────────────
@@ -32,6 +41,9 @@ MQTT CONTRACT
   Publish:   custom/{name}/suggestion        — action + full explanation (XAI)
              custom/sensors/{name}/decision  — flattened numeric decision
                                                record (collector-ingestable)
+             custom/{name}/execute/{slug}    — per-action trigger (autopilot
+                                               only; consumed by stock
+                                               ha_actuators, one per action)
 
 SPAWN CONFIG (delivered by the comfort-optimizer via _initial_state.aif_config)
 ────────────
@@ -75,6 +87,11 @@ STALE_FACTOR    = 3       # obs older than STALE_FACTOR*tick ⇒ predict-only
 # ══════════════════════════════════════════════════════════════════════════════
 # GENERATIVE MODEL — generic 1-D grid, pure Python
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _slug(label):
+    """Action label → topic-safe slug: 'set 22.5' → 'set_22_5'."""
+    return "".join(c if c.isalnum() else "_" for c in str(label).lower()).strip("_")
+
 
 def _make_grid(value_range, band):
     """State grid spanning the observed range (+margin) AND the comfort band —
@@ -218,6 +235,66 @@ def _init_state(agent, cfg):
                                  f"custom/{agent.name}/suggestion")
     s["decision_topic"] = next((t for t in pubs if "decision" in t),
                                f"custom/sensors/{agent.name}/decision")
+    # per-action execute topics — DISCRETE action grid ⇒ one trigger topic per
+    # action, so completely stock ha_actuators (static service_data) can execute
+    s["execute_base"] = f"custom/{agent.name}/execute"
+    s["execute_topics"] = {_slug(a["label"]): f"{s['execute_base']}/{_slug(a['label'])}"
+                           for a in s["actions"]}
+    s["autopilot"] = bool(agent.recall("autopilot")
+                          if agent.recall("autopilot") is not None
+                          else cfg.get("autopilot") or False)
+    # execute topic → exact HA call. Published in produces_schema so the
+    # PLANNER can autowire stock ha_actuators from "actuate the suggestions"
+    # without any special command.
+    s["execute_call_map"] = {}
+    for a in s["actions"]:
+        call = a.get("call") or {}
+        if call.get("entity"):
+            s["execute_call_map"][s["execute_topics"][_slug(a["label"])]] = {
+                "domain": call.get("domain"), "service": call.get("service"),
+                "entity_id": call.get("entity"),
+                "service_data": call.get("service_data") or {},
+            }
+
+
+def _produces_schema(s):
+    """Contract schema: tells the planner exactly how to consume each topic —
+    incl. the ready-made ha_actuator action for every execute trigger."""
+    schema = {
+        s["suggestion_topic"]: "proposed actuation + full explanation (XAI, human-facing)",
+        s["decision_topic"]: "flat numeric decision record (collector-ingestable)",
+    }
+    for topic, call in s["execute_call_map"].items():
+        schema[topic] = {
+            "payload": {"triggered": True, "label": "str", "why": "str"},
+            "to_actuate": ("spawn a stock ha_actuator subscribed to THIS topic "
+                           "with detection_filter {'triggered': true} and exactly "
+                           "this action"),
+            "ha_action": call,
+        }
+    return schema
+
+
+def _maybe_auto_arm(agent):
+    """Auto-enable autopilot when consumers appear on the execute topics —
+    i.e. the user asked the planner to 'actuate the suggestions' and actuators
+    got wired. An EXPLICIT autopilot=false (persisted) is always respected."""
+    s = agent.state
+    if s["autopilot"] or agent.recall("autopilot") is not None:
+        return False
+    try:
+        from wactorz.core.topic_bus import get_topic_bus
+        bus = get_topic_bus()
+        if not bus:
+            return False
+        for topic in s["execute_topics"].values():
+            for c in bus.registry.consumers_of(topic):
+                if c.name != agent.name:
+                    s["autopilot"] = True
+                    return True
+    except Exception:
+        pass
+    return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -379,6 +456,22 @@ async def _propose(agent, decision, force=False):
         "efe_curiosity": exp["efe_terms"]["curiosity"],
         "efe_total": exp["efe_terms"]["total"],
     })
+    # autopilot: fire the per-action trigger so a STOCK ha_actuator executes it
+    if _maybe_auto_arm(agent):
+        await agent.log(
+            "AUTO-ARMED: actuator(s) detected on my execute topics — firing "
+            "execute triggers from now on. Send {'action':'autopilot',"
+            "'enabled':false} to disarm.")
+    if s.get("autopilot"):
+        slug = _slug(decision["label"])
+        topic = s["execute_topics"].get(slug)
+        if topic:
+            await agent.publish(topic, {
+                "triggered": True,
+                "label": decision["label"],
+                "why": exp["text"][:200],
+                "ts": now,
+            })
     s["last_proposal"] = decision
     s["last_proposal_ts"] = now
     agent.persist("b_counts", s["B_counts"])
@@ -448,8 +541,10 @@ async def setup(agent):
         cfg = {"binding": {}, "model": {}}
     _init_state(agent, cfg)
     agent.declare_contract(
-        publishes=[agent.state["suggestion_topic"], agent.state["decision_topic"]],
+        publishes=[agent.state["suggestion_topic"], agent.state["decision_topic"]]
+        + sorted(agent.state["execute_topics"].values()),
         subscribes=cfg.get("subscribes") or ["homeassistant/state_changes/#"],
+        produces_schema=_produces_schema(agent.state),
     )
     if agent.state["binding"].get("primary_observation"):
         asyncio.create_task(_mqtt_subscriber(agent))
@@ -492,7 +587,9 @@ async def handle_task(agent, payload):
                 "decision": d,
                 "grid": [round(g, 2) for g in agent.state["grid"]],
                 "C": agent.state["C"],
-                "suggestion_topic": agent.state["suggestion_topic"]}
+                "suggestion_topic": agent.state["suggestion_topic"],
+                "autopilot": agent.state["autopilot"],
+                "execute_topics": agent.state["execute_topics"]}
 
     if action == "explain":
         d = agent.state["last_decision"]
@@ -507,6 +604,50 @@ async def handle_task(agent, payload):
             except Exception:
                 pass
         return {"result": text, "decision": d}
+
+    # ── wiring: ready-to-spawn STOCK ha_actuator configs, one per action ────
+    if action == "wiring":
+        s = agent.state
+        configs = []
+        for act in s["actions"]:
+            call = act.get("call") or {}
+            if not call.get("entity"):
+                continue
+            slug = _slug(act["label"])
+            configs.append({
+                "name": f"{agent.name}-exec-{slug}",
+                "type": "ha_actuator",
+                "automation_id": f"{agent.name}-exec-{slug}",
+                "description": f"Executes the aif action '{act['label']}' "
+                               f"on {call['entity']} when triggered.",
+                "mqtt_topics": [s["execute_topics"][slug]],
+                "actions": [{"domain": call.get("domain"),
+                             "service": call.get("service"),
+                             "entity_id": call.get("entity"),
+                             "service_data": call.get("service_data") or {}}],
+                "detection_filter": {"triggered": True},
+                "cooldown_seconds": 60,
+            })
+        return {
+            "result": (f"{len(configs)} stock ha_actuator config(s) — spawn these, "
+                       f"then send {{'action':'autopilot','enabled':true}} to start "
+                       f"firing the execute triggers. Topics: "
+                       + ", ".join(sorted(s["execute_topics"].values()))),
+            "actuator_configs": configs,
+            "execute_topics": s["execute_topics"],
+            "autopilot": s["autopilot"],
+        }
+
+    # ── autopilot on/off — gates the execute triggers (suggestions unaffected) ─
+    if action == "autopilot":
+        enabled = bool(payload.get("enabled", True))
+        agent.state["autopilot"] = enabled
+        agent.persist("autopilot", enabled)
+        return {"result": ("Autopilot ON — execute triggers will fire on "
+                           "custom/…/execute/* (make sure the wiring actuators "
+                           "are spawned)." if enabled else
+                           "Autopilot OFF — proposal-only mode."),
+                "autopilot": enabled}
 
     if action == "configure":
         c = agent.state["C"]
@@ -532,7 +673,11 @@ async def handle_task(agent, payload):
 
     return {
         "result": "Actions: propose (decide + publish now), status, explain "
-                  "(LLM narration if available), configure (update C at runtime).",
-        "commands": ["propose", "status", "explain", "configure"],
+                  "(LLM narration if available), configure (update C at runtime), "
+                  "wiring (ready-to-spawn stock ha_actuator configs, one per "
+                  "action), autopilot (enabled=true|false — gate the execute "
+                  "triggers).",
+        "commands": ["propose", "status", "explain", "configure", "wiring",
+                     "autopilot"],
     }
 '''

@@ -26,6 +26,13 @@ from ..core.mqtt import mqtt_client
 from .llm_agent import LLMProvider, _accumulate_global_cost
 from .mixins.spawning import SpawnMixin
 
+try:
+    from .sparql_context import build_sparql_context as _build_sparql_context
+
+    _SPARQL_AVAILABLE = True
+except ImportError:
+    _SPARQL_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 _SKIP_AGENTS = {
@@ -75,6 +82,18 @@ class PlannerAgent(Actor, SpawnMixin):
         self._approved_plan = approved_plan
         self._result_futures: dict[str, asyncio.Future] = {}
         self._spawned_by_planner: list[str] = []  # agents we created this run
+
+        # Fuseki endpoint for SPARQL world-model enrichment (optional).
+        # None → build_sparql_context resolves FUSEKI_URL / FUSEKI_DATASET env
+        # vars itself, using the same defaults as the fuseki extension.
+        try:
+            from ..config import CONFIG
+
+            self._fuseki_url: str | None = getattr(CONFIG, "fuseki_url", None) or getattr(
+                CONFIG, "fuseki_endpoint", None
+            )
+        except Exception:
+            self._fuseki_url = None
         # Per-agent spawn outcome: name → {"ok": bool, "error": str|None}
         # Sent back to main in the RESULT payload so it knows what actually happened.
         self._spawn_results: dict[str, dict] = {}
@@ -1410,6 +1429,17 @@ class PlannerAgent(Actor, SpawnMixin):
                 logger.warning(f"[{self.name}] Feasibility check error (continuing): {e}")
 
         # ── 3. Decompose into spawn configs ────────────────────────────────
+        # SPARQL enrichment: fetch durable channel schemas + relevant HA state
+        _sparql_pipeline_ctx = ""
+        if _SPARQL_AVAILABLE:
+            try:
+                _sparql_pipeline_ctx = await _build_sparql_context(
+                    task=task,
+                    fuseki_url=self._fuseki_url,
+                    timeout=3.0,
+                )
+            except Exception as _e:
+                logger.debug(f"[{self.name}] SPARQL pipeline context skipped: {_e}")
 
         # Build the prompt as a list of parts to avoid f-string escape issues
         prompt_parts = [
@@ -1698,6 +1728,15 @@ class PlannerAgent(Actor, SpawnMixin):
                     "",
                 ]
                 if topic_samples_section
+                else []
+            ),
+            *(  # SPARQL: durable channel schemas + relevant HA states from Fuseki
+                [
+                    "═══ FUSEKI KNOWLEDGE GRAPH (durable schemas + HA state) ═══",
+                    _sparql_pipeline_ctx,
+                    "",
+                ]
+                if _sparql_pipeline_ctx
                 else []
             ),
             "═══ HOME ASSISTANT ENTITIES ═══",
@@ -2111,12 +2150,24 @@ class PlannerAgent(Actor, SpawnMixin):
         except Exception:
             pass
 
+        # ── SPARQL world-model enrichment (durable channel schemas + HA state) ──
+        sparql_ctx = ""
+        if _SPARQL_AVAILABLE:
+            try:
+                sparql_ctx = await _build_sparql_context(
+                    task=task,
+                    fuseki_url=self._fuseki_url,
+                    timeout=3.0,
+                )
+            except Exception as _e:
+                logger.debug(f"[{self.name}] SPARQL context skipped: {_e}")
+
         prompt = f"""You are a task planner for a multi-agent system.
 Break the task into steps. Each step is handled by one agent.
 
 AVAILABLE AGENTS (with input/output contracts):
 {workers_desc}
-{topic_schema_ctx}
+{topic_schema_ctx}{sparql_ctx}
 DELEGATING TO EXISTING AGENTS — strongly preferred over raw MQTT:
 - When an existing agent has its own LLM/NL planner (look for phrases like
   "internal LLM planner", "PREFERRED interface", or "send_to" in its description),

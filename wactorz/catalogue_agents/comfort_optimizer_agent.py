@@ -154,6 +154,117 @@ def _inventory(rows):
 # 3b.2 — GENERIC PATTERN MINING (code; nothing device-specific)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _dedupe_rows(rows, window_s=5.0):
+    """Collapse duplicate deliveries (two subscribers) and no-op changes.
+    Generic: keyed only on (entity, new_state, time proximity)."""
+    rows = sorted(rows, key=lambda r: r["ts"])
+    last, out = {}, []
+    for r in rows:
+        e, n = r["entity_id"], str(r.get("new_state"))
+        if str(r.get("old_state")) == n:
+            continue
+        prev = last.get(e)
+        if prev and prev[1] == n and r["ts"] - prev[0] <= window_s:
+            continue
+        last[e] = (r["ts"], n)
+        out.append(r)
+    return out
+
+
+def _mine_transitions(rows, inv, max_lag_s=30.0, min_n=3, min_conf=0.6):
+    """DIRECTIONAL state-level rules: (entity_a, state_a) -> (entity_b, state_b)
+    with median lag and lift-vs-chance. This is what disambiguates
+    'locked -> AC on' from 'unlocked -> AC on': the trigger STATE is part of
+    the key, and states come from the data, never from code. A sub-5s median
+    lag is flagged automation-like (existing automation) vs behavioral (habit).
+    Conditional automations (fire only under an unobserved extra condition)
+    show as moderate confidence + extreme lift, so both gates admit them."""
+    import bisect as _bisect
+    evs = [(r["ts"], r["entity_id"], str(r["new_state"]).lower())
+           for r in rows if inv.get(r["entity_id"], {}).get("eventlike")]
+    evs.sort()
+    span_s = (evs[-1][0] - evs[0][0]) if len(evs) > 1 else 1.0
+    times = {}
+    for ts, e, s in evs:
+        times.setdefault((e, s), []).append(ts)
+
+    out = []
+    for (ea, sa), ta in times.items():
+        if len(ta) < min_n:
+            continue
+        for (eb, sb), tb in times.items():
+            if ea == eb:
+                continue
+            lags = []
+            for t in ta:
+                k = _bisect.bisect_right(tb, t)
+                if k < len(tb) and tb[k] - t <= max_lag_s:
+                    lags.append(tb[k] - t)
+            if len(lags) < min_n:
+                continue
+            conf = len(lags) / len(ta)
+            base = len(tb) * max_lag_s / span_s      # chance rate
+            lift = round(conf / base, 1) if base > 0 else None
+            if conf < min_conf and not (lift and lift >= 20 and conf >= 0.3):
+                continue
+            lags.sort()
+            med = lags[len(lags) // 2]
+            out.append({
+                "when": {"entity": ea, "state": sa},
+                "then": {"entity": eb, "state": sb},
+                "n": len(ta), "confidence": round(conf, 2),
+                "median_lag_s": round(med, 1), "lift": lift,
+                "verdict": "automation-like" if med <= 5.0 else "behavioral",
+            })
+    out.sort(key=lambda p: -(p["lift"] or 0) * p["confidence"])
+    return out[:16]
+
+
+def _mine_schedules(rows, inv, tol_min=3.0, min_days=2):
+    """Cron-like behavior for ANY (entity, state): cluster the times-of-day at
+    which the transition occurs; a tight cluster hit on >= min_days distinct
+    days is a schedule. No hours are hardcoded — the clock times emerge from
+    clustering the data (with midnight wraparound handled)."""
+    pts = {}
+    for r in rows:
+        if not inv.get(r["entity_id"], {}).get("eventlike"):
+            continue
+        lt = time.localtime(r["ts"])
+        mod = lt.tm_hour * 60 + lt.tm_min + lt.tm_sec / 60.0
+        pts.setdefault((r["entity_id"], str(r["new_state"]).lower()), []).append(
+            ((lt.tm_year, lt.tm_yday), mod))
+
+    found = []
+    for (e, s), ps in pts.items():
+        ps.sort(key=lambda p: p[1])
+        clusters, cur = [], [ps[0]]
+        for p in ps[1:]:
+            if p[1] - cur[-1][1] <= tol_min:
+                cur.append(p)
+            else:
+                clusters.append(cur)
+                cur = [p]
+        clusters.append(cur)
+        if len(clusters) > 1 and \
+                (clusters[0][0][1] + 1440) - clusters[-1][-1][1] <= tol_min:
+            clusters[0] = clusters.pop() + clusters[0]
+        n_days_total = len({d for d, _ in ps})
+        for cl in clusters:
+            days = {d for d, _ in cl}
+            if len(days) < min_days or len(cl) > 2 * len(days):
+                continue                     # multi-day, ~once-per-day
+            mods = [m % 1440 for _, m in cl]
+            center = sum(mods) / len(mods)
+            found.append({
+                "entity": e, "state": s,
+                "time_local": "%02d:%02d" % (int(center // 60), int(center % 60)),
+                "days_hit": len(days), "days_observed": n_days_total,
+                "n": len(cl), "spread_min": round(max(mods) - min(mods), 1),
+            })
+    found.sort(key=lambda o: (-o["days_hit"], o["spread_min"]))
+    return found[:12]
+
+
 def _active_windows(per, eid, inv):
     """Time windows in which an entity is 'active': numeric>threshold for
     power-like entities, else any state change burst membership."""
@@ -199,6 +310,10 @@ def _mine_patterns(rows, inv, per):
 
     event_entities = [e for e, i in inv.items() if i["eventlike"] and i["events"] >= 3]
     numeric_entities = [e for e, i in inv.items() if i["numeric"]]
+
+    # ── directional state-transition rules + clock-time schedules ───────────
+    out["transition_rules"] = _mine_transitions(rows, inv)
+    out["schedules"] = _mine_schedules(rows, inv)
 
     # ── lagged co-occurrence between event-like entities ────────────────────
     pairs = []
@@ -301,7 +416,11 @@ def _mine_patterns(rows, inv, per):
             ov = _win_overlap(windowed[a], windowed[b])
             if ov is not None:
                 overlaps.append({"a_active": a, "b_active": b, "overlap": ov})
-    out["state_overlap"] = sorted(overlaps, key=lambda o: -o["overlap"])[:12]
+    # Extremes at BOTH ends carry the signal: ~1.0 = run together,
+    # ~0.0 = mutually exclusive (e.g. AC active only while NOT unlocked
+    # ⇒ cooling-while-empty). ~0.5 is uninformative — rank by |ov - 0.5|.
+    out["state_overlap"] = sorted(
+        overlaps, key=lambda o: -abs(o["overlap"] - 0.5))[:12]
     return out
 
 
@@ -346,6 +465,16 @@ def _llm_prompt(inv, patterns, goal, hints):
         "and C preferences. Infer preferences from REVEALED behavior in the "
         "patterns (e.g. if the actuator runs mostly while the space is empty, "
         "comfort_when='unoccupied' and energy_weight should be lower). "
+        "READING THE PATTERNS: 'transition_rules' are directional — the "
+        "trigger STATE matters (locked→cool means cooling starts on vacating; "
+        "occupancy-state→cool means cooling-while-occupied). "
+        "verdict='automation-like' (sub-5s lag) means an automation ALREADY "
+        "implements that rule — treat it as the user's revealed preference and "
+        "design the controller to subsume/improve it, not fight it. Moderate "
+        "confidence with high lift means the existing rule is conditional. "
+        "'schedules' are fixed clock-time behaviors (existing timers). "
+        "In 'state_overlap', ~0.0 means mutually exclusive and ~1.0 means "
+        "concurrent — both are strong preference signals. "
         f"Reply as JSON with exactly this shape:\n{json.dumps(schema)}"
     )
 
@@ -607,6 +736,7 @@ async def handle_task(agent, payload):
             rows = await _fetch_history(agent, hours)
         except Exception as exc:
             return {"result": f"Could not fetch data: {exc}", "spawned": False}
+        rows = _dedupe_rows(rows)   # duplicate deliveries + no-op changes
         if len(rows) < 10:
             return {"result": f"Only {len(rows)} row(s) in the last {hours:g} h — "
                               "not enough data. Let the collector run longer.",

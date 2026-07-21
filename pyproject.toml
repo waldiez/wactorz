@@ -40,7 +40,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "websockets>=15.0",
     "asyncssh>=2.14.0",
-    "waldiez-swid @ git+https://github.com/waldiez/swid"
+    "waldiez-swid @ git+https://github.com/waldiez/swid@b3ec1f46733cad0d0fdc30552da8fa9a84531bfa"
 ]
 
 [project.optional-dependencies]

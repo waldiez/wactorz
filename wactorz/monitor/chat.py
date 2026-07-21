@@ -41,10 +41,12 @@ async def no_op_async() -> None:
 
 
 def chat_mode() -> str:
+    """Which chat path is active: ``direct_ws`` when a registry is wired, else ``mqtt``."""
     return "direct_ws" if runtime.registry is not None else "mqtt"
 
 
 def find_main() -> MainActor | None:
+    """Return the main actor from the registry, or ``None`` in legacy MQTT mode."""
     actor = runtime.registry.find_by_name("main") if runtime.registry else None
     if actor:
         return cast(MainActor, actor)
@@ -52,6 +54,10 @@ def find_main() -> MainActor | None:
 
 
 def parse_mention(content: str) -> tuple[str, str]:
+    """Split a leading ``@agent`` mention off a message.
+
+    Returns ``(target, remaining_text)``; target is ``""`` when unmentioned.
+    """
     if content.startswith("@"):
         parts = content[1:].split(None, 1)
         return parts[0], (parts[1].strip() if len(parts) > 1 else "")
@@ -64,6 +70,7 @@ def parse_mention(content: str) -> tuple[str, str]:
 
 
 async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, reply_fn) -> None:
+    """Install and start a remote runner on ``host`` over SSH, streaming progress."""
     if not host:
         await reply_fn(f"[discover] Searching for '{node}' on the network...")
         discovered = None
@@ -84,7 +91,7 @@ async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, re
                     None, lambda: socket.gethostbyname(socket.gethostname())
                 )
                 subnet = ".".join(local_ip.split(".")[:3])
-            except Exception:  # pylint: disable=broad-exception-caught
+            except Exception:
                 subnet = "192.168.1"
             await reply_fn(f"[discover] mDNS not found. Scanning {subnet}.1-254 for SSH...")
             found = await _scan_subnet_ssh(subnet)
@@ -144,7 +151,6 @@ async def _scan_subnet_ssh(subnet: str) -> list:
 
     async def probe(ip):
         async with sem:
-            # pylint: disable=broad-exception-caught
             try:
                 _, w = await asyncio.wait_for(asyncio.open_connection(ip, 22), timeout=0.4)
                 w.close()
@@ -280,7 +286,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
         # If so, route the message via MQTT and stream the reply back.
         if main_actor and hasattr(main_actor, "_known_nodes"):
             remote_node = None
-            for node_name, nd in main_actor._known_nodes.items():  # pylint: disable=protected-access
+            for node_name, nd in main_actor._known_nodes.items():
                 if time.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get(
                     "agents", []
                 ):
@@ -302,7 +308,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                     ) as client:
                         # Subscribe first, then publish — avoids race condition
                         await client.subscribe(reply_topic)
-                        await main_actor._mqtt_publish(  # pylint: disable=protected-access
+                        await main_actor._mqtt_publish(
                             f"agents/by-name/{target_name}/task",
                             payload,
                         )
@@ -322,7 +328,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                                             or data.get("content")
                                             or str(data)
                                         )
-                                    except Exception:  # pylint: disable=broad-exception-caught
+                                    except Exception:
                                         text_out = msg.payload.decode()
                                     return str(text_out)
                                 return None
@@ -337,7 +343,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                             )
                             await _end_fn()
                             return
-                except Exception as exc:  # pylint: disable=broad-exception-caught
+                except Exception as exc:
                     msg = f"[io-gateway] Remote @{target_name} routing failed: {exc}"
                     logger.error(msg, exc_info=True)
                     await reply_fn(
@@ -382,7 +388,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             try:
                 result = await target.chat(text)  # pyright: ignore[reportAttributeAccessIssue]
                 await reply_fn(str(result))
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:
                 msg = f"[io-gateway] chat() on {target.name} failed: {exc}"
                 logger.error(msg, exc_info=True)
                 await reply_fn(f"[error] {target.name}: {exc}")
@@ -437,7 +443,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
 
         except asyncio.TimeoutError:
             await reply_fn(f"[error] @{target_name} did not reply within 150s.")
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             msg = f"[io-gateway] task dispatch to {target.name} failed: {exc}"
             logger.error(msg, exc_info=True)
             await reply_fn(f"[error] {target.name}: {exc}")
@@ -483,7 +489,7 @@ async def rest_chat_handler(request: web.Request) -> Response:
         return web.json_response({"error": "registry not available"}, status=503)
     try:
         data = await request.json()
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         return web.json_response({"error": "invalid JSON"}, status=400)
     message = data.get("message", "").strip()
     agent_name = data.get("agent_name", "main-actor")
@@ -499,7 +505,7 @@ async def rest_chat_handler(request: web.Request) -> Response:
     return web.json_response({"status": "sent", "agent": agent_name})
 
 
-async def rest_chat_stop_handler(request: web.Request) -> Response:  # pylint: disable=unused-argument
+async def rest_chat_stop_handler(request: web.Request) -> Response:
     """POST /chat/stop — cancel any in-flight generation. No request body needed.
 
     Works in both runtime modes:
@@ -525,7 +531,7 @@ async def rest_chat_stop_handler(request: web.Request) -> Response:  # pylint: d
                 qos=1,
             )
             published = True
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             logger.warning("[chat/stop] io/chat/control publish failed: %s", exc)
 
     return web.json_response(

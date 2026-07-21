@@ -28,7 +28,7 @@ async def broadcast(msg: dict[str, Any]) -> None:
     for ws in list(runtime.ws_clients):
         try:
             await ws.send_str(payload)
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as e:
             logger.warning("[broadcast] WS send failed: %s", e)
             dead.add(ws)
     runtime.ws_clients.difference_update(dead)
@@ -73,7 +73,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 role=role,
                 content=content,
             )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             logger.warning("[ws] chat_log write failed: %s", exc)
 
     async def ws_reply(text: str):
@@ -91,7 +91,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             # Non-streamed replies (slash command output, errors, system
             # messages) — persist immediately.
             _persist_chat("assistant", text, _reply_from["name"])
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             pass
 
     async def ws_stream_chunk(chunk: str):
@@ -109,7 +109,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             # Buffer for end-of-stream persistence; do NOT write per chunk.
             if chunk:
                 _stream_buffer.append(chunk)
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             pass
 
     async def ws_stream_end():
@@ -128,7 +128,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 full = "".join(_stream_buffer)
                 _stream_buffer.clear()
                 _persist_chat("assistant", full, _reply_from["name"])
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             # Even if the send_str failed, flush anything we accumulated
             # so the user's session isn't lost on a transient ws hiccup.
             if _stream_buffer:
@@ -155,7 +155,6 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             qos=1,
         )
 
-    # pylint: disable=broad-exception-caught
     try:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
@@ -259,5 +258,5 @@ async def handle_command(cmd: dict[str, Any]) -> None:
             await broadcast(
                 {"type": "lifecycle.delete_agent", "agent_id": agent_id, "state": events.snapshot()}
             )
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except Exception as e:
         logger.error("[cmd] Publish failed: %s", e)

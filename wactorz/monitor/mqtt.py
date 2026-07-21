@@ -23,7 +23,7 @@ async def broadcast_mqtt_msg(topic: str, payload: str) -> None:
     parsed: Any = payload
     try:
         parsed = json.loads(payload)
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         # non-JSON: pass the string through
         pass
     await ws.broadcast({"type": "server_event", "topic": topic, "payload": parsed})
@@ -41,7 +41,6 @@ async def set_mqtt_status(connected: bool) -> None:
 
 async def mqtt_listener() -> None:
     """Subscribe to topics and handle mqtt messages."""
-    # pylint: disable=broad-exception-caught
     logger.info("Connecting to MQTT %s:%s...", runtime.MQTT_BROKER, runtime.MQTT_PORT)
     try:
         while True:
@@ -113,7 +112,7 @@ async def mqtt_listener() -> None:
     finally:
         # Drop ref and force GC while loop is still open so paho's __del__
         # doesn't fire after the event loop closes (avoids RuntimeError noise).
-        import gc  # pylint: disable=import-outside-toplevel
+        import gc
 
         runtime.mqtt_client_ref = None
         gc.collect()
@@ -129,7 +128,6 @@ async def check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
     abort startup: the aiomqtt client itself reconnects, so this pre-flight probe
     must be at least as tolerant, or it aborts a server whose MQTT is actually fine.
     """
-    # pylint: disable=broad-exception-caught
     last = ""
     for i in range(attempts):
         try:

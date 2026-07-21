@@ -71,6 +71,7 @@ def csp_policy(nonce: str) -> str:
 
 
 async def index_handler(request: web.Request) -> Response:
+    """Serve the SPA shell with a per-request CSP nonce and the ingress prefix injected."""
     if request.path.endswith("favicon.svg"):
         for candidate in [FRONTEND_PUBLIC / "favicon.svg", FRONTEND_DIST / "favicon.svg"]:
             if candidate.exists():
@@ -106,6 +107,7 @@ async def index_handler(request: web.Request) -> Response:
 
 
 async def static_handler(request: web.Request) -> Response:
+    """Serve a built asset, rewriting absolute API/WS URLs when behind HA ingress."""
     rel = request.match_info["path"]
 
     # Special case for favicon if it's requested at root
@@ -141,7 +143,7 @@ async def static_handler(request: web.Request) -> Response:
                     )
 
                 return _with_no_cache(web.FileResponse(candidate))
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             pass
     raise web.HTTPNotFound()
 
@@ -156,6 +158,7 @@ async def docs_redirect(_request: web.Request) -> web.Response:
 
 
 async def docs_handler(request: web.Request) -> web.FileResponse:
+    """Serve the rendered docs site, resolving directory URLs to their index page."""
     if not DOCS_SITE.is_dir():
         raise web.HTTPNotFound(
             reason="Docs not built — run: python3 scripts/build_docs.py  (or: make docs-build)"
@@ -176,6 +179,6 @@ async def docs_handler(request: web.Request) -> web.FileResponse:
                         raise web.HTTPFound(request.path.rstrip("/") + f"/{sub.name}/index.html")
     except web.HTTPFound:
         raise
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         pass
     raise web.HTTPNotFound()

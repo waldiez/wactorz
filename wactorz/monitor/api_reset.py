@@ -51,7 +51,7 @@ async def reset_handler(request: web.Request) -> Response:
     """
     try:
         body = await request.json()
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         return web.json_response({"error": "invalid JSON"}, status=400)
 
     scope = body.get("scope", "")
@@ -121,7 +121,6 @@ async def reset_handler(request: web.Request) -> Response:
             # Harmless when there are no nodes.
             node_names = set(runtime.state["nodes"].keys())
             main_actor = chat.find_main()
-            # pylint: disable=protected-access
             if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
                 for cfg in (main_actor._get_spawn_registry() or {}).values():
                     n = (cfg.get("node") or "").strip()
@@ -189,7 +188,7 @@ async def reset_handler(request: web.Request) -> Response:
                 from ..agents.llm_agent import reset_global_cost
 
                 reset_global_cost()
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
             runtime.state["agents"].clear()
             runtime.state["nodes"].clear()
@@ -220,7 +219,6 @@ async def reset_handler(request: web.Request) -> Response:
         # "remembers" the conversation (and re-persists it on the next turn) until
         # a restart — the same live-vs-disk gap the metrics scope guards against.
         live_actors = list(runtime.registry.all_actors()) if runtime.registry is not None else []
-        # pylint: disable=protected-access
         for actor in live_actors:
             if agent and actor.name != agent:
                 continue
@@ -229,7 +227,6 @@ async def reset_handler(request: web.Request) -> Response:
             if hasattr(actor, "_history_summary"):
                 actor._history_summary = ""  # pyright: ignore[reportAttributeAccessIssue]
     elif scope == "state":
-        # pylint: disable=protected-access
         if agent:
             _reset.reset_agent_state(agent)
         else:
@@ -261,7 +258,7 @@ async def reset_handler(request: web.Request) -> Response:
                 from ..agents.llm_agent import reset_global_cost
 
                 reset_global_cost()
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
     elif scope == "spawns":
         # Clear live state + retained desired_state FIRST (it needs the registry

@@ -333,7 +333,20 @@ wactorz/                         ← repo root
 ├── wactorz/                     ← Python package
 │   ├── cli.py                   ← entry point (wactorz command)
 │   ├── config.py                ← .env loading, CONFIG object
-│   ├── monitor_server.py        ← web dashboard (aiohttp)
+│   ├── monitor_server.py        ← back-compat shim → wactorz/monitor/
+│   ├── monitor/                 ← web dashboard (aiohttp)
+│   │   ├── app.py               ← route table, build_app(), entry point
+│   │   ├── runtime.py           ← shared mutable state (registry, db, live state)
+│   │   ├── api_actors.py        ← /api/actors… handlers
+│   │   ├── api_system.py        ← health, cost, config, feed
+│   │   ├── api_reset.py         ← /api/reset + factory keep-set
+│   │   ├── chat.py              ← chat routing, slash commands, REST chat
+│   │   ├── ws.py                ← /ws transport
+│   │   ├── mqtt.py              ← broker listener
+│   │   ├── events.py            ← topic → state transitions
+│   │   ├── cost.py              ← lifetime ledger
+│   │   ├── lifecycle.py         ← purges + deletion
+│   │   └── static_site.py       ← SPA + docs serving
 │   ├── core/
 │   │   ├── actor.py             ← Actor base class, Supervisor, persistence
 │   │   └── registry.py          ← ActorSystem, ActorRegistry, MQTT publisher

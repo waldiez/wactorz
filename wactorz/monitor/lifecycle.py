@@ -40,7 +40,7 @@ async def purge_agent_retained(agent_id: str) -> None:
         topic = f"agents/{agent_id}/{metric}"
         try:
             await runtime.mqtt_client_ref.publish(topic, b"", retain=True)
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as e:
             logger.debug("[purge] Failed to clear retained %s: %s", topic, e)
 
 
@@ -56,7 +56,7 @@ async def purge_node_desired_state(node: str) -> None:
     topic = f"nodes/{node}/desired_state"
     try:
         await runtime.mqtt_client_ref.publish(topic, b"", retain=True)
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except Exception as e:
         logger.debug("[purge] Failed to clear retained %s: %s", topic, e)
 
 
@@ -80,7 +80,7 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
     main_actor = chat.find_main()
     reg = {}
     if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
-        reg = main_actor._get_spawn_registry() or {}  # pylint: disable=protected-access
+        reg = main_actor._get_spawn_registry() or {}
 
     # Affected nodes: live heartbeats ∪ registry (covers offline nodes).
     node_names: set[str] = set(runtime.state["nodes"].keys())
@@ -103,7 +103,7 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
     if agent and main_actor is not None and hasattr(main_actor, "_update_node_desired_state"):
         # Republish from the reduced registry so siblings on the node survive.
         await asyncio.gather(
-            *[main_actor._update_node_desired_state(n) for n in node_names],  # pylint: disable=protected-access
+            *[main_actor._update_node_desired_state(n) for n in node_names],
             return_exceptions=True,
         )
     else:
@@ -147,7 +147,7 @@ async def delete_agent(agent_id: str) -> str:
             try:
                 await main_actor.delete_spawned_agent(name)
                 routed = f"via main.delete_spawned_agent({name!r})"
-            except Exception as e:  # pylint: disable=broad-exception-caught
+            except Exception as e:
                 msg = (
                     f"[delete] main.delete_spawned_agent('{name}') failed: {e}; "
                     "falling back to direct MQTT"
@@ -167,7 +167,6 @@ async def delete_agent(agent_id: str) -> str:
 
     if routed in ("unknown", "main path failed") and runtime.mqtt_client_ref:
         # MQTT-only mode (or main unavailable). Route by node if we have one.
-        # pylint: disable=broad-exception-caught
         if node:
             try:
                 await runtime.mqtt_client_ref.publish(

@@ -10,8 +10,6 @@ would not be seen. The in-place-mutated containers (``state``, ``ws_clients``)
 are the only names safe to alias-import.
 """
 
-# pylint: disable=global-statement
-
 import time
 from typing import TYPE_CHECKING
 
@@ -69,7 +67,7 @@ ws_clients: set = set()
 # still ignoring stale retained messages from the deleted instance.
 deleted_agent_ids: list = []
 DELETED_IDS_MAX = 1024
-hard_resetting: bool = False  # pylint: disable=invalid-name
+hard_resetting: bool = False
 
 
 def mark_deleted(agent_id: str) -> None:

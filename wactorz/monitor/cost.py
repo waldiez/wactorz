@@ -33,7 +33,7 @@ lifetime_loaded: bool = False
 
 def ensure_lifetime_loaded() -> None:
     """Lazily hydrate the in-memory ledger from SQLite once db is injected."""
-    global lifetime_loaded  # pylint: disable=global-statement
+    global lifetime_loaded
     if lifetime_loaded or runtime.db is None:
         return
     try:
@@ -44,7 +44,7 @@ def ensure_lifetime_loaded() -> None:
                     lifetime_cost[k] = float(v)
                 except (TypeError, ValueError):
                     pass
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         pass
     lifetime_loaded = True
 
@@ -76,7 +76,7 @@ def record_lifetime_cost(agent_id: str, cost_usd) -> None:
     if runtime.db is not None:
         try:
             runtime.db.kv_set("_system", LIFETIME_LEDGER_KEY, lifetime_cost)
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             pass
 
 
@@ -102,7 +102,6 @@ def reset_actor_cost(actor) -> None:
     actor.total_cost_usd = 0.0
     actor.total_input_tokens = 0
     actor.total_output_tokens = 0
-    # pylint: disable=protected-access
     if hasattr(actor, "_last_persisted_usd"):
         actor._last_persisted_usd = 0.0
     if hasattr(actor, "_last_period_cost_usd"):
@@ -113,7 +112,6 @@ def historical_cost_usd(live_names: set) -> float:
     """Sum _final_cost for agents not in live_names."""
     if runtime.db is None:
         return 0.0
-    # pylint: disable=broad-exception-caught
     try:
         rows = runtime.db.conn.execute(
             "SELECT value FROM kv_store WHERE key = '_final_cost'"
@@ -135,7 +133,6 @@ def historical_messages(live_names: set) -> int:
     """Sum _messages_processed for agents not in live_names."""
     if runtime.db is None:
         return 0
-    # pylint: disable=broad-exception-caught
     try:
         rows = runtime.db.conn.execute(
             "SELECT agent, value FROM kv_store WHERE key = '_messages_processed'"
@@ -157,7 +154,6 @@ def _final_cost_from_db(name: str):
     """Read the persisted _final_cost cost_usd for an agent name, or None."""
     if runtime.db is None or not name:
         return None
-    # pylint: disable=broad-exception-caught
     try:
         row = runtime.db.conn.execute(
             "SELECT value FROM kv_store WHERE agent=? AND key='_final_cost'",

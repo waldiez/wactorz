@@ -64,7 +64,7 @@ def build_app() -> web.Application:
             response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
             response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             pass
         return response
 
@@ -133,6 +133,11 @@ def build_app() -> web.Application:
 
 
 async def main(exit_on_failure: bool = False) -> None:
+    """Check preconditions, serve the app, then run the broker listener forever.
+
+    With ``exit_on_failure`` a failed precondition raises ``SystemExit`` (the
+    console-script path); otherwise it returns so an embedding app can carry on.
+    """
     mqtt_ok = await mqtt.check_mqtt()
     port_ok = await check_ws_port()
 
@@ -164,6 +169,11 @@ async def main(exit_on_failure: bool = False) -> None:
 
 
 def cli_main() -> None:
+    """Console-script entry point (``wactorz-monitor``).
+
+    Windows drives the loop manually so paho-mqtt can close its sockets before
+    interpreter shutdown; every other platform just uses ``asyncio.run``.
+    """
     if sys.platform == "win32":
         # On Windows we manage the loop manually so paho-mqtt's __del__ doesn't
         # race against a closed loop during interpreter shutdown, which would
@@ -172,7 +182,6 @@ def cli_main() -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         exit_exc = None
-        # pylint: disable=broad-exception-caught
         try:
             loop.run_until_complete(main(exit_on_failure=True))
         except (KeyboardInterrupt, SystemExit) as _exit:

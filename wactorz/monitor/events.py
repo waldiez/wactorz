@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def update_agent(agent_id: str, key: str, data) -> None:
+    """Merge one field of an agent's live state, re-admitting it if respawned."""
     if runtime.hard_resetting or runtime.is_deleted(agent_id):
         return
     if agent_id not in runtime.state["agents"]:
@@ -29,15 +30,21 @@ def update_agent(agent_id: str, key: str, data) -> None:
 
 
 def add_log(entry: dict) -> None:
+    """Append to the bounded log feed shared with connected browsers."""
     runtime.state["log_feed"].insert(0, entry)
     if len(runtime.state["log_feed"]) > 100:
         runtime.state["log_feed"].pop()
 
 
 def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
+    """Decode one broker message into a state mutation.
+
+    Returns the event dict to broadcast to browsers, or ``None`` when the
+    message needs no client-side notification.
+    """
     try:
         data = json.loads(payload_str)
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         data = payload_str
 
     parts = topic.split("/")
@@ -252,10 +259,12 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
 
 
 def node_online(last_seen: float, threshold: float = 45.0) -> bool:
+    """True if a remote node's last heartbeat is recent enough to count as up."""
     return (time.time() - last_seen) < threshold
 
 
 def snapshot() -> dict[str, Any]:
+    """Render the full dashboard state for a newly connected websocket client."""
     if runtime.hard_resetting:
         return {
             "agents": [],
@@ -316,7 +325,7 @@ def snapshot() -> dict[str, Any]:
         from ..agents.llm_agent import get_global_alltime_cost
 
         alltime_cost = get_global_alltime_cost()
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         alltime_cost = 0.0
     total_cost = max(
         live_cost + cost.historical_cost_usd(live_names),

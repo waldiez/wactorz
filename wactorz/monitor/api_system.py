@@ -18,16 +18,19 @@ logger = logging.getLogger(__name__)
 
 
 async def health_handler(_request: web.Request) -> Response:
+    """Liveness probe — 200 as long as the server is accepting requests."""
     return web.json_response({"status": "ok"})
 
 
 async def cost_handler(_request: web.Request) -> Response:
+    """Return spend and message totals for the cost widget."""
     from ..agents.llm_agent import get_global_cost_info
 
     return web.json_response(get_global_cost_info())
 
 
 async def cost_limit_handler(request: web.Request) -> Response:
+    """Set the spend ceiling that pauses LLM calls once exceeded."""
     from ..agents.llm_agent import set_cost_limit
 
     try:
@@ -40,14 +43,14 @@ async def cost_limit_handler(request: web.Request) -> Response:
             )
         set_cost_limit(limit_usd, period)
         return web.json_response({"ok": True, "limit_usd": limit_usd, "period": period})
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except Exception as e:
         return web.json_response({"error": str(e)}, status=400)
 
 
 async def cost_reset_handler(_request: web.Request) -> Response:
+    """Zero the current spend period without touching the lifetime ledger."""
     from ..agents.llm_agent import reset_global_cost
 
-    # pylint: disable=broad-exception-caught
     try:
         info = reset_global_cost()
         # Clear the in-memory lifetime ledger so max() doesn't pin the display
@@ -81,7 +84,7 @@ async def chat_log_handler(request: web.Request) -> Response:
         limit = min(int(request.rel_url.query.get("limit", 200)), 1000)
         rows = runtime.db.query_chat_log(agent_name=agent, role=role, since=since, limit=limit)
         return web.json_response(rows)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:
         return web.json_response({"error": str(exc)}, status=500)
 
 
@@ -135,7 +138,6 @@ async def feed_handler(_request: web.Request) -> Response:
     """
     if runtime.db is None:
         return web.json_response([])
-    # pylint: disable=broad-exception-caught
     try:
         # Primary path — persistent chat_log with real timestamps.
         try:

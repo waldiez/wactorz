@@ -33,12 +33,13 @@ def _actor_payload(ag: dict) -> dict:
 
 
 async def send_message_handler(request: web.Request) -> Response:
+    """Deliver a message to one actor (fire-and-forget)."""
     actor_id = request.match_info["actor_id"]
     if runtime.registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
     try:
         data = await request.json()
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         return web.json_response({"error": "invalid JSON"}, status=400)
     content = data.get("content", "").strip()
     if not content:
@@ -56,6 +57,7 @@ async def send_message_handler(request: web.Request) -> Response:
 
 
 async def delete_actor_handler(request: web.Request) -> Response:
+    """Stop an actor and purge its retained state so it cannot be resurrected."""
     actor_id = request.match_info["actor_id"]
     # Resolve the dashboard's record first so remote agents (which aren't in
     # the local registry) can still be deleted via this endpoint. The earlier
@@ -82,6 +84,7 @@ async def delete_actor_handler(request: web.Request) -> Response:
 
 
 async def pause_actor_handler(request: web.Request) -> Response:
+    """Suspend an actor's message processing, leaving it in the registry."""
     actor_id = request.match_info["actor_id"]
     if runtime.registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -99,6 +102,7 @@ async def pause_actor_handler(request: web.Request) -> Response:
 
 
 async def resume_actor_handler(request: web.Request) -> Response:
+    """Resume a paused actor."""
     actor_id = request.match_info["actor_id"]
     if runtime.registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -116,6 +120,7 @@ async def resume_actor_handler(request: web.Request) -> Response:
 
 
 async def actor_metrics_handler(request: web.Request) -> Response:
+    """Return one actor's counters (messages, cost, tokens) for its detail view."""
     actor_id = request.match_info["actor_id"]
     ag = runtime.state["agents"].get(actor_id)
     actor = None
@@ -141,7 +146,11 @@ async def actor_metrics_handler(request: web.Request) -> Response:
     )
 
 
-async def actors_handler(request: web.Request) -> Response:  # pylint: disable=unused-argument
+async def actors_handler(request: web.Request) -> Response:
+    """List every local actor for the dashboard grid.
+
+    Deliberately excludes remote-runner agents — see the CONTRACT note below.
+    """
     # Prefer the live registry (injected at boot via runtime.set_registry) —
     # actor objects carry the authoritative protected flag.  Fall back to the
     # MQTT-derived state dict when no registry was injected (legacy MQTT mode).
@@ -177,6 +186,7 @@ async def actors_handler(request: web.Request) -> Response:  # pylint: disable=u
 
 
 async def actor_handler(request: web.Request) -> Response:
+    """Return a single actor's card payload."""
     actor_id = request.match_info["actor_id"]
     ag = runtime.state["agents"].get(actor_id)
     if ag is None:
@@ -185,6 +195,7 @@ async def actor_handler(request: web.Request) -> Response:
 
 
 async def actor_history_handler(request: web.Request) -> Response:
+    """Return an actor's persisted conversation history."""
     actor_id = request.match_info["actor_id"]
 
     # Resolve actor: the frontend sends the agent NAME (not UUID), so try
@@ -204,7 +215,7 @@ async def actor_history_handler(request: web.Request) -> Response:
                 (actor_id,),
             ).fetchone()
             history = json.loads(row[0]) if row else []
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             history = []
     else:
         history = []

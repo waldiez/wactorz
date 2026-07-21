@@ -33,6 +33,7 @@ import { WSClient } from "./io/WSClient";
 import { register as registerFuseki } from "./ext/fuseki";
 import { register as registerSwid } from "./ext/swid";
 import { register as registerTTS } from "./ext/tts";
+import { seedServerConfig } from "./config/serverConfig";
 import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
@@ -456,9 +457,8 @@ fetch(`${_apiBase}/api/feed`)
 // to MQTT; it gets everything over /ws.
 
 // Seed server config early so TTS availability is known before probing.
-import("./config/serverConfig")
-    .then(async m => {
-        const haChanged = await m.seedServerConfig();
+seedServerConfig()
+    .then(haChanged => {
         if (haChanged) {
             emit("af-connection-status", { status: _feedLive ? "live" : "demo" });
         }

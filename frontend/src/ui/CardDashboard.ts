@@ -28,6 +28,7 @@ import { buildFeedView, appendFeedItemToView, feedKey } from "./dashboard/feedVi
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import { MetricsController } from "./dashboard/metrics";
+import { seedServerConfig } from "../config/serverConfig";
 import { emit, listen } from "../events";
 
 export class CardDashboard {
@@ -110,11 +111,8 @@ export class CardDashboard {
 
     /** Seed runtime config from /api/config and point the Devices nav link at it. */
     private _loadServerConfig(): void {
-        import("../config/serverConfig")
-            .then(async m => {
-                await m.seedServerConfig();
-                setHaNavUrl(this.root, this.haUrl);
-            })
+        seedServerConfig()
+            .then(() => setHaNavUrl(this.root, this.haUrl))
             .catch(() => {});
     }
 

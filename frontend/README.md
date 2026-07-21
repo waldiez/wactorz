@@ -24,13 +24,10 @@ frontend/
 │   ├── config/            # App-level config: fetches /api/config, seeds safeStorage
 │   │   └── serverConfig.ts
 │   ├── ext/               # Extensions — self-contained feature modules (mirrors backend wactorz/ext/)
-│   │   ├── tts/           # TTS extension: TTSManager, types, register()
-│   │   │   ├── index.ts
-│   │   │   ├── TTSManager.ts
-│   │   │   └── types.ts
-│   │   └── fuseki/        # Fuseki extension: SPARQL Graph tab, register()
+│   │   └── tts/           # TTS extension: TTSManager, types, register()
 │   │       ├── index.ts
-│   │       └── fusekiView.ts
+│   │       ├── TTSManager.ts
+│   │       └── types.ts
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
 │   ├── io/                # IO/transport: WSClient (the /ws connection), ServerEventRouter
 │   │                      #   (topic→typed-event decoder), IOManager, SpeechToText,
@@ -124,6 +121,16 @@ agents/{id}/logs        agents/{id}/completed
 nodes/{node}/heartbeat  system/health         system/host    system/qa-flag
 ```
 
+## Adding a new UI component
+
+1. Create `src/ui/MyComponent.ts`
+2. Instantiate in `main.ts`, in the matching numbered section (see its header map)
+3. Subscribe to relevant events via `listen(type, handler)` from `src/events.ts`
+4. Fire events via `emit(type, detail)` rather than calling methods on other components directly
+   (add the event to `AppEventMap` first)
+5. Add a unit test in `src/__tests__/` (coverage is gated in CI)
+6. Run `bun run lint && bun run test` — both must pass before opening a PR
+
 ## Adding an extension
 
 Extensions live in `src/ext/<name>/` and mirror the backend's `wactorz/ext/<name>/`.
@@ -135,21 +142,12 @@ TTS (`src/ext/tts/`) is the reference implementation. An extension:
 3. **Talks via the event bus** — never imports other extensions directly; emits/receives
    typed events on `AppEventMap` (`src/events.ts`)
 4. **Reads config from safeStorage** — `/api/config` results are seeded by
-   `config/serverConfig.ts`; add a whitelist entry there for your extension's fields
+   `config/serverConfig.ts`; register your extension's fields from the barrel via
+   `registerConfigEntry()` at module load
 5. **Registers custom icons** via `registerIcon(name, svgPaths)` from
    `ui/dashboard/icons.ts` before calling `registerView` — core never needs to
    know your icon names
 6. **Tests mirror the layout** — `src/__tests__/ext/<name>/`
-
-## Adding a new UI component
-
-1. Create `src/ui/MyComponent.ts`
-2. Instantiate in `main.ts`, in the matching numbered section (see its header map)
-3. Subscribe to relevant events via `listen(type, handler)` from `src/events.ts`
-4. Fire events via `emit(type, detail)` rather than calling methods on other components directly
-   (add the event to `AppEventMap` first)
-5. Add a unit test in `src/__tests__/` (coverage is gated in CI)
-6. Run `bun run lint && bun run test` — both must pass before opening a PR
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide: style/JSDoc rules, the
 PR checklist, and the branch target (`dev`).

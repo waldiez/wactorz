@@ -30,9 +30,7 @@ export interface AppEventMap {
     "af-wipe-all": void;
     "af-clear-feed": void;
     "tts-voices-loaded": { voices: TTSVoice[] };
-    /** TTS started playing server audio — duck ambient. */
     "tts-audio-start": void;
-    /** TTS finished playing (or failed) — restore ambient. */
     "tts-audio-end": void;
 }
 

@@ -35,4 +35,23 @@ describe("ext/fuseki barrel (index.ts)", () => {
         expect(el).toBeInstanceOf(HTMLElement);
         expect(el.querySelector(".af-fuseki-sidebar")).not.toBeNull();
     });
+
+    it("registers its /api/config entries (url + dataset seed into storage)", async () => {
+        localStorage.clear();
+        (window as unknown as Record<string, unknown>).__WACTORZ_INGRESS_PATH = "";
+        await import("../../../ext/fuseki"); // module load registers the entries
+        const { seedServerConfig } = await import("../../../config/serverConfig");
+        const origFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ fuseki: { url: "http://fuseki:3030", dataset: "myds" } }),
+        })) as unknown as typeof fetch;
+        try {
+            await seedServerConfig();
+        } finally {
+            globalThis.fetch = origFetch;
+        }
+        expect(localStorage.getItem("wactorz-fuseki-url")).toBe("http://fuseki:3030");
+        expect(localStorage.getItem("wactorz-fuseki-dataset")).toBe("myds");
+    });
 });

@@ -8,7 +8,7 @@
  * This file only *wires*: it instantiates the services, derives the deployment
  * URLs, and connects transports → store → UI. Every decision/transform lives in
  * a tested module (agents/mapping, agents/deletionGuard, ui/haFeed,
- * ui/dashboard/haConfig); the handlers below are thin delegators. Keep it that
+ * config/serverConfig); the handlers below are thin delegators. Keep it that
  * way — if a handler grows real logic, extract it (see CONTRIBUTING).
  *
  * The chat lives entirely in CardDashboard's in-card bar (DashboardChat), which

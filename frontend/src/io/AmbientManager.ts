@@ -10,8 +10,8 @@
  * Auto-ducks to DUCK_VOLUME when TTS is speaking.
  */
 
-import { safeStorage } from "../safeStorage";
 import { listen } from "../events";
+import { safeStorage } from "../safeStorage";
 
 const DUCK_VOLUME = 0.12;
 const LS_TRACK = "wactorz.ambientTrack";

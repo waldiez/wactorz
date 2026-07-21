@@ -10,12 +10,23 @@
  * startup; the rest of the app talks to it via the event bus.
  */
 
+import { registerConfigEntry } from "../../config/serverConfig";
 import { tts } from "./TTSManager";
 
 export { tts, TTSManager } from "./TTSManager";
 export type { TTSVoice } from "./types";
 
-/** Extension config seeded from /api/config by seedServerConfig(). */
+// This extension's /api/config fields (namespaced under "tts" by the backend
+// seam) — registered at module load so seedServerConfig() picks them up.
+registerConfigEntry("wactorz-tts-available", c =>
+    (c.tts as Record<string, unknown> | undefined)?.available ? "1" : "0",
+);
+registerConfigEntry(
+    "wactorz-tts-voice",
+    c => (c.tts as Record<string, unknown> | undefined)?.voice as string | undefined,
+);
+
+/** Extension config passed to register() once at startup (see main.ts). */
 export interface TTSConfig {
     apiBase: string;
     available: boolean;

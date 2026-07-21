@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Reachy Mini agent — Wactorz</title>
+  <title>Fuseki extension — Wactorz</title>
   <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
   <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
@@ -114,7 +114,7 @@
 
 <div class="layout">
   <aside class="sidebar">
-    <details class="sidebar-group">
+    <details class="sidebar-group" open>
       <summary class="sidebar-label">Guide</summary>
       <a href="../guide/development.html" class="">Installation</a>
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
@@ -126,10 +126,10 @@
       <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
-      <a href="../guide/ext-fuseki.html" class="">Fuseki extension</a>
+      <a href="../guide/ext-fuseki.html" class="active">Fuseki extension</a>
       <a href="../guide/ext-swid.html" class="">SWID extension</a>
     </details>
-    <details class="sidebar-group" open>
+    <details class="sidebar-group">
       <summary class="sidebar-label">Catalogue agents</summary>
       <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
       <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
@@ -137,7 +137,7 @@
       <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
       <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
       <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
-      <a href="../catalogue/catalogue-reachy-mini.html" class="active">Reachy Mini</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="">Reachy Mini</a>
       <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
       <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
       <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
@@ -145,128 +145,42 @@
     </details>
   </aside>
   <main class="content">
-<h1 id="reachy-mini-agent">Reachy Mini agent</h1>
-<p><code>reachy-mini</code> controls a Reachy Mini from Wactorz. Use it for wake/sleep, head pose,
-antennas, gaze, speech, expressive gestures, and optional Home Assistant actions.</p>
-<h2 id="hardware-setup">Hardware setup</h2>
-<p>Reachy Mini Wireless:</p>
-<ol>
-<li>Power on the robot.</li>
-<li>Put the robot and the Wactorz host on the same WiFi network.</li>
-<li>Make sure the network does not block local device discovery.</li>
-<li>Stop any Hugging Face app running on the robot before Wactorz connects.</li>
-</ol>
-<p>Reachy Mini Lite:</p>
-<ol>
-<li>Connect the robot over USB.</li>
-<li>Start the local daemon before spawning the agent:</li>
-</ol>
-<div class="highlight"><pre><span></span><code>reachy-mini-daemon<span class="w"> </span>-p<span class="w"> </span>&lt;serial_port&gt;
+<h1 id="fuseki-extension">Fuseki extension</h1>
+<p>Bridges Wactorz to an Apache Jena Fuseki triple store: agent manifests and
+Home Assistant state become RDF, queryable from the dashboard's <strong>Graph</strong> tab
+through the <code>/api/fuseki/&lt;dataset&gt;/sparql</code> proxy. See <a href="extensions.md">Extensions</a>
+for the general extension mechanics this module follows.</p>
+<h2 id="layout">Layout</h2>
+<div class="highlight"><pre><span></span><code><span class="n">wactorz</span><span class="o">/</span><span class="n">ext</span><span class="o">/</span><span class="n">fuseki</span><span class="o">/</span>
+<span class="err">├──</span><span class="w"> </span><span class="n">__init__</span><span class="p">.</span><span class="n">py</span><span class="w">     </span><span class="p">#</span><span class="w"> </span><span class="n">setup</span><span class="p">(),</span><span class="w"> </span><span class="n">public_config</span><span class="p">(),</span><span class="w"> </span><span class="n">on_ready</span><span class="p">(),</span><span class="w"> </span><span class="n">__deps__</span>
+<span class="err">├──</span><span class="w"> </span><span class="n">bridge</span><span class="p">.</span><span class="n">py</span><span class="w">       </span><span class="p">#</span><span class="w"> </span><span class="n">FusekiClient</span><span class="p">,</span><span class="w"> </span><span class="n">HAFusekiBridge</span><span class="p">,</span><span class="w"> </span><span class="n">HAWebSocketClient</span>
+<span class="err">├──</span><span class="w"> </span><span class="n">manager</span><span class="p">.</span><span class="n">py</span><span class="w">      </span><span class="p">#</span><span class="w"> </span><span class="n">BridgeManager</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="n">instance</span><span class="w"> </span><span class="n">state</span><span class="w"> </span><span class="p">(</span><span class="n">ha_task</span><span class="p">,</span><span class="w"> </span><span class="n">agent_tasks</span><span class="p">)</span>
+<span class="err">└──</span><span class="w"> </span><span class="n">proxy</span><span class="p">.</span><span class="n">py</span><span class="w">        </span><span class="p">#</span><span class="w"> </span><span class="n">aiohttp</span><span class="w"> </span><span class="n">route</span><span class="w"> </span><span class="n">handlers</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="o">/</span><span class="n">api</span><span class="o">/</span><span class="n">fuseki</span><span class="o">/&lt;</span><span class="n">dataset</span><span class="o">&gt;/</span><span class="n">sparql</span>
+
+<span class="n">frontend</span><span class="o">/</span><span class="n">src</span><span class="o">/</span><span class="n">ext</span><span class="o">/</span><span class="n">fuseki</span><span class="o">/</span>
+<span class="err">├──</span><span class="w"> </span><span class="n">index</span><span class="p">.</span><span class="n">ts</span><span class="w">        </span><span class="p">#</span><span class="w"> </span><span class="n">register</span><span class="p">({</span><span class="w"> </span><span class="n">url</span><span class="p">,</span><span class="w"> </span><span class="n">dataset</span><span class="p">,</span><span class="w"> </span><span class="n">onRender</span><span class="p">,</span><span class="w"> </span><span class="n">registerView</span><span class="w"> </span><span class="p">})</span>
+<span class="err">└──</span><span class="w"> </span><span class="n">fusekiView</span><span class="p">.</span><span class="n">ts</span><span class="w">   </span><span class="p">#</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">Graph</span><span class="w"> </span><span class="n">tab</span><span class="w"> </span><span class="p">(</span><span class="n">SPARQL</span><span class="w"> </span><span class="n">console</span><span class="p">)</span>
 </code></pre></div>
 
-<h2 id="install-dependencies">Install dependencies</h2>
-<p>The catalogue installer can install recipe dependencies on first spawn. To install them
-manually:</p>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>reachy-mini<span class="w"> </span>numpy<span class="w"> </span>edge-tts
+<p>The extension declares <code>__deps__ = ["swid"]</code>: its <code>on_ready()</code> links agent DIDs
+onto the graph nodes, so it runs after the swid extension has minted them.</p>
+<h2 id="activation">Activation</h2>
+<p>Entirely env-gated — without <code>FUSEKI_URL</code> the extension is a no-op:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">FUSEKI_URL</span><span class="o">=</span>http://fuseki:3030<span class="w">     </span><span class="c1"># in .env; container service name or localhost</span>
+<span class="nv">FUSEKI_DATASET</span><span class="o">=</span>wactorz<span class="w">            </span><span class="c1"># optional, default &quot;wactorz&quot;</span>
+<span class="nv">FUSEKI_USER</span><span class="o">=</span>admin<span class="w">                 </span><span class="c1"># optional</span>
+<span class="nv">FUSEKI_PASSWORD</span><span class="o">=</span>admin<span class="w">             </span><span class="c1"># optional</span>
 </code></pre></div>
 
-<h2 id="spawn">Spawn</h2>
-<div class="highlight"><pre><span></span><code>@catalog spawn reachy-mini
+<p>The Fuseki server itself ships as an additive compose overlay:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.yaml<span class="w"> </span>-f<span class="w"> </span>compose.fuseki.yaml<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
-<p>Confirm it is running:</p>
-<div class="highlight"><pre><span></span><code>/agents
-</code></pre></div>
-
-<p>If the robot was disconnected and reconnected:</p>
-<div class="highlight"><pre><span></span><code>/agents restart reachy-mini
-</code></pre></div>
-
-<h2 id="pin-a-wireless-host">Pin a Wireless host</h2>
-<p>The Reachy SDK usually auto-detects the robot. If discovery is unreliable, publish the host
-once and restart the agent:</p>
-<div class="highlight"><pre><span></span><code>topic: custom/reachy/config
-payload: {&quot;robot_host&quot;: &quot;192.168.1.42&quot;}
-</code></pre></div>
-
-<p>Use the robot's IP address or hostname. The current host is reported in
-<code>custom/reachy/state</code> as <code>robot_host</code>.</p>
-<h2 id="use-it">Use it</h2>
-<p>Plain English works for normal use:</p>
-<div class="highlight"><pre><span></span><code>wake up
-do a happy gesture
-wiggle your antennas
-look left
-say hello
-turn on the light and nod
-</code></pre></div>
-
-<p>Other agents can send the same requests directly:</p>
-<div class="highlight"><pre><span></span><code><span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">&quot;reachy-mini&quot;</span><span class="p">,</span> <span class="s2">&quot;do a happy gesture&quot;</span><span class="p">)</span>
-<span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">&quot;reachy-mini&quot;</span><span class="p">,</span> <span class="s2">&quot;say hello&quot;</span><span class="p">)</span>
-</code></pre></div>
-
-<h2 id="structured-commands">Structured commands</h2>
-<p>For direct control, send a dict with <code>cmd</code>:</p>
-<table>
-<thead>
-<tr>
-<th>Command</th>
-<th>Purpose</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>wake</code>, <code>sleep</code>, <code>stop</code></td>
-<td>Basic robot state</td>
-</tr>
-<tr>
-<td><code>pose</code></td>
-<td>Head yaw, pitch, roll, x/y/z</td>
-</tr>
-<tr>
-<td><code>antennas</code></td>
-<td>Left and right antenna angles</td>
-</tr>
-<tr>
-<td><code>look_at</code>, <code>look_pixel</code></td>
-<td>Gaze target</td>
-</tr>
-<tr>
-<td><code>emotion</code>, <code>list_emotions</code></td>
-<td>Recorded gesture clips</td>
-</tr>
-<tr>
-<td><code>say</code>, <code>volume</code></td>
-<td>Speech and speaker volume</td>
-</tr>
-<tr>
-<td><code>ha</code></td>
-<td>Home Assistant request</td>
-</tr>
-<tr>
-<td><code>bind</code>, <code>unbind</code></td>
-<td>Persistent reaction to an MQTT/HA event</td>
-</tr>
-</tbody>
-</table>
-<p>Examples:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;wake&quot;</span><span class="p">}</span>
-</code></pre></div>
-
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pose&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;yaw&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;duration&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.6</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;minjerk&quot;</span><span class="p">}</span>
-</code></pre></div>
-
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;antennas&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;left&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">45</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;right&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">-45</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;duration&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="p">}</span>
-</code></pre></div>
-
-<h2 id="troubleshooting">Troubleshooting</h2>
-<ul>
-<li>If Wireless does not connect, check that the robot and Wactorz host are on the same LAN.</li>
-<li>If discovery fails, pin <code>robot_host</code> with <code>custom/reachy/config</code>.</li>
-<li>If motion commands do nothing, check that another app is not already controlling the robot.</li>
-<li>For Lite, restart <code>reachy-mini-daemon</code>, then restart <code>reachy-mini</code>.</li>
-</ul>
+<h2 id="frontend">Frontend</h2>
+<p><code>public_config()</code> exposes <code>{url, dataset}</code> (never credentials); the barrel
+registers <code>wactorz-fuseki-url</code> / <code>wactorz-fuseki-dataset</code> via
+<code>registerConfigEntry()</code>, and <code>register()</code> adds the Graph tab only when a URL is
+configured.</p>
   </main>
 </div>
 

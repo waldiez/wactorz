@@ -10,7 +10,7 @@
  * so importing the module records every handler it registers, then drive each
  * handler (and each app-event) to exercise the wiring — including the guard
  * branches — the way the real transport would at runtime. Decision/transform
- * logic itself is covered by the agents/mapping + haConfig + haFeed unit tests.
+ * logic itself is covered by the agents/mapping + serverConfig + haFeed unit tests.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { emit } from "../events";
@@ -101,20 +101,13 @@ vi.mock("../agents/AgentStore", () => ({
 
 vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
 vi.mock("../config/serverConfig", () => ({
-    seedServerConfig: vi.fn(async () => {
-        localStorage.setItem("wactorz-fuseki-url", "http://fuseki:3030/wactorz");
-        localStorage.setItem("wactorz-fuseki-dataset", "wactorz");
-        localStorage.setItem("wactorz-tts-available", "1");
-        return true;
-    }),
-}));
-vi.mock("../config/serverConfig", () => ({
+    registerConfigEntry: vi.fn(),
     seedServerConfig: vi.fn(async () => {
         // Set up safeStorage so fuseki/TTS registration paths are covered.
         localStorage.setItem("wactorz-fuseki-url", "http://fuseki:3030/wactorz");
         localStorage.setItem("wactorz-fuseki-dataset", "wactorz");
         localStorage.setItem("wactorz-tts-available", "1");
-        return true; // haChanged → covers line 462
+        return true; // haChanged → exercises the connection-status re-emit
     }),
 }));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));

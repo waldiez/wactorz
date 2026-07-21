@@ -30,6 +30,8 @@ pip install wactorz[all]
 - **[MQTT Topics](mqtt_topics.md)** — Full topic reference with payload schemas
 - **[Remote Nodes](remote-nodes.md)** — Edge deployment via `remote_runner.py`
 - **[Extensions](extensions.md)** — How to write backend/frontend extensions
+- **[Fuseki extension](ext-fuseki.md)** — SPARQL triple store bridge + Graph tab
+- **[SWID extension](ext-swid.md)** — did:swid identities + Identity tab
 - **[Python API](python-api.md)** — Core classes, supervision, persistence
 - **[Home Assistant Addon](../ha-addon/DOCS.md)** — Install and configure the HA Supervisor addon (requires HAOS or Supervised)
 <!-- - **[JS/TS Docs](https://waldiez.github.io/wactorz/api/js/)** — TypeDoc for the card-dashboard frontend -->

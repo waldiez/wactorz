@@ -2435,9 +2435,10 @@ async def config_handler(request: web.Request) -> Response:
 
     ws_url = f"{protocol}://{ws_host}/ws"
 
-    # Core config (non-secret fields from AppConfig)
-    response: dict = {
+    payload: dict = {
         "ha": {
+            # URL only — the dashboard links out to the HA UI and never talks to
+            # HA directly, so the long-lived token must NOT reach the browser.
             "url": CONFIG.ha_url,
         },
         "llm": {
@@ -2449,12 +2450,10 @@ async def config_handler(request: web.Request) -> Response:
         },
         "ws_url": ws_url,
     }
-
-    # Merge extension public_config — each extension's key maps to its
-    # non-secret browser config (e.g. {"fuseki": {url, dataset}}).
-    response.update(collect_public_config(request.app))
-
-    return web.json_response(response)
+    # Merge each extension's non-secret browser config (e.g. tts availability),
+    # namespaced by extension name.
+    payload.update(collect_public_config(request.app))
+    return web.json_response(payload)
 
 
 async def feed_handler(request: web.Request) -> Response:
@@ -2640,6 +2639,13 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/docs", docs_redirect)
     app.router.add_get("/docs/", docs_handler)
     app.router.add_get("/docs/{path:.+}", docs_handler)
+
+    # Discover and wire optional extensions (routes, on_startup, public config).
+    # Registered before the static catch-all so extension routes take precedence.
+    from .ext import setup_all
+
+    setup_all(app)
+
     app.router.add_get("/{path:.+}", static_handler)
 
     runner = web.AppRunner(app)

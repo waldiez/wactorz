@@ -147,7 +147,7 @@ function renderList(root: HTMLElement, data: IdentitiesResponse): void {
         const q = search.value.toLowerCase();
         list.querySelectorAll<HTMLElement>(".af-identity-row").forEach(row => {
             const text = (row.textContent ?? "").toLowerCase();
-            (row as HTMLElement).hidden = q !== "" && !text.includes(q);
+            row.hidden = q !== "" && !text.includes(q);
         });
     });
 }

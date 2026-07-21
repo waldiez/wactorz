@@ -27,7 +27,7 @@ describe("buildHeader", () => {
         });
         expect(header.querySelector(".af-title")!.textContent).toBe("Wactorz");
         expect(header.querySelector(".af-conn-badge")!.classList.contains("af-conn-live")).toBe(true);
-        // 6 view tabs (incl. Graph + Identity) + the Devices link + audio + reset icon buttons
+        // 4 built-in view tabs + the Devices link + audio + reset icon buttons
         expect(header.querySelectorAll(".af-view-btn").length).toBe(7);
     });
 

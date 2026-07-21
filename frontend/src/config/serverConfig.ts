@@ -6,16 +6,17 @@
  * Bootstrap runtime config from the server's `/api/config` endpoint.
  *
  * The response is small (a handful of key/value pairs) — we fetch it once and
- * seed every whitelisted field into localStorage so the rest of the UI can
+ * seed every registered field into localStorage so the rest of the UI can
  * read them synchronously without further network round-trips.
  *
  * Each seeded key is paired with a `__server` baseline so we can tell a
  * user's local edit apart from an actual server-side `.env` change and only
  * overwrite when the server value itself has changed.
  *
- * CONFIG_ENTRIES is the single source of truth: add one line to bring a new
- * server field into localStorage. Fields not listed here are **never** stored,
- * even if the server starts sending them.
+ * Core registers only its own keys here (the HA URL). Extensions contribute
+ * theirs via ``registerConfigEntry()`` at module load — before
+ * ``seedServerConfig()`` runs — so this file never names an extension.
+ * Keys not registered are **never** stored, even if the server sends them.
  */
 
 import { safeStorage } from "../safeStorage";
@@ -34,35 +35,24 @@ export function seedKeyFromServer(key: string, value: string | undefined | null)
     return true;
 }
 
-const CONFIG_ENTRIES = [
-    [
-        "wactorz-ha-url",
-        (c: Record<string, unknown>) =>
-            (c.ha as Record<string, unknown> | undefined)?.url as string | undefined,
-    ],
-    [
-        "wactorz-fuseki-url",
-        (c: Record<string, unknown>) =>
-            (c.fuseki as Record<string, unknown> | undefined)?.url as string | undefined,
-    ],
-    [
-        "wactorz-fuseki-dataset",
-        (c: Record<string, unknown>) =>
-            (c.fuseki as Record<string, unknown> | undefined)?.dataset as string | undefined,
-    ],
-    [
-        "wactorz-tts-available",
-        (c: Record<string, unknown>) =>
-            (c.tts as Record<string, unknown> | undefined)?.available ? "1" : "0",
-    ],
-    [
-        "wactorz-tts-voice",
-        (c: Record<string, unknown>) =>
-            (c.tts as Record<string, unknown> | undefined)?.voice as string | undefined,
-    ],
-] as const;
+/** Extract a storable string from the parsed `/api/config` payload. */
+export type ConfigExtract = (cfg: Record<string, unknown>) => string | undefined;
 
-/** Fetch `/api/config` and seed every whitelisted client-side key from it.
+const _entries = new Map<string, ConfigExtract>();
+
+/** Register a localStorage key to seed from `/api/config`. Extensions call
+ *  this at module load, before `seedServerConfig()` runs. */
+export function registerConfigEntry(key: string, extract: ConfigExtract): void {
+    _entries.set(key, extract);
+}
+
+// Core entry — the HA URL for the external Devices link (never a token).
+registerConfigEntry(
+    "wactorz-ha-url",
+    c => (c.ha as Record<string, unknown> | undefined)?.url as string | undefined,
+);
+
+/** Fetch `/api/config` and seed every registered client-side key from it.
  *  Returns whether the HA URL changed (the caller uses this to refresh the
  *  Devices nav link). */
 export async function seedServerConfig(): Promise<boolean> {
@@ -74,7 +64,7 @@ export async function seedServerConfig(): Promise<boolean> {
         }
         const cfg = (await resp.json()) as Record<string, unknown>;
         let haChanged = false;
-        for (const [key, extract] of CONFIG_ENTRIES) {
+        for (const [key, extract] of _entries) {
             const changed = seedKeyFromServer(key, extract(cfg));
             if (key === "wactorz-ha-url" && changed) {
                 haChanged = true;

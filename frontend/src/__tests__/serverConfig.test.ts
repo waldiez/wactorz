@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { seedServerConfig, seedKeyFromServer } from "../config/serverConfig";
+import { seedServerConfig, seedKeyFromServer, registerConfigEntry } from "../config/serverConfig";
 
 describe("seedKeyFromServer", () => {
     beforeEach(() => localStorage.clear());
@@ -48,19 +48,39 @@ describe("seedServerConfig", () => {
         vi.restoreAllMocks();
     });
 
-    it("seeds all config fields from the server when localStorage is empty", async () => {
+    it("seeds the core HA URL from the server when localStorage is empty", async () => {
         globalThis.fetch = vi.fn(async () => ({
             ok: true,
-            json: async () => ({
-                ha: { url: "http://ha.local" },
-                fuseki: { url: "http://fuseki.local:3030", dataset: "myds" },
-            }),
+            json: async () => ({ ha: { url: "http://ha.local" } }),
         })) as unknown as typeof fetch;
 
         expect(await seedServerConfig()).toBe(true);
         expect(localStorage.getItem("wactorz-ha-url")).toBe("http://ha.local");
-        expect(localStorage.getItem("wactorz-fuseki-url")).toBe("http://fuseki.local:3030");
-        expect(localStorage.getItem("wactorz-fuseki-dataset")).toBe("myds");
+    });
+
+    it("seeds extension-registered entries (registerConfigEntry)", async () => {
+        registerConfigEntry(
+            "wactorz-myext-flag",
+            c => (c.myext as Record<string, unknown> | undefined)?.flag as string | undefined,
+        );
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ ha: { url: "http://ha.local" }, myext: { flag: "on" } }),
+        })) as unknown as typeof fetch;
+
+        await seedServerConfig();
+        expect(localStorage.getItem("wactorz-myext-flag")).toBe("on");
+    });
+
+    it("ignores unregistered server fields (whitelist)", async () => {
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ ha: { url: "http://ha.local" }, rogue: { secret: "x" } }),
+        })) as unknown as typeof fetch;
+
+        await seedServerConfig();
+        expect(localStorage.getItem("wactorz-rogue-secret")).toBeNull();
+        expect(localStorage.getItem("rogue")).toBeNull();
     });
 
     it("never persists a token, even if the server still sends one", async () => {
@@ -74,65 +94,25 @@ describe("seedServerConfig", () => {
         expect(localStorage.getItem("wactorz-ha-token")).toBeNull(); // token is never stored
     });
 
-    it("returns true only when the HA URL changed", async () => {
-        // Pre-seed only fuseki — HA URL is still missing, so return true.
-        localStorage.setItem("wactorz-fuseki-url", "http://old-fuseki");
-        localStorage.setItem("wactorz-fuseki-url__server", "http://old-fuseki");
+    it("returns false when the HA URL is unchanged (no rewrite)", async () => {
+        localStorage.setItem("wactorz-ha-url", "http://ha.local");
+        localStorage.setItem("wactorz-ha-url__server", "http://ha.local");
         globalThis.fetch = vi.fn(async () => ({
             ok: true,
-            json: async () => ({
-                ha: { url: "http://ha.local" },
-                fuseki: { url: "http://old-fuseki" },
-            }),
-        })) as unknown as typeof fetch;
-
-        expect(await seedServerConfig()).toBe(true);
-        expect(localStorage.getItem("wactorz-ha-url")).toBe("http://ha.local");
-    });
-
-    it("returns false when nothing changed", async () => {
-        localStorage.setItem("wactorz-ha-url", "http://server");
-        localStorage.setItem("wactorz-ha-url__server", "http://server");
-        localStorage.setItem("wactorz-fuseki-url", "http://fuseki");
-        localStorage.setItem("wactorz-fuseki-url__server", "http://fuseki");
-        globalThis.fetch = vi.fn(async () => ({
-            ok: true,
-            json: async () => ({
-                ha: { url: "http://server" },
-                fuseki: { url: "http://fuseki" },
-            }),
+            json: async () => ({ ha: { url: "http://ha.local" } }),
         })) as unknown as typeof fetch;
 
         expect(await seedServerConfig()).toBe(false);
     });
 
-    it("adopts a changed fuseki URL from an updated .env", async () => {
-        // Pre-seed with old fuseki URL so HA stays unchanged but fuseki changes.
-        localStorage.setItem("wactorz-ha-url", "http://ha");
-        localStorage.setItem("wactorz-ha-url__server", "http://ha");
-        localStorage.setItem("wactorz-fuseki-url", "http://old-fuseki");
-        localStorage.setItem("wactorz-fuseki-url__server", "http://old-fuseki");
+    it("returns false when the server sends no url", async () => {
         globalThis.fetch = vi.fn(async () => ({
             ok: true,
-            json: async () => ({
-                ha: { url: "http://ha" },
-                fuseki: { url: "http://new-fuseki" },
-            }),
+            json: async () => ({}),
         })) as unknown as typeof fetch;
 
-        expect(await seedServerConfig()).toBe(false); // HA didn't change
-        expect(localStorage.getItem("wactorz-fuseki-url")).toBe("http://new-fuseki");
-        expect(localStorage.getItem("wactorz-fuseki-url__server")).toBe("http://new-fuseki");
-    });
-
-    it("returns false when the server sends no ha url", async () => {
-        globalThis.fetch = vi.fn(async () => ({
-            ok: true,
-            json: async () => ({ ha: {}, fuseki: { url: "http://f" } }),
-        })) as unknown as typeof fetch;
         expect(await seedServerConfig()).toBe(false);
-        // Fuseki still gets seeded even though HA didn't change.
-        expect(localStorage.getItem("wactorz-fuseki-url")).toBe("http://f");
+        expect(localStorage.getItem("wactorz-ha-url")).toBeNull();
     });
 
     it("returns false on a non-OK response", async () => {
@@ -142,7 +122,7 @@ describe("seedServerConfig", () => {
 
     it("returns false when fetch throws (server not ready)", async () => {
         globalThis.fetch = vi.fn(async () => {
-            throw new Error("conn refused");
+            throw new Error("ECONNREFUSED");
         }) as unknown as typeof fetch;
         expect(await seedServerConfig()).toBe(false);
     });

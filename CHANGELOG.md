@@ -9,16 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 > (server container, HA→Fuseki bridge, `/api/fuseki` proxy, Graph tab), extra
 > agents, and the `sinergym/` + `models/` experiment trees.
 
-### Changed
-
-- **Fuseki is now an opt-in compose overlay.** The `fuseki` server and RDF bridge moved out
-  of the base `compose.yaml`/`compose.dev.yaml` into an additive `compose.fuseki.yaml`; the
-  base stacks are Fuseki-free and identical to `dev`. Bring Fuseki up by layering the overlay
-  (`docker compose -f compose.yaml -f compose.fuseki.yaml --profile full up -d`) and set
-  `FUSEKI_URL` in `.env`. The `python-full` compose profile is renamed `full`.
-
 ### Added
 
+- **Extension seam (`wactorz/ext/`).** Optional features live in self-contained folders that expose a
+  `setup(app)` hook; the monitor auto-discovers and wires them at startup, and each may contribute
+  non-secret browser config to `/api/config`. Text-to-speech is now packaged as the first such
+  extension (`wactorz/ext/tts/` + `frontend/src/ext/tts/`), with no change to its behavior.
+- **Frontend extension registries.** Extensions can now add dashboard tabs
+  (`CardDashboard.registerView`), custom icons (`registerIcon`), and `/api/config`-seeded settings
+  (`registerConfigEntry` in the new `config/serverConfig.ts`) without touching core files. The HA
+  URL seeding moved into the same mechanism; TTS availability is now read from the server config
+  instead of always probing.
 - **Identity view** — a new dashboard tab listing every minted Spatial Web identity
   (agents, devices, spaces) with its class, readable handle, and DID; each row copies the
   full DID or resolves it in place to show the live DID document. Backed by
@@ -32,6 +33,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Fuseki is now an opt-in compose overlay.** The `fuseki` server and RDF bridge moved out
+  of the base `compose.yaml`/`compose.dev.yaml` into an additive `compose.fuseki.yaml`; the
+  base stacks are Fuseki-free and identical to `dev`. Bring Fuseki up by layering the overlay
+  (`docker compose -f compose.yaml -f compose.fuseki.yaml --profile full up -d`) and set
+  `FUSEKI_URL` in `.env`. The `python-full` compose profile is renamed `full`.
 - **Device `swid` labels are now readable handles** (`swid:device:<ns>:<slug>-<fp>`), replacing the
   pilot `did:swid:home:<area>:<name>-<hash>` format that squatted the official `did:swid:` namespace.
   Handles are room-independent: a device that moves rooms keeps its handle.

@@ -9,8 +9,20 @@
  * Jena Fuseki triple store through the ``/api/fuseki/<dataset>/sparql`` proxy.
  */
 
+import { registerConfigEntry } from "../../config/serverConfig";
 import { registerIcon } from "../../ui/dashboard/icons";
 import { buildFusekiView } from "./fusekiView";
+
+// This extension's /api/config fields (namespaced under "fuseki" by the backend
+// seam) — registered at module load so seedServerConfig() picks them up.
+registerConfigEntry(
+    "wactorz-fuseki-url",
+    c => (c.fuseki as Record<string, unknown> | undefined)?.url as string | undefined,
+);
+registerConfigEntry(
+    "wactorz-fuseki-dataset",
+    c => (c.fuseki as Record<string, unknown> | undefined)?.dataset as string | undefined,
+);
 
 export interface FusekiConfig {
     /** Fuseki base URL (from /api/config — read-only display). */

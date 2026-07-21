@@ -61,6 +61,8 @@ NAV = [
             ("Remote Nodes", "remote-nodes.md"),
             ("Prometheus", "prometheus.md"),
             ("Extensions", "extensions.md"),
+            ("Fuseki extension", "ext-fuseki.md"),
+            ("SWID extension", "ext-swid.md"),
         ],
     ),
     (

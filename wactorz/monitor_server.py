@@ -38,8 +38,7 @@ from aiohttp.typedefs import Handler
 from ._bootstrap import WACTORZ_BOOTSTRAP  # noqa: F401 # pylint: disable=unused-import
 from .agents.main_actor import MainActor
 from .core.mqtt import mqtt_client
-from .monitor import runtime
-from .monitor.runtime import _is_deleted, _mark_deleted, _undelete
+from .monitor import events, runtime
 
 Response = web.Response | web.FileResponse | web.StreamResponse
 
@@ -60,14 +59,14 @@ logger = logging.getLogger(__name__)
 _inflight_chat_tasks: set = set()
 
 
-def _track_chat_task(task):
+def track_chat_task(task):
     """Register an in-flight chat-generation task so /chat/stop can cancel it."""
     _inflight_chat_tasks.add(task)
     task.add_done_callback(_inflight_chat_tasks.discard)
     return task
 
 
-async def _purge_agent_retained(agent_id: str) -> None:
+async def purge_agent_retained(agent_id: str) -> None:
     """Clear retained MQTT messages for a deleted agent so the broker stops
     re-delivering them after a monitor reconnect or a fresh subscribe.
 
@@ -96,7 +95,7 @@ async def _purge_agent_retained(agent_id: str) -> None:
             logger.debug(f"[purge] Failed to clear retained {topic}: {e}")
 
 
-async def _purge_node_desired_state(node: str) -> None:
+async def purge_node_desired_state(node: str) -> None:
     """Clear the retained nodes/{node}/desired_state message.
 
     The remote runner subscribes to this topic and, on reconnect/reboot,
@@ -112,7 +111,7 @@ async def _purge_node_desired_state(node: str) -> None:
         logger.debug(f"[purge] Failed to clear retained {topic}: {e}")
 
 
-async def _purge_spawn_reconcile(agent: str | None = None) -> None:
+async def purge_spawn_reconcile(agent: str | None = None) -> None:
     """Tear down the agent-respawn state behind a spawn-registry clear.
 
     Shared by the "spawns" and "all" reset scopes so both behave identically:
@@ -129,7 +128,7 @@ async def _purge_spawn_reconcile(agent: str | None = None) -> None:
     Must run BEFORE reset_spawns()/reset_all() wipe the kv on disk — it reads the
     registry to learn which nodes are affected.
     """
-    main_actor = _find_main()
+    main_actor = find_main()
     reg = {}
     if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
         reg = main_actor._get_spawn_registry() or {}
@@ -160,12 +159,12 @@ async def _purge_spawn_reconcile(agent: str | None = None) -> None:
         )
     else:
         await asyncio.gather(
-            *[_purge_node_desired_state(n) for n in node_names],
+            *[purge_node_desired_state(n) for n in node_names],
             return_exceptions=True,
         )
 
 
-async def _delete_agent(agent_id: str) -> str:
+async def delete_agent(agent_id: str) -> str:
     """Delete an agent properly regardless of whether it lives locally on this
     process or on a remote node. Returns a short status string for logs.
 
@@ -186,7 +185,7 @@ async def _delete_agent(agent_id: str) -> str:
     name = record.get("name") or agent_id
     node = (record.get("node") or "").strip()
 
-    _mark_deleted(agent_id)
+    runtime.mark_deleted(agent_id)
     runtime.state["agents"].pop(agent_id, None)
 
     routed = "unknown"
@@ -194,7 +193,7 @@ async def _delete_agent(agent_id: str) -> str:
     if runtime.registry is not None:
         # In-process: delegate to main, which owns the spawn registry and
         # knows exactly how to clean up both local and remote agents.
-        main_actor = _find_main()
+        main_actor = find_main()
         if main_actor is not None and hasattr(main_actor, "delete_spawned_agent"):
             try:
                 await main_actor.delete_spawned_agent(name)
@@ -239,7 +238,7 @@ async def _delete_agent(agent_id: str) -> str:
 
     # Always purge retained — even when main handled the delete, we want the
     # dashboard's view to clear immediately rather than wait for tombstones.
-    asyncio.create_task(_purge_agent_retained(agent_id))
+    asyncio.create_task(purge_agent_retained(agent_id))
 
     logger.info(f"[delete] '{name}' (id={agent_id[:8]}, node={node or 'local'}) {routed}")
     return routed
@@ -252,41 +251,22 @@ async def no_op_async() -> None:
     """No op. To use instead of lambdas."""
 
 
-def _chat_mode() -> str:
+def chat_mode() -> str:
     return "direct_ws" if runtime.registry is not None else "mqtt"
 
 
-def _find_main():
+def find_main() -> MainActor | None:
     actor = runtime.registry.find_by_name("main") if runtime.registry else None
     if actor:
         return cast(MainActor, actor)
     return None
 
 
-def _parse_mention(content: str) -> tuple[str, str]:
+def parse_mention(content: str) -> tuple[str, str]:
     if content.startswith("@"):
         parts = content[1:].split(None, 1)
         return parts[0], (parts[1].strip() if len(parts) > 1 else "")
     return "main", content
-
-
-def update_agent(agent_id: str, key: str, data):
-    if runtime._hard_resetting or _is_deleted(agent_id):
-        return
-    if agent_id not in runtime.state["agents"]:
-        runtime.state["agents"][agent_id] = {
-            "agent_id": agent_id,
-            "name": agent_id[:8],
-            "first_seen": time.time(),
-        }
-    runtime.state["agents"][agent_id][key] = data
-    runtime.state["agents"][agent_id]["last_update"] = time.time()
-
-
-def add_log(entry: dict):
-    runtime.state["log_feed"].insert(0, entry)
-    if len(runtime.state["log_feed"]) > 100:
-        runtime.state["log_feed"].pop()
 
 
 async def broadcast(msg: dict):
@@ -308,7 +288,7 @@ async def broadcast(msg: dict):
 # MQTT publisher or a WebSocket sender.  No global state, no monkey-patching.
 
 
-async def _slash_deploy(node: str, host: str, user: str, pw: str, broker: str, reply_fn):
+async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, reply_fn) -> None:
     if not host:
         await reply_fn(f"[discover] Searching for '{node}' on the network...")
         discovered = None
@@ -358,7 +338,7 @@ async def _slash_deploy(node: str, host: str, user: str, pw: str, broker: str, r
         )
         return
 
-    main_actor = _find_main()
+    main_actor = find_main()
     if main_actor is None or not hasattr(main_actor, "delegate_to_installer"):
         await reply_fn("[error] Installer agent not available.")
         return
@@ -412,7 +392,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
     cmd = parts[0].lower()
 
     if cmd == "/clear-plans":
-        main_actor = _find_main()
+        main_actor = find_main()
         if main_actor and hasattr(main_actor, "persist"):
             main_actor.persist("_plan_cache", {})
         await reply_fn("[System: Plan cache cleared.]")
@@ -433,7 +413,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
         return True
 
     if cmd == "/nodes":
-        main_actor = _find_main()
+        main_actor = find_main()
         remote_nodes = (
             main_actor.list_nodes() if (main_actor and hasattr(main_actor, "list_nodes")) else []
         )
@@ -452,7 +432,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
         if len(parts) < 3:
             await reply_fn("[usage] /migrate <agent-name> <target-node>")
             return True
-        main_actor = _find_main()
+        main_actor = find_main()
         if main_actor is None or not hasattr(main_actor, "migrate_agent"):
             await reply_fn("[error] migrate_agent not available.")
             return True
@@ -466,7 +446,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
         if len(parts) < 2:
             await reply_fn("[usage] /deploy <node-name> [host [user [password [broker]]]]")
             return True
-        await _slash_deploy(
+        await slash_deploy(
             node=parts[1],
             host=parts[2] if len(parts) > 2 else "",
             user=parts[3] if len(parts) > 3 else "",
@@ -492,7 +472,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
     if content.startswith("/"):
         handled = await handle_slash(content, reply_fn)
         if not handled:
-            main_actor = _find_main()
+            main_actor = find_main()
             # Forward unrecognized slash commands to main actor.
             # main_actor.process_user_input handles the full command set
             # (/help, /plans, /delete, /stop, /memory, /rules, /topics, etc.)
@@ -513,12 +493,12 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                 await reply_fn("Unknown command. Type /help for available commands.")
         return
 
-    target_name, text = _parse_mention(content)
+    target_name, text = parse_mention(content)
 
     target = runtime.registry.find_by_name(target_name) if runtime.registry else None
 
     if target is None:
-        main_actor = _find_main()
+        main_actor = find_main()
         # ── Remote agent fallback ─────────────────────────────────────────────
         # Agent not in local registry — check if it's running on a remote node.
         # If so, route the message via MQTT and stream the reply back.
@@ -723,10 +703,10 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     logger.info(f"WebSocket client connected. Total: {len(runtime.ws_clients)}")
 
     # Send initial state
-    await ws.send_str(json.dumps({"type": "full_snapshot", "state": _snapshot()}))
+    await ws.send_str(json.dumps({"type": "full_snapshot", "state": events.snapshot()}))
 
     # Advertise chat mode so the frontend knows where to send messages
-    await ws.send_str(json.dumps({"type": "config", "chat_mode": _chat_mode()}))
+    await ws.send_str(json.dumps({"type": "config", "chat_mode": chat_mode()}))
 
     # Current server↔broker state so the "live" badge is right immediately on load.
     await ws.send_str(json.dumps({"type": "mqtt_status", "connected": _mqtt_connected}))
@@ -828,7 +808,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         if not runtime.mqtt_client_ref:
             await ws_reply("[system] Chat unavailable — no broker connection.")
             return
-        who = "main" if content.startswith("/") else _parse_mention(content)[0]
+        who = "main" if content.startswith("/") else parse_mention(content)[0]
         _persist_chat("user", content, who)
         await runtime.mqtt_client_ref.publish(
             "io/chat",
@@ -855,7 +835,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                             # reply frames and chat_log group under that agent
                             # instead of the io-gateway transport id.
                             _reply_from["name"] = (
-                                "main" if content.startswith("/") else _parse_mention(content)[0]
+                                "main" if content.startswith("/") else parse_mention(content)[0]
                             )
                             # Persist the user's turn first so chat_log has the
                             # request even if the assistant reply errors out.
@@ -887,7 +867,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                                     except Exception:
                                         pass
 
-                            _track_chat_task(asyncio.create_task(_safe_route()))
+                            track_chat_task(asyncio.create_task(_safe_route()))
                         elif content:
                             await _relay_chat_to_ioagent(content)
 
@@ -922,239 +902,21 @@ async def handle_command(cmd: dict):
     )
     try:
         await runtime.mqtt_client_ref.publish(f"agents/{agent_id}/commands", payload)
-        add_log(
+        events.add_log(
             {"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()}
         )
         if command in ("stop", "pause", "resume"):
             runtime.state["agents"].get(agent_id, {})["state"] = (
                 "stopped" if command == "stop" else "paused" if command == "pause" else "running"
             )
-            await broadcast({"type": "patch", "state": _snapshot()})
+            await broadcast({"type": "patch", "state": events.snapshot()})
         elif command == "delete":
-            await _delete_agent(agent_id)
-            await broadcast({"type": "delete_agent", "agent_id": agent_id, "state": _snapshot()})
+            await delete_agent(agent_id)
+            await broadcast(
+                {"type": "delete_agent", "agent_id": agent_id, "state": events.snapshot()}
+            )
     except Exception as e:
         logger.error(f"[cmd] Publish failed: {e}")
-
-
-def parse_topic(topic: str, payload_str: str):
-    try:
-        data = json.loads(payload_str)
-    except Exception:
-        data = payload_str
-
-    parts = topic.split("/")
-
-    if parts[0] == "system" and len(parts) >= 2:
-        if parts[1] == "health":
-            runtime.state["system_health"] = data
-        elif parts[1] == "alerts":
-            runtime.state["alerts"].insert(0, data)
-            if len(runtime.state["alerts"]) > 50:
-                runtime.state["alerts"].pop()
-        return {"type": "system", "subtype": parts[1], "data": data}
-
-    if parts[0] == "agents" and len(parts) >= 3:
-        agent_id = parts[1]
-        metric = parts[2]
-
-        # Re-admit a deleted agent on a FRESH status event. Every actor
-        # publishes its first status from on_start(), with uptime ≈ 0; that's
-        # the unambiguous "I just started" signal. A stale retained status
-        # from the previous (deleted) incarnation would carry the uptime it
-        # had at the moment of deletion (typically large), so we don't
-        # confuse it with a respawn.
-        #
-        # Without this, deleting an agent and respawning it under the same
-        # name produces the same deterministic actor_id (uuid5 of the name),
-        # the deleted guard fires, and the new instance is invisible in the
-        # dashboard even though it's actually running.
-        if metric == "status" and isinstance(data, dict) and _is_deleted(agent_id):
-            uptime = data.get("uptime", 0)
-            try:
-                uptime = float(uptime)
-            except (TypeError, ValueError):
-                uptime = 0.0
-            agent_state = data.get("state", "")
-            if uptime < 10.0 and agent_state not in ("stopped", "failed"):
-                _undelete(agent_id)
-                logger.info(
-                    f"[MQTT] Re-admitting respawned agent {agent_id[:8]} "
-                    f"(uptime={uptime:.1f}s, state={agent_state}, previously deleted)"
-                )
-
-        # If the agent was just deleted, update_agent() refuses to recreate
-        # the entry — so any direct state["agents"][agent_id] access below
-        # would KeyError. Skip the whole branch; the agent is gone.
-        if _is_deleted(agent_id):
-            return {"type": "agent", "subtype": metric, "agent_id": agent_id, "data": data}
-
-        if metric == "status":
-            update_agent(agent_id, "status", data)
-            if isinstance(data, dict) and agent_id in runtime.state["agents"]:
-                if "name" in data:
-                    runtime.state["agents"][agent_id]["name"] = data["name"]
-                if "state" in data:
-                    runtime.state["agents"][agent_id]["state"] = data["state"]
-                if "protected" in data:
-                    runtime.state["agents"][agent_id]["protected"] = data["protected"]
-            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log(
-                {
-                    "type": "status",
-                    "agent_id": agent_id,
-                    "name": name,
-                    "status": data,
-                    "timestamp": time.time(),
-                }
-            )
-
-        elif metric == "heartbeat":
-            update_agent(agent_id, "heartbeat", data)
-            if isinstance(data, dict) and agent_id in runtime.state["agents"]:
-                ag = runtime.state["agents"][agent_id]
-                ag["name"] = data.get("name", agent_id[:8])
-                ag["cpu"] = data.get("cpu", 0)
-                ag["mem"] = data.get("memory_mb", 0)
-                ag["task"] = data.get("task", "idle")
-                ag["state"] = data.get("state", "unknown")
-                # Remote agents' heartbeats include "node" — capture it so the
-                # dashboard delete path can route the stop to the right runner.
-                # Local agents don't set this field; absence means "local".
-                if data.get("node"):
-                    ag["node"] = data["node"]
-            if agent_id in runtime.state["agents"]:
-                logger.info(
-                    f"[MQTT] Heartbeat: {runtime.state['agents'][agent_id].get('name', agent_id[:8])}"
-                )
-
-        elif metric == "metrics":
-            update_agent(agent_id, "metrics", data)
-            if isinstance(data, dict) and agent_id in runtime.state["agents"]:
-                runtime.state["agents"][agent_id]["messages_processed"] = data.get(
-                    "messages_processed", 0
-                )
-                if "cost_usd" in data:
-                    runtime.state["agents"][agent_id]["cost_usd"] = data.get("cost_usd", 0.0)
-                    runtime.state["agents"][agent_id]["input_tokens"] = data.get("input_tokens", 0)
-                    runtime.state["agents"][agent_id]["output_tokens"] = data.get(
-                        "output_tokens", 0
-                    )
-                    # Bank the spend durably so it survives the agent being
-                    # deleted or hard-killed before its on_stop() can persist.
-                    _record_lifetime_cost(agent_id, data.get("cost_usd"))
-
-        elif metric == "logs":
-            # Log frames carry only the agent id; resolve the friendly name the
-            # same way alert/completed do so the feed never shows a bare id.
-            # `**data` last lets a payload that already includes a name win.
-            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log(
-                {
-                    "type": "log",
-                    "agent_id": agent_id,
-                    "name": name,
-                    "timestamp": time.time(),
-                    **(data if isinstance(data, dict) else {}),
-                }
-            )
-        elif metric == "spawned":
-            # Payload carries child_name/child_id, not name — resolve the (parent)
-            # agent's name from state so the feed row isn't attributed to a bare id.
-            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log(
-                {
-                    "type": "spawned",
-                    "agent_id": agent_id,
-                    "name": name,
-                    "timestamp": time.time(),
-                    **(data if isinstance(data, dict) else {}),
-                }
-            )
-        elif metric == "chat":
-            # User-facing message pushed by an agent via Actor.notify_user().
-            # Forward it to the chat panel as a live chat frame (in addition to
-            # the dashboard feed). The frame is carried under "_push_chat";
-            # mqtt_listener does the broadcast since parse_topic is synchronous.
-            sender = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            content = ""
-            if isinstance(data, dict):
-                content = (data.get("content") or data.get("text") or "").strip()
-                sender = data.get("from") or sender
-            elif isinstance(data, str):
-                content = data.strip()
-            if content:
-                add_log(
-                    {
-                        "type": "chat",
-                        "agent_id": agent_id,
-                        "from": sender,
-                        "content": content,
-                        "timestamp": time.time(),
-                    }
-                )
-                return {
-                    "type": "agent",
-                    "agent_id": agent_id,
-                    "metric": "chat",
-                    "data": data,
-                    "_push_chat": {
-                        "type": "chat",
-                        "from": sender,
-                        "content": content,
-                        "timestamp": time.time(),
-                    },
-                }
-            return {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
-        elif metric == "completed":
-            update_agent(agent_id, "last_completed", data)
-            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log(
-                {"type": "completed", "agent_id": agent_id, "name": name, "timestamp": time.time()}
-            )
-        elif metric == "alert":
-            if isinstance(data, dict):
-                data["agent_id"] = agent_id
-                data.setdefault(
-                    "name", runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-                )
-            runtime.state["alerts"].insert(
-                0, data if isinstance(data, dict) else {"agent_id": agent_id}
-            )
-            if len(runtime.state["alerts"]) > 50:
-                runtime.state["alerts"].pop()
-            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            severity = data.get("severity", "warning") if isinstance(data, dict) else "warning"
-            add_log(
-                {
-                    "type": "alert",
-                    "agent_id": agent_id,
-                    "name": name,
-                    "message": f"{name} unresponsive ({severity})",
-                    "timestamp": time.time(),
-                }
-            )
-
-        return {"type": "agent", "agent_id": agent_id, "metric": metric, "data": data}
-
-    if parts[0] == "nodes" and len(parts) >= 3 and parts[2] == "heartbeat":
-        node_name = parts[1]
-        if isinstance(data, dict):
-            runtime.state["nodes"][node_name] = {
-                "node": node_name,
-                "agents": data.get("agents", []),
-                "last_seen": time.time(),
-                "online": True,
-                "node_id": data.get("node_id", ""),
-            }
-            logger.info(f"[MQTT] Node heartbeat: {node_name} | agents: {data.get('agents', [])}")
-            return {"type": "node", "node_name": node_name, "data": data}
-
-    return None
-
-
-def _node_online(last_seen: float) -> bool:
-    return (time.time() - last_seen) < 45
 
 
 # ── Durable lifetime cost ledger ────────────────────────────────────────────
@@ -1176,7 +938,7 @@ _lifetime_cost: dict = {}
 _lifetime_loaded = False
 
 
-def _ensure_lifetime_loaded() -> None:
+def ensure_lifetime_loaded() -> None:
     """Lazily hydrate the in-memory ledger from SQLite once db is injected."""
     global _lifetime_loaded
     if _lifetime_loaded or runtime.db is None:
@@ -1194,7 +956,7 @@ def _ensure_lifetime_loaded() -> None:
     _lifetime_loaded = True
 
 
-def _record_lifetime_cost(agent_id: str, cost_usd) -> None:
+def record_lifetime_cost(agent_id: str, cost_usd) -> None:
     """Bank an agent's reported lifetime cost as a monotonic high-water mark.
     Persisted durably so deletion / hard kills never drop it from the total.
 
@@ -1214,7 +976,7 @@ def _record_lifetime_cost(agent_id: str, cost_usd) -> None:
         return
     if cost <= 0:
         return
-    _ensure_lifetime_loaded()
+    ensure_lifetime_loaded()
     if cost <= _lifetime_cost.get(agent_id, 0.0):
         return
     _lifetime_cost[agent_id] = cost
@@ -1225,12 +987,12 @@ def _record_lifetime_cost(agent_id: str, cost_usd) -> None:
             pass
 
 
-def _lifetime_cost_total() -> float:
-    _ensure_lifetime_loaded()
+def lifetime_cost_total() -> float:
+    ensure_lifetime_loaded()
     return sum(_lifetime_cost.values())
 
 
-def _reset_actor_cost(actor) -> None:
+def reset_actor_cost(actor) -> None:
     """Zero a live actor's cost/token counters AND its per-call accrual baseline.
 
     The baseline must move with total_cost_usd: _persist_cost / _accrue_usage
@@ -1252,7 +1014,7 @@ def _reset_actor_cost(actor) -> None:
         actor._last_period_cost_usd = 0.0
 
 
-def _historical_cost_usd(live_names: set) -> float:
+def historical_cost_usd(live_names: set) -> float:
     """Sum _final_cost for agents not in live_names."""
     if runtime.db is None:
         return 0.0
@@ -1273,7 +1035,7 @@ def _historical_cost_usd(live_names: set) -> float:
         return 0.0
 
 
-def _historical_messages(live_names: set) -> int:
+def historical_messages(live_names: set) -> int:
     """Sum _messages_processed for agents not in live_names."""
     if runtime.db is None:
         return 0
@@ -1292,86 +1054,6 @@ def _historical_messages(live_names: set) -> int:
         return total
     except Exception:
         return 0
-
-
-def _snapshot() -> dict:
-    if runtime._hard_resetting:
-        return {
-            "agents": [],
-            "nodes": [],
-            "alerts": [],
-            "log_feed": [],
-            "total_cost_usd": 0,
-            "total_messages": 0,
-        }
-    for nd in runtime.state["nodes"].values():
-        nd["online"] = _node_online(nd.get("last_seen", 0))
-
-    # The headline totals must match what the dashboard actually shows on the
-    # cards. Each card resolves its cost via _actor_cost() — MQTT state, then the
-    # live actor object, then the persisted _final_cost row — so the header has to
-    # coalesce the same three sources per agent. Summing only state["cost_usd"]
-    # (or only iterating the local registry) dropped any on-screen agent whose
-    # cost lives on the actor object / SQLite rather than in an MQTT metrics frame.
-    actors_by_id: dict = {}
-    actors_by_name: dict = {}
-    if runtime.registry is not None:
-        for a in runtime.registry.all_actors():
-            actors_by_id[a.actor_id] = a
-            actors_by_name[a.name] = a
-
-    live_names: set = set()
-    live_cost = 0.0
-    live_msgs = 0
-    seen_ids: set = set()
-    for aid, ag in runtime.state["agents"].items():
-        seen_ids.add(aid)
-        name = ag.get("name", "")
-        live_names.add(name)
-        actor = actors_by_id.get(aid) or actors_by_name.get(name)
-        live_cost += _best_cost(ag, actor, name)
-        live_msgs += _best_msgs(ag, actor)
-    # Fold in live actors not yet in state (the post-restart window before the
-    # first heartbeat). Keyed by actor_id so agents already counted above are
-    # skipped — no double-count.
-    for a in actors_by_id.values():
-        if a.actor_id in seen_ids:
-            continue
-        live_names.add(a.name)
-        live_cost += _best_cost(None, a, a.name)
-        live_msgs += _best_msgs(None, a)
-
-    # The live + _final_cost sum can dip when an agent is deleted (its _final_cost
-    # row is purged) or hard-killed (its on_stop never ran). The durable ledger is
-    # monotonic, so clamp the headline total up to whichever is larger — spend is
-    # never lost, and the live path still covers the fresh-boot window before the
-    # first heartbeat repopulates the ledger.
-    # The all-time call-time counter is delete-proof (a deleted agent's _final_cost
-    # row is purged and its lifetime-ledger high-water can be missed/popped, but
-    # the counter accrued its spend at call time). Use it as a third floor so the
-    # headline never drops below money already spent — and so it can never read
-    # lower than the "this period" spend shown beside it.
-    try:
-        from .agents.llm_agent import get_global_alltime_cost
-
-        alltime_cost = get_global_alltime_cost()
-    except Exception:
-        alltime_cost = 0.0
-    total_cost = max(
-        live_cost + _historical_cost_usd(live_names),
-        _lifetime_cost_total(),
-        alltime_cost,
-    )
-    total_msgs = live_msgs + _historical_messages(live_names)
-    return {
-        "agents": list(runtime.state["agents"].values()),
-        "nodes": list(runtime.state["nodes"].values()),
-        "alerts": runtime.state["alerts"][:10],
-        "log_feed": runtime.state["log_feed"][:20],
-        "system_health": runtime.state["system_health"],
-        "total_cost_usd": round(total_cost, 6),
-        "total_messages": total_msgs,
-    }
 
 
 async def _broadcast_mqtt_msg(topic: str, payload: str) -> None:
@@ -1439,13 +1121,13 @@ async def mqtt_listener():
                                     logger.error(f"[io/chat] error: {exc}")
                             continue
 
-                        event: dict[str, Any] | None = parse_topic(topic, payload)
+                        event: dict[str, Any] | None = events.parse_topic(topic, payload)
                         await _broadcast_mqtt_msg(topic, payload)
-                        if event and not runtime._hard_resetting:
+                        if event and not runtime.hard_resetting:
                             metric = event.get("metric", "")
                             log_event = None if metric == "heartbeat" else event
                             await broadcast(
-                                {"type": "patch", "event": log_event, "state": _snapshot()}
+                                {"type": "patch", "event": log_event, "state": events.snapshot()}
                             )
                             # Agent-originated user-facing message. The browser already
                             # renders it from the agents/{id}/chat (the broadcast above)
@@ -1714,7 +1396,7 @@ def _final_cost_from_db(name: str):
     return None
 
 
-def _actor_cost(actor, ag: dict):
+def actor_cost(actor, ag: dict):
     """Return the most accurate cost available: MQTT-derived first, then live object, then SQLite."""
     mqtt_cost = ag.get("cost_usd")
     if mqtt_cost is not None:
@@ -1725,7 +1407,7 @@ def _actor_cost(actor, ag: dict):
     return _final_cost_from_db(getattr(actor, "name", ""))
 
 
-def _best_cost(ag, actor, name: str) -> float:
+def best_cost(ag, actor, name: str) -> float:
     """Resolve an agent's cost the SAME way the cards do (_actor_cost): MQTT
     state first, then the live actor object, then the persisted _final_cost row.
     Returns 0.0 when nothing is known so it can be summed safely. The headline
@@ -1753,7 +1435,7 @@ def _best_cost(ag, actor, name: str) -> float:
         return 0.0
 
 
-def _best_msgs(ag, actor) -> int:
+def best_msgs(ag, actor) -> int:
     """Resolve message count: MQTT state first, then the live actor's metrics."""
     if ag is not None:
         m = ag.get("messages_processed")
@@ -1833,7 +1515,7 @@ async def send_message_handler(request: web.Request) -> Response:
     # actor is dropped. Prepend the mention to route there, unless the caller
     # already addressed someone (@) or it's a slash command (/).
     routed = content if content.startswith(("@", "/")) else f"@{actor.name} {content}"
-    _track_chat_task(asyncio.create_task(_route_chat(routed, lambda t: None)))
+    track_chat_task(asyncio.create_task(_route_chat(routed, lambda t: None)))
     return web.json_response({"status": "sent"})
 
 
@@ -1856,8 +1538,8 @@ async def delete_actor_handler(request: web.Request) -> Response:
             return web.json_response({"error": "actor not found"}, status=404)
     if record.get("protected"):
         return web.json_response({"error": "actor is protected"}, status=403)
-    routed = await _delete_agent(actor_id)
-    await broadcast({"type": "delete_agent", "agent_id": actor_id, "state": _snapshot()})
+    routed = await delete_agent(actor_id)
+    await broadcast({"type": "delete_agent", "agent_id": actor_id, "state": events.snapshot()})
     return web.Response(status=200, text=f"stopping ({routed})")
 
 
@@ -1874,7 +1556,7 @@ _HA_SYSTEM_AGENTS = frozenset(
 )
 
 
-def _survives_factory_reset(name: str, protected: bool) -> bool:
+def survives_factory_reset(name: str, protected: bool) -> bool:
     """Whether an agent is kept by ``reset all`` (factory reset).
 
     Kept if it is a system-protected actor (main / monitor / io-agent / installer
@@ -1909,7 +1591,7 @@ async def reset_handler(request: web.Request) -> Response:
 
     if scope == "all":
         # Block incoming heartbeats, stop all actors, wipe disk, clear memory
-        runtime._hard_resetting = True
+        runtime.hard_resetting = True
         # Wrap the whole teardown so _hard_resetting ALWAYS resets — otherwise a
         # mid-wipe exception leaves it True forever and every incoming heartbeat
         # stays blocked, freezing the dashboard until the process restarts.
@@ -1924,7 +1606,7 @@ async def reset_handler(request: web.Request) -> Response:
             # Factory reset keeps the protected system actors and the HA system
             # agents; only user- and catalog-spawned agents are stopped.
             def _kept(name: str, protected: bool) -> bool:
-                return _survives_factory_reset(name, protected)
+                return survives_factory_reset(name, protected)
 
             stoppable = [a for a in all_actors if not _kept(a.name, getattr(a, "protected", False))]
             # The registry is the AUTHORITATIVE source of the protected flag — the
@@ -1964,7 +1646,7 @@ async def reset_handler(request: web.Request) -> Response:
             # retained spawn directives that would otherwise replay on reconnect.
             # Harmless when there are no nodes.
             node_names = set(runtime.state["nodes"].keys())
-            main_actor = _find_main()
+            main_actor = find_main()
             if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
                 for cfg in (main_actor._get_spawn_registry() or {}).values():
                     n = (cfg.get("node") or "").strip()
@@ -1992,17 +1674,17 @@ async def reset_handler(request: web.Request) -> Response:
             # late/in-flight frame can't re-admit it once _hard_resetting clears, and
             # drop it from the dashboard now.
             await asyncio.gather(
-                *[_purge_agent_retained(aid) for aid in agent_ids],
+                *[purge_agent_retained(aid) for aid in agent_ids],
                 return_exceptions=True,
             )
             for aid in agent_ids:
-                _mark_deleted(aid)
+                runtime.mark_deleted(aid)
                 runtime.state["agents"].pop(aid, None)
 
             # Clear the live spawn registry + retained desired_state so neither a
             # restart nor a runner reconnect can resurrect the wiped agents. Runs
             # before reset_all() wipes the kv on disk (it reads the registry first).
-            await _purge_spawn_reconcile(None)
+            await purge_spawn_reconcile(None)
             # Reset in-memory metrics + history on the KEPT actors (protected +
             # fresh-boot) so they too return to factory state, not just stay alive.
             kept_actors = [a for a in all_actors if _kept(a.name, getattr(a, "protected", False))]
@@ -2011,7 +1693,7 @@ async def reset_handler(request: web.Request) -> Response:
                 actor.metrics.errors = 0
                 actor.metrics.tasks_completed = 0
                 actor.metrics.tasks_failed = 0
-                _reset_actor_cost(actor)
+                reset_actor_cost(actor)
                 if hasattr(actor, "_conversation_history"):
                     actor._conversation_history = []
                 if hasattr(actor, "_history_summary"):
@@ -2054,7 +1736,7 @@ async def reset_handler(request: web.Request) -> Response:
                 }
             )
         finally:
-            runtime._hard_resetting = False
+            runtime.hard_resetting = False
         return web.json_response({"status": "ok", "scope": "all", "agent": None})
     if scope == "chat":
         _reset.reset_chat(agent)
@@ -2086,7 +1768,7 @@ async def reset_handler(request: web.Request) -> Response:
             if agent and actor.name != agent:
                 continue
             actor.metrics.messages_processed = 0
-            _reset_actor_cost(actor)
+            reset_actor_cost(actor)
         # The headline total is max(live + historical, lifetime ledger).
         # reset_metrics cleared the kv ledger, but the in-memory _lifetime_cost
         # high-water survives in THIS process and pins the headline to its old
@@ -2109,7 +1791,7 @@ async def reset_handler(request: web.Request) -> Response:
         # to learn the affected nodes), then wipe the kv on disk. Without this,
         # clearing the registry left desired_state behind and a runner reconnect
         # reconciled the agents straight back.
-        await _purge_spawn_reconcile(agent)
+        await purge_spawn_reconcile(agent)
         _reset.reset_spawns(agent)
     elif scope == "logs":
         _reset.reset_logs()
@@ -2135,7 +1817,7 @@ async def reset_handler(request: web.Request) -> Response:
             runtime.state["alerts"].clear()
             runtime.state["log_feed"].clear()
 
-    await broadcast({"type": "reset", "scope": scope, "agent": agent, "state": _snapshot()})
+    await broadcast({"type": "reset", "scope": scope, "agent": agent, "state": events.snapshot()})
     return web.json_response({"status": "ok", "scope": scope, "agent": agent})
 
 
@@ -2217,7 +1899,7 @@ async def rest_chat_handler(request: web.Request) -> Response:
     # As above: route to the named agent, since _route_chat would otherwise
     # default to main when the message carries no @mention.
     routed = message if message.startswith(("@", "/")) else f"@{target.name} {message}"
-    _track_chat_task(asyncio.create_task(_route_chat(routed, lambda t: None)))
+    track_chat_task(asyncio.create_task(_route_chat(routed, lambda t: None)))
     return web.json_response({"status": "sent", "agent": agent_name})
 
 
@@ -2272,7 +1954,7 @@ async def actors_handler(request: web.Request) -> Response:
     if runtime.registry is not None:
         result = []
         for actor in runtime.registry.all_actors():
-            if _is_deleted(actor.actor_id):
+            if runtime.is_deleted(actor.actor_id):
                 continue
             ag = runtime.state["agents"].get(actor.actor_id, {})
             result.append(
@@ -2287,7 +1969,7 @@ async def actors_handler(request: web.Request) -> Response:
                     "messagesProcessed": ag.get("messages_processed")
                     if ag.get("messages_processed") is not None
                     else getattr(getattr(actor, "metrics", None), "messages_processed", None),
-                    "costUsd": _actor_cost(actor, ag),
+                    "costUsd": actor_cost(actor, ag),
                 }
             )
         return web.json_response(result)
@@ -2490,7 +2172,7 @@ async def main(exit_on_failure: bool = False):
         return
 
     @web.middleware
-    async def _cors_middleware(request: web.Request, handler: Handler) -> Response:
+    async def cors_middleware(request: web.Request, handler: Handler) -> Response:
         if request.method == "OPTIONS":
             return web.Response(
                 headers={
@@ -2508,7 +2190,7 @@ async def main(exit_on_failure: bool = False):
             pass
         return response
 
-    app = web.Application(middlewares=[_cors_middleware])
+    app = web.Application(middlewares=[cors_middleware])
     app.router.add_get("/", index_handler)
     app.router.add_get("/health", health_handler)
     app.router.add_get("/api/cost", cost_handler)
@@ -2574,7 +2256,7 @@ async def main(exit_on_failure: bool = False):
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", runtime.WS_PORT)
     await site.start()
-    logger.info(f"Monitor  → http://localhost:{runtime.WS_PORT}/  [chat: {_chat_mode()}]")
+    logger.info(f"Monitor  → http://localhost:{runtime.WS_PORT}/  [chat: {chat_mode()}]")
     if DOCS_SITE.is_dir():
         logger.info(f"Docs     → http://localhost:{runtime.WS_PORT}/docs/")
 
@@ -2633,39 +2315,60 @@ if __name__ == "__main__":
 
 
 # ── Compatibility façade ──────────────────────────────────────────────────────
-# The shared mutable state lives in wactorz.monitor.runtime. External code and
-# tests keep using this module's attributes (`monitor_server.registry = fake`);
-# forward both reads and writes so injection is seen by every handler.
-_RUNTIME_FORWARD = frozenset(
-    {
-        "registry",
-        "db",
-        "state",
-        "ws_clients",
-        "mqtt_client_ref",
-        "_hard_resetting",
-        "_deleted_agent_ids",
-        "_DELETED_IDS_MAX",
-        "MQTT_BROKER",
-        "MQTT_PORT",
-        "MQTT_WS_PORT",
-        "WS_PORT",
-        "MQTT_TOPICS",
-        "IO_GATEWAY_ID",
-    }
-)
+# The shared mutable state lives in wactorz.monitor.runtime and extracted
+# helpers in their monitor.* modules. External code and tests keep using this
+# module's attributes (including pre-split underscore names); forward reads AND
+# writes to the real home so injection/monkeypatching is seen by every caller.
+_FORWARD = {
+    # runtime state (clean names)
+    **{
+        n: (runtime, n)
+        for n in (
+            "registry",
+            "db",
+            "state",
+            "ws_clients",
+            "mqtt_client_ref",
+            "hard_resetting",
+            "deleted_agent_ids",
+            "DELETED_IDS_MAX",
+            "MQTT_BROKER",
+            "MQTT_PORT",
+            "MQTT_WS_PORT",
+            "WS_PORT",
+            "MQTT_TOPICS",
+            "IO_GATEWAY_ID",
+            "is_deleted",
+            "mark_deleted",
+            "undelete",
+        )
+    },
+    # events module (clean names)
+    **{
+        n: (events, n)
+        for n in (
+            "parse_topic",
+            "update_agent",
+            "add_log",
+            "snapshot",
+            "node_online",
+        )
+    },
+}
 
 
 def __getattr__(name: str):
-    if name in _RUNTIME_FORWARD:
-        return getattr(runtime, name)
+    target = _FORWARD.get(name)
+    if target is not None:
+        return getattr(target[0], target[1])
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-class _FacadeModule(type(sys.modules[__name__])):  # pylint: disable=too-few-public-methods
+class _FacadeModule(type(sys.modules[__name__])):
     def __setattr__(self, name: str, value) -> None:
-        if name in _RUNTIME_FORWARD:
-            setattr(runtime, name, value)
+        target = _FORWARD.get(name)
+        if target is not None:
+            setattr(target[0], target[1], value)
         else:
             super().__setattr__(name, value)
 

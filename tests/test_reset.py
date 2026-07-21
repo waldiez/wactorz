@@ -251,7 +251,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
             with (
                 patch("wactorz.reset.reset_metrics"),
                 patch.object(ms, "broadcast", new=AsyncMock()),
-                patch.object(ms, "_snapshot", return_value={}),
+                patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
             self.assertEqual(resp.status, 200)
@@ -280,7 +280,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
                 patch("wactorz.reset.reset_metrics"),
                 patch("wactorz.agents.llm_agent.reset_global_cost"),
                 patch.object(ms, "broadcast", new=AsyncMock()),
-                patch.object(ms, "_snapshot", return_value={}),
+                patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
             self.assertEqual(resp.status, 200)
@@ -310,7 +310,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
             with (
                 patch("wactorz.reset.reset_chat"),
                 patch.object(ms, "broadcast", new=AsyncMock()),
-                patch.object(ms, "_snapshot", return_value={}),
+                patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
             self.assertEqual(resp.status, 200)
@@ -333,7 +333,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
             with (
                 patch("wactorz.reset.reset_chat"),
                 patch.object(ms, "broadcast", new=AsyncMock()),
-                patch.object(ms, "_snapshot", return_value={}),
+                patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
             self.assertEqual(resp.status, 200)
@@ -361,7 +361,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
             with (
                 patch("wactorz.reset.reset_metrics"),
                 patch.object(ms, "broadcast", new=AsyncMock()),
-                patch.object(ms, "_snapshot", return_value={}),
+                patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
             self.assertEqual(resp.status, 200)
@@ -533,7 +533,7 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
             with (
                 patch("wactorz.reset.reset_all"),
                 patch.object(ms, "broadcast", new=AsyncMock()),
-                patch.object(ms, "_snapshot", return_value={}),
+                patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
             self.assertEqual(resp.status, 200)
@@ -581,26 +581,26 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
 
         orig_registry, orig_mqtt = ms.registry, ms.mqtt_client_ref
         orig_nodes, orig_agents = dict(ms.state["nodes"]), dict(ms.state["agents"])
-        orig_deleted = list(ms._deleted_agent_ids)
+        orig_deleted = list(ms.deleted_agent_ids)
         ms.registry = fake_registry
         ms.mqtt_client_ref = AsyncMock()
         ms.state["nodes"] = {}
         # Dashboard entries WITHOUT the protected flag — the exact bug condition.
         ms.state["agents"] = {"main-id": {"name": "main"}, "io-id": {"name": "io-agent"}}
-        ms._deleted_agent_ids = []
+        ms.deleted_agent_ids = []
         try:
             with (
                 patch("wactorz.reset.reset_all"),
-                patch.object(ms, "_purge_agent_retained", new=AsyncMock()) as purge,
+                patch.object(ms, "purge_agent_retained", new=AsyncMock()) as purge,
                 patch.object(ms, "broadcast", new=AsyncMock()),
-                patch.object(ms, "_snapshot", return_value={}),
+                patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(_make_request({"scope": "all"}))
             self.assertEqual(resp.status, 200)
             purged = {c.args[0] for c in purge.call_args_list}
             self.assertIn("io-id", purged)
             self.assertNotIn("main-id", purged)  # protected: never purged
-            tombstoned = {aid for aid, _ in ms._deleted_agent_ids}
+            tombstoned = {aid for aid, _ in ms.deleted_agent_ids}
             self.assertIn("io-id", tombstoned)
             self.assertNotIn("main-id", tombstoned)  # protected: never tombstoned
         finally:
@@ -608,7 +608,7 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
             ms.mqtt_client_ref = orig_mqtt
             ms.state["nodes"] = orig_nodes
             ms.state["agents"] = orig_agents
-            ms._deleted_agent_ids = orig_deleted
+            ms.deleted_agent_ids = orig_deleted
 
 
 class FactoryResetKeepSetTest(unittest.TestCase):
@@ -619,20 +619,20 @@ class FactoryResetKeepSetTest(unittest.TestCase):
         import wactorz.monitor_server as ms
 
         for name in ("main", "monitor", "io-agent", "installer", "catalog"):
-            self.assertTrue(ms._survives_factory_reset(name, True), name)
+            self.assertTrue(ms.survives_factory_reset(name, True), name)
 
     def test_ha_system_agents_kept_despite_being_unprotected(self):
         import wactorz.monitor_server as ms
 
         # Unprotected → still individually deletable, but a factory reset keeps them.
         for name in ms._HA_SYSTEM_AGENTS:
-            self.assertTrue(ms._survives_factory_reset(name, False), name)
+            self.assertTrue(ms.survives_factory_reset(name, False), name)
 
     def test_user_and_catalog_spawned_agents_are_wiped(self):
         import wactorz.monitor_server as ms
 
-        self.assertFalse(ms._survives_factory_reset("weather-agent", False))
-        self.assertFalse(ms._survives_factory_reset("my-catalog-spawn", False))
+        self.assertFalse(ms.survives_factory_reset("weather-agent", False))
+        self.assertFalse(ms.survives_factory_reset("my-catalog-spawn", False))
 
     def test_keep_set_covers_every_app_py_supervised_agent(self):
         """Drift guard: every fresh-boot agent (app.py .supervise chain) must be
@@ -648,7 +648,7 @@ class FactoryResetKeepSetTest(unittest.TestCase):
         # Protection lives on the actor class; treat the known protected names as
         # protected here so the guard checks name-coverage, not the flag itself.
         protected = {"main", "monitor", "io-agent", "installer", "catalog"}
-        missing = [n for n in supervised if not ms._survives_factory_reset(n, n in protected)]
+        missing = [n for n in supervised if not ms.survives_factory_reset(n, n in protected)]
         self.assertEqual(missing, [], f"fresh-boot agents not kept by reset: {missing}")
 
 

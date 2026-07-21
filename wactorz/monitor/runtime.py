@@ -10,6 +10,8 @@ would not be seen. The in-place-mutated containers (``state``, ``ws_clients``)
 are the only names safe to alias-import.
 """
 
+# pylint: disable=global-statement
+
 import time
 from typing import TYPE_CHECKING
 
@@ -61,41 +63,41 @@ ws_clients: set = set()
 # Stored as a list of (agent_id, deleted_at_ts) tuples so we can re-admit on
 # a NEWER status event (which is what a deliberate respawn produces) while
 # still ignoring stale retained messages from the deleted instance.
-_deleted_agent_ids: list = []
-_DELETED_IDS_MAX = 1024
-_hard_resetting = False
+deleted_agent_ids: list = []
+DELETED_IDS_MAX = 1024
+hard_resetting: bool = False  # pylint: disable=invalid-name
 
 
-def _mark_deleted(agent_id: str) -> None:
+def mark_deleted(agent_id: str) -> None:
     """Add an agent_id to the deleted list with FIFO eviction. If already
     present, refresh its deleted-at timestamp so any in-flight retained
     messages from the previous incarnation stay blocked.
     """
-    _undelete(agent_id)  # remove any prior entry so the new timestamp wins
-    _deleted_agent_ids.append((agent_id, time.time()))
-    if len(_deleted_agent_ids) > _DELETED_IDS_MAX:
-        del _deleted_agent_ids[0 : len(_deleted_agent_ids) - _DELETED_IDS_MAX]
+    undelete(agent_id)  # remove any prior entry so the new timestamp wins
+    deleted_agent_ids.append((agent_id, time.time()))
+    if len(deleted_agent_ids) > DELETED_IDS_MAX:
+        del deleted_agent_ids[0 : len(deleted_agent_ids) - DELETED_IDS_MAX]
 
 
-def _is_deleted(agent_id: str, newer_than: float = 0.0) -> bool:
+def is_deleted(agent_id: str, newer_than: float = 0.0) -> bool:
     """Was this agent_id deleted? When newer_than is given, return False if
     the caller has evidence (a message timestamp) that's strictly later than
     the deletion — that means the agent was respawned and we should re-admit
     it on the next update_agent() call. The actual un-delete happens there;
     this function stays a pure query.
     """
-    for aid, ts in _deleted_agent_ids:
+    for aid, ts in deleted_agent_ids:
         if aid == agent_id:
             return not newer_than > ts
     return False
 
 
-def _undelete(agent_id: str) -> bool:
+def undelete(agent_id: str) -> bool:
     """Remove agent_id from the deleted list. Returns True if it was there."""
-    global _deleted_agent_ids
-    before = len(_deleted_agent_ids)
-    _deleted_agent_ids = [(a, t) for (a, t) in _deleted_agent_ids if a != agent_id]
-    return len(_deleted_agent_ids) < before
+    global deleted_agent_ids
+    before = len(deleted_agent_ids)
+    deleted_agent_ids = [(a, t) for (a, t) in deleted_agent_ids if a != agent_id]
+    return len(deleted_agent_ids) < before
 
 
 # ── Injection points (app.py calls these at boot) ────────────────────────────

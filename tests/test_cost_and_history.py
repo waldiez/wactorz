@@ -3,7 +3,7 @@ Tests for cost persistence, cost restoration on startup, and chat history API.
 
 Covers three recent features:
   - LLM cost written to SQLite (_final_cost key) and restored on agent restart
-  - Historical (deleted agent) cost included in _snapshot() total
+  - Historical (deleted agent) cost included in snapshot() total
   - GET /api/actors/{id}/history endpoint filters and returns conversation history
 """
 
@@ -174,17 +174,17 @@ class HistoricalCostTest(unittest.TestCase):
         self._ms.state["agents"] = self._orig_state
 
     def _live_names(self):
-        """Derive live_names from state["agents"] as _snapshot() does when no registry."""
+        """Derive live_names from state["agents"] as snapshot() does when no registry."""
         return {a.get("name", "") for a in self._ms.state["agents"].values()}
 
     def test_returns_zero_when_db_is_none(self):
         self._ms.db = None
-        self.assertEqual(self._ms._historical_cost_usd(self._live_names()), 0.0)
+        self.assertEqual(self._ms.historical_cost_usd(self._live_names()), 0.0)
 
     def test_returns_zero_when_no_final_cost_rows(self):
         self._ms.db = _make_kv_db([])
         self._ms.state["agents"] = {}
-        self.assertEqual(self._ms._historical_cost_usd(self._live_names()), 0.0)
+        self.assertEqual(self._ms.historical_cost_usd(self._live_names()), 0.0)
 
     def test_sums_costs_for_deleted_agents(self):
         self._ms.db = _make_kv_db(
@@ -203,7 +203,7 @@ class HistoricalCostTest(unittest.TestCase):
         )
         self._ms.state["agents"] = {}  # no live agents
 
-        total = self._ms._historical_cost_usd(self._live_names())
+        total = self._ms.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.08, places=6)
 
     def test_excludes_live_agent_costs(self):
@@ -226,7 +226,7 @@ class HistoricalCostTest(unittest.TestCase):
             "live-agent": {"name": "live-agent", "cost_usd": 0.10},
         }
 
-        total = self._ms._historical_cost_usd(self._live_names())
+        total = self._ms.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.04, places=6)
 
     def test_ignores_malformed_rows(self):
@@ -243,7 +243,7 @@ class HistoricalCostTest(unittest.TestCase):
         self._ms.db = types.SimpleNamespace(conn=conn)
         self._ms.state["agents"] = {}
 
-        total = self._ms._historical_cost_usd(self._live_names())
+        total = self._ms.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.02, places=6)
 
 
@@ -286,40 +286,40 @@ class LifetimeCostLedgerTest(unittest.TestCase):
         self._ms._lifetime_loaded = self._orig_loaded
 
     def test_records_and_totals_cost(self):
-        self._ms._record_lifetime_cost("a1", 0.05)
-        self._ms._record_lifetime_cost("a2", 0.03)
-        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.08, places=6)
+        self._ms.record_lifetime_cost("a1", 0.05)
+        self._ms.record_lifetime_cost("a2", 0.03)
+        self.assertAlmostEqual(self._ms.lifetime_cost_total(), 0.08, places=6)
 
     def test_is_monotonic_high_water(self):
-        self._ms._record_lifetime_cost("a1", 0.05)
-        self._ms._record_lifetime_cost("a1", 0.02)  # lower report — ignored
-        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.05, places=6)
-        self._ms._record_lifetime_cost("a1", 0.09)  # higher — raises
-        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.09, places=6)
+        self._ms.record_lifetime_cost("a1", 0.05)
+        self._ms.record_lifetime_cost("a1", 0.02)  # lower report — ignored
+        self.assertAlmostEqual(self._ms.lifetime_cost_total(), 0.05, places=6)
+        self._ms.record_lifetime_cost("a1", 0.09)  # higher — raises
+        self.assertAlmostEqual(self._ms.lifetime_cost_total(), 0.09, places=6)
 
     def test_survives_agent_disappearing(self):
         """The core bug: a deleted / hard-killed agent must not drop the total."""
-        self._ms._record_lifetime_cost("planner-1123da", 0.0365)
+        self._ms.record_lifetime_cost("planner-1123da", 0.0365)
         # Agent vanishes (no more reports, never written to _final_cost).
-        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.0365, places=6)
+        self.assertAlmostEqual(self._ms.lifetime_cost_total(), 0.0365, places=6)
 
     def test_ignores_non_positive_and_invalid(self):
         for bad in (0, -1.0, None, "x"):
-            self._ms._record_lifetime_cost("a1", bad)
-        self.assertEqual(self._ms._lifetime_cost_total(), 0.0)
+            self._ms.record_lifetime_cost("a1", bad)
+        self.assertEqual(self._ms.lifetime_cost_total(), 0.0)
 
     def test_persists_to_db_and_reloads(self):
-        self._ms._record_lifetime_cost("a1", 0.07)
+        self._ms.record_lifetime_cost("a1", 0.07)
         # Simulate a monitor restart: drop in-memory state, keep the db.
         self._ms._lifetime_cost.clear()
         self._ms._lifetime_loaded = False
-        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.07, places=6)
+        self.assertAlmostEqual(self._ms.lifetime_cost_total(), 0.07, places=6)
 
     def test_no_db_is_safe(self):
         self._ms.db = None
         self._ms._lifetime_loaded = False
-        self._ms._record_lifetime_cost("a1", 0.05)  # must not raise
-        self.assertEqual(self._ms._lifetime_cost_total(), 0.05)
+        self._ms.record_lifetime_cost("a1", 0.05)  # must not raise
+        self.assertEqual(self._ms.lifetime_cost_total(), 0.05)
 
 
 class ResetActorCostTest(unittest.TestCase):
@@ -342,7 +342,7 @@ class ResetActorCostTest(unittest.TestCase):
             _last_period_cost_usd = 0.42
 
         a = _Actor()
-        self._ms._reset_actor_cost(a)
+        self._ms.reset_actor_cost(a)
         self.assertEqual(a.total_cost_usd, 0.0)
         self.assertEqual(a.total_input_tokens, 0)
         self.assertEqual(a.total_output_tokens, 0)
@@ -360,16 +360,16 @@ class ResetActorCostTest(unittest.TestCase):
             _last_persisted_usd = 0.42
 
         a = _Actor()
-        self._ms._reset_actor_cost(a)
+        self._ms.reset_actor_cost(a)
         a.total_cost_usd += 0.01  # one new LLM call after the wipe
         self.assertGreater(a.total_cost_usd - a._last_persisted_usd, 0)
 
     def test_actor_without_cost_attrs_is_noop(self):
-        self._ms._reset_actor_cost(object())  # must not raise
+        self._ms.reset_actor_cost(object())  # must not raise
 
 
 class SnapshotTotalsTest(unittest.TestCase):
-    """_snapshot() headline totals must match the cards the dashboard renders,
+    """snapshot() headline totals must match the cards the dashboard renders,
     including remote / spawned agents that live in state but not in this
     process's registry."""
 
@@ -401,7 +401,7 @@ class SnapshotTotalsTest(unittest.TestCase):
             "main": {"name": "main", "cost_usd": 0.0381},
             "reachy-mini": {"name": "reachy-mini", "cost_usd": 0.0213},
         }
-        snap = self._ms._snapshot()
+        snap = self._ms.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.0594, places=6)
 
     def test_includes_state_only_agent_missing_from_registry(self):
@@ -418,7 +418,7 @@ class SnapshotTotalsTest(unittest.TestCase):
             "main": {"name": "main", "cost_usd": 0.0381, "messages_processed": 1},
             "reachy-mini": {"name": "reachy-mini", "cost_usd": 0.0213, "messages_processed": 3},
         }
-        snap = self._ms._snapshot()
+        snap = self._ms.snapshot()
         # Old behaviour summed only registry actors -> 0.0381. Must be the full sum.
         self.assertAlmostEqual(snap["total_cost_usd"], 0.0594, places=6)
         self.assertEqual(snap["total_messages"], 4)
@@ -444,7 +444,7 @@ class SnapshotTotalsTest(unittest.TestCase):
             "main-id": {"name": "main", "cost_usd": 0.038124, "messages_processed": 1},
             "reachy-id": {"name": "reachy-mini", "messages_processed": 3},  # no cost_usd
         }
-        snap = self._ms._snapshot()
+        snap = self._ms.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.059409, places=6)
         self.assertEqual(snap["total_messages"], 4)
 
@@ -479,7 +479,7 @@ class SnapshotTotalsTest(unittest.TestCase):
         )
         self._ms.registry = types.SimpleNamespace(all_actors=lambda: [main_a, reachy_a])
         self._ms.state["agents"] = {"m": {"name": "main"}, "r": {"name": "reachy-mini"}}
-        snap = self._ms._snapshot()
+        snap = self._ms.snapshot()
         # Must NOT double-count: _final_cost is used for the live sum, and
         # historical (also _final_cost) must skip names already counted.
         self.assertAlmostEqual(snap["total_cost_usd"], 0.059409, places=6)
@@ -502,7 +502,7 @@ class SnapshotTotalsTest(unittest.TestCase):
         )
         self._ms.registry = types.SimpleNamespace(all_actors=lambda: [in_state, not_yet])
         self._ms.state["agents"] = {"main": {"name": "main", "cost_usd": 0.05}}
-        snap = self._ms._snapshot()
+        snap = self._ms.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.07, places=6)
 
 

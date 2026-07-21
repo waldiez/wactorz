@@ -38,8 +38,8 @@ from aiohttp.typedefs import Handler
 from ._bootstrap import WACTORZ_BOOTSTRAP  # noqa: F401 # pylint: disable=unused-import
 from .agents.main_actor import MainActor
 from .core.mqtt import mqtt_client
-from .core.persistence import WactorzDB
-from .core.registry import ActorRegistry
+from .monitor import runtime
+from .monitor.runtime import _is_deleted, _mark_deleted, _undelete
 
 Response = web.Response | web.FileResponse | web.StreamResponse
 
@@ -54,38 +54,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Injected by cli.py after the actor system is built.
-# None  → legacy MQTT/IOAgent mode
-# <registry> → direct mode (Option B)
-registry: ActorRegistry | None = None
-
-# Injected by cli.py — used to query historical cost data for deleted agents.
-db: WactorzDB | None = None
-
-MQTT_BROKER = "localhost"
-MQTT_PORT = 1883
-MQTT_WS_PORT = 9001
-WS_PORT = 8888
-MQTT_TOPICS = [
-    "agents/#",
-    "system/#",
-    "nodes/#",
-    "io/chat",
-    "homeassistant/state_changes/#",
-]
-
-IO_GATEWAY_ID = "io-gateway"
-
-state = {
-    "agents": {},
-    "nodes": {},
-    "alerts": [],
-    "system_health": {},
-    "log_feed": [],
-}
-
-ws_clients: set = set()
-mqtt_client_ref = None
 # In-flight chat-generation tasks (direct_ws + REST paths) so POST /chat/stop can
 # cancel a turn mid-stream. The legacy MQTT path is handled separately by the
 # IOAgent via the io/chat/control topic.
@@ -99,48 +67,6 @@ def _track_chat_task(task):
     return task
 
 
-# IDs that have been explicitly deleted — block re-admission from stale heartbeats.
-# Bounded so a long-running monitor doesn't leak memory across many deletions.
-# Stored as a list of (agent_id, deleted_at_ts) tuples so we can re-admit on
-# a NEWER status event (which is what a deliberate respawn produces) while
-# still ignoring stale retained messages from the deleted instance.
-_deleted_agent_ids: list = []
-_DELETED_IDS_MAX = 1024
-_hard_resetting = False
-
-
-def _mark_deleted(agent_id: str) -> None:
-    """Add an agent_id to the deleted list with FIFO eviction. If already
-    present, refresh its deleted-at timestamp so any in-flight retained
-    messages from the previous incarnation stay blocked.
-    """
-    _undelete(agent_id)  # remove any prior entry so the new timestamp wins
-    _deleted_agent_ids.append((agent_id, time.time()))
-    if len(_deleted_agent_ids) > _DELETED_IDS_MAX:
-        del _deleted_agent_ids[0 : len(_deleted_agent_ids) - _DELETED_IDS_MAX]
-
-
-def _is_deleted(agent_id: str, newer_than: float = 0.0) -> bool:
-    """Was this agent_id deleted? When newer_than is given, return False if
-    the caller has evidence (a message timestamp) that's strictly later than
-    the deletion — that means the agent was respawned and we should re-admit
-    it on the next update_agent() call. The actual un-delete happens there;
-    this function stays a pure query.
-    """
-    for aid, ts in _deleted_agent_ids:
-        if aid == agent_id:
-            return not newer_than > ts
-    return False
-
-
-def _undelete(agent_id: str) -> bool:
-    """Remove agent_id from the deleted list. Returns True if it was there."""
-    global _deleted_agent_ids
-    before = len(_deleted_agent_ids)
-    _deleted_agent_ids = [(a, t) for (a, t) in _deleted_agent_ids if a != agent_id]
-    return len(_deleted_agent_ids) < before
-
-
 async def _purge_agent_retained(agent_id: str) -> None:
     """Clear retained MQTT messages for a deleted agent so the broker stops
     re-delivering them after a monitor reconnect or a fresh subscribe.
@@ -149,7 +75,7 @@ async def _purge_agent_retained(agent_id: str) -> None:
     heartbeat / metrics, each of which would otherwise crash parse_topic
     with KeyError on an entry that update_agent now refuses to recreate.
     """
-    if not mqtt_client_ref:
+    if not runtime.mqtt_client_ref:
         return
     for metric in (
         "status",
@@ -165,7 +91,7 @@ async def _purge_agent_retained(agent_id: str) -> None:
     ):
         topic = f"agents/{agent_id}/{metric}"
         try:
-            await mqtt_client_ref.publish(topic, b"", retain=True)
+            await runtime.mqtt_client_ref.publish(topic, b"", retain=True)
         except Exception as e:
             logger.debug(f"[purge] Failed to clear retained {topic}: {e}")
 
@@ -177,11 +103,11 @@ async def _purge_node_desired_state(node: str) -> None:
     reconciles it by spawning any listed agent that isn't already running.
     If a reset doesn't clear it, the runner re-spawns the just-deleted agents.
     """
-    if not mqtt_client_ref or not node:
+    if not runtime.mqtt_client_ref or not node:
         return
     topic = f"nodes/{node}/desired_state"
     try:
-        await mqtt_client_ref.publish(topic, b"", retain=True)
+        await runtime.mqtt_client_ref.publish(topic, b"", retain=True)
     except Exception as e:
         logger.debug(f"[purge] Failed to clear retained {topic}: {e}")
 
@@ -209,7 +135,7 @@ async def _purge_spawn_reconcile(agent: str | None = None) -> None:
         reg = main_actor._get_spawn_registry() or {}
 
     # Affected nodes: live heartbeats ∪ registry (covers offline nodes).
-    node_names: set[str] = set(state["nodes"].keys())
+    node_names: set[str] = set(runtime.state["nodes"].keys())
     for name, cfg in reg.items():
         if agent and name != agent:
             continue
@@ -256,16 +182,16 @@ async def _delete_agent(agent_id: str) -> str:
            - Local → publish to agents/<id>/commands {"command": "stop"}.
       4. Clear retained messages so old heartbeats don't come back on reconnect.
     """
-    record = state["agents"].get(agent_id) or {}
+    record = runtime.state["agents"].get(agent_id) or {}
     name = record.get("name") or agent_id
     node = (record.get("node") or "").strip()
 
     _mark_deleted(agent_id)
-    state["agents"].pop(agent_id, None)
+    runtime.state["agents"].pop(agent_id, None)
 
     routed = "unknown"
 
-    if registry is not None:
+    if runtime.registry is not None:
         # In-process: delegate to main, which owns the spawn registry and
         # knows exactly how to clean up both local and remote agents.
         main_actor = _find_main()
@@ -285,16 +211,16 @@ async def _delete_agent(agent_id: str) -> str:
         # that exist in the registry but aren't in main's spawn registry yet
         # (race window during startup).
         if routed.startswith("via main") is False:
-            actor = registry.get(agent_id) or registry.find_by_name(name)
+            actor = runtime.registry.get(agent_id) or runtime.registry.find_by_name(name)
             if actor is not None and not getattr(actor, "protected", False):
                 asyncio.create_task(actor.stop())
                 routed = "via local registry"
 
-    if routed in ("unknown", "main path failed") and mqtt_client_ref:
+    if routed in ("unknown", "main path failed") and runtime.mqtt_client_ref:
         # MQTT-only mode (or main unavailable). Route by node if we have one.
         if node:
             try:
-                await mqtt_client_ref.publish(
+                await runtime.mqtt_client_ref.publish(
                     f"nodes/{node}/stop",
                     json.dumps({"name": name}),
                 )
@@ -303,7 +229,7 @@ async def _delete_agent(agent_id: str) -> str:
                 logger.warning(f"[delete] nodes/{node}/stop publish failed: {e}")
         else:
             try:
-                await mqtt_client_ref.publish(
+                await runtime.mqtt_client_ref.publish(
                     f"agents/{agent_id}/commands",
                     json.dumps({"command": "stop", "sender": "monitor", "timestamp": time.time()}),
                 )
@@ -327,11 +253,11 @@ async def no_op_async() -> None:
 
 
 def _chat_mode() -> str:
-    return "direct_ws" if registry is not None else "mqtt"
+    return "direct_ws" if runtime.registry is not None else "mqtt"
 
 
 def _find_main():
-    actor = registry.find_by_name("main") if registry else None
+    actor = runtime.registry.find_by_name("main") if runtime.registry else None
     if actor:
         return cast(MainActor, actor)
     return None
@@ -345,36 +271,36 @@ def _parse_mention(content: str) -> tuple[str, str]:
 
 
 def update_agent(agent_id: str, key: str, data):
-    if _hard_resetting or _is_deleted(agent_id):
+    if runtime._hard_resetting or _is_deleted(agent_id):
         return
-    if agent_id not in state["agents"]:
-        state["agents"][agent_id] = {
+    if agent_id not in runtime.state["agents"]:
+        runtime.state["agents"][agent_id] = {
             "agent_id": agent_id,
             "name": agent_id[:8],
             "first_seen": time.time(),
         }
-    state["agents"][agent_id][key] = data
-    state["agents"][agent_id]["last_update"] = time.time()
+    runtime.state["agents"][agent_id][key] = data
+    runtime.state["agents"][agent_id]["last_update"] = time.time()
 
 
 def add_log(entry: dict):
-    state["log_feed"].insert(0, entry)
-    if len(state["log_feed"]) > 100:
-        state["log_feed"].pop()
+    runtime.state["log_feed"].insert(0, entry)
+    if len(runtime.state["log_feed"]) > 100:
+        runtime.state["log_feed"].pop()
 
 
 async def broadcast(msg: dict):
-    if not ws_clients:
+    if not runtime.ws_clients:
         return
     payload = json.dumps(msg)
     dead = set()
-    for ws in list(ws_clients):
+    for ws in list(runtime.ws_clients):
         try:
             await ws.send_str(payload)
         except Exception as e:
             logger.warning(f"[broadcast] WS send failed: {e}")
             dead.add(ws)
-    ws_clients.difference_update(dead)
+    runtime.ws_clients.difference_update(dead)
 
 
 # ── slash commands ─────────────────────────────────────────────────────────
@@ -493,11 +419,11 @@ async def handle_slash(text: str, reply_fn) -> bool:
         return True
 
     if cmd == "/agents":
-        if registry is None:
+        if runtime.registry is None:
             await reply_fn("[agents] Registry not available.")
             return True
         lines = []
-        for actor in registry.all_actors():
+        for actor in runtime.registry.all_actors():
             status = actor.get_status() if hasattr(actor, "get_status") else {}
             st = status.get("state", "?")
             protected = " [protected]" if getattr(actor, "protected", False) else ""
@@ -511,7 +437,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
         remote_nodes = (
             main_actor.list_nodes() if (main_actor and hasattr(main_actor, "list_nodes")) else []
         )
-        local = [a.name for a in registry.all_actors()] if registry else []
+        local = [a.name for a in runtime.registry.all_actors()] if runtime.registry else []
         lines = [f"  {'local':20s} online   {', '.join('@' + n for n in local) or '(none)'}"]
         for nd in sorted(remote_nodes, key=lambda x: x["node"]):
             st = "online" if nd["online"] else "OFFLINE"
@@ -589,7 +515,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
 
     target_name, text = _parse_mention(content)
 
-    target = registry.find_by_name(target_name) if registry else None
+    target = runtime.registry.find_by_name(target_name) if runtime.registry else None
 
     if target is None:
         main_actor = _find_main()
@@ -764,19 +690,19 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
 
 async def handle_chat_mqtt(data: dict):
     """Called when io/chat arrives via MQTT and registry is wired in."""
-    if registry is None:
+    if runtime.registry is None:
         return  # IOAgent handles it
     content = (data.get("content") or "").strip()
     if not content:
         return
 
     async def mqtt_reply(text: str):
-        if mqtt_client_ref:
-            await mqtt_client_ref.publish(
-                f"agents/{IO_GATEWAY_ID}/chat",
+        if runtime.mqtt_client_ref:
+            await runtime.mqtt_client_ref.publish(
+                f"agents/{runtime.IO_GATEWAY_ID}/chat",
                 json.dumps(
                     {
-                        "from": IO_GATEWAY_ID,
+                        "from": runtime.IO_GATEWAY_ID,
                         "to": "user",
                         "content": text,
                         "timestamp": time.time(),
@@ -793,8 +719,8 @@ async def handle_chat_mqtt(data: dict):
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
-    ws_clients.add(ws)
-    logger.info(f"WebSocket client connected. Total: {len(ws_clients)}")
+    runtime.ws_clients.add(ws)
+    logger.info(f"WebSocket client connected. Total: {len(runtime.ws_clients)}")
 
     # Send initial state
     await ws.send_str(json.dumps({"type": "full_snapshot", "state": _snapshot()}))
@@ -815,14 +741,14 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     # UI (and persisted/reloaded history) shows the agent that actually answered
     # rather than the gateway. Set per turn from the user's @mention before
     # routing; defaults to the gateway id until a chat turn arrives.
-    _reply_from = {"name": IO_GATEWAY_ID}
+    _reply_from = {"name": runtime.IO_GATEWAY_ID}
 
     def _persist_chat(role: str, content: str, agent_name: str = "main") -> None:
         """Best-effort write to chat_log. Never raises into the WS path."""
-        if db is None or not content:
+        if runtime.db is None or not content:
             return
         try:
-            db.write_chat_log(
+            runtime.db.write_chat_log(
                 ts=time.time(),
                 agent_name=agent_name,
                 role=role,
@@ -899,12 +825,12 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         Only used in the legacy `wactorz-monitor` (registry-None) mode; remove it
         when that entry point is retired from pyproject scripts.
         """
-        if not mqtt_client_ref:
+        if not runtime.mqtt_client_ref:
             await ws_reply("[system] Chat unavailable — no broker connection.")
             return
         who = "main" if content.startswith("/") else _parse_mention(content)[0]
         _persist_chat("user", content, who)
-        await mqtt_client_ref.publish(
+        await runtime.mqtt_client_ref.publish(
             "io/chat",
             json.dumps({"content": content, "from": "user", "timestamp": time.time()}),
             qos=1,
@@ -922,7 +848,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
                     elif msg_type == "chat":
                         content = (data.get("content") or "").strip()
-                        if content and registry is not None:
+                        if content and runtime.registry is not None:
                             # Attribute the whole turn to the agent it addresses
                             # (slash commands and un-mentioned text default to
                             # "main", matching _route_chat's own resolution) so the
@@ -970,8 +896,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                 break
     finally:
-        ws_clients.discard(ws)
-        logger.info(f"WebSocket client disconnected. Total: {len(ws_clients)}")
+        runtime.ws_clients.discard(ws)
+        logger.info(f"WebSocket client disconnected. Total: {len(runtime.ws_clients)}")
     return ws
 
 
@@ -987,7 +913,7 @@ async def handle_command(cmd: dict):
         return
 
     logger.info(f"[cmd] {command.upper()} -> {agent_id[:8]}")
-    if not mqtt_client_ref:
+    if not runtime.mqtt_client_ref:
         logger.warning("[cmd] No MQTT client available")
         return
 
@@ -995,12 +921,12 @@ async def handle_command(cmd: dict):
         {"command": command, "sender": "monitor-dashboard", "timestamp": time.time()}
     )
     try:
-        await mqtt_client_ref.publish(f"agents/{agent_id}/commands", payload)
+        await runtime.mqtt_client_ref.publish(f"agents/{agent_id}/commands", payload)
         add_log(
             {"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()}
         )
         if command in ("stop", "pause", "resume"):
-            state["agents"].get(agent_id, {})["state"] = (
+            runtime.state["agents"].get(agent_id, {})["state"] = (
                 "stopped" if command == "stop" else "paused" if command == "pause" else "running"
             )
             await broadcast({"type": "patch", "state": _snapshot()})
@@ -1021,11 +947,11 @@ def parse_topic(topic: str, payload_str: str):
 
     if parts[0] == "system" and len(parts) >= 2:
         if parts[1] == "health":
-            state["system_health"] = data
+            runtime.state["system_health"] = data
         elif parts[1] == "alerts":
-            state["alerts"].insert(0, data)
-            if len(state["alerts"]) > 50:
-                state["alerts"].pop()
+            runtime.state["alerts"].insert(0, data)
+            if len(runtime.state["alerts"]) > 50:
+                runtime.state["alerts"].pop()
         return {"type": "system", "subtype": parts[1], "data": data}
 
     if parts[0] == "agents" and len(parts) >= 3:
@@ -1065,14 +991,14 @@ def parse_topic(topic: str, payload_str: str):
 
         if metric == "status":
             update_agent(agent_id, "status", data)
-            if isinstance(data, dict) and agent_id in state["agents"]:
+            if isinstance(data, dict) and agent_id in runtime.state["agents"]:
                 if "name" in data:
-                    state["agents"][agent_id]["name"] = data["name"]
+                    runtime.state["agents"][agent_id]["name"] = data["name"]
                 if "state" in data:
-                    state["agents"][agent_id]["state"] = data["state"]
+                    runtime.state["agents"][agent_id]["state"] = data["state"]
                 if "protected" in data:
-                    state["agents"][agent_id]["protected"] = data["protected"]
-            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+                    runtime.state["agents"][agent_id]["protected"] = data["protected"]
+            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
             add_log(
                 {
                     "type": "status",
@@ -1085,8 +1011,8 @@ def parse_topic(topic: str, payload_str: str):
 
         elif metric == "heartbeat":
             update_agent(agent_id, "heartbeat", data)
-            if isinstance(data, dict) and agent_id in state["agents"]:
-                ag = state["agents"][agent_id]
+            if isinstance(data, dict) and agent_id in runtime.state["agents"]:
+                ag = runtime.state["agents"][agent_id]
                 ag["name"] = data.get("name", agent_id[:8])
                 ag["cpu"] = data.get("cpu", 0)
                 ag["mem"] = data.get("memory_mb", 0)
@@ -1097,19 +1023,23 @@ def parse_topic(topic: str, payload_str: str):
                 # Local agents don't set this field; absence means "local".
                 if data.get("node"):
                     ag["node"] = data["node"]
-            if agent_id in state["agents"]:
+            if agent_id in runtime.state["agents"]:
                 logger.info(
-                    f"[MQTT] Heartbeat: {state['agents'][agent_id].get('name', agent_id[:8])}"
+                    f"[MQTT] Heartbeat: {runtime.state['agents'][agent_id].get('name', agent_id[:8])}"
                 )
 
         elif metric == "metrics":
             update_agent(agent_id, "metrics", data)
-            if isinstance(data, dict) and agent_id in state["agents"]:
-                state["agents"][agent_id]["messages_processed"] = data.get("messages_processed", 0)
+            if isinstance(data, dict) and agent_id in runtime.state["agents"]:
+                runtime.state["agents"][agent_id]["messages_processed"] = data.get(
+                    "messages_processed", 0
+                )
                 if "cost_usd" in data:
-                    state["agents"][agent_id]["cost_usd"] = data.get("cost_usd", 0.0)
-                    state["agents"][agent_id]["input_tokens"] = data.get("input_tokens", 0)
-                    state["agents"][agent_id]["output_tokens"] = data.get("output_tokens", 0)
+                    runtime.state["agents"][agent_id]["cost_usd"] = data.get("cost_usd", 0.0)
+                    runtime.state["agents"][agent_id]["input_tokens"] = data.get("input_tokens", 0)
+                    runtime.state["agents"][agent_id]["output_tokens"] = data.get(
+                        "output_tokens", 0
+                    )
                     # Bank the spend durably so it survives the agent being
                     # deleted or hard-killed before its on_stop() can persist.
                     _record_lifetime_cost(agent_id, data.get("cost_usd"))
@@ -1118,7 +1048,7 @@ def parse_topic(topic: str, payload_str: str):
             # Log frames carry only the agent id; resolve the friendly name the
             # same way alert/completed do so the feed never shows a bare id.
             # `**data` last lets a payload that already includes a name win.
-            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
             add_log(
                 {
                     "type": "log",
@@ -1131,7 +1061,7 @@ def parse_topic(topic: str, payload_str: str):
         elif metric == "spawned":
             # Payload carries child_name/child_id, not name — resolve the (parent)
             # agent's name from state so the feed row isn't attributed to a bare id.
-            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
             add_log(
                 {
                     "type": "spawned",
@@ -1146,7 +1076,7 @@ def parse_topic(topic: str, payload_str: str):
             # Forward it to the chat panel as a live chat frame (in addition to
             # the dashboard feed). The frame is carried under "_push_chat";
             # mqtt_listener does the broadcast since parse_topic is synchronous.
-            sender = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            sender = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
             content = ""
             if isinstance(data, dict):
                 content = (data.get("content") or data.get("text") or "").strip()
@@ -1178,18 +1108,22 @@ def parse_topic(topic: str, payload_str: str):
             return {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
         elif metric == "completed":
             update_agent(agent_id, "last_completed", data)
-            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
             add_log(
                 {"type": "completed", "agent_id": agent_id, "name": name, "timestamp": time.time()}
             )
         elif metric == "alert":
             if isinstance(data, dict):
                 data["agent_id"] = agent_id
-                data.setdefault("name", state["agents"].get(agent_id, {}).get("name", agent_id[:8]))
-            state["alerts"].insert(0, data if isinstance(data, dict) else {"agent_id": agent_id})
-            if len(state["alerts"]) > 50:
-                state["alerts"].pop()
-            name = state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+                data.setdefault(
+                    "name", runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+                )
+            runtime.state["alerts"].insert(
+                0, data if isinstance(data, dict) else {"agent_id": agent_id}
+            )
+            if len(runtime.state["alerts"]) > 50:
+                runtime.state["alerts"].pop()
+            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
             severity = data.get("severity", "warning") if isinstance(data, dict) else "warning"
             add_log(
                 {
@@ -1206,7 +1140,7 @@ def parse_topic(topic: str, payload_str: str):
     if parts[0] == "nodes" and len(parts) >= 3 and parts[2] == "heartbeat":
         node_name = parts[1]
         if isinstance(data, dict):
-            state["nodes"][node_name] = {
+            runtime.state["nodes"][node_name] = {
                 "node": node_name,
                 "agents": data.get("agents", []),
                 "last_seen": time.time(),
@@ -1245,10 +1179,10 @@ _lifetime_loaded = False
 def _ensure_lifetime_loaded() -> None:
     """Lazily hydrate the in-memory ledger from SQLite once db is injected."""
     global _lifetime_loaded
-    if _lifetime_loaded or db is None:
+    if _lifetime_loaded or runtime.db is None:
         return
     try:
-        stored = db.kv_get("_system", _LIFETIME_LEDGER_KEY)
+        stored = runtime.db.kv_get("_system", _LIFETIME_LEDGER_KEY)
         if isinstance(stored, dict):
             for k, v in stored.items():  # pyright: ignore[reportGeneralTypeIssues]
                 try:
@@ -1284,9 +1218,9 @@ def _record_lifetime_cost(agent_id: str, cost_usd) -> None:
     if cost <= _lifetime_cost.get(agent_id, 0.0):
         return
     _lifetime_cost[agent_id] = cost
-    if db is not None:
+    if runtime.db is not None:
         try:
-            db.kv_set("_system", _LIFETIME_LEDGER_KEY, _lifetime_cost)
+            runtime.db.kv_set("_system", _LIFETIME_LEDGER_KEY, _lifetime_cost)
         except Exception:
             pass
 
@@ -1320,10 +1254,12 @@ def _reset_actor_cost(actor) -> None:
 
 def _historical_cost_usd(live_names: set) -> float:
     """Sum _final_cost for agents not in live_names."""
-    if db is None:
+    if runtime.db is None:
         return 0.0
     try:
-        rows = db.conn.execute("SELECT value FROM kv_store WHERE key = '_final_cost'").fetchall()
+        rows = runtime.db.conn.execute(
+            "SELECT value FROM kv_store WHERE key = '_final_cost'"
+        ).fetchall()
         total = 0.0
         for row in rows:
             try:
@@ -1339,10 +1275,10 @@ def _historical_cost_usd(live_names: set) -> float:
 
 def _historical_messages(live_names: set) -> int:
     """Sum _messages_processed for agents not in live_names."""
-    if db is None:
+    if runtime.db is None:
         return 0
     try:
-        rows = db.conn.execute(
+        rows = runtime.db.conn.execute(
             "SELECT agent, value FROM kv_store WHERE key = '_messages_processed'"
         ).fetchall()
         total = 0
@@ -1359,7 +1295,7 @@ def _historical_messages(live_names: set) -> int:
 
 
 def _snapshot() -> dict:
-    if _hard_resetting:
+    if runtime._hard_resetting:
         return {
             "agents": [],
             "nodes": [],
@@ -1368,7 +1304,7 @@ def _snapshot() -> dict:
             "total_cost_usd": 0,
             "total_messages": 0,
         }
-    for nd in state["nodes"].values():
+    for nd in runtime.state["nodes"].values():
         nd["online"] = _node_online(nd.get("last_seen", 0))
 
     # The headline totals must match what the dashboard actually shows on the
@@ -1379,8 +1315,8 @@ def _snapshot() -> dict:
     # cost lives on the actor object / SQLite rather than in an MQTT metrics frame.
     actors_by_id: dict = {}
     actors_by_name: dict = {}
-    if registry is not None:
-        for a in registry.all_actors():
+    if runtime.registry is not None:
+        for a in runtime.registry.all_actors():
             actors_by_id[a.actor_id] = a
             actors_by_name[a.name] = a
 
@@ -1388,7 +1324,7 @@ def _snapshot() -> dict:
     live_cost = 0.0
     live_msgs = 0
     seen_ids: set = set()
-    for aid, ag in state["agents"].items():
+    for aid, ag in runtime.state["agents"].items():
         seen_ids.add(aid)
         name = ag.get("name", "")
         live_names.add(name)
@@ -1428,11 +1364,11 @@ def _snapshot() -> dict:
     )
     total_msgs = live_msgs + _historical_messages(live_names)
     return {
-        "agents": list(state["agents"].values()),
-        "nodes": list(state["nodes"].values()),
-        "alerts": state["alerts"][:10],
-        "log_feed": state["log_feed"][:20],
-        "system_health": state["system_health"],
+        "agents": list(runtime.state["agents"].values()),
+        "nodes": list(runtime.state["nodes"].values()),
+        "alerts": runtime.state["alerts"][:10],
+        "log_feed": runtime.state["log_feed"][:20],
+        "system_health": runtime.state["system_health"],
         "total_cost_usd": round(total_cost, 6),
         "total_messages": total_msgs,
     }
@@ -1465,29 +1401,28 @@ async def _set_mqtt_status(connected: bool) -> None:
 
 
 async def mqtt_listener():
-    global mqtt_client_ref
-    logger.info(f"Connecting to MQTT {MQTT_BROKER}:{MQTT_PORT}...")
+    logger.info(f"Connecting to MQTT {runtime.MQTT_BROKER}:{runtime.MQTT_PORT}...")
     try:
         while True:
             try:
-                async with mqtt_client(MQTT_BROKER, MQTT_PORT) as client:
-                    mqtt_client_ref = client
+                async with mqtt_client(runtime.MQTT_BROKER, runtime.MQTT_PORT) as client:
+                    runtime.mqtt_client_ref = client
                     logger.info("MQTT connected.")
 
-                    if registry is not None:
+                    if runtime.registry is not None:
                         await client.publish(
-                            f"agents/{IO_GATEWAY_ID}/spawn",
+                            f"agents/{runtime.IO_GATEWAY_ID}/spawn",
                             json.dumps(
                                 {
-                                    "agentId": IO_GATEWAY_ID,
-                                    "agentName": IO_GATEWAY_ID,
+                                    "agentId": runtime.IO_GATEWAY_ID,
+                                    "agentName": runtime.IO_GATEWAY_ID,
                                     "agentType": "gateway",
                                     "timestamp": time.time(),
                                 }
                             ),
                         )
 
-                    for topic in MQTT_TOPICS:
+                    for topic in runtime.MQTT_TOPICS:
                         await client.subscribe(topic)
 
                     await _set_mqtt_status(True)
@@ -1497,7 +1432,7 @@ async def mqtt_listener():
                         payload = message.payload.decode(errors="replace")
 
                         if topic == "io/chat":
-                            if registry is not None:
+                            if runtime.registry is not None:
                                 try:
                                     asyncio.create_task(handle_chat_mqtt(json.loads(payload)))
                                 except Exception as exc:
@@ -1506,7 +1441,7 @@ async def mqtt_listener():
 
                         event: dict[str, Any] | None = parse_topic(topic, payload)
                         await _broadcast_mqtt_msg(topic, payload)
-                        if event and not _hard_resetting:
+                        if event and not runtime._hard_resetting:
                             metric = event.get("metric", "")
                             log_event = None if metric == "heartbeat" else event
                             await broadcast(
@@ -1519,8 +1454,8 @@ async def mqtt_listener():
                             push = event.get("_push_chat")
                             if push:
                                 try:
-                                    if db is not None and push.get("content"):
-                                        db.write_chat_log(
+                                    if runtime.db is not None and push.get("content"):
+                                        runtime.db.write_chat_log(
                                             ts=push.get("timestamp", time.time()),
                                             agent_name=push.get("from", "agent"),
                                             role="assistant",
@@ -1530,7 +1465,7 @@ async def mqtt_listener():
                                     logger.debug(f"[chat-bridge] persist failed: {_exc}")
 
             except Exception as e:
-                mqtt_client_ref = None
+                runtime.mqtt_client_ref = None
                 await _set_mqtt_status(False)
                 logger.warning(f"MQTT error: {e}. Reconnecting in 5s...")
                 await asyncio.sleep(5)
@@ -1539,7 +1474,7 @@ async def mqtt_listener():
         # doesn't fire after the event loop closes (avoids RuntimeError noise).
         import gc
 
-        mqtt_client_ref = None
+        runtime.mqtt_client_ref = None
         gc.collect()
 
 
@@ -1557,7 +1492,7 @@ async def _check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
     for i in range(attempts):
         try:
             _, writer = await asyncio.wait_for(
-                asyncio.open_connection(MQTT_BROKER, MQTT_PORT), timeout=3
+                asyncio.open_connection(runtime.MQTT_BROKER, runtime.MQTT_PORT), timeout=3
             )
             writer.close()
             try:
@@ -1570,7 +1505,7 @@ async def _check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
             if i < attempts - 1:
                 await asyncio.sleep(delay)
     logger.error(
-        f"[startup] MQTT broker {MQTT_BROKER}:{MQTT_PORT} "
+        f"[startup] MQTT broker {runtime.MQTT_BROKER}:{runtime.MQTT_PORT} "
         f"unreachable after {attempts} tries — {last}"
     )
     return False
@@ -1579,12 +1514,12 @@ async def _check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
 async def _check_ws_port() -> bool:
     """Return True if WS_PORT is free to bind."""
     try:
-        server = await asyncio.start_server(lambda r, w: None, "0.0.0.0", WS_PORT)
+        server = await asyncio.start_server(lambda r, w: None, "0.0.0.0", runtime.WS_PORT)
         server.close()
         await server.wait_closed()
         return True
     except OSError as exc:
-        logger.error(f"[startup] Port {WS_PORT} already in use — {exc}")
+        logger.error(f"[startup] Port {runtime.WS_PORT} already in use — {exc}")
         return False
 
 
@@ -1705,7 +1640,8 @@ async def static_handler(request: web.Request) -> Response:
                     # Point the WebSocket at the monitor's actual port (WS_PORT),
                     # not HA's 8123. WS_PORT is where the /ws proxy lives.
                     content = content.replace(
-                        "`ws://${location.host}/ws`", f"`ws://${{location.hostname}}:{WS_PORT}/ws`"
+                        "`ws://${location.host}/ws`",
+                        f"`ws://${{location.hostname}}:{runtime.WS_PORT}/ws`",
                     )
 
                     return _with_no_cache(
@@ -1764,10 +1700,10 @@ def _actor_payload(ag: dict) -> dict:
 
 def _final_cost_from_db(name: str):
     """Read the persisted _final_cost cost_usd for an agent name, or None."""
-    if db is None or not name:
+    if runtime.db is None or not name:
         return None
     try:
-        row = db.conn.execute(
+        row = runtime.db.conn.execute(
             "SELECT value FROM kv_store WHERE agent=? AND key='_final_cost'",
             (name,),
         ).fetchone()
@@ -1868,9 +1804,9 @@ async def cost_reset_handler(request: web.Request) -> Response:
         # Clear the in-memory lifetime ledger so max() doesn't pin the display
         # to pre-reset values for the rest of this process lifetime.
         _lifetime_cost.clear()
-        if db is not None:
+        if runtime.db is not None:
             try:
-                db.kv_delete("_system", _LIFETIME_LEDGER_KEY)
+                runtime.db.kv_delete("_system", _LIFETIME_LEDGER_KEY)
             except Exception:
                 pass
         return web.json_response({"ok": True, **info})
@@ -1880,7 +1816,7 @@ async def cost_reset_handler(request: web.Request) -> Response:
 
 async def send_message_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
-    if registry is None:
+    if runtime.registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
     try:
         data = await request.json()
@@ -1889,7 +1825,7 @@ async def send_message_handler(request: web.Request) -> Response:
     content = data.get("content", "").strip()
     if not content:
         return web.json_response({"error": "content required"}, status=400)
-    actor = registry.get(actor_id) or registry.find_by_name(actor_id)
+    actor = runtime.registry.get(actor_id) or runtime.registry.find_by_name(actor_id)
     if actor is None:
         return web.json_response({"error": "actor not found"}, status=404)
     # This endpoint names an explicit target, but _route_chat re-derives the
@@ -1906,11 +1842,11 @@ async def delete_actor_handler(request: web.Request) -> Response:
     # Resolve the dashboard's record first so remote agents (which aren't in
     # the local registry) can still be deleted via this endpoint. The earlier
     # 503/404 short-circuit made remote deletes impossible.
-    record = state["agents"].get(actor_id) or {}
+    record = runtime.state["agents"].get(actor_id) or {}
     if not record:
         # Fall back to local-registry lookup so a name-based ID still works.
-        if registry is not None:
-            actor = registry.get(actor_id) or registry.find_by_name(actor_id)
+        if runtime.registry is not None:
+            actor = runtime.registry.get(actor_id) or runtime.registry.find_by_name(actor_id)
             if actor is None:
                 return web.json_response({"error": "actor not found"}, status=404)
             if getattr(actor, "protected", False):
@@ -1973,16 +1909,17 @@ async def reset_handler(request: web.Request) -> Response:
 
     if scope == "all":
         # Block incoming heartbeats, stop all actors, wipe disk, clear memory
-        global _hard_resetting
-        _hard_resetting = True
+        runtime._hard_resetting = True
         # Wrap the whole teardown so _hard_resetting ALWAYS resets — otherwise a
         # mid-wipe exception leaves it True forever and every incoming heartbeat
         # stays blocked, freezing the dashboard until the process restarts.
         try:
             supervisor = (
-                getattr(registry, "_supervisor_ref", None) if registry is not None else None
+                getattr(runtime.registry, "_supervisor_ref", None)
+                if runtime.registry is not None
+                else None
             )
-            all_actors = list(registry.all_actors()) if registry is not None else []
+            all_actors = list(runtime.registry.all_actors()) if runtime.registry is not None else []
 
             # Factory reset keeps the protected system actors and the HA system
             # agents; only user- and catalog-spawned agents are stopped.
@@ -2005,7 +1942,7 @@ async def reset_handler(request: web.Request) -> Response:
             # but never a fresh-boot or protected one.
             dash_ids = [
                 aid
-                for aid, ag in state["agents"].items()
+                for aid, ag in runtime.state["agents"].items()
                 if not _kept(ag.get("name", ""), ag.get("protected", False))
                 and aid not in kept_ids
                 and ag.get("name") not in kept_names
@@ -2019,24 +1956,24 @@ async def reset_handler(request: web.Request) -> Response:
                     supervisor.release(actor.name)
             await asyncio.gather(*[actor.stop() for actor in stoppable], return_exceptions=True)
             await asyncio.gather(
-                *[registry.unregister(a.actor_id) for a in stoppable if registry],
+                *[runtime.registry.unregister(a.actor_id) for a in stoppable if runtime.registry],
                 return_exceptions=True,
             )
 
             # Stop agents living on runner nodes (not in this registry) and clear the
             # retained spawn directives that would otherwise replay on reconnect.
             # Harmless when there are no nodes.
-            node_names = set(state["nodes"].keys())
+            node_names = set(runtime.state["nodes"].keys())
             main_actor = _find_main()
             if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
                 for cfg in (main_actor._get_spawn_registry() or {}).values():
                     n = (cfg.get("node") or "").strip()
                     if n:
                         node_names.add(n)
-            if mqtt_client_ref and node_names:
+            if runtime.mqtt_client_ref and node_names:
                 await asyncio.gather(
                     *[
-                        mqtt_client_ref.publish(
+                        runtime.mqtt_client_ref.publish(
                             f"nodes/{n}/stop_all", json.dumps({"reason": "wipe everything"}), qos=1
                         )
                         for n in node_names
@@ -2045,7 +1982,7 @@ async def reset_handler(request: web.Request) -> Response:
                 )
                 await asyncio.gather(
                     *[
-                        mqtt_client_ref.publish(f"nodes/{n}/spawn", b"", retain=True)
+                        runtime.mqtt_client_ref.publish(f"nodes/{n}/spawn", b"", retain=True)
                         for n in node_names
                     ],
                     return_exceptions=True,
@@ -2060,7 +1997,7 @@ async def reset_handler(request: web.Request) -> Response:
             )
             for aid in agent_ids:
                 _mark_deleted(aid)
-                state["agents"].pop(aid, None)
+                runtime.state["agents"].pop(aid, None)
 
             # Clear the live spawn registry + retained desired_state so neither a
             # restart nor a runner reconnect can resurrect the wiped agents. Runs
@@ -2097,10 +2034,10 @@ async def reset_handler(request: web.Request) -> Response:
                 reset_global_cost()
             except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
-            state["agents"].clear()
-            state["nodes"].clear()
-            state["alerts"].clear()
-            state["log_feed"].clear()
+            runtime.state["agents"].clear()
+            runtime.state["nodes"].clear()
+            runtime.state["alerts"].clear()
+            runtime.state["log_feed"].clear()
             await broadcast(
                 {
                     "type": "reset",
@@ -2117,7 +2054,7 @@ async def reset_handler(request: web.Request) -> Response:
                 }
             )
         finally:
-            _hard_resetting = False
+            runtime._hard_resetting = False
         return web.json_response({"status": "ok", "scope": "all", "agent": None})
     if scope == "chat":
         _reset.reset_chat(agent)
@@ -2125,7 +2062,7 @@ async def reset_handler(request: web.Request) -> Response:
         # only clears the persisted chat_log/kv, so without this the agent still
         # "remembers" the conversation (and re-persists it on the next turn) until
         # a restart — the same live-vs-disk gap the metrics scope guards against.
-        live_actors = list(registry.all_actors()) if registry is not None else []
+        live_actors = list(runtime.registry.all_actors()) if runtime.registry is not None else []
         for actor in live_actors:
             if agent and actor.name != agent:
                 continue
@@ -2144,7 +2081,7 @@ async def reset_handler(request: web.Request) -> Response:
         # only clears the persisted kv snapshot, so without this the next
         # heartbeat re-reports the old totals and the dashboard looks unchanged
         # until a restart. Scoped to metrics/cost fields only (not history).
-        live_actors = list(registry.all_actors()) if registry is not None else []
+        live_actors = list(runtime.registry.all_actors()) if runtime.registry is not None else []
         for actor in live_actors:
             if agent and actor.name != agent:
                 continue
@@ -2178,23 +2115,25 @@ async def reset_handler(request: web.Request) -> Response:
         _reset.reset_logs()
         # The activity feed mirrors the log files we just truncated, so drop the
         # in-memory entries too — otherwise the UI keeps showing stale lines.
-        state["log_feed"].clear()
+        runtime.state["log_feed"].clear()
 
     # Clear in-memory dashboard cost/message state for the affected agents.
     # Scoped to "metrics" only — clearing chat history must not zero cost/
     # message counters or wipe the alerts/activity feed.
     if scope == "metrics":
         if agent:
-            aid = next((k for k, v in state["agents"].items() if v.get("name") == agent), None)
+            aid = next(
+                (k for k, v in runtime.state["agents"].items() if v.get("name") == agent), None
+            )
             if aid:
-                state["agents"][aid].pop("cost_usd", None)
-                state["agents"][aid].pop("messages_processed", None)
+                runtime.state["agents"][aid].pop("cost_usd", None)
+                runtime.state["agents"][aid].pop("messages_processed", None)
         else:
-            for aid in state["agents"]:
-                state["agents"][aid].pop("cost_usd", None)
-                state["agents"][aid].pop("messages_processed", None)
-            state["alerts"].clear()
-            state["log_feed"].clear()
+            for aid in runtime.state["agents"]:
+                runtime.state["agents"][aid].pop("cost_usd", None)
+                runtime.state["agents"][aid].pop("messages_processed", None)
+            runtime.state["alerts"].clear()
+            runtime.state["log_feed"].clear()
 
     await broadcast({"type": "reset", "scope": scope, "agent": agent, "state": _snapshot()})
     return web.json_response({"status": "ok", "scope": scope, "agent": agent})
@@ -2202,15 +2141,15 @@ async def reset_handler(request: web.Request) -> Response:
 
 async def pause_actor_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
-    if registry is None:
+    if runtime.registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
-    actor = registry.get(actor_id) or registry.find_by_name(actor_id)
+    actor = runtime.registry.get(actor_id) or runtime.registry.find_by_name(actor_id)
     if actor is None:
         return web.json_response({"error": "actor not found"}, status=404)
     if getattr(actor, "protected", False):
         return web.json_response({"error": "actor is protected"}, status=403)
-    if mqtt_client_ref:
-        await mqtt_client_ref.publish(
+    if runtime.mqtt_client_ref:
+        await runtime.mqtt_client_ref.publish(
             f"agents/{actor_id}/commands",
             json.dumps({"command": "pause", "sender": "api", "timestamp": time.time()}),
         )
@@ -2219,15 +2158,15 @@ async def pause_actor_handler(request: web.Request) -> Response:
 
 async def resume_actor_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
-    if registry is None:
+    if runtime.registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
-    actor = registry.get(actor_id) or registry.find_by_name(actor_id)
+    actor = runtime.registry.get(actor_id) or runtime.registry.find_by_name(actor_id)
     if actor is None:
         return web.json_response({"error": "actor not found"}, status=404)
     if getattr(actor, "protected", False):
         return web.json_response({"error": "actor is protected"}, status=403)
-    if mqtt_client_ref:
-        await mqtt_client_ref.publish(
+    if runtime.mqtt_client_ref:
+        await runtime.mqtt_client_ref.publish(
             f"agents/{actor_id}/commands",
             json.dumps({"command": "resume", "sender": "api", "timestamp": time.time()}),
         )
@@ -2236,10 +2175,10 @@ async def resume_actor_handler(request: web.Request) -> Response:
 
 async def actor_metrics_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
-    ag = state["agents"].get(actor_id)
+    ag = runtime.state["agents"].get(actor_id)
     actor = None
-    if registry is not None:
-        actor = registry.get(actor_id) or registry.find_by_name(actor_id)
+    if runtime.registry is not None:
+        actor = runtime.registry.get(actor_id) or runtime.registry.find_by_name(actor_id)
     if actor is None and ag is None:
         return web.json_response({"error": "actor not found"}, status=404)
     metrics_obj = getattr(actor, "metrics", None) if actor else None
@@ -2262,7 +2201,7 @@ async def actor_metrics_handler(request: web.Request) -> Response:
 
 async def rest_chat_handler(request: web.Request) -> Response:
     """POST /chat — fire-and-forget a message to a named agent."""
-    if registry is None:
+    if runtime.registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
     try:
         data = await request.json()
@@ -2272,7 +2211,7 @@ async def rest_chat_handler(request: web.Request) -> Response:
     agent_name = data.get("agent_name", "main-actor")
     if not message:
         return web.json_response({"error": "message required"}, status=400)
-    target = registry.find_by_name(agent_name)
+    target = runtime.registry.find_by_name(agent_name)
     if target is None:
         return web.json_response({"error": f"agent '{agent_name}' not found"}, status=404)
     # As above: route to the named agent, since _route_chat would otherwise
@@ -2300,9 +2239,9 @@ async def rest_chat_stop_handler(request: web.Request) -> Response:
 
     # legacy MQTT: tell the IOAgent to stop whatever it is generating.
     published = False
-    if registry is None and mqtt_client_ref:
+    if runtime.registry is None and runtime.mqtt_client_ref:
         try:
-            await mqtt_client_ref.publish(
+            await runtime.mqtt_client_ref.publish(
                 "io/chat/control",
                 json.dumps({"action": "stop"}),
                 qos=1,
@@ -2330,12 +2269,12 @@ async def actors_handler(request: web.Request) -> Response:
     # to distinguish local vs remote agents: any agent absent from this response
     # but present via MQTT heartbeat with a "node" field is a remote agent and
     # must NOT be evicted by the 15-second REST reconcile cycle.
-    if registry is not None:
+    if runtime.registry is not None:
         result = []
-        for actor in registry.all_actors():
+        for actor in runtime.registry.all_actors():
             if _is_deleted(actor.actor_id):
                 continue
-            ag = state["agents"].get(actor.actor_id, {})
+            ag = runtime.state["agents"].get(actor.actor_id, {})
             result.append(
                 {
                     "id": actor.actor_id,
@@ -2352,12 +2291,12 @@ async def actors_handler(request: web.Request) -> Response:
                 }
             )
         return web.json_response(result)
-    return web.json_response([_actor_payload(ag) for ag in state["agents"].values()])
+    return web.json_response([_actor_payload(ag) for ag in runtime.state["agents"].values()])
 
 
 async def actor_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
-    ag = state["agents"].get(actor_id)
+    ag = runtime.state["agents"].get(actor_id)
     if ag is None:
         return web.json_response({"error": "actor not found"}, status=404)
     return web.json_response(_actor_payload(ag))
@@ -2369,16 +2308,16 @@ async def actor_history_handler(request: web.Request) -> Response:
     # Resolve actor: the frontend sends the agent NAME (not UUID), so try
     # direct UUID lookup first, then fall back to name-based lookup.
     actor = None
-    if registry is not None:
-        actor = registry.get(actor_id) or registry.find_by_name(actor_id)
+    if runtime.registry is not None:
+        actor = runtime.registry.get(actor_id) or runtime.registry.find_by_name(actor_id)
 
     if actor is not None and hasattr(actor, "recall"):
         history = actor.recall("conversation_history", [])
-    elif db is not None:
+    elif runtime.db is not None:
         # Actor not in registry (deleted or name-only lookup) — read from SQLite.
         # actor_id might be a display name (e.g. "main") — try it directly.
         try:
-            row = db.conn.execute(
+            row = runtime.db.conn.execute(
                 "SELECT value FROM kv_store WHERE agent=? AND key='conversation_history'",
                 (actor_id,),
             ).fetchone()
@@ -2401,14 +2340,14 @@ async def chat_log_handler(request: web.Request) -> Response:
       since   — Unix timestamp float, only return rows newer than this
       limit   — max rows to return (default 200, max 1000)
     """
-    if db is None:
+    if runtime.db is None:
         return web.json_response([], status=200)
     try:
         agent = request.rel_url.query.get("agent")
         role = request.rel_url.query.get("role")
         since = float(request.rel_url.query["since"]) if "since" in request.rel_url.query else None
         limit = min(int(request.rel_url.query.get("limit", 200)), 1000)
-        rows = db.query_chat_log(agent_name=agent, role=role, since=since, limit=limit)
+        rows = runtime.db.query_chat_log(agent_name=agent, role=role, since=since, limit=limit)
         return web.json_response(rows)
     except Exception as exc:
         return web.json_response({"error": str(exc)}, status=500)
@@ -2422,7 +2361,7 @@ async def config_handler(request: web.Request) -> Response:
     # The /ws proxy is served by *this* server, so point the frontend at the
     # monitor's actual port (WS_PORT), not a hardcoded one.
     raw_host = request.host.split(":")[0]
-    ws_host = f"{raw_host}:{WS_PORT}"
+    ws_host = f"{raw_host}:{runtime.WS_PORT}"
     protocol = "wss" if request.secure else "ws"
 
     ws_url = f"{protocol}://{ws_host}/ws"
@@ -2462,12 +2401,12 @@ async def feed_handler(request: web.Request) -> Response:
     where nothing has been written yet) so existing users still see their
     pre-upgrade history on first launch.
     """
-    if db is None:
+    if runtime.db is None:
         return web.json_response([])
     try:
         # Primary path — persistent chat_log with real timestamps.
         try:
-            rows = db.query_chat_log(limit=50)
+            rows = runtime.db.query_chat_log(limit=50)
         except Exception as exc:
             logger.warning(f"[feed] chat_log query failed: {exc}")
             rows = []
@@ -2495,7 +2434,7 @@ async def feed_handler(request: web.Request) -> Response:
         # until new chat turns start populating chat_log. Synthesises a
         # timestamp by anchoring the last entry to "now" and walking backwards
         # in 1-second steps, so at least entries are ordered consistently.
-        kv_rows = db.conn.execute(
+        kv_rows = runtime.db.conn.execute(
             "SELECT agent, value FROM kv_store WHERE key='conversation_history'"
         ).fetchall()
         items = []
@@ -2542,9 +2481,9 @@ async def main(exit_on_failure: bool = False):
     if not mqtt_ok or not port_ok:
         msg = []
         if not mqtt_ok:
-            msg.append(f"MQTT broker unreachable ({MQTT_BROKER}:{MQTT_PORT})")
+            msg.append(f"MQTT broker unreachable ({runtime.MQTT_BROKER}:{runtime.MQTT_PORT})")
         if not port_ok:
-            msg.append(f"Port {WS_PORT} already in use")
+            msg.append(f"Port {runtime.WS_PORT} already in use")
         logger.error(f"[startup] Cannot start: {'; '.join(msg)}")
         if exit_on_failure:
             raise SystemExit(1)
@@ -2633,11 +2572,11 @@ async def main(exit_on_failure: bool = False):
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", WS_PORT)
+    site = web.TCPSite(runner, "0.0.0.0", runtime.WS_PORT)
     await site.start()
-    logger.info(f"Monitor  → http://localhost:{WS_PORT}/  [chat: {_chat_mode()}]")
+    logger.info(f"Monitor  → http://localhost:{runtime.WS_PORT}/  [chat: {_chat_mode()}]")
     if DOCS_SITE.is_dir():
-        logger.info(f"Docs     → http://localhost:{WS_PORT}/docs/")
+        logger.info(f"Docs     → http://localhost:{runtime.WS_PORT}/docs/")
 
     await mqtt_listener()
 
@@ -2691,3 +2630,44 @@ if __name__ == "__main__":
     this_module.WS_PORT = args.ws_port  # pyright: ignore[reportAttributeAccessIssue]
 
     cli_main()
+
+
+# ── Compatibility façade ──────────────────────────────────────────────────────
+# The shared mutable state lives in wactorz.monitor.runtime. External code and
+# tests keep using this module's attributes (`monitor_server.registry = fake`);
+# forward both reads and writes so injection is seen by every handler.
+_RUNTIME_FORWARD = frozenset(
+    {
+        "registry",
+        "db",
+        "state",
+        "ws_clients",
+        "mqtt_client_ref",
+        "_hard_resetting",
+        "_deleted_agent_ids",
+        "_DELETED_IDS_MAX",
+        "MQTT_BROKER",
+        "MQTT_PORT",
+        "MQTT_WS_PORT",
+        "WS_PORT",
+        "MQTT_TOPICS",
+        "IO_GATEWAY_ID",
+    }
+)
+
+
+def __getattr__(name: str):
+    if name in _RUNTIME_FORWARD:
+        return getattr(runtime, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+class _FacadeModule(type(sys.modules[__name__])):  # pylint: disable=too-few-public-methods
+    def __setattr__(self, name: str, value) -> None:
+        if name in _RUNTIME_FORWARD:
+            setattr(runtime, name, value)
+        else:
+            super().__setattr__(name, value)
+
+
+sys.modules[__name__].__class__ = _FacadeModule

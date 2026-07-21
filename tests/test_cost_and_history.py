@@ -273,17 +273,17 @@ class LifetimeCostLedgerTest(unittest.TestCase):
 
         self._ms = ms
         self._orig_db = ms.db
-        self._orig_ledger = dict(ms._lifetime_cost)
-        self._orig_loaded = ms._lifetime_loaded
-        ms._lifetime_cost.clear()
-        ms._lifetime_loaded = False
+        self._orig_ledger = dict(ms.lifetime_cost)
+        self._orig_loaded = ms.lifetime_loaded
+        ms.lifetime_cost.clear()
+        ms.lifetime_loaded = False
         ms.db = _KVStub()
 
     def tearDown(self):
         self._ms.db = self._orig_db
-        self._ms._lifetime_cost.clear()
-        self._ms._lifetime_cost.update(self._orig_ledger)
-        self._ms._lifetime_loaded = self._orig_loaded
+        self._ms.lifetime_cost.clear()
+        self._ms.lifetime_cost.update(self._orig_ledger)
+        self._ms.lifetime_loaded = self._orig_loaded
 
     def test_records_and_totals_cost(self):
         self._ms.record_lifetime_cost("a1", 0.05)
@@ -311,13 +311,13 @@ class LifetimeCostLedgerTest(unittest.TestCase):
     def test_persists_to_db_and_reloads(self):
         self._ms.record_lifetime_cost("a1", 0.07)
         # Simulate a monitor restart: drop in-memory state, keep the db.
-        self._ms._lifetime_cost.clear()
-        self._ms._lifetime_loaded = False
+        self._ms.lifetime_cost.clear()
+        self._ms.lifetime_loaded = False
         self.assertAlmostEqual(self._ms.lifetime_cost_total(), 0.07, places=6)
 
     def test_no_db_is_safe(self):
         self._ms.db = None
-        self._ms._lifetime_loaded = False
+        self._ms.lifetime_loaded = False
         self._ms.record_lifetime_cost("a1", 0.05)  # must not raise
         self.assertEqual(self._ms.lifetime_cost_total(), 0.05)
 
@@ -380,20 +380,20 @@ class SnapshotTotalsTest(unittest.TestCase):
         self._orig_db = ms.db
         self._orig_reg = ms.registry
         self._orig_agents = dict(ms.state["agents"])
-        self._orig_ledger = dict(ms._lifetime_cost)
-        self._orig_loaded = ms._lifetime_loaded
+        self._orig_ledger = dict(ms.lifetime_cost)
+        self._orig_loaded = ms.lifetime_loaded
         ms.db = None  # no historical / no ledger persistence
-        ms._lifetime_cost.clear()
-        ms._lifetime_loaded = True  # skip db hydrate
+        ms.lifetime_cost.clear()
+        ms.lifetime_loaded = True  # skip db hydrate
         ms.state["agents"] = {}
 
     def tearDown(self):
         self._ms.db = self._orig_db
         self._ms.registry = self._orig_reg
         self._ms.state["agents"] = self._orig_agents
-        self._ms._lifetime_cost.clear()
-        self._ms._lifetime_cost.update(self._orig_ledger)
-        self._ms._lifetime_loaded = self._orig_loaded
+        self._ms.lifetime_cost.clear()
+        self._ms.lifetime_cost.update(self._orig_ledger)
+        self._ms.lifetime_loaded = self._orig_loaded
 
     def test_sums_all_visible_agents_when_no_registry(self):
         self._ms.registry = None

@@ -36,7 +36,7 @@ from aiohttp.typedefs import Handler
 from ._bootstrap import WACTORZ_BOOTSTRAP  # noqa: F401 # pylint: disable=unused-import
 from .agents.main_actor import MainActor
 from .core.mqtt import mqtt_client
-from .monitor import events, runtime, static_site
+from .monitor import cost, events, runtime, static_site
 
 Response = web.Response | web.FileResponse | web.StreamResponse
 
@@ -917,143 +917,6 @@ async def handle_command(cmd: dict):
         logger.error(f"[cmd] Publish failed: {e}")
 
 
-# ── Durable lifetime cost ledger ────────────────────────────────────────────
-# The headline total cost must never drop when an agent goes away. The per-agent
-# _final_cost rows that feed _historical_cost_usd() are purged on permanent
-# delete (kv_purge_agent) and are never written on a hard kill — an addon update
-# restarts the container, so an in-flight agent's on_stop() never runs. A total
-# computed purely from live actors + surviving _final_cost rows therefore leaks
-# spend whenever an agent is deleted or killed mid-life.
-#
-# Every actor publishes its cumulative cost_usd over MQTT on each heartbeat
-# (~10s), so the monitor sees the spend long before the agent disappears. We bank
-# each actor's highest-reported cost into a monotonic ledger keyed by the stable
-# actor_id and persist it under the _system agent in SQLite. Deletion and hard
-# kills cannot erase what was already banked; keying by actor_id stops a
-# respawned agent from double-counting.
-_LIFETIME_LEDGER_KEY = "_lifetime_cost_ledger"
-_lifetime_cost: dict = {}
-_lifetime_loaded = False
-
-
-def ensure_lifetime_loaded() -> None:
-    """Lazily hydrate the in-memory ledger from SQLite once db is injected."""
-    global _lifetime_loaded
-    if _lifetime_loaded or runtime.db is None:
-        return
-    try:
-        stored = runtime.db.kv_get("_system", _LIFETIME_LEDGER_KEY)
-        if isinstance(stored, dict):
-            for k, v in stored.items():  # pyright: ignore[reportGeneralTypeIssues]
-                try:
-                    _lifetime_cost[k] = float(v)
-                except (TypeError, ValueError):
-                    pass
-    except Exception:
-        pass
-    _lifetime_loaded = True
-
-
-def record_lifetime_cost(agent_id: str, cost_usd) -> None:
-    """Bank an agent's reported lifetime cost as a monotonic high-water mark.
-    Persisted durably so deletion / hard kills never drop it from the total.
-
-    The high-water mark is deliberately robust to out-of-order / transient-low
-    heartbeats (a momentary lower reading never lowers the banked value). The
-    trade-off: if a same-named agent is *deleted* (purging its _final_cost) and
-    then respawned with the same actor_id, the new life's spend is absorbed into
-    the existing high-water rather than added on top — i.e. it can undercount in
-    that narrow case. That is preferred over inferring "a new life started" from
-    a cost regression, which a stale frame would misread and double-count.
-    """
-    if not agent_id or cost_usd is None:
-        return
-    try:
-        cost = float(cost_usd)
-    except (TypeError, ValueError):
-        return
-    if cost <= 0:
-        return
-    ensure_lifetime_loaded()
-    if cost <= _lifetime_cost.get(agent_id, 0.0):
-        return
-    _lifetime_cost[agent_id] = cost
-    if runtime.db is not None:
-        try:
-            runtime.db.kv_set("_system", _LIFETIME_LEDGER_KEY, _lifetime_cost)
-        except Exception:
-            pass
-
-
-def lifetime_cost_total() -> float:
-    ensure_lifetime_loaded()
-    return sum(_lifetime_cost.values())
-
-
-def reset_actor_cost(actor) -> None:
-    """Zero a live actor's cost/token counters AND its per-call accrual baseline.
-
-    The baseline must move with total_cost_usd: _persist_cost / _accrue_usage
-    accumulate (total_cost_usd - baseline) into the global period and all-time
-    counters. Zeroing total_cost_usd on a reset without also zeroing the baseline
-    leaves the baseline at the pre-reset total, so every subsequent call yields a
-    negative delta and the period/all-time counters stop advancing until spend
-    climbs back past the old total — the "limit count stopped counting after a
-    wipe" bug.
-    """
-    if not hasattr(actor, "total_cost_usd"):
-        return
-    actor.total_cost_usd = 0.0
-    actor.total_input_tokens = 0
-    actor.total_output_tokens = 0
-    if hasattr(actor, "_last_persisted_usd"):
-        actor._last_persisted_usd = 0.0
-    if hasattr(actor, "_last_period_cost_usd"):
-        actor._last_period_cost_usd = 0.0
-
-
-def historical_cost_usd(live_names: set) -> float:
-    """Sum _final_cost for agents not in live_names."""
-    if runtime.db is None:
-        return 0.0
-    try:
-        rows = runtime.db.conn.execute(
-            "SELECT value FROM kv_store WHERE key = '_final_cost'"
-        ).fetchall()
-        total = 0.0
-        for row in rows:
-            try:
-                entry = json.loads(row[0])
-                if entry.get("name") not in live_names:
-                    total += entry.get("cost_usd", 0.0)
-            except Exception:
-                pass
-        return total
-    except Exception:
-        return 0.0
-
-
-def historical_messages(live_names: set) -> int:
-    """Sum _messages_processed for agents not in live_names."""
-    if runtime.db is None:
-        return 0
-    try:
-        rows = runtime.db.conn.execute(
-            "SELECT agent, value FROM kv_store WHERE key = '_messages_processed'"
-        ).fetchall()
-        total = 0
-        for agent_name, value in rows:
-            if agent_name not in live_names:
-                try:
-                    entry = json.loads(value)
-                    total += entry.get("count", 0)
-                except Exception:
-                    pass
-        return total
-    except Exception:
-        return 0
-
-
 async def _broadcast_mqtt_msg(topic: str, payload: str) -> None:
     """Broadcast a received mqtt message."""
     parsed: Any = payload
@@ -1217,77 +1080,6 @@ def _actor_payload(ag: dict) -> dict:
     }
 
 
-def _final_cost_from_db(name: str):
-    """Read the persisted _final_cost cost_usd for an agent name, or None."""
-    if runtime.db is None or not name:
-        return None
-    try:
-        row = runtime.db.conn.execute(
-            "SELECT value FROM kv_store WHERE agent=? AND key='_final_cost'",
-            (name,),
-        ).fetchone()
-        if row:
-            return json.loads(row[0]).get("cost_usd")
-    except Exception:
-        pass
-    return None
-
-
-def actor_cost(actor, ag: dict):
-    """Return the most accurate cost available: MQTT-derived first, then live object, then SQLite."""
-    mqtt_cost = ag.get("cost_usd")
-    if mqtt_cost is not None:
-        return mqtt_cost
-    live_cost = getattr(actor, "total_cost_usd", None)
-    if live_cost:
-        return round(live_cost, 6)
-    return _final_cost_from_db(getattr(actor, "name", ""))
-
-
-def best_cost(ag, actor, name: str) -> float:
-    """Resolve an agent's cost the SAME way the cards do (_actor_cost): MQTT
-    state first, then the live actor object, then the persisted _final_cost row.
-    Returns 0.0 when nothing is known so it can be summed safely. The headline
-    total must use this — summing only state["cost_usd"] dropped agents whose
-    cost lives on the actor object / SQLite.
-    """
-    if ag is not None:
-        c = ag.get("cost_usd")
-        if c is not None:
-            try:
-                return float(c)
-            except (TypeError, ValueError):
-                pass
-    if actor is not None:
-        c = getattr(actor, "total_cost_usd", None)
-        if c:
-            try:
-                return float(c)
-            except (TypeError, ValueError):
-                pass
-    c = _final_cost_from_db(name)
-    try:
-        return float(c) if c is not None else 0.0
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def best_msgs(ag, actor) -> int:
-    """Resolve message count: MQTT state first, then the live actor's metrics."""
-    if ag is not None:
-        m = ag.get("messages_processed")
-        if m:
-            try:
-                return int(m)
-            except (TypeError, ValueError):
-                pass
-    m = getattr(getattr(actor, "metrics", None), "messages_processed", 0)
-    try:
-        return int(m) if m else 0
-    except (TypeError, ValueError):
-        return 0
-
-
 async def health_handler(request: web.Request) -> Response:
     return web.json_response({"status": "ok"})
 
@@ -1322,10 +1114,10 @@ async def cost_reset_handler(request: web.Request) -> Response:
         info = reset_global_cost()
         # Clear the in-memory lifetime ledger so max() doesn't pin the display
         # to pre-reset values for the rest of this process lifetime.
-        _lifetime_cost.clear()
+        cost.lifetime_cost.clear()
         if runtime.db is not None:
             try:
-                runtime.db.kv_delete("_system", _LIFETIME_LEDGER_KEY)
+                runtime.db.kv_delete("_system", cost.LIFETIME_LEDGER_KEY)
             except Exception:
                 pass
         return web.json_response({"ok": True, **info})
@@ -1530,7 +1322,7 @@ async def reset_handler(request: web.Request) -> Response:
                 actor.metrics.errors = 0
                 actor.metrics.tasks_completed = 0
                 actor.metrics.tasks_failed = 0
-                reset_actor_cost(actor)
+                cost.reset_actor_cost(actor)
                 if hasattr(actor, "_conversation_history"):
                     actor._conversation_history = []
                 if hasattr(actor, "_history_summary"):
@@ -1546,7 +1338,7 @@ async def reset_handler(request: web.Request) -> Response:
             # Clear the in-memory lifetime cost ledger + global accumulator too, or
             # the headline total re-pins to the old high-water once _hard_resetting
             # clears and heartbeats resume (mirrors /api/cost/reset).
-            _lifetime_cost.clear()
+            cost.lifetime_cost.clear()
             try:
                 from .agents.llm_agent import reset_global_cost
 
@@ -1605,18 +1397,18 @@ async def reset_handler(request: web.Request) -> Response:
             if agent and actor.name != agent:
                 continue
             actor.metrics.messages_processed = 0
-            reset_actor_cost(actor)
+            cost.reset_actor_cost(actor)
         # The headline total is max(live + historical, lifetime ledger).
-        # reset_metrics cleared the kv ledger, but the in-memory _lifetime_cost
+        # reset_metrics cleared the kv ledger, but the in-memory cost.lifetime_cost
         # high-water survives in THIS process and pins the headline to its old
         # value — so the total only "drops" by the live component and never
         # zeroes. Clear it here, mirroring /api/cost/reset.
         if agent:
             aid = next((getattr(a, "actor_id", None) for a in live_actors if a.name == agent), None)
             if aid:
-                _lifetime_cost.pop(aid, None)
+                cost.lifetime_cost.pop(aid, None)
         else:
-            _lifetime_cost.clear()
+            cost.lifetime_cost.clear()
             try:
                 from .agents.llm_agent import reset_global_cost
 
@@ -1806,7 +1598,7 @@ async def actors_handler(request: web.Request) -> Response:
                     "messagesProcessed": ag.get("messages_processed")
                     if ag.get("messages_processed") is not None
                     else getattr(getattr(actor, "metrics", None), "messages_processed", None),
-                    "costUsd": actor_cost(actor, ag),
+                    "costUsd": cost.actor_cost(actor, ag),
                 }
             )
         return web.json_response(result)
@@ -2192,6 +1984,24 @@ _FORWARD = {
             "FRONTEND_DIST",
             "FRONTEND_PUBLIC",
             "DOCS_SITE",
+        )
+    },
+    # cost module
+    **{
+        n: (cost, n)
+        for n in (
+            "ensure_lifetime_loaded",
+            "record_lifetime_cost",
+            "lifetime_cost_total",
+            "reset_actor_cost",
+            "historical_cost_usd",
+            "historical_messages",
+            "actor_cost",
+            "best_cost",
+            "best_msgs",
+            "lifetime_cost",
+            "lifetime_loaded",
+            "LIFETIME_LEDGER_KEY",
         )
     },
     # events module (clean names)

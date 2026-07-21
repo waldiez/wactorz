@@ -10,20 +10,9 @@ import logging
 import time
 from typing import Any
 
-from . import runtime
+from . import cost, runtime
 
 logger = logging.getLogger(__name__)
-
-
-def _ms():
-    """The monitor façade — for helpers not yet extracted from it.
-
-    Looked up lazily at call time so tests that monkeypatch them on
-    ``wactorz.monitor_server`` keep working, and no import cycle forms.
-    """
-    import wactorz.monitor_server as ms
-
-    return ms
 
 
 def update_agent(agent_id: str, key: str, data) -> None:
@@ -151,7 +140,7 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                     )
                     # Bank the spend durably so it survives the agent being
                     # deleted or hard-killed before its on_stop() can persist.
-                    _ms().record_lifetime_cost(agent_id, data.get("cost_usd"))
+                    cost.record_lifetime_cost(agent_id, data.get("cost_usd"))
 
         elif metric == "logs":
             # Log frames carry only the agent id; resolve the friendly name the
@@ -301,8 +290,8 @@ def snapshot() -> dict[str, Any]:
         name = ag.get("name", "")
         live_names.add(name)
         actor = actors_by_id.get(aid) or actors_by_name.get(name)
-        live_cost += _ms().best_cost(ag, actor, name)
-        live_msgs += _ms().best_msgs(ag, actor)
+        live_cost += cost.best_cost(ag, actor, name)
+        live_msgs += cost.best_msgs(ag, actor)
     # Fold in live actors not yet in state (the post-restart window before the
     # first heartbeat). Keyed by actor_id so agents already counted above are
     # skipped — no double-count.
@@ -310,8 +299,8 @@ def snapshot() -> dict[str, Any]:
         if a.actor_id in seen_ids:
             continue
         live_names.add(a.name)
-        live_cost += _ms().best_cost(None, a, a.name)
-        live_msgs += _ms().best_msgs(None, a)
+        live_cost += cost.best_cost(None, a, a.name)
+        live_msgs += cost.best_msgs(None, a)
 
     # The live + _final_cost sum can dip when an agent is deleted (its _final_cost
     # row is purged) or hard-killed (its on_stop never ran). The durable ledger is
@@ -330,11 +319,11 @@ def snapshot() -> dict[str, Any]:
     except Exception:  # pylint: disable=broad-exception-caught
         alltime_cost = 0.0
     total_cost = max(
-        live_cost + _ms().historical_cost_usd(live_names),
-        _ms().lifetime_cost_total(),
+        live_cost + cost.historical_cost_usd(live_names),
+        cost.lifetime_cost_total(),
         alltime_cost,
     )
-    total_msgs = live_msgs + _ms().historical_messages(live_names)
+    total_msgs = live_msgs + cost.historical_messages(live_names)
     return {
         "agents": list(runtime.state["agents"].values()),
         "nodes": list(runtime.state["nodes"].values()),

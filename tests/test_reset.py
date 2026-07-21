@@ -270,10 +270,10 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         import wactorz.monitor_server as ms
 
         orig_registry = ms.registry
-        orig_ledger = dict(ms._lifetime_cost)
+        orig_ledger = dict(ms.lifetime_cost)
         ms.registry = None
-        ms._lifetime_cost.clear()
-        ms._lifetime_cost.update({"id1": 5.0, "id2": 2.0})
+        ms.lifetime_cost.clear()
+        ms.lifetime_cost.update({"id1": 5.0, "id2": 2.0})
         try:
             req = _make_request({"scope": "metrics"})
             with (
@@ -284,11 +284,11 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
             ):
                 resp = await ms.reset_handler(req)
             self.assertEqual(resp.status, 200)
-            self.assertEqual(ms._lifetime_cost, {})
+            self.assertEqual(ms.lifetime_cost, {})
         finally:
             ms.registry = orig_registry
-            ms._lifetime_cost.clear()
-            ms._lifetime_cost.update(orig_ledger)
+            ms.lifetime_cost.clear()
+            ms.lifetime_cost.update(orig_ledger)
 
     async def test_chat_scope_clears_live_conversation(self):
         # reset_chat only clears persisted chat; the handler must also wipe the

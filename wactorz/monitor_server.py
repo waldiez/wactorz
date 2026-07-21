@@ -28,12 +28,12 @@ import sys
 import time
 from typing import Any
 
-from aiohttp import WSMsgType, web
+from aiohttp import web
 from aiohttp.typedefs import Handler
 
 from ._bootstrap import WACTORZ_BOOTSTRAP  # noqa: F401 # pylint: disable=unused-import
 from .core.mqtt import mqtt_client
-from .monitor import chat, cost, events, lifecycle, runtime, static_site
+from .monitor import chat, cost, events, lifecycle, runtime, static_site, ws
 
 Response = web.Response | web.FileResponse | web.StreamResponse
 
@@ -52,250 +52,6 @@ logger = logging.getLogger(__name__)
 # ── helpers ────────────────────────────────────────────────────────────────
 
 
-async def broadcast(msg: dict):
-    if not runtime.ws_clients:
-        return
-    payload = json.dumps(msg)
-    dead = set()
-    for ws in list(runtime.ws_clients):
-        try:
-            await ws.send_str(payload)
-        except Exception as e:
-            logger.warning(f"[broadcast] WS send failed: {e}")
-            dead.add(ws)
-    runtime.ws_clients.difference_update(dead)
-
-
-# ── slash commands ─────────────────────────────────────────────────────────
-# Every handler receives a `reply_fn` coroutine — callers supply either an
-# MQTT publisher or a WebSocket sender.  No global state, no monkey-patching.
-
-
-async def ws_handler(request: web.Request) -> web.WebSocketResponse:
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
-    runtime.ws_clients.add(ws)
-    logger.info(f"WebSocket client connected. Total: {len(runtime.ws_clients)}")
-
-    # Send initial state
-    await ws.send_str(json.dumps({"type": "full_snapshot", "state": events.snapshot()}))
-
-    # Advertise chat mode so the frontend knows where to send messages
-    await ws.send_str(json.dumps({"type": "config", "chat.chat_mode": chat.chat_mode()}))
-
-    # Current server↔broker state so the "live" badge is right immediately on load.
-    await ws.send_str(json.dumps({"type": "mqtt_status", "connected": _mqtt_connected}))
-
-    # Per-connection accumulator for streamed assistant replies.
-    # We only persist once at stream_end so chat_log gets one row per turn
-    # with the full content, not a row per chunk.
-    _stream_buffer: list[str] = []
-
-    # The agent the current turn is addressed to. Reply frames and chat_log are
-    # attributed to it instead of the generic "io-gateway" transport id, so the
-    # UI (and persisted/reloaded history) shows the agent that actually answered
-    # rather than the gateway. Set per turn from the user's @mention before
-    # routing; defaults to the gateway id until a chat turn arrives.
-    _reply_from = {"name": runtime.IO_GATEWAY_ID}
-
-    def _persist_chat(role: str, content: str, agent_name: str = "main") -> None:
-        """Best-effort write to chat_log. Never raises into the WS path."""
-        if runtime.db is None or not content:
-            return
-        try:
-            runtime.db.write_chat_log(
-                ts=time.time(),
-                agent_name=agent_name,
-                role=role,
-                content=content,
-            )
-        except Exception as exc:
-            logger.warning(f"[ws] chat_log write failed: {exc}")
-
-    async def ws_reply(text: str):
-        try:
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "type": "chat",
-                        "from": _reply_from["name"],
-                        "content": text,
-                        "timestamp": time.time(),
-                    }
-                )
-            )
-            # Non-streamed replies (slash command output, errors, system
-            # messages) — persist immediately.
-            _persist_chat("assistant", text, _reply_from["name"])
-        except Exception:
-            pass
-
-    async def ws_stream_chunk(chunk: str):
-        try:
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "type": "stream_chunk",
-                        "from": _reply_from["name"],
-                        "content": chunk,
-                        "timestamp": time.time(),
-                    }
-                )
-            )
-            # Buffer for end-of-stream persistence; do NOT write per chunk.
-            if chunk:
-                _stream_buffer.append(chunk)
-        except Exception:
-            pass
-
-    async def ws_stream_end():
-        try:
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "type": "stream_end",
-                        "from": _reply_from["name"],
-                        "timestamp": time.time(),
-                    }
-                )
-            )
-            # Now persist the full assembled assistant turn — once.
-            if _stream_buffer:
-                full = "".join(_stream_buffer)
-                _stream_buffer.clear()
-                _persist_chat("assistant", full, _reply_from["name"])
-        except Exception:
-            # Even if the send_str failed, flush anything we accumulated
-            # so the user's session isn't lost on a transient ws hiccup.
-            if _stream_buffer:
-                full = "".join(_stream_buffer)
-                _stream_buffer.clear()
-                _persist_chat("assistant", full, _reply_from["name"])
-
-    async def _relay_chat_to_ioagent(content: str) -> None:
-        """Standalone monitor (no in-process registry): forward the browser's turn
-        to the IOAgent over MQTT `io/chat`. The reply returns on
-        `agents/{id}/chat`, which this process relays to the browser over /ws.
-
-        Only used in the legacy `wactorz-monitor` (registry-None) mode; remove it
-        when that entry point is retired from pyproject scripts.
-        """
-        if not runtime.mqtt_client_ref:
-            await ws_reply("[system] Chat unavailable — no broker connection.")
-            return
-        who = "main" if content.startswith("/") else chat.parse_mention(content)[0]
-        _persist_chat("user", content, who)
-        await runtime.mqtt_client_ref.publish(
-            "io/chat",
-            json.dumps({"content": content, "from": "user", "timestamp": time.time()}),
-            qos=1,
-        )
-
-    try:
-        async for msg in ws:
-            if msg.type == WSMsgType.TEXT:
-                try:
-                    data = json.loads(msg.data)
-                    msg_type = data.get("type")
-
-                    if msg_type == "command":
-                        await handle_command(data)
-
-                    elif msg_type == "chat":
-                        content = (data.get("content") or "").strip()
-                        if content and runtime.registry is not None:
-                            # Attribute the whole turn to the agent it addresses
-                            # (slash commands and un-mentioned text default to
-                            # "main", matching chat.route_chat's own resolution) so the
-                            # reply frames and chat_log group under that agent
-                            # instead of the io-gateway transport id.
-                            _reply_from["name"] = (
-                                "main"
-                                if content.startswith("/")
-                                else chat.parse_mention(content)[0]
-                            )
-                            # Persist the user's turn first so chat_log has the
-                            # request even if the assistant reply errors out.
-                            _persist_chat("user", content, _reply_from["name"])
-
-                            async def _safe_route(c=content):
-                                try:
-                                    await chat.route_chat(
-                                        c,
-                                        ws_reply,
-                                        stream_fn=ws_stream_chunk,
-                                        stream_end_fn=ws_stream_end,
-                                    )
-                                except asyncio.CancelledError:
-                                    # Stop button: finalize the partial stream so
-                                    # the UI re-enables, then post a confirmation
-                                    # matching the IOAgent's wording.
-                                    try:
-                                        await ws_stream_end()
-                                        await ws_reply("⏹ Stopped.")
-                                    except Exception:
-                                        pass
-                                    raise
-                                except Exception as exc:
-                                    logger.error(f"[ws] chat error: {exc}", exc_info=True)
-                                    try:
-                                        await ws_reply(f"[error] {exc}")
-                                        await ws_stream_end()
-                                    except Exception:
-                                        pass
-
-                            chat.track_chat_task(asyncio.create_task(_safe_route()))
-                        elif content:
-                            await _relay_chat_to_ioagent(content)
-
-                except Exception as e:
-                    logger.warning(f"[ws] Bad message: {e}")
-            elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
-                break
-    finally:
-        runtime.ws_clients.discard(ws)
-        logger.info(f"WebSocket client disconnected. Total: {len(runtime.ws_clients)}")
-    return ws
-
-
-# ── MQTT infrastructure ────────────────────────────────────────────────────
-
-
-async def handle_command(cmd: dict):
-    command = cmd.get("command")
-    agent_id = cmd.get("agent_id")
-    if not command or not agent_id:
-        return
-    if command not in {"pause", "stop", "resume", "delete"}:
-        return
-
-    logger.info(f"[cmd] {command.upper()} -> {agent_id[:8]}")
-    if not runtime.mqtt_client_ref:
-        logger.warning("[cmd] No MQTT client available")
-        return
-
-    payload = json.dumps(
-        {"command": command, "sender": "monitor-dashboard", "timestamp": time.time()}
-    )
-    try:
-        await runtime.mqtt_client_ref.publish(f"agents/{agent_id}/commands", payload)
-        events.add_log(
-            {"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()}
-        )
-        if command in ("stop", "pause", "resume"):
-            runtime.state["agents"].get(agent_id, {})["state"] = (
-                "stopped" if command == "stop" else "paused" if command == "pause" else "running"
-            )
-            await broadcast({"type": "patch", "state": events.snapshot()})
-        elif command == "delete":
-            await lifecycle.delete_agent(agent_id)
-            await broadcast(
-                {"type": "lifecycle.delete_agent", "agent_id": agent_id, "state": events.snapshot()}
-            )
-    except Exception as e:
-        logger.error(f"[cmd] Publish failed: {e}")
-
-
 async def _broadcast_mqtt_msg(topic: str, payload: str) -> None:
     """Broadcast a received mqtt message."""
     parsed: Any = payload
@@ -304,22 +60,16 @@ async def _broadcast_mqtt_msg(topic: str, payload: str) -> None:
     except Exception:
         # non-JSON: pass the string through
         pass
-    await broadcast({"type": "server_event", "topic": topic, "payload": parsed})
+    await ws.broadcast({"type": "server_event", "topic": topic, "payload": parsed})
 
 
 # Server-broker connection state, mirrored to browsers so the dashboard's "live"
-# badge reflects whether real events are actually flowing (not just whether the
-# browser's own /ws is up). The browser treats "live" as: /ws open AND this True.
-_mqtt_connected: bool = False
-
-
 async def _set_mqtt_status(connected: bool) -> None:
     """Broadcast a change in the server↔broker connection state to all browsers."""
-    global _mqtt_connected
-    if _mqtt_connected == connected:
+    if runtime.mqtt_connected == connected:
         return
-    _mqtt_connected = connected
-    await broadcast({"type": "mqtt_status", "connected": connected})
+    runtime.mqtt_connected = connected
+    await ws.broadcast({"type": "mqtt_status", "connected": connected})
 
 
 async def mqtt_listener():
@@ -366,12 +116,12 @@ async def mqtt_listener():
                         if event and not runtime.hard_resetting:
                             metric = event.get("metric", "")
                             log_event = None if metric == "heartbeat" else event
-                            await broadcast(
+                            await ws.broadcast(
                                 {"type": "patch", "event": log_event, "state": events.snapshot()}
                             )
                             # Agent-originated user-facing message. The browser already
-                            # renders it from the agents/{id}/chat (the broadcast above)
-                            # so we do NOT broadcast a second frame here. We only persist
+                            # renders it from the agents/{id}/chat (the ws.broadcast above)
+                            # so we do NOT ws.broadcast a second frame here. We only persist
                             # it so it survives a browser reload like any other turn.
                             push = event.get("_push_chat")
                             if push:
@@ -547,7 +297,7 @@ async def delete_actor_handler(request: web.Request) -> Response:
     if record.get("protected"):
         return web.json_response({"error": "actor is protected"}, status=403)
     routed = await lifecycle.delete_agent(actor_id)
-    await broadcast(
+    await ws.broadcast(
         {"type": "lifecycle.delete_agent", "agent_id": actor_id, "state": events.snapshot()}
     )
     return web.Response(status=200, text=f"stopping ({routed})")
@@ -579,7 +329,7 @@ def survives_factory_reset(name: str, protected: bool) -> bool:
 
 
 async def reset_handler(request: web.Request) -> Response:
-    """POST /api/reset  —  clear stored state and broadcast a reset event.
+    """POST /api/reset  —  clear stored state and ws.broadcast a reset event.
 
     Body (JSON):
       scope   : "chat" | "state" | "metrics" | "spawns" | "all"  (required)
@@ -730,7 +480,7 @@ async def reset_handler(request: web.Request) -> Response:
             runtime.state["nodes"].clear()
             runtime.state["alerts"].clear()
             runtime.state["log_feed"].clear()
-            await broadcast(
+            await ws.broadcast(
                 {
                     "type": "reset",
                     "scope": "all",
@@ -827,7 +577,9 @@ async def reset_handler(request: web.Request) -> Response:
             runtime.state["alerts"].clear()
             runtime.state["log_feed"].clear()
 
-    await broadcast({"type": "reset", "scope": scope, "agent": agent, "state": events.snapshot()})
+    await ws.broadcast(
+        {"type": "reset", "scope": scope, "agent": agent, "state": events.snapshot()}
+    )
     return web.json_response({"status": "ok", "scope": scope, "agent": agent})
 
 
@@ -1149,7 +901,7 @@ async def main(exit_on_failure: bool = False):
     app.router.add_post("/cost/limit", cost_limit_handler)
     app.router.add_post("/api/cost/reset", cost_reset_handler)
     app.router.add_post("/cost/reset", cost_reset_handler)
-    app.router.add_get("/ws", ws_handler)
+    app.router.add_get("/ws", ws.ws_handler)
 
     # Actor collection
     app.router.add_get("/api/actors", actors_handler)
@@ -1279,6 +1031,7 @@ _FORWARD = {
             "state",
             "ws_clients",
             "mqtt_client_ref",
+            "mqtt_connected",
             "hard_resetting",
             "deleted_agent_ids",
             "DELETED_IDS_MAX",
@@ -1307,6 +1060,8 @@ _FORWARD = {
             "DOCS_SITE",
         )
     },
+    # ws module
+    **{n: (ws, n) for n in ("broadcast", "ws_handler", "handle_command")},
     # lifecycle module
     **{
         n: (lifecycle, n)

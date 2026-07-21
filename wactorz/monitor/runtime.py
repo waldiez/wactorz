@@ -46,6 +46,10 @@ db: "WactorzDB | None" = None
 
 mqtt_client_ref: aiomqtt.Client | None = None
 
+# Server↔broker link state. Shared: mqtt sets it, ws reports it to browsers, so
+# it lives here rather than in either module (mqtt already depends on ws).
+mqtt_connected: bool = False
+
 # ── Live snapshot (mutated in place — never rebound) ─────────────────────────
 state = {
     "agents": {},

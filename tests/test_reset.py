@@ -176,7 +176,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
             patch("wactorz.reset.reset_logs"),
             patch("wactorz.reset.reset_all"),
             patch("wactorz.reset._reset_all_pickles"),
-            patch.object(ms, "broadcast", new=AsyncMock()),
+            patch("wactorz.monitor.ws.broadcast", new=AsyncMock()),
         ):
             return await ms.reset_handler(req)
 
@@ -250,7 +250,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         try:
             with (
                 patch("wactorz.reset.reset_metrics"),
-                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch("wactorz.monitor.ws.broadcast", new=AsyncMock()),
                 patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
@@ -279,7 +279,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
             with (
                 patch("wactorz.reset.reset_metrics"),
                 patch("wactorz.agents.llm_agent.reset_global_cost"),
-                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch("wactorz.monitor.ws.broadcast", new=AsyncMock()),
                 patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
@@ -309,7 +309,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         try:
             with (
                 patch("wactorz.reset.reset_chat"),
-                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch("wactorz.monitor.ws.broadcast", new=AsyncMock()),
                 patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
@@ -332,7 +332,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         try:
             with (
                 patch("wactorz.reset.reset_chat"),
-                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch("wactorz.monitor.ws.broadcast", new=AsyncMock()),
                 patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
@@ -360,7 +360,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         try:
             with (
                 patch("wactorz.reset.reset_metrics"),
-                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch("wactorz.monitor.ws.broadcast", new=AsyncMock()),
                 patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
@@ -404,7 +404,7 @@ class ResetHandlerDispatchTest(unittest.IsolatedAsyncioTestCase):
             "_reset_all_pickles": "wactorz.reset._reset_all_pickles",
         }
         patches = [patch(t) for t in targets.values()]
-        with patch.object(ms, "broadcast", new=AsyncMock()):
+        with patch("wactorz.monitor.ws.broadcast", new=AsyncMock()):
             started = [p.start() for p in patches]
             mocks = dict(zip(targets.keys(), started))
             try:
@@ -532,7 +532,7 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
             req = _make_request({"scope": "all"})
             with (
                 patch("wactorz.reset.reset_all"),
-                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch("wactorz.monitor.ws.broadcast", new=AsyncMock()),
                 patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(req)
@@ -592,7 +592,7 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
             with (
                 patch("wactorz.reset.reset_all"),
                 patch("wactorz.monitor.lifecycle.purge_agent_retained", new=AsyncMock()) as purge,
-                patch.object(ms, "broadcast", new=AsyncMock()),
+                patch("wactorz.monitor.ws.broadcast", new=AsyncMock()),
                 patch("wactorz.monitor.events.snapshot", return_value={}),
             ):
                 resp = await ms.reset_handler(_make_request({"scope": "all"}))

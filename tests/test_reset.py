@@ -591,7 +591,7 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         try:
             with (
                 patch("wactorz.reset.reset_all"),
-                patch.object(ms, "purge_agent_retained", new=AsyncMock()) as purge,
+                patch("wactorz.monitor.lifecycle.purge_agent_retained", new=AsyncMock()) as purge,
                 patch.object(ms, "broadcast", new=AsyncMock()),
                 patch("wactorz.monitor.events.snapshot", return_value={}),
             ):

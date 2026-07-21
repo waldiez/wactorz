@@ -9,34 +9,40 @@ The mode is advertised to the browser on connect via a {"type":"config"} frame
 so the frontend knows whether to send chat over /ws or publish to io/chat.
 """
 
+# TODO: uncomment the skips below (when we can do that and not make the linters crazy)
+# TODO: handle the 'from aiohttp import web' inside the function cases. Tests fail if we move them!!
+# TODO: Refactor this file: split it to wactorz/monitor/ package
+
+# pylint: disable=global-statement,invalid-name,logging-fstring-interpolation
+# pylint: disable=broad-exception-caught,protected-access,line-too-long
+# pylint: disable=missing-function-docstring,unused-argument,too-many-lines
+# pylint: disable=import-outside-toplevel,wrong-import-position,wrong-import-order
+
+# pyright: reportAttributeAccessIssue=false,reportUnusedParameter=false,reportUnusedImport=false
+
 import asyncio
-import secrets
-import sys
-from typing import Any
-
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    # Force UTF-8 on the real Windows console only. Skip when stdio has been
-    # replaced (pytest capture, test runners, etc.) since re-wrapping a
-    # capture stream breaks the harness on Python 3.13.
-    _need_wrap = (
-        (getattr(sys.stdout, "encoding", "") or "").lower() != "utf-8"
-        and hasattr(sys.stdout, "buffer")
-        and hasattr(sys.stderr, "buffer")
-    )
-    if _need_wrap:
-        import io
-
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
 import json
 import logging
+import os
+import secrets
 import socket
+import sys
 import time
+import uuid
 from pathlib import Path
+from typing import Any, cast
 
+from aiohttp import WSMsgType, web
+from aiohttp.typedefs import Handler
+
+from ._bootstrap import WACTORZ_BOOTSTRAP  # noqa: F401 # pylint: disable=unused-import
+from .agents.main_actor import MainActor
 from .core.mqtt import mqtt_client
+from .core.persistence import WactorzDB
+from .core.registry import ActorRegistry
+
+Response = web.Response | web.FileResponse | web.StreamResponse
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,6 +53,14 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+# Injected by cli.py after the actor system is built.
+# None  → legacy MQTT/IOAgent mode
+# <registry> → direct mode (Option B)
+registry: ActorRegistry | None = None
+
+# Injected by cli.py — used to query historical cost data for deleted agents.
+db: WactorzDB | None = None
 
 MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
@@ -59,14 +73,6 @@ MQTT_TOPICS = [
     "io/chat",
     "homeassistant/state_changes/#",
 ]
-
-# Injected by cli.py after the actor system is built.
-# None  → legacy MQTT/IOAgent mode
-# <registry> → direct mode (Option B)
-registry = None
-
-# Injected by cli.py — used to query historical cost data for deleted agents.
-db = None
 
 IO_GATEWAY_ID = "io-gateway"
 
@@ -197,10 +203,10 @@ async def _purge_spawn_reconcile(agent: str | None = None) -> None:
     Must run BEFORE reset_spawns()/reset_all() wipe the kv on disk — it reads the
     registry to learn which nodes are affected.
     """
-    main_ref = registry.find_by_name("main") if registry is not None else None
+    main_actor = _find_main()
     reg = {}
-    if main_ref is not None and hasattr(main_ref, "_get_spawn_registry"):
-        reg = main_ref._get_spawn_registry() or {}
+    if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
+        reg = main_actor._get_spawn_registry() or {}
 
     # Affected nodes: live heartbeats ∪ registry (covers offline nodes).
     node_names: set[str] = set(state["nodes"].keys())
@@ -213,17 +219,17 @@ async def _purge_spawn_reconcile(agent: str | None = None) -> None:
 
     # Clear the live registry through the actor's own persistence.
     if (
-        main_ref is not None
-        and hasattr(main_ref, "recall")
-        and main_ref.recall("_spawned_agents", None) is not None
+        main_actor is not None
+        and hasattr(main_actor, "recall")
+        and main_actor.recall("_spawned_agents", None) is not None
     ):
         kept = {k: v for k, v in reg.items() if k != agent} if agent else {}
-        main_ref.persist("_spawned_agents", kept)
+        main_actor.persist("_spawned_agents", kept)
 
-    if agent and main_ref is not None and hasattr(main_ref, "_update_node_desired_state"):
+    if agent and main_actor is not None and hasattr(main_actor, "_update_node_desired_state"):
         # Republish from the reduced registry so siblings on the node survive.
         await asyncio.gather(
-            *[main_ref._update_node_desired_state(n) for n in node_names],
+            *[main_actor._update_node_desired_state(n) for n in node_names],
             return_exceptions=True,
         )
     else:
@@ -262,10 +268,10 @@ async def _delete_agent(agent_id: str) -> str:
     if registry is not None:
         # In-process: delegate to main, which owns the spawn registry and
         # knows exactly how to clean up both local and remote agents.
-        main = registry.find_by_name("main")
-        if main is not None and hasattr(main, "delete_spawned_agent"):
+        main_actor = _find_main()
+        if main_actor is not None and hasattr(main_actor, "delete_spawned_agent"):
             try:
-                await main.delete_spawned_agent(name)
+                await main_actor.delete_spawned_agent(name)
                 routed = f"via main.delete_spawned_agent({name!r})"
             except Exception as e:
                 logger.warning(
@@ -316,12 +322,19 @@ async def _delete_agent(agent_id: str) -> str:
 # ── helpers ────────────────────────────────────────────────────────────────
 
 
+async def no_op_async() -> None:
+    """No op. To use instead of lambdas."""
+
+
 def _chat_mode() -> str:
     return "direct_ws" if registry is not None else "mqtt"
 
 
 def _find_main():
-    return registry.find_by_name("main") if registry else None
+    actor = registry.find_by_name("main") if registry else None
+    if actor:
+        return cast(MainActor, actor)
+    return None
 
 
 def _parse_mention(content: str) -> tuple[str, str]:
@@ -419,14 +432,14 @@ async def _slash_deploy(node: str, host: str, user: str, pw: str, broker: str, r
         )
         return
 
-    main = _find_main()
-    if main is None or not hasattr(main, "delegate_to_installer"):
+    main_actor = _find_main()
+    if main_actor is None or not hasattr(main_actor, "delegate_to_installer"):
         await reply_fn("[error] Installer agent not available.")
         return
 
     broker = broker or "localhost"
     await reply_fn(f"[deploy] Deploying to {user}@{host} as '{node}'... (20-60s)")
-    result = await main.delegate_to_installer(
+    result = await main_actor.delegate_to_installer(
         {
             "action": "node_deploy",
             "host": host,
@@ -473,9 +486,9 @@ async def handle_slash(text: str, reply_fn) -> bool:
     cmd = parts[0].lower()
 
     if cmd == "/clear-plans":
-        main = _find_main()
-        if main and hasattr(main, "persist"):
-            main.persist("_plan_cache", {})
+        main_actor = _find_main()
+        if main_actor and hasattr(main_actor, "persist"):
+            main_actor.persist("_plan_cache", {})
         await reply_fn("[System: Plan cache cleared.]")
         return True
 
@@ -494,8 +507,10 @@ async def handle_slash(text: str, reply_fn) -> bool:
         return True
 
     if cmd == "/nodes":
-        main = _find_main()
-        remote_nodes = main.list_nodes() if (main and hasattr(main, "list_nodes")) else []
+        main_actor = _find_main()
+        remote_nodes = (
+            main_actor.list_nodes() if (main_actor and hasattr(main_actor, "list_nodes")) else []
+        )
         local = [a.name for a in registry.all_actors()] if registry else []
         lines = [f"  {'local':20s} online   {', '.join('@' + n for n in local) or '(none)'}"]
         for nd in sorted(remote_nodes, key=lambda x: x["node"]):
@@ -511,12 +526,12 @@ async def handle_slash(text: str, reply_fn) -> bool:
         if len(parts) < 3:
             await reply_fn("[usage] /migrate <agent-name> <target-node>")
             return True
-        main = _find_main()
-        if main is None or not hasattr(main, "migrate_agent"):
+        main_actor = _find_main()
+        if main_actor is None or not hasattr(main_actor, "migrate_agent"):
             await reply_fn("[error] migrate_agent not available.")
             return True
         await reply_fn(f"[migrating] @{parts[1]} → {parts[2]}...")
-        result = await main.migrate_agent(parts[1], parts[2])
+        result = await main_actor.migrate_agent(parts[1], parts[2])
         sym = "OK" if result.get("success") else "FAIL"
         await reply_fn(f"[{sym}] {result.get('message', str(result))}")
         return True
@@ -546,25 +561,25 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
     stream_end_fn()       — signal that streaming is done (optional)
     """
     _chunk_fn = stream_fn or reply_fn
-    _end_fn = stream_end_fn or (lambda: None)
+    _end_fn = stream_end_fn or no_op_async
 
     if content.startswith("/"):
         handled = await handle_slash(content, reply_fn)
         if not handled:
+            main_actor = _find_main()
             # Forward unrecognized slash commands to main actor.
             # main_actor.process_user_input handles the full command set
             # (/help, /plans, /delete, /stop, /memory, /rules, /topics, etc.)
-            main = _find_main()
-            if main and hasattr(main, "process_user_input_stream"):
+            if main_actor and hasattr(main_actor, "process_user_input_stream"):
                 _chunk_fn = stream_fn or reply_fn
-                async for chunk in main.process_user_input_stream(content):
+                async for chunk in main_actor.process_user_input_stream(content):
                     if isinstance(chunk, dict):
                         continue
                     await _chunk_fn(str(chunk))
                 if stream_end_fn:
                     await stream_end_fn()
-            elif main and hasattr(main, "process_user_input"):
-                result = await main.process_user_input(content)
+            elif main_actor and hasattr(main_actor, "process_user_input"):
+                result = await main_actor.process_user_input(content)
                 await reply_fn(str(result))
                 if stream_end_fn:
                     await stream_end_fn()
@@ -577,24 +592,21 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
     target = registry.find_by_name(target_name) if registry else None
 
     if target is None:
+        main_actor = _find_main()
         # ── Remote agent fallback ─────────────────────────────────────────────
         # Agent not in local registry — check if it's running on a remote node.
         # If so, route the message via MQTT and stream the reply back.
-        main = registry.find_by_name("main") if registry else None
-        if main and hasattr(main, "_known_nodes"):
-            import time as _rt
-
+        if main_actor and hasattr(main_actor, "_known_nodes"):
             remote_node = None
-            for node_name, nd in main._known_nodes.items():
-                if _rt.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get("agents", []):
+            for node_name, nd in main_actor._known_nodes.items():
+                if time.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get(
+                    "agents", []
+                ):
                     remote_node = node_name
                     break
 
             if remote_node:
-                import json as _json
-                import uuid as _uuid
-
-                reply_topic = f"main/reply/io-gateway/{_uuid.uuid4().hex[:8]}"
+                reply_topic = f"main/reply/io-gateway/{uuid.uuid4().hex[:8]}"
                 payload = {
                     "text": text,
                     "payload": text,
@@ -603,12 +615,12 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                 }
                 try:
                     async with mqtt_client(
-                        getattr(main, "_mqtt_broker", "localhost"),
-                        getattr(main, "_mqtt_port", 1883),
+                        getattr(main_actor, "_mqtt_broker", "localhost"),
+                        getattr(main_actor, "_mqtt_port", 1883),
                     ) as client:
                         # Subscribe first, then publish — avoids race condition
                         await client.subscribe(reply_topic)
-                        await main._mqtt_publish(
+                        await main_actor._mqtt_publish(
                             f"agents/by-name/{target_name}/task",
                             payload,
                         )
@@ -618,7 +630,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
                             async def _get_reply():
                                 async for msg in client.messages:
                                     try:
-                                        data = _json.loads(msg.payload.decode())
+                                        data = json.loads(msg.payload.decode())
                                         text_out = (
                                             data.get("result")
                                             or data.get("reply")
@@ -662,7 +674,7 @@ async def _route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None
     )
     if gen_fn:
         try:
-            async for chunk in gen_fn(text):
+            async for chunk in gen_fn(text):  # pylint: disable=not-callable
                 if isinstance(chunk, dict):
                     continue
                 await _chunk_fn(str(chunk))
@@ -759,7 +771,6 @@ async def handle_chat_mqtt(data: dict):
         return
 
     async def mqtt_reply(text: str):
-        global mqtt_client_ref
         if mqtt_client_ref:
             await mqtt_client_ref.publish(
                 f"agents/{IO_GATEWAY_ID}/chat",
@@ -779,9 +790,7 @@ async def handle_chat_mqtt(data: dict):
 # ── WebSocket handler ──────────────────────────────────────────────────────
 
 
-async def ws_handler(request):
-    from aiohttp import WSMsgType, web
-
+async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     ws_clients.add(ws)
@@ -970,7 +979,6 @@ async def ws_handler(request):
 
 
 async def handle_command(cmd: dict):
-    global mqtt_client_ref
     command = cmd.get("command")
     agent_id = cmd.get("agent_id")
     if not command or not agent_id:
@@ -1242,7 +1250,7 @@ def _ensure_lifetime_loaded() -> None:
     try:
         stored = db.kv_get("_system", _LIFETIME_LEDGER_KEY)
         if isinstance(stored, dict):
-            for k, v in stored.items():
+            for k, v in stored.items():  # pyright: ignore[reportGeneralTypeIssues]
                 try:
                     _lifetime_cost[k] = float(v)
                 except (TypeError, ValueError):
@@ -1315,13 +1323,11 @@ def _historical_cost_usd(live_names: set) -> float:
     if db is None:
         return 0.0
     try:
-        import json as _json
-
         rows = db.conn.execute("SELECT value FROM kv_store WHERE key = '_final_cost'").fetchall()
         total = 0.0
         for row in rows:
             try:
-                entry = _json.loads(row[0])
+                entry = json.loads(row[0])
                 if entry.get("name") not in live_names:
                     total += entry.get("cost_usd", 0.0)
             except Exception:
@@ -1336,8 +1342,6 @@ def _historical_messages(live_names: set) -> int:
     if db is None:
         return 0
     try:
-        import json as _json
-
         rows = db.conn.execute(
             "SELECT agent, value FROM kv_store WHERE key = '_messages_processed'"
         ).fetchall()
@@ -1345,7 +1349,7 @@ def _historical_messages(live_names: set) -> int:
         for agent_name, value in rows:
             if agent_name not in live_names:
                 try:
-                    entry = _json.loads(value)
+                    entry = json.loads(value)
                     total += entry.get("count", 0)
                 except Exception:
                     pass
@@ -1566,7 +1570,8 @@ async def _check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
             if i < attempts - 1:
                 await asyncio.sleep(delay)
     logger.error(
-        f"[startup] MQTT broker {MQTT_BROKER}:{MQTT_PORT} unreachable after {attempts} tries — {last}"
+        f"[startup] MQTT broker {MQTT_BROKER}:{MQTT_PORT} "
+        f"unreachable after {attempts} tries — {last}"
     )
     return False
 
@@ -1602,7 +1607,7 @@ FRONTEND_PUBLIC = _find_dir("frontend", "public")
 DOCS_SITE = _find_dir("static", "docs")
 
 
-def _with_no_cache(response):
+def _with_no_cache(response: Response) -> Response:
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
@@ -1638,9 +1643,7 @@ def _csp_policy(nonce: str) -> str:
     )
 
 
-async def index_handler(request):
-    from aiohttp import web
-
+async def index_handler(request: web.Request) -> Response:
     if request.path.endswith("favicon.svg"):
         for candidate in [FRONTEND_PUBLIC / "favicon.svg", FRONTEND_DIST / "favicon.svg"]:
             if candidate.exists():
@@ -1675,9 +1678,7 @@ async def index_handler(request):
     raise web.HTTPNotFound()
 
 
-async def static_handler(request):
-    from aiohttp import web
-
+async def static_handler(request: web.Request) -> Response:
     rel = request.match_info["path"]
 
     # Special case for favicon if it's requested at root
@@ -1717,9 +1718,11 @@ async def static_handler(request):
     raise web.HTTPNotFound()
 
 
-async def docs_handler(request):
-    from aiohttp import web
+async def docs_redirect(request: web.Request) -> web.HTTPFound:
+    return web.HTTPFound("/docs/")
 
+
+async def docs_handler(request: web.Request) -> web.FileResponse:
     if not DOCS_SITE.is_dir():
         raise web.HTTPNotFound(
             reason="Docs not built — run: python3 scripts/build_docs.py  (or: make docs-build)"
@@ -1764,14 +1767,12 @@ def _final_cost_from_db(name: str):
     if db is None or not name:
         return None
     try:
-        import json as _json
-
         row = db.conn.execute(
             "SELECT value FROM kv_store WHERE agent=? AND key='_final_cost'",
             (name,),
         ).fetchone()
         if row:
-            return _json.loads(row[0]).get("cost_usd")
+            return json.loads(row[0]).get("cost_usd")
     except Exception:
         pass
     return None
@@ -1785,7 +1786,7 @@ def _actor_cost(actor, ag: dict):
     live_cost = getattr(actor, "total_cost_usd", None)
     if live_cost:
         return round(live_cost, 6)
-    return _final_cost_from_db(getattr(actor, "name", None))
+    return _final_cost_from_db(getattr(actor, "name", ""))
 
 
 def _best_cost(ag, actor, name: str) -> float:
@@ -1832,23 +1833,17 @@ def _best_msgs(ag, actor) -> int:
         return 0
 
 
-async def health_handler(request):
-    from aiohttp import web
-
+async def health_handler(request: web.Request) -> Response:
     return web.json_response({"status": "ok"})
 
 
-async def cost_handler(request):
-    from aiohttp import web
-
+async def cost_handler(request: web.Request) -> Response:
     from .agents.llm_agent import get_global_cost_info
 
     return web.json_response(get_global_cost_info())
 
 
-async def cost_limit_handler(request):
-    from aiohttp import web
-
+async def cost_limit_handler(request: web.Request) -> Response:
     from .agents.llm_agent import set_cost_limit
 
     try:
@@ -1865,9 +1860,7 @@ async def cost_limit_handler(request):
         return web.json_response({"error": str(e)}, status=400)
 
 
-async def cost_reset_handler(request):
-    from aiohttp import web
-
+async def cost_reset_handler(request: web.Request) -> Response:
     from .agents.llm_agent import reset_global_cost
 
     try:
@@ -1885,9 +1878,7 @@ async def cost_reset_handler(request):
         return web.json_response({"error": str(e)}, status=400)
 
 
-async def send_message_handler(request):
-    from aiohttp import web
-
+async def send_message_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -1910,9 +1901,7 @@ async def send_message_handler(request):
     return web.json_response({"status": "sent"})
 
 
-async def delete_actor_handler(request):
-    from aiohttp import web
-
+async def delete_actor_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     # Resolve the dashboard's record first so remote agents (which aren't in
     # the local registry) can still be deleted via this endpoint. The earlier
@@ -1961,15 +1950,13 @@ def _survives_factory_reset(name: str, protected: bool) -> bool:
     return protected or name in _HA_SYSTEM_AGENTS
 
 
-async def reset_handler(request):
+async def reset_handler(request: web.Request) -> Response:
     """POST /api/reset  —  clear stored state and broadcast a reset event.
 
     Body (JSON):
       scope   : "chat" | "state" | "metrics" | "spawns" | "all"  (required)
       agent   : str  (optional — limit to one agent by name)
     """
-    from aiohttp import web
-
     try:
         body = await request.json()
     except Exception:
@@ -2032,7 +2019,7 @@ async def reset_handler(request):
                     supervisor.release(actor.name)
             await asyncio.gather(*[actor.stop() for actor in stoppable], return_exceptions=True)
             await asyncio.gather(
-                *[registry.unregister(a.actor_id) for a in stoppable],
+                *[registry.unregister(a.actor_id) for a in stoppable if registry],
                 return_exceptions=True,
             )
 
@@ -2040,9 +2027,9 @@ async def reset_handler(request):
             # retained spawn directives that would otherwise replay on reconnect.
             # Harmless when there are no nodes.
             node_names = set(state["nodes"].keys())
-            _main = registry.find_by_name("main") if registry is not None else None
-            if _main is not None and hasattr(_main, "_get_spawn_registry"):
-                for cfg in (_main._get_spawn_registry() or {}).values():
+            main_actor = _find_main()
+            if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
+                for cfg in (main_actor._get_spawn_registry() or {}).values():
                     n = (cfg.get("node") or "").strip()
                     if n:
                         node_names.add(n)
@@ -2213,9 +2200,7 @@ async def reset_handler(request):
     return web.json_response({"status": "ok", "scope": scope, "agent": agent})
 
 
-async def pause_actor_handler(request):
-    from aiohttp import web
-
+async def pause_actor_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -2232,9 +2217,7 @@ async def pause_actor_handler(request):
     return web.json_response({"status": "pausing"})
 
 
-async def resume_actor_handler(request):
-    from aiohttp import web
-
+async def resume_actor_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -2251,9 +2234,7 @@ async def resume_actor_handler(request):
     return web.json_response({"status": "resuming"})
 
 
-async def actor_metrics_handler(request):
-    from aiohttp import web
-
+async def actor_metrics_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     ag = state["agents"].get(actor_id)
     actor = None
@@ -2279,10 +2260,8 @@ async def actor_metrics_handler(request):
     )
 
 
-async def rest_chat_handler(request):
+async def rest_chat_handler(request: web.Request) -> Response:
     """POST /chat — fire-and-forget a message to a named agent."""
-    from aiohttp import web
-
     if registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
     try:
@@ -2303,7 +2282,7 @@ async def rest_chat_handler(request):
     return web.json_response({"status": "sent", "agent": agent_name})
 
 
-async def rest_chat_stop_handler(request):
+async def rest_chat_stop_handler(request: web.Request) -> Response:
     """POST /chat/stop — cancel any in-flight generation. No request body needed.
 
     Works in both runtime modes:
@@ -2314,8 +2293,6 @@ async def rest_chat_stop_handler(request):
     The user-facing confirmation rides the usual chat reply path, so the UI
     needs no extra subscription.
     """
-    from aiohttp import web
-
     # direct_ws: cancel the in-process generation task(s).
     tasks = [t for t in _inflight_chat_tasks if not t.done()]
     for t in tasks:
@@ -2343,9 +2320,7 @@ async def rest_chat_stop_handler(request):
     )
 
 
-async def actors_handler(request):
-    from aiohttp import web
-
+async def actors_handler(request: web.Request) -> Response:
     # Prefer the live registry (injected by cli.py) — actor objects carry the
     # authoritative protected flag.  Fall back to MQTT-derived state dict when
     # the registry is unavailable (standalone monitor_server mode).
@@ -2380,9 +2355,7 @@ async def actors_handler(request):
     return web.json_response([_actor_payload(ag) for ag in state["agents"].values()])
 
 
-async def actor_handler(request):
-    from aiohttp import web
-
+async def actor_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
     ag = state["agents"].get(actor_id)
     if ag is None:
@@ -2390,9 +2363,7 @@ async def actor_handler(request):
     return web.json_response(_actor_payload(ag))
 
 
-async def actor_history_handler(request):
-    from aiohttp import web
-
+async def actor_history_handler(request: web.Request) -> Response:
     actor_id = request.match_info["actor_id"]
 
     # Resolve actor: the frontend sends the agent NAME (not UUID), so try
@@ -2407,13 +2378,11 @@ async def actor_history_handler(request):
         # Actor not in registry (deleted or name-only lookup) — read from SQLite.
         # actor_id might be a display name (e.g. "main") — try it directly.
         try:
-            import json as _json
-
             row = db.conn.execute(
                 "SELECT value FROM kv_store WHERE agent=? AND key='conversation_history'",
                 (actor_id,),
             ).fetchone()
-            history = _json.loads(row[0]) if row else []
+            history = json.loads(row[0]) if row else []
         except Exception:
             history = []
     else:
@@ -2423,7 +2392,7 @@ async def actor_history_handler(request):
     return web.json_response(visible)
 
 
-async def chat_log_handler(request):
+async def chat_log_handler(request: web.Request) -> Response:
     """GET /api/chats — query the persistent chat_log table.
 
     Query params:
@@ -2432,8 +2401,6 @@ async def chat_log_handler(request):
       since   — Unix timestamp float, only return rows newer than this
       limit   — max rows to return (default 200, max 1000)
     """
-    from aiohttp import web
-
     if db is None:
         return web.json_response([], status=200)
     try:
@@ -2447,10 +2414,8 @@ async def chat_log_handler(request):
         return web.json_response({"error": str(exc)}, status=500)
 
 
-async def config_handler(request):
+async def config_handler(request: web.Request) -> Response:
     """Expose non-secret runtime config so the frontend can seed its defaults."""
-    from aiohttp import web
-
     from .config import CONFIG
     from .ext import collect_public_config
 
@@ -2462,7 +2427,7 @@ async def config_handler(request):
 
     ws_url = f"{protocol}://{ws_host}/ws"
 
-    payload = {
+    payload: dict = {
         "ha": {
             # URL only — the dashboard links out to the HA UI and never talks to
             # HA directly, so the long-lived token must NOT reach the browser.
@@ -2483,7 +2448,7 @@ async def config_handler(request):
     return web.json_response(payload)
 
 
-async def feed_handler(request):
+async def feed_handler(request: web.Request) -> Response:
     """Return recent chat events for the UI feed, with REAL persisted timestamps.
 
     Previously this read from kv_store.conversation_history, which is just a
@@ -2497,8 +2462,6 @@ async def feed_handler(request):
     where nothing has been written yet) so existing users still see their
     pre-upgrade history on first launch.
     """
-    from aiohttp import web
-
     if db is None:
         return web.json_response([])
     try:
@@ -2532,8 +2495,6 @@ async def feed_handler(request):
         # until new chat turns start populating chat_log. Synthesises a
         # timestamp by anchoring the last entry to "now" and walking backwards
         # in 1-second steps, so at least entries are ordered consistently.
-        import json as _json
-
         kv_rows = db.conn.execute(
             "SELECT agent, value FROM kv_store WHERE key='conversation_history'"
         ).fetchall()
@@ -2541,7 +2502,7 @@ async def feed_handler(request):
         now = time.time()
         for agent_name, value in kv_rows:
             try:
-                history = _json.loads(value)
+                history = json.loads(value)
                 visible = [
                     m
                     for m in history
@@ -2574,8 +2535,6 @@ async def feed_handler(request):
 
 
 async def main(exit_on_failure: bool = False):
-    from aiohttp import web
-
     # ... (startup checks remain same) ...
     mqtt_ok = await _check_mqtt()
     port_ok = await _check_ws_port()
@@ -2592,7 +2551,7 @@ async def main(exit_on_failure: bool = False):
         return
 
     @web.middleware
-    async def _cors_middleware(request, handler):
+    async def _cors_middleware(request: web.Request, handler: Handler) -> Response:
         if request.method == "OPTIONS":
             return web.Response(
                 headers={
@@ -2658,15 +2617,17 @@ async def main(exit_on_failure: bool = False):
     app.router.add_get("/feed", feed_handler)
     app.router.add_post("/api/reset", reset_handler)
     app.router.add_get("/favicon.svg", index_handler)
-    app.router.add_get("/docs", lambda r: web.HTTPFound("/docs/"))
-    app.router.add_get("/docs/", docs_handler)
-    app.router.add_get("/docs/{path:.+}", docs_handler)
 
-    # Discover and wire optional extensions (routes, on_startup, public config).
-    # Registered before the static catch-all so extension routes take precedence.
+    # Extensions (wactorz/ext/): additive features register their own routes
+    # and startup/teardown hooks here. Must run BEFORE the docs/static
+    # catch-alls below, or the /{path:.+} route shadows extension routes.
     from .ext import setup_all
 
     setup_all(app)
+
+    app.router.add_get("/docs", docs_redirect)
+    app.router.add_get("/docs/", docs_handler)
+    app.router.add_get("/docs/{path:.+}", docs_handler)
 
     app.router.add_get("/{path:.+}", static_handler)
 
@@ -2715,7 +2676,6 @@ def cli_main() -> None:
 
 if __name__ == "__main__":
     import argparse
-    import os
 
     parser = argparse.ArgumentParser(description="Wactorz Monitor Server")
     parser.add_argument("--broker", default=os.getenv("WACTORZ_BROKER", "localhost"))
@@ -2724,10 +2684,10 @@ if __name__ == "__main__":
     parser.add_argument("--ws-port", type=int, default=int(os.getenv("MONITOR_PORT", "8888")))
     args = parser.parse_args()
 
-    thismodule = sys.modules[__name__]
-    thismodule.MQTT_BROKER = args.broker
-    thismodule.MQTT_PORT = args.mqtt_port
-    thismodule.MQTT_WS_PORT = args.mqtt_ws_port
-    thismodule.WS_PORT = args.ws_port
+    this_module = sys.modules[__name__]
+    this_module.MQTT_BROKER = args.broker  # pyright: ignore[reportAttributeAccessIssue]
+    this_module.MQTT_PORT = args.mqtt_port  # pyright: ignore[reportAttributeAccessIssue]
+    this_module.MQTT_WS_PORT = args.mqtt_ws_port  # pyright: ignore[reportAttributeAccessIssue]
+    this_module.WS_PORT = args.ws_port  # pyright: ignore[reportAttributeAccessIssue]
 
     cli_main()

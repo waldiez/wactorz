@@ -20,7 +20,7 @@ def _ensure_real_aiohttp():
 
 
 def test_csp_includes_nonce_and_key_directives():
-    policy = m._csp_policy("TESTNONCE")
+    policy = m.csp_policy("TESTNONCE")
     assert "script-src 'self' 'nonce-TESTNONCE'" in policy
     assert "style-src 'self' 'unsafe-inline'" in policy  # dashboard sets inline styles
     assert "connect-src 'self'" in policy

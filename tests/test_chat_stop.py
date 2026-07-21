@@ -15,6 +15,7 @@ import json
 import pytest
 
 import wactorz.monitor_server as m
+from wactorz.monitor import chat, runtime
 
 
 def _payload(resp):
@@ -44,21 +45,21 @@ class _FakeMqtt:
         self.published.append((topic, payload, qos))
 
 
-@pytest.fixture
-def patched(monkeypatch):
+@pytest.fixture(name="patched")
+def patched_fixture(monkeypatch):
     """Reset the module globals the handler reads (in-flight tasks, mqtt ref)."""
-    monkeypatch.setattr(m, "_inflight_chat_tasks", set(), raising=False)
-    monkeypatch.setattr(m, "mqtt_client_ref", None, raising=False)
+    monkeypatch.setattr(chat, "inflight_chat_tasks", set())
+    monkeypatch.setattr(runtime, "mqtt_client_ref", None)
 
 
-async def test_stop_cancels_inflight_and_publishes(patched):
+async def test_stop_cancels_inflight_and_publishes(patched: pytest.MonkeyPatch):
     running = _FakeTask(done=False)
     finished = _FakeTask(done=True)
     mqtt = _FakeMqtt()
-    m._inflight_chat_tasks = {running, finished}
-    m.mqtt_client_ref = mqtt
+    chat.inflight_chat_tasks = {running, finished}
+    runtime.mqtt_client_ref = mqtt
 
-    resp = await m.rest_chat_stop_handler(request=None)
+    resp = await m.rest_chat_stop_handler(None)
     payload = _payload(resp)
 
     # Only the not-done task is cancelled.
@@ -76,8 +77,8 @@ async def test_stop_cancels_inflight_and_publishes(patched):
     assert payload["status"] == "stopped"
 
 
-async def test_stop_when_idle_and_no_broker_is_harmless(patched):
-    resp = await m.rest_chat_stop_handler(request=None)
+async def test_stop_when_idle_and_no_broker_is_harmless(patched: pytest.MonkeyPatch):
+    resp = await m.rest_chat_stop_handler(None)
     payload = _payload(resp)
 
     assert payload["cancelled"] == 0

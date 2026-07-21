@@ -625,7 +625,7 @@ class FactoryResetKeepSetTest(unittest.TestCase):
         import wactorz.monitor_server as ms
 
         # Unprotected → still individually deletable, but a factory reset keeps them.
-        for name in ms._HA_SYSTEM_AGENTS:
+        for name in ms.HA_SYSTEM_AGENTS:
             self.assertTrue(ms.survives_factory_reset(name, False), name)
 
     def test_user_and_catalog_spawned_agents_are_wiped(self):
@@ -637,7 +637,7 @@ class FactoryResetKeepSetTest(unittest.TestCase):
     def test_keep_set_covers_every_app_py_supervised_agent(self):
         """Drift guard: every fresh-boot agent (app.py .supervise chain) must be
         kept. If a new .supervise("x") is added, either mark it protected or add
-        it to _HA_SYSTEM_AGENTS — otherwise a factory reset would wipe it."""
+        it to HA_SYSTEM_AGENTS — otherwise a factory reset would wipe it."""
         import re
 
         import wactorz.monitor_server as ms

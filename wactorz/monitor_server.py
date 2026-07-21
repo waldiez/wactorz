@@ -9,10 +9,6 @@ The mode is advertised to the browser on connect via a {"type":"config"} frame
 so the frontend knows whether to send chat over /ws or publish to io/chat.
 """
 
-# TODO: uncomment the skips below (when we can do that and not make the linters crazy)
-# TODO: handle the 'from aiohttp import web' inside the function cases. Tests fail if we move them!!
-# TODO: Refactor this file: split it to wactorz/monitor/ package
-
 # pylint: disable=global-statement,invalid-name,logging-fstring-interpolation
 # pylint: disable=broad-exception-caught,protected-access,line-too-long
 # pylint: disable=missing-function-docstring,unused-argument,too-many-lines
@@ -26,14 +22,12 @@ import logging
 import os
 import sys
 import time
-from typing import Any
 
 from aiohttp import web
 from aiohttp.typedefs import Handler
 
 from ._bootstrap import WACTORZ_BOOTSTRAP  # noqa: F401 # pylint: disable=unused-import
-from .core.mqtt import mqtt_client
-from .monitor import chat, cost, events, lifecycle, runtime, static_site, ws
+from .monitor import chat, cost, events, lifecycle, mqtt, runtime, static_site, ws
 
 Response = web.Response | web.FileResponse | web.StreamResponse
 
@@ -50,139 +44,6 @@ logger = logging.getLogger(__name__)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
-
-
-async def _broadcast_mqtt_msg(topic: str, payload: str) -> None:
-    """Broadcast a received mqtt message."""
-    parsed: Any = payload
-    try:
-        parsed = json.loads(payload)
-    except Exception:
-        # non-JSON: pass the string through
-        pass
-    await ws.broadcast({"type": "server_event", "topic": topic, "payload": parsed})
-
-
-# Server-broker connection state, mirrored to browsers so the dashboard's "live"
-async def _set_mqtt_status(connected: bool) -> None:
-    """Broadcast a change in the server↔broker connection state to all browsers."""
-    if runtime.mqtt_connected == connected:
-        return
-    runtime.mqtt_connected = connected
-    await ws.broadcast({"type": "mqtt_status", "connected": connected})
-
-
-async def mqtt_listener():
-    logger.info(f"Connecting to MQTT {runtime.MQTT_BROKER}:{runtime.MQTT_PORT}...")
-    try:
-        while True:
-            try:
-                async with mqtt_client(runtime.MQTT_BROKER, runtime.MQTT_PORT) as client:
-                    runtime.mqtt_client_ref = client
-                    logger.info("MQTT connected.")
-
-                    if runtime.registry is not None:
-                        await client.publish(
-                            f"agents/{runtime.IO_GATEWAY_ID}/spawn",
-                            json.dumps(
-                                {
-                                    "agentId": runtime.IO_GATEWAY_ID,
-                                    "agentName": runtime.IO_GATEWAY_ID,
-                                    "agentType": "gateway",
-                                    "timestamp": time.time(),
-                                }
-                            ),
-                        )
-
-                    for topic in runtime.MQTT_TOPICS:
-                        await client.subscribe(topic)
-
-                    await _set_mqtt_status(True)
-
-                    async for message in client.messages:
-                        topic = str(message.topic)
-                        payload = message.payload.decode(errors="replace")
-
-                        if topic == "io/chat":
-                            if runtime.registry is not None:
-                                try:
-                                    asyncio.create_task(chat.handle_chat_mqtt(json.loads(payload)))
-                                except Exception as exc:
-                                    logger.error(f"[io/chat] error: {exc}")
-                            continue
-
-                        event: dict[str, Any] | None = events.parse_topic(topic, payload)
-                        await _broadcast_mqtt_msg(topic, payload)
-                        if event and not runtime.hard_resetting:
-                            metric = event.get("metric", "")
-                            log_event = None if metric == "heartbeat" else event
-                            await ws.broadcast(
-                                {"type": "patch", "event": log_event, "state": events.snapshot()}
-                            )
-                            # Agent-originated user-facing message. The browser already
-                            # renders it from the agents/{id}/chat (the ws.broadcast above)
-                            # so we do NOT ws.broadcast a second frame here. We only persist
-                            # it so it survives a browser reload like any other turn.
-                            push = event.get("_push_chat")
-                            if push:
-                                try:
-                                    if runtime.db is not None and push.get("content"):
-                                        runtime.db.write_chat_log(
-                                            ts=push.get("timestamp", time.time()),
-                                            agent_name=push.get("from", "agent"),
-                                            role="assistant",
-                                            content=push["content"],
-                                        )
-                                except Exception as _exc:
-                                    logger.debug(f"[chat-bridge] persist failed: {_exc}")
-
-            except Exception as e:
-                runtime.mqtt_client_ref = None
-                await _set_mqtt_status(False)
-                logger.warning(f"MQTT error: {e}. Reconnecting in 5s...")
-                await asyncio.sleep(5)
-    finally:
-        # Drop ref and force GC while loop is still open so paho's __del__
-        # doesn't fire after the event loop closes (avoids RuntimeError noise).
-        import gc
-
-        runtime.mqtt_client_ref = None
-        gc.collect()
-
-
-# ── Startup checks ─────────────────────────────────────────────────────────
-
-
-async def _check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
-    """Return True if MQTT broker is reachable.
-
-    Retries briefly so a transient blip (or a broker mid-restart) does not fatally
-    abort startup: the aiomqtt client itself reconnects, so this pre-flight probe
-    must be at least as tolerant, or it aborts a server whose MQTT is actually fine.
-    """
-    last = ""
-    for i in range(attempts):
-        try:
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection(runtime.MQTT_BROKER, runtime.MQTT_PORT), timeout=3
-            )
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass
-            return True
-        except Exception as exc:
-            last = repr(exc)
-            if i < attempts - 1:
-                await asyncio.sleep(delay)
-    logger.error(
-        f"[startup] MQTT broker {runtime.MQTT_BROKER}:{runtime.MQTT_PORT} "
-        f"unreachable after {attempts} tries — {last}"
-    )
-    return False
-
-
 async def _check_ws_port() -> bool:
     """Return True if WS_PORT is free to bind."""
     try:
@@ -859,7 +720,7 @@ async def feed_handler(request: web.Request) -> Response:
 
 async def main(exit_on_failure: bool = False):
     # ... (startup checks remain same) ...
-    mqtt_ok = await _check_mqtt()
+    mqtt_ok = await mqtt.check_mqtt()
     port_ok = await _check_ws_port()
 
     if not mqtt_ok or not port_ok:
@@ -962,7 +823,7 @@ async def main(exit_on_failure: bool = False):
     if static_site.DOCS_SITE.is_dir():
         logger.info(f"Docs     → http://localhost:{runtime.WS_PORT}/docs/")
 
-    await mqtt_listener()
+    await mqtt.mqtt_listener()
 
 
 def cli_main() -> None:
@@ -1059,6 +920,11 @@ _FORWARD = {
             "FRONTEND_PUBLIC",
             "DOCS_SITE",
         )
+    },
+    # mqtt module
+    **{
+        n: (mqtt, n)
+        for n in ("mqtt_listener", "set_mqtt_status", "check_mqtt", "broadcast_mqtt_msg")
     },
     # ws module
     **{n: (ws, n) for n in ("broadcast", "ws_handler", "handle_command")},

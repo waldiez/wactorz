@@ -58,6 +58,11 @@ def parse_mention(content: str) -> tuple[str, str]:
     return "main", content
 
 
+# ── Slash commands ─────────────────────────────────────────────────────────
+# Every handler receives a `reply_fn` coroutine — callers supply either an
+# MQTT publisher or a WebSocket sender.  No global state, no monkey-patching.
+
+
 async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, reply_fn) -> None:
     if not host:
         await reply_fn(f"[discover] Searching for '{node}' on the network...")
@@ -469,7 +474,7 @@ async def handle_chat_mqtt(data: dict):
     await route_chat(content, mqtt_reply)  # MQTT path: no streaming, reply_fn used for all output
 
 
-# ── WebSocket handler ──────────────────────────────────────────────────────
+# ── REST chat endpoints ────────────────────────────────────────────────────
 
 
 async def rest_chat_handler(request: web.Request) -> Response:

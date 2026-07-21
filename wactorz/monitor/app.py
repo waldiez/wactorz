@@ -29,7 +29,7 @@ Response = web.Response | web.FileResponse | web.StreamResponse
 logger = logging.getLogger(__name__)
 
 
-# ── helpers ────────────────────────────────────────────────────────────────
+# ── Startup preconditions ──────────────────────────────────────────────────
 async def check_ws_port() -> bool:
     """Return True if WS_PORT is free to bind."""
     try:

@@ -142,9 +142,9 @@ async def actor_metrics_handler(request: web.Request) -> Response:
 
 
 async def actors_handler(request: web.Request) -> Response:  # pylint: disable=unused-argument
-    # Prefer the live registry (injected by cli.py) — actor objects carry the
-    # authoritative protected flag.  Fall back to MQTT-derived state dict when
-    # the registry is unavailable (standalone monitor_server mode).
+    # Prefer the live registry (injected at boot via runtime.set_registry) —
+    # actor objects carry the authoritative protected flag.  Fall back to the
+    # MQTT-derived state dict when no registry was injected (legacy MQTT mode).
     #
     # CONTRACT: the registry path intentionally excludes remote-runner agents
     # (they are not in the local Python registry).  The frontend relies on this

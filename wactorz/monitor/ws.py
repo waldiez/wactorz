@@ -34,11 +34,6 @@ async def broadcast(msg: dict[str, Any]) -> None:
     runtime.ws_clients.difference_update(dead)
 
 
-# ── slash commands ─────────────────────────────────────────────────────────
-# Every handler receives a `reply_fn` coroutine — callers supply either an
-# MQTT publisher or a WebSocket sender.  No global state, no monkey-patching.
-
-
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     """Handle websocket connection."""
     ws = web.WebSocketResponse()
@@ -228,7 +223,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
-# ── MQTT infrastructure ────────────────────────────────────────────────────
+# ── Browser commands ───────────────────────────────────────────────────────
 
 
 async def handle_command(cmd: dict[str, Any]) -> None:

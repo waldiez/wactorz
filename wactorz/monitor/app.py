@@ -42,21 +42,12 @@ async def check_ws_port() -> bool:
         return False
 
 
-async def main(exit_on_failure: bool = False) -> None:
-    mqtt_ok = await mqtt.check_mqtt()
-    port_ok = await check_ws_port()
+def build_app() -> web.Application:
+    """Create the monitor app with every route registered.
 
-    if not mqtt_ok or not port_ok:
-        msg = []
-        if not mqtt_ok:
-            msg.append(f"MQTT broker unreachable ({runtime.MQTT_BROKER}:{runtime.MQTT_PORT})")
-        if not port_ok:
-            msg.append(f"Port {runtime.WS_PORT} already in use")
-        err_msg = "; ".join(msg)
-        logger.error("[startup] Cannot start: %s", err_msg)
-        if exit_on_failure:
-            raise SystemExit(1)
-        return
+    Kept separate from :func:`main` so the full HTTP surface is readable in
+    one place, and so tests can build the real app without binding a port.
+    """
 
     @web.middleware
     async def cors_middleware(request: web.Request, handler: Handler) -> Response:
@@ -138,6 +129,26 @@ async def main(exit_on_failure: bool = False) -> None:
     app.router.add_get("/docs/{path:.+}", static_site.docs_handler)
 
     app.router.add_get("/{path:.+}", static_site.static_handler)
+    return app
+
+
+async def main(exit_on_failure: bool = False) -> None:
+    mqtt_ok = await mqtt.check_mqtt()
+    port_ok = await check_ws_port()
+
+    if not mqtt_ok or not port_ok:
+        msg = []
+        if not mqtt_ok:
+            msg.append(f"MQTT broker unreachable ({runtime.MQTT_BROKER}:{runtime.MQTT_PORT})")
+        if not port_ok:
+            msg.append(f"Port {runtime.WS_PORT} already in use")
+        err_msg = "; ".join(msg)
+        logger.error("[startup] Cannot start: %s", err_msg)
+        if exit_on_failure:
+            raise SystemExit(1)
+        return
+
+    app = build_app()
 
     runner = web.AppRunner(app)
     await runner.setup()

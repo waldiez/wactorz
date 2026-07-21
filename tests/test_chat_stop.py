@@ -14,7 +14,6 @@ import json
 
 import pytest
 
-import wactorz.monitor_server as m
 from wactorz.monitor import chat, runtime
 
 
@@ -59,7 +58,7 @@ async def test_stop_cancels_inflight_and_publishes(patched: pytest.MonkeyPatch):
     chat.inflight_chat_tasks = {running, finished}
     runtime.mqtt_client_ref = mqtt
 
-    resp = await m.rest_chat_stop_handler(None)
+    resp = await chat.rest_chat_stop_handler(None)
     payload = _payload(resp)
 
     # Only the not-done task is cancelled.
@@ -78,7 +77,7 @@ async def test_stop_cancels_inflight_and_publishes(patched: pytest.MonkeyPatch):
 
 
 async def test_stop_when_idle_and_no_broker_is_harmless(patched: pytest.MonkeyPatch):
-    resp = await m.rest_chat_stop_handler(None)
+    resp = await chat.rest_chat_stop_handler(None)
     payload = _payload(resp)
 
     assert payload["cancelled"] == 0

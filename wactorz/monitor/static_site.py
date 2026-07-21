@@ -146,8 +146,13 @@ async def static_handler(request: web.Request) -> Response:
     raise web.HTTPNotFound()
 
 
-async def docs_redirect(_request: web.Request) -> web.HTTPFound:
-    return web.HTTPFound("/docs/")
+async def docs_redirect(_request: web.Request) -> web.Response:
+    """Send ``/docs`` to ``/docs/`` so relative asset links resolve.
+
+    Raised rather than returned: aiohttp deprecated returning an
+    ``HTTPException`` (aio-libs/aiohttp#2415).
+    """
+    raise web.HTTPFound("/docs/")
 
 
 async def docs_handler(request: web.Request) -> web.FileResponse:

@@ -54,6 +54,7 @@ Environment variables:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -76,6 +77,17 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger("wactorz.fuseki")
+
+
+def _encode_basic_auth(login: str, password: str = "") -> str:
+    """RFC 7617 ``Authorization`` header value for HTTP Basic auth.
+
+    ``aiohttp.encode_basic_auth`` only exists in aiohttp >= 3.14, while
+    ``aiohttp.BasicAuth.encode`` is deprecated there — encode locally so the
+    whole supported range (aiohttp >= 3.13.3) works without warnings.
+    """
+    credentials = base64.b64encode(f"{login}:{password}".encode("utf-8")).decode("ascii")
+    return f"Basic {credentials}"
 
 # ── Shared Turtle prefix block ────────────────────────────────────────────────
 
@@ -1066,7 +1078,7 @@ class HAFusekiBridge:
         self._fuseki_url = fuseki_url
         self._fuseki_dataset = fuseki_dataset
         self._fuseki_auth_header: str | None = (
-            aiohttp.encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
+            _encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
         )
         self._domains: frozenset[str] = domains if domains is not None else DEFAULT_DOMAINS
         # area_id → area name lookup built during seed
@@ -1325,7 +1337,7 @@ async def seed_agent_registry(
     """
     if not fuseki_url or not fuseki_dataset:
         return
-    auth_header = aiohttp.encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
+    auth_header = _encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
     connector = aiohttp.TCPConnector(ssl=False, force_close=True)
     try:
         async with aiohttp.ClientSession(connector=connector) as http:
@@ -1397,7 +1409,7 @@ async def link_agent_dids(
             f'  swidns:did "{_esc(did)}" ;\n'
             f'  swidns:handle "{_esc(handle)}" .\n'
         )
-    auth_header = aiohttp.encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
+    auth_header = _encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
     connector = aiohttp.TCPConnector(ssl=False, force_close=True)
     try:
         async with aiohttp.ClientSession(connector=connector) as http:
@@ -1428,7 +1440,7 @@ class AgentManifestBridge:
         self._fuseki_url = fuseki_url  # pyright: ignore[reportUnannotatedClassAttribute]
         self._fuseki_dataset = fuseki_dataset  # pyright: ignore[reportUnannotatedClassAttribute]
         self._fuseki_auth_header: str | None = (  # pyright: ignore[reportUnannotatedClassAttribute]
-            aiohttp.encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
+            _encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
         )
 
     async def run(self) -> None:
@@ -1515,7 +1527,7 @@ class MetricsBridge:
         self._fuseki_url = fuseki_url
         self._fuseki_dataset = fuseki_dataset
         self._fuseki_auth_header: str | None = (
-            aiohttp.encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
+            _encode_basic_auth(fuseki_user, fuseki_password) if fuseki_user else None
         )
 
     # Compact every 6 hours to reclaim TDB2 journal space

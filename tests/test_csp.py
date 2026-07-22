@@ -4,7 +4,7 @@ import importlib
 import re
 import sys
 
-from wactorz.monitor import static_site
+from wactorz.web import static_site
 
 
 def _ensure_real_aiohttp():

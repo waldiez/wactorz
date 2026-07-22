@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from wactorz.monitor import chat, runtime
+from wactorz.web import chat, runtime
 
 
 def _payload(resp):

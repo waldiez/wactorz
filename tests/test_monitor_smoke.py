@@ -14,8 +14,8 @@ gracefully when ``runtime.registry`` is ``None`` (legacy/standalone mode).
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from wactorz.monitor import runtime
-from wactorz.monitor.app import build_app
+from wactorz.web import runtime
+from wactorz.web.app import build_app
 
 # Routes that need a live actor/broker or mutate state — smoke-tested for
 # reachability only, or skipped entirely (POST/DELETE are covered by the unit

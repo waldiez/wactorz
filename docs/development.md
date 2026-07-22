@@ -333,8 +333,8 @@ wactorz/                         ← repo root
 ├── wactorz/                     ← Python package
 │   ├── cli.py                   ← entry point (wactorz command)
 │   ├── config.py                ← .env loading, CONFIG object
-│   ├── monitor_server.py        ← back-compat shim → wactorz/monitor/
-│   ├── monitor/                 ← web dashboard (aiohttp)
+│   ├── monitor_server.py        ← back-compat shim → wactorz/web/
+│   ├── web/                     ← web server: dashboard SPA + REST + WS + docs (aiohttp)
 │   │   ├── app.py               ← route table, build_app(), entry point
 │   │   ├── runtime.py           ← shared mutable state (registry, db, live state)
 │   │   ├── api_actors.py        ← /api/actors… handlers

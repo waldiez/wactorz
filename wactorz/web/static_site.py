@@ -14,7 +14,7 @@ from . import runtime
 
 Response = web.Response | web.FileResponse | web.StreamResponse
 
-# This module lives in wactorz/monitor/, so the package dir is two levels up
+# This module lives in wactorz/web/, so the package dir is two levels up
 # from __file__ (assets ship inside the wheel at wactorz/static/, and sit at
 # <repo>/static/ in a source checkout).
 _pkg = Path(__file__).parent.parent

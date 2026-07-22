@@ -15,7 +15,7 @@ import types
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from wactorz.monitor import api_actors, cost, events, runtime
+from wactorz.web import api_actors, cost, events, runtime
 
 # ── Minimal stubs so heavy optional deps don't need to be installed ──────────
 # aiohttp is a hard dependency and monitor_server imports it fully at module

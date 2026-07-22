@@ -1,20 +1,20 @@
 """Compatibility shim for the pre-split monitor module.
 
-The monitor now lives in the :mod:`wactorz.monitor` package: ``app`` (route
+The monitor now lives in the :mod:`wactorz.web` package: ``app`` (route
 table + entry point), ``runtime`` (shared mutable state), and one module per
 concern — ``chat``, ``ws``, ``mqtt``, ``events``, ``cost``, ``lifecycle``,
 ``static_site``, ``api_actors``, ``api_system``, ``api_reset``.
 
 This module exists so the ``wactorz-monitor`` console script, the
 ``python -m wactorz.monitor_server`` invocation, and any external importer keep
-working. **New code should import from ``wactorz.monitor.*`` directly.**
+working. **New code should import from ``wactorz.web.*`` directly.**
 """
 
 import os
 
 from ._bootstrap import WACTORZ_BOOTSTRAP  # noqa: F401 # pylint: disable=unused-import
-from .monitor import runtime
-from .monitor.app import build_app, cli_main, main
+from .web import runtime
+from .web.app import build_app, cli_main, main
 
 __all__ = ["build_app", "cli_main", "main"]
 

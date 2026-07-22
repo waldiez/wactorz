@@ -36,8 +36,8 @@ async def _start_web_ui(
     """Start the monitor web server as a quiet background asyncio task."""
     import logging as _log
 
-    from wactorz.monitor import runtime, static_site
-    from wactorz.monitor.app import main as monitor_main
+    from wactorz.web import runtime, static_site
+    from wactorz.web.app import main as run_server
 
     runtime.MQTT_BROKER = mqtt_broker
     runtime.MQTT_PORT = mqtt_port
@@ -50,10 +50,10 @@ async def _start_web_ui(
     if persistence_db is not None:
         runtime.set_db(persistence_db)
 
-    for _name in ("wactorz.monitor", "aiohttp.access", "aiohttp.server"):
+    for _name in ("wactorz.web", "aiohttp.access", "aiohttp.server"):
         _log.getLogger(_name).setLevel(_log.WARNING)
 
-    asyncio.create_task(monitor_main())
+    asyncio.create_task(run_server())
     logger.info("Web UI →  http://localhost:%d", port)
     if static_site.DOCS_SITE.is_dir():
         logger.info("Docs   →  http://localhost:%d/docs/", port)

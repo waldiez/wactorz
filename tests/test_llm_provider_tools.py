@@ -168,12 +168,13 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
 
         # patch.dict auto-restores sys.modules["aiohttp"] on exit so this fake
         # never leaks into later tests that import aiohttp at module level.
-        self.enterContext(
-            patch.dict(
-                sys.modules,
-                {"aiohttp": types.SimpleNamespace(ClientSession=lambda: _Session())},
-            )
+        # (start()+addCleanup rather than self.enterContext, which is 3.11+.)
+        _patch = patch.dict(
+            sys.modules,
+            {"aiohttp": types.SimpleNamespace(ClientSession=lambda: _Session())},
         )
+        _patch.start()
+        self.addCleanup(_patch.stop)
 
         provider = OllamaProvider(model="llama3", base_url="http://ollama.local")
         result = await provider.complete_with_tools(

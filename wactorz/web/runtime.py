@@ -13,9 +13,9 @@ are the only names safe to alias-import.
 import time
 from typing import TYPE_CHECKING
 
-import aiomqtt
-
 if TYPE_CHECKING:
+    import aiomqtt
+
     from wactorz.core.persistence import WactorzDB
     from wactorz.core.registry import ActorRegistry
 
@@ -42,7 +42,7 @@ registry: "ActorRegistry | None" = None
 # Used to query historical cost data for deleted agents.
 db: "WactorzDB | None" = None
 
-mqtt_client_ref: aiomqtt.Client | None = None
+mqtt_client_ref: "aiomqtt.Client | None" = None
 
 # Server↔broker link state. Shared: mqtt sets it, ws reports it to browsers, so
 # it lives here rather than in either module (mqtt already depends on ws).

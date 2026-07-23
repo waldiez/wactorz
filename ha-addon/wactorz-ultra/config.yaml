@@ -1,10 +1,10 @@
-name: Wactorz
+name: Wactorz Ultra
 version: "0.5.1"
-slug: wactorz
-description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
+slug: wactorz-ultra
+description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime. Also run machine learning models for data analysis, like image recognition.
 url: https://github.com/waldiez/wactorz
 # Remove in local test copies to build from source.
-image: "ghcr.io/waldiez/wactorz-addon-{arch}"
+image: "ghcr.io/waldiez/wactorz-ultra-addon-{arch}"
 arch:
   - aarch64
   - amd64
@@ -17,8 +17,8 @@ hassio_role: admin
 ingress: true
 ingress_port: 8888
 ingress_stream: true
-panel_icon: mdi:robot-outline
-panel_title: Wactorz
+panel_icon: mdi:brain
+panel_title: Wactorz Ultra
 webui: http://[HOST]:[PORT:8888]
 
 # ── Ports ──────────────────────────────────────────────────────────────────────

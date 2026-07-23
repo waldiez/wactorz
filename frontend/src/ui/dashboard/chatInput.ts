@@ -50,7 +50,7 @@ export class ChatInput {
             this._acceptSuggestion(input, ghost);
             return;
         }
-        if (this._tryHistoryNav(e, input, select, ghost, mentionPanel)) {
+        if (this._tryHistoryNav(e, input)) {
             return;
         }
         if (e.key === "Escape") {
@@ -155,13 +155,7 @@ export class ChatInput {
     }
 
     /** ↑/↓ step through input history. Returns true if handled. */
-    private _tryHistoryNav(
-        e: KeyboardEvent,
-        input: HTMLTextAreaElement,
-        select: HTMLSelectElement,
-        ghost: HTMLElement,
-        mentionPanel: HTMLElement,
-    ): boolean {
+    private _tryHistoryNav(e: KeyboardEvent, input: HTMLTextAreaElement): boolean {
         if ((e.key !== "ArrowUp" && e.key !== "ArrowDown") || e.shiftKey) {
             return false;
         }
@@ -171,7 +165,9 @@ export class ChatInput {
         } else {
             this._historyDown(input);
         }
-        this.onChange(input, select, ghost, mentionPanel);
+        // Fire `input` so the textarea auto-grows to fit the recalled message
+        // (and runs onChange) — the same path a real keystroke takes.
+        input.dispatchEvent(new Event("input"));
         return true;
     }
 

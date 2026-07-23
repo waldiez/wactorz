@@ -1,0 +1,128 @@
+name: Wactorz
+version: "0.5.1"
+slug: wactorz
+description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
+url: https://github.com/waldiez/wactorz
+# Remove in local test copies to build from source.
+image: "ghcr.io/waldiez/wactorz-addon-{arch}"
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: auto
+init: false
+homeassistant_api: true
+hassio_api: true
+hassio_role: admin
+ingress: true
+ingress_port: 8888
+ingress_stream: true
+panel_icon: mdi:robot-outline
+panel_title: Wactorz
+webui: http://[HOST]:[PORT:8888]
+
+# ── Ports ──────────────────────────────────────────────────────────────────────
+ports:
+  8000/tcp: 8000
+  8888/tcp: 8888
+  1883/tcp: null
+ports_description:
+  8000/tcp: Wactorz REST + WebSocket API
+  8888/tcp: Wactorz Monitor UI
+  1883/tcp: MQTT TCP broker (only active when mosquitto_embedded is true)
+
+# ── Persistent state ───────────────────────────────────────────────────────────
+map:
+  - config:rw
+  - share:rw
+
+# ── User-configurable options ──────────────────────────────────────────────────
+options:
+  # API access key for the Wactorz REST API (leave blank to disable auth)
+  #api_key: ""
+
+  # LLM backend
+  llm_provider: anthropic
+  llm_model: claude-sonnet-4-6
+  llm_api_key: ""
+
+
+  # Ollama (local LLM alternative — set llm_provider: ollama)
+  ollama_url: "http://localhost:11434"
+
+  # OpenAI-compatible endpoint (set llm_provider: openai). Leave blank for the
+  # real OpenAI API, or point to any compatible proxy/provider for communication
+  # with it — e.g. a LiteLLM proxy, Groq, Together, vLLM, or LM Studio.
+  openai_url: ""
+
+  # MQTT broker — set to the Mosquitto addon host if using the official addon
+  mqtt_host: core-mosquitto
+  mqtt_port: 1883
+  mqtt_ws_port: 8083
+  # Broker credentials (optional) — leave blank for an anonymous broker.
+  # The official Mosquitto addon disables anonymous access, so set these to a
+  # Home Assistant user/password (or a broker-specific login) when not embedded.
+  mqtt_username: ""
+  mqtt_password: ""
+
+  # Home Assistant connection (used by HA agents inside Wactorz)
+  ha_url: "http://homeassistant.local:8123"
+  ha_token: ""
+
+  # Embedded services — bundle Mosquitto inside this addon container
+  # (no external addon needed; data persisted to /share/mosquitto)
+  mosquitto_embedded: false
+
+  # Spend cap — set to 0 to disable. Period: daily, weekly, or monthly. Resets automatically.
+  llm_cost_limit_usd: 0
+  llm_cost_limit_period: monthly
+
+  # Optional extra integrations
+  #discord_bot_token: ""
+  #telegram_bot_token: ""
+  #telegram_allowed_user_id: 0
+
+  # OpenTelemetry — leave blank to disable
+  # Point to any OTLP HTTP collector (e.g. http://192.168.1.10:4318)
+  #otel_endpoint: ""
+  #otel_service_name: "wactorz"
+
+  # InfluxDB 2.x — leave influx_url blank to disable
+  # Use the official InfluxDB HA addon (http://homeassistant:8086) or any external instance.
+  # pip install 'wactorz[influx]' is handled automatically when influx_url is set.
+  #influx_url: ""
+  #influx_token: ""
+  #influx_org: "wactorz"
+  #influx_bucket: "wactorz"
+
+schema:
+  #api_key: str?
+  llm_provider: list(anthropic|ollama|openai|gemini|nim)
+  llm_model: str
+  llm_api_key: str?
+  llm_cost_limit_usd: float
+  llm_cost_limit_period: list(daily|weekly|monthly)
+  ollama_url: url
+  openai_url: str?
+  mqtt_host: str
+  mqtt_port: port
+  mqtt_ws_port: port
+  mqtt_username: str?
+  mqtt_password: str?
+  ha_url: url
+  ha_token: str?
+  mosquitto_embedded: bool
+  #discord_bot_token: str?
+  #telegram_bot_token: str?
+  #telegram_allowed_user_id: int
+  #otel_endpoint: str?
+  #otel_service_name: str?
+  #influx_url: str?
+  #influx_token: str?
+  #influx_org: str
+  #influx_bucket: str
+
+# ── Environment variables injected into the container ─────────────────────────
+# The run.sh entrypoint reads OPTIONS_PATH and maps these to env vars.
+environment:
+  OPTIONS_PATH: /data/options.json

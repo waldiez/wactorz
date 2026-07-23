@@ -16,7 +16,6 @@ export default defineConfig({
             // Forward API and WebSocket calls to the local monitor server in dev.
             "/api": { target: "http://localhost:8888", changeOrigin: true },
             "/ws": { target: "ws://localhost:8888", ws: true },
-            "/mqtt": { target: "ws://localhost:8888", ws: true },
         },
     },
     base: "./",
@@ -28,14 +27,7 @@ export default defineConfig({
         rollupOptions: {
             output: {
                 manualChunks: id => {
-                    // Split third-party deps into cacheable chunks. Match on the
-                    // node_modules package path, never a bare "mqtt" substring —
-                    // that would also catch the app's own src/mqtt/ modules, which
-                    // must stay in the entry chunk.
                     if (id.includes("node_modules")) {
-                        if (id.includes("node_modules/mqtt/") || id.includes("node_modules/mqtt-packet/")) {
-                            return "mqtt";
-                        }
                         return "vendor";
                     }
                 },

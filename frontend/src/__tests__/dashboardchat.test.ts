@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
-import { resolveSendTarget, stripLeadingMention } from "../ui/dashboard/chatRouting";
+import { pickChatTarget, resolveSendTarget, stripLeadingMention } from "../ui/dashboard/chatRouting";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { View } from "../ui/dashboard/types";
 
@@ -48,6 +48,30 @@ const thread = (host: ChatHost) => host.root.querySelector<HTMLElement>("#af-cha
 // A raw UUID agent id — the backend uses these (not WIDs), and one that never
 // resolved to a friendly name keeps the id as its name.
 const UUID = "45511e2b-3a2f-4c1d-9e8a-1b2c3d4e5f60";
+
+describe("pickChatTarget", () => {
+    it("prefers main on startup even after another agent was auto-selected first", () => {
+        // No user pick yet: catalog registered before main and is the current
+        // auto-pick, but once main is present it must win (else it sticks).
+        expect(pickChatTarget([agent("catalog"), agent("main")], "catalog", false)).toBe("main");
+    });
+
+    it("falls back to the alphabetical-first messageable agent when main is absent", () => {
+        expect(pickChatTarget([agent("catalog"), agent("worker")], "main-actor", false)).toBe("catalog");
+    });
+
+    it("keeps a user-picked target even when main is present", () => {
+        expect(pickChatTarget([agent("catalog"), agent("main")], "catalog", true)).toBe("catalog");
+    });
+
+    it("moves a user-picked target off an agent that is gone", () => {
+        expect(pickChatTarget([agent("main"), agent("worker")], "ghost", true)).toBe("main");
+    });
+
+    it("returns current when there are no messageable agents", () => {
+        expect(pickChatTarget([], "main-actor", false)).toBe("main-actor");
+    });
+});
 
 describe("resolveSendTarget", () => {
     const names = ["main-actor", "catalog", "worker"];
@@ -108,11 +132,18 @@ describe("DashboardChat — syncChatTarget", () => {
         expect(dc.chatTarget).toBe("alpha");
     });
 
-    it("keeps a current valid target instead of re-picking", () => {
+    it("keeps a user-picked target instead of re-picking", () => {
         const dc = new DashboardChat(makeHost([agent("main"), agent("worker")]));
-        dc.chatTarget = "worker";
+        dc.setTarget("worker"); // explicit user pick → sticky
         dc.syncChatTarget();
         expect(dc.chatTarget).toBe("worker");
+    });
+
+    it("re-selects main on startup even if an agent was auto-picked before main loaded", () => {
+        const dc = new DashboardChat(makeHost([agent("catalog"), agent("main")]));
+        dc.chatTarget = "catalog"; // auto-picked before main arrived (no user pick)
+        dc.syncChatTarget();
+        expect(dc.chatTarget).toBe("main");
     });
 });
 
@@ -442,5 +473,31 @@ describe("DashboardChat — stop, attachments, external events", () => {
         dc._streamText = "partial reply";
         dc.renderChatThread();
         expect(thread(host).textContent).toContain("partial reply");
+    });
+});
+
+describe("DashboardChat — @mention target stickiness", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("stays on an @mentioned agent after a later reconcile (no snap back to main)", () => {
+        globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => [] })) as unknown as typeof fetch;
+        const host = makeHost([agent("main-actor"), agent("catalog")], "chat");
+        const dc = mount(host);
+        dc.wire();
+        const iobar = dc.buildIobar();
+        host.root.appendChild(iobar);
+        const input = iobar.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+
+        input.value = "@catalog spawn weather agent";
+        iobar.querySelector<HTMLButtonElement>(".af-send-btn")!.click();
+        // the @mention switched the open thread to catalog
+        expect(dc.chatTarget).toBe("catalog");
+
+        // a reply / agent-list refresh triggers syncChatTarget — it must NOT
+        // revert to main now that the @mention counts as a deliberate pick.
+        dc.syncChatTarget();
+        expect(dc.chatTarget).toBe("catalog");
+
+        dc.unwire();
     });
 });

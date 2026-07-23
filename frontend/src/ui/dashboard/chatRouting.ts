@@ -13,18 +13,29 @@ import { looksLikeAgentId } from "../../agents/naming";
 import { canDirectMessage } from "./agentState";
 
 /**
- * Pick the default chat target for the current agent set: keep `current` if it's
- * still messageable, else prefer main, else the first human-named agent. Never
- * auto-selects an id-named agent — the backend uses UUID ids (not WIDs), so an
- * agent that never resolved keeps the id as its name and must not silently become
- * the chat target (it leaks into the placeholder). The user can still pick one.
+ * Pick the default chat target for the current agent set.
+ *
+ * Until the user has explicitly picked a target (`userPicked` false), prefer main
+ * whenever it is present — otherwise an agent that registers before main on
+ * startup (added first, and often alphabetically first, e.g. `catalog`) gets
+ * auto-selected and then sticks. Once the user has picked, keep `current` while
+ * it's still messageable, else fall back to main, else the first human-named
+ * agent. Never auto-selects an id-named agent — the backend uses UUID ids (not
+ * WIDs), so an agent that never resolved keeps the id as its name and must not
+ * silently become the chat target.
  */
-export function pickChatTarget(agents: AgentInfo[], current: string): string {
+export function pickChatTarget(agents: AgentInfo[], current: string, userPicked = false): string {
     const messageable = agents.filter(canDirectMessage);
-    if (!messageable.length || messageable.some(a => a.name === current)) {
+    if (!messageable.length) {
         return current;
     }
     const main = messageable.find(a => a.name === "main" || a.name === "main-actor");
+    if (!userPicked && main) {
+        return main.name;
+    }
+    if (messageable.some(a => a.name === current)) {
+        return current;
+    }
     const named = messageable
         .filter(a => !looksLikeAgentId(a.name))
         .sort((a, b) => a.name.localeCompare(b.name));

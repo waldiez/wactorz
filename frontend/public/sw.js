@@ -12,13 +12,13 @@
  * Strategy:
  *   - index.html / entry points → network-first, cache fallback (ensures fresh JS hashes)
  *   - Hashed assets (/assets/*, *.js, *.css) → cache-first (content-hash busts automatically)
- *   - API calls (/api/*, /ws/*, /mqtt/*) → network-only (never cache)
+ *   - API calls (/api/*, /ws/*) → network-only (never cache)
  *   - Everything else → network-first, fall back to cache
  */
 
-const CACHE = "wactorz-v4";
+const CACHE = "wactorz-v5";
 
-const NEVER_CACHE = ["/api/", "/ws", "/mqtt"];
+const NEVER_CACHE = ["/api/", "/ws"];
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();
@@ -44,7 +44,7 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
   // Never intercept API / WebSocket upgrade requests. A trailing-slash entry
-  // (/api/) matches by prefix; a bare entry (/ws, /mqtt) matches only the exact
+  // (/api/) matches by prefix; a bare entry (/ws) matches only the exact
   // path or a sub-path, never a sibling like /wsfoo.
   const path = url.pathname;
   if (

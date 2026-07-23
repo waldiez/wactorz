@@ -32,6 +32,11 @@ from .prompts.main_actor_prompts import (
 
 logger = logging.getLogger(__name__)
 
+# Consecutive node heartbeats a registry-claimed agent must be absent from before
+# it is pruned as a silent loss. A single miss is a transient discovery gap; pruning
+# on it drops a live agent from the registry (breaking delete + node-reboot recovery).
+VANISH_MISS_THRESHOLD = 3
+
 
 class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     DESCRIPTION = "Main orchestrator: spawns agents, routes tasks, manages the multi-agent system"
@@ -53,6 +58,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.protected = True
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
         self._known_nodes: dict[str, dict] = {}
+        # Consecutive heartbeats a registry-claimed agent has been absent from its
+        # node — (node_name, agent_name) → count. Prune only past the threshold so a
+        # single missed heartbeat (a transient gap) doesn't drop a live agent.
+        self._node_agent_misses: dict[tuple[str, str], int] = {}
         # Topic registry: topic → [manifest, ...] — built from agents/+/manifest
         self._topic_registry: dict[str, list] = {}  # topic → list of agent manifests
         self._agent_manifests: dict[
@@ -96,6 +105,38 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             del reg[name]
             self.persist(SPAWN_REGISTRY_KEY, reg)
             logger.info(f"[{self.name}] Removed '{name}' from spawn registry.")
+
+    def _agents_to_prune(
+        self, node_name: str, curr_agents: set[str], prev_agents: set[str]
+    ) -> list[str]:
+        """Registry agents on ``node_name`` that have now missed
+        ``VANISH_MISS_THRESHOLD`` consecutive heartbeats, so they count as a real
+        silent loss rather than a transient gap. Updates the miss counters:
+        presence resets, absence increments. Never starts counting an agent that
+        has not yet appeared on the node (e.g. just spawned, first heartbeat
+        pending); migrated-away agents (registry now names a different node) are
+        skipped like before.
+        """
+        reg = self._get_spawn_registry()
+        to_prune: list[str] = []
+        for agent_name, cfg in list(reg.items()):
+            if (cfg.get("node", "") or "").strip() != node_name:
+                continue
+            key = (node_name, agent_name)
+            if agent_name in curr_agents:
+                self._node_agent_misses.pop(key, None)
+                continue
+            # Absent this heartbeat — only count it if the agent was present last
+            # heartbeat or is already mid-count; ignore one that never appeared.
+            if key not in self._node_agent_misses and agent_name not in prev_agents:
+                continue
+            misses = self._node_agent_misses.get(key, 0) + 1
+            if misses >= VANISH_MISS_THRESHOLD:
+                self._node_agent_misses.pop(key, None)
+                to_prune.append(agent_name)
+            else:
+                self._node_agent_misses[key] = misses
+        return to_prune
 
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = None):
         """Clear an agent's manifest from main's in-memory caches AND from the
@@ -3171,31 +3212,25 @@ async def handle_task(agent, payload):
                             prev = self._known_nodes.get(node_name, {})
                             prev_agents = set(prev.get("agents", []))
                             curr_agents = set(new_agents)
-                            disappeared = prev_agents - curr_agents
-                            if disappeared:
-                                # Only count as silent-loss if the spawn registry still
-                                # claims the agent should be on this node. Migration
-                                # updates the registry before the old node stops the
-                                # agent, so a migrated agent won't trip this check.
-                                reg = self._get_spawn_registry()
-                                for agent_name in disappeared:
-                                    cfg = reg.get(agent_name)
-                                    if not cfg:
-                                        continue  # already deleted via /agents — nothing to do
-                                    if cfg.get("node", "").strip() != node_name:
-                                        continue  # migrated away — expected disappearance
-                                    logger.warning(
-                                        f"[main] Agent '{agent_name}' silently disappeared "
-                                        f"from node '{node_name}' (crash/kill suspected)"
-                                    )
-                                    # Same cleanup as a manual delete, minus the node-side
-                                    # stop signal (it's already gone there).
-                                    self._remove_from_spawn_registry(agent_name)
-                                    await self._clear_agent_manifest(agent_name)
-                                    self._record_agent_deletion(
-                                        agent_name,
-                                        reason=f"vanished from node '{node_name}' (crash or external kill)",
-                                    )
+                            # Prune only agents absent for several consecutive
+                            # heartbeats — a single miss is a transient gap and must
+                            # not drop a live agent. _agents_to_prune tracks the miss
+                            # counts and skips migrated-away / never-appeared agents.
+                            for agent_name in self._agents_to_prune(
+                                node_name, curr_agents, prev_agents
+                            ):
+                                logger.warning(
+                                    f"[main] Agent '{agent_name}' silently disappeared "
+                                    f"from node '{node_name}' (crash/kill suspected)"
+                                )
+                                # Same cleanup as a manual delete, minus the node-side
+                                # stop signal (it's already gone there).
+                                self._remove_from_spawn_registry(agent_name)
+                                await self._clear_agent_manifest(agent_name)
+                                self._record_agent_deletion(
+                                    agent_name,
+                                    reason=f"vanished from node '{node_name}' (crash or external kill)",
+                                )
                             self._known_nodes[node_name] = {
                                 "last_seen": _t.time(),
                                 "agents": new_agents,
@@ -3692,6 +3727,22 @@ async def handle_task(agent, payload):
         if target:
             await self.send(target.actor_id, command)
 
+    def _node_running_agent(self, name: str) -> str:
+        """Return the live remote node currently running ``name``, from heartbeat
+        telemetry, or "" if none recently claims it.
+
+        Fallback for when the spawn registry doesn't record the node. Mirrors the
+        freshness window used by ``migrate_agent``.
+        """
+        import time as _t
+
+        for nd_name, nd in self._known_nodes.items():
+            if _t.time() - nd.get("last_seen", 0) >= 30:
+                continue
+            if name in nd.get("agents", []):
+                return nd_name
+        return ""
+
     async def delete_spawned_agent(self, name: str):
         """Permanently delete an agent.
 
@@ -3710,9 +3761,14 @@ async def handle_task(agent, payload):
             per-agent MQTT topics as a defensive second pass — if the runner
             is offline or main is acting alone, the broker is still cleared.
         """
-        # Find node before removing from registry
+        # Find node before removing from registry. If the registry has no record
+        # of the agent (e.g. already pruned), fall back to live heartbeat
+        # telemetry — otherwise a remote agent would take the local-only branch
+        # below and keep running on its node.
         reg = self._get_spawn_registry()
         node = reg.get(name, {}).get("node", "").strip()
+        if not node:
+            node = self._node_running_agent(name)
 
         # Capture/derive the deterministic actor_id BEFORE we tear anything down,
         # so we can purge per-agent retained topics even after the local actor

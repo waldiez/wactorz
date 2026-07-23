@@ -278,15 +278,13 @@ After connection the server streams every MQTT message as a JSON object. Field n
 }
 ```
 
-The dashboard also receives bespoke control frames (`delete_agent`, snapshot diffs, etc.) over the same socket.
-
-The monitor additionally serves `ws://localhost:8888/mqtt`, a raw passthrough to the broker's WebSocket listener so clients can speak native MQTT over WebSocket through a single port.
+The dashboard also receives bespoke control frames (`delete_agent`, snapshot diffs, etc.) over the same socket, plus `server_event` frames — the live MQTT activity, relayed by the monitor so the browser never connects to the broker directly.
 
 ---
 
 ## MQTT
 
-Broker: `mosquitto:1883` (TCP) / `ws://host:9001` (WebSocket) / `ws://host:8888/mqtt` (proxied via monitor).
+Broker: `mosquitto:1883` (TCP) / `ws://host:9001` (WebSocket). The dashboard does not use MQTT directly — the monitor relays broker activity to the browser over `/ws` (see above).
 
 All payloads are **snake_case JSON** with `timestamp` as a float (Unix seconds).
 

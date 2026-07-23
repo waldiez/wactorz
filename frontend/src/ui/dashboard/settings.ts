@@ -168,6 +168,5 @@ export function buildSettingsView(info: CostLimitInfo | null, cb: CostLimitCallb
     el.appendChild(buildCostLimitSection(info, cb));
     // No Home Assistant fields: the HA URL comes from /api/config and the Devices
     // nav button links straight to HA — the browser never holds a token.
-    // No MQTT URL field either: the dashboard always uses the same-origin /mqtt proxy.
     return el;
 }

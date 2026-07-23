@@ -126,6 +126,16 @@ describe("OverviewView.renderNodes", () => {
         expect(pills).toContain("offline"); // stale "old"
     });
 
+    it("keeps remote-runner agents out of the local node's agent list", () => {
+        const host = makeHost([agent("main-actor"), agent("cpu-monitor", { node: "rpi-new" })]);
+        host.remoteNodes.set("rpi-new", { agents: ["cpu-monitor"], lastSeen: Date.now() });
+        mount(host);
+        const list = host.root.querySelector<HTMLElement>("#af-node-list")!;
+        const localMeta = list.querySelector(".af-node-meta")!.textContent!;
+        expect(localMeta).toContain("main-actor");
+        expect(localMeta).not.toContain("cpu-monitor");
+    });
+
     // Node and agent names arrive from untrusted MQTT topics — they must never be
     // parsed as HTML (XSS). textContent rendering means the payload becomes inert text.
     it("does not inject HTML from a malicious remote-node name", () => {

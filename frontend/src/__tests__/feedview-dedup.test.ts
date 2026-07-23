@@ -7,7 +7,7 @@ import { dedupeAndSortFeed, feedKey } from "../ui/dashboard/feedView";
 import type { FeedItem } from "../types/feed";
 
 // The in-card feed is fed from several unsynchronised sources (SQLite seed, WS
-// log_feed replay, live MQTT/chat) in arrival order and without ids. These tests
+// log_feed replay, live chat) in arrival order and without ids. These tests
 // lock the content-dedup + chronological-sort behaviour that keeps it stable.
 
 function item(over: Partial<FeedItem> = {}): FeedItem {

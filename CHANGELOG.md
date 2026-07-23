@@ -28,6 +28,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Migration to a non-existent node made the agent disappear** — `migrate_agent` accepted any target name blindly: the source stopped the agent (deleting its state) and shipped it to a node topic nobody was listening on, so a typo'd or offline target destroyed the agent. The target node is now validated against live heartbeats before anything destructive happens; if it is unknown or offline the migration is refused with a message listing the nodes that are online, and the agent stays where it is.
 - **Native catalog agents vanished after a restart** — `weather-agent`, `gmail-agent`, and `google-calendar-agent` (the `type: native` catalog agents) were spawned but never written to the spawn registry, so a process restart dropped them while code-recipe agents survived. They are now persisted on spawn (as a JSON-safe descriptor) and re-resolved to their class and restored on startup.
 - **Remote agent vanish-detection** — a remote agent missing from a single node heartbeat is no longer pruned from the registry (which broke delete and node-reboot recovery); pruning now needs several consecutive misses, and never touches an agent that hasn't appeared yet or has migrated away.
 - **Chat input** — up-arrow history recall now grows the textarea to fit a multi-line message instead of clipping it to one line.

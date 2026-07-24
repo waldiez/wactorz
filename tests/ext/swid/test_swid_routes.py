@@ -7,12 +7,8 @@ but unknown one.
 
 # pylint: disable=missing-function-docstring,import-outside-toplevel
 
-import importlib
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-import pytest
 
 from wactorz.ext.swid import FileSWIDRegistry, SwidMinter, swid_routes
 
@@ -23,23 +19,8 @@ if TYPE_CHECKING:
 PASSPHRASE = "test-passphrase"
 
 
-@pytest.fixture(autouse=True, name="real_aiohttp")
-def real_aiohttp_fixture() -> None:
-    """Restore the genuine aiohttp package before every test.
-
-    Other suite tests replace ``sys.modules['aiohttp']`` with a partial stub
-    (and some leave it installed); ``aiohttp.test_utils`` doesn't exist on it,
-    so purge and re-import from disk. Runs per test — a module-level purge is
-    not enough because the stub can be re-installed between collection and run.
-    """
-    for name in [n for n in list(sys.modules) if n == "aiohttp" or n.startswith("aiohttp.")]:
-        del sys.modules[name]
-    importlib.import_module("aiohttp.web")
-
-
 async def _client(tmp_path: Path) -> tuple["TestClient[Request, Application]", str | None, str]:
     """App over tmp_path with one minted agent DID; returns (client, did, handle)."""
-    # Bind aiohttp after the purge fixture so everything comes from the real package.
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
@@ -109,7 +90,7 @@ async def test_identities_reconciles_late_spawned_agent(tmp_path: Path) -> None:
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
-    from wactorz.core import contract
+    from wactorz.ext.swid import contract
 
     minter = SwidMinter(tmp_path, PASSPHRASE, "https://hstp.example")
     app = web.Application()

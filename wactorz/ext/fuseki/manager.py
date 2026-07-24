@@ -9,9 +9,9 @@ from typing import cast
 
 from aiohttp import web
 
-from wactorz.core import contract
 from wactorz.core.registry import ActorRegistry
 
+from ..swid import contract
 from .bridge import HAFusekiBridge
 
 logger = logging.getLogger(__name__)

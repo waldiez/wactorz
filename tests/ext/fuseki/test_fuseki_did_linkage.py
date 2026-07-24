@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock
 
 from aiohttp import web
 
-from wactorz.core import contract
 from wactorz.ext.fuseki import TTL_PREFIXES, HAFusekiBridge, area_body, device_body, on_ready
+from wactorz.ext.swid import contract
 
 DID = "did:swid:zQmcn8EtYXq3CETZxfom5FJzHJYy2BBchWMGbAB5NnvyKpX"
 HANDLE = "swid:device:home:kitchen-light-ab12cd34"

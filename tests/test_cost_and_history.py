@@ -3,7 +3,7 @@ Tests for cost persistence, cost restoration on startup, and chat history API.
 
 Covers three recent features:
   - LLM cost written to SQLite (_final_cost key) and restored on agent restart
-  - Historical (deleted agent) cost included in _snapshot() total
+  - Historical (deleted agent) cost included in snapshot() total
   - GET /api/actors/{id}/history endpoint filters and returns conversation history
 """
 
@@ -14,6 +14,8 @@ import tempfile
 import types
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from wactorz.web import api_actors, cost, events, runtime
 
 # ── Minimal stubs so heavy optional deps don't need to be installed ──────────
 # aiohttp is a hard dependency and monitor_server imports it fully at module
@@ -162,32 +164,29 @@ def _make_kv_db(entries: list[dict]) -> object:
 
 class HistoricalCostTest(unittest.TestCase):
     def setUp(self):
-        import wactorz.monitor_server as ms
-
-        self._ms = ms
         # Reset module state between tests
-        self._orig_db = ms.db
-        self._orig_state = dict(ms.state["agents"])
+        self._orig_db = runtime.db
+        self._orig_state = dict(runtime.state["agents"])
 
     def tearDown(self):
-        self._ms.db = self._orig_db
-        self._ms.state["agents"] = self._orig_state
+        runtime.db = self._orig_db
+        runtime.state["agents"] = self._orig_state
 
     def _live_names(self):
-        """Derive live_names from state["agents"] as _snapshot() does when no registry."""
-        return {a.get("name", "") for a in self._ms.state["agents"].values()}
+        """Derive live_names from state["agents"] as snapshot() does when no registry."""
+        return {a.get("name", "") for a in runtime.state["agents"].values()}
 
     def test_returns_zero_when_db_is_none(self):
-        self._ms.db = None
-        self.assertEqual(self._ms._historical_cost_usd(self._live_names()), 0.0)
+        runtime.db = None
+        self.assertEqual(cost.historical_cost_usd(self._live_names()), 0.0)
 
     def test_returns_zero_when_no_final_cost_rows(self):
-        self._ms.db = _make_kv_db([])
-        self._ms.state["agents"] = {}
-        self.assertEqual(self._ms._historical_cost_usd(self._live_names()), 0.0)
+        runtime.db = _make_kv_db([])
+        runtime.state["agents"] = {}
+        self.assertEqual(cost.historical_cost_usd(self._live_names()), 0.0)
 
     def test_sums_costs_for_deleted_agents(self):
-        self._ms.db = _make_kv_db(
+        runtime.db = _make_kv_db(
             [
                 {
                     "agent": "old-agent",
@@ -201,14 +200,14 @@ class HistoricalCostTest(unittest.TestCase):
                 },
             ]
         )
-        self._ms.state["agents"] = {}  # no live agents
+        runtime.state["agents"] = {}  # no live agents
 
-        total = self._ms._historical_cost_usd(self._live_names())
+        total = cost.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.08, places=6)
 
     def test_excludes_live_agent_costs(self):
         """Live agents report cost via MQTT heartbeats — don't double-count."""
-        self._ms.db = _make_kv_db(
+        runtime.db = _make_kv_db(
             [
                 {
                     "agent": "live-agent",
@@ -222,11 +221,11 @@ class HistoricalCostTest(unittest.TestCase):
                 },
             ]
         )
-        self._ms.state["agents"] = {
+        runtime.state["agents"] = {
             "live-agent": {"name": "live-agent", "cost_usd": 0.10},
         }
 
-        total = self._ms._historical_cost_usd(self._live_names())
+        total = cost.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.04, places=6)
 
     def test_ignores_malformed_rows(self):
@@ -240,10 +239,10 @@ class HistoricalCostTest(unittest.TestCase):
             ("ok", "_final_cost", json.dumps({"name": "ok", "cost_usd": 0.02})),
         )
         conn.commit()
-        self._ms.db = types.SimpleNamespace(conn=conn)
-        self._ms.state["agents"] = {}
+        runtime.db = types.SimpleNamespace(conn=conn)
+        runtime.state["agents"] = {}
 
-        total = self._ms._historical_cost_usd(self._live_names())
+        total = cost.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.02, places=6)
 
 
@@ -269,57 +268,54 @@ class _KVStub:
 
 class LifetimeCostLedgerTest(unittest.TestCase):
     def setUp(self):
-        import wactorz.monitor_server as ms
-
-        self._ms = ms
-        self._orig_db = ms.db
-        self._orig_ledger = dict(ms._lifetime_cost)
-        self._orig_loaded = ms._lifetime_loaded
-        ms._lifetime_cost.clear()
-        ms._lifetime_loaded = False
-        ms.db = _KVStub()
+        self._orig_db = runtime.db
+        self._orig_ledger = dict(cost.lifetime_cost)
+        self._orig_loaded = cost.lifetime_loaded
+        cost.lifetime_cost.clear()
+        cost.lifetime_loaded = False
+        runtime.db = _KVStub()
 
     def tearDown(self):
-        self._ms.db = self._orig_db
-        self._ms._lifetime_cost.clear()
-        self._ms._lifetime_cost.update(self._orig_ledger)
-        self._ms._lifetime_loaded = self._orig_loaded
+        runtime.db = self._orig_db
+        cost.lifetime_cost.clear()
+        cost.lifetime_cost.update(self._orig_ledger)
+        cost.lifetime_loaded = self._orig_loaded
 
     def test_records_and_totals_cost(self):
-        self._ms._record_lifetime_cost("a1", 0.05)
-        self._ms._record_lifetime_cost("a2", 0.03)
-        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.08, places=6)
+        cost.record_lifetime_cost("a1", 0.05)
+        cost.record_lifetime_cost("a2", 0.03)
+        self.assertAlmostEqual(cost.lifetime_cost_total(), 0.08, places=6)
 
     def test_is_monotonic_high_water(self):
-        self._ms._record_lifetime_cost("a1", 0.05)
-        self._ms._record_lifetime_cost("a1", 0.02)  # lower report — ignored
-        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.05, places=6)
-        self._ms._record_lifetime_cost("a1", 0.09)  # higher — raises
-        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.09, places=6)
+        cost.record_lifetime_cost("a1", 0.05)
+        cost.record_lifetime_cost("a1", 0.02)  # lower report — ignored
+        self.assertAlmostEqual(cost.lifetime_cost_total(), 0.05, places=6)
+        cost.record_lifetime_cost("a1", 0.09)  # higher — raises
+        self.assertAlmostEqual(cost.lifetime_cost_total(), 0.09, places=6)
 
     def test_survives_agent_disappearing(self):
         """The core bug: a deleted / hard-killed agent must not drop the total."""
-        self._ms._record_lifetime_cost("planner-1123da", 0.0365)
+        cost.record_lifetime_cost("planner-1123da", 0.0365)
         # Agent vanishes (no more reports, never written to _final_cost).
-        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.0365, places=6)
+        self.assertAlmostEqual(cost.lifetime_cost_total(), 0.0365, places=6)
 
     def test_ignores_non_positive_and_invalid(self):
         for bad in (0, -1.0, None, "x"):
-            self._ms._record_lifetime_cost("a1", bad)
-        self.assertEqual(self._ms._lifetime_cost_total(), 0.0)
+            cost.record_lifetime_cost("a1", bad)
+        self.assertEqual(cost.lifetime_cost_total(), 0.0)
 
     def test_persists_to_db_and_reloads(self):
-        self._ms._record_lifetime_cost("a1", 0.07)
+        cost.record_lifetime_cost("a1", 0.07)
         # Simulate a monitor restart: drop in-memory state, keep the db.
-        self._ms._lifetime_cost.clear()
-        self._ms._lifetime_loaded = False
-        self.assertAlmostEqual(self._ms._lifetime_cost_total(), 0.07, places=6)
+        cost.lifetime_cost.clear()
+        cost.lifetime_loaded = False
+        self.assertAlmostEqual(cost.lifetime_cost_total(), 0.07, places=6)
 
     def test_no_db_is_safe(self):
-        self._ms.db = None
-        self._ms._lifetime_loaded = False
-        self._ms._record_lifetime_cost("a1", 0.05)  # must not raise
-        self.assertEqual(self._ms._lifetime_cost_total(), 0.05)
+        runtime.db = None
+        cost.lifetime_loaded = False
+        cost.record_lifetime_cost("a1", 0.05)  # must not raise
+        self.assertEqual(cost.lifetime_cost_total(), 0.05)
 
 
 class ResetActorCostTest(unittest.TestCase):
@@ -327,11 +323,6 @@ class ResetActorCostTest(unittest.TestCase):
     global period and all-time counters stop advancing afterward because
     delta = total_cost_usd - baseline goes negative (the "limit count stopped
     counting after a wipe" bug)."""
-
-    def setUp(self):
-        import wactorz.monitor_server as ms
-
-        self._ms = ms
 
     def test_zeroes_counters_and_baselines(self):
         class _Actor:
@@ -342,7 +333,7 @@ class ResetActorCostTest(unittest.TestCase):
             _last_period_cost_usd = 0.42
 
         a = _Actor()
-        self._ms._reset_actor_cost(a)
+        cost.reset_actor_cost(a)
         self.assertEqual(a.total_cost_usd, 0.0)
         self.assertEqual(a.total_input_tokens, 0)
         self.assertEqual(a.total_output_tokens, 0)
@@ -360,48 +351,45 @@ class ResetActorCostTest(unittest.TestCase):
             _last_persisted_usd = 0.42
 
         a = _Actor()
-        self._ms._reset_actor_cost(a)
+        cost.reset_actor_cost(a)
         a.total_cost_usd += 0.01  # one new LLM call after the wipe
         self.assertGreater(a.total_cost_usd - a._last_persisted_usd, 0)
 
     def test_actor_without_cost_attrs_is_noop(self):
-        self._ms._reset_actor_cost(object())  # must not raise
+        cost.reset_actor_cost(object())  # must not raise
 
 
 class SnapshotTotalsTest(unittest.TestCase):
-    """_snapshot() headline totals must match the cards the dashboard renders,
+    """snapshot() headline totals must match the cards the dashboard renders,
     including remote / spawned agents that live in state but not in this
     process's registry."""
 
     def setUp(self):
-        import wactorz.monitor_server as ms
-
-        self._ms = ms
-        self._orig_db = ms.db
-        self._orig_reg = ms.registry
-        self._orig_agents = dict(ms.state["agents"])
-        self._orig_ledger = dict(ms._lifetime_cost)
-        self._orig_loaded = ms._lifetime_loaded
-        ms.db = None  # no historical / no ledger persistence
-        ms._lifetime_cost.clear()
-        ms._lifetime_loaded = True  # skip db hydrate
-        ms.state["agents"] = {}
+        self._orig_db = runtime.db
+        self._orig_reg = runtime.registry
+        self._orig_agents = dict(runtime.state["agents"])
+        self._orig_ledger = dict(cost.lifetime_cost)
+        self._orig_loaded = cost.lifetime_loaded
+        runtime.db = None  # no historical / no ledger persistence
+        cost.lifetime_cost.clear()
+        cost.lifetime_loaded = True  # skip db hydrate
+        runtime.state["agents"] = {}
 
     def tearDown(self):
-        self._ms.db = self._orig_db
-        self._ms.registry = self._orig_reg
-        self._ms.state["agents"] = self._orig_agents
-        self._ms._lifetime_cost.clear()
-        self._ms._lifetime_cost.update(self._orig_ledger)
-        self._ms._lifetime_loaded = self._orig_loaded
+        runtime.db = self._orig_db
+        runtime.registry = self._orig_reg
+        runtime.state["agents"] = self._orig_agents
+        cost.lifetime_cost.clear()
+        cost.lifetime_cost.update(self._orig_ledger)
+        cost.lifetime_loaded = self._orig_loaded
 
     def test_sums_all_visible_agents_when_no_registry(self):
-        self._ms.registry = None
-        self._ms.state["agents"] = {
+        runtime.registry = None
+        runtime.state["agents"] = {
             "main": {"name": "main", "cost_usd": 0.0381},
             "reachy-mini": {"name": "reachy-mini", "cost_usd": 0.0213},
         }
-        snap = self._ms._snapshot()
+        snap = events.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.0594, places=6)
 
     def test_includes_state_only_agent_missing_from_registry(self):
@@ -413,12 +401,12 @@ class SnapshotTotalsTest(unittest.TestCase):
             total_cost_usd=0.0381,
             metrics=types.SimpleNamespace(messages_processed=1),
         )
-        self._ms.registry = types.SimpleNamespace(all_actors=lambda: [local_main])
-        self._ms.state["agents"] = {
+        runtime.registry = types.SimpleNamespace(all_actors=lambda: [local_main])
+        runtime.state["agents"] = {
             "main": {"name": "main", "cost_usd": 0.0381, "messages_processed": 1},
             "reachy-mini": {"name": "reachy-mini", "cost_usd": 0.0213, "messages_processed": 3},
         }
-        snap = self._ms._snapshot()
+        snap = events.snapshot()
         # Old behaviour summed only registry actors -> 0.0381. Must be the full sum.
         self.assertAlmostEqual(snap["total_cost_usd"], 0.0594, places=6)
         self.assertEqual(snap["total_messages"], 4)
@@ -439,19 +427,19 @@ class SnapshotTotalsTest(unittest.TestCase):
             total_cost_usd=0.021285,
             metrics=types.SimpleNamespace(messages_processed=3),
         )
-        self._ms.registry = types.SimpleNamespace(all_actors=lambda: [main_actor, reachy_actor])
-        self._ms.state["agents"] = {
+        runtime.registry = types.SimpleNamespace(all_actors=lambda: [main_actor, reachy_actor])
+        runtime.state["agents"] = {
             "main-id": {"name": "main", "cost_usd": 0.038124, "messages_processed": 1},
             "reachy-id": {"name": "reachy-mini", "messages_processed": 3},  # no cost_usd
         }
-        snap = self._ms._snapshot()
+        snap = events.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.059409, places=6)
         self.assertEqual(snap["total_messages"], 4)
 
     def test_includes_cost_from_sqlite_final_cost(self):
         """Cost lives only in the persisted _final_cost row (no MQTT state, zero on
         the object) — still counts, matching the card's _actor_cost fallback."""
-        self._ms.db = _make_kv_db(
+        runtime.db = _make_kv_db(
             [
                 {
                     "agent": "main",
@@ -477,9 +465,9 @@ class SnapshotTotalsTest(unittest.TestCase):
             total_cost_usd=0.0,
             metrics=types.SimpleNamespace(messages_processed=0),
         )
-        self._ms.registry = types.SimpleNamespace(all_actors=lambda: [main_a, reachy_a])
-        self._ms.state["agents"] = {"m": {"name": "main"}, "r": {"name": "reachy-mini"}}
-        snap = self._ms._snapshot()
+        runtime.registry = types.SimpleNamespace(all_actors=lambda: [main_a, reachy_a])
+        runtime.state["agents"] = {"m": {"name": "main"}, "r": {"name": "reachy-mini"}}
+        snap = events.snapshot()
         # Must NOT double-count: _final_cost is used for the live sum, and
         # historical (also _final_cost) must skip names already counted.
         self.assertAlmostEqual(snap["total_cost_usd"], 0.059409, places=6)
@@ -500,9 +488,9 @@ class SnapshotTotalsTest(unittest.TestCase):
             total_cost_usd=0.02,
             metrics=types.SimpleNamespace(messages_processed=0),
         )
-        self._ms.registry = types.SimpleNamespace(all_actors=lambda: [in_state, not_yet])
-        self._ms.state["agents"] = {"main": {"name": "main", "cost_usd": 0.05}}
-        snap = self._ms._snapshot()
+        runtime.registry = types.SimpleNamespace(all_actors=lambda: [in_state, not_yet])
+        runtime.state["agents"] = {"main": {"name": "main", "cost_usd": 0.05}}
+        snap = events.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.07, places=6)
 
 
@@ -518,21 +506,18 @@ def _payload(resp):
 
 class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        import wactorz.monitor_server as ms
-
-        self._ms = ms
-        self._orig_registry = ms.registry
+        self._orig_registry = runtime.registry
 
     def tearDown(self):
-        self._ms.registry = self._orig_registry
+        runtime.registry = self._orig_registry
 
     def _make_request(self, actor_id: str):
         return types.SimpleNamespace(match_info={"actor_id": actor_id})
 
     async def test_returns_empty_list_when_registry_none(self):
-        self._ms.registry = None
+        runtime.registry = None
 
-        resp = await self._ms.actor_history_handler(self._make_request("any"))
+        resp = await api_actors.actor_history_handler(self._make_request("any"))
 
         self.assertEqual(_payload(resp), [])
         self.assertEqual(resp.status, 200)
@@ -540,9 +525,9 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
     async def test_returns_empty_list_when_actor_not_found(self):
         registry = MagicMock()
         registry.get.return_value = None
-        self._ms.registry = registry
+        runtime.registry = registry
 
-        resp = await self._ms.actor_history_handler(self._make_request("ghost"))
+        resp = await api_actors.actor_history_handler(self._make_request("ghost"))
 
         self.assertEqual(_payload(resp), [])
 
@@ -557,9 +542,9 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         actor.recall.return_value = history
         registry = MagicMock()
         registry.get.return_value = actor
-        self._ms.registry = registry
+        runtime.registry = registry
 
-        resp = await self._ms.actor_history_handler(self._make_request("test-agent"))
+        resp = await api_actors.actor_history_handler(self._make_request("test-agent"))
 
         payload = _payload(resp)
         self.assertEqual(len(payload), 2)
@@ -571,9 +556,9 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         actor.recall.return_value = []
         registry = MagicMock()
         registry.get.return_value = actor
-        self._ms.registry = registry
+        runtime.registry = registry
 
-        resp = await self._ms.actor_history_handler(self._make_request("quiet-agent"))
+        resp = await api_actors.actor_history_handler(self._make_request("quiet-agent"))
 
         self.assertEqual(_payload(resp), [])
 
@@ -582,9 +567,9 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         actor = object()  # plain object, no recall method
         registry = MagicMock()
         registry.get.return_value = actor
-        self._ms.registry = registry
+        runtime.registry = registry
 
-        resp = await self._ms.actor_history_handler(self._make_request("dumb-agent"))
+        resp = await api_actors.actor_history_handler(self._make_request("dumb-agent"))
 
         self.assertEqual(_payload(resp), [])
 

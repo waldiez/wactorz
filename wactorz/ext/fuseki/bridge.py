@@ -73,7 +73,7 @@ from wactorz.core.integrations.home_assistant.ha_web_socket_client import (
 from wactorz.core.mqtt import mqtt_client
 
 if TYPE_CHECKING:
-    from wactorz.core.contract import IdentityMinter
+    from ..swid.contract import IdentityMinter
 
 
 log = logging.getLogger("wactorz.fuseki")
@@ -86,8 +86,9 @@ def _encode_basic_auth(login: str, password: str = "") -> str:
     ``aiohttp.BasicAuth.encode`` is deprecated there — encode locally so the
     whole supported range (aiohttp >= 3.13.3) works without warnings.
     """
-    credentials = base64.b64encode(f"{login}:{password}".encode("utf-8")).decode("ascii")
+    credentials = base64.b64encode(f"{login}:{password}".encode()).decode("ascii")
     return f"Basic {credentials}"
+
 
 # ── Shared Turtle prefix block ────────────────────────────────────────────────
 

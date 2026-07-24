@@ -5,8 +5,7 @@ import os
 
 from aiohttp import web
 
-from wactorz.core import contract
-
+from ..swid import contract
 from .bridge import (
     TTL_PREFIXES,
     HAFusekiBridge,

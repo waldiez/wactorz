@@ -1,54 +1,16 @@
-"""Shared ports between core and extensions: app-state keys and identity protocols.
+"""Shared app-state keys between core and extensions.
 
-Core owns these ports; extensions provide the implementations. Living in core
-lets any core module (monitor_server, fuseki) depend on the *interface* without a
-backwards core→ext import — the swid extension supplies a concrete minter that
-structurally satisfies :class:`IdentityMinter`.
+Core provides its keys on the aiohttp app before ``setup_all()`` runs;
+extensions provide their own keys in ``setup()``. Consume a key with
+``app.get(KEY)`` — an absent provider is normal (e.g. the actor registry is
+``None`` in standalone MQTT mode), never an error.
 
-Wiring rule: core PROVIDES core keys before ``setup_all()``; extensions PROVIDE
-their keys in ``setup()``; everyone CONSUMES shared keys only inside startup
-hooks or request handlers (all setups finish before any on_startup hook fires,
-so discovery order never matters). Absent providers are normal — read with
-``app.get(KEY)``.
+Only *generic* keys live here. Extension-specific keys (identity minter, etc.)
+belong to the extension that owns them, not to core.
 """
-
-from __future__ import annotations
-
-from typing import Protocol
 
 from aiohttp import web
 
-
-class IdentityRecord(Protocol):
-    """Outcome of minting: a readable handle always, a DID when minting is on.
-
-    Structural, so any implementation (e.g. the swid extension's ``MintResult``)
-    satisfies it without importing this module or subclassing anything.
-    """
-
-    @property
-    def did(self) -> str | None: ...
-
-    @property
-    def handle(self) -> str: ...
-
-
-class IdentityMinter(Protocol):
-    """Mints (or looks up) a stable identity for an entity; idempotent by handle."""
-
-    async def ensure_did(
-        self,
-        entity_class: str,
-        namespace: str,
-        natural_key: str,
-        *,
-        name: str | None = None,
-    ) -> IdentityRecord: ...
-
-
-# Actor registry — core-provided before setup_all() (may hold None in standalone mode).
+# The live ActorRegistry, set by the web layer before setup_all() so extensions
+# can reach it. Holds None in standalone/legacy MQTT mode.
 ACTOR_REGISTRY: web.AppKey = web.AppKey("actor_registry", object)
-# Identity minter — provided by the swid extension's setup(); absent without it.
-IDENTITY_MINTER: web.AppKey[IdentityMinter] = web.AppKey("identity_minter", IdentityMinter)
-# actor_id → IdentityRecord — filled by the swid extension at startup; optional.
-AGENT_IDENTITY: web.AppKey = web.AppKey("agent_identity", dict)

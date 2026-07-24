@@ -514,7 +514,20 @@ MQTT_HOST=mosquitto         # container name, not localhost
 ├── <span class="n">wactorz</span>/                     ← <span class="n">Python</span> <span class="nb">package</span>
 │   ├── <span class="n">cli</span>.<span class="n">py</span>                   ← <span class="n">entry</span> <span class="n">point</span> (<span class="n">wactorz</span> <span class="nb">command</span>)
 │   ├── <span class="nb">config</span>.<span class="n">py</span>                ← .<span class="n">env</span> <span class="n">loading</span>, <span class="n">CONFIG</span> <span class="n">object</span>
-│   ├── <span class="n">monitor_server</span>.<span class="n">py</span>        ← <span class="n">web</span> <span class="n">dashboard</span> (<span class="n">aiohttp</span>)
+│   ├── <span class="n">monitor_server</span>.<span class="n">py</span>        ← <span class="n">back-compat</span> <span class="n">shim</span> → <span class="n">wactorz</span><span class="o">/</span><span class="n">web</span>/
+│   ├── <span class="n">web</span>/                     ← <span class="n">web</span> <span class="n">server:</span> <span class="n">dashboard</span> <span class="n">SPA</span> + <span class="n">REST</span> + <span class="n">WS</span> + <span class="n">docs</span> (<span class="n">aiohttp</span>)
+│   │   ├── <span class="n">app</span>.<span class="n">py</span>               ← <span class="n">route</span> <span class="n">table</span>, <span class="n">build_app</span>(), <span class="n">entry</span> <span class="n">point</span>
+│   │   ├── <span class="n">runtime</span>.<span class="n">py</span>           ← <span class="n">shared</span> <span class="n">mutable</span> <span class="k">state</span> (<span class="n">registry</span>, <span class="n">db</span>, <span class="nb">live</span> <span class="k">state</span>)
+│   │   ├── <span class="n">api_actors</span>.<span class="n">py</span>        ← /<span class="n">api</span><span class="o">/</span><span class="n">actors</span>… <span class="n">handlers</span>
+│   │   ├── <span class="n">api_system</span>.<span class="n">py</span>        ← <span class="n">health</span>, <span class="n">cost</span>, <span class="nb">config</span>, <span class="n">feed</span>
+│   │   ├── <span class="n">api_reset</span>.<span class="n">py</span>         ← /<span class="n">api</span><span class="o">/</span><span class="n">reset</span> + <span class="n">factory</span> <span class="n">keep-set</span>
+│   │   ├── <span class="n">chat</span>.<span class="n">py</span>              ← <span class="n">chat</span> <span class="n">routing</span>, <span class="n">slash</span> <span class="n">commands</span>, <span class="n">REST</span> <span class="n">chat</span>
+│   │   ├── <span class="n">ws</span>.<span class="n">py</span>                ← /<span class="n">ws</span> <span class="n">transport</span>
+│   │   ├── <span class="n">mqtt</span>.<span class="n">py</span>              ← <span class="n">broker</span> <span class="n">listener</span>
+│   │   ├── <span class="n">events</span>.<span class="n">py</span>            ← <span class="n">topic</span> → <span class="k">state</span> <span class="n">transitions</span>
+│   │   ├── <span class="n">cost</span>.<span class="n">py</span>              ← <span class="n">lifetime</span> <span class="n">ledger</span>
+│   │   ├── <span class="n">lifecycle</span>.<span class="n">py</span>         ← <span class="n">purges</span> + <span class="n">deletion</span>
+│   │   └── <span class="n">static_site</span>.<span class="n">py</span>       ← <span class="n">SPA</span> + <span class="n">docs</span> <span class="n">serving</span>
 │   ├── <span class="n">core</span>/
 │   │   ├── <span class="n">actor</span>.<span class="n">py</span>             ← <span class="n">Actor</span> <span class="nb">base</span> <span class="k">class</span>, <span class="n">Supervisor</span>, <span class="n">persistence</span>
 │   │   └── <span class="n">registry</span>.<span class="n">py</span>          ← <span class="n">ActorSystem</span>, <span class="n">ActorRegistry</span>, <span class="n">MQTT</span> <span class="n">publisher</span>

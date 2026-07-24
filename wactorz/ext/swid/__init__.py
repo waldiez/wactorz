@@ -2,7 +2,7 @@
 
 An additive extension (``wactorz/ext/``): its ``setup`` provides the minting
 service and the per-agent identity map on the aiohttp app (via the keys in
-:mod:`wactorz.core.contract`), mounts the DIF resolver routes, and registers a
+:mod:`.contract`), mounts the DIF resolver routes, and registers a
 startup hook that mints a DID for every local actor. Nothing here imports
 ``monitor_server`` — the actor registry arrives through app-state.
 
@@ -19,9 +19,9 @@ from typing import cast
 
 from aiohttp.web import Application
 
-from wactorz.core import contract
 from wactorz.core.registry import ActorRegistry
 
+from . import contract
 from .registry import FileSWIDRegistry
 from .routes import swid_routes
 from .service import MintResult, SwidMinter
@@ -86,4 +86,28 @@ def setup(app: Application) -> None:
     app.on_startup.append(mint_agent_dids)
 
 
-__all__ = ["FileSWIDRegistry", "MintResult", "SwidMinter", "setup", "swid_routes"]
+def actor_decorator(app: Application):
+    """Enrich each /api/actors payload with the agent's did/handle.
+
+    The web layer calls this per actor; the identity map was populated by
+    mint_agent_dids() at startup. did is None when minting is off; a missing
+    record means the actor has no identity yet.
+    """
+    id_map = app.get(contract.AGENT_IDENTITY) or {}
+
+    def decorate(actor, payload: dict) -> None:
+        rec = id_map.get(actor.actor_id)
+        payload["did"] = getattr(rec, "did", None)
+        payload["handle"] = getattr(rec, "handle", None)
+
+    return decorate
+
+
+__all__ = [
+    "FileSWIDRegistry",
+    "MintResult",
+    "SwidMinter",
+    "actor_decorator",
+    "setup",
+    "swid_routes",
+]

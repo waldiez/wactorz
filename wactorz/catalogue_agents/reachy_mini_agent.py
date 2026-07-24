@@ -4386,7 +4386,9 @@ async def _conversation_publish(agent, session, state, turn=None, *, ok=True,
     session["state"] = state
     agent.state["conversation_state"] = state
     _schedule_conversation_state_motion(agent, session, state)
-    _schedule_conversation_idle_motion(agent, session, state)
+    # Subtle listening idle "breath" disabled for now — not behaving as wanted.
+    # Re-enable by uncommenting; the loop/scheduler below are left intact.
+    # _schedule_conversation_idle_motion(agent, session, state)
     event = _conversation_turn(session)
     if turn:
         event.update(turn)

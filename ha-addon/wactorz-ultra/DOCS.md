@@ -17,7 +17,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 ## Options
 
 | Option | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `api_key` | *(blank)* | Shared secret for the Wactorz REST API. Leave blank to disable auth. |
 | `llm_provider` | `anthropic` | LLM backend: `anthropic`, `openai`, `gemini`, `ollama`, `nim` |
 | `llm_model` | `claude-sonnet-4-6` | Model name for the chosen provider |
@@ -32,8 +32,9 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `mqtt_username` | *(blank)* | Broker username (optional). Leave blank for an anonymous broker; **required for the official Mosquitto addon** (it disables anonymous access). |
 | `mqtt_password` | *(blank)* | Broker password (optional). |
 | `mosquitto_embedded` | `false` | Start a bundled Mosquitto broker inside the addon (no external addon needed) |
-| `ha_url` | `http://homeassistant.local:8123` | Home Assistant base URL seen from inside the addon container |
-| `ha_token` | *(blank)* | Long-lived access token (HA → Profile → Security → Long-Lived Access Tokens) |
+| `ha_connection` | `auto` | `auto`: use the Supervisor proxy when `ha_token` is blank, your `ha_url` otherwise. `supervisor`/`custom`: force a mode explicitly. |
+| `ha_url` | `http://homeassistant.local:8123` | Home Assistant base URL seen from inside the addon container (only used in `custom` mode) |
+| `ha_token` | *(blank)* | Long-lived access token (HA → Profile → Security → Long-Lived Access Tokens). Blank = Supervisor proxy mode, `ha_url` ignored |
 | `discord_bot_token` | *(blank)* | Discord bot token (optional) |
 | `telegram_bot_token` | *(blank)* | Telegram bot token (optional) |
 | `telegram_allowed_user_id` | `0` | Telegram user ID allowed to send commands (0 = disabled) |
@@ -57,14 +58,21 @@ Set `mosquitto_embedded: true`. Wactorz starts its own Mosquitto instance inside
 Setting `mosquitto_embedded` to `true` bundles a Mosquitto broker inside the Wactorz container — no separate addon required.
 
 | Option | Port | Data path |
-|---|---|---|
+| --- | --- | --- |
 | `mosquitto_embedded: true` | `1883` TCP (exposed as addon port) | `/share/mosquitto` |
 
 ## Home Assistant integration
 
-Set `ha_url` to `http://homeassistant.local:8123` (the default) and generate a long-lived access token in HA → Profile → Security → Long-Lived Access Tokens, then paste it into `ha_token`.
+Two connection modes exist — the Supervisor token only authenticates against the internal proxy, so no other combinations are valid:
+
+- **Supervisor proxy (default, zero-config):** leave `ha_token` blank (and `ha_connection: auto`). Wactorz connects through `http://supervisor/core` with the injected Supervisor token. `ha_url` is **ignored** in this mode — the add-on logs a warning if you set a custom one without a token.
+- **Custom URL:** set `ha_url` to your HA instance (e.g. `http://homeassistant.local:8123`) **and** generate a long-lived access token in HA → Profile → Security → Long-Lived Access Tokens, then paste it into `ha_token`.
+
+Set `ha_connection` to `supervisor` or `custom` only if you want to force a mode explicitly; `auto` infers it from `ha_token` presence as above.
+
+On startup the add-on probes the connection and logs one line with the mode, URL, and auth result (e.g. `HA connection OK — mode=supervisor ...` or `HA auth FAILED (401) ...`) — check the add-on log first if HA integration misbehaves.
 
 ## Support
 
-- Documentation: https://docs.waldiez.io/wactorz/
-- Issues: https://github.com/waldiez/wactorz/issues
+- Documentation: <https://docs.waldiez.io/wactorz/>
+- Issues: <https://github.com/waldiez/wactorz/issues>

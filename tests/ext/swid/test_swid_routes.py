@@ -90,7 +90,7 @@ async def test_identities_reconciles_late_spawned_agent(tmp_path: Path) -> None:
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
-    from wactorz.ext.swid import contract
+    from wactorz.ext import contract
 
     minter = SwidMinter(tmp_path, PASSPHRASE, "https://hstp.example")
     app = web.Application()

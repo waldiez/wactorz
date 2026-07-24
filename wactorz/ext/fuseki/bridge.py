@@ -73,7 +73,7 @@ from wactorz.core.integrations.home_assistant.ha_web_socket_client import (
 from wactorz.core.mqtt import mqtt_client
 
 if TYPE_CHECKING:
-    from ..swid.contract import IdentityMinter
+    from ..contract import IdentityMinter
 
 
 log = logging.getLogger("wactorz.fuseki")

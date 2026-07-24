@@ -1,12 +1,11 @@
-"""SWID app-state keys and identity protocols.
+"""Identity ports shared by the identity-related extensions.
 
-These are swid-specific ports: the identity minter and the actor→identity map,
-plus the structural protocols an implementation satisfies. They live with the
-extension that owns them (not in ``wactorz.core.contract``, which stays generic).
-
-``ACTOR_REGISTRY`` is re-exported from core so consumers of this module can reach
-every key they need through one import — it is the same generic key the web layer
-provides, only surfaced here for convenience.
+App-state keys and structural protocols for did:swid identities: the minter and
+the actor→identity map, plus the ``IdentityMinter``/``IdentityRecord`` protocols
+an implementation satisfies. They live at the ``wactorz.ext`` level — a neutral
+home both the *provider* (``ext/swid``) and *consumers* (``ext/fuseki``) import,
+so no extension imports another. ``core.contract`` stays generic (registry only);
+``ACTOR_REGISTRY`` is re-exported here for one-import convenience.
 """
 
 from __future__ import annotations

@@ -8,7 +8,7 @@ import os
 import swid as swid_lib
 from aiohttp import web
 
-from . import contract
+from .. import contract
 from .registry import FileSWIDRegistry
 from .service import SwidMinter
 

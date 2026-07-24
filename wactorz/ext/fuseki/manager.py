@@ -11,7 +11,7 @@ from aiohttp import web
 
 from wactorz.core.registry import ActorRegistry
 
-from ..swid import contract
+from .. import contract
 from .bridge import HAFusekiBridge
 
 logger = logging.getLogger(__name__)

@@ -5,7 +5,7 @@ import os
 
 from aiohttp import web
 
-from ..swid import contract
+from .. import contract
 from .bridge import (
     TTL_PREFIXES,
     HAFusekiBridge,

@@ -6,32 +6,53 @@ module, so the side effects apply exactly once regardless of how many entry
 points import it.
 """
 
+import asyncio
+import io
 import logging
 import sys
 from pathlib import Path
 
 # Make the package importable when launched directly (not via the console script).
-_pkg_dir = str(Path(__file__).parent)
-if sys.path[0] != _pkg_dir:
-    sys.path.insert(0, _pkg_dir)
+_PKG_DIR = str(Path(__file__).parent)
+if sys.path[0] != _PKG_DIR:
+    sys.path.insert(0, _PKG_DIR)
+
+WACTORZ_BOOTSTRAP = False
 
 
-# Windows: MUST run before any async library is imported or started.
-if sys.platform == "win32":
-    import asyncio
-    import io
+def _bootstrap() -> None:
+    """Handle windows event loop and encoding cases, setup logging."""
+    global WACTORZ_BOOTSTRAP  # pylint: disable=global-statement
+    if not WACTORZ_BOOTSTRAP:
+        WACTORZ_BOOTSTRAP = True
+        # Windows: MUST run before any async library is imported or started.
+        if sys.platform == "win32":
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+            # Force UTF-8 on the real Windows console only. Skip when stdio has been
+            # replaced (pytest capture, test runners, etc.) since re-wrapping a
+            # capture stream breaks the harness on Python 3.13.
+            # pytest capture / pythonw replace stdio
+            # with objects that have no .buffer.
+            _need_wrap = (
+                (getattr(sys.stdout, "encoding", "") or "").lower() != "utf-8"
+                and hasattr(sys.stdout, "buffer")
+                and hasattr(sys.stderr, "buffer")
+            )
+            if _need_wrap:
+                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+                sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    # The default cp1252 console encoding mangles non-ASCII output; force UTF-8.
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            handlers=[
+                logging.StreamHandler(sys.stdout),
+                logging.FileHandler("wactorz.log", encoding="utf-8"),
+            ],
+        )
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("wactorz.log", encoding="utf-8"),
-    ],
-)
+_bootstrap()
+
+
+__all__ = ["WACTORZ_BOOTSTRAP"]

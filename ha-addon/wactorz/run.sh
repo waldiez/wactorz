@@ -1,4 +1,5 @@
 #!/usr/bin/with-contenv bashio
+# shellcheck disable=SC1008
 
 bashio::log.info "Starting Wactorz addon..."
 
@@ -34,13 +35,20 @@ get_config_safe() {
 # --- Export Environment Variables ---
 
 # LLM Config
-export LLM_PROVIDER=$(get_config_safe 'llm_provider' 'anthropic')
-export LLM_MODEL=$(get_config_safe 'llm_model' 'claude-sonnet-4-6')
-export LLM_API_KEY=$(get_config_safe 'llm_api_key' '')
-export OLLAMA_URL=$(get_config_safe 'ollama_url' 'http://localhost:11434')
-export OPENAI_URL=$(get_config_safe 'openai_url' '')
-export LLM_COST_LIMIT_USD=$(get_config_safe 'llm_cost_limit_usd' '0')
-export LLM_COST_LIMIT_PERIOD=$(get_config_safe 'llm_cost_limit_period' 'monthly')
+LLM_PROVIDER=$(get_config_safe 'llm_provider' 'anthropic')
+export LLM_PROVIDER="${LLM_PROVIDER}"
+LLM_MODEL=$(get_config_safe 'llm_model' 'claude-sonnet-4-6')
+export LLM_MODEL="${LLM_MODEL}"
+LLM_API_KEY=$(get_config_safe 'llm_api_key' '')
+export LLM_API_KEY="${LLM_API_KEY}"
+OLLAMA_URL=$(get_config_safe 'ollama_url' 'http://localhost:11434')
+export OLLAMA_URL="${OLLAMA_URL}"
+OPENAI_URL=$(get_config_safe 'openai_url' '')
+export OPENAI_URL="${OPENAI_URL}"
+LLM_COST_LIMIT_USD=$(get_config_safe 'llm_cost_limit_usd' '0')
+export LLM_COST_LIMIT_USD="${LLM_COST_LIMIT_USD}"
+LLM_COST_LIMIT_PERIOD=$(get_config_safe 'llm_cost_limit_period' 'monthly')
+export LLM_COST_LIMIT_PERIOD="${LLM_COST_LIMIT_PERIOD}"
 
 # Map generic LLM_API_KEY to provider-specific env vars expected by the Python app
 case "$LLM_PROVIDER" in
@@ -51,52 +59,108 @@ case "$LLM_PROVIDER" in
 esac
 
 # MQTT Config (CRITICAL: ensure never empty)
-export MQTT_HOST=$(get_config_safe 'mqtt_host' 'core-mosquitto')
-export MQTT_PORT=$(get_config_safe 'mqtt_port' '1883')
-export MQTT_WS_PORT=$(get_config_safe 'mqtt_ws_port' '8083')
+MQTT_HOST=$(get_config_safe 'mqtt_host' 'core-mosquitto')
+export MQTT_HOST="${MQTT_HOST}"
+MQTT_PORT=$(get_config_safe 'mqtt_port' '1883')
+export MQTT_PORT="${MQTT_PORT}"
+MQTT_WS_PORT=$(get_config_safe 'mqtt_ws_port' '8083')
+export MQTT_WS_PORT="${MQTT_WS_PORT}"
 # Optional broker credentials (blank = anonymous). Needed for the official
 # Mosquitto addon and any broker with allow_anonymous false.
-export MQTT_USERNAME=$(get_config_safe 'mqtt_username' '')
-export MQTT_PASSWORD=$(get_config_safe 'mqtt_password' '')
+MQTT_USERNAME=$(get_config_safe 'mqtt_username' '')
+export MQTT_USERNAME="${MQTT_USERNAME}"
+MQTT_PASSWORD=$(get_config_safe 'mqtt_password' '')
+export MQTT_PASSWORD="${MQTT_PASSWORD}"
 
 # Home Assistant Config
 HA_URL=$(get_config_safe 'ha_url' '')
 HA_TOKEN=$(get_config_safe 'ha_token' '')
+# Must match the ha_url default in config.yaml:
+HA_DEFAULT_URL="http://homeassistant.local:8123"
 
-# If no token is provided, we MUST use the supervisor proxy with the supervisor token.
-# Port 8123 (the normal HA URL) will NOT accept the supervisor token.
-if [ -z "$HA_TOKEN" ] || [ "$HA_TOKEN" == "null" ]; then
+# Exactly two combinations are valid:
+#   supervisor | http://supervisor/core | injected SUPERVISOR_TOKEN
+#   custom     | your URL/IP (:8123)    | your long-lived token
+# The Supervisor token ONLY authenticates against http://supervisor/core — a
+# normal HA URL (:8123) rejects it.
+# ha_connection: auto (default) infers the mode from token presence, exactly as
+# before this option existed; supervisor/custom are explicit escape hatches.
+HA_MODE=$(get_config_safe 'ha_connection' 'auto')
+if [ "$HA_MODE" == "auto" ]; then
+    if [ -z "$HA_TOKEN" ] || [ "$HA_TOKEN" == "null" ]; then
+        HA_MODE="supervisor"
+    else
+        HA_MODE="custom"
+    fi
+fi
+
+if [ "$HA_MODE" == "supervisor" ]; then
+    # Supervisor mode MUST use the proxy URL + injected token; a custom ha_url
+    # or ha_token is ignored (loudly, not silently).
+    if [ -n "$HA_URL" ] && [ "$HA_URL" != "$HA_DEFAULT_URL" ]; then
+        bashio::log.warning "ha_url='${HA_URL}' is IGNORED: mode=supervisor uses the Supervisor proxy (http://supervisor/core), which only accepts the Supervisor token. To use your own URL, set ha_connection: custom and a long-lived ha_token."
+    fi
+    if [ -n "$HA_TOKEN" ] && [ "$HA_TOKEN" != "null" ]; then
+        bashio::log.warning "ha_token is IGNORED: mode=supervisor uses the injected Supervisor token."
+    fi
     export HA_URL="http://supervisor/core"
     export HA_TOKEN="${SUPERVISOR_TOKEN:-}"
     bashio::log.info "Using internal Supervisor proxy for Home Assistant connection."
 else
-    # User provided a custom token, so we can use their URL or fallback to the standard one.
-    export HA_URL="${HA_URL:-http://homeassistant:8123}"
-    export HA_TOKEN="$HA_TOKEN"
+    # Custom mode: the user's URL (or the standard fallback) + their long-lived token.
+    export HA_URL="${HA_URL:-$HA_DEFAULT_URL}"
+    if [ -z "$HA_TOKEN" ] || [ "$HA_TOKEN" == "null" ]; then
+        bashio::log.warning "ha_connection=custom but ha_token is empty — HA calls will fail auth. Set a long-lived token, or use ha_connection: auto / supervisor."
+        export HA_TOKEN=""
+    else
+        export HA_TOKEN="$HA_TOKEN"
+    fi
+    if [ "$HA_URL" == "http://supervisor/core" ] || [ "$HA_URL" == "http://supervisor/core/" ]; then
+        bashio::log.warning "ha_url points at the Supervisor proxy, which only accepts the injected Supervisor token — it will not work with mode=custom. Use ha_connection: supervisor (or auto with an empty ha_token)."
+    fi
     bashio::log.info "Using custom Home Assistant URL: ${HA_URL}"
 fi
 export HOME_ASSISTANT_URL="$HA_URL"
 export HOME_ASSISTANT_TOKEN="$HA_TOKEN"
 
-# Other Integrations
-export API_KEY=$(get_config_safe 'api_key' '')
+# Startup auth probe: one deterministic line stating mode + URL + auth result.
+# Non-fatal — HA may still be booting, and the agents already no-op on bad config.
+ha_probe=$(curl -s -o /dev/null -m 5 -w '%{http_code}' \
+    -H "Authorization: Bearer ${HA_TOKEN}" "${HA_URL}/api/" 2>/dev/null || echo 000)
+case "$ha_probe" in
+    200)     bashio::log.info "HA connection OK — mode=${HA_MODE} url=${HA_URL} (auth 200)";;
+    401|403) bashio::log.warning "HA auth FAILED (${ha_probe}) — mode=${HA_MODE} url=${HA_URL}. Check ha_token: long-lived token for a custom URL, empty for supervisor mode.";;
+    000)     bashio::log.warning "HA unreachable — mode=${HA_MODE} url=${HA_URL} (HA may still be booting; wactorz keeps retrying).";;
+    *)       bashio::log.warning "HA probe returned ${ha_probe} — mode=${HA_MODE} url=${HA_URL}.";;
+esac
 
-export DISCORD_BOT_TOKEN=$(get_config_safe 'discord_bot_token' '')
-export TELEGRAM_BOT_TOKEN=$(get_config_safe 'telegram_bot_token' '')
-export TELEGRAM_ALLOWED_USER_ID=$(get_config_safe 'telegram_allowed_user_id' '0')
+# Other Integrations
+API_KEY=$(get_config_safe 'api_key' '')
+export API_KEY="${API_KEY}"
+
+DISCORD_BOT_TOKEN=$(get_config_safe 'discord_bot_token' '')
+export DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN}"
+TELEGRAM_BOT_TOKEN=$(get_config_safe 'telegram_bot_token' '')
+export TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
+TELEGRAM_ALLOWED_USER_ID=$(get_config_safe 'telegram_allowed_user_id' '0')
+export TELEGRAM_ALLOWED_USER_ID="${TELEGRAM_ALLOWED_USER_ID}"
 
 OTEL_ENDPOINT=$(get_config_safe 'otel_endpoint' '')
 if [ -n "$OTEL_ENDPOINT" ]; then
     export OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_ENDPOINT"
-    export OTEL_SERVICE_NAME=$(get_config_safe 'otel_service_name' 'wactorz')
+    OTEL_SERVICE_NAME=$(get_config_safe 'otel_service_name' 'wactorz')
+    export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME}"
 fi
 
 INFLUX_URL=$(get_config_safe 'influx_url' '')
 if [ -n "$INFLUX_URL" ]; then
     export INFLUX_URL="$INFLUX_URL"
-    export INFLUX_TOKEN=$(get_config_safe 'influx_token' '')
-    export INFLUX_ORG=$(get_config_safe 'influx_org' 'wactorz')
-    export INFLUX_BUCKET=$(get_config_safe 'influx_bucket' 'wactorz')
+    INFLUX_TOKEN=$(get_config_safe 'influx_token' '')
+    export INFLUX_TOKEN="${INFLUX_TOKEN}"
+    INFLUX_ORG=$(get_config_safe 'influx_org' 'wactorz')
+    export INFLUX_ORG="${INFLUX_ORG}"
+    INFLUX_BUCKET=$(get_config_safe 'influx_bucket' 'wactorz')
+    export INFLUX_BUCKET="${INFLUX_BUCKET}"
 fi
 
 # Embedded services

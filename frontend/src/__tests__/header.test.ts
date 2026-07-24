@@ -10,7 +10,7 @@ vi.mock("../ui/dashboard/popovers", () => ({
     buildResetPopover: () => document.createElement("div"),
 }));
 
-import { buildHeader, buildBottomNav, setHaNavUrl } from "../ui/dashboard/header";
+import { buildHeader, buildBottomNav, setHaNavUrl, resolveHaNavUrl } from "../ui/dashboard/header";
 
 describe("buildHeader", () => {
     beforeEach(() => {
@@ -135,6 +135,33 @@ describe("Devices nav link (external HA link, no embedded client)", () => {
         const link = header.querySelector<HTMLAnchorElement>(".af-ha-nav-link")!;
         expect(link.getAttribute("href")).toBe("https://ha.example.com");
         expect(link.style.display).not.toBe("none");
+    });
+
+    it("rewrites the container-internal supervisor URL to the page origin (HA add-on ingress)", () => {
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: "http://supervisor/core",
+            extraViews: [],
+        });
+        const link = header.querySelector<HTMLAnchorElement>(".af-ha-nav-link")!;
+        expect(new URL(link.href).origin).toBe(window.location.origin);
+        expect(link.style.display).not.toBe("none");
+    });
+});
+
+describe("resolveHaNavUrl", () => {
+    it("rewrites supervisor proxy URLs (any path/trailing slash) to the page origin", () => {
+        expect(resolveHaNavUrl("http://supervisor/core")).toBe(window.location.origin);
+        expect(resolveHaNavUrl("http://supervisor/core/")).toBe(window.location.origin);
+        expect(resolveHaNavUrl("https://supervisor")).toBe(window.location.origin);
+    });
+
+    it("passes through normal URLs, invalid strings and null unchanged", () => {
+        expect(resolveHaNavUrl("http://ha.local:8123")).toBe("http://ha.local:8123");
+        expect(resolveHaNavUrl("not a url")).toBe("not a url");
+        expect(resolveHaNavUrl(null)).toBeNull();
     });
 });
 

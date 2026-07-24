@@ -4,7 +4,7 @@ import importlib
 import re
 import sys
 
-import wactorz.monitor_server as m
+from wactorz.web import static_site
 
 
 def _ensure_real_aiohttp():
@@ -20,7 +20,7 @@ def _ensure_real_aiohttp():
 
 
 def test_csp_includes_nonce_and_key_directives():
-    policy = m._csp_policy("TESTNONCE")
+    policy = static_site.csp_policy("TESTNONCE")
     assert "script-src 'self' 'nonce-TESTNONCE'" in policy
     assert "style-src 'self' 'unsafe-inline'" in policy  # dashboard sets inline styles
     assert "connect-src 'self'" in policy
@@ -40,7 +40,7 @@ class _Req:
 
 async def test_index_handler_sets_csp_with_matching_nonce():
     _ensure_real_aiohttp()
-    resp = await m.index_handler(_Req())
+    resp = await static_site.index_handler(_Req())
     csp = resp.headers.get("Content-Security-Policy")
     assert csp is not None
     # The nonce in the header is the same one stamped on the injected script.
@@ -54,6 +54,6 @@ async def test_index_handler_sets_csp_with_matching_nonce():
 
 async def test_index_handler_nonce_is_per_request():
     _ensure_real_aiohttp()
-    a = await m.index_handler(_Req())
-    b = await m.index_handler(_Req())
+    a = await static_site.index_handler(_Req())
+    b = await static_site.index_handler(_Req())
     assert a.headers["Content-Security-Policy"] != b.headers["Content-Security-Policy"]

@@ -1,11 +1,10 @@
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 sys.modules.setdefault("openai", types.ModuleType("openai"))
 sys.modules.setdefault("anthropic", types.ModuleType("anthropic"))
-sys.modules.setdefault("aiohttp", types.ModuleType("aiohttp"))
-sys.modules.setdefault("websockets", types.ModuleType("websockets"))
 
 from wactorz.agents.llm_agent import (
     AnthropicProvider,
@@ -167,7 +166,15 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
                 posted_payloads.append(json)
                 return _Response()
 
-        sys.modules["aiohttp"] = types.SimpleNamespace(ClientSession=lambda: _Session())
+        # patch.dict auto-restores sys.modules["aiohttp"] on exit so this fake
+        # never leaks into later tests that import aiohttp at module level.
+        # (start()+addCleanup rather than self.enterContext, which is 3.11+.)
+        _patch = patch.dict(
+            sys.modules,
+            {"aiohttp": types.SimpleNamespace(ClientSession=lambda: _Session())},
+        )
+        _patch.start()
+        self.addCleanup(_patch.stop)
 
         provider = OllamaProvider(model="llama3", base_url="http://ollama.local")
         result = await provider.complete_with_tools(

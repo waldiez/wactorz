@@ -151,7 +151,8 @@ or config — there is no <code>if extension == "tts"</code> anywhere.</p>
 <h2 id="overview">Overview</h2>
 <div class="highlight"><pre><span></span><code><span class="n">wactorz</span><span class="o">/</span>
 <span class="err">├──</span><span class="w"> </span><span class="n">ext</span><span class="o">/</span><span class="w">                    </span><span class="p">#</span><span class="w"> </span><span class="n">Backend</span><span class="w"> </span><span class="n">extensions</span><span class="w"> </span><span class="p">(</span><span class="n">Python</span><span class="p">)</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">__init__</span><span class="p">.</span><span class="n">py</span><span class="w">         </span><span class="p">#</span><span class="w">     </span><span class="n">discovery</span><span class="p">,</span><span class="w"> </span><span class="n">setup_all</span><span class="p">(),</span><span class="w"> </span><span class="n">collect_public_config</span><span class="p">()</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">__init__</span><span class="p">.</span><span class="n">py</span><span class="w">         </span><span class="p">#</span><span class="w">     </span><span class="n">discovery</span><span class="p">,</span><span class="w"> </span><span class="n">setup_all</span><span class="p">(),</span><span class="w"> </span><span class="n">collect_public_config</span><span class="p">(),</span>
+<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">                        </span><span class="p">#</span><span class="w">     </span><span class="n">collect_actor_decorators</span><span class="p">()</span>
 <span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">tts</span><span class="o">/</span><span class="w">                </span><span class="p">#</span><span class="w">     </span><span class="n">TTS</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="k">edge</span><span class="o">-</span><span class="n">tts</span><span class="w"> </span><span class="n">voice</span><span class="w"> </span><span class="n">synthesis</span>
 
 <span class="n">frontend</span><span class="o">/</span><span class="n">src</span><span class="o">/</span>
@@ -185,6 +186,9 @@ no-ops when unconfigured, so shipping one forces nothing on anyone.</p>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Called after every extension&#39;s setup() has run — for cross-extension</span>
 <span class="sd">       logic that needs another extension already wired.&quot;&quot;&quot;</span>
 
+<span class="k">def</span><span class="w"> </span><span class="nf">actor_decorator</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">actor</span><span class="p">,</span> <span class="nb">dict</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a per-actor payload enricher (or None to opt out).&quot;&quot;&quot;</span>
+
 <span class="c1"># Optional: declare ordering dependencies for on_ready().</span>
 <span class="n">__deps__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;other-ext&quot;</span><span class="p">]</span>  <span class="c1"># this on_ready() runs after other-ext&#39;s</span>
 </code></pre></div>
@@ -210,8 +214,29 @@ no-ops when unconfigured, so shipping one forces nothing on anyone.</p>
 <td><code>on_ready(app)</code></td>
 <td>(optional) runs as <code>on_startup</code>, topo-sorted by <code>__deps__</code></td>
 </tr>
+<tr>
+<td><code>actor_decorator(app)</code></td>
+<td>(optional) enriches each actor in the <code>/api/actors</code> payload</td>
+</tr>
 </tbody>
 </table>
+<h3 id="enriching-the-actors-list">Enriching the actors list</h3>
+<p><code>actor_decorator(app)</code> lets an extension add fields to every actor the dashboard
+shows, without core knowing about them. Return a <code>(actor, payload) -&gt; None</code>
+closure — typically one that fetches your index once, then mutates each payload
+in place:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.core</span><span class="w"> </span><span class="kn">import</span> <span class="n">contract</span>  <span class="c1"># ACTOR_REGISTRY app-key (core-provided)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">actor_decorator</span><span class="p">(</span><span class="n">app</span><span class="p">):</span>
+    <span class="n">index</span> <span class="o">=</span> <span class="n">app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;my-index&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>       <span class="c1"># your own per-actor data</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">decorate</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">payload</span><span class="p">):</span>
+        <span class="n">payload</span><span class="p">[</span><span class="s2">&quot;myField&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">index</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">actor</span><span class="o">.</span><span class="n">actor_id</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">decorate</span>
+</code></pre></div>
+
+<p>The registry itself is on <code>app[contract.ACTOR_REGISTRY]</code> (set by core before
+<code>setup_all()</code>; <code>None</code> in standalone mode). A raising factory or one returning
+<code>None</code> is skipped — never fatal.</p>
 <h3 id="requirements">Requirements</h3>
 <ul>
 <li>Register routes on <code>app.router</code> and namespace them under <code>/api/&lt;ext&gt;/…</code>.</li>
@@ -374,6 +399,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 <li>[ ] Backend <code>setup()</code> registers routes under <code>/api/&lt;ext&gt;/…</code></li>
 <li>[ ] Optional <code>public_config()</code> returns only non-secret keys (never tokens)</li>
 <li>[ ] Optional <code>on_ready()</code> handles cross-extension ordering via <code>__deps__</code></li>
+<li>[ ] Optional <code>actor_decorator()</code> enriches the <code>/api/actors</code> payload</li>
 <li>[ ] Config is read from <code>os.getenv(…)</code>, not <code>wactorz.config.CONFIG</code></li>
 <li>[ ] Extension no-ops gracefully when its env var / dependency is absent</li>
 <li>[ ] Frontend barrel exports a <code>register(config)</code> function; wires via the event bus</li>

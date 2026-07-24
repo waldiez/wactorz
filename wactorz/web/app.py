@@ -69,6 +69,12 @@ def build_app() -> web.Application:
         return response
 
     app = web.Application(middlewares=[cors_middleware])
+    # Expose the registry to extensions (via app.get) before setup_all() runs.
+    # None in standalone/legacy MQTT mode — consumers handle that.
+    from ..core import contract
+
+    app[contract.ACTOR_REGISTRY] = runtime.registry
+
     app.router.add_get("/", static_site.index_handler)
     app.router.add_get("/health", api_system.health_handler)
     app.router.add_get("/api/cost", api_system.cost_handler)
@@ -115,7 +121,6 @@ def build_app() -> web.Application:
     app.router.add_get("/api/feed", api_system.feed_handler)
     app.router.add_get("/feed", api_system.feed_handler)
     app.router.add_post("/api/reset", api_reset.reset_handler)
-    app.router.add_get("/favicon.svg", static_site.index_handler)
 
     # Extensions (wactorz/ext/): additive features register their own routes
     # and startup/teardown hooks here. Must run BEFORE the docs/static
@@ -128,6 +133,7 @@ def build_app() -> web.Application:
     app.router.add_get("/docs/", static_site.docs_handler)
     app.router.add_get("/docs/{path:.+}", static_site.docs_handler)
 
+    app.router.add_get("/favicon.svg", static_site.index_handler)
     app.router.add_get("/{path:.+}", static_site.static_handler)
     return app
 

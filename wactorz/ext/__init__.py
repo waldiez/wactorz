@@ -44,6 +44,7 @@ import importlib
 import logging
 import pkgutil
 from collections import deque
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
@@ -143,6 +144,32 @@ def collect_public_config(app: Application) -> dict[str, Any]:
         except Exception as exc:  # pylint: disable=broad-exception-caught
             log.warning("[ext] %s public_config() failed: %s", name, exc)
     return out
+
+
+def collect_actor_decorators(app: Application) -> list[Callable[[Any, dict], None]]:
+    """Gather each extension's per-actor payload decorator.
+
+    An extension may expose ``actor_decorator(app) -> Callable[[actor, payload], None]``
+    — typically a closure that fetches its index once, then enriches each payload
+    in place. The web layer's actors_handler calls every returned decorator on each
+    actor payload it builds, so extensions can add fields (e.g. identity did/handle)
+    without the monitor knowing about them. Best-effort: a failing or absent hook,
+    or a factory that returns None, is skipped.
+    """
+    decorators: list[Callable[[Any, dict], None]] = []
+    for mod in discover():
+        factory = getattr(mod, "actor_decorator", None)
+        if factory is None:
+            continue
+        name = mod.__name__.rsplit(".", 1)[-1]
+        try:
+            dec = factory(app)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            log.warning("[ext] %s actor_decorator() failed: %s", name, exc)
+            continue
+        if dec is not None:
+            decorators.append(dec)
+    return decorators
 
 
 def _short_name(mod: Extension) -> str:

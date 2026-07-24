@@ -161,26 +161,32 @@ async def actors_handler(request: web.Request) -> Response:
     # but present via MQTT heartbeat with a "node" field is a remote agent and
     # must NOT be evicted by the 15-second REST reconcile cycle.
     if runtime.registry is not None:
+        # Extensions may enrich each actor payload (e.g. identity did/handle);
+        # gathered once, applied per actor. No-op when no extension provides one.
+        from ..ext import collect_actor_decorators
+
+        decorators = collect_actor_decorators(request.app)
         result = []
         for actor in runtime.registry.all_actors():
             if runtime.is_deleted(actor.actor_id):
                 continue
             ag = runtime.state["agents"].get(actor.actor_id, {})
-            result.append(
-                {
-                    "id": actor.actor_id,
-                    "name": actor.name,
-                    "state": ag.get("state", "unknown"),
-                    "protected": bool(getattr(actor, "protected", False)),
-                    "cpu": ag.get("cpu"),
-                    "mem": ag.get("mem"),
-                    "task": ag.get("task"),
-                    "messagesProcessed": ag.get("messages_processed")
-                    if ag.get("messages_processed") is not None
-                    else getattr(getattr(actor, "metrics", None), "messages_processed", None),
-                    "costUsd": cost.actor_cost(actor, ag),
-                }
-            )
+            payload = {
+                "id": actor.actor_id,
+                "name": actor.name,
+                "state": ag.get("state", "unknown"),
+                "protected": bool(getattr(actor, "protected", False)),
+                "cpu": ag.get("cpu"),
+                "mem": ag.get("mem"),
+                "task": ag.get("task"),
+                "messagesProcessed": ag.get("messages_processed")
+                if ag.get("messages_processed") is not None
+                else getattr(getattr(actor, "metrics", None), "messages_processed", None),
+                "costUsd": cost.actor_cost(actor, ag),
+            }
+            for decorate in decorators:
+                decorate(actor, payload)
+            result.append(payload)
         return web.json_response(result)
     return web.json_response([_actor_payload(ag) for ag in runtime.state["agents"].values()])
 

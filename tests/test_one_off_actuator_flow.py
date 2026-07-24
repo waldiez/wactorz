@@ -5,8 +5,6 @@ import types
 import unittest
 from unittest.mock import AsyncMock, patch
 
-sys.modules.setdefault("aiohttp", types.ModuleType("aiohttp"))
-sys.modules.setdefault("websockets", types.ModuleType("websockets"))
 sys.modules.setdefault("openai", types.ModuleType("openai"))
 
 from wactorz.agents.dynamic_agent import DynamicAgent

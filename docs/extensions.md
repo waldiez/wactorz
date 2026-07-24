@@ -7,10 +7,11 @@ or config — there is no `if extension == "tts"` anywhere.
 
 ## Overview
 
-```
+```text
 wactorz/
 ├── ext/                    # Backend extensions (Python)
-│   ├── __init__.py         #     discovery, setup_all(), collect_public_config()
+│   ├── __init__.py         #     discovery, setup_all(), collect_public_config(),
+│   │                        #     collect_actor_decorators()
 │   └── tts/                #     TTS — edge-tts voice synthesis
 
 frontend/src/
@@ -50,17 +51,42 @@ async def on_ready(app: web.Application) -> None:
     """Called after every extension's setup() has run — for cross-extension
        logic that needs another extension already wired."""
 
+def actor_decorator(app: web.Application) -> Callable[[actor, dict], None] | None:
+    """Return a per-actor payload enricher (or None to opt out)."""
+
 # Optional: declare ordering dependencies for on_ready().
 __deps__ = ["other-ext"]  # this on_ready() runs after other-ext's
 ```
 
 ### Protocol
 
-| Hook                 | When                                                        |
-|----------------------|-------------------------------------------------------------|
-| `setup(app)`         | (**required**) register routes + state                      |
-| `public_config(app)` | (optional) merged into `/api/config` at startup             |
-| `on_ready(app)`      | (optional) runs as `on_startup`, topo-sorted by `__deps__`  |
+| Hook                  | When                                                        |
+|-----------------------|-------------------------------------------------------------|
+| `setup(app)`          | (**required**) register routes + state                      |
+| `public_config(app)`  | (optional) merged into `/api/config` at startup             |
+| `on_ready(app)`       | (optional) runs as `on_startup`, topo-sorted by `__deps__`  |
+| `actor_decorator(app)`| (optional) enriches each actor in the `/api/actors` payload |
+
+### Enriching the actors list
+
+`actor_decorator(app)` lets an extension add fields to every actor the dashboard
+shows, without core knowing about them. Return a `(actor, payload) -> None`
+closure — typically one that fetches your index once, then mutates each payload
+in place:
+
+```python
+from wactorz.core import contract  # ACTOR_REGISTRY app-key (core-provided)
+
+def actor_decorator(app):
+    index = app.get("my-index") or {}       # your own per-actor data
+    def decorate(actor, payload):
+        payload["myField"] = index.get(actor.actor_id)
+    return decorate
+```
+
+The registry itself is on `app[contract.ACTOR_REGISTRY]` (set by core before
+`setup_all()`; `None` in standalone mode). A raising factory or one returning
+`None` is skipped — never fatal.
 
 ### Requirements
 
@@ -74,7 +100,7 @@ __deps__ = ["other-ext"]  # this on_ready() runs after other-ext's
 
 ### Example: TTS
 
-```
+```text
 wactorz/ext/tts/
 └── __init__.py     # setup() registers /api/tts + /api/tts/voices,
                     # public_config() reports availability,
@@ -219,6 +245,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 - [ ] Backend `setup()` registers routes under `/api/<ext>/…`
 - [ ] Optional `public_config()` returns only non-secret keys (never tokens)
 - [ ] Optional `on_ready()` handles cross-extension ordering via `__deps__`
+- [ ] Optional `actor_decorator()` enriches the `/api/actors` payload
 - [ ] Config is read from `os.getenv(…)`, not `wactorz.config.CONFIG`
 - [ ] Extension no-ops gracefully when its env var / dependency is absent
 - [ ] Frontend barrel exports a `register(config)` function; wires via the event bus

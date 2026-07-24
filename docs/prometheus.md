@@ -81,7 +81,7 @@ Use the Python profiles:
 
 ```bash
 docker compose --profile python up -d
-docker compose --profile python-full up -d
+docker compose --profile full up -d
 ```
 
 ### Development stack

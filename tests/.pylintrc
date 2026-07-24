@@ -1,0 +1,39 @@
+# pylint config for the test suite only.
+#
+# Docstrings are required in wactorz/ (see [tool.pylint] in pyproject.toml, which
+# leaves the missing-*-docstring checks enabled). Tests are the exception: a
+# well-named test *is* its own documentation, and forcing a docstring onto every
+# case adds restatement, not information.
+#
+# Used automatically when pylint is run from inside tests/, or explicitly:
+#   pylint --rcfile=tests/.pylintrc tests
+
+[MESSAGES CONTROL]
+disable =
+    missing-module-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
+    # Same deliberate patterns as the package config.
+    broad-exception-caught,
+    protected-access,
+    import-outside-toplevel,
+    global-statement,
+    invalid-name,
+    line-too-long,
+    wrong-import-order,
+    wrong-import-position,
+    unused-argument,
+    too-many-lines,
+    too-many-locals,
+    too-many-branches,
+    too-many-statements,
+    too-many-return-statements,
+    too-many-positional-arguments,
+    duplicate-code,
+    # pytest fixtures are *meant* to shadow the module-level fixture name.
+    redefined-outer-name,
+    # Asserting an exact empty container is clearer than a falsy check.
+    use-implicit-booleaness-not-comparison,
+    # Test doubles are intentionally minimal.
+    too-few-public-methods,
+    attribute-defined-outside-init,

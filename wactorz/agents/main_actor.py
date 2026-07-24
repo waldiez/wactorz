@@ -2561,6 +2561,19 @@ async def handle_task(agent, payload):
             for name, info in self._known_nodes.items()
         ]
 
+    def _node_is_online(self, node_name: str) -> bool:
+        """True if ``node_name`` sent a heartbeat within the last 30s — the same
+        freshness window used by list_nodes() and _node_running_agent().
+        """
+        import time as _time
+
+        info = self._known_nodes.get(node_name)
+        return bool(info and (_time.time() - info.get("last_seen", 0)) < 30)
+
+    def _online_node_names(self) -> list[str]:
+        """Names of all nodes currently considered online (30s heartbeat window)."""
+        return sorted(name for name in self._known_nodes if self._node_is_online(name))
+
     def list_topics(self, keyword: str = "") -> list[dict]:
         """Return all known MQTT topics published by agents, optionally filtered by keyword.
         Each entry: {"topic": str, "agents": [{"name", "node", "description"}, ...]}
@@ -3152,6 +3165,30 @@ async def handle_task(agent, payload):
 
         # Normalise "local" as a target so users can type /migrate agent-name local
         is_target_local = target_node.strip().lower() in ("", "local", "main")
+
+        # ── Verify the target node exists and is online ────────────────────────
+        # This must happen BEFORE anything destructive. Without it, a typo'd or
+        # offline target made the agent vanish: the source stopped the agent
+        # (deleting its state file) and published the hand-off to a node topic
+        # nobody was listening on. Refuse up front instead — the agent keeps
+        # running where it is.
+        if not is_target_local and not self._node_is_online(target_node):
+            if target_node in self._known_nodes:
+                reason = f"node '{target_node}' is known but offline (no heartbeat in the last 30s)"
+            else:
+                reason = f"node '{target_node}' does not exist (never sent a heartbeat)"
+            online = self._online_node_names()
+            hint = (
+                f"Online nodes: {', '.join(online)}."
+                if online
+                else "No remote nodes are currently online."
+            )
+            return {
+                "success": False,
+                "message": f"Cannot migrate '{agent_name}': {reason}. {hint} "
+                f"Migration aborted — the agent stays on "
+                f"'{current_node or 'local'}'.",
+            }
 
         if current_node and not is_target_local:
             # ── Remote → Remote migration ────────────────────────────────────

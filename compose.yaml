@@ -154,7 +154,7 @@ services:
 
   # ── InfluxDB 2.x (optional — chat log + time-series) ────────────────────────
   # docker compose --profile influx up -d              (standalone)
-  # docker compose --profile python-full --profile influx up -d  (with Python)
+  # docker compose --profile full --profile influx up -d  (with Python)
   influxdb:
     profiles: [influx]
     image: influxdb:2.7

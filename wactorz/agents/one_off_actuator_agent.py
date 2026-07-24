@@ -525,7 +525,7 @@ class OneOffActuatorAgent(Actor):
         distinct = {a.entity_id for a in light_ons}
         if len(distinct) <= 1:
             return actions
-        keep_id = preferred_entity if preferred_entity in distinct else sorted(distinct)[0]
+        keep_id = preferred_entity if preferred_entity in distinct else min(distinct)
         collapsed: list[ActuatorAction] = []
         kept = False
         for action in actions:

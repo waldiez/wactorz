@@ -1,5 +1,18 @@
 # Contributing to ha-addon
 
+## DOCS.md — single source of truth
+
+`ha-addon/DOCS.md` (this directory) is the canonical user documentation. The two
+add-on folders each need their own copy (the Supervisor renders `<addon>/DOCS.md`
+in the add-on info tab), so after editing the canonical file, sync it down:
+
+```bash
+cp ha-addon/DOCS.md ha-addon/wactorz/DOCS.md
+cp ha-addon/DOCS.md ha-addon/wactorz-ultra/DOCS.md
+```
+
+The three files must stay byte-identical — never edit the copies directly.
+
 ## Adding or modifying an option
 
 Options are defined in three places that must stay in sync:

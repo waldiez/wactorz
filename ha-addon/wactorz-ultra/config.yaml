@@ -66,6 +66,8 @@ options:
   mqtt_password: ""
 
   # Home Assistant connection (used by HA agents inside Wactorz)
+  # auto (default): supervisor proxy when ha_token is blank, custom URL otherwise.
+  ha_connection: auto
   ha_url: "http://homeassistant.local:8123"
   ha_token: ""
 
@@ -109,6 +111,7 @@ schema:
   mqtt_ws_port: port
   mqtt_username: str?
   mqtt_password: str?
+  ha_connection: list(auto|supervisor|custom)?
   ha_url: url
   ha_token: str?
   mosquitto_embedded: bool

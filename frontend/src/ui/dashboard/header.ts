@@ -29,11 +29,33 @@ function safeHref(url: string): string {
     return /^https?:\/\//i.test(url.trim()) ? url : "#";
 }
 
+/** Container-internal HA URLs (the add-on's supervisor proxy,
+ *  `http://supervisor/core`) only resolve inside the add-on network. */
+function isContainerInternalUrl(url: string): boolean {
+    try {
+        return new URL(url).hostname === "supervisor";
+    } catch {
+        return false;
+    }
+}
+
+/** Resolve the HA URL the Devices link should point at. A container-internal
+ *  URL (supervisor proxy mode in the HA add-on) cannot resolve in the user's
+ *  browser, so it is rewritten to the page's own origin — under HA ingress
+ *  that origin IS the Home Assistant UI. Anything else passes through. */
+export function resolveHaNavUrl(haUrl: string | null): string | null {
+    if (haUrl && isContainerInternalUrl(haUrl)) {
+        return window.location.origin;
+    }
+    return haUrl;
+}
+
 /** Point a Devices link at the HA UI, or hide it when no URL is configured. */
 function applyHaNavUrl(a: HTMLAnchorElement, haUrl: string | null): void {
-    if (haUrl) {
-        a.href = safeHref(haUrl);
-        a.title = `Open Home Assistant — ${haUrl}`;
+    const resolved = resolveHaNavUrl(haUrl);
+    if (resolved) {
+        a.href = safeHref(resolved);
+        a.title = `Open Home Assistant — ${resolved}`;
         a.style.display = "";
     } else {
         a.removeAttribute("href");

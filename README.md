@@ -172,6 +172,21 @@ LLM_MODEL=claude-sonnet-4-6
 LLM_API_KEY=your-key-here
 ```
 
+### Per-call-site overrides (hybrid setups)
+
+Optionally, route individual call sites to different models with `LLM_OVERRIDES` —
+for example run the cheap, high-frequency calls on a local model and keep the
+planner on a hosted one:
+
+```bash
+# <site>=<provider>[:<model>], comma-separated. Unlisted sites use the global provider.
+LLM_OVERRIDES="intent=ollama:qwen3:4b,actuator=ollama:llama3,planner=anthropic:claude-sonnet-4-6"
+```
+
+Sites: `main` (conversation), `intent` (intent routing), `planner` (pipeline
+planning/codegen), `actuator` (one-off device control), `ha` (Home Assistant
+agent), `dynamic` (the `get_llm()` shim inside generated agents).
+
 ---
 
 ## Security

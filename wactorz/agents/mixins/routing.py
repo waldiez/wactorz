@@ -14,6 +14,7 @@ import logging
 import uuid
 
 from wactorz.config import CONFIG
+from wactorz.llm_factory import provider_for
 
 from ...core.actor import MessageType
 from ..prompts.main_actor_prompts import INTENT_CLASSIFIER_PROMPT
@@ -30,11 +31,12 @@ class RoutingMixin:
         """
         if not text or text.startswith("/"):
             return "OTHER"
-        if self.llm is None:
+        llm = provider_for("intent", self.llm)
+        if llm is None:
             return "OTHER"
         try:
             decision, _usage = await asyncio.wait_for(
-                self.llm.complete(
+                llm.complete(
                     messages=[{"role": "user", "content": text}],
                     system=INTENT_CLASSIFIER_PROMPT,
                     max_tokens=10,
@@ -140,7 +142,7 @@ class RoutingMixin:
             await self.spawn(
                 OneOffActuatorAgent,
                 request=enriched_text,
-                llm_provider=self.llm,
+                llm_provider=provider_for("actuator", self.llm),
                 task_id=task_id,
                 reply_to_id=self.actor_id,
                 allowed_domains=allowed_domains,

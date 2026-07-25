@@ -467,14 +467,17 @@ def launch_desktop() -> None:
     signal.signal(signal.SIGTERM, _shutdown)
 
     state = window_state.load()
+    positioning_supported = window_state.position_supported()
     window_state.seed(state)  # so an untouched session re-saves the same
     _window = webview.create_window(
         APP_NAME,
         html=pages.LOADING_HTML,
         width=state["width"],
         height=state["height"],
-        x=state["x"],
-        y=state["y"],
+        # Wayland ignores a client-chosen position (the compositor places the
+        # window), so don't ask for one there — see window_state.
+        x=state["x"] if positioning_supported else None,
+        y=state["y"] if positioning_supported else None,
         min_size=(900, 600),
         js_api=Api(),
         background_color=SPLASH_BG,

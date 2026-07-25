@@ -12,6 +12,7 @@ never worth failing a launch or a quit over.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from wactorz.desktop.config import WINDOW_STATE_FILE
@@ -21,6 +22,20 @@ DEFAULTS: dict[str, Any] = {"width": 1280, "height": 720, "x": None, "y": None}
 # Live geometry, seeded from the saved state on launch and kept fresh by the
 # window events. `save()` writes this, not the window.
 _geometry: dict[str, Any] = dict(DEFAULTS)
+
+
+def position_supported() -> bool:
+    """Whether this session lets a window choose its own position.
+
+    Wayland deliberately does not: `move()` is ignored and the compositor places
+    the window, so the toolkit reports a meaningless 0,0. Tracking that would
+    overwrite a good saved position with garbage, so callers skip position
+    handling entirely here. XWayland (`QT_QPA_PLATFORM=xcb`) does honour moves,
+    so it counts as X11 even though WAYLAND_DISPLAY is still set.
+    """
+    if os.environ.get("QT_QPA_PLATFORM") == "xcb":
+        return True
+    return not os.environ.get("WAYLAND_DISPLAY")
 
 
 def sanitize(state: dict) -> dict[str, Any]:
@@ -82,13 +97,32 @@ def track_resize(width, height) -> None:
 
 
 def track_move(x, y) -> None:
-    """Record a move reported by the window."""
+    """Record a move reported by the window.
+
+    Ignored where the platform does not let a window position itself: the
+    reported coordinates are meaningless there, and storing them would clobber
+    a position saved from a session that *could* restore it.
+    """
+    if not position_supported():
+        return
     _geometry["x"], _geometry["y"] = int(x), int(y)
 
 
 def _within(screen, px: int, py: int) -> bool:
     """True if the point lies on `screen`."""
     return screen.x <= px < screen.x + screen.width and screen.y <= py < screen.y + screen.height
+
+
+def _fit_to_primary(window, screens) -> None:
+    """Shrink the window to the primary screen, leaving its position alone."""
+    if not screens:
+        return
+    primary = screens[0]
+    w, h = _geometry["width"], _geometry["height"]
+    nw, nh = min(w, primary.width), min(h, primary.height)
+    if (nw, nh) != (w, h):
+        window.resize(nw, nh)
+        _geometry.update(width=nw, height=nh)
 
 
 def place(window, screens) -> None:
@@ -102,6 +136,10 @@ def place(window, screens) -> None:
         return
     try:
         screens = list(screens or [])
+        if not position_supported():
+            # The compositor owns placement; only the size is ours to fix.
+            _fit_to_primary(window, screens)
+            return
         if not screens:
             return
         w, h = _geometry["width"], _geometry["height"]
@@ -110,11 +148,7 @@ def place(window, screens) -> None:
         # No saved position (first run / never moved): create_window already
         # centered it — only shrink if it overflows the primary screen.
         if x is None or y is None:
-            primary = screens[0]
-            nw, nh = min(w, primary.width), min(h, primary.height)
-            if (nw, nh) != (w, h):
-                window.resize(nw, nh)
-                _geometry.update(width=nw, height=nh)
+            _fit_to_primary(window, screens)
             return
 
         target = next((s for s in screens if _within(s, x, y)), None)

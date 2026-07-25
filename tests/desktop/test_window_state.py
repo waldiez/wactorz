@@ -16,8 +16,15 @@ from wactorz.desktop import window_state
 
 
 @pytest.fixture(name="reset_geometry", autouse=True)
-def reset_geometry_fixture():
-    """Isolate the module-level geometry between tests."""
+def reset_geometry_fixture(monkeypatch):
+    """Isolate the module state between tests.
+
+    Also pins the session to one where a window may position itself, so the
+    placement tests behave the same on an X11 CI runner and a Wayland desktop.
+    Tests that care about the other case opt in via the `wayland` fixture.
+    """
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
     window_state.seed(dict(window_state.DEFAULTS))
     yield
     window_state.seed(dict(window_state.DEFAULTS))
@@ -264,3 +271,66 @@ def test_place_swallows_a_failing_window_call():
 
     window_state.seed({"width": 3000, "height": 2000, "x": None, "y": None})
     window_state.place(_Angry(), [_screen()])  # must not raise
+
+
+# ── position_supported (Wayland cannot place its own windows) ───────────────
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({}, True),  # plain X11
+        ({"WAYLAND_DISPLAY": "wayland-0"}, False),  # native Wayland
+        ({"WAYLAND_DISPLAY": "wayland-0", "QT_QPA_PLATFORM": "xcb"}, True),  # XWayland
+        ({"QT_QPA_PLATFORM": "wayland"}, True),  # no WAYLAND_DISPLAY → X11 session
+    ],
+    ids=["x11", "wayland", "xwayland", "qt-wayland-without-display"],
+)
+def test_position_supported_per_session(env, expected, monkeypatch):
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert window_state.position_supported() is expected
+
+
+@pytest.fixture(name="wayland")
+def wayland_fixture(monkeypatch):
+    """A session where the compositor owns window placement."""
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+
+
+def test_track_move_is_ignored_where_position_is_not_ours(wayland):
+    # The toolkit reports a meaningless 0,0 on Wayland; recording it would
+    # destroy the position saved from an X11 session.
+    window_state.seed({"width": 800, "height": 600, "x": 400, "y": 300})
+    window_state.track_move(0, 0)
+    assert (window_state.current()["x"], window_state.current()["y"]) == (400, 300)
+
+
+def test_track_resize_still_works_on_wayland(wayland):
+    # Size is settable there — only position is the compositor's call.
+    window_state.track_resize(1024, 768)
+    assert window_state.current()["width"] == 1024
+
+
+def test_track_move_records_on_x11():
+    window_state.track_move(42, 24)
+    assert (window_state.current()["x"], window_state.current()["y"]) == (42, 24)
+
+
+def test_place_only_fixes_size_on_wayland(wayland):
+    # A saved position must not be applied (move is a no-op) nor overwritten.
+    win = _FakeWindow()
+    window_state.seed({"width": 3000, "height": 2000, "x": 400, "y": 300})
+    window_state.place(win, [_screen(width=1920, height=1080)])
+    assert win.resized_to == (1920, 1080)  # oversize is still corrected
+    assert win.moved_to is None  # placement left to the compositor
+    assert window_state.current()["x"] == 400  # saved position preserved
+
+
+def test_place_on_wayland_without_screens_does_nothing(wayland):
+    win = _FakeWindow()
+    window_state.place(win, [])
+    assert win.resized_to is None and win.moved_to is None

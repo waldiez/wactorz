@@ -1,15 +1,9 @@
 {
   "name": "Wactorz Dashboard",
   "short_name": "Wactorz",
-<<<<<<< HEAD
-  "description": "Wactorz: real-time multi-agent orchestration dashboard. Monitor, chat with, and control AI agents.",
-  "start_url": "/",
-  "scope": "/",
-=======
   "description": "Real-time multi-agent orchestration dashboard. Monitor, chat with, and control AI agents.",
   "start_url": "./",
   "scope": "./",
->>>>>>> dev
   "display": "standalone",
   "orientation": "any",
   "background_color": "#050818",
@@ -38,13 +32,6 @@
   ],
   "screenshots": [
     {
-<<<<<<< HEAD
-      "src": "/screenshots/dashboard.png",
-      "sizes": "1280x720",
-      "type": "image/png",
-      "form_factor": "wide",
-      "label": "Dashboard overview"
-=======
       "src": "./screenshots/dashboard.webp",
       "sizes": "1920x1080",
       "type": "image/webp",
@@ -57,7 +44,6 @@
       "type": "image/webp",
       "form_factor": "narrow",
       "label": "Wactorz dashboard on mobile"
->>>>>>> dev
     }
   ]
 }

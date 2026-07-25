@@ -32,6 +32,7 @@ from wactorz.desktop import (
     desktop_entry,
     notifications,
     pages,
+    platform_hooks,
     settings,
     tray,
     updates,
@@ -39,7 +40,6 @@ from wactorz.desktop import (
 )
 from wactorz.desktop.config import (
     APP_ICON,
-    APP_ID,
     APP_NAME,
     BACKEND_LOG,
     DATA_DIR,
@@ -271,20 +271,6 @@ def _toggle() -> None:
 
 
 # ── lifecycle ─────────────────────────────────────────────────────────────────
-def _set_app_user_model_id() -> None:
-    """Windows: set the AppUserModelID so the taskbar groups the window under our
-    icon. Must run before the window is created; a no-op on other platforms.
-    """
-    if os.name != "nt":
-        return
-    try:
-        import ctypes
-
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)  # type: ignore[attr-defined]
-    except Exception:
-        pass
-
-
 def _shutdown(*_) -> None:
     window_state.save()
     _stop_backend()
@@ -315,9 +301,6 @@ def _on_app_loaded(*_) -> None:
 
 
 # Retained: NSApp's delegate is a non-owning reference.
-_macos_app_delegate = None
-
-
 def _reveal_window() -> None:
     """Bring the window back whether it was hidden to the tray or minimized."""
     global _hidden, _minimized
@@ -330,70 +313,13 @@ def _reveal_window() -> None:
     _hidden = False
 
 
-def _install_macos_quit_handler() -> None:
-    """macOS: Dock-Quit / ⌘Q go through NSApp's applicationShouldTerminate, which
-    pywebview gates on the window 'closing' veto — so hide-to-tray also blocks
-    quitting. Install an app delegate that quits for real. The red close button
-    (windowShouldClose) is untouched, so it still hides to the tray.
-    """
-    if sys.platform != "darwin":
-        return
-    try:
-        # pylint: disable=import-error
-        from AppKit import NSApplication, NSTerminateNow  # pyright: ignore[reportMissingImports]
-        from Foundation import NSObject  # pyright: ignore[reportMissingImports]
-        from PyObjCTools import AppHelper  # pyright: ignore[reportMissingImports]
-
-        global _macos_app_delegate
-
-        class _QuitDelegate(NSObject):
-            """Handles the AppKit events pywebview does not surface itself."""
-
-            def applicationShouldTerminate_(self, app):
-                """Shut down cleanly on Dock ▸ Quit and ⌘Q.
-
-                Both bypass the window close handler, so the state save and
-                backend stop have to happen here or the child outlives us.
-                """
-                _shutdown()  # saves state, stops backend, os._exit
-                return NSTerminateNow  # belt-and-suspenders if _shutdown returns
-
-            def applicationShouldHandleReopen_hasVisibleWindows_(self, app, has_visible):
-                """Restore the window when the Dock icon is clicked.
-
-                With nothing visible (hidden to the tray) macOS would
-                otherwise do nothing, leaving the app looking dead.
-                """
-                # Dock-icon click while hidden to the tray → bring the window back.
-                if not has_visible:
-                    _reveal_window()
-                return True
-
-            def applicationSupportsSecureRestorableState_(self, app):
-                """Opt in to secure state restoration (quiets a macOS warning).
-
-                The shell restores its own geometry from disk, so there is no
-                AppKit-managed state to protect.
-                """
-                return True
-
-        _macos_app_delegate = _QuitDelegate.alloc().init()
-        # Set on the main thread (we run on a pywebview worker), after pywebview
-        # has already installed its own delegate during window creation.
-        AppHelper.callAfter(
-            lambda: NSApplication.sharedApplication().setDelegate_(_macos_app_delegate)
-        )
-    except Exception:
-        pass
-
-
 def _load_when_ready(window) -> None:
     """Worker (runs after the GUI loop starts): correct the window placement,
     wait for MQTT, start the backend, load the app, then reveal the window.
     """
     global _backend
     window_state.place(_window, webview.screens)
-    _install_macos_quit_handler()
+    platform_hooks.install_quit_handler(on_quit=_shutdown, on_reopen=_reveal_window)
     notifications.request_authorization()  # macOS: prompt for permission once
     if not _wait_for_mqtt():
         # The backend can't start without MQTT; configure instead of failing.
@@ -462,7 +388,7 @@ def launch_desktop() -> None:
     # covers source/dev runs that don't go through AppRun. (Qt-only.)
     if _use_qt and "gnome" in os.environ.get("XDG_CURRENT_DESKTOP", "").lower():
         os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
-    _set_app_user_model_id()
+    platform_hooks.set_app_user_model_id()
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 

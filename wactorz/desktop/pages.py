@@ -43,7 +43,7 @@ _ERROR_HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
      Make sure your MQTT host is running and reachable from this machine, then reopen.</p>
   <p><button onclick="window.pywebview.api.open_config()"
         style="background:#6366f1;color:#fff;border:0;border-radius:6px;
-               padding:.55rem 1.1rem;font-size:.85rem;cursor:pointer">Configure…</button></p>
+               padding:.55rem 1.1rem;font-size:.85rem;cursor:pointer">Configure...</button></p>
   <p>Details are in the log:<br><code>{LOG_PATH}</code></p>
 </div></body></html>"""
 
@@ -140,7 +140,7 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
     <label>Provider</label><select id="LLM_PROVIDER">{options}</select>
     <label>Model</label><input id="LLM_MODEL" value="{val("LLM_MODEL")}" placeholder="claude-sonnet-4-6">
     <label>API key</label><input id="LLM_API_KEY" type="password" value="{val("LLM_API_KEY")}">
-    <label>OpenAI-compatible URL <span style="color:#64748b">(OpenAI / Groq / vLLM …)</span></label>
+    <label>OpenAI-compatible URL <span style="color:#64748b">(OpenAI / Anthropic / vLLM ...)</span></label>
     <input id="OPENAI_URL" value="{val("OPENAI_URL")}" placeholder="https://api.openai.com/v1">
     <label>Ollama URL <span style="color:#64748b">(when provider = Ollama)</span></label>
     <input id="OLLAMA_URL" value="{val("OLLAMA_URL")}" placeholder="http://localhost:11434">
@@ -172,7 +172,7 @@ def config_html(values: dict, message: str = "", can_cancel: bool = False) -> st
                  "MQTT_HOST","MQTT_PORT","MQTT_USERNAME","MQTT_PASSWORD","HA_URL","HA_TOKEN"];
     const v = {{}};
     for (const id of ids) v[id] = document.getElementById(id).value.trim();
-    document.getElementById("status").textContent = "Saving & restarting…";
+    document.getElementById("status").textContent = "Saving & restarting...";
     await window.pywebview.api.save_config(v);
   }}
 </script>

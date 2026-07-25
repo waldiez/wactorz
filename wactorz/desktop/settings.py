@@ -32,10 +32,12 @@ def _save(data: dict) -> None:
 
 
 def auto_update_check() -> bool:
+    """Whether the shell looks for a newer release at launch (default off)."""
     return bool(_load().get("auto_update_check", False))
 
 
 def set_auto_update_check(enabled: bool) -> None:
+    """Persist the launch-time update-check preference."""
     data = _load()
     data["auto_update_check"] = bool(enabled)
     _save(data)

@@ -19,7 +19,7 @@ Callback = Callable[[], None]
 
 
 @dataclass
-class TrayHooks:
+class TrayHooks:  # pylint: disable=too-many-instance-attributes
     """Behaviour + state accessors the tray menu wires up."""
 
     on_toggle: Callback  # show/hide the window
@@ -53,7 +53,7 @@ def build_qt_tray(hooks: TrayHooks):
     app.setApplicationName(APP_NAME)
     app.setOrganizationName("Wactorz")
     app.setOrganizationDomain("io.waldiez.wactorz")
-    app.setDesktopFileName(APP_ID)
+    app.setDesktopFileName(APP_ID)  # pyright: ignore[reportAttributeAccessIssue]
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         return None
@@ -73,7 +73,7 @@ def build_qt_tray(hooks: TrayHooks):
         version = hooks.pending_update_version()
         download.setVisible(bool(version))
         if version:
-            download.setText(f"Download v{version}…")
+            download.setText(f"Download v{version}...")
 
     menu.aboutToShow.connect(_refresh_download)  # re-evaluate each time it opens
     _refresh_download()
@@ -126,8 +126,8 @@ def build_pystray_tray(hooks: TrayHooks):
     thread).
     """
     try:
-        import pystray
-        from PIL import Image
+        import pystray  # pyright: ignore[reportMissingImports]
+        from PIL import Image  # pyright: ignore[reportMissingImports]
     except ImportError:
         return None
     try:
@@ -147,9 +147,13 @@ def build_pystray_tray(hooks: TrayHooks):
         pystray.MenuItem("Configure...", lambda icon, item: hooks.on_configure()),
         pystray.MenuItem("Check for Updates...", lambda icon, item: hooks.on_check_updates()),
         pystray.MenuItem(
-            lambda item: f"Download v{hooks.pending_update_version()}…",
+            lambda item: f"Download v{hooks.pending_update_version()}...",
             lambda icon, item: hooks.open_download(),
-            visible=lambda item: bool(hooks.pending_update_version()),
+            # pystray calls this (`return self._visible(self)`); its untyped
+            # signature just infers bool from the default.
+            visible=lambda item: bool(  # pyright: ignore[reportArgumentType]
+                hooks.pending_update_version()
+            ),
         ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(

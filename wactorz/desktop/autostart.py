@@ -37,10 +37,16 @@ def _launch_argv() -> list[str]:
 
 
 def is_enabled() -> bool:
+    """True when the run-at-login entry exists (plist / registry / .desktop).
+
+    Nothing is cached — the OS artifact is the source of truth, so an entry the
+    user removed by hand shows up immediately. Unreadable counts as disabled.
+    """
     try:
         if sys.platform == "darwin":
             return _PLIST.exists()
         if os.name == "nt":
+            # pylint: disable=import-error
             import winreg
 
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
@@ -85,6 +91,7 @@ def _set_macos(enabled: bool) -> None:
 
 
 def _set_windows(enabled: bool) -> None:
+    # pylint: disable=import-error
     import winreg
 
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_WRITE) as key:

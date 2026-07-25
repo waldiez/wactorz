@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import uuid
 
 from wactorz.desktop.config import APP_ICON, APP_NAME
 
@@ -32,21 +33,31 @@ def _macos_un_center():
     bundle / framework missing). First call wires the foreground-presentation
     delegate and requests authorization (the one-time permission prompt).
     """
+    # pylint: disable=import-error
     global _un_delegate, _un_ready
     try:
-        from UserNotifications import UNUserNotificationCenter
+        from UserNotifications import (  # pyright: ignore[reportMissingImports]
+            UNUserNotificationCenter,
+        )
 
         center = UNUserNotificationCenter.currentNotificationCenter()
         if center is None:
             return None
         if not _un_ready:
             _un_ready = True
-            from Foundation import NSObject
+            from Foundation import NSObject  # pyright: ignore[reportMissingImports]
 
-            class _Delegate(NSObject):
+            class _Delegate(NSObject):  # pylint: disable=too-few-public-methods
+                """Lets banners appear while the app itself is frontmost."""
+
                 def userNotificationCenter_willPresentNotification_withCompletionHandler_(
                     self, center, notification, completion
                 ):
+                    """Present the banner even when the app has focus.
+
+                    macOS hides notifications from the foreground app unless
+                    its delegate asks for them explicitly.
+                    """
                     completion(_UN_PRESENT)
 
             _un_delegate = _Delegate.alloc().init()
@@ -61,10 +72,12 @@ def _macos_un_center():
 
 def _deliver_macos_un(title: str, body: str) -> bool:
     """Deliver via UNUserNotificationCenter. Returns True only if posted."""
+    # pylint: disable=import-error
     try:
-        import uuid
-
-        from UserNotifications import UNMutableNotificationContent, UNNotificationRequest
+        from UserNotifications import (  # pyright: ignore[reportMissingImports]
+            UNMutableNotificationContent,
+            UNNotificationRequest,
+        )
 
         center = _macos_un_center()
         if center is None:
@@ -86,17 +99,25 @@ def _deliver_macos_legacy(title: str, body: str) -> None:
     """Deprecated NSUserNotification path — used only when UN is unavailable.
     A delegate forces presentation even when frontmost.
     """
+    # pylint: disable=import-error
     global _legacy_delegate
     try:
-        from Foundation import NSObject, NSUserNotification, NSUserNotificationCenter
+        from Foundation import (  # pyright: ignore[reportMissingImports]
+            NSObject,
+            NSUserNotification,
+            NSUserNotificationCenter,
+        )
 
         center = NSUserNotificationCenter.defaultUserNotificationCenter()
         if center is None:
             return
         if _legacy_delegate is None:
 
-            class _PresentAlways(NSObject):
+            class _PresentAlways(NSObject):  # pylint: disable=too-few-public-methods
+                """Legacy-API counterpart of the UN delegate above."""
+
                 def userNotificationCenter_shouldPresentNotification_(self, center, note):
+                    """Present the banner even when the app has focus."""
                     return True
 
             _legacy_delegate = _PresentAlways.alloc().init()
@@ -120,8 +141,9 @@ def _notify_macos_native(title: str, body: str) -> None:
     """Post a macOS notification, hopping to the main thread (callers are often
     worker threads, where delivery silently no-ops).
     """
+    # pylint: disable=import-error
     try:
-        from PyObjCTools import AppHelper
+        from PyObjCTools import AppHelper  # pyright: ignore[reportMissingImports]
 
         AppHelper.callAfter(_deliver_macos, title, body)
     except Exception:
@@ -134,8 +156,9 @@ def request_authorization() -> None:
     """
     if sys.platform != "darwin":
         return
+    # pylint: disable=import-error
     try:
-        from PyObjCTools import AppHelper
+        from PyObjCTools import AppHelper  # pyright: ignore[reportMissingImports]
 
         AppHelper.callAfter(_macos_un_center)
     except Exception:
@@ -179,6 +202,11 @@ def _notify_linux(title: str, body: str) -> bool:
 
 
 def notify(title: str, body: str) -> None:
+    """Show an OS notification using the best backend for this platform.
+
+    Best-effort: with no notifier available the call is silently dropped —
+    a missing notification must never break the caller mid-task.
+    """
     if sys.platform == "darwin":
         _notify_macos_native(title, body)
         return
@@ -190,6 +218,11 @@ def notify(title: str, body: str) -> None:
         # Windows path (and Linux fallback). app_icon gives the toast its icon;
         # APP_ICON resolves to the bundled per-platform icon.
         icon = str(APP_ICON) if APP_ICON.exists() else ""
-        notification.notify(title=title, message=body, app_name=APP_NAME, app_icon=icon)
+        notification.notify(  # pyright: ignore[reportOptionalCall]
+            title=title,
+            message=body,
+            app_name=APP_NAME,
+            app_icon=icon,
+        )
     except Exception:
         pass

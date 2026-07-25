@@ -132,6 +132,7 @@ def _place_window() -> None:
                 _window_geometry.update(width=nw, height=nh)
             return
 
+        # pylint: disable=not-an-iterable
         target = next((s for s in screens if _on(s, x, y)), None)
         nw = min(w, (target or screens[0]).width)
         nh = min(h, (target or screens[0]).height)
@@ -183,6 +184,9 @@ def _spawn_backend() -> subprocess.Popen:
     )
     cmd = [sys.executable, "--run-backend"] if FROZEN else [sys.executable, "-m", "wactorz"]
     try:
+        # Both the log handle and the child outlive this call: a `with` block
+        # would close the pipe and terminate the backend on return.
+        # pylint: disable=consider-using-with
         log = open(BACKEND_LOG, "w", encoding="utf-8")  # noqa: SIM115
         return subprocess.Popen(
             cmd, env=env, cwd=str(DATA_DIR), stdout=log, stderr=subprocess.STDOUT
@@ -305,7 +309,16 @@ def _restart_backend() -> None:
 
 # ── JS bridge (window.pywebview.api.*) ──────────────────────────────────────
 class Api:
+    """Methods the shell's own pages call as ``window.pywebview.api.*``.
+
+    pywebview injects this bridge into every page it loads, but only the
+    splash/error/config pages (``pages.py``) use it — the dashboard SPA never
+    does. Keep these thin: they run on pywebview's JS-API thread, so anything
+    that navigates the window must go through ``_defer_nav``.
+    """
+
     def notify(self, title: str, body: str) -> None:
+        """Raise an OS notification on behalf of the page."""
         notifications.notify(title, body)
 
     def open_config(self) -> None:
@@ -314,8 +327,12 @@ class Api:
 
     def close_config(self) -> None:
         """Cancel: return to the running app without saving."""
-        if _window is not None:
-            _defer_nav(lambda: _window.load_url(URL))
+
+        def _load() -> None:
+            if _window is not None:
+                _window.load_url(URL)
+
+        _defer_nav(_load)
 
     def retry(self) -> bool:
         """Retry connecting with the current config (e.g. after starting the
@@ -428,24 +445,42 @@ def _install_macos_quit_handler() -> None:
     if sys.platform != "darwin":
         return
     try:
-        from AppKit import NSApplication, NSTerminateNow
-        from Foundation import NSObject
-        from PyObjCTools import AppHelper
+        # pylint: disable=import-error
+        from AppKit import NSApplication, NSTerminateNow  # pyright: ignore[reportMissingImports]
+        from Foundation import NSObject  # pyright: ignore[reportMissingImports]
+        from PyObjCTools import AppHelper  # pyright: ignore[reportMissingImports]
 
         global _macos_app_delegate
 
         class _QuitDelegate(NSObject):
+            """Handles the AppKit events pywebview does not surface itself."""
+
             def applicationShouldTerminate_(self, app):
+                """Shut down cleanly on Dock ▸ Quit and ⌘Q.
+
+                Both bypass the window close handler, so the state save and
+                backend stop have to happen here or the child outlives us.
+                """
                 _shutdown()  # saves state, stops backend, os._exit
                 return NSTerminateNow  # belt-and-suspenders if _shutdown returns
 
             def applicationShouldHandleReopen_hasVisibleWindows_(self, app, has_visible):
+                """Restore the window when the Dock icon is clicked.
+
+                With nothing visible (hidden to the tray) macOS would
+                otherwise do nothing, leaving the app looking dead.
+                """
                 # Dock-icon click while hidden to the tray → bring the window back.
                 if not has_visible:
                     _reveal_window()
                 return True
 
             def applicationSupportsSecureRestorableState_(self, app):
+                """Opt in to secure state restoration (quiets a macOS warning).
+
+                The shell restores its own geometry from disk, so there is no
+                AppKit-managed state to protect.
+                """
                 return True
 
         _macos_app_delegate = _QuitDelegate.alloc().init()
@@ -496,13 +531,17 @@ def _qt_available() -> bool:
 
 def _gtk_available() -> bool:
     """True if PyGObject (the GTK/WebKit2 webview backend) is importable."""
-    import importlib.util
-
     return importlib.util.find_spec("gi") is not None
 
 
 def launch_desktop() -> None:
-    global _backend, _window, _tray, _tray_ok
+    """Open the app window and run the GUI loop until the user quits.
+
+    Picks a GUI backend (Qt where available, else the system GTK/WebKit),
+    restores the last window geometry, and builds a tray if one can be shown.
+    The backend child is started once the loop is up. Blocks the main thread.
+    """
+    global _window, _tray, _tray_ok
     # On Linux we prefer the Qt (QtWebEngine) backend the AppImage bundles, but a
     # source/pip install without PySide6 (e.g. a system WebKit2GTK box such as a
     # Raspberry Pi) should fall back to pywebview's GTK backend rather than crash.
@@ -546,11 +585,16 @@ def launch_desktop() -> None:
         js_api=Api(),
         background_color=SPLASH_BG,
     )
+    if not _window:
+        return
     _window.events.closing += _on_closing
     _window.events.resized += _on_window_resized
     _window.events.moved += _on_window_moved
     _window.events.minimized += _on_minimized
     _window.events.restored += _on_restored
+
+    def _set_autostart(enabled: bool) -> None:
+        autostart.set_enabled(enabled)
 
     # The backend is spawned later, in _load_when_ready, once MQTT is reachable
     # (see _wait_for_mqtt) — spawning here would race a still-booting broker.
@@ -562,11 +606,11 @@ def launch_desktop() -> None:
     # False and closing the window shuts the app down instead of hiding it.
     hooks = tray.TrayHooks(
         on_toggle=_toggle,
-        on_configure=lambda: _show_config(),
-        on_check_updates=lambda: updates.check_for_updates(),
+        on_configure=_show_config,
+        on_check_updates=updates.check_for_updates,
         on_quit=_shutdown,
         autostart_enabled=autostart.is_enabled,
-        set_autostart=autostart.set_enabled,
+        set_autostart=_set_autostart,
         auto_update_enabled=settings.auto_update_check,
         set_auto_update=settings.set_auto_update_check,
         pending_update_version=updates.pending_version,
@@ -574,15 +618,19 @@ def launch_desktop() -> None:
     )
     _tray = (tray.build_qt_tray if _use_qt else tray.build_pystray_tray)(hooks)
     _tray_ok = _tray is not None
-
-    start_kwargs = {"icon": APP_ICON}
     if _use_qt:
-        start_kwargs["gui"] = "qt"
-    webview.start(_load_when_ready, _window, **start_kwargs)  # blocks the main thread
+        webview.start(_load_when_ready, [_window], icon=str(APP_ICON), gui="qt")
+    else:
+        webview.start(_load_when_ready, [_window], icon=str(APP_ICON))
     _shutdown()
 
 
 def main() -> None:
+    """Console-script entry point (``wactorz-desktop``).
+
+    Re-invoked with ``--run-backend`` for the backend child process; without
+    it, opens the desktop window.
+    """
     if "--run-backend" in sys.argv:
         run_backend()
         return

@@ -14,7 +14,6 @@ a tray rather than failing to start.
 """
 
 import importlib.util
-import json
 import os
 import signal
 import socket
@@ -36,6 +35,7 @@ from wactorz.desktop import (
     settings,
     tray,
     updates,
+    window_state,
 )
 from wactorz.desktop.config import (
     APP_ICON,
@@ -47,12 +47,9 @@ from wactorz.desktop.config import (
     PORT,
     SPLASH_BG,
     URL,
-    WINDOW_STATE_FILE,
 )
 
 load_dotenv(find_dotenv())
-
-_DEFAULT_WINDOW_STATE = {"width": 1280, "height": 720, "x": None, "y": None}
 
 _backend: subprocess.Popen | None = None
 _window = None
@@ -61,109 +58,6 @@ _minimized = False  # tracked from the minimized/restored window events
 _shown = False  # the window is revealed only once the page paints
 _tray = None  # kept alive for the lifetime of the process
 _tray_ok = False  # True only when a tray icon is actually shown
-# Live geometry, kept fresh by the resized/moved events so we never have to read
-# a hidden or torn-down window at shutdown. Seeded from the saved state on launch.
-_window_geometry = dict(_DEFAULT_WINDOW_STATE)
-
-
-def _sanitize_window_state(s: dict) -> dict:
-    """Coerce a loaded state dict to valid values (it may be hand-edited or a
-    partial/old file): positive int width/height; x/y int or None.
-    """
-    out = dict(_DEFAULT_WINDOW_STATE)
-    try:
-        w, h = int(s["width"]), int(s["height"])
-        if w >= 1 and h >= 1:
-            out["width"], out["height"] = w, h
-    except (KeyError, TypeError, ValueError):
-        pass
-    for k in ("x", "y"):
-        try:
-            out[k] = None if s.get(k) is None else int(s[k])
-        except (TypeError, ValueError):
-            out[k] = None
-    return out
-
-
-def _load_window_state() -> dict:
-    """Last saved window geometry, sanitized — or defaults. Never raises; a
-    missing or corrupt file just yields the defaults.
-    """
-    try:
-        if WINDOW_STATE_FILE.exists():
-            return _sanitize_window_state(json.loads(WINDOW_STATE_FILE.read_text()))
-    except Exception:
-        pass
-    return dict(_DEFAULT_WINDOW_STATE)
-
-
-def _on_window_resized(width, height) -> None:
-    _window_geometry["width"], _window_geometry["height"] = int(width), int(height)
-
-
-def _on_window_moved(x, y) -> None:
-    _window_geometry["x"], _window_geometry["y"] = int(x), int(y)
-
-
-def _place_window() -> None:
-    """After the GUI is up (screens are known): keep the window on a connected
-    screen and no larger than it. Fixes a saved position on a monitor that is no
-    longer present, and a saved size larger than the current display.
-    """
-    if _window is None:
-        return
-    try:
-        screens = webview.screens or []
-        if not screens:
-            return
-        w, h = _window_geometry["width"], _window_geometry["height"]
-        x, y = _window_geometry["x"], _window_geometry["y"]
-
-        def _on(scr, px, py):
-            return scr.x <= px < scr.x + scr.width and scr.y <= py < scr.y + scr.height
-
-        # No saved position (first run / never moved): the window is already
-        # centered by create_window — only shrink it if it overflows the primary.
-        if x is None or y is None:
-            primary = screens[0]
-            nw, nh = min(w, primary.width), min(h, primary.height)
-            if (nw, nh) != (w, h):
-                _window.resize(nw, nh)
-                _window_geometry.update(width=nw, height=nh)
-            return
-
-        # pylint: disable=not-an-iterable
-        target = next((s for s in screens if _on(s, x, y)), None)
-        nw = min(w, (target or screens[0]).width)
-        nh = min(h, (target or screens[0]).height)
-        if target is not None:
-            # On a live screen: keep the position, nudge so it fits within it.
-            nx = min(max(x, target.x), target.x + target.width - nw)
-            ny = min(max(y, target.y), target.y + target.height - nh)
-        else:
-            # Saved screen is gone: center on the primary screen.
-            primary = screens[0]
-            nx = primary.x + (primary.width - nw) // 2
-            ny = primary.y + (primary.height - nh) // 2
-        if (nw, nh) != (w, h):
-            _window.resize(nw, nh)
-        if (nx, ny) != (x, y):
-            _window.move(nx, ny)
-        _window_geometry.update(width=nw, height=nh, x=nx, y=ny)
-    except Exception:
-        pass
-
-
-def _save_window_state() -> None:
-    """Persist the tracked geometry. Best-effort — never raises. Reads the
-    tracked dict (not the live window), so it is correct even when quitting from
-    the tray with the window hidden.
-    """
-    try:
-        WINDOW_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        WINDOW_STATE_FILE.write_text(json.dumps(_window_geometry))
-    except Exception:
-        pass
 
 
 # ── backend child ─────────────────────────────────────────────────────────────
@@ -392,7 +286,7 @@ def _set_app_user_model_id() -> None:
 
 
 def _shutdown(*_) -> None:
-    _save_window_state()
+    window_state.save()
     _stop_backend()
     os._exit(0)
 
@@ -498,7 +392,7 @@ def _load_when_ready(window) -> None:
     wait for MQTT, start the backend, load the app, then reveal the window.
     """
     global _backend
-    _place_window()
+    window_state.place(_window, webview.screens)
     _install_macos_quit_handler()
     notifications.request_authorization()  # macOS: prompt for permission once
     if not _wait_for_mqtt():
@@ -572,8 +466,8 @@ def launch_desktop() -> None:
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    state = _load_window_state()
-    _window_geometry.update(state)  # so an untouched session re-saves the same
+    state = window_state.load()
+    window_state.seed(state)  # so an untouched session re-saves the same
     _window = webview.create_window(
         APP_NAME,
         html=pages.LOADING_HTML,
@@ -588,8 +482,8 @@ def launch_desktop() -> None:
     if not _window:
         return
     _window.events.closing += _on_closing
-    _window.events.resized += _on_window_resized
-    _window.events.moved += _on_window_moved
+    _window.events.resized += window_state.track_resize
+    _window.events.moved += window_state.track_move
     _window.events.minimized += _on_minimized
     _window.events.restored += _on_restored
 

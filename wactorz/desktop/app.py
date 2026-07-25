@@ -16,18 +16,16 @@ a tray rather than failing to start.
 import importlib.util
 import os
 import signal
-import socket
-import subprocess
 import sys
 import threading
 import time
-import urllib.request
 
 import webview
 from dotenv import find_dotenv, load_dotenv
 
 from wactorz.desktop import (
     autostart,
+    backend,
     backend_config,
     desktop_entry,
     notifications,
@@ -42,16 +40,12 @@ from wactorz.desktop.config import (
     APP_ICON,
     APP_NAME,
     BACKEND_LOG,
-    DATA_DIR,
-    FROZEN,
-    PORT,
     SPLASH_BG,
     URL,
 )
 
 load_dotenv(find_dotenv())
 
-_backend: subprocess.Popen | None = None
 _window = None
 _hidden = False  # True when hidden to the tray (our hide(); no event)
 _minimized = False  # tracked from the minimized/restored window events
@@ -60,96 +54,12 @@ _tray = None  # kept alive for the lifetime of the process
 _tray_ok = False  # True only when a tray icon is actually shown
 
 
-# ── backend child ─────────────────────────────────────────────────────────────
-def _spawn_backend() -> subprocess.Popen:
-    # Run from a per-user writable dir: the backend writes wactorz.log,
-    # monitor.log and ./state relative to its cwd, which fails under an
-    # all-users install (e.g. C:\Program Files). INTERFACE=rest makes it serve
-    # the web/REST UI on MONITOR_PORT (its default "cli" mode never binds it).
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
-    # User config from the Configure view wins over the inherited shell/.env, so
-    # a stale shell var can't shadow it. The shell-owned vars below win over both.
-    env.update(backend_config.env_for_backend())
-    env.update(
-        MONITOR_PORT=str(PORT),
-        INTERFACE="rest",
-        WACTORZ_STATE_DIR=str(DATA_DIR / "state"),
-    )
-    cmd = [sys.executable, "--run-backend"] if FROZEN else [sys.executable, "-m", "wactorz"]
-    try:
-        # Both the log handle and the child outlive this call: a `with` block
-        # would close the pipe and terminate the backend on return.
-        # pylint: disable=consider-using-with
-        log = open(BACKEND_LOG, "w", encoding="utf-8")  # noqa: SIM115
-        return subprocess.Popen(
-            cmd, env=env, cwd=str(DATA_DIR), stdout=log, stderr=subprocess.STDOUT
-        )
-    except Exception:
-        return subprocess.Popen(cmd, env=env, cwd=str(DATA_DIR))
-
-
-def run_backend() -> None:
-    """Entry for `<exe> --run-backend` (frozen) — same as `python -m wactorz`."""
-    import runpy
-
-    sys.argv = ["wactorz"]
-    runpy.run_module("wactorz", run_name="__main__")
-
-
-def _wait_for_backend(timeout: float = 30.0) -> bool:
-    # Probe the REST /health endpoint (returns 200 once the server is up). "/"
-    # depends on static assets and could 404, which would read as not-ready.
-    health = f"{URL}/health"
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _backend is not None and _backend.poll() is not None:
-            return False  # child exited before serving — see BACKEND_LOG
-        try:
-            with urllib.request.urlopen(health, timeout=1):
-                return True
-        except Exception:
-            time.sleep(0.15)
-    return False
-
-
-def _mqtt_reachable(timeout: float = 3.0) -> bool:
-    """TCP-probe the configured MQTT broker. The backend can't start without it,
-    so a quick check lets us open Configure instead of waiting out the timeout.
-    """
-    env = backend_config.env_for_backend()
-    host = env.get("MQTT_HOST") or os.environ.get("MQTT_HOST") or "localhost"
-    try:
-        port = int(env.get("MQTT_PORT") or os.environ.get("MQTT_PORT") or 1883)
-    except (TypeError, ValueError):
-        port = 1883
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
-def _wait_for_mqtt(timeout: float = 25.0) -> bool:
-    """Poll the MQTT broker until reachable or timeout. Covers the broker (often
-    a local Docker container) still starting up at login — a single probe would
-    lose that race and pop Configure even though it comes up a moment later.
-    """
-    deadline = time.time() + timeout
-    while True:
-        if _mqtt_reachable(timeout=2.0):
-            return True
-        if time.time() >= deadline:
-            return False
-        time.sleep(1.0)
-
-
 def _show_config(message: str = "") -> None:
     """Load the Configure form. Offer Cancel only when the backend is running,
     i.e. there's a live app to return to (not on first-run / failure).
     """
     if _window is not None:
-        backend_up = _backend is not None and _backend.poll() is None
+        backend_up = backend.is_running()
         _window.load_html(pages.config_html(backend_config.load(), message, can_cancel=backend_up))
         _reveal_window()  # bring it forward if opened from the tray while hidden
 
@@ -171,30 +81,18 @@ def _defer_nav(action) -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 
-def _stop_backend() -> None:
-    global _backend
-    if _backend and _backend.poll() is None:
-        _backend.terminate()
-        try:
-            _backend.wait(timeout=5)
-        except Exception:
-            _backend.kill()
-    _backend = None
-
-
 def _restart_backend() -> None:
     """Apply saved config: stop the child, show the splash, respawn with the new
     env, then load the app (or back to Configure / the error page). Off-thread.
     """
-    global _backend
-    _stop_backend()
-    if not _mqtt_reachable():
+    backend.stop()
+    if not backend.mqtt_reachable():
         _show_config("MQTT broker still unreachable — check the host and port.")
         return
     if _window is not None:
         _window.load_html(pages.LOADING_HTML)
-    _backend = _spawn_backend()
-    if _wait_for_backend():
+    backend.start()
+    if backend.wait_until_serving():
         if _window is not None:
             _window.load_url(URL)
     elif _window is not None:
@@ -273,7 +171,7 @@ def _toggle() -> None:
 # ── lifecycle ─────────────────────────────────────────────────────────────────
 def _shutdown(*_) -> None:
     window_state.save()
-    _stop_backend()
+    backend.stop()
     os._exit(0)
 
 
@@ -317,19 +215,18 @@ def _load_when_ready(window) -> None:
     """Worker (runs after the GUI loop starts): correct the window placement,
     wait for MQTT, start the backend, load the app, then reveal the window.
     """
-    global _backend
     window_state.place(_window, webview.screens)
     platform_hooks.install_quit_handler(on_quit=_shutdown, on_reopen=_reveal_window)
     notifications.request_authorization()  # macOS: prompt for permission once
-    if not _wait_for_mqtt():
+    if not backend.wait_for_mqtt():
         # The backend can't start without MQTT; configure instead of failing.
         notifications.notify(APP_NAME, "MQTT broker unreachable — opening configuration.")
         _show_config("MQTT broker unreachable — check the host and port.")
         _on_app_loaded()
     else:
         # Spawn only once MQTT is up, so the backend doesn't exit on a boot race.
-        _backend = _spawn_backend()
-        if _wait_for_backend():
+        backend.start()
+        if backend.wait_until_serving():
             window.events.loaded += _on_app_loaded
             window.load_url(URL)
             time.sleep(2.0)  # fallback reveal if the 'loaded' event doesn't fire
@@ -420,7 +317,7 @@ def launch_desktop() -> None:
         autostart.set_enabled(enabled)
 
     # The backend is spawned later, in _load_when_ready, once MQTT is reachable
-    # (see _wait_for_mqtt) — spawning here would race a still-booting broker.
+    # (see backend.wait_for_mqtt) — spawning here would race a still-booting broker.
 
     # Tray backend matches the webview backend: the Qt tray (QSystemTrayIcon,
     # shares pywebview's QApplication) when Qt is used, otherwise pystray's
@@ -455,7 +352,7 @@ def main() -> None:
     it, opens the desktop window.
     """
     if "--run-backend" in sys.argv:
-        run_backend()
+        backend.run_in_process()
         return
     launch_desktop()
 

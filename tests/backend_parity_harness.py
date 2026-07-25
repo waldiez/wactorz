@@ -35,6 +35,7 @@ for _module in ("aiomqtt", "psutil"):
 
 def _load(name: str, path: pathlib.Path):
     spec = importlib.util.spec_from_file_location(name, path)
+    assert spec
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     assert spec.loader is not None
@@ -81,7 +82,7 @@ def _make_system() -> ActorSystem:
         async def disconnect(self):
             return None
 
-    system._mqtt_client = _NoOpMQTT()
+    system._mqtt_client = _NoOpMQTT()  # pyright: ignore[reportAttributeAccessIssue]
     system._supervisor = Supervisor(system.registry, system._inject, poll_interval=0.05)
     return system
 

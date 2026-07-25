@@ -2,15 +2,15 @@
 
 # pylint: disable=missing-function-docstring,missing-class-docstring
 
-import sys
 import types
 import unittest
 from unittest.mock import patch
 
 import aiohttp
 
-sys.modules.setdefault("openai", types.ModuleType("openai"))
-sys.modules.setdefault("anthropic", types.ModuleType("anthropic"))
+from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissingImports]
+
+ensure_importable("openai", "anthropic")
 
 from wactorz.agents.llm_agent import (
     AnthropicProvider,

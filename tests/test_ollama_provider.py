@@ -1,12 +1,12 @@
-import json
-import sys
-import types
+import json as json_
 import unittest
 from unittest.mock import patch
 
 import aiohttp
 
-sys.modules.setdefault("openai", types.ModuleType("openai"))
+from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissingImports]
+
+ensure_importable("openai")
 
 from wactorz.agents.llm_agent import OllamaProvider
 
@@ -31,7 +31,7 @@ class _FakeContent:
         self._chunks = list(chunks)
 
     def __aiter__(self):
-        self._iter = iter(self._chunks)
+        self._iter = iter(self._chunks)  # pylint: disable=attribute-defined-outside-init
         return self
 
     async def __anext__(self):
@@ -97,8 +97,8 @@ class OllamaProviderTest(unittest.IsolatedAsyncioTestCase):
     async def test_stream_sends_system_prompt_as_system_message(self):
         calls = []
         chunks = [
-            json.dumps({"message": {"content": "he"}, "done": False}).encode(),
-            json.dumps(
+            json_.dumps({"message": {"content": "he"}, "done": False}).encode(),
+            json_.dumps(
                 {
                     "message": {"content": "llo"},
                     "done": True,

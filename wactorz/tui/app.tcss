@@ -1,0 +1,98 @@
+/* Wactorz TUI — blue rounded panels, dark bg, accent text. */
+
+Screen {
+    background: $background;
+    color: $text;
+}
+
+/* ── Top title + tab bar ─────────────────────────────────────────────────── */
+#brand {
+    color: $accent;
+    text-style: bold;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+/* The tab labels row */
+Tabs {
+    background: $background;
+}
+Tab {
+    color: $text-muted;
+}
+Tab.-active {
+    color: $accent;
+    text-style: bold;
+}
+
+/* ── Content panels ──────────────────────────────────────────────────────── */
+TabPane {
+    padding: 1 2;
+}
+
+.panel {
+    border: round $primary;
+    height: 1fr;
+    padding: 1 2;
+}
+
+/* ── Logs tab ────────────────────────────────────────────────────────────── */
+#log-toolbar {
+    height: 1;
+    margin: 0 0 1 0;
+}
+#log-toolbar Button {
+    margin: 0 1 0 0;
+    color: $text-muted;
+}
+#log-search {
+    width: 1fr;
+    height: 1;
+    border: none;
+    background: $background;
+}
+#logbox {
+    height: 1fr;
+}
+
+/* ── Chat tab ────────────────────────────────────────────────────────────── */
+.chat-hint {
+    color: $text-muted;
+    margin: 0 0 1 0;
+}
+.chat-user {
+    margin: 1 0 0 0;
+}
+.chat-reply {
+    margin: 0 0 1 0;
+}
+
+/* ── Bottom region: input + key hints + status bar ───────────────────────── */
+#footer {
+    dock: bottom;
+    height: 5;
+}
+
+#cmd {
+    height: 3;
+    border: round $primary;
+    background: $background;
+}
+#cmd:focus {
+    border: round $accent;
+}
+
+#keyhints {
+    height: 1;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+#statusbar {
+    height: 1;
+    background: $panel;
+    color: $text-muted;
+    padding: 0 1;
+}

@@ -1,6 +1,8 @@
-"""TUI entrypoint - `python -m wactorz.tui`."""
+"""`python -m wactorz.tui`."""
 
-from .app import run
+from .app import run_async
 
 if __name__ == "__main__":
-    run()
+    import asyncio
+
+    asyncio.run(run_async())

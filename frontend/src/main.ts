@@ -107,7 +107,16 @@ function reportGlobalError(context: string, detail: unknown): void {
         message: "Something went wrong — see the console for details.",
     });
 }
-window.addEventListener("error", e => reportGlobalError("uncaught", e.error ?? e.message));
+window.addEventListener("error", e => {
+    // Scripts injected from another origin (browser extensions, an embedding
+    // webview's JS bridge) report as an opaque "Script error." with no error
+    // object, filename or line — nothing anyone can act on. Toasting those
+    // blames the app for someone else's script, so only report real page errors.
+    if (!e.error && !e.filename) {
+        return;
+    }
+    reportGlobalError("uncaught", e.error ?? e.message);
+});
 window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
 
 const agentStore = new AgentStore();

@@ -250,4 +250,27 @@ describe("main.ts bootstrap", () => {
         window.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: new Error("nope") }));
         expect(toast.show).toHaveBeenCalledTimes(2);
     });
+
+    it("ignores opaque cross-origin script errors (no error object, no filename)", () => {
+        // What an injected script from another origin looks like — e.g. a browser
+        // extension, or the desktop shell's webview bridge hitting our CSP. There
+        // is nothing actionable in it, so it must not blame the app with a toast.
+        vi.mocked(toast.show).mockClear();
+        window.dispatchEvent(
+            Object.assign(new Event("error"), { error: null, message: "Script error.", filename: "" }),
+        );
+        expect(toast.show).not.toHaveBeenCalled();
+    });
+
+    it("still reports an errorless event that carries a filename (real page error)", () => {
+        vi.mocked(toast.show).mockClear();
+        window.dispatchEvent(
+            Object.assign(new Event("error"), {
+                error: null,
+                message: "boom",
+                filename: "http://localhost/app.js",
+            }),
+        );
+        expect(toast.show).toHaveBeenCalledTimes(1);
+    });
 });

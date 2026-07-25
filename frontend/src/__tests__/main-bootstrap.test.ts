@@ -273,4 +273,16 @@ describe("main.ts bootstrap", () => {
         );
         expect(toast.show).toHaveBeenCalledTimes(1);
     });
+
+    it("ignores CSP-blocked eval from an injected bridge (reported as first-party)", () => {
+        vi.mocked(toast.show).mockClear();
+        window.dispatchEvent(
+            Object.assign(new Event("error"), {
+                error: new EvalError("Refused to evaluate a string as JavaScript"),
+                message: "EvalError: Refused to evaluate a string as JavaScript",
+                filename: "http://localhost:8888/",
+            }),
+        );
+        expect(toast.show).not.toHaveBeenCalled();
+    });
 });

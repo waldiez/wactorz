@@ -108,14 +108,18 @@ function reportGlobalError(context: string, detail: unknown): void {
     });
 }
 window.addEventListener("error", e => {
-    // Scripts injected from another origin (browser extensions, an embedding
-    // webview's JS bridge) report as an opaque "Script error." with no error
-    // object, filename or line — nothing anyone can act on. Toasting those
-    // blames the app for someone else's script, so only report real page errors.
+    // Injected scripts (browser extensions, the desktop shell's pywebview
+    // bridge) can trip our script-src CSP, which allows no 'unsafe-eval'.
+    // WebKit attributes that to the page itself, so it arrives as a
+    // first-party error and slips past the opaque-error check below. The app
+    // never evals, so an EvalError is always someone else's code.
+    if (e.error instanceof EvalError) {
+        return;
+    }
     if (!e.error && !e.filename) {
         return;
     }
-    reportGlobalError("uncaught", e.error ?? e.message);
+    reportGlobalError("uncaught", e.error ?? e.message ?? e.filename);
 });
 window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
 

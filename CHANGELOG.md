@@ -5,14 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Added
+
+- **`ha_connection` add-on option** (`auto` / `supervisor` / `custom`) — explicit Home Assistant connection mode for both add-on variants. `auto` keeps the previous token-presence inference, so existing installs are unaffected. Startup now also logs one deterministic line with the resolved mode, URL, and auth result (e.g. `HA connection OK — mode=supervisor ...` or `HA auth FAILED (401) ...`).
+- **Extension seam (`wactorz/ext/`).** Optional features live in self-contained folders that expose a
+  `setup(app)` hook; the monitor auto-discovers and wires them at startup, and each may contribute
+  non-secret browser config to `/api/config`. Text-to-speech is now packaged as the first such
+  extension (`wactorz/ext/tts/` + `frontend/src/ext/tts/`), with no change to its behavior.
+- **Frontend extension registries.** Extensions can now add dashboard tabs
+  (`CardDashboard.registerView`), custom icons (`registerIcon`), and `/api/config`-seeded settings
+  (`registerConfigEntry` in the new `config/serverConfig.ts`) without touching core files. The HA
+  URL seeding moved into the same mechanism; TTS availability is now read from the server config
+  instead of always probing.
+
 ### Changed
 
 - **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant
   activity now stream to the browser as server-push over `/ws`; the dashboard no longer opens its own
   MQTT connection to the broker, and the browser receives no broker credentials.
+- **Home Assistant add-on split into two variants.** The store now offers **Wactorz** (slim, Alpine,
+  ~200 MB) and **Wactorz Ultra** (Debian + ML/`ultralytics`, ~3 GB) as separate cards; both share the
+  same options and entrypoint. CI builds and pushes both variants across `aarch64`/`amd64`.
 
 ### Fixed
 
+- **Silent HA misconfiguration in the add-on** — a custom `ha_url` with a blank `ha_token` (or a token set in supervisor mode) used to fail quietly: the Supervisor proxy only accepts the injected Supervisor token, so the custom URL was silently discarded. The add-on now logs a loud warning explaining what is ignored and why, in both `run.sh` variants.
+- **Devices nav link dead in add-on supervisor mode** — `/api/config` exposes the backend's HA URL verbatim, which in supervisor mode is the container-internal `http://supervisor/core`; the browser cannot resolve it. The dashboard now rewrites container-internal HA URLs to the page's own origin (which under ingress *is* the Home Assistant UI).
+- **Migration to a non-existent node made the agent disappear** — `migrate_agent` accepted any target name blindly: the source stopped the agent (deleting its state) and shipped it to a node topic nobody was listening on, so a typo'd or offline target destroyed the agent. The target node is now validated against live heartbeats before anything destructive happens; if it is unknown or offline the migration is refused with a message listing the nodes that are online, and the agent stays where it is.
+- **Native catalog agents vanished after a restart** — `weather-agent`, `gmail-agent`, and `google-calendar-agent` (the `type: native` catalog agents) were spawned but never written to the spawn registry, so a process restart dropped them while code-recipe agents survived. They are now persisted on spawn (as a JSON-safe descriptor) and re-resolved to their class and restored on startup.
 - **Remote agent vanish-detection** — a remote agent missing from a single node heartbeat is no longer pruned from the registry (which broke delete and node-reboot recovery); pruning now needs several consecutive misses, and never touches an agent that hasn't appeared yet or has migrated away.
 - **Chat input** — up-arrow history recall now grows the textarea to fit a multi-line message instead of clipping it to one line.
 - **Nodes panel** — remote-runner agents no longer also appear under the local node; each agent is listed only on the node it runs on.

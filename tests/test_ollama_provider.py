@@ -2,9 +2,10 @@ import json
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
-sys.modules.setdefault("aiohttp", types.ModuleType("aiohttp"))
-sys.modules.setdefault("websockets", types.ModuleType("websockets"))
+import aiohttp
+
 sys.modules.setdefault("openai", types.ModuleType("openai"))
 
 from wactorz.agents.llm_agent import OllamaProvider
@@ -57,27 +58,29 @@ class _FakeSession:
 
 
 class OllamaProviderTest(unittest.IsolatedAsyncioTestCase):
+    # The provider does a function-local ``import aiohttp; aiohttp.ClientSession()``.
+    # Patch only that attribute on the real module — never swap the whole module in
+    # sys.modules, which changes aiohttp's class identity for every later test.
+
     async def test_complete_sends_system_prompt_as_system_message(self):
         calls = []
-        fake_aiohttp = types.SimpleNamespace(
-            ClientSession=lambda: _FakeSession(
-                _FakeResponse(
-                    json_data={
-                        "message": {"content": "hello"},
-                        "prompt_eval_count": 3,
-                        "eval_count": 2,
-                    }
-                ),
-                calls,
-            )
+        session = _FakeSession(
+            _FakeResponse(
+                json_data={
+                    "message": {"content": "hello"},
+                    "prompt_eval_count": 3,
+                    "eval_count": 2,
+                }
+            ),
+            calls,
         )
-        sys.modules["aiohttp"] = fake_aiohttp
 
         provider = OllamaProvider(model="llama3", base_url="http://ollama.local")
-        text, usage = await provider.complete(
-            messages=[{"role": "user", "content": "ping"}],
-            system="You are concise.",
-        )
+        with patch.object(aiohttp, "ClientSession", lambda *a, **k: session):
+            text, usage = await provider.complete(
+                messages=[{"role": "user", "content": "ping"}],
+                system="You are concise.",
+            )
 
         self.assertEqual(text, "hello")
         self.assertEqual(usage["input_tokens"], 3)
@@ -104,18 +107,16 @@ class OllamaProviderTest(unittest.IsolatedAsyncioTestCase):
                 }
             ).encode(),
         ]
-        fake_aiohttp = types.SimpleNamespace(
-            ClientSession=lambda: _FakeSession(_FakeResponse(content_chunks=chunks), calls)
-        )
-        sys.modules["aiohttp"] = fake_aiohttp
+        session = _FakeSession(_FakeResponse(content_chunks=chunks), calls)
 
         provider = OllamaProvider(model="llama3", base_url="http://ollama.local")
         parts = []
-        async for chunk in provider.stream(
-            messages=[{"role": "user", "content": "ping"}],
-            system="You are concise.",
-        ):
-            parts.append(chunk)
+        with patch.object(aiohttp, "ClientSession", lambda *a, **k: session):
+            async for chunk in provider.stream(
+                messages=[{"role": "user", "content": "ping"}],
+                system="You are concise.",
+            ):
+                parts.append(chunk)
 
         self.assertEqual(parts[:-1], ["he", "llo"])
         self.assertEqual(parts[-1]["input_tokens"], 5)

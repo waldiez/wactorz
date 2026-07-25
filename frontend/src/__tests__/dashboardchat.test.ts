@@ -475,3 +475,29 @@ describe("DashboardChat — stop, attachments, external events", () => {
         expect(thread(host).textContent).toContain("partial reply");
     });
 });
+
+describe("DashboardChat — @mention target stickiness", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("stays on an @mentioned agent after a later reconcile (no snap back to main)", () => {
+        globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => [] })) as unknown as typeof fetch;
+        const host = makeHost([agent("main-actor"), agent("catalog")], "chat");
+        const dc = mount(host);
+        dc.wire();
+        const iobar = dc.buildIobar();
+        host.root.appendChild(iobar);
+        const input = iobar.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+
+        input.value = "@catalog spawn weather agent";
+        iobar.querySelector<HTMLButtonElement>(".af-send-btn")!.click();
+        // the @mention switched the open thread to catalog
+        expect(dc.chatTarget).toBe("catalog");
+
+        // a reply / agent-list refresh triggers syncChatTarget — it must NOT
+        // revert to main now that the @mention counts as a deliberate pick.
+        dc.syncChatTarget();
+        expect(dc.chatTarget).toBe("catalog");
+
+        dc.unwire();
+    });
+});

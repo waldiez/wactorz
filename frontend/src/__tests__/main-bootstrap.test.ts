@@ -10,7 +10,7 @@
  * so importing the module records every handler it registers, then drive each
  * handler (and each app-event) to exercise the wiring — including the guard
  * branches — the way the real transport would at runtime. Decision/transform
- * logic itself is covered by the agents/mapping + haConfig + haFeed unit tests.
+ * logic itself is covered by the agents/mapping + serverConfig + haFeed unit tests.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { emit } from "../events";
@@ -98,7 +98,7 @@ vi.mock("../agents/AgentStore", () => ({
     },
 }));
 
-vi.mock("../io/TTSManager", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() } }));
+vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 vi.mock("../ui/DropZone", () => ({ DropZone: class {} }));
 

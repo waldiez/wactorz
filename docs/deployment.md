@@ -65,7 +65,7 @@ Use the add-on when Wactorz should run inside Home Assistant OS or a Supervised
 Home Assistant install. The add-on uses prebuilt multi-arch images from GHCR, so
 Supervisor updates pull an image instead of building Wactorz on the device.
 
-See `ha-addon/README.md` for install and local testing details.
+See `ha-addon/wactorz/README.md` (or `ha-addon/wactorz-ultra/README.md` for the ML variant) for install and local testing details.
 
 ---
 

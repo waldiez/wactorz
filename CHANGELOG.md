@@ -22,9 +22,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   extra), so the Home Assistant add-on includes them out of the box. The add-on now also exposes
   `discord_bot_token`, `telegram_bot_token`, and `telegram_allowed_user_id` as configurable options
   (both variants), so users can enter their tokens from the add-on UI.
+- **Device control from a social channel is limited to everyday domains.** The one-off actuator
+  executes the Home Assistant `domain.service` the model resolved, so "control my devices" used to
+  reach `shell_command` and `python_script` (arbitrary code on the HA host), `hassio`, and
+  `homeassistant.stop`. Restricted callers now pass an allow-list - lights, switches, fans, covers,
+  climate, media players, vacuums, humidifiers, water heaters, input booleans and scenes - enforced
+  at the call site, not in the resolver prompt. Out-of-policy calls are dropped, logged, and named
+  in the reply so a partly-blocked request never reads as if it all went through. The dashboard and
+  CLI are unaffected and keep full access.
+- **Sender allow-lists are required on every social channel.** `DISCORD_ALLOWED_USER_IDS`,
+  `TELEGRAM_ALLOWED_USER_IDS` and `WHATSAPP_ALLOWED_NUMBERS` (comma-separated) decide who may talk
+  to a bot at all. A channel with a token but no allow-list refuses to start rather than answering
+  whoever finds it - the exception being Telegram, which runs in **setup mode**: it answers `/start`
+  with the sender's user id and nothing else, so the id needed to fill the allow-list is still
+  discoverable without exposing the LLM or the user's home. `TELEGRAM_ALLOWED_USER_ID` (singular)
+  is still honored. WhatsApp, whose webhook is a public HTTP endpoint, now also runs in restricted
+  mode like the other two.
+- **Per-sender rate limit on social channels.** Each inbound message costs at least an intent
+  classification plus a completion, so `SOCIAL_RATE_LIMIT_PER_MIN` (default 12, `0` disables) caps
+  messages per sender per minute, and a sender's next message is refused while their previous turn
+  is still generating. Both limits reply with a short explanation instead of going quiet.
 
 ### Changed
 
+- **`--interface discord` / `--interface telegram` / `--interface whatsapp` are now restricted
+  too.** The guarantees above live in the interface classes, not in the companion wiring, so a
+  social channel is capability-restricted whether it runs alongside the dashboard or as the primary
+  interface. There is no longer a way to drive spawning, deletion or code execution from a chat bot;
+  that surface is the dashboard, the CLI and the authenticated REST interface. **Action required:**
+  a deployment that sets a bot token must now also set the matching allow-list, or that channel will
+  not start.
 - **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant
   activity now stream to the browser as server-push over `/ws`; the dashboard no longer opens its own
   MQTT connection to the broker, and the browser receives no broker credentials.

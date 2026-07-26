@@ -197,7 +197,9 @@ Run `list_agents`, `ask_wactorz` with `/agents`, and read `wactorz://config` fir
 | **dep** | `pip install wactorz[discord]` |
 | **class** | `DiscordInterface` |
 
-Runs Wactorz as a Discord bot. The bot responds to messages in any channel it has access to, and supports DMs. All Wactorz commands and `@agent-name` routing work identically to the CLI.
+Runs Wactorz as a Discord bot. The bot replies when mentioned in a channel it has access to, and supports DMs.
+
+Discord is a **restricted** channel: conversation, Home Assistant queries and everyday device control work, but spawning agents, deleting agents, running code, pipelines and admin slash commands do not. Use the dashboard for those.
 
 ```bash
 wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN
@@ -208,13 +210,17 @@ wactorz --interface discord --discord-token $DISCORD_BOT_TOKEN
 1. Go to [discord.com/developers](https://discord.com/developers/applications) → New Application → Bot
 2. Enable **Message Content Intent** under Bot → Privileged Gateway Intents
 3. Copy the bot token and set it as `DISCORD_BOT_TOKEN` in your `.env`
-4. Invite the bot to your server using the OAuth2 URL generator with `bot` scope and `Send Messages` + `Read Message History` permissions
+4. Enable **Developer Mode** (Settings → Advanced), right-click your name → **Copy User ID**, and set it as `DISCORD_ALLOWED_USER_IDS`
+5. Invite the bot to your server using the OAuth2 URL generator with `bot` scope and `Send Messages` + `Read Message History` permissions
 
 #### Configuration
 
 ```bash
 DISCORD_BOT_TOKEN=MTI4...
+DISCORD_ALLOWED_USER_IDS=123456789012345678   # required — comma-separate for several people
 ```
+
+> **The allow-list is required.** Without it the bot logs an error and does not log in: anyone who could mention it would otherwise be able to control your devices and spend your LLM budget. Senders are also rate-limited (`SOCIAL_RATE_LIMIT_PER_MIN`, default 12/min).
 
 > **💡 Webhook notifications** — Pipelines can post to Discord independently of the bot using webhook URLs. Store a webhook with `/webhook discord https://discord.com/api/webhooks/...` and the planner will inject it into generated notification agents automatically.
 
@@ -232,6 +238,8 @@ DISCORD_BOT_TOKEN=MTI4...
 
 Connects Wactorz to WhatsApp via the Twilio Messaging API. Incoming WhatsApp messages are forwarded to MainActor and replies are sent back to the user's number.
 
+Like Discord and Telegram this is a **restricted** channel — conversation, HA queries and everyday device control only.
+
 ```bash
 wactorz --interface whatsapp
 ```
@@ -240,7 +248,7 @@ wactorz --interface whatsapp
 
 1. Create a [Twilio](https://www.twilio.com) account and enable the WhatsApp sandbox (or a production number)
 2. Set the webhook URL in the Twilio console to your public endpoint (e.g. via ngrok during development): `https://your-host/whatsapp/incoming`
-3. Add credentials to `.env`
+3. Add credentials and the sender allow-list to `.env`
 
 #### Configuration
 
@@ -248,7 +256,10 @@ wactorz --interface whatsapp
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_AUTH_TOKEN=your_auth_token
 TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
+WHATSAPP_ALLOWED_NUMBERS=+306912345678        # required — comma-separate for several people
 ```
+
+> **The allow-list is required.** The webhook is a public HTTP endpoint, so without it the interface refuses to start. Messages from other numbers are dropped before reaching the LLM.
 
 ---
 
@@ -263,6 +274,8 @@ TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
 
 Runs Wactorz as a Telegram bot using the Bot API in long-polling mode — no public webhook endpoint required. Works behind NAT and firewalls out of the box.
 
+Telegram is a **restricted** channel: conversation, Home Assistant queries and everyday device control only — no spawning, deleting, code, pipelines or admin commands.
+
 ```bash
 wactorz --interface telegram --telegram-token $TELEGRAM_BOT_TOKEN
 ```
@@ -271,14 +284,17 @@ wactorz --interface telegram --telegram-token $TELEGRAM_BOT_TOKEN
 
 1. Message [@BotFather](https://t.me/BotFather) on Telegram → `/newbot`
 2. Copy the token and set it as `TELEGRAM_BOT_TOKEN` in your `.env`
-3. Start Wactorz — the bot is immediately reachable in any chat or group it's added to
+3. Start Wactorz and send `/start` to the bot. With no allow-list configured it runs in **setup mode** and answers only that one command, with your numeric user id
+4. Put that id in `TELEGRAM_ALLOWED_USER_IDS` and restart — the bot is now reachable, by you
 
 #### Configuration
 
 ```bash
 TELEGRAM_BOT_TOKEN=1234567890:AAF...
-TELEGRAM_ALLOWED_USER_ID=123456789   # optional: restrict to a single user ID
+TELEGRAM_ALLOWED_USER_IDS=123456789   # required — comma-separate for a household
 ```
+
+> **The allow-list is required.** Telegram bots are publicly discoverable by username, so an unrestricted bot is an open door to your home and your LLM budget. Until it is set the bot stays in setup mode. `TELEGRAM_ALLOWED_USER_ID` (singular) is still accepted and folded into the list.
 
 ---
 

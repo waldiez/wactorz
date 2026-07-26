@@ -40,6 +40,7 @@ def _pkg_manager(frontend_dir: Path) -> list[str]:
     pkg_json = frontend_dir / "package.json"
     try:
         import json
+
         data = json.loads(pkg_json.read_text())
         pm = data.get("packageManager", "")
         if pm.startswith("bun"):
@@ -56,6 +57,7 @@ def _pkg_manager(frontend_dir: Path) -> list[str]:
 def _pm_available(pm: list[str]) -> bool:
     """Return True if the package-manager executable is on PATH."""
     import shutil
+
     return shutil.which(pm[0]) is not None
 
 
@@ -63,7 +65,7 @@ def _is_stale(dist_index: Path) -> bool:
     if not dist_index.exists():
         return True
     if STALE_AFTER == 0:
-        return True          # always rebuild when STALE_AFTER=0 (CI)
+        return True  # always rebuild when STALE_AFTER=0 (CI)
     age = time.time() - dist_index.stat().st_mtime
     return age > STALE_AFTER
 
@@ -77,7 +79,7 @@ class CustomBuildHook(BuildHookInterface):
         self._build_frontend(Path(self.root))
 
     def _build_frontend(self, root: Path) -> None:
-        frontend   = root / "frontend"
+        frontend = root / "frontend"
         dist_index = root / "static" / "app" / "index.html"
 
         if SKIP_BUILD:
@@ -119,8 +121,7 @@ class CustomBuildHook(BuildHookInterface):
             result = subprocess.run(cmd, cwd=frontend, check=False)
             if result.returncode != 0:
                 raise RuntimeError(
-                    f"[build-hook] command failed (exit {result.returncode}): "
-                    + " ".join(cmd)
+                    f"[build-hook] command failed (exit {result.returncode}): " + " ".join(cmd)
                 )
 
         try:

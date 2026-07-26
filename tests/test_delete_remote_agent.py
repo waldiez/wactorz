@@ -8,6 +8,8 @@ The node is now resolved from live heartbeat telemetry as a fallback, mirroring
 ``migrate_agent``.
 """
 
+# pylint: disable=missing-function-docstring
+
 import time
 import types
 from unittest.mock import AsyncMock, Mock
@@ -31,7 +33,7 @@ def _bare_main() -> MainActor:
     return m
 
 
-async def test_delete_stops_remote_agent_via_heartbeat_node():
+async def test_delete_stops_remote_agent_via_heartbeat_node() -> None:
     m = _bare_main()
     # Registry has no record of the agent, but a live node heartbeat lists it.
     m._known_nodes = {"rpi-test": {"last_seen": time.time(), "agents": ["system-monitor"]}}
@@ -46,7 +48,7 @@ async def test_delete_stops_remote_agent_via_heartbeat_node():
     assert payload == {"name": "system-monitor", "delete": True}
 
 
-async def test_stale_node_heartbeat_does_not_route_remote():
+async def test_stale_node_heartbeat_does_not_route_remote() -> None:
     m = _bare_main()
     # Heartbeat older than the freshness window — not a trustworthy location.
     m._known_nodes = {"rpi-test": {"last_seen": time.time() - 60, "agents": ["system-monitor"]}}

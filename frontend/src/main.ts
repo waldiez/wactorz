@@ -8,7 +8,7 @@
  * This file only *wires*: it instantiates the services, derives the deployment
  * URLs, and connects transports → store → UI. Every decision/transform lives in
  * a tested module (agents/mapping, agents/deletionGuard, ui/haFeed,
- * ui/dashboard/haConfig); the handlers below are thin delegators. Keep it that
+ * config/serverConfig); the handlers below are thin delegators. Keep it that
  * way — if a handler grows real logic, extract it (see CONTRIBUTING).
  *
  * The chat lives entirely in CardDashboard's in-card bar (DashboardChat), which
@@ -30,7 +30,8 @@ import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
-import { tts } from "./io/TTSManager";
+import { register as registerTTS } from "./ext/tts";
+import { seedServerConfig } from "./config/serverConfig";
 import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
@@ -106,7 +107,16 @@ function reportGlobalError(context: string, detail: unknown): void {
         message: "Something went wrong — see the console for details.",
     });
 }
-window.addEventListener("error", e => reportGlobalError("uncaught", e.error ?? e.message));
+window.addEventListener("error", e => {
+    // Scripts injected from another origin (browser extensions, an embedding
+    // webview's JS bridge) report as an opaque "Script error." with no error
+    // object, filename or line — nothing anyone can act on. Toasting those
+    // blames the app for someone else's script, so only report real page errors.
+    if (!e.error && !e.filename) {
+        return;
+    }
+    reportGlobalError("uncaught", e.error ?? e.message);
+});
 window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
 
 const agentStore = new AgentStore();
@@ -448,14 +458,25 @@ fetch(`${_apiBase}/api/feed`)
     )
     .catch(err => log.debug("[feed] /api/feed seed failed:", err));
 
-// The HA URL is seeded from /api/config by CardDashboard (see ui/dashboard/haConfig)
-// for the Devices link; no token ever reaches the browser. No broker address is
-// seeded either — the browser never connects to MQTT; it gets everything over /ws.
+// The HA URL is seeded from /api/config at startup (see config/serverConfig.ts);
+// the Devices nav link reads it from safeStorage. No token ever reaches the
+// browser. The broker address isn't seeded either — the browser never connects
+// to MQTT; it gets everything over /ws.
 
-// Probe server TTS availability + load voice list (base must be set first so
-// the request stays inside the ingress prefix instead of bare "/api").
-tts.setApiBase(_apiBase);
-void tts.init();
+// Seed server config early so TTS availability is known before probing.
+seedServerConfig()
+    .then(haChanged => {
+        if (haChanged) {
+            emit("af-connection-status", { status: _feedLive ? "live" : "demo" });
+        }
+        // Boot TTS after config is seeded — reads availability from safeStorage.
+        const available = safeStorage.get("wactorz-tts-available") === "1";
+        registerTTS({ apiBase: _apiBase, available });
+    })
+    .catch(() => {
+        // Config fetch failed — boot TTS anyway, it probes /api/tts/voices itself.
+        registerTTS({ apiBase: _apiBase, available: true });
+    });
 
 // ═══ 8 · Teardown ════════════════════════════════════════════════════════════
 

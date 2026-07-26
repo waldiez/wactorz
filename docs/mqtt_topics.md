@@ -116,7 +116,7 @@ Monitor heartbeat alerts use `last_seen_ago` and `state` instead of `message`.
 ---
 
 ### `agents/{id}/commands`
-**Published by:** Dashboard (via `monitor_server.py`) or any external client
+**Published by:** Dashboard (via `wactorz/web/`) or any external client
 **Trigger:** User clicks Pause / Resume / Stop / Delete in dashboard
 **Purpose:** Remote control of agents.
 

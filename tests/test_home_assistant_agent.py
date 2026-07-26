@@ -1,12 +1,7 @@
 import json
-import sys
 import tempfile
-import types
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-
-sys.modules.setdefault("aiohttp", types.ModuleType("aiohttp"))
-sys.modules.setdefault("websockets", types.ModuleType("websockets"))
 
 from wactorz.agents.home_assistant_agent import HomeAssistantAgent
 from wactorz.agents.llm_agent import ToolCall, ToolCompletion

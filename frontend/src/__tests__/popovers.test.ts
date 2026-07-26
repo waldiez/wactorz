@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("../io/TTSManager", () => ({
+vi.mock("../ext/tts", () => ({
     tts: {
         beepEnabled: false,
         ttsEnabled: false,
@@ -25,7 +25,7 @@ vi.mock("../io/AmbientManager", () => ({
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
 import { buildAudioPopover, buildResetPopover } from "../ui/dashboard/popovers";
-import { tts } from "../io/TTSManager";
+import { tts } from "../ext/tts";
 import { ambient } from "../io/AmbientManager";
 import { toast } from "../ui/ToastManager";
 

@@ -1353,8 +1353,6 @@ wactorz/
 │   ├── anomaly_detector_agent.py              Statistical anomaly detection over HA + Sinergym streams
 │   └── manual_agent.py                        Device-manual search + PDF Q&A
 │
-├── experimental_agents/                       Optional add-on agents (code, ML, weather, news, …)
-│
 └── interfaces/
     ├── chat_interfaces.py                     CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface, TelegramInterface
     └── mcp_server.py                          MCP tools/resources for compatible clients

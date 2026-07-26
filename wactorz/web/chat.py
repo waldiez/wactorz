@@ -64,6 +64,89 @@ def parse_mention(content: str) -> tuple[str, str]:
     return "main", content
 
 
+# ── Catalog / experimental-agent presentation ──────────────────────────────
+
+
+def catalog_agent_line(agent: dict) -> str:
+    name = agent.get("name", "unknown")
+    description = agent.get("description", "")
+    return f"- `{name}` - {description}" if description else f"- `{name}`"
+
+
+def format_catalog_agents_response(payload: dict) -> str:
+    agents = payload.get("agents", [])
+    if not isinstance(agents, list):
+        return str(payload)
+
+    show_experimental = bool(payload.get("show_experimental", False))
+    recommended = [a for a in agents if isinstance(a, dict) and not a.get("experimental")]
+    experimental = [a for a in agents if isinstance(a, dict) and a.get("experimental")]
+    total = len(recommended) + len(experimental)
+
+    lines = [
+        "**Catalog agents**",
+        f"`{total}` total - `{len(recommended)}` recommended, "
+        f"`{len(experimental)}` experimental beta",
+    ]
+
+    if recommended:
+        lines.extend(
+            [
+                "",
+                "### Recommended",
+                *(catalog_agent_line(agent) for agent in recommended),
+            ]
+        )
+
+    if experimental:
+        if show_experimental:
+            lines.extend(
+                [
+                    "",
+                    "### Experimental / Beta",
+                    *(catalog_agent_line(agent) for agent in experimental),
+                ]
+            )
+        else:
+            # Hidden by default — nudge the user toward the opt-in instead of
+            # listing beta agents in the normal view.
+            lines.extend(
+                [
+                    "",
+                    f"_{len(experimental)} experimental/beta agent(s) hidden — "
+                    f"say `list experimental` to show them._",
+                ]
+            )
+
+    return "\n".join(lines)
+
+
+# Agents already warned in this process — so the beta banner shows on the first
+# user message to an experimental agent, not on every turn.
+beta_warned_agents: set = set()
+
+
+def experimental_first_use_banner(agent_name: str) -> str | None:
+    """One-time beta banner for the first user message to an experimental agent.
+
+    Returns the banner the first time ``agent_name`` is messaged in this process,
+    then None afterwards so the warning isn't repeated every turn. Non-experimental
+    or unknown agents always return None. The experimental flag and per-agent
+    warning come from main's manifest, populated by the catalog at startup.
+    """
+    if agent_name in beta_warned_agents:
+        return None
+    main = find_main()
+    manifest = (getattr(main, "_agent_manifests", {}) or {}).get(agent_name) if main else None
+    if not manifest or not manifest.get("experimental"):
+        return None
+    beta_warned_agents.add(agent_name)
+    from ..agents.catalog_agent import BETA_WARNING
+
+    warning = manifest.get("warning") or BETA_WARNING
+    return f"⚠️ **{agent_name}** is an experimental/beta agent. {warning}\n\n"
+
+
 # ── Slash commands ─────────────────────────────────────────────────────────
 # Every handler receives a `reply_fn` coroutine — callers supply either an
 # MQTT publisher or a WebSocket sender.  No global state, no monkey-patching.
@@ -358,6 +441,12 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
     msg = f"[io-gateway] → {target.name}: {text[:60]!r}"
     logger.info(msg)
 
+    # First user message to an experimental/beta agent gets a one-time warning
+    # banner, emitted through the same channel the reply will use.
+    banner = experimental_first_use_banner(target_name)
+    if banner:
+        await _chunk_fn(banner)
+
     gen_fn = getattr(target, "process_user_input_stream", None) or getattr(
         target, "chat_stream", None
     )
@@ -432,10 +521,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                     or str(payload)
                 )
                 if "agents" in payload and isinstance(payload["agents"], list):
-                    lines = [payload.get("message", "Available agents:")]
-                    for a in payload["agents"]:
-                        lines.append(f"  • {a['name']}: {a.get('description', '')}")
-                    text_out = "\n".join(lines)
+                    text_out = format_catalog_agents_response(payload)
             else:
                 text_out = str(payload)
 

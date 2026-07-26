@@ -84,6 +84,19 @@ async def build_system(args: argparse.Namespace):
         provider = None
     if provider is None:
         logger.warning("No LLM provider set. Agents will have limited capabilities.")
+    else:
+        # One deterministic startup line so the active model and sampling
+        # settings are visible without digging through provider dashboards.
+        temperature = (
+            "provider default" if CONFIG.llm_temperature is None else CONFIG.llm_temperature
+        )
+        logger.info(
+            "LLM: %s/%s | temperature=%s%s",
+            llm,
+            getattr(provider, "model", None) or getattr(provider, "model_name", "?"),
+            temperature,
+            f" | overrides: {CONFIG.llm_overrides}" if CONFIG.llm_overrides else "",
+        )
 
     # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
     _sd = _state_dir()

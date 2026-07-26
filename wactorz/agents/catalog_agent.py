@@ -34,10 +34,30 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+BETA_WARNING = (
+    "Experimental/Beta agent: behavior may change, fail, or be removed. "
+    "Use it for trials, not unattended production workflows."
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # RECIPE IMPORTS
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def _chat_message_with_beta_warning(message: str, beta_warning: str) -> str:
+    if not beta_warning:
+        return message
+    return f"{message}\n\nWarning: {beta_warning}"
+
+
+# Words that opt a `list` request into showing the (hidden-by-default) beta agents.
+_EXPERIMENTAL_REVEAL_WORDS = ("experimental", "beta", "unstable", "all")
+
+
+def _wants_experimental(text: str) -> bool:
+    """True when a catalog `list` request explicitly asks to include beta agents."""
+    low = (text or "").lower()
+    return any(word in low for word in _EXPERIMENTAL_REVEAL_WORDS)
 
 
 def _load_recipe(filename: str) -> str | None:
@@ -339,6 +359,9 @@ def _build_catalog() -> dict:
         catalog["reachy-mini"] = {
             "name": "reachy-mini",
             "type": "dynamic",
+            "stability": "beta",
+            "experimental": True,
+            "warning": BETA_WARNING,
             "description": (
                 "Controls a Reachy Mini: wake/sleep, head pose, antennas, gaze, "
                 "speech, gestures, and optional Home Assistant actions."
@@ -524,6 +547,9 @@ class CatalogAgent(Actor):
                 "capabilities": recipe.get("capabilities", []),
                 "input_schema": recipe.get("input_schema", {}),
                 "output_schema": recipe.get("output_schema", {}),
+                "stability": recipe.get("stability", "stable"),
+                "experimental": bool(recipe.get("experimental", False)),
+                "warning": recipe.get("warning", ""),
                 "publishes": [],
                 "spawnable": True,
                 "catalog": self.name,
@@ -565,7 +591,8 @@ class CatalogAgent(Actor):
         if isinstance(payload, dict) and payload.get("action"):
             action = payload["action"].lower().strip()
             if action == "list":
-                return self._action_list()
+                filt = str(payload.get("filter", "") or payload.get("agent", ""))
+                return self._action_list(include_experimental=_wants_experimental(filt))
             if action == "info":
                 return self._action_info(payload.get("agent", ""))
             if action == "spawn":
@@ -589,7 +616,7 @@ class CatalogAgent(Actor):
             cmd = parts[0].lower()
             arg = parts[1].strip() if len(parts) > 1 else ""
             if cmd == "list":
-                return self._action_list()
+                return self._action_list(include_experimental=_wants_experimental(arg))
             if cmd == "info":
                 return self._action_info(arg)
             if cmd == "spawn":
@@ -642,7 +669,13 @@ class CatalogAgent(Actor):
 
     # ── Actions ────────────────────────────────────────────────────────────────
 
-    def _action_list(self) -> dict:
+    def _action_list(self, include_experimental: bool = False) -> dict:
+        """List catalog agents. The full set (including beta) is always returned
+        in ``agents`` so other consumers get complete data; ``show_experimental``
+        tells the chat formatter whether to display the beta agents or hide them
+        behind a hint. Beta agents are hidden by default — the caller opts in with
+        a request like "list experimental".
+        """
         agents = []
         for name, recipe in self._catalog.items():
             agents.append(
@@ -650,12 +683,16 @@ class CatalogAgent(Actor):
                     "name": name,
                     "description": recipe.get("description", ""),
                     "capabilities": recipe.get("capabilities", []),
+                    "stability": recipe.get("stability", "stable"),
+                    "experimental": bool(recipe.get("experimental", False)),
+                    "warning": recipe.get("warning", ""),
                 }
             )
         return {
             "ok": True,
             "message": f"{len(agents)} agent(s) available in catalog",
             "agents": agents,
+            "show_experimental": include_experimental,
         }
 
     def _action_info(self, name: str) -> dict:
@@ -667,7 +704,12 @@ class CatalogAgent(Actor):
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
         safe = {k: v for k, v in recipe.items() if k not in {"code", "factory"}}
-        return {"ok": True, "message": f"Recipe for '{resolved}'", "recipe": safe}
+        message = f"Recipe for '{resolved}'"
+        if recipe.get("experimental"):
+            message += (
+                f" ({recipe.get('stability', 'beta')}: {recipe.get('warning', BETA_WARNING)})"
+            )
+        return {"ok": True, "message": message, "recipe": safe}
 
     async def _action_spawn(self, name: str, payload: dict) -> dict:
         if not name:
@@ -685,6 +727,17 @@ class CatalogAgent(Actor):
         existing = self._registry.find_by_name(resolved)
         if existing:
             return {"ok": True, "message": f"'{resolved}' is already running"}
+
+        beta_warning = recipe.get("warning") if recipe.get("experimental") else ""
+        if beta_warning:
+            await self._mqtt_publish(
+                f"agents/{self.actor_id}/alert",
+                {
+                    "severity": "warning",
+                    "message": f"{resolved} is Experimental/Beta. {beta_warning}",
+                    "timestamp": time.time(),
+                },
+            )
 
         logger.info(f"[{self.name}] Spawning '{resolved}'...")
         await self._mqtt_publish(
@@ -719,7 +772,9 @@ class CatalogAgent(Actor):
                         save_config = {k: v for k, v in recipe.items() if k != "factory"}
                         save_config["trusted"] = True
                         main._save_to_spawn_registry(save_config)
-                    msg = f"'{resolved}' spawned and running"
+                    msg = _chat_message_with_beta_warning(
+                        f"'{resolved}' spawned and running", beta_warning
+                    )
                     logger.info(f"[{self.name}] {msg}")
                     await self._mqtt_publish(
                         f"agents/{self.actor_id}/logs",
@@ -822,7 +877,9 @@ class CatalogAgent(Actor):
                     save_config["trusted"] = True
                     main._save_to_spawn_registry(save_config)
 
-                msg = f"'{resolved}' spawned and running"
+                msg = _chat_message_with_beta_warning(
+                    f"'{resolved}' spawned and running", beta_warning
+                )
                 logger.info(f"[{self.name}] {msg}")
                 await self._mqtt_publish(
                     f"agents/{self.actor_id}/logs",

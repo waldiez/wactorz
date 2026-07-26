@@ -7,6 +7,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Social channels (Discord/Telegram) as capability-restricted companions.** They now run
+  *alongside* the primary interface (e.g. the HA add-on dashboard) whenever their token is set,
+  instead of only as a standalone `--interface`. Messages reach the main agent in a **restricted
+  mode**: full conversation, Home Assistant queries, and device control are allowed, but spawning
+  agents, deleting agents, running code, pipelines/automations, and admin (slash) commands are all
+  unreachable — enforced at the actions (intent routing, `<spawn>`/`<delete>` execution) rather than
+  by guessing intent from the text, so it can't be talked around. Delegation is limited to an
+  allow-list of safe native agents (fails closed), so it can't be used to launder code execution
+  through a running `DynamicAgent`/`code-agent`. These channels previously routed straight to the
+  unrestricted orchestrator. A channel whose token is set but whose
+  library is missing is now skipped with a clear warning naming the pip package, instead of failing
+  silently. Both `discord.py` and `python-telegram-bot` now ship in `wactorz[all]` (new `telegram`
+  extra), so the Home Assistant add-on includes them out of the box. The add-on now also exposes
+  `discord_bot_token`, `telegram_bot_token`, and `telegram_allowed_user_id` as configurable options
+  (both variants), so users can enter their tokens from the add-on UI.
+- **Device control from a social channel is limited to everyday domains.** The one-off actuator
+  executes the Home Assistant `domain.service` the model resolved, so "control my devices" used to
+  reach `shell_command` and `python_script` (arbitrary code on the HA host), `hassio`, and
+  `homeassistant.stop`. Restricted callers now pass an allow-list - lights, switches, fans, covers,
+  climate, media players, vacuums, humidifiers, water heaters, input booleans and scenes - enforced
+  at the call site, not in the resolver prompt. Out-of-policy calls are dropped, logged, and named
+  in the reply so a partly-blocked request never reads as if it all went through. The dashboard and
+  CLI are unaffected and keep full access.
+- **Sender allow-lists are required on every social channel.** `DISCORD_ALLOWED_USER_IDS`,
+  `TELEGRAM_ALLOWED_USER_IDS` and `WHATSAPP_ALLOWED_NUMBERS` (comma-separated) decide who may talk
+  to a bot at all. A channel with a token but no allow-list refuses to start rather than answering
+  whoever finds it - the exception being Telegram, which runs in **setup mode**: it answers `/start`
+  with the sender's user id and nothing else, so the id needed to fill the allow-list is still
+  discoverable without exposing the LLM or the user's home. `TELEGRAM_ALLOWED_USER_ID` (singular)
+  is still honored. WhatsApp, whose webhook is a public HTTP endpoint, now also runs in restricted
+  mode like the other two.
+- **Per-sender rate limit on social channels.** Each inbound message costs at least an intent
+  classification plus a completion, so `SOCIAL_RATE_LIMIT_PER_MIN` (default 12, `0` disables) caps
+  messages per sender per minute, and a sender's next message is refused while their previous turn
+  is still generating. Both limits reply with a short explanation instead of going quiet.
+- **Catalog recognises experimental/beta agents.** Catalog recipes can be tagged
+  `stability: beta` with a warning; `reachy-mini` is the first one. Beta agents are **hidden by
+  default** in `@catalog list` (shown behind a hint; reveal with `list experimental`), the catalog
+  warns before spawning one, and the first message to a running beta agent shows a one-time
+  instability warning.
 - **`ha_connection` add-on option** (`auto` / `supervisor` / `custom`) — explicit Home Assistant connection mode for both add-on variants. `auto` keeps the previous token-presence inference, so existing installs are unaffected. Startup now also logs one deterministic line with the resolved mode, URL, and auth result (e.g. `HA connection OK — mode=supervisor ...` or `HA auth FAILED (401) ...`).
 - **Extension seam (`wactorz/ext/`).** Optional features live in self-contained folders that expose a
   `setup(app)` hook; the monitor auto-discovers and wires them at startup, and each may contribute
@@ -20,12 +60,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **`--interface discord` / `--interface telegram` / `--interface whatsapp` are now restricted
+  too.** The guarantees above live in the interface classes, not in the companion wiring, so a
+  social channel is capability-restricted whether it runs alongside the dashboard or as the primary
+  interface. There is no longer a way to drive spawning, deletion or code execution from a chat bot;
+  that surface is the dashboard, the CLI and the authenticated REST interface. **Action required:**
+  a deployment that sets a bot token must now also set the matching allow-list, or that channel will
+  not start.
 - **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant
   activity now stream to the browser as server-push over `/ws`; the dashboard no longer opens its own
   MQTT connection to the broker, and the browser receives no broker credentials.
 - **Home Assistant add-on split into two variants.** The store now offers **Wactorz** (slim, Alpine,
   ~200 MB) and **Wactorz Ultra** (Debian + ML/`ultralytics`, ~3 GB) as separate cards; both share the
   same options and entrypoint. CI builds and pushes both variants across `aarch64`/`amd64`.
+
+### Removed
+
+- **`wactorz/experimental_agents/` package.** The ten scratch agents in it (`code`, `news`, `qa`,
+  `tick`, `wif`, `wiz`, `ml`, `nautilus`, `udx`, `weather`) were test scaffolding, were never
+  reachable from the catalog, and nothing outside the folder imported them. `reachy-mini` is now the
+  only agent carrying experimental/beta status, and it lives in `catalogue_agents/` like every other
+  recipe.
 
 ### Fixed
 

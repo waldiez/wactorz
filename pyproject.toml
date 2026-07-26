@@ -47,6 +47,7 @@ anthropic = ["anthropic>=0.86.0"]
 openai    = ["openai>=2.29.0"]
 google    = ["google-genai>=1.0.0"]
 discord   = ["discord.py>=2.7.1"]
+telegram  = ["python-telegram-bot>=21.0"]
 whatsapp  = ["twilio>=9.10.4"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
 mcp       = ["mcp>=1.0.0"]
@@ -86,6 +87,7 @@ all = [
     "wactorz[openai]",
     "wactorz[google]",
     "wactorz[discord]",
+    "wactorz[telegram]",
     "wactorz[whatsapp]",
     "wactorz[mcp]",
     "wactorz[otel]",

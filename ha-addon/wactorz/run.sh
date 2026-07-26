@@ -140,10 +140,16 @@ export API_KEY="${API_KEY}"
 
 DISCORD_BOT_TOKEN=$(get_config_safe 'discord_bot_token' '')
 export DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN}"
+DISCORD_ALLOWED_USER_IDS=$(get_config_safe 'discord_allowed_user_ids' '')
+export DISCORD_ALLOWED_USER_IDS="${DISCORD_ALLOWED_USER_IDS}"
 TELEGRAM_BOT_TOKEN=$(get_config_safe 'telegram_bot_token' '')
 export TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
+TELEGRAM_ALLOWED_USER_IDS=$(get_config_safe 'telegram_allowed_user_ids' '')
+export TELEGRAM_ALLOWED_USER_IDS="${TELEGRAM_ALLOWED_USER_IDS}"
 TELEGRAM_ALLOWED_USER_ID=$(get_config_safe 'telegram_allowed_user_id' '0')
 export TELEGRAM_ALLOWED_USER_ID="${TELEGRAM_ALLOWED_USER_ID}"
+SOCIAL_RATE_LIMIT_PER_MIN=$(get_config_safe 'social_rate_limit_per_min' '12')
+export SOCIAL_RATE_LIMIT_PER_MIN="${SOCIAL_RATE_LIMIT_PER_MIN}"
 
 OTEL_ENDPOINT=$(get_config_safe 'otel_endpoint' '')
 if [ -n "$OTEL_ENDPOINT" ]; then

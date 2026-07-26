@@ -3,17 +3,12 @@ Supports Anthropic Claude, OpenAI, Ollama (local), and custom providers.
 """
 
 import asyncio
-import json
 import logging
 import os
 import time
-from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from datetime import datetime
-from queue import Queue
 from typing import Any
-
-import aiohttp
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.persistence import get_db
@@ -100,7 +95,9 @@ def _known_persisted_cost_total(db) -> float:
             try:
                 value = row[0]
                 if isinstance(value, str):
-                    value = json.loads(value)
+                    import json as _json
+
+                    value = _json.loads(value)
                 if isinstance(value, dict):
                     total += float(value.get("cost_usd") or 0.0)
             except Exception:
@@ -227,7 +224,7 @@ def set_cost_limit(limit_usd: float, period: str) -> None:
     db.kv_set("_system", "_cost_limit_override", {"limit_usd": limit_usd, "period": period})
 
 
-def reset_global_cost() -> dict[str, Any]:
+def reset_global_cost() -> dict:
     """Clear accumulated spend for all periods. Returns new spend info."""
     db = get_db()
     if db is None:
@@ -352,6 +349,8 @@ async def _refresh_pricing() -> None:
         return
     _pricing_fetch_in_progress = True
     try:
+        import aiohttp
+
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 _LITELLM_PRICING_URL,
@@ -412,18 +411,40 @@ def pricing_info(model: str) -> dict[str, object]:
     return {"source": "unknown", "input_per_1m": 0.0, "output_per_1m": 0.0}
 
 
+def _resolve_temperature(kwargs: dict) -> float | None:
+    """Explicit call-site ``temperature`` kwarg, else the global
+    ``LLM_TEMPERATURE`` env setting, else None (keep the provider's default).
+    """
+    temperature = kwargs.get("temperature")
+    if temperature is not None:
+        return float(temperature)
+    from ..config import CONFIG
+
+    return CONFIG.llm_temperature
+
+
+def _temp_params(kwargs: dict) -> dict:
+    """``{"temperature": t}`` when a temperature is configured, else ``{}``."""
+    temperature = _resolve_temperature(kwargs)
+    return {} if temperature is None else {"temperature": temperature}
+
+
+def _ollama_options(kwargs: dict) -> dict:
+    """Ollama takes sampling settings under ``options``, not at the top level."""
+    temperature = _resolve_temperature(kwargs)
+    return {} if temperature is None else {"options": {"temperature": temperature}}
+
+
 class LLMProvider:
     """Base class for LLM providers."""
 
-    async def complete(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs
-    ) -> tuple[str, dict]:
+    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         """Returns (text, usage) where usage = {input_tokens, output_tokens, cost_usd}"""
         raise NotImplementedError
 
     async def complete_with_tools(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -470,6 +491,8 @@ def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
     if raw in (None, ""):
         return {}
     try:
+        import json
+
         parsed = json.loads(str(raw))
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
@@ -533,14 +556,14 @@ def _openai_tool_result_message(message: dict[str, Any]) -> dict[str, Any]:
 
 
 class AnthropicProvider(LLMProvider):
-    def __init__(self, model: str = "claude-sonnet-4-6", api_key: str | None = None) -> None:
+    def __init__(self, model: str = "claude-sonnet-4-6", api_key: str | None = None):
         import anthropic
 
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
         self.model = model
 
     @staticmethod
-    def _extract_text(response: Any) -> str:
+    def _extract_text(response) -> str:
         """Join every text block, skipping thinking / redacted_thinking and any
         other non-text block. Robust whether or not extended thinking is enabled;
         without this, content[0] is a ThinkingBlock and .text raises.
@@ -551,14 +574,13 @@ class AnthropicProvider(LLMProvider):
                 parts.append(getattr(block, "text", "") or "")
         return "".join(parts).strip()
 
-    async def complete(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict[str, Any]]:
+    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         response = await self.client.messages.create(
             model=self.model,
             max_tokens=kwargs.get("max_tokens", 16384),
             system=system,
-            messages=messages,  # pyright: ignore[reportArgumentType]
+            messages=messages,
+            **_temp_params(kwargs),
         )
         text = self._extract_text(response)
         usage = {
@@ -572,7 +594,7 @@ class AnthropicProvider(LLMProvider):
 
     async def complete_with_tools(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -581,8 +603,9 @@ class AnthropicProvider(LLMProvider):
             model=self.model,
             max_tokens=kwargs.get("max_tokens", 16384),
             system=system,
-            messages=self._anthropic_messages(messages),  # pyright: ignore[reportArgumentType]
-            tools=self._anthropic_tools(tools),  # pyright: ignore[reportArgumentType]
+            messages=self._anthropic_messages(messages),
+            tools=self._anthropic_tools(tools),
+            **_temp_params(kwargs),
         )
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -630,7 +653,7 @@ class AnthropicProvider(LLMProvider):
         ]
 
     @staticmethod
-    def _anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _anthropic_messages(messages: list[dict]) -> list[dict]:
         converted: list[dict[str, Any]] = []
         for message in messages:
             role = message.get("role")
@@ -662,16 +685,15 @@ class AnthropicProvider(LLMProvider):
             )
         return converted
 
-    async def stream(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
-    ) -> AsyncGenerator[str | dict[str, Any], None]:
+    async def stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         input_tokens = output_tokens = 0
         async with self.client.messages.stream(
             model=self.model,
             max_tokens=kwargs.get("max_tokens", 16384),
             system=system,
-            messages=messages,  # pyright: ignore[reportArgumentType]
+            messages=messages,
+            **_temp_params(kwargs),
         ) as s:
             async for chunk in s.text_stream:
                 yield chunk
@@ -692,21 +714,19 @@ class OpenAIProvider(LLMProvider):
     ):
         import openai
 
+        self.client = openai.AsyncOpenAI(
+            api_key=api_key, **({"base_url": base_url} if base_url else {})
+        )
         self.model = model
         self.base_url = base_url or None
-        if base_url:
-            self.client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
-        else:
-            self.client = openai.AsyncOpenAI(api_key=api_key)
 
-    async def complete(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict[str, Any]]:
+    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
         params = {
             "model": self.model,
             "messages": full_messages,
             "max_completion_tokens": kwargs.get("max_tokens", 16384),
+            **_temp_params(kwargs),
         }
         reasoning_effort = kwargs.get("reasoning_effort")
         if (
@@ -737,7 +757,7 @@ class OpenAIProvider(LLMProvider):
 
     async def complete_with_tools(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -747,10 +767,11 @@ class OpenAIProvider(LLMProvider):
         ]
         response = await self.client.chat.completions.create(
             model=self.model,
-            messages=full_messages,  # pyright: ignore[reportArgumentType]
-            tools=_openai_tools(tools),  # pyright: ignore[reportArgumentType]
+            messages=full_messages,
+            tools=_openai_tools(tools),
             tool_choice=kwargs.get("tool_choice", "auto"),
             max_completion_tokens=kwargs.get("max_tokens", 16384),
+            **_temp_params(kwargs),
         )
         message = response.choices[0].message
         raw_calls = getattr(message, "tool_calls", None) or []
@@ -787,9 +808,7 @@ class OpenAIProvider(LLMProvider):
             assistant_message=assistant_message,
         )
 
-    async def stream(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs
-    ) -> AsyncGenerator[Any | dict[str, Any], None]:
+    async def stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
         input_tokens = output_tokens = 0
@@ -799,6 +818,7 @@ class OpenAIProvider(LLMProvider):
             "max_completion_tokens": kwargs.get("max_tokens", 16384),
             "stream": True,
             "stream_options": {"include_usage": True},
+            **_temp_params(kwargs),
         }
         reasoning_effort = kwargs.get("reasoning_effort")
         if reasoning_effort and "mistral" not in self.model.lower():
@@ -829,23 +849,24 @@ class OpenAIProvider(LLMProvider):
 class OllamaProvider(LLMProvider):
     """Local LLM via Ollama."""
 
-    def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434") -> None:
+    def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434"):
         self.model = model
         self.base_url = base_url
 
     @staticmethod
-    def _chat_messages(messages: list[dict[str, Any]], system: str = "") -> list[dict[str, Any]]:
+    def _chat_messages(messages: list[dict], system: str = "") -> list[dict]:
         if not system:
             return list(messages)
         return [{"role": "system", "content": system}, *list(messages)]
 
-    async def complete(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict[str, Any]]:
+    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+        import aiohttp
+
         payload = {
             "model": self.model,
             "messages": self._chat_messages(messages, system),
             "stream": False,
+            **_ollama_options(kwargs),
         }
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{self.base_url}/api/chat", json=payload) as resp:
@@ -858,11 +879,13 @@ class OllamaProvider(LLMProvider):
 
     async def complete_with_tools(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
     ) -> ToolCompletion:
+        import aiohttp
+
         ollama_messages = []
         for message in messages:
             if message.get("role") == "tool":
@@ -880,6 +903,7 @@ class OllamaProvider(LLMProvider):
             "messages": self._chat_messages(ollama_messages, system),
             "stream": False,
             "tools": _openai_tools(tools),
+            **_ollama_options(kwargs),
         }
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{self.base_url}/api/chat", json=payload) as resp:
@@ -917,17 +941,17 @@ class OllamaProvider(LLMProvider):
             assistant_message=assistant_message,
         )
 
-    async def stream(
-        self,
-        messages: list[dict[str, Any]],
-        system: str = "",
-        **kwargs: Any,
-    ) -> AsyncGenerator[Any | dict[str, Any], None]:
+    async def stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
+        import json as _json
+
+        import aiohttp
+
         payload = {
             "model": self.model,
             "messages": self._chat_messages(messages, system),
             "stream": True,
+            **_ollama_options(kwargs),
         }
         input_tokens = output_tokens = 0
         async with aiohttp.ClientSession() as session:
@@ -936,7 +960,7 @@ class OllamaProvider(LLMProvider):
                     if not raw.strip():
                         continue
                     try:
-                        data = json.loads(raw)
+                        data = _json.loads(raw)
                     except Exception:
                         continue
                     delta = (data.get("message") or {}).get("content", "")
@@ -984,7 +1008,7 @@ class NIMProvider(LLMProvider):
             base_url=base_url,
         )
 
-    async def _create_completion(self, params: dict[str, Any]) -> Any:
+    async def _create_completion(self, params: dict[str, Any]):
         """Create a completion, retrying without reasoning knobs if rejected.
 
         Some NIM models don't accept the ``enable_thinking`` chat-template flag
@@ -1005,14 +1029,13 @@ class NIMProvider(LLMProvider):
                 return await self.client.chat.completions.create(**params)
             raise
 
-    async def complete(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict[str, Any]]:
+    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
         params: dict[str, Any] = {
             "model": self.model,
             "messages": full_messages,
             "max_tokens": kwargs.get("max_tokens", 8192),
+            **_temp_params(kwargs),
         }
         _apply_openai_reasoning(params, self.model, kwargs.get("reasoning_effort"))
         response = await self._create_completion(params)
@@ -1028,7 +1051,7 @@ class NIMProvider(LLMProvider):
 
     async def complete_with_tools(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -1039,10 +1062,11 @@ class NIMProvider(LLMProvider):
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
-                messages=full_messages,  # pyright: ignore[reportArgumentType]
-                tools=_openai_tools(tools),  # pyright: ignore[reportArgumentType]
+                messages=full_messages,
+                tools=_openai_tools(tools),
                 tool_choice=kwargs.get("tool_choice", "auto"),
                 max_tokens=kwargs.get("max_tokens", 8192),
+                **_temp_params(kwargs),
             )
         except Exception as exc:
             raise RuntimeError(
@@ -1083,9 +1107,7 @@ class NIMProvider(LLMProvider):
             assistant_message=assistant_message,
         )
 
-    async def stream(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
-    ) -> AsyncGenerator[Any | dict[str, Any], None]:
+    async def stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
         input_tokens = output_tokens = 0
@@ -1094,6 +1116,7 @@ class NIMProvider(LLMProvider):
             "messages": full_messages,
             "max_tokens": kwargs.get("max_tokens", 8192),
             "stream": True,
+            **_temp_params(kwargs),
         }
         _apply_openai_reasoning(params, self.model, kwargs.get("reasoning_effort"))
         stream_cm = await self._create_completion(params)
@@ -1148,21 +1171,17 @@ class GeminiProvider(LLMProvider):
         self.client = genai.Client(api_key=api_key) if api_key else genai.Client()
         self._types = genai_types
 
-    async def complete(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs
-    ) -> tuple[str, dict]:
+    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         contents = self._to_gemini_contents(messages)
         config = self._types.GenerateContentConfig(
-            system_instruction=system or None,  # pyright: ignore[reportCallIssue]
+            system_instruction=system or None,
             max_output_tokens=kwargs.get("max_tokens"),
+            **_temp_params(kwargs),
         )
 
-        # client.aio is the SDK's async surface; the sync `client.models` call
-        # would block the shared event loop for the whole round-trip, starving
-        # every other actor (and MQTT keepalive) until the model replies.
-        response = await self.client.aio.models.generate_content(
+        response = self.client.models.generate_content(
             model=self.model_name,
-            contents=contents,  # pyright: ignore[reportArgumentType]
+            contents=contents,
             config=config,
         )
 
@@ -1180,7 +1199,7 @@ class GeminiProvider(LLMProvider):
 
     async def complete_with_tools(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -1191,13 +1210,11 @@ class GeminiProvider(LLMProvider):
             system_instruction=system or None,
             tools=[self._types.Tool(function_declarations=function_declarations)],
             max_output_tokens=kwargs.get("max_tokens"),
+            **_temp_params(kwargs),
         )
-        # client.aio is the SDK's async surface; the sync `client.models` call
-        # would block the shared event loop for the whole round-trip, starving
-        # every other actor (and MQTT keepalive) until the model replies.
-        response = await self.client.aio.models.generate_content(
+        response = self.client.models.generate_content(
             model=self.model_name,
-            contents=contents,  # pyright: ignore[reportArgumentType]
+            contents=contents,
             config=config,
         )
         text_parts: list[str] = []
@@ -1249,22 +1266,25 @@ class GeminiProvider(LLMProvider):
             parameters=tool.get("parameters", {"type": "object", "properties": {}}),
         )
 
-    async def stream(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
-    ) -> AsyncGenerator[Any | dict[str, Any], None]:
+    async def stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
+        import asyncio
+        import queue as _queue
+
         contents = self._to_gemini_contents(messages)
-        config = self._types.GenerateContentConfig(system_instruction=system or None)
+        config = self._types.GenerateContentConfig(
+            system_instruction=system or None, **_temp_params(kwargs)
+        )
 
         # Stream via SDK in a thread, bridge to async via queue
-        q: Queue[tuple[str, Any]] = Queue()
+        q: _queue.Queue = _queue.Queue()
         input_tokens = output_tokens = 0
 
         def _stream_thread():
             try:
                 for chunk in self.client.models.generate_content_stream(
                     model=self.model_name,
-                    contents=contents,  # pyright: ignore[reportArgumentType]
+                    contents=contents,
                     config=config,
                 ):
                     text = getattr(chunk, "text", "")
@@ -1304,7 +1324,7 @@ class GeminiProvider(LLMProvider):
         }
 
     @staticmethod
-    def _to_gemini_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _to_gemini_contents(messages: list[dict]) -> list[dict]:
         """Convert OpenAI-style messages to Gemini contents format."""
         contents = []
         for m in messages:
@@ -1348,14 +1368,14 @@ class LLMAgent(Actor):
         system_prompt: str = "You are a helpful AI agent.",
         max_history: int = 20,
         summarize_threshold: int = 30,
-        **kwargs: Any,
-    ) -> None:
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.llm = llm_provider
         self.system_prompt = system_prompt
         self.max_history = max_history
         self.summarize_threshold = summarize_threshold  # compress when history exceeds this
-        self._conversation_history: list[dict[str, Any]] = []
+        self._conversation_history: list[dict] = []
         self._history_summary: str = ""  # rolling summary of compressed messages
         self._current_task = "idle"
         # Cost / token tracking — must be set here so subclasses (MainActor etc.) inherit them
@@ -1385,7 +1405,7 @@ class LLMAgent(Actor):
         """System prompt with the live date/time block prepended every turn."""
         return self._now_context() + "\n" + self.system_prompt
 
-    async def on_start(self) -> None:
+    async def on_start(self):
         _ = asyncio.create_task(_refresh_pricing())
         # Restore conversation history and rolling summary from persistence
         saved = self.recall("conversation_history", [])
@@ -1441,11 +1461,11 @@ class LLMAgent(Actor):
             output_schema=output_schema,
         )
 
-    async def on_stop(self) -> None:
+    async def on_stop(self):
         self.persist("conversation_history", self._conversation_history)
         self.persist("history_summary", self._history_summary)
 
-    async def _maybe_summarize(self) -> None:
+    async def _maybe_summarize(self):
         """If history exceeds summarize_threshold, compress the oldest half into a
         rolling summary and keep only the most recent max_history messages.
         The summary is prepended as a system-style context message when sending
@@ -1496,7 +1516,7 @@ class LLMAgent(Actor):
             logger.warning(f"[{self.name}] Summarization failed: {e} — truncating instead")
             self._conversation_history = self._conversation_history[-self.max_history :]
 
-    def _build_messages_with_summary(self, n: int) -> list[dict[str, Any]]:
+    def _build_messages_with_summary(self, n: int) -> list[dict]:
         """Build the message list to send to the LLM, prepending the rolling summary
         as context if one exists.
         """
@@ -1513,11 +1533,11 @@ class LLMAgent(Actor):
         ]
         return summary_ctx + recent
 
-    async def handle_message(self, msg: Message) -> None:
+    async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:
             await self._handle_task(msg)
 
-    async def _handle_task(self, msg: Message) -> None:
+    async def _handle_task(self, msg: Message):
         if isinstance(msg.payload, dict):
             # Accept "text", "task", "message", or fall back to JSON dump
             task_text = (
@@ -1648,9 +1668,7 @@ class LLMAgent(Actor):
         )
         return response
 
-    async def chat_stream(
-        self, user_message: str
-    ) -> AsyncGenerator[str | Any | dict[Any, Any], None]:
+    async def chat_stream(self, user_message: str):
         """Streaming version of chat(). Yields text chunks, then a final usage dict.
         The caller is responsible for printing chunks as they arrive.
 
@@ -1689,7 +1707,7 @@ class LLMAgent(Actor):
             and m.get("content") is not None
         ]
         try:
-            async for chunk in self.llm.stream(  # pyright: ignore[reportOptionalMemberAccess, reportAttributeAccessIssue]
+            async for chunk in self.llm.stream(
                 messages=safe_history,
                 system=self._system_prompt_with_now(),
             ):
@@ -1733,29 +1751,8 @@ class LLMAgent(Actor):
         db = get_db()
         if db is not None:
             try:
-                # TODO: dead call — WactorzDB has no log_chat(); the method is
-                # write_chat_log(). It raises AttributeError every turn and the
-                # except below swallows it at debug level.
-                #
-                # Do NOT simply rename it. chat_log is already populated by the
-                # web layer — web/ws.py `_persist_chat` (both halves of every
-                # dashboard turn) and web/mqtt.py (agent notify_user() pushes) —
-                # which is why history survives a restart today. Renaming would
-                # double-write every dashboard turn, and double the growth of a
-                # table that has no retention and commits synchronously on the
-                # event loop.
-                #
-                # There is still a real gap worth a decision: turns arriving via
-                # Discord/Telegram/WhatsApp/TUI reach neither web-layer writer,
-                # so they are absent from chat_log. Either drop this block as
-                # redundant, or make it the single writer and remove the web
-                # ones — but not both at once.
-                db.log_chat(  # pyright: ignore[reportAttributeAccessIssue]
-                    self.name, "user", user_msg, ts=ts_user, session_id=self.actor_id
-                )
-                db.log_chat(  # pyright: ignore[reportAttributeAccessIssue]
-                    self.name, "assistant", reply, ts=ts_reply, session_id=self.actor_id
-                )
+                db.log_chat(self.name, "user", user_msg, ts=ts_user, session_id=self.actor_id)
+                db.log_chat(self.name, "assistant", reply, ts=ts_reply, session_id=self.actor_id)
             except Exception as exc:
                 logger.debug("[%s] chat_log SQLite write failed: %s", self.name, exc)
         try:

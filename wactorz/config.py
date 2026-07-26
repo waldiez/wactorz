@@ -29,6 +29,17 @@ def _env_float(name: str, default: float) -> float:
     return float(value)
 
 
+def _env_opt_float(name: str) -> float | None:
+    """Float env var where unset/empty means None (no override)."""
+    value = os.getenv(name)
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    return float(value)
+
+
 DEV_MODE = _env_truthy("WACTORZ_DEV_MODE")
 
 _env_file = Path(__file__).parent / ".env"
@@ -45,6 +56,8 @@ class AppConfig:
     llm_provider: str
     llm_model: str
     llm_api_key: str
+    llm_overrides: str
+    llm_temperature: float | None
     ollama_url: str
     mqtt_host: str
     mqtt_port: int
@@ -81,6 +94,12 @@ CONFIG = AppConfig(
     llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
     llm_model=os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
     llm_api_key=os.getenv("LLM_API_KEY", ""),
+    # Per-call-site model overrides, e.g. "intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6".
+    # See wactorz/llm_factory.py for the site list and format.
+    llm_overrides=os.getenv("LLM_OVERRIDES", ""),
+    # Sampling temperature for every LLM call (0.0 = deterministic). Unset or
+    # empty keeps each provider's own default (the previous behavior).
+    llm_temperature=_env_opt_float("LLM_TEMPERATURE"),
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),
     mqtt_port=_env_int("MQTT_PORT", 1883),

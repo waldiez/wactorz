@@ -2,8 +2,11 @@
 
 # pylint: disable=missing-function-docstring,missing-class-docstring
 
+from __future__ import annotations
+
 import types
 import unittest
+from typing import Any
 from unittest.mock import patch
 
 import aiohttp
@@ -29,9 +32,9 @@ TOOL = {
 
 class _FakeOpenAICompletions:  # pylint: disable=too-few-public-methods
     def __init__(self) -> None:
-        self.calls = []
+        self.calls: list[dict[str, Any]] = []
 
-    async def create(self, **kwargs) -> types.SimpleNamespace:
+    async def create(self, **kwargs: Any) -> types.SimpleNamespace:
         self.calls.append(kwargs)
         message = types.SimpleNamespace(
             content=None,
@@ -49,10 +52,10 @@ class _FakeOpenAICompletions:  # pylint: disable=too-few-public-methods
 
 
 class _FakeAnthropicMessages:  # pylint: disable=too-few-public-methods
-    def __init__(self):
-        self.calls = []
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
 
-    async def create(self, **kwargs) -> types.SimpleNamespace:
+    async def create(self, **kwargs: dict[str, Any]) -> types.SimpleNamespace:
         self.calls.append(kwargs)
         return types.SimpleNamespace(
             content=[
@@ -134,16 +137,21 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_ollama_tool_payload_and_returned_tool_calls(self) -> None:
         """Ollama receives OpenAI-style tools and returns normalized tool calls."""
-        posted_payloads = []
+        posted_payloads: list[dict[str, Any]] = []
 
         class _Response:
-            async def __aenter__(self):
+            async def __aenter__(self) -> _Response:
                 return self
 
-            async def __aexit__(self, exc_type, exc, tb):
+            async def __aexit__(
+                self,
+                exc_type: type[Exception] | None,
+                exc: Exception | None,
+                tb: types.TracebackType,
+            ) -> None:
                 return None
 
-            async def json(self):
+            async def json(self) -> dict[str, Any]:
                 return {
                     "message": {
                         "content": "",
@@ -162,13 +170,18 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
                 }
 
         class _Session:
-            async def __aenter__(self):
+            async def __aenter__(self) -> _Session:
                 return self
 
-            async def __aexit__(self, exc_type, exc, tb):
+            async def __aexit__(
+                self,
+                exc_type: type[Exception] | None,
+                exc: Exception | None,
+                tb: types.TracebackType,
+            ) -> None:
                 return None
 
-            def post(self, url, json):
+            def post(self, url: str, json: dict[str, Any]) -> _Response:
                 posted_payloads.append(json)
                 return _Response()
 
@@ -196,22 +209,24 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
 
         class _Types:
             @staticmethod
-            def GenerateContentConfig(**kwargs):
+            def GenerateContentConfig(**kwargs: Any) -> dict[str, Any]:
                 return kwargs
 
             @staticmethod
-            def Tool(**kwargs):
+            def Tool(**kwargs: Any) -> dict[str, Any]:
                 return kwargs
 
             @staticmethod
-            def FunctionDeclaration(**kwargs):
+            def FunctionDeclaration(**kwargs: Any) -> dict[str, Any]:
                 return kwargs
 
         class _Models:
-            def __init__(self):
-                self.calls = []
+            """The async SDK surface — the provider must not block the loop."""
 
-            def generate_content(self, **kwargs):
+            def __init__(self) -> None:
+                self.calls: list[dict[str, Any]] = []
+
+            async def generate_content(self, **kwargs: dict[str, Any]) -> types.SimpleNamespace:
                 self.calls.append(kwargs)
                 function_call = types.SimpleNamespace(
                     id="call-1",
@@ -232,7 +247,9 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
         provider.model_name = "gemini-2.5-flash"
         provider._types = _Types  # pyright: ignore[reportAttributeAccessIssue]
         models = _Models()
-        provider.client = types.SimpleNamespace(models=models)  # pyright: ignore[reportAttributeAccessIssue]
+        provider.client = types.SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
+            aio=types.SimpleNamespace(models=models)
+        )
 
         result = await provider.complete_with_tools(
             messages=[{"role": "user", "content": "check HA"}],

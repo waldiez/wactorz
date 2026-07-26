@@ -756,9 +756,18 @@ npx @modelcontextprotocol/inspector python -m wactorz.interfaces.mcp_server
 
 Start with read-only tools such as `list_agents`, `ask_wactorz` with `/agents`, and `wactorz://config`. `ha_call_service` can change real devices, so use it only after confirming the target entity.
 
+> **All three social channels run in restricted mode.** Conversation, Home Assistant queries and everyday device control (lights, switches, climate, covers, media players) work; spawning agents, deleting agents, running code, pipelines and admin slash commands do not, and device control is limited to everyday domains so it cannot reach `shell_command`, `python_script` or `hassio`. Each channel also requires a sender allow-list and applies a per-sender rate limit (`SOCIAL_RATE_LIMIT_PER_MIN`, default 12/min). Use the dashboard for anything the bots refuse.
+
 ### Discord
 
-Set `DISCORD_BOT_TOKEN` and start with `--interface discord`. The bot responds when **mentioned** (e.g. `@YourBot turn on the lights`). Make sure to enable the **Message Content Intent** in your Discord Developer Portal under Bot → Privileged Gateway Intents.
+Set `DISCORD_BOT_TOKEN` and `DISCORD_ALLOWED_USER_IDS`, then start with `--interface discord` (or just set the token pair and the bot rides along beside whatever interface you run). The bot responds when **mentioned** (e.g. `@YourBot turn on the lights`). Make sure to enable the **Message Content Intent** in your Discord Developer Portal under Bot → Privileged Gateway Intents.
+
+To find your user id: enable **Developer Mode** (Settings → Advanced), right-click your name, **Copy User ID**. Multiple ids are comma-separated. Without the allow-list the bot logs an error and does not log in.
+
+```env
+DISCORD_BOT_TOKEN=MTI4...
+DISCORD_ALLOWED_USER_IDS=123456789012345678
+```
 
 ### Telegram
 
@@ -771,23 +780,31 @@ python -m wactorz --interface telegram
 **Setup steps:**
 1. Create a bot via [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token
 2. Add `TELEGRAM_BOT_TOKEN=<token>` to your `.env`
-3. Start wactorz and send `/start` to your bot — it replies with your numeric user ID
-4. Add `TELEGRAM_ALLOWED_USER_ID=<id>` to your `.env` to lock the bot to only you
+3. Start wactorz and send `/start` to your bot — it replies with your numeric user ID. With no allow-list set the bot runs in **setup mode**: `/start` is the only thing it answers, so nobody can reach the LLM or your devices before you have locked it down.
+4. Add `TELEGRAM_ALLOWED_USER_IDS=<id>` to your `.env` and restart. Comma-separate several ids for a household.
 
 ```env
 TELEGRAM_BOT_TOKEN=7123456789:AAF...
-TELEGRAM_ALLOWED_USER_ID=123456789
+TELEGRAM_ALLOWED_USER_IDS=123456789
 ```
 
+`TELEGRAM_ALLOWED_USER_ID` (singular) still works and is folded into the list.
+
 > **Privacy & security notes:**
-> - Telegram bots are publicly discoverable by username. Without `TELEGRAM_ALLOWED_USER_ID` set, anyone who finds your bot can send it messages and consume your LLM credits. **Always set it.**
+> - Telegram bots are publicly discoverable by username, so the allow-list is required, not optional — without it the bot stays in setup mode and will not chat with anyone.
 > - Your bot token is a secret — treat it like a password. Never commit it to git. Make sure `.env` is in your `.gitignore`.
 > - Messages pass through Telegram's servers. If end-to-end privacy is a hard requirement, consider the REST or CLI interface instead.
 > - If your token is ever exposed (e.g. accidentally shared), revoke it immediately via BotFather: `/mybots` → select your bot → API Token → Revoke.
 
 ### WhatsApp
 
-Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_WHATSAPP_FROM` and start with `--interface whatsapp`. Wactorz runs an aiohttp webhook server that receives incoming messages from Twilio. The same `process_user_input()` pipeline handles all interfaces.
+Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` and `WHATSAPP_ALLOWED_NUMBERS`, then start with `--interface whatsapp`. Wactorz runs an aiohttp webhook server that receives incoming messages from Twilio.
+
+The webhook is a public HTTP endpoint, so the allow-list is required: without it the interface refuses to start, and messages from numbers outside it are dropped without ever reaching the LLM. Numbers are matched with or without the `whatsapp:` prefix Twilio adds.
+
+```env
+WHATSAPP_ALLOWED_NUMBERS=+306912345678,+306987654321
+```
 
 ### Live Dashboard
 
@@ -1242,12 +1259,16 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `HA_STATE_BRIDGE_OUTPUT_TOPIC` | Base MQTT topic for `HomeAssistantStateBridgeAgent` (default: `homeassistant/state_changes`) |
 | `HA_STATE_BRIDGE_DOMAINS` | Comma-separated domain allow-list for state bridge (e.g. `light,switch,sensor`; empty = all) |
 | `HA_STATE_BRIDGE_PER_ENTITY` | `1` (default) = per-entity sub-topics; `0` = single shared topic |
-| `DISCORD_BOT_TOKEN` | Discord bot token (for `--interface discord`) |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather (for `--interface telegram`) |
-| `TELEGRAM_ALLOWED_USER_ID` | Optional — restrict Telegram bot to a single numeric user ID |
+| `DISCORD_BOT_TOKEN` | Discord bot token (for `--interface discord`, or to run it alongside another interface) |
+| `DISCORD_ALLOWED_USER_IDS` | **Required with the token** — comma-separated Discord user IDs allowed to talk to the bot |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather (for `--interface telegram`, or alongside another interface) |
+| `TELEGRAM_ALLOWED_USER_IDS` | **Required with the token** — comma-separated Telegram user IDs; without it the bot stays in setup mode |
+| `TELEGRAM_ALLOWED_USER_ID` | Older single-ID form of the above; still honored |
+| `SOCIAL_RATE_LIMIT_PER_MIN` | Max messages per minute per sender on social channels (default `12`; `0` disables) |
 | `TWILIO_ACCOUNT_SID` | Twilio account SID (for `--interface whatsapp`) |
 | `TWILIO_AUTH_TOKEN` | Twilio auth token |
 | `TWILIO_WHATSAPP_FROM` | Twilio WhatsApp sender number |
+| `WHATSAPP_ALLOWED_NUMBERS` | **Required with WhatsApp** — comma-separated numbers allowed to message the webhook |
 | `WACTORZ_URL` | Wactorz REST base URL used by the MCP server (default `http://localhost:8000`) |
 | `WACTORZ_API_KEY` | Optional MCP-to-REST API key; should match `API_KEY` when REST auth is enabled |
 

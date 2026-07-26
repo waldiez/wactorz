@@ -42,6 +42,29 @@ _COLOR_SERVICE_KEYS = {
 }
 _COLOR_MODES = {"hs", "rgb", "rgbw", "rgbww", "xy"}
 
+# Home Assistant domains an untrusted caller (Discord/Telegram/WhatsApp) may
+# actuate. Deliberately an allow-list: `domain`/`service` come out of the LLM's
+# JSON and are executed verbatim, so a deny-list would have to enumerate every
+# escape. `shell_command` and `python_script` run arbitrary code on the HA host;
+# `script`/`automation` run whatever the user wired into them, which can include
+# both; `hassio`/`homeassistant` can stop or restart the stack. None of those
+# belong on a social channel — they stay available on the dashboard.
+SOCIAL_ACTUATE_DOMAINS = frozenset(
+    {
+        "light",
+        "switch",
+        "fan",
+        "cover",
+        "climate",
+        "media_player",
+        "vacuum",
+        "humidifier",
+        "water_heater",
+        "input_boolean",
+        "scene",
+    }
+)
+
 _RESOLVER_PROMPT = """You are a Home Assistant service-call resolver.
 
 Your task:
@@ -344,6 +367,7 @@ class OneOffActuatorAgent(Actor):
         llm_provider: LLMProvider | None,
         task_id: str,
         reply_to_id: str,
+        allowed_domains: frozenset[str] | set[str] | None = None,
         **kwargs: Any,
     ) -> None:
         kwargs.setdefault("name", f"one-off-actuator-{task_id[-8:]}")
@@ -352,6 +376,9 @@ class OneOffActuatorAgent(Actor):
         self.llm = llm_provider
         self.task_id = task_id
         self.reply_to_id = reply_to_id
+        # None = trusted caller (dashboard/CLI), every domain allowed. A set
+        # restricts execution to those domains; see SOCIAL_ACTUATE_DOMAINS.
+        self.allowed_domains = frozenset(allowed_domains) if allowed_domains is not None else None
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost_usd = 0.0
@@ -610,10 +637,36 @@ class OneOffActuatorAgent(Actor):
                 attrs.update(entity[key])
         return attrs
 
+    def _is_allowed(self, action: ActuatorAction) -> bool:
+        """Whether this caller may execute ``action``. Trusted callers pass None."""
+        if self.allowed_domains is None:
+            return True
+        return str(action.domain or "").lower() in self.allowed_domains
+
     async def _execute_actions(self, actions: list[ActuatorAction]) -> str:
         ws_url = normalize_ha_ws_url(CONFIG.ha_url)
         successes: list[str] = []
         failures: list[str] = []
+
+        # Enforced here rather than in the resolver prompt: the prompt is a
+        # request, this is the gate. Blocked actions never reach call_service.
+        blocked = [a for a in actions if not self._is_allowed(a)]
+        actions = [a for a in actions if self._is_allowed(a)]
+        for action in blocked:
+            logger.warning(
+                "[%s] blocked out-of-policy service call %s.%s (allowed domains: %s)",
+                self.name,
+                action.domain,
+                action.service,
+                ", ".join(sorted(self.allowed_domains or [])),
+            )
+        if blocked and not actions:
+            names = ", ".join(sorted({str(a.domain) for a in blocked}))
+            return (
+                f"I can't control {names} from this channel — only everyday devices "
+                "(lights, switches, climate, media, covers) are available here. "
+                "Use the dashboard for anything else."
+            )
 
         async with HAWebSocketClient(ws_url, CONFIG.ha_token) as ha:
             for action in actions:
@@ -628,15 +681,24 @@ class OneOffActuatorAgent(Actor):
                 except Exception as exc:
                     failures.append(f"{self._format_action(action)} ({exc})")
 
+        # Say what was refused, so a partly-blocked request doesn't read as if
+        # everything the user asked for went through.
+        note = ""
+        if blocked:
+            note = " Skipped (not available on this channel): " + ", ".join(
+                sorted({f"{a.domain}.{a.service}" for a in blocked})
+            )
+
         if successes and not failures:
-            return f"Done: {', '.join(successes)}."
+            return f"Done: {', '.join(successes)}.{note}"
         if failures and not successes:
-            return "Nothing was executed successfully: " + "; ".join(failures)
+            return "Nothing was executed successfully: " + "; ".join(failures) + note
         return (
             "Partial success. Completed: "
             + ", ".join(successes)
             + ". Failed: "
             + "; ".join(failures)
+            + note
         )
 
     def _format_action(self, action: ActuatorAction) -> str:

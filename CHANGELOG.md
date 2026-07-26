@@ -6,7 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — pending
 
 ### Added
-
+- **LLM_TEMPERATURE** sets the sampling temperature for every LLM call across all five providers; unset keeps each provider's default, so existing installs are unaffected.
 - **Social channels (Discord/Telegram) as capability-restricted companions.** They now run
   *alongside* the primary interface (e.g. the HA add-on dashboard) whenever their token is set,
   instead of only as a standalone `--interface`. Messages reach the main agent in a **restricted

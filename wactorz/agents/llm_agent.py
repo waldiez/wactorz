@@ -1179,9 +1179,12 @@ class GeminiProvider(LLMProvider):
             **_temp_params(kwargs),
         )
 
-        response = self.client.models.generate_content(
+        # client.aio is the SDK's async surface; the sync `client.models` call
+        # would block the shared event loop for the whole round-trip, starving
+        # every other actor (and MQTT keepalive) until the model replies.
+        response = await self.client.aio.models.generate_content(
             model=self.model_name,
-            contents=contents,
+            contents=contents,  # pyright: ignore[reportArgumentType]
             config=config,
         )
 
@@ -1212,9 +1215,12 @@ class GeminiProvider(LLMProvider):
             max_output_tokens=kwargs.get("max_tokens"),
             **_temp_params(kwargs),
         )
-        response = self.client.models.generate_content(
+        # client.aio is the SDK's async surface; the sync `client.models` call
+        # would block the shared event loop for the whole round-trip, starving
+        # every other actor (and MQTT keepalive) until the model replies.
+        response = await self.client.aio.models.generate_content(
             model=self.model_name,
-            contents=contents,
+            contents=contents,  # pyright: ignore[reportArgumentType]
             config=config,
         )
         text_parts: list[str] = []

@@ -20,6 +20,10 @@ from .llm_agent import LLMProvider, _accumulate_global_cost
 
 logger = logging.getLogger(__name__)
 
+# Import-time marker: appears once at startup so it is unambiguous which
+# version of this module the running process loaded.
+logger.info("one_off_actuator_agent loaded — resolver guard v2 active")
+
 _COLOR_RGB = {
     "blue": [0, 0, 255],
     "pink": [255, 105, 180],
@@ -87,6 +91,10 @@ Rules:
   different device: if the user says "TV" and no TV-like entity exists in the
   payload, return [] — do NOT act on a light, switch, or any other device
   instead. Acting on the wrong device is far worse than doing nothing.
+- Return ONLY actions for the devices the user asked about in THIS request.
+  Do NOT add extra actions for other devices the user did not mention.
+  The worked examples above illustrate the output FORMAT only — never copy
+  their actions into your answer.
 - If the request is ambiguous or no device matches, return [].
 - For multiple commands in one request, return multiple actions.
 - Only include service_data keys that are needed.
@@ -106,6 +114,217 @@ Rules:
 - Do not invent entity IDs.
 - Do not return markdown or explanation.
 """
+
+
+# ── Post-resolution guard ────────────────────────────────────────────────────
+# Small local models sometimes ignore the resolver rules: they substitute a
+# device the user never named, or append "bonus" actions copied from the
+# prompt's worked examples. Wrong actuation is strictly worse than none, so
+# every resolved action is checked against the request before execution.
+
+# Words that name a *kind* of device rather than a specific one. They justify
+# an action in the mapped domain but cannot single out one entity.
+_DEVICE_WORD_DOMAINS = {
+    "light": "light",
+    "lights": "light",
+    "lamp": "light",
+    "lamps": "light",
+    "bulb": "light",
+    "bulbs": "light",
+    "brightness": "light",
+    "dim": "light",
+    "tv": "media_player",
+    "television": "media_player",
+    "telly": "media_player",
+    "speaker": "media_player",
+    "speakers": "media_player",
+    "music": "media_player",
+    "volume": "media_player",
+    "radio": "media_player",
+    "thermostat": "climate",
+    "heating": "climate",
+    "heater": "climate",
+    "temperature": "climate",
+    "degrees": "climate",
+    "warmer": "climate",
+    "cooler": "climate",
+    "ac": "climate",
+    "aircon": "climate",
+    "lock": "lock",
+    "locks": "lock",
+    "unlock": "lock",
+    "blinds": "cover",
+    "curtain": "cover",
+    "curtains": "cover",
+    "cover": "cover",
+    "covers": "cover",
+    "shutter": "cover",
+    "shutters": "cover",
+    "garage": "cover",
+    "switch": "switch",
+    "plug": "switch",
+    "socket": "switch",
+    "outlet": "switch",
+    "kettle": "switch",
+    "fan": "fan",
+    "fans": "fan",
+    "vacuum": "vacuum",
+    "hoover": "vacuum",
+    "camera": "camera",
+    "cameras": "camera",
+}
+
+_REQUEST_STOPWORDS = {
+    "the",
+    "a",
+    "an",
+    "my",
+    "our",
+    "your",
+    "and",
+    "or",
+    "to",
+    "in",
+    "at",
+    "of",
+    "for",
+    "on",
+    "off",
+    "turn",
+    "set",
+    "put",
+    "make",
+    "please",
+    "now",
+    "then",
+    "it",
+    "is",
+    "with",
+    "all",
+    "some",
+    "me",
+    "can",
+    "you",
+    "could",
+    "open",
+    "close",
+    "start",
+    "stop",
+}
+
+
+def _request_tokens(request: str) -> tuple[set[str], set[str]]:
+    """Split a request into (specific_tokens, domain_hints).
+
+    Specific tokens are words that could name a particular device ("hue",
+    "office", "samsung"); domain hints are the domains implied by generic
+    device words ("lights" → light). Colors, digits, and stopwords carry no
+    device information and are excluded.
+    """
+    tokens: set[str] = set()
+    for raw in request.lower().replace("_", " ").replace("-", " ").split():
+        tok = raw.strip(".,!?()[]{}'\":;%")
+        if len(tok) < 2 or tok.isdigit() or tok in _REQUEST_STOPWORDS or tok in _COLOR_RGB:
+            continue
+        tokens.add(tok)
+    hints = {_DEVICE_WORD_DOMAINS[t] for t in tokens if t in _DEVICE_WORD_DOMAINS}
+    specific = {t for t in tokens if t not in _DEVICE_WORD_DOMAINS}
+    return specific, hints
+
+
+def _entity_haystacks(devices: Any) -> dict[str, str]:
+    """entity_id → searchable text (id suffix + names + area), lowercased."""
+    haystacks: dict[str, str] = {}
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            entity_id = str(node.get("entity_id") or "")
+            if entity_id:
+                attrs = node.get("attributes") if isinstance(node.get("attributes"), dict) else {}
+                state = node.get("state")
+                state_attrs = (
+                    state.get("attributes")
+                    if isinstance(state, dict) and isinstance(state.get("attributes"), dict)
+                    else {}
+                )
+                parts = [
+                    entity_id.split(".", 1)[-1],
+                    node.get("name"),
+                    node.get("friendly_name"),
+                    attrs.get("friendly_name"),
+                    state_attrs.get("friendly_name"),
+                    node.get("area"),
+                    node.get("location"),
+                ]
+                text = " ".join(str(p) for p in parts if p)
+                haystacks[entity_id] = (
+                    haystacks.get(entity_id, "")
+                    + " "
+                    + text.lower().replace("_", " ").replace("-", " ")
+                )
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(devices)
+    return haystacks
+
+
+def filter_unrequested_actions(
+    request: str,
+    actions: list[ActuatorAction],
+    devices: Any,
+) -> tuple[list[ActuatorAction], list[ActuatorAction]]:
+    """Split resolved actions into (kept, dropped) based on the request.
+
+    An action is kept when its entity matches a specific token of the request
+    (e.g. "hue" → light.philips_hue_lct015), or when its domain is implied by a
+    generic device word ("lights" → light) and no other action already matched
+    that domain specifically. Everything else — actions on devices the user
+    never mentioned — is dropped.
+
+    If nothing survives: return ([], actions) when the request clearly named
+    a device kind or a specific device that none of the actions touch (the
+    substitution case), else pass everything through unchanged — a request
+    with no recognizable device reference cannot be adjudicated here.
+    """
+    if not actions:
+        return [], []
+    # Routing appends the discovered entity list to the request text before
+    # spawning the actuator. Only the user's own words may vouch for an action
+    # — tokenizing the injected list would make every entity "mentioned" and
+    # let any action through.
+    request = request.split("[AVAILABLE HA ENTITIES", 1)[0]
+    specific, hints = _request_tokens(request)
+    haystacks = _entity_haystacks(devices)
+
+    def entity_match(action: ActuatorAction) -> bool:
+        suffix = action.entity_id.split(".", 1)[-1].replace("_", " ").replace("-", " ").lower()
+        hay = f"{haystacks.get(action.entity_id, '')} {suffix}"
+        return any(tok in hay or tok.rstrip("s") in hay for tok in specific)
+
+    matched_ids = {id(a) for a in actions if entity_match(a)}
+    matched_domains = {a.domain for a in actions if id(a) in matched_ids}
+
+    kept: list[ActuatorAction] = []
+    dropped: list[ActuatorAction] = []
+    for action in actions:
+        if id(action) in matched_ids or (
+            action.domain in hints and action.domain not in matched_domains
+        ):
+            kept.append(action)
+        else:
+            dropped.append(action)
+
+    if kept:
+        return kept, dropped
+    # Nothing survived. Veto everything only when the request named a device
+    # (kind or specific) that none of the actions correspond to.
+    if hints or specific:
+        return [], actions
+    return actions, []
 
 
 class OneOffActuatorAgent(Actor):
@@ -216,7 +435,20 @@ class OneOffActuatorAgent(Actor):
         self._accumulate_usage(usage)
         parsed = self._parse_actions_json(raw)
         actions = [ActuatorAction.from_dict(item) for item in parsed]
-        return self._repair_color_actions(actions, devices)
+        actions = self._repair_color_actions(actions, devices)
+        kept, dropped = filter_unrequested_actions(self.request, actions, devices)
+        # Always log the verdict — an actuation with no "Guard:" line means the
+        # running process is not executing this module.
+        await self._log(
+            f"Guard: resolver returned {len(actions)} action(s), "
+            f"kept {len(kept)}, dropped {len(dropped)}"
+            + (
+                " — dropped: " + ", ".join(self._format_action(a) for a in dropped)
+                if dropped
+                else ""
+            )
+        )
+        return kept
 
     def _parse_actions_json(self, raw: str) -> list[dict[str, Any]]:
         cleaned = (raw or "").strip()
@@ -224,20 +456,41 @@ class OneOffActuatorAgent(Actor):
             cleaned = cleaned.strip("`")
             cleaned = cleaned.removeprefix("json")
             cleaned = cleaned.strip()
-        data = json.loads(cleaned)
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            # Models occasionally wrap the array in prose despite the
+            # JSON-only instruction. Salvage the first [...] span rather than
+            # failing the whole actuation.
+            start, end = cleaned.find("["), cleaned.rfind("]")
+            if start == -1 or end <= start:
+                raise
+            data = json.loads(cleaned[start : end + 1])
         if not isinstance(data, list):
             raise json.JSONDecodeError("Expected a JSON array", cleaned, 0)
         return [item for item in data if isinstance(item, dict)]
 
+    def _user_text(self) -> str:
+        """The user's own words — the request minus the entity list that
+        routing appends. Color/brightness detection and entity ranking must
+        never read the injected list: an entity like "Infrared Hub" would
+        otherwise make every request "ask for red".
+        """
+        return self.request.split("[AVAILABLE HA ENTITIES", 1)[0].lower()
+
     def _requested_rgb(self) -> list[int] | None:
-        request = self.request.lower()
+        import re
+
+        text = self._user_text()
         for color, rgb in _COLOR_RGB.items():
-            if color in request:
+            # Whole-word match only: "infrared" must not count as "red",
+            # "bluetooth" must not count as "blue".
+            if re.search(rf"\b{color}\b", text):
                 return list(rgb)
         return None
 
     def _requests_max_brightness(self) -> bool:
-        request = self.request.lower()
+        request = self._user_text()
         return any(
             phrase in request
             for phrase in (
@@ -295,7 +548,7 @@ class OneOffActuatorAgent(Actor):
         if not lights:
             return None
 
-        request = self.request.lower()
+        request = self._user_text()
         ranked: list[tuple[int, str]] = []
         for entity in lights:
             entity_id = str(entity.get("entity_id") or "")

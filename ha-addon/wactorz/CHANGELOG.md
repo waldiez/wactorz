@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added: `ha_connection` add-on option (`auto` / `supervisor` / `custom`) — explicit Home Assistant connection mode. `auto` keeps the previous token-presence inference, so existing installs are unaffected.
+- Added: startup auth probe — the add-on log now shows one deterministic line with the HA connection mode, URL, and auth result (e.g. `HA connection OK — mode=supervisor ...` or `HA auth FAILED (401) ...`).
+- Fixed: silent HA misconfiguration — a custom `ha_url` with a blank `ha_token` (or a token set in supervisor mode) now logs a loud warning explaining what is ignored and why, instead of failing quietly.
+- Fixed: shellcheck hygiene in `run.sh` (declare-then-export, shebang directive).
+
 ## 0.5.1
 
 - Added: `openai_url` add-on option — surfaces the existing OpenAI-compatible endpoint support in the settings UI, so the `openai` provider can be pointed at a LiteLLM proxy or any compatible API (Groq, Together, vLLM, LM Studio) without editing env vars.

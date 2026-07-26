@@ -305,7 +305,7 @@ TELEGRAM_ALLOWED_USER_IDS=123456789   # required — comma-separate for a househ
 | | |
 |---|---|
 | **default port** | `8888` |
-| **server** | `aiohttp` (`monitor_server.py`) |
+| **server** | `aiohttp` (`wactorz/web/`) |
 
 The web dashboard starts automatically alongside whichever chat interface is active. It provides a real-time view of the running system and a chat interface accessible from any browser — no CLI needed.
 

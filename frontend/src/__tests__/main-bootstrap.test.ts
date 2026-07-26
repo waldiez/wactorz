@@ -10,7 +10,7 @@
  * so importing the module records every handler it registers, then drive each
  * handler (and each app-event) to exercise the wiring — including the guard
  * branches — the way the real transport would at runtime. Decision/transform
- * logic itself is covered by the agents/mapping + haConfig + haFeed unit tests.
+ * logic itself is covered by the agents/mapping + serverConfig + haFeed unit tests.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { emit } from "../events";
@@ -98,7 +98,7 @@ vi.mock("../agents/AgentStore", () => ({
     },
 }));
 
-vi.mock("../io/TTSManager", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() } }));
+vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 vi.mock("../ui/DropZone", () => ({ DropZone: class {} }));
 
@@ -249,5 +249,28 @@ describe("main.ts bootstrap", () => {
         expect(toast.show).toHaveBeenCalledTimes(1);
         window.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: new Error("nope") }));
         expect(toast.show).toHaveBeenCalledTimes(2);
+    });
+
+    it("ignores opaque cross-origin script errors (no error object, no filename)", () => {
+        // What an injected script from another origin looks like — e.g. a browser
+        // extension, or the desktop shell's webview bridge hitting our CSP. There
+        // is nothing actionable in it, so it must not blame the app with a toast.
+        vi.mocked(toast.show).mockClear();
+        window.dispatchEvent(
+            Object.assign(new Event("error"), { error: null, message: "Script error.", filename: "" }),
+        );
+        expect(toast.show).not.toHaveBeenCalled();
+    });
+
+    it("still reports an errorless event that carries a filename (real page error)", () => {
+        vi.mocked(toast.show).mockClear();
+        window.dispatchEvent(
+            Object.assign(new Event("error"), {
+                error: null,
+                message: "boom",
+                filename: "http://localhost/app.js",
+            }),
+        );
+        expect(toast.show).toHaveBeenCalledTimes(1);
     });
 });

@@ -36,25 +36,26 @@ async def _start_web_ui(
     """Start the monitor web server as a quiet background asyncio task."""
     import logging as _log
 
-    import wactorz.monitor_server as _ms
+    from wactorz.web import runtime, static_site
+    from wactorz.web.app import main as run_server
 
-    _ms.MQTT_BROKER = mqtt_broker
-    _ms.MQTT_PORT = mqtt_port
-    _ms.WS_PORT = port
-    _ms.MQTT_WS_PORT = int(os.getenv("MQTT_WS_PORT", "9001"))
+    runtime.MQTT_BROKER = mqtt_broker
+    runtime.MQTT_PORT = mqtt_port
+    runtime.WS_PORT = port
+    runtime.MQTT_WS_PORT = int(os.getenv("MQTT_WS_PORT", "9001"))
 
     # Wire the registry in so chat is routed directly — no IOAgent needed
     if actor_registry is not None:
-        _ms.registry = actor_registry
+        runtime.set_registry(actor_registry)
     if persistence_db is not None:
-        _ms.db = persistence_db
+        runtime.set_db(persistence_db)
 
-    for _name in ("wactorz.monitor_server", "aiohttp.access", "aiohttp.server"):
+    for _name in ("wactorz.web", "aiohttp.access", "aiohttp.server"):
         _log.getLogger(_name).setLevel(_log.WARNING)
 
-    asyncio.create_task(_ms.main())
+    asyncio.create_task(run_server())
     logger.info("Web UI →  http://localhost:%d", port)
-    if _ms.DOCS_SITE.is_dir():
+    if static_site.DOCS_SITE.is_dir():
         logger.info("Docs   →  http://localhost:%d/docs/", port)
 
 

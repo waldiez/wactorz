@@ -98,7 +98,9 @@ class SpawnMixin:
         system_prompt = config.get("system_prompt", "").strip()
 
         # ── Route to the right agent class ─────────────────────────────────
-        if agent_type == "ha_actuator":
+        if agent_type == "native":
+            actor = await self._spawn_native_agent(config, name)
+        elif agent_type == "ha_actuator":
             actor = await self._spawn_ha_actuator(config, name)
         elif agent_type == "scheduled":
             actor = await self._spawn_scheduled_agent(config, name)
@@ -123,6 +125,31 @@ class SpawnMixin:
         return actor
 
     # ── Per-type spawn helpers ─────────────────────────────────────────────
+
+    async def _spawn_native_agent(self, config: dict, name: str) -> Actor | None:
+        """Spawn a native catalog agent (type: native) from its saved config.
+
+        Native agents are first-class Actor/LLMAgent subclasses, so their spawn
+        config can't carry the class itself — the factory is re-resolved by name
+        from the catalog. Mirrors CatalogAgent's own native spawn kwargs so a
+        restored agent is constructed identically to a freshly-spawned one.
+        """
+        from ..catalog_agent import get_native_factory
+
+        factory = get_native_factory(name)
+        if factory is None:
+            logger.warning(
+                f"[{self.name}] Cannot spawn native agent '{name}': "
+                f"no catalog factory found for that name."
+            )
+            return None
+
+        kwargs = {"name": name, "persistence_dir": str(self._persistence_dir.parent)}
+        llm = getattr(self, "llm", None)
+        if llm is not None:
+            kwargs["llm_provider"] = llm
+        logger.info(f"[{self.name}] Spawning native catalog agent '{name}'")
+        return await self.spawn(factory, **kwargs)
 
     async def _spawn_ha_actuator(self, config: dict, name: str) -> Actor | None:
         """Spawn a HomeAssistantActuatorAgent (type: ha_actuator).

@@ -531,11 +531,17 @@ To move a running agent from one machine to another, call migrate_agent():
   result = await main.migrate_agent("agent-name", "target-node-name")
 
 The system will:
-  1. Snapshot the agent's persisted state (counters, calibration, learned values)
-  2. Stop the agent on its current machine
-  3. Start it on the target machine with full state restored
-  4. Update the spawn registry so it restores to the right machine on restart
-  5. Notify you via the dashboard when migration completes
+  1. Verify the target node exists and is online (heartbeat in the last 30s) —
+     if not, the migration is refused and the agent stays where it is
+  2. Snapshot the agent's persisted state (counters, calibration, learned values)
+  3. Stop the agent on its current machine
+  4. Start it on the target machine with full state restored
+  5. Update the spawn registry so it restores to the right machine on restart
+  6. Notify you via the dashboard when migration completes
+
+If migrate_agent() returns success=False because the target node is unknown or
+offline, relay the message to the user (it lists the nodes that ARE online) —
+do not retry with the same target.
 
 State that survives migration: any value the agent stored via agent.persist() /
 agent.recall() that is JSON-serialisable (numbers, strings, dicts, lists).

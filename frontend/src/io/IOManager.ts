@@ -16,7 +16,7 @@
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { ServerEventRouter } from "./ServerEventRouter";
 import type { WSClient } from "./WSClient";
-import { tts } from "./TTSManager";
+import { tts } from "../ext/tts";
 import { toast } from "../ui/ToastManager";
 import { emit } from "../events";
 import { uid } from "../ids";

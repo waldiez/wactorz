@@ -234,3 +234,44 @@ exclude_also = [
 ]
 # fail_under = 90
 precision = 2
+
+# ── pylint (advisory) ─────────────────────────────────────────────────────────
+# ruff is the *gated* linter (see the Makefile); pylint is advisory and mainly
+# useful for the checks ruff does not implement. The disables below are patterns
+# this codebase uses deliberately — they were previously declared per-file (and,
+# after the monitor split, per-line), which buried the signal in noise.
+[tool.pylint.main]
+ignore-paths = ["wactorz/_version.py"]
+jobs = 0
+
+[tool.pylint."messages control"]
+disable = [
+    # The monitor is I/O glue: a failing broadcast, purge, or file read must
+    # never take the server down, so broad excepts are intentional there.
+    "broad-exception-caught",
+    # Actors expose internals the monitor legitimately drives (spawn registry,
+    # node desired-state); these are one codebase, not a public API boundary.
+    "protected-access",
+    # Function-local imports are load-order tools here: they keep package-init
+    # light and break import cycles. See CLAUDE.md.
+    "import-outside-toplevel",
+    # runtime.py owns process-wide state by design; rebinding needs `global`.
+    "global-statement",
+    # Module-level mutable state in runtime.py reads as a constant to pylint.
+    "invalid-name",
+    # Delegated to ruff/ruff-format, which are gated.
+    "line-too-long",
+    "wrong-import-order",
+    "wrong-import-position",
+    # aiohttp handlers must accept `request` whether or not they use it.
+    "unused-argument",
+    # Size heuristics: tracked via the module-split work, not per-commit.
+    "too-many-lines",
+    "too-many-locals",
+    "too-many-branches",
+    "too-many-statements",
+    "too-many-return-statements",
+    "too-many-arguments",
+    "too-many-positional-arguments",
+    "duplicate-code",
+]

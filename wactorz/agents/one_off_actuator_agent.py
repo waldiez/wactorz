@@ -55,9 +55,38 @@ Action schema:
   }
 ]
 
+Worked examples:
+
+Request: "dim the living room lamp to 50%" with light.living_room_lamp in the payload:
+[
+  {
+    "domain": "light",
+    "service": "turn_on",
+    "entity_id": "light.living_room_lamp",
+    "service_data": {"brightness_pct": 50}
+  }
+]
+
+Request: "turn off the TV" with media_player.living_room_tv in the payload:
+[
+  {
+    "domain": "media_player",
+    "service": "turn_off",
+    "entity_id": "media_player.living_room_tv"
+  }
+]
+
+Request: "turn off the TV" when NO tv/media_player entity exists in the payload
+(only lights, switches, etc.):
+[]
+
 Rules:
 - Return an array, never an object.
 - Use the most specific matching entity_id available.
+- The chosen entity MUST be the device the user named. NEVER substitute a
+  different device: if the user says "TV" and no TV-like entity exists in the
+  payload, return [] — do NOT act on a light, switch, or any other device
+  instead. Acting on the wrong device is far worse than doing nothing.
 - If the request is ambiguous or no device matches, return [].
 - For multiple commands in one request, return multiple actions.
 - Only include service_data keys that are needed.

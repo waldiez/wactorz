@@ -1,13 +1,9 @@
 import base64
 import json
-import sys
 import tempfile
 import types
 import unittest
 from unittest.mock import AsyncMock
-
-sys.modules.setdefault("aiohttp", types.ModuleType("aiohttp"))
-sys.modules.setdefault("websockets", types.ModuleType("websockets"))
 
 from wactorz.agents.home_assistant_map_agent import HomeAssistantMapAgent, MapUpdateDispatcher
 from wactorz.core.actor import Message, MessageType

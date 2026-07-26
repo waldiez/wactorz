@@ -133,4 +133,25 @@ describe("CardDashboard render", () => {
             cd.onHeartbeat("main", Date.now());
         }).not.toThrow();
     });
+
+    it("renderView rebuilds the active view body", () => {
+        cd.show([agent("A")]);
+        const body = cd.root.querySelector(".af-body")!;
+        body.innerHTML = "";
+        cd.renderView();
+        // Body was cleared and rebuilt — should contain overview content.
+        expect(body.children.length).toBeGreaterThan(0);
+    });
+
+    it("registerView adds a nav button and view builder", () => {
+        cd.show([agent("A")]);
+        const el = document.createElement("div");
+        el.textContent = "custom-view";
+        cd.registerView("custom", "hexagon", "Custom", () => el);
+        expect(cd.root.querySelector('[data-view="custom"]')).not.toBeNull();
+        // Switch to the registered view — builder is called.
+        cd.view = "custom";
+        cd.renderView();
+        expect(cd.root.textContent).toContain("custom-view");
+    });
 });

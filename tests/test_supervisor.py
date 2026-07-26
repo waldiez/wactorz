@@ -8,41 +8,8 @@ the Supervisor, and verifies behaviour by inspecting actor state.
 
 import argparse
 import asyncio
-import importlib
 import sys
 import traceback
-import types
-
-
-def _stub(name):
-    """Provide an empty stand-in ONLY for optional deps that aren't installed,
-    so the core import chain succeeds without the heavy ML/PDF extras. Never
-    shadow a real, importable module — doing so would poison it for every other
-    test sharing this process.
-    """
-    try:
-        importlib.import_module(name)
-    except Exception:
-        sys.modules.setdefault(name, types.ModuleType(name))
-
-
-for _m in [
-    "aiomqtt",
-    "psutil",
-    "anthropic",
-    "openai",
-    "aiohttp",
-    "discord",
-    "twilio",
-    "pdfplumber",
-    "fitz",
-    "ultralytics",
-    "torch",
-    "numpy",
-    "asyncssh",
-]:
-    _stub(_m)
-
 
 from wactorz.core.actor import Actor, ActorState, Message, SupervisorStrategy
 from wactorz.core.registry import ActorSystem, Supervisor
@@ -56,7 +23,7 @@ _results: list[tuple[str, bool, str]] = []
 
 
 def assert_eq(label, got, expected):
-    ok = got == expected
+    ok = bool(got == expected)
     _results.append((label, ok, f"got={got!r}, expected={expected!r}"))
     marker = PASS if ok else FAIL
     print(f"  {marker}  {label}")
@@ -164,7 +131,7 @@ def make_system(poll_interval: float = 0.05):
         async def disconnect(self):
             pass
 
-    system._mqtt_client = _NoOpMQTT()
+    system._mqtt_client = _NoOpMQTT()  # pyright: ignore[reportAttributeAccessIssue]
     # Override supervisor with fast poll_interval
     system._supervisor = Supervisor(system.registry, system._inject, poll_interval=poll_interval)
     return system
@@ -247,6 +214,7 @@ async def test_one_for_one_restart():
     await asyncio.sleep(0.25)
 
     new_crash_actor = system.supervisor._specs["crash-once"].actor
+    assert new_crash_actor
     sibling = stable_ref["a"]
 
     # The factory was called more than once — a new instance replaced the original
@@ -288,6 +256,7 @@ async def test_restart_count_increments():
     await asyncio.sleep(0.35)
 
     final = system.supervisor._specs["counted"].actor
+    assert final
     assert_true(
         "restart_count >= 2", final.metrics.restart_count >= 2, f"got {final.metrics.restart_count}"
     )
@@ -309,11 +278,10 @@ async def test_budget_exhausted_gives_up():
         _pending_notifications = notifications
         actor_id = "fake-main-id"
 
-    system.registry._actors["fake-main-id"] = FakeMain()
-    system.registry._actors  # trick find_by_name
+    system.registry._actors["fake-main-id"] = FakeMain()  # pyright: ignore[reportArgumentType]
     # Patch find_by_name to return FakeMain
     original_find = system.registry.find_by_name
-    system.registry.find_by_name = lambda n: FakeMain() if n == "main" else original_find(n)
+    system.registry.find_by_name = lambda n: FakeMain() if n == "main" else original_find(n)  # pyright: ignore[reportAttributeAccessIssue]
 
     start_count = {"n": 0}
 
@@ -520,6 +488,7 @@ async def test_supervised_flag_on_actor():
     await asyncio.sleep(0.1)
 
     actor = system.supervisor._specs["flag-test"].actor
+    assert actor
     status = actor.get_status()
     assert_eq("supervised=True in get_status", status.get("supervised"), True)
     assert_eq("restart_count=0 in get_status", status.get("restart_count"), 0)

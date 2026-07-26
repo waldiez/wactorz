@@ -272,6 +272,17 @@ def _build_experimental_catalog() -> dict:
     return experimental
 
 
+def get_native_factory(name: str):
+    """Return the Actor subclass that backs a native catalog agent, or None.
+
+    Used by the local spawn router to restore a ``type: "native"`` agent from
+    its saved registry config: the config can only carry JSON-safe fields, so
+    the factory (a class object) is re-resolved here by name at restore time.
+    """
+    recipe = _build_native_catalog().get(name)
+    return recipe.get("factory") if recipe else None
+
+
 def _build_catalog() -> dict:
     catalog = _build_native_catalog()
     catalog.update(_build_experimental_catalog())
@@ -838,6 +849,15 @@ class CatalogAgent(Actor):
                     native_kwargs["llm_provider"] = llm_provider
                 actor = await self.spawn(factory, **native_kwargs)
                 if actor:
+                    if main and hasattr(main, "_save_to_spawn_registry"):
+                        # Persist a JSON-safe descriptor so the agent is restored
+                        # after a process restart. The factory (a class object)
+                        # is dropped — it is re-resolved by name via
+                        # get_native_factory() on restore. Mark trusted so it
+                        # bypasses the safety validator like other catalog agents.
+                        save_config = {k: v for k, v in recipe.items() if k != "factory"}
+                        save_config["trusted"] = True
+                        main._save_to_spawn_registry(save_config)
                     msg = _chat_message_with_beta_warning(
                         f"'{resolved}' spawned and running", beta_warning
                     )

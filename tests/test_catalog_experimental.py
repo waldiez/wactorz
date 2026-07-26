@@ -93,9 +93,9 @@ def _grouping_payload(show_experimental: bool) -> dict:
 
 
 def test_catalog_response_hides_experimental_by_default():
-    from wactorz.monitor_server import _format_catalog_agents_response
+    from wactorz.web.chat import format_catalog_agents_response
 
-    text = _format_catalog_agents_response(_grouping_payload(show_experimental=False))
+    text = format_catalog_agents_response(_grouping_payload(show_experimental=False))
 
     assert "**Catalog agents**" in text
     assert "`2` total - `1` recommended, `1` experimental beta" in text
@@ -108,9 +108,9 @@ def test_catalog_response_hides_experimental_by_default():
 
 
 def test_catalog_response_shows_experimental_when_opted_in():
-    from wactorz.monitor_server import _format_catalog_agents_response
+    from wactorz.web.chat import format_catalog_agents_response
 
-    text = _format_catalog_agents_response(_grouping_payload(show_experimental=True))
+    text = format_catalog_agents_response(_grouping_payload(show_experimental=True))
 
     assert "### Recommended" in text
     assert "### Experimental / Beta" in text
@@ -133,7 +133,7 @@ def test_catalog_spawn_message_leaves_recommended_agents_plain():
 
 
 def test_experimental_first_use_banner_warns_once(monkeypatch):
-    import wactorz.monitor_server as ms
+    import wactorz.web.chat as chat
 
     class _FakeMain:
         def __init__(self):
@@ -142,13 +142,13 @@ def test_experimental_first_use_banner_warns_once(monkeypatch):
                 "weather-agent": {"experimental": False},
             }
 
-    monkeypatch.setattr(ms, "_find_main", lambda: _FakeMain())
-    ms._beta_warned_agents.clear()
+    monkeypatch.setattr(chat, "find_main", lambda: _FakeMain())
+    chat.beta_warned_agents.clear()
 
-    first = ms._experimental_first_use_banner("code-agent")
-    second = ms._experimental_first_use_banner("code-agent")
-    plain = ms._experimental_first_use_banner("weather-agent")
-    unknown = ms._experimental_first_use_banner("no-such-agent")
+    first = chat.experimental_first_use_banner("code-agent")
+    second = chat.experimental_first_use_banner("code-agent")
+    plain = chat.experimental_first_use_banner("weather-agent")
+    unknown = chat.experimental_first_use_banner("no-such-agent")
 
     assert first is not None
     assert "experimental/beta" in first and BETA_WARNING in first

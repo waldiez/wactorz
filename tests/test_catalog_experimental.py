@@ -7,8 +7,8 @@ from wactorz.agents.catalog_agent import (
 
 EXPECTED_EXPERIMENTAL = {"reachy-mini"}
 
-# Agents that must never appear in the catalog — the experimental package is
-# not exposed through it.
+# Scratch agents that were deleted along with wactorz/experimental_agents/.
+# Guards against anyone reintroducing them into the catalog.
 PRUNED_EXPERIMENTAL = {
     "code-agent",
     "news-agent",

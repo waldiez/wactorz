@@ -32,6 +32,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   ~200 MB) and **Wactorz Ultra** (Debian + ML/`ultralytics`, ~3 GB) as separate cards; both share the
   same options and entrypoint. CI builds and pushes both variants across `aarch64`/`amd64`.
 
+### Removed
+
+- **`wactorz/experimental_agents/` package.** The ten scratch agents in it (`code`, `news`, `qa`,
+  `tick`, `wif`, `wiz`, `ml`, `nautilus`, `udx`, `weather`) were test scaffolding, were never
+  reachable from the catalog, and nothing outside the folder imported them. `reachy-mini` is now the
+  only agent carrying experimental/beta status, and it lives in `catalogue_agents/` like every other
+  recipe.
+
 ### Fixed
 
 - **Gemini completions froze every agent** — `GeminiProvider.complete` and `complete_with_tools` called the *synchronous* google-genai surface from inside `async def`, blocking the single shared event loop for the entire model round-trip. With a Gemini provider configured, one agent's LLM call stalled every other actor, delayed MQTT keepalive, and could trip the 35 s heartbeat watchdog into force-restarting healthy agents as "presumed crashed". Both paths now `await client.aio.…` instead. Streaming was already off-loop and is unchanged.

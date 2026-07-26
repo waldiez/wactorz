@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Catalog recognises experimental/beta agents.** Catalog recipes can be tagged
+  `stability: beta` with a warning; `reachy-mini` is the first one. Beta agents are **hidden by
+  default** in `@catalog list` (shown behind a hint; reveal with `list experimental`), the catalog
+  warns before spawning one, and the first message to a running beta agent shows a one-time
+  instability warning.
 - **`ha_connection` add-on option** (`auto` / `supervisor` / `custom`) — explicit Home Assistant connection mode for both add-on variants. `auto` keeps the previous token-presence inference, so existing installs are unaffected. Startup now also logs one deterministic line with the resolved mode, URL, and auth result (e.g. `HA connection OK — mode=supervisor ...` or `HA auth FAILED (401) ...`).
 - **Extension seam (`wactorz/ext/`).** Optional features live in self-contained folders that expose a
   `setup(app)` hook; the monitor auto-discovers and wires them at startup, and each may contribute
@@ -26,6 +31,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Home Assistant add-on split into two variants.** The store now offers **Wactorz** (slim, Alpine,
   ~200 MB) and **Wactorz Ultra** (Debian + ML/`ultralytics`, ~3 GB) as separate cards; both share the
   same options and entrypoint. CI builds and pushes both variants across `aarch64`/`amd64`.
+
+### Removed
+
+- **`wactorz/experimental_agents/` package.** The ten scratch agents in it (`code`, `news`, `qa`,
+  `tick`, `wif`, `wiz`, `ml`, `nautilus`, `udx`, `weather`) were test scaffolding, were never
+  reachable from the catalog, and nothing outside the folder imported them. `reachy-mini` is now the
+  only agent carrying experimental/beta status, and it lives in `catalogue_agents/` like every other
+  recipe.
 
 ### Fixed
 

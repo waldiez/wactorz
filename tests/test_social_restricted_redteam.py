@@ -52,8 +52,9 @@ def make_main(*, intent="OTHER", chat_response="ok", agents=()):
 
     m._classify_intent = _classify
 
-    async def _actuate(_t):
+    async def _actuate(_t, allowed_domains=None):
         m.log["actuate"] += 1
+        m.log["actuate_domains"] = allowed_domains
         return "Done: light.turn_on -> light.tapo_l920"
 
     m._handle_actuate_intent = _actuate

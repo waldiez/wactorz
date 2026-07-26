@@ -26,6 +26,7 @@ from .mixins import (
     SpawnMixin,
     SpawnPlaceholder,
 )
+from .one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from .prompts.main_actor_prompts import (
     ORCHESTRATOR_PROMPT,
 )
@@ -1451,7 +1452,12 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             return note_prefix + reply
 
         if intent == "ACTUATE":
-            response = await self._handle_actuate_intent(text)
+            # Everyday devices only. The actuator executes the domain/service the
+            # LLM picked, so without this gate "control my devices" reaches
+            # shell_command/python_script/hassio and becomes code execution.
+            response = await self._handle_actuate_intent(
+                text, allowed_domains=SOCIAL_ACTUATE_DOMAINS
+            )
             await self._record_external_exchange(text, response)
             return note_prefix + response
 

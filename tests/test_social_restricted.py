@@ -53,8 +53,9 @@ def make_main(*, intent="OTHER", chat_response="hello", agents=()):
 
     m._classify_intent = _classify
 
-    async def _actuate(_t):
+    async def _actuate(_t, allowed_domains=None):
         m.calls["actuate"] += 1
+        m.calls["actuate_domains"] = allowed_domains
         return "actuated the device"
 
     m._handle_actuate_intent = _actuate
@@ -171,10 +172,14 @@ def test_delegation_to_safe_running_agent_works():
 
 
 def test_actuate_intent_allowed():
+    from wactorz.agents.one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
+
     m = make_main(intent="ACTUATE")
     out = run(m.process_user_input_restricted("turn off the living room lamp"))
     assert m.calls["actuate"] == 1
     assert "actuated" in out
+    # Device control is allowed, but only over everyday domains.
+    assert m.calls["actuate_domains"] == SOCIAL_ACTUATE_DOMAINS
 
 
 def test_ha_intent_allowed():

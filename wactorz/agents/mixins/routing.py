@@ -57,7 +57,15 @@ class RoutingMixin:
             logger.debug(f"[{self.name}] Intent classification failed: {e}")
             return "OTHER"
 
-    async def _handle_actuate_intent(self, text: str) -> str:
+    async def _handle_actuate_intent(
+        self, text: str, allowed_domains: frozenset[str] | set[str] | None = None
+    ) -> str:
+        """Resolve and execute a device-control request.
+
+        ``allowed_domains`` restricts which Home Assistant domains may be
+        actuated; None (the default, used by the dashboard and CLI) allows all.
+        Untrusted callers pass ``SOCIAL_ACTUATE_DOMAINS``.
+        """
         if not CONFIG.ha_url or not CONFIG.ha_token:
             return (
                 "Home Assistant is not configured. Set `HA_URL` and `HA_TOKEN` in your .env file."
@@ -135,6 +143,7 @@ class RoutingMixin:
                 llm_provider=self.llm,
                 task_id=task_id,
                 reply_to_id=self.actor_id,
+                allowed_domains=allowed_domains,
                 persistence_dir=str(self._persistence_dir.parent),
             )
             result = await asyncio.wait_for(future, timeout=120.0)

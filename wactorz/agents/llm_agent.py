@@ -1733,13 +1733,23 @@ class LLMAgent(Actor):
         db = get_db()
         if db is not None:
             try:
-                # TODO: broken: WactorzDB has no "log_chat()"
-                # the method is write_chat_log(). The SQLite half
-                # of the chat log has therefore never been written, and
-                # query_chat_log() readers see nothing. Fixing it also switches
-                # on unbounded chat_log growth (full message content, two rows
-                # per turn, no retention) plus two sync commits per turn on the
-                # event loop — settle retention first. Left as-is deliberately.
+                # TODO: dead call — WactorzDB has no log_chat(); the method is
+                # write_chat_log(). It raises AttributeError every turn and the
+                # except below swallows it at debug level.
+                #
+                # Do NOT simply rename it. chat_log is already populated by the
+                # web layer — web/ws.py `_persist_chat` (both halves of every
+                # dashboard turn) and web/mqtt.py (agent notify_user() pushes) —
+                # which is why history survives a restart today. Renaming would
+                # double-write every dashboard turn, and double the growth of a
+                # table that has no retention and commits synchronously on the
+                # event loop.
+                #
+                # There is still a real gap worth a decision: turns arriving via
+                # Discord/Telegram/WhatsApp/TUI reach neither web-layer writer,
+                # so they are absent from chat_log. Either drop this block as
+                # redundant, or make it the single writer and remove the web
+                # ones — but not both at once.
                 db.log_chat(  # pyright: ignore[reportAttributeAccessIssue]
                     self.name, "user", user_msg, ts=ts_user, session_id=self.actor_id
                 )

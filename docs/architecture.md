@@ -201,6 +201,15 @@ Discord channel
 
 All providers implement `complete(messages, system) → (text, usage)` and `stream(messages, system) → AsyncGenerator`. Cost tracking (USD per 1M tokens) is built into every provider and accumulated in `LLMAgent.metrics`.
 
+### Sampling temperature
+
+`LLM_TEMPERATURE` sets the sampling temperature for every provider and every call (`0` for
+deterministic routing and actuation; unset keeps each provider's default — Anthropic, OpenAI and
+Gemini default to `1.0`, Ollama to `0.8`, so pinning it is what makes runs comparable across
+backends). Ollama receives it as `options.temperature`; the others take it as a top-level request
+parameter. An individual call site can still pass `temperature=` to `complete()` / `stream()`,
+which wins over the env setting. The resolved value is logged at startup.
+
 ### Per-call-site overrides
 
 `LLM_OVERRIDES` routes individual call sites to different providers/models, falling back to the global `LLM_PROVIDER` for any site not listed (`wactorz/llm_factory.py`):

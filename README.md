@@ -170,6 +170,17 @@ LLM_MODEL=claude-sonnet-4-6
 # For Ollama, set OLLAMA_URL instead (default: http://localhost:11434)
 # For OpenAI-compatible endpoints (Groq, Together, vLLM…), set OPENAI_URL to redirect
 LLM_API_KEY=your-key-here
+
+# Optional — sampling temperature for every LLM call.
+# 0 = deterministic (recommended for device control and classification);
+# leave unset/empty to keep each provider's own default.
+LLM_TEMPERATURE=0
+```
+
+At startup Wactorz logs the configuration it resolved, so you can confirm it at a glance:
+
+```text
+LLM: anthropic/claude-sonnet-4-6 | temperature=0.0
 ```
 
 ### Per-call-site overrides (hybrid setups)
@@ -186,6 +197,17 @@ LLM_OVERRIDES="intent=ollama:qwen3:4b,actuator=ollama:llama3,planner=anthropic:c
 Sites: `main` (conversation), `intent` (intent routing), `planner` (pipeline
 planning/codegen), `actuator` (one-off device control), `ha` (Home Assistant
 agent), `dynamic` (the `get_llm()` shim inside generated agents).
+
+To compare models per call site before choosing an override, run the built-in
+evaluation harness — it scores each site automatically and reports accuracy,
+latency and cost:
+
+```bash
+python -m wactorz.evalharness \
+  --models "ollama:qwen3:4b,anthropic:claude-sonnet-4-6" --temperature 0
+```
+
+See [docs/evaluation.md](docs/evaluation.md) for the benchmark format and metrics.
 
 ---
 
@@ -245,6 +267,7 @@ rather than opening a public issue.
 | [API reference](https://github.com/waldiez/wactorz/blob/main/docs/api.md) | REST endpoints and payloads |
 | [Deployment](https://docs.waldiez.io/wactorz/guide/deployment.html) | Docker, Home Assistant add-on, environment setup |
 | [Prometheus](https://docs.waldiez.io/wactorz/guide/prometheus.html) | Metrics and monitoring |
+| [Evaluation harness](https://github.com/waldiez/wactorz/blob/main/docs/evaluation.md) | Compare models per LLM call site |
 | [Technical reference](https://github.com/waldiez/wactorz/blob/main/docs/reference.md) | Deeper internals |
 
 ---

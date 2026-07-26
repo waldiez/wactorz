@@ -22,7 +22,6 @@ Or via main (natural language):
 """
 
 import asyncio
-import inspect
 import logging
 import pathlib
 import time
@@ -191,87 +190,6 @@ def _build_native_catalog() -> dict:
     return native
 
 
-def _build_experimental_catalog() -> dict:
-    """Experimental native agents exposed through catalog with beta warnings."""
-    experimental = {}
-
-    try:
-        from ..experimental_agents.code_agent import CodeAgent
-        from ..experimental_agents.news_agent import NewsAgent
-        from ..experimental_agents.qa_agent import QAAgent
-        from ..experimental_agents.tick_agent import TickAgent
-        from ..experimental_agents.wif_agent import WifAgent
-        from ..experimental_agents.wiz_agent import WizAgent
-
-        beta_recipes = {
-            "code-agent": {
-                "factory": CodeAgent,
-                "description": "Experimental Python code generation and execution agent with configurable sandboxing.",
-                "capabilities": ["code_generation", "code_execution", "python"],
-                "input_schema": CodeAgent.INPUT_SCHEMA,
-                "output_schema": CodeAgent.OUTPUT_SCHEMA,
-            },
-            "news-agent": {
-                "factory": NewsAgent,
-                "description": "Experimental on-demand Hacker News headlines agent. No API key required.",
-                "capabilities": ["news", "hacker_news", "headlines"],
-                "input_schema": {
-                    "text": "str - optional feed/count command, e.g. 'top 10', 'new', 'jobs', or 'help'"
-                },
-                "output_schema": {"content": "str - formatted headline list or help text"},
-            },
-            "qa-agent": {
-                "factory": QAAgent,
-                "description": "Experimental passive safety observer for prompt injection, raw data bleed, and response timeouts.",
-                "capabilities": [
-                    "qa",
-                    "safety",
-                    "prompt_injection_detection",
-                    "response_monitoring",
-                ],
-                "input_schema": {"from": "str", "content": "str - chat text to inspect"},
-                "output_schema": {"category": "str", "severity": "str", "excerpt": "str"},
-            },
-            "chron-agent": {
-                "factory": TickAgent,
-                "description": "Experimental in-process scheduler for one-off and recurring reminders/tasks.",
-                "capabilities": ["scheduler", "timers", "reminders"],
-                "input_schema": {"text": "str - scheduling request or command"},
-                "output_schema": {"result": "str - timer status or command response"},
-            },
-            "wif-agent": {
-                "factory": WifAgent,
-                "description": "Experimental local finance helper for expenses, budgets, ROI, loans, tax, and tips.",
-                "capabilities": ["finance", "budgeting", "expense_tracking", "calculators"],
-                "input_schema": {"text": "str - finance command such as 'add 12 food' or 'report'"},
-                "output_schema": {"result": "str - finance calculation or report"},
-            },
-            "wiz-agent": {
-                "factory": WizAgent,
-                "description": "Experimental WaldiezCoin in-game economy tracker for agent activity and system events.",
-                "capabilities": ["gamification", "coin_economy", "activity_tracking"],
-                "input_schema": {
-                    "text": "str - economy command such as 'balance', 'history', or 'earn 5'"
-                },
-                "output_schema": {"result": "str - balance or transaction response"},
-            },
-        }
-        for name, recipe in beta_recipes.items():
-            experimental[name] = {
-                "name": name,
-                "type": "native",
-                "stability": "beta",
-                "experimental": True,
-                "warning": BETA_WARNING,
-                **recipe,
-            }
-            logger.info("[catalog] Loaded experimental beta recipe %s", name)
-    except ImportError as e:
-        logger.warning(f"[catalog] experimental beta recipes unavailable: {e}")
-
-    return experimental
-
-
 def get_native_factory(name: str):
     """Return the Actor subclass that backs a native catalog agent, or None.
 
@@ -285,7 +203,6 @@ def get_native_factory(name: str):
 
 def _build_catalog() -> dict:
     catalog = _build_native_catalog()
-    catalog.update(_build_experimental_catalog())
 
     # ── doc-to-pptx-agent ─────────────────────────────────────────────────────
     code = _load_recipe("doc_to_pptx_agent.py")
@@ -442,6 +359,9 @@ def _build_catalog() -> dict:
         catalog["reachy-mini"] = {
             "name": "reachy-mini",
             "type": "dynamic",
+            "stability": "beta",
+            "experimental": True,
+            "warning": BETA_WARNING,
             "description": (
                 "Controls a Reachy Mini: wake/sleep, head pose, antennas, gaze, "
                 "speech, gestures, and optional Home Assistant actions."
@@ -839,13 +759,7 @@ class CatalogAgent(Actor):
                 if not factory:
                     return {"ok": False, "message": f"Native recipe '{resolved}' has no factory"}
                 native_kwargs = {"name": resolved, "persistence_dir": persistence_dir}
-                factory_params = inspect.signature(factory).parameters
-                from .llm_agent import LLMAgent
-
-                accepts_llm_provider = "llm_provider" in factory_params or issubclass(
-                    factory, LLMAgent
-                )
-                if llm_provider and accepts_llm_provider:
+                if llm_provider:
                     native_kwargs["llm_provider"] = llm_provider
                 actor = await self.spawn(factory, **native_kwargs)
                 if actor:

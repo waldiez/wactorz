@@ -21,15 +21,27 @@ class _DummyMain:
     name = "main"
 
 
-def _set_tokens(monkeypatch, *, discord="", telegram="", allowed=0, deps_present=True):
+def _set_tokens(
+    monkeypatch,
+    *,
+    discord="",
+    telegram="",
+    discord_allowed=(7,),
+    telegram_allowed=(42,),
+    deps_present=True,
+):
     # CONFIG is a frozen dataclass, so swap the whole module reference for a fake.
+    # Both channels get an allow-list by default — without one they refuse to
+    # start, which is its own test below.
     monkeypatch.setattr(
         ci,
         "CONFIG",
         SimpleNamespace(
             discord_token=discord,
             telegram_token=telegram,
-            telegram_allowed_user_id=allowed,
+            discord_allowed_user_ids=frozenset(discord_allowed),
+            telegram_allowed_user_ids=frozenset(telegram_allowed),
+            social_rate_limit_per_min=12,
         ),
     )
     # Default to "libraries installed" so selection tests don't depend on which
@@ -39,14 +51,40 @@ def _set_tokens(monkeypatch, *, discord="", telegram="", allowed=0, deps_present
 
 
 def test_both_tokens_start_alongside_rest(monkeypatch):
-    _set_tokens(monkeypatch, discord="d-tok", telegram="t-tok", allowed=42)
+    _set_tokens(monkeypatch, discord="d-tok", telegram="t-tok")
 
     companions = build_social_companions(_DummyMain(), primary="rest")
 
     kinds = {type(c) for c in companions}
     assert kinds == {DiscordInterface, TelegramInterface}
     telegram = next(c for c in companions if isinstance(c, TelegramInterface))
-    assert telegram.allowed_user_id == 42
+    discord = next(c for c in companions if isinstance(c, DiscordInterface))
+    assert telegram.allowed_user_ids == frozenset({42})
+    assert discord.allowed_user_ids == frozenset({7})
+
+
+def test_channel_without_allow_list_refuses_to_start(monkeypatch, caplog):
+    """A token with no allow-list would answer anyone who finds the bot, which
+    means spending the user's LLM budget and controlling their home."""
+    import logging
+
+    _set_tokens(
+        monkeypatch,
+        discord="d-tok",
+        telegram="t-tok",
+        discord_allowed=(),
+        telegram_allowed=(),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        companions = build_social_companions(_DummyMain(), primary="rest")
+
+    assert companions == []
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "Discord companion NOT started" in messages
+    assert "Telegram companion NOT started" in messages
+    assert "DISCORD_ALLOWED_USER_IDS" in messages
+    assert "TELEGRAM_ALLOWED_USER_IDS" in messages
 
 
 def test_no_tokens_no_companions(monkeypatch):

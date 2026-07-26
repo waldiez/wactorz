@@ -347,7 +347,11 @@ async def app(args: argparse.Namespace):
             if not discord_token:
                 logger.error("DISCORD_BOT_TOKEN not set.")
                 sys.exit(1)
-            iface = DiscordInterface(main_actor, token=discord_token)
+            iface = DiscordInterface(
+                main_actor,
+                token=discord_token,
+                allowed_user_ids=CONFIG.discord_allowed_user_ids,
+            )
             await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "whatsapp":
             port = args.port or CONFIG.port
@@ -357,6 +361,7 @@ async def app(args: argparse.Namespace):
                 auth_token=CONFIG.twilio_auth_token,
                 from_number=CONFIG.twilio_whatsapp_number,
                 port=port,
+                allowed_numbers=CONFIG.whatsapp_allowed_numbers,
             )
             await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "telegram":
@@ -364,11 +369,11 @@ async def app(args: argparse.Namespace):
             if not telegram_token:
                 logger.error("TELEGRAM_BOT_TOKEN not set.")
                 sys.exit(1)
-            allowed_user_id = (
-                args.telegram_allowed_user_id or CONFIG.telegram_allowed_user_id or None
-            )
             iface = TelegramInterface(
-                main_actor, token=telegram_token, allowed_user_id=allowed_user_id
+                main_actor,
+                token=telegram_token,
+                allowed_user_id=args.telegram_allowed_user_id or None,
+                allowed_user_ids=CONFIG.telegram_allowed_user_ids,
             )
             await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     except Exception as exc:

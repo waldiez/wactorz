@@ -82,8 +82,11 @@ export HOME_ASSISTANT_TOKEN="$HA_TOKEN"
 export API_KEY=$(get_config_safe 'api_key' '')
 
 export DISCORD_BOT_TOKEN=$(get_config_safe 'discord_bot_token' '')
+export DISCORD_ALLOWED_USER_IDS=$(get_config_safe 'discord_allowed_user_ids' '')
 export TELEGRAM_BOT_TOKEN=$(get_config_safe 'telegram_bot_token' '')
+export TELEGRAM_ALLOWED_USER_IDS=$(get_config_safe 'telegram_allowed_user_ids' '')
 export TELEGRAM_ALLOWED_USER_ID=$(get_config_safe 'telegram_allowed_user_id' '0')
+export SOCIAL_RATE_LIMIT_PER_MIN=$(get_config_safe 'social_rate_limit_per_min' '12')
 
 OTEL_ENDPOINT=$(get_config_safe 'otel_endpoint' '')
 if [ -n "$OTEL_ENDPOINT" ]; then

@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — pending
 
 ### Added
+- **Per-call-site LLM overrides (`LLM_OVERRIDES`).** Route individual call sites to different
+  providers/models — e.g. `LLM_OVERRIDES="intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6"`
+  runs intent classification on a local model while the planner stays on a hosted one. Sites:
+  `main`, `intent`, `planner`, `actuator`, `ha`, `dynamic`; unlisted sites keep the global
+  `LLM_PROVIDER`, and a malformed entry falls back to it with a warning instead of failing startup.
+- **`LLM_TEMPERATURE`.** Sets the sampling temperature for every LLM call across all five providers
+  (Anthropic, OpenAI, Ollama, NIM, Gemini) — `0` for deterministic classification and device
+  control. Unset keeps each provider's own default, so existing installs are unaffected.
+- **Call-site evaluation harness (`python -m wactorz.evalharness`).** Benchmarks any set of
+  `provider:model` specs across the framework's LLM call sites using the production system prompts,
+  with automatic scoring (label match, JSON action match, plan validity, codegen compile + required
+  functions), latency and cost capture, JSONL records and a CSV/console summary. Takes
+  `--temperature` and records it with every result.
+- **Startup line naming the active LLM.** Boot now logs `LLM: <provider>/<model> | temperature=…`
+  (plus any overrides), so the effective model configuration is visible without external dashboards.
 - **LLM_TEMPERATURE** sets the sampling temperature for every LLM call across all five providers; unset keeps each provider's default, so existing installs are unaffected.
 - **Social channels (Discord/Telegram) as capability-restricted companions.** They now run
   *alongside* the primary interface (e.g. the HA add-on dashboard) whenever their token is set,

@@ -21,9 +21,7 @@ import { toast } from "../ui/ToastManager";
 import { emit } from "../events";
 import { uid } from "../ids";
 
-/** Ceiling on a single streamed reply's accumulated text, guarding against a
- *  runaway/looping stream growing this without bound. */
-const MAX_STREAM_CHARS = 200_000;
+import { MAX_STREAM_CHARS } from "./streamCap";
 
 export class IOManager {
     private _lastStreamFrom = "";
@@ -62,7 +60,8 @@ export class IOManager {
         });
     }
 
-    /** Send `text` to the appropriate agent (direct_ws if available, else io/chat). */
+    /** Send `text` to the appropriate agent over the WebSocket. Nothing reaches
+     *  the feed unless the transport accepted it. */
     // Async for the caller-facing contract; the transport calls (WS send / MQTT
     // publish) are fire-and-forget, so there's nothing to await.
     // eslint-disable-next-line @typescript-eslint/require-await
@@ -81,13 +80,6 @@ export class IOManager {
             timestampMs: Date.now(),
         };
 
-        // Echo the routed form so the live feed row matches the persisted one
-        // shown after a refresh — the feed renders the `@agent` mention.
-        emit("af-feed-push", {
-            item: { type: "chat", label: content, agentName: "user", timestamp: msg.timestampMs },
-        });
-
-        // direct_ws mode
         const sent = this._ws?.send(content, agent?.name ?? "main-actor");
         if (!sent) {
             toast.show({
@@ -95,7 +87,17 @@ export class IOManager {
                 title: "Disconnected",
                 message: "WebSocket disconnected — reconnecting, please retry.",
             });
+            return;
         }
+
+        // Echo only what actually went out. Echoing before the attempt left a
+        // failed message sitting in the feed looking exactly like a delivered
+        // one, and it would vanish on the next refresh since nothing persisted
+        // it. The routed form is used so the live row matches the persisted one
+        // — the feed renders the `@agent` mention.
+        emit("af-feed-push", {
+            item: { type: "chat", label: content, agentName: "user", timestamp: msg.timestampMs },
+        });
     }
 
     /**

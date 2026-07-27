@@ -69,6 +69,25 @@ describe("IOManager.send", () => {
         await io.send("hi", null);
         expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
     });
+
+    it("shows a delivered message in the feed", async () => {
+        const io = new IOManager(makeRouter());
+        io.setWSClient(makeWS() as unknown as WSClient);
+        await io.send("hello", agentInfo);
+        expect(lastEvent("af-feed-push")?.detail.item).toMatchObject({
+            agentName: "user",
+            label: "@alpha hello",
+        });
+    });
+
+    it("keeps an undelivered message out of the feed", async () => {
+        const io = new IOManager(makeRouter());
+        io.setWSClient(makeWS(false) as unknown as WSClient);
+        await io.send("hi", null);
+        // it used to be echoed before the attempt and left sitting there,
+        // indistinguishable from a message that actually went out
+        expect(lastEvent("af-feed-push")).toBeUndefined();
+    });
 });
 
 describe("IOManager streaming", () => {

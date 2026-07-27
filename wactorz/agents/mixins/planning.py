@@ -14,6 +14,8 @@ import logging
 import uuid
 from typing import ClassVar
 
+from wactorz.llm_factory import provider_for
+
 from ..helpers.main_actor_helpers import (
     PENDING_PLANS_KEY,
     PIPELINE_RULES_KEY,
@@ -387,7 +389,7 @@ class PlanningMixin:
             planner = await self.spawn(
                 PlannerAgent,
                 name=planner_name,
-                llm_provider=self.llm,
+                llm_provider=provider_for("planner", self.llm),
                 task=enriched_task,
                 reply_to_id=self.actor_id,
                 reply_task_id=task_id,

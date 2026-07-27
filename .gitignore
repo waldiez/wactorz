@@ -211,3 +211,5 @@ coverage/
 
 
 yolov8n.pt
+
+eval_results/

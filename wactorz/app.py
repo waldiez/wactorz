@@ -66,43 +66,37 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
     from wactorz.agents.installer_agent import InstallerAgent
     from wactorz.agents.io_agent import IOAgent
-    from wactorz.agents.llm_agent import (
-        AnthropicProvider,
-        GeminiProvider,
-        NIMProvider,
-        OllamaProvider,
-        OpenAIProvider,
-    )
     from wactorz.agents.main_actor import MainActor
     from wactorz.agents.monitor_agent import MonitorActor
     from wactorz.core.actor import SupervisorStrategy
     from wactorz.core.registry import ActorSystem
+    from wactorz.llm_factory import create_provider, provider_for
 
     llm = args.llm or CONFIG.llm_provider
-    if llm == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY") or CONFIG.llm_api_key
-        provider = AnthropicProvider(model=CONFIG.llm_model, api_key=api_key)
-    elif llm == "openai":
-        api_key = os.getenv("OPENAI_API_KEY") or CONFIG.llm_api_key
-        provider = OpenAIProvider(
-            model=CONFIG.llm_model, api_key=api_key, base_url=CONFIG.openai_url or None
-        )
-    elif llm == "ollama":
-        ollama_model = args.ollama_model or CONFIG.llm_model
-        provider = OllamaProvider(model=ollama_model, base_url=CONFIG.ollama_url)
-    elif llm == "nim":
-        nim_model = args.nim_model or CONFIG.llm_model
-        provider = NIMProvider(
-            model=nim_model,
-            api_key=CONFIG.nim_api_key or CONFIG.nvidia_api_key or CONFIG.llm_api_key,
-        )
-    elif llm == "gemini":
-        gemini_model = args.gemini_model or CONFIG.llm_model or "gemini-2.5-flash"
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or CONFIG.llm_api_key
-        provider = GeminiProvider(model=gemini_model, api_key=api_key)
-    else:
+    model_flag = {
+        "ollama": args.ollama_model,
+        "nim": args.nim_model,
+        "gemini": args.gemini_model,
+    }.get(llm)
+    try:
+        provider = create_provider(llm, model_flag)
+    except ValueError:
         provider = None
+    if provider is None:
         logger.warning("No LLM provider set. Agents will have limited capabilities.")
+    else:
+        # One deterministic startup line so the active model and sampling
+        # settings are visible without digging through provider dashboards.
+        temperature = (
+            "provider default" if CONFIG.llm_temperature is None else CONFIG.llm_temperature
+        )
+        logger.info(
+            "LLM: %s/%s | temperature=%s%s",
+            llm,
+            getattr(provider, "model", None) or getattr(provider, "model_name", "?"),
+            temperature,
+            f" | overrides: {CONFIG.llm_overrides}" if CONFIG.llm_overrides else "",
+        )
 
     # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
     _sd = _state_dir()
@@ -162,7 +156,11 @@ async def build_system(args: argparse.Namespace):
 
     def make_main():
         return _wire_persistence(
-            MainActor(llm_provider=make_provider(), name="main", persistence_dir="./state")
+            MainActor(
+                llm_provider=provider_for("main", make_provider()),
+                name="main",
+                persistence_dir="./state",
+            )
         )
 
     def make_monitor():
@@ -181,7 +179,9 @@ async def build_system(args: argparse.Namespace):
     def make_ha_agent():
         return _wire_persistence(
             HomeAssistantAgent(
-                llm_provider=make_provider(), name="home-assistant-agent", persistence_dir="./state"
+                llm_provider=provider_for("ha", make_provider()),
+                name="home-assistant-agent",
+                persistence_dir="./state",
             )
         )
 

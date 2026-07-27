@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 # IOAgent via the io/chat/control topic.
 inflight_chat_tasks: set = set()
 
+MAIN_ACTOR_NAME = "main"
+
 
 def track_chat_task(task):
     """Register an in-flight chat-generation task so /chat/stop can cancel it."""
@@ -40,6 +42,15 @@ async def no_op_async() -> None:
     """No op. To use instead of lambdas."""
 
 
+async def discard_reply(_text: str) -> None:
+    """Drop a reply chunk, for fire-and-forget callers with nowhere to send it.
+
+    ``route_chat`` does ``await reply_fn(text)``, so this must be a coroutine
+    function taking one argument — a bare lambda raises TypeError on the first
+    chunk and silently abandons the stream after the tokens are paid for.
+    """
+
+
 def chat_mode() -> str:
     """Which chat path is active: ``direct_ws`` when a registry is wired, else ``mqtt``."""
     return "direct_ws" if runtime.registry is not None else "mqtt"
@@ -47,7 +58,7 @@ def chat_mode() -> str:
 
 def find_main() -> MainActor | None:
     """Return the main actor from the registry, or ``None`` in legacy MQTT mode."""
-    actor = runtime.registry.find_by_name("main") if runtime.registry else None
+    actor = runtime.registry.find_by_name(MAIN_ACTOR_NAME) if runtime.registry else None
     if actor:
         return cast(MainActor, actor)
     return None
@@ -61,7 +72,7 @@ def parse_mention(content: str) -> tuple[str, str]:
     if content.startswith("@"):
         parts = content[1:].split(None, 1)
         return parts[0], (parts[1].strip() if len(parts) > 1 else "")
-    return "main", content
+    return MAIN_ACTOR_NAME, content
 
 
 # ── Catalog / experimental-agent presentation ──────────────────────────────
@@ -578,7 +589,7 @@ async def rest_chat_handler(request: web.Request) -> Response:
     except Exception:
         return web.json_response({"error": "invalid JSON"}, status=400)
     message = data.get("message", "").strip()
-    agent_name = data.get("agent_name", "main-actor")
+    agent_name = data.get("agent_name", MAIN_ACTOR_NAME)
     if not message:
         return web.json_response({"error": "message required"}, status=400)
     target = runtime.registry.find_by_name(agent_name)
@@ -587,7 +598,7 @@ async def rest_chat_handler(request: web.Request) -> Response:
     # As above: route to the named agent, since route_chat would otherwise
     # default to main when the message carries no @mention.
     routed = message if message.startswith(("@", "/")) else f"@{target.name} {message}"
-    track_chat_task(asyncio.create_task(route_chat(routed, lambda t: None)))
+    track_chat_task(asyncio.create_task(route_chat(routed, discard_reply)))
     return web.json_response({"status": "sent", "agent": agent_name})
 
 

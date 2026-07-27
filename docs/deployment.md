@@ -126,7 +126,9 @@ rest_command:
     url: "http://wactorz-python:8000/api/chat"
     method: POST
     content_type: "application/json"
-    payload: '{"to":"main-actor","content":"{{ message }}"}'
+    # The endpoint reads `message`, plus an optional `agent_name` that defaults
+    # to the orchestrator. Add `"agent_name": "<name>"` to address one agent.
+    payload: '{"message":"{{ message }}"}'
 ```
 
 Set `HA_URL` and `HA_TOKEN` in `.env`.

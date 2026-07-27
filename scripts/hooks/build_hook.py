@@ -1,5 +1,4 @@
-"""
-Hatchling pre-build hook — ensures the Vite frontend is built before packaging.
+"""Hatchling pre-build hook — ensures the Vite frontend is built before packaging.
 
 ``static/app/`` (Vite SPA) and ``static/docs/`` (docs site) are committed
 to the repository and bundled into the wheel as-is — no build tools are
@@ -21,8 +20,8 @@ from pathlib import Path
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 # Set to 0 to force a rebuild regardless of what changed (release/CI). Any
-# other value leaves the decision to source mtimes — see _is_stale. The name
-# and the legacy default are kept so existing invocations keep working.
+# other value defers to the input fingerprint — see _is_stale. The name and the
+# legacy default are kept so existing invocations keep working.
 STALE_AFTER: int = int(os.getenv("WACTORZ_FRONTEND_STALE", "600"))
 
 
@@ -84,9 +83,7 @@ _FINGERPRINT_REL = Path("node_modules") / ".cache" / "wactorz-frontend-inputs"
 def _input_fingerprint(frontend: Path) -> str:
     """SHA-256 over the contents of every file that can affect the bundle."""
     digest = hashlib.sha256()
-    files = sorted(
-        p for pattern in _SOURCE_GLOBS for p in frontend.glob(pattern) if p.is_file()
-    )
+    files = sorted(p for pattern in _SOURCE_GLOBS for p in frontend.glob(pattern) if p.is_file())
     for path in files:
         digest.update(path.relative_to(frontend).as_posix().encode())
         digest.update(b"\0")
@@ -185,8 +182,8 @@ class CustomBuildHook(BuildHookInterface):
                 )
 
         try:
-            _run(pm + ["install", "--frozen-lockfile"] if pm[0] != "npm" else pm + ["ci"])
-            _run(pm + ["run", "build"])
+            _run([*pm, "install", "--frozen-lockfile"] if pm[0] != "npm" else [*pm, "ci"])
+            _run([*pm, "run", "build"])
         except RuntimeError as exc:
             if STRICT:
                 self.app.display_error(str(exc))

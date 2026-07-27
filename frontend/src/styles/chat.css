@@ -54,6 +54,31 @@
   border-radius: 8px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
 }
+.af-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  color: #fff;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+}
+.af-lightbox-close:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+/* The dialog traps focus, so this outline is the only cue a keyboard user has. */
+.af-lightbox-close:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
 .af-chat-pane-header {
   padding: 8px 14px;
   flex-shrink: 0;

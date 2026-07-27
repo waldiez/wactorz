@@ -79,6 +79,9 @@ dev       = [
     "pytest-asyncio>=0.24.0",
     "ruff>=0.15.0",
     "basedpyright>=1.20.0",
+    # The packaging build backend, so the custom build hook can be imported and
+    # tested directly rather than exercised only through a real wheel build.
+    "hatchling>=1.27.0",
 ]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`

@@ -76,6 +76,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
+- **`main.run_pipeline()`.** It imported a `task_manager` module that does not exist, so every call raised `ImportError` — while the orchestrator's prompt actively advertised it as a capability for multi-agent tasks. Both the method and the prompt section are gone; delegation to named agents is unaffected.
 - **`wactorz/experimental_agents/` package.** The ten scratch agents in it (`code`, `news`, `qa`,
   `tick`, `wif`, `wiz`, `ml`, `nautilus`, `udx`, `weather`) were test scaffolding, were never
   reachable from the catalog, and nothing outside the folder imported them. `reachy-mini` is now the
@@ -84,6 +85,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`gpt-4o-mini` was billed at `gpt-4o` rates** — model pricing falls back to a table keyed by name prefix, and the shorter `gpt-4o` key matched first, so the cheaper model was costed ~17x too high whenever the live price catalogue was unavailable (notably at startup, and offline). The same number drives reported spend, the budget check and the spend cap, so a limit could fire early. The lookup now prefers the longest matching prefix, and `pricing_info()` — which carried its own copy of the same lookup — shares it, so the reported rate always matches the rate charged. Dated variants such as `gpt-4o-2024-08-06` still inherit their family's price.
 - **`POST /api/chat` was unusable** — the default agent name did not match the registered orchestrator, so a request without an explicit `agent_name` returned 404. Requests that did name a valid agent got further and then failed silently: the reply callback was a plain lambda where a coroutine was awaited, so the stream was abandoned after the tokens were billed and no reply was delivered.
 - **Gemini completions froze every agent** — `GeminiProvider.complete` and `complete_with_tools` called the *synchronous* google-genai surface from inside `async def`, blocking the single shared event loop for the entire model round-trip. With a Gemini provider configured, one agent's LLM call stalled every other actor, delayed MQTT keepalive, and could trip the 35 s heartbeat watchdog into force-restarting healthy agents as "presumed crashed". Both paths now `await client.aio.…` instead. Streaming was already off-loop and is unchanged.
 - **Silent HA misconfiguration in the add-on** — a custom `ha_url` with a blank `ha_token` (or a token set in supervisor mode) used to fail quietly: the Supervisor proxy only accepts the injected Supervisor token, so the custom URL was silently discarded. The add-on now logs a loud warning explaining what is ignored and why, in both `run.sh` variants.

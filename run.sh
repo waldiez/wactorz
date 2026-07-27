@@ -3,9 +3,14 @@
 
 set -e
 
-# Load .env if it exists
+# Load .env if it exists.
+# Sourced with allexport rather than `export $(grep ... | xargs)`: word-splitting
+# the file breaks on the inline comments and quoted values that .env.template
+# itself contains, and with `set -e` above that aborts the launch.
 if [ -f .env ]; then
-  export $(grep -v '^#' .env | xargs)
+  set -a
+  . ./.env
+  set +a
 fi
 
 echo "Starting Wactorz (Python backend)..."

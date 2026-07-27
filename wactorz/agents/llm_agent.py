@@ -375,13 +375,25 @@ async def _refresh_pricing() -> None:
         _pricing_fetch_in_progress = False
 
 
+def _fallback_pricing_key(model: str) -> str | None:
+    """Longest table prefix matching `model`, or None.
+
+    Longest wins because a shorter key would otherwise shadow a longer one:
+    `gpt-4o` matches `gpt-4o-mini` and would bill the cheap model at the full
+    model's rate. Prefix matching itself is deliberate — it lets dated variants
+    like `gpt-4o-2024-08-06` inherit their family's price instead of costing 0.
+    """
+    candidates = [k for k in _FALLBACK_PRICING if model.startswith(k)]
+    return max(candidates, key=len) if candidates else None
+
+
 def _calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     # Exact match against live catalogue
     if model in _dynamic_pricing:
         price_in, price_out = _dynamic_pricing[model]
         return (input_tokens * price_in + output_tokens * price_out) / 1_000_000
     # Prefix match against local fallback table
-    key = next((k for k in _FALLBACK_PRICING if model.startswith(k)), None)
+    key = _fallback_pricing_key(model)
     if not key:
         return 0.0
     price_in, price_out = _FALLBACK_PRICING[key]
@@ -399,7 +411,7 @@ def pricing_info(model: str) -> dict[str, object]:
             "output_per_1m": out,
             "cache_age_s": round(age),
         }
-    key = next((k for k in _FALLBACK_PRICING if model.startswith(k)), None)
+    key = _fallback_pricing_key(model)
     if key:
         inp, out = _FALLBACK_PRICING[key]
         return {

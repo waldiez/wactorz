@@ -266,7 +266,7 @@ def _md_to_html_path(md_file: str) -> str:
 
 
 def build_sidebar(active_md: str, active_subdir: str, root: str = "../") -> str:
-    lines = []
+    lines: list[str] = []
     for item in NAV:
         label = item[0]
         if len(item) == 2:

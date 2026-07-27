@@ -3,12 +3,17 @@ Supports Anthropic Claude, OpenAI, Ollama (local), and custom providers.
 """
 
 import asyncio
+import json
 import logging
 import os
+import queue
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
+
+import aiohttp
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.persistence import get_db
@@ -49,8 +54,6 @@ def resolve_now(tz_name: str | None = None) -> datetime:
         if not name:
             continue
         try:
-            from zoneinfo import ZoneInfo
-
             return datetime.now(ZoneInfo(name))
         except Exception:
             logger.debug("Unknown timezone '%s' — trying next candidate", name)
@@ -95,9 +98,7 @@ def _known_persisted_cost_total(db) -> float:
             try:
                 value = row[0]
                 if isinstance(value, str):
-                    import json as _json
-
-                    value = _json.loads(value)
+                    value = json.loads(value)
                 if isinstance(value, dict):
                     total += float(value.get("cost_usd") or 0.0)
             except Exception:
@@ -349,8 +350,6 @@ async def _refresh_pricing() -> None:
         return
     _pricing_fetch_in_progress = True
     try:
-        import aiohttp
-
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 _LITELLM_PRICING_URL,
@@ -503,8 +502,6 @@ def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
     if raw in (None, ""):
         return {}
     try:
-        import json
-
         parsed = json.loads(str(raw))
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
@@ -587,7 +584,7 @@ class AnthropicProvider(LLMProvider):
         return "".join(parts).strip()
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
-        response = await self.client.messages.create(
+        response = await self.client.messages.create(  # pyright: ignore[reportCallIssue]
             model=self.model,
             max_tokens=kwargs.get("max_tokens", 16384),
             system=system,
@@ -611,12 +608,12 @@ class AnthropicProvider(LLMProvider):
         system: str = "",
         **kwargs: Any,
     ) -> ToolCompletion:
-        response = await self.client.messages.create(
+        response = await self.client.messages.create(  # pyright: ignore[reportCallIssue]
             model=self.model,
             max_tokens=kwargs.get("max_tokens", 16384),
             system=system,
-            messages=self._anthropic_messages(messages),
-            tools=self._anthropic_tools(tools),
+            messages=self._anthropic_messages(messages),  # pyright: ignore[reportArgumentType]
+            tools=self._anthropic_tools(tools),  # pyright: ignore[reportArgumentType]
             **_temp_params(kwargs),
         )
         text_parts: list[str] = []
@@ -858,6 +855,21 @@ class OpenAIProvider(LLMProvider):
         }
 
 
+# A host that never completes the connection is dead and should fail fast, but
+# Ollama is usually a LAN box that can legitimately think for minutes on a large
+# prompt — so the whole-request ceiling is deliberately generous. Streaming gets
+# no ceiling at all: a long answer is not a fault, and a total would cut off
+# healthy generations. What means something there is silence, so the gap between
+# chunks is bounded instead.
+_OLLAMA_TIMEOUT = aiohttp.ClientTimeout(total=600, sock_connect=10)
+
+# How long the Gemini stream bridge waits for the next item before treating the
+# stream as stalled. Generous, because thinking time between tokens is normal;
+# what it catches is a generator that has stopped producing entirely.
+_GEMINI_STREAM_STALL_TIMEOUT = 60
+_OLLAMA_STREAM_TIMEOUT = aiohttp.ClientTimeout(sock_connect=10, sock_read=120)
+
+
 class OllamaProvider(LLMProvider):
     """Local LLM via Ollama."""
 
@@ -872,8 +884,6 @@ class OllamaProvider(LLMProvider):
         return [{"role": "system", "content": system}, *list(messages)]
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
-        import aiohttp
-
         payload = {
             "model": self.model,
             "messages": self._chat_messages(messages, system),
@@ -881,7 +891,10 @@ class OllamaProvider(LLMProvider):
             **_ollama_options(kwargs),
         }
         async with aiohttp.ClientSession() as session:
-            async with session.post(f"{self.base_url}/api/chat", json=payload) as resp:
+            async with session.post(
+                f"{self.base_url}/api/chat", json=payload, timeout=_OLLAMA_TIMEOUT
+            ) as resp:
+                resp.raise_for_status()
                 data = await resp.json()
         text = (data.get("message") or {}).get("content") or ""
         prompt_eval = data.get("prompt_eval_count", 0)
@@ -896,8 +909,6 @@ class OllamaProvider(LLMProvider):
         system: str = "",
         **kwargs: Any,
     ) -> ToolCompletion:
-        import aiohttp
-
         ollama_messages = []
         for message in messages:
             if message.get("role") == "tool":
@@ -918,7 +929,10 @@ class OllamaProvider(LLMProvider):
             **_ollama_options(kwargs),
         }
         async with aiohttp.ClientSession() as session:
-            async with session.post(f"{self.base_url}/api/chat", json=payload) as resp:
+            async with session.post(
+                f"{self.base_url}/api/chat", json=payload, timeout=_OLLAMA_TIMEOUT
+            ) as resp:
+                resp.raise_for_status()
                 data = await resp.json()
 
         message = data.get("message") or {}
@@ -955,10 +969,6 @@ class OllamaProvider(LLMProvider):
 
     async def stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
-        import json as _json
-
-        import aiohttp
-
         payload = {
             "model": self.model,
             "messages": self._chat_messages(messages, system),
@@ -967,12 +977,15 @@ class OllamaProvider(LLMProvider):
         }
         input_tokens = output_tokens = 0
         async with aiohttp.ClientSession() as session:
-            async with session.post(f"{self.base_url}/api/chat", json=payload) as resp:
+            async with session.post(
+                f"{self.base_url}/api/chat", json=payload, timeout=_OLLAMA_STREAM_TIMEOUT
+            ) as resp:
+                resp.raise_for_status()
                 async for raw in resp.content:
                     if not raw.strip():
                         continue
                     try:
-                        data = _json.loads(raw)
+                        data = json.loads(raw)
                     except Exception:
                         continue
                     delta = (data.get("message") or {}).get("content", "")
@@ -1286,16 +1299,13 @@ class GeminiProvider(LLMProvider):
 
     async def stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
-        import asyncio
-        import queue as _queue
-
         contents = self._to_gemini_contents(messages)
         config = self._types.GenerateContentConfig(
             system_instruction=system or None, **_temp_params(kwargs)
         )
 
         # Stream via SDK in a thread, bridge to async via queue
-        q: _queue.Queue = _queue.Queue()
+        q: queue.Queue[tuple[str, str]] = queue.Queue()
         input_tokens = output_tokens = 0
 
         def _stream_thread():
@@ -1319,10 +1329,18 @@ class GeminiProvider(LLMProvider):
         loop = asyncio.get_running_loop()
         loop.run_in_executor(None, _stream_thread)
 
+        error: str | None = None
         while True:
             try:
-                kind, value = await loop.run_in_executor(None, lambda: q.get(timeout=60))
-            except Exception:
+                kind, value = await loop.run_in_executor(
+                    None, lambda: q.get(timeout=_GEMINI_STREAM_STALL_TIMEOUT)
+                )
+            except queue.Empty:
+                # Only Empty is an expected outcome here. A bare `except` also
+                # caught bugs in this loop and ended the stream as if the model
+                # had simply finished.
+                error = f"stream stalled: nothing received for {_GEMINI_STREAM_STALL_TIMEOUT}s"
+                logger.warning("[GeminiProvider] %s", error)
                 break
             if kind == "done":
                 break
@@ -1332,14 +1350,23 @@ class GeminiProvider(LLMProvider):
                 input_tokens = value.prompt_token_count or 0
                 output_tokens = value.candidates_token_count or 0
             elif kind == "error":
+                error = str(value)
                 logger.error(f"[GeminiProvider] Stream error: {value}")
                 break
 
-        yield {
+        # Text that arrived is real work and is delivered either way, but the
+        # final item says whether the model actually finished. Without this a
+        # truncated reply is indistinguishable from a complete one, so the chat
+        # log, the feed and any retry logic all treat half an answer as whole.
+        # Usage is reported regardless: tokens spent were spent.
+        final: dict[str, Any] = {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cost_usd": _calc_cost(self.model_name, input_tokens, output_tokens),
         }
+        if error:
+            final["error"] = error
+        yield final
 
     @staticmethod
     def _to_gemini_contents(messages: list[dict]) -> list[dict]:
@@ -1555,6 +1582,26 @@ class LLMAgent(Actor):
         if msg.type == MessageType.TASK:
             await self._handle_task(msg)
 
+    async def _reply_to_task(self, msg: Message, result: dict) -> None:
+        """Answer a task's sender, echoing `_task_id` so their future resolves.
+
+        Every exit from `_handle_task` goes through here, including the failures.
+        A path that returns without replying leaves the caller blocked until its
+        own timeout, and the reason is visible only in this side's log — so the
+        caller cannot tell a slow task from a dead one.
+
+        Senders that supplied no reply address get nothing, which keeps
+        fire-and-forget tasks from gaining a phantom reply.
+        """
+        payload_dict = msg.payload if isinstance(msg.payload, dict) else {}
+        reply_to = payload_dict.get("_reply_to") or msg.reply_to or msg.sender_id
+        if not reply_to:
+            return
+        task_id = payload_dict.get("_task_id")
+        if task_id:
+            result = {**result, "_task_id": task_id}
+        await self.send(reply_to, MessageType.RESULT, result)
+
     async def _handle_task(self, msg: Message):
         if isinstance(msg.payload, dict):
             # Accept "text", "task", "message", or fall back to JSON dump
@@ -1571,19 +1618,13 @@ class LLMAgent(Actor):
 
         if self.llm is None:
             logger.warning(f"[{self.name}] No LLM provider configured.")
+            await self._reply_to_task(msg, {"text": "[No LLM configured]", "task": task_text})
             return
 
         try:
             _check_cost_limit()
         except RuntimeError as e:
-            payload_dict = msg.payload if isinstance(msg.payload, dict) else {}
-            task_id = payload_dict.get("_task_id")
-            reply_to = payload_dict.get("_reply_to") or msg.reply_to or msg.sender_id
-            if reply_to:
-                result = {"text": str(e), "task": task_text}
-                if task_id:
-                    result["_task_id"] = task_id
-                await self.send(reply_to, MessageType.RESULT, result)
+            await self._reply_to_task(msg, {"text": str(e), "task": task_text})
             return
 
         start = time.time()
@@ -1624,20 +1665,17 @@ class LLMAgent(Actor):
                 },
             )
 
-            # Reply to sender — echo _task_id so send_to() futures resolve
-            payload_dict = msg.payload if isinstance(msg.payload, dict) else {}
-            task_id = payload_dict.get("_task_id")
-            reply_to = payload_dict.get("_reply_to") or msg.reply_to or msg.sender_id
-            if reply_to:
-                result = {"text": response, "task": task_text, "duration": duration}
-                if task_id:
-                    result["_task_id"] = task_id
-                await self.send(reply_to, MessageType.RESULT, result)
+            await self._reply_to_task(
+                msg, {"text": response, "task": task_text, "duration": duration}
+            )
 
         except Exception as e:
             self.metrics.tasks_failed += 1
             self.state_value = "failed_task"
             logger.error(f"[{self.name}] LLM task failed: {e}", exc_info=True)
+            # The caller is waiting on a future; tell it the turn is over rather
+            # than leaving it to time out with no idea what happened.
+            await self._reply_to_task(msg, {"text": f"[error] {e}", "task": task_text})
 
         finally:
             self._current_task = "idle"
@@ -1745,6 +1783,15 @@ class LLMAgent(Actor):
             raise
 
         response = "".join(full_text)
+        if usage.get("error"):
+            # The reply is kept — the tokens are real — but this is the only
+            # place the truncation is visible, so it must not pass in silence.
+            logger.warning(
+                "[%s] streamed reply is incomplete after %d chars: %s",
+                self.name,
+                len(response),
+                usage["error"],
+            )
         self._conversation_history.append(
             {"role": "assistant", "content": response, "ts": time.time()}
         )

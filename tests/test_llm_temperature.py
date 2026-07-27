@@ -95,6 +95,9 @@ class _FakeResponse:
     async def __aexit__(self, *exc):
         return None
 
+    def raise_for_status(self):
+        """No-op: this fake only ever stands in for a 200."""
+
     async def json(self):
         return {"message": {"content": "ok"}, "prompt_eval_count": 1, "eval_count": 1}
 
@@ -109,7 +112,7 @@ class _FakeSession:
     async def __aexit__(self, *exc):
         return None
 
-    def post(self, url, json=None):
+    def post(self, url, json=None, timeout=None):
         self.sink.append(json)
         return _FakeResponse(json)
 

@@ -6,6 +6,7 @@ import asyncio
 import importlib.util
 import logging
 import os
+import socket
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,21 @@ if TYPE_CHECKING:
     from ..agents.main_actor import MainActor
 
 logger = logging.getLogger(__name__)
+
+
+async def _resolve_host(hostname: str) -> str | None:
+    """Resolve `hostname`, or None if it does not resolve.
+
+    Off the event loop: `gethostbyname` blocks the calling thread, and a name
+    that does not resolve blocks it for the resolver's full timeout — seconds,
+    during which every other actor in the process is frozen and MQTT keepalive
+    stops.
+    """
+    try:
+        return await asyncio.to_thread(socket.gethostbyname, hostname)
+    except OSError:
+        return None
+
 
 # Import name → pip package for each social channel's optional dependency.
 _INTERFACE_DEPENDENCIES = {
@@ -330,8 +346,6 @@ class CLIInterface:
         2. Scan  — scan local subnet for SSH (port 22)
         3. Manual — ask user
         """
-        import socket
-
         print(f"\n[discover] Searching for '{node_name}' on the network...")
 
         # 1. mDNS
@@ -341,8 +355,8 @@ class CLIInterface:
             f"{node_name.replace('-', '')}.local",
         ]
         for hostname in candidates:
-            try:
-                ip = socket.gethostbyname(hostname)
+            ip = await _resolve_host(hostname)
+            if ip:
                 print(f"[discover] Found via mDNS: {hostname} → {ip}")
                 ans = await asyncio.get_event_loop().run_in_executor(
                     None,
@@ -350,15 +364,10 @@ class CLIInterface:
                 )
                 if ans in ("", "y", "yes"):
                     return hostname
-            except socket.gaierror:
-                pass
 
         # 2. Network scan
-        try:
-            local_ip = socket.gethostbyname(socket.gethostname())
-            subnet = ".".join(local_ip.split(".")[:3])
-        except Exception:
-            subnet = "192.168.1"
+        local_ip = await _resolve_host(socket.gethostname())
+        subnet = ".".join(local_ip.split(".")[:3]) if local_ip else "192.168.1"
 
         print(f"[discover] mDNS not found. Scanning {subnet}.1-254 for SSH (~10s)...")
         found = await self._scan_subnet_ssh(subnet)
@@ -901,6 +910,20 @@ class WhatsAppInterface:
     def _normalize_number(number: str) -> str:
         return str(number or "").strip().replace("whatsapp:", "")
 
+    async def _send_message(self, twilio, body: str, to: str) -> None:
+        """Send one WhatsApp message, off the event loop.
+
+        The Twilio SDK is synchronous, so calling it directly from the webhook
+        handler froze every actor in the process for a full network round-trip —
+        on every inbound message.
+        """
+        await asyncio.to_thread(
+            twilio.messages.create,
+            body=body,
+            from_=f"whatsapp:{self.from_number}",
+            to=to,
+        )
+
     async def run(self):
         try:
             from aiohttp import web
@@ -932,9 +955,7 @@ class WhatsAppInterface:
 
             throttled = self.limiter.check(sender)
             if throttled:
-                twilio.messages.create(
-                    body=throttled, from_=f"whatsapp:{self.from_number}", to=from_number
-                )
+                await self._send_message(twilio, throttled, from_number)
                 return web.Response(text="OK")
 
             # Restricted mode: same guarantees as the other social channels.
@@ -943,11 +964,7 @@ class WhatsAppInterface:
             finally:
                 self.limiter.done(sender)
 
-            twilio.messages.create(
-                body=response_text,
-                from_=f"whatsapp:{self.from_number}",
-                to=from_number,
-            )
+            await self._send_message(twilio, response_text, from_number)
             return web.Response(text="OK")
 
         app = web.Application()

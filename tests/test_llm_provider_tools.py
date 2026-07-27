@@ -151,6 +151,9 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
             ) -> None:
                 return None
 
+            def raise_for_status(self) -> None:
+                """No-op: this fake only ever stands in for a 200."""
+
             async def json(self) -> dict[str, Any]:
                 return {
                     "message": {
@@ -181,7 +184,7 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
             ) -> None:
                 return None
 
-            def post(self, url: str, json: dict[str, Any]) -> _Response:
+            def post(self, url: str, json: dict[str, Any], timeout: Any = None) -> _Response:
                 posted_payloads.append(json)
                 return _Response()
 

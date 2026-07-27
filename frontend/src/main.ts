@@ -28,6 +28,7 @@ import { AgentStore } from "./agents/AgentStore";
 import { ServerEventRouter } from "./io/ServerEventRouter";
 import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
+import { createOutageTracker } from "./io/outage";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
 import { register as registerTTS } from "./ext/tts";
@@ -143,6 +144,7 @@ let _feedLive = false;
 let liveSyncInFlight = false;
 // Seed only once — reconnects must not re-add already-known agents.
 let seeded = false;
+const actorOutage = createOutageTracker();
 
 // ═══ 3 · Helpers ═════════════════════════════════════════════════════════════
 
@@ -162,13 +164,19 @@ function refreshLiveActors(): void {
     fetch(`${_apiBase}/api/actors`, { signal: ctrl.signal })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((actors: AgentInfo[]) => {
+            actorOutage.recordSuccess();
             agentStore.reconcileAgents(reconcileActorList(actors, isDeleted));
             log.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
         })
         .catch(err => {
             // Dev mode without a running server is expected; log at debug so a
-            // genuine backend failure still leaves a trace.
+            // genuine backend failure still leaves a trace. A run of them is not
+            // routine, so say that once, at a level that survives a production
+            // build.
             log.debug("[Dashboard] live actor refresh failed:", err);
+            if (actorOutage.recordFailure()) {
+                log.warn("[Dashboard] backend unreachable — live actor list is stale");
+            }
         })
         .finally(() => {
             window.clearTimeout(timer);

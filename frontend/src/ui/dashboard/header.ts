@@ -82,10 +82,28 @@ export function setHaNavUrl(root: HTMLElement, haUrl: string | null): void {
     root.querySelectorAll<HTMLAnchorElement>(".af-ha-nav-link").forEach(a => applyHaNavUrl(a, haUrl));
 }
 
+/**
+ * Popovers live on `document.body`, not inside the header, so that they can
+ * overflow it. That means replacing the header does not dispose of them: the
+ * elements and their outside-click listeners on `document` survive, and every
+ * rebuild adds another set. Each one is recorded here so a rebuild can undo it.
+ */
+const openPopovers: { el: HTMLElement; outsideClick: EventListener }[] = [];
+
+/** Dispose of the popovers the current header installed. Call before rebuilding
+ *  the header, and on teardown; safe to call when there are none. */
+export function releaseHeaderPopovers(): void {
+    for (const { el, outsideClick } of openPopovers.splice(0)) {
+        document.removeEventListener("click", outsideClick);
+        el.remove();
+    }
+}
+
 /** Toggle `popover` from `btn`, positioning it under the button, closing on
  *  outside click. `onClose` runs whenever the popover is dismissed. */
 function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTMLElement) => void): void {
     document.body.appendChild(popover);
+    popover.dataset.afPopover = "";
     if (!popover.id) {
         popover.id = uid("af-pop");
     }
@@ -104,15 +122,17 @@ function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTM
             onClose?.(popover);
         }
     });
-    // Page-lifetime listener: CardDashboard is a single instance never remounted,
-    // so this is intentionally not removed. If that assumption ever changes, this leaks.
-    document.addEventListener("click", e => {
+    // The button's own listener dies with the header; this one is on `document`
+    // and must be taken down explicitly (see releaseHeaderPopovers).
+    const outsideClick: EventListener = e => {
         if (!popover.contains(e.target as Node)) {
             onClose?.(popover);
             popover.classList.remove("open");
             btn.setAttribute("aria-expanded", "false");
         }
-    });
+    };
+    document.addEventListener("click", outsideClick);
+    openPopovers.push({ el: popover, outsideClick });
 }
 
 function buildHeaderLeft(connState: ConnState): HTMLElement {

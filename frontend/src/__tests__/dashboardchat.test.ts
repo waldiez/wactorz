@@ -3,6 +3,10 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
+
+import { toast } from "../ui/ToastManager";
 import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
 import { pickChatTarget, resolveSendTarget, stripLeadingMention } from "../ui/dashboard/chatRouting";
 import type { AgentInfo, ChatMessage } from "../types/agent";
@@ -382,13 +386,49 @@ describe("DashboardChat — stop, attachments, external events", () => {
         return { id: "a1", name: "x.png", mime: "image/png", size: 10, url: "blob:abc", ...over };
     }
 
-    it("stop generation fire-and-forgets a POST to /api/chat/stop", () => {
+    it("stop generation POSTs to /api/chat/stop", () => {
         const dc = mount(makeHost()) as any;
         const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as unknown as Response);
         dc._stopGeneration();
         expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/chat/stop"), {
             method: "POST",
         });
+        fetchSpy.mockRestore();
+    });
+
+    it("says so when stop cannot reach the backend", async () => {
+        const dc = mount(makeHost()) as any;
+        vi.mocked(toast.show).mockClear();
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+
+        await dc._stopGeneration();
+
+        // clicking Stop against a dead backend used to do nothing at all
+        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
+        fetchSpy.mockRestore();
+    });
+
+    it("says so when the backend refuses the stop", async () => {
+        const dc = mount(makeHost()) as any;
+        vi.mocked(toast.show).mockClear();
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValue({ ok: false, status: 503 } as unknown as Response);
+
+        await dc._stopGeneration();
+
+        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
+        fetchSpy.mockRestore();
+    });
+
+    it("stays quiet when stop succeeds", async () => {
+        const dc = mount(makeHost()) as any;
+        vi.mocked(toast.show).mockClear();
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as unknown as Response);
+
+        await dc._stopGeneration();
+
+        expect(toast.show).not.toHaveBeenCalled();
         fetchSpy.mockRestore();
     });
 

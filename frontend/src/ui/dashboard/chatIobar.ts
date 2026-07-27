@@ -108,28 +108,80 @@ function buildStopBtn(deps: IobarDeps): HTMLButtonElement {
 }
 
 /**
+ * How long a turn may go completely silent before the composer frees itself.
+ * Every stream chunk restarts the clock, so this only fires when nothing at all
+ * is arriving — a slow model still holding the line keeps its turn.
+ */
+export const TURN_IDLE_TIMEOUT_MS = 60_000;
+
+/**
  * Toggle the send/stop buttons across a turn: reveal stop (and disable send) the
  * moment the user sends, restore it once the turn completes. Showing on send —
  * rather than on the first stream chunk — gives a usable stop window even when
  * the model "thinks" for a while before any tokens arrive. A turn ends with
  * `af-stream-end` (streamed reply) or `af-chat-message` (non-streamed reply,
  * e.g. slash commands), both dispatched in direct_ws and mqtt modes.
+ *
+ * A turn belongs to the agent it was sent to. Both terminating events also fire
+ * for traffic the user had no part in — agent-to-agent chatter arrives as
+ * `af-chat-message` like any other frame — so they only end the turn when they
+ * come from its target. The key is the *sender*: a genuine reply is addressed
+ * `to: "user"` just as a bystander's message may be, so `to` cannot distinguish
+ * them.
+ *
+ * Neither event arrives at all if the backend dies mid-turn, which would strand
+ * the composer with send disabled and stop inert. Two independent escapes: the
+ * transport dropping out of `live`, and a silence timeout as the backstop for a
+ * terminating frame that is simply lost on a connection that still looks fine.
  */
 function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButtonElement): void {
-    const busy = () => {
-        sendBtn.disabled = true;
-        stopBtn.style.display = "flex";
-    };
+    let turnTarget: string | null = null;
+    let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+
     const idle = () => {
+        turnTarget = null;
+        clearTimeout(silenceTimer);
         sendBtn.disabled = false;
         stopBtn.style.display = "none";
     };
+    const armSilenceTimer = () => {
+        clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(idle, TURN_IDLE_TIMEOUT_MS);
+    };
+    const busy = (target: string | undefined) => {
+        turnTarget = target ?? null;
+        sendBtn.disabled = true;
+        stopBtn.style.display = "flex";
+        armSilenceTimer();
+    };
+    /** Whether `from` is the agent this turn is waiting on. */
+    const endsTurn = (from: string | undefined) => turnTarget === null || from === turnTarget;
+
     // Page-lifetime listeners: buildIobar runs once (CardDashboard is a single
     // instance never remounted), so these are intentionally not removed. If that
     // assumption ever changes, a second call here double-fires busy/idle.
-    listen("af-send-message", busy);
-    listen("af-stream-end", idle);
-    listen("af-chat-message", idle);
+    listen("af-send-message", d => busy(d?.target));
+    listen("af-stream-end", d => {
+        if (endsTurn(d?.from)) {
+            idle();
+        }
+    });
+    listen("af-chat-message", d => {
+        if (endsTurn(d?.msg?.from)) {
+            idle();
+        }
+    });
+    // Tokens are proof the turn is alive, but not that it is over.
+    listen("af-stream-chunk", d => {
+        if (turnTarget !== null && endsTurn(d?.from)) {
+            armSilenceTimer();
+        }
+    });
+    listen("af-connection-status", d => {
+        if (d?.status !== "live") {
+            idle();
+        }
+    });
 }
 
 async function startMic(stt: SpeechToText, btn: HTMLButtonElement): Promise<void> {

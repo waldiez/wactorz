@@ -18,6 +18,8 @@ import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
 import { ChatInput } from "./chatInput";
 import { pickChatTarget, resolveSendTarget, stripLeadingMention } from "./chatRouting";
 import { SpeechToText } from "../../io/SpeechToText";
+import { MAX_STREAM_CHARS } from "../../io/streamCap";
+import { postOrWarn } from "./mutate";
 import { renderMarkdown } from "../markdown";
 import { UPLOADS_ENABLED } from "./uploads";
 import { renderAttachTray } from "./attachTray";
@@ -344,15 +346,15 @@ export class DashboardChat {
             setTarget: name => this.setTarget(name),
             populateSelect: select => this._populateSelect(select),
             send: (input, select) => this._sendMessage(input, select),
-            stop: () => this._stopGeneration(),
+            stop: () => void this._stopGeneration(),
         });
     }
 
-    /** Ask the backend to cancel the in-flight generation. Fire-and-forget: the
-     *  server emits the "⏹ Stopped." confirmation on the usual chat reply path. */
-    private _stopGeneration(): void {
-        const base = window.__WACTORZ_INGRESS_PATH ?? "";
-        void fetch(`${base}/api/chat/stop`, { method: "POST" }).catch(() => {});
+    /** Cancel the in-flight generation. Success is silent (the server confirms on
+     *  the chat reply path); failure is not — an unreachable backend is exactly
+     *  when the user reaches for Stop. */
+    private async _stopGeneration(): Promise<void> {
+        await postOrWarn(`${window.__WACTORZ_INGRESS_PATH ?? ""}/api/chat/stop`, { method: "POST" }, "stop");
     }
 
     private _populateSelect(select: HTMLSelectElement): void {
@@ -567,7 +569,7 @@ export class DashboardChat {
             }
             // Cap accumulation so a runaway/looping stream can't grow this without bound.
             this._streamText =
-                this._streamText.length < 200_000 ? this._streamText + chunk : this._streamText;
+                this._streamText.length < MAX_STREAM_CHARS ? this._streamText + chunk : this._streamText;
             if (this.host.getView() !== "chat") {
                 return;
             }

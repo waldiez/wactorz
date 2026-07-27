@@ -403,6 +403,9 @@ router.on("raw", ({ topic, payload }) => {
 
 // Streaming reply finished — notify
 listen("af-stream-end", detail => {
+    if (!detail) {
+        return;
+    }
     const { text, from } = detail;
     if (!text) {
         return;

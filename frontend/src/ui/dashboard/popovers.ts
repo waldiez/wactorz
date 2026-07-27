@@ -40,8 +40,11 @@ function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
     return toggleRow;
 }
 
-/** Voice-select row, repopulated when the browser's voice list loads. */
-function buildVoiceRow(): HTMLElement {
+/** Voice-select row, repopulated when the browser's voice list loads.
+ *  Returns the row plus a `release` that unhooks the `tts-voices-loaded`
+ *  listener — the audio popover is rebuilt on every nav rebuild, and without
+ *  this each rebuild would stack another listener mutating a detached select. */
+function buildVoiceRow(): { row: HTMLElement; release: () => void } {
     const voiceRow = document.createElement("div");
     voiceRow.className = "af-audio-row";
     voiceRow.style.display = tts.ttsEnabled ? "" : "none";
@@ -79,14 +82,14 @@ function buildVoiceRow(): HTMLElement {
     };
 
     populateVoices();
-    // Page-lifetime listener: buildVoiceRow runs once (single audio popover,
-    // never rebuilt), so this is intentionally not removed. A second call here
-    // would double-populate the select on every future voice-list load.
-    listen("tts-voices-loaded", () => populateVoices());
+    const voicesListener = listen("tts-voices-loaded", () => populateVoices());
     voiceSel.addEventListener("change", () => tts.setVoice(voiceSel.value));
 
     voiceRow.appendChild(voiceSel);
-    return voiceRow;
+    return {
+        row: voiceRow,
+        release: () => document.removeEventListener("tts-voices-loaded", voicesListener),
+    };
 }
 
 /** Ambient volume slider row (visibility toggled by the track buttons). */
@@ -149,12 +152,18 @@ function buildAmbientRows(): DocumentFragment {
     return frag;
 }
 
+/** An audio popover carrying teardown for its `tts-voices-loaded` listener
+ *  (invoked by `releaseHeaderPopovers` before the element is removed). */
+export interface AudioPopover extends HTMLElement {
+    _release: () => void;
+}
+
 /** Audio controls: beep/TTS toggles, voice select, ambient track + volume. */
-export function buildAudioPopover(): HTMLElement {
+export function buildAudioPopover(): AudioPopover {
     const pop = document.createElement("div");
     pop.className = "af-audio-popover glass";
 
-    const voiceRow = buildVoiceRow();
+    const { row: voiceRow, release } = buildVoiceRow();
     pop.appendChild(buildAudioToggles(voiceRow));
     pop.appendChild(voiceRow);
 
@@ -163,7 +172,7 @@ export function buildAudioPopover(): HTMLElement {
     pop.appendChild(divider);
 
     pop.appendChild(buildAmbientRows());
-    return pop;
+    return Object.assign(pop, { _release: release });
 }
 
 const RESET_ICONS: Record<string, string> = {

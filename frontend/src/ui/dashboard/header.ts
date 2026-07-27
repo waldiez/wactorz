@@ -88,13 +88,22 @@ export function setHaNavUrl(root: HTMLElement, haUrl: string | null): void {
  * elements and their outside-click listeners on `document` survive, and every
  * rebuild adds another set. Each one is recorded here so a rebuild can undo it.
  */
-const openPopovers: { el: HTMLElement; outsideClick: EventListener }[] = [];
+const openPopovers: { el: HTMLElement; outsideClick: EventListener; keydown: EventListener }[] = [];
+
+/** A popover with extra teardown beyond its outside-click listener (e.g. the
+ *  audio popover's `tts-voices-loaded` subscription). Same `_`-prefixed hook
+ *  convention as `ResetPopover._resetArmed`. */
+export interface ReleasablePopover extends HTMLElement {
+    _release?: () => void;
+}
 
 /** Dispose of the popovers the current header installed. Call before rebuilding
  *  the header, and on teardown; safe to call when there are none. */
 export function releaseHeaderPopovers(): void {
-    for (const { el, outsideClick } of openPopovers.splice(0)) {
+    for (const { el, outsideClick, keydown } of openPopovers.splice(0)) {
         document.removeEventListener("click", outsideClick);
+        document.removeEventListener("keydown", keydown);
+        (el as ReleasablePopover)._release?.();
         el.remove();
     }
 }
@@ -132,7 +141,18 @@ function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTM
         }
     };
     document.addEventListener("click", outsideClick);
-    openPopovers.push({ el: popover, outsideClick });
+    // Escape closes an open popover and returns focus to its trigger — tracked
+    // alongside the outside-click listener so rebuilds don't strand it.
+    const keydown: EventListener = e => {
+        if ((e as KeyboardEvent).key === "Escape" && popover.classList.contains("open")) {
+            onClose?.(popover);
+            popover.classList.remove("open");
+            btn.setAttribute("aria-expanded", "false");
+            btn.focus();
+        }
+    };
+    document.addEventListener("keydown", keydown);
+    openPopovers.push({ el: popover, outsideClick, keydown });
 }
 
 function buildHeaderLeft(connState: ConnState): HTMLElement {
@@ -232,6 +252,84 @@ function bottomTab(key: View, icon: IconName, label: string, view: View, extra: 
     return btn;
 }
 
+/** The bottom nav's document-level listeners live on `document`, so replacing
+ *  the nav strands them. The live pair is tracked here so a rebuild can retire
+ *  it and teardown can remove it. */
+let bottomNavListeners: { click: EventListener; keydown: EventListener } | null = null;
+
+/** Remove the bottom nav's document-level listeners, if any.
+ *  Safe to call when there are none. */
+export function releaseBottomNav(): void {
+    if (bottomNavListeners) {
+        document.removeEventListener("click", bottomNavListeners.click);
+        document.removeEventListener("keydown", bottomNavListeners.keydown);
+        bottomNavListeners = null;
+    }
+}
+
+/** Wire the More button to toggle its slide-up sheet, keeping `aria-expanded`
+ *  in step. Only listeners on the button itself, which die with it — dismissing
+ *  the sheet from outside is `buildBottomNav`'s job, since those listeners sit
+ *  on `document` and outlive a rebuild. */
+function wireMoreSheet(sheet: HTMLElement, moreBtn: HTMLButtonElement): void {
+    moreBtn.setAttribute("aria-haspopup", "true");
+    moreBtn.setAttribute("aria-expanded", "false");
+    moreBtn.addEventListener("click", e => {
+        e.stopPropagation();
+        sheet.classList.toggle("open");
+        const open = sheet.classList.contains("open");
+        moreBtn.classList.toggle("active", open);
+        moreBtn.setAttribute("aria-expanded", String(open));
+    });
+}
+
+/** Append the always-visible tabs to the nav. Choosing one also dismisses the
+ *  More sheet, so a tap never leaves it covering the view it just opened. */
+function wirePrimaryBottomNav(
+    nav: HTMLElement,
+    sheet: HTMLElement,
+    view: View,
+    onSetView: (v: View) => void,
+): void {
+    const primary: { key: View; icon: IconName; label: string }[] = [
+        { key: "overview", icon: "grid", label: "Overview" },
+        { key: "feed", icon: "list", label: "Feed" },
+        { key: "chat", icon: "chat", label: "Chat" },
+    ];
+    primary.forEach(({ key, icon, label }) => {
+        const btn = bottomTab(key, icon, label, view, "");
+        btn.addEventListener("click", () => {
+            sheet.classList.remove("open");
+            onSetView(key);
+        });
+        nav.appendChild(btn);
+    });
+}
+
+/** Fill the More sheet with the overflow tabs — extension-registered views plus
+ *  Settings — which is why the nav is rebuilt whenever a view registers late. */
+function wireSecondaryBottomNav(
+    sheet: HTMLElement,
+    moreBtn: HTMLButtonElement,
+    view: View,
+    extraViews: { key: View; label: string; icon: IconName }[],
+    onSetView: (v: View) => void,
+): void {
+    const secondary: { key: View; icon: IconName; label: string }[] = [
+        ...extraViews,
+        { key: SETTINGS_VIEW.key, icon: SETTINGS_VIEW.icon, label: SETTINGS_VIEW.label },
+    ];
+    secondary.forEach(({ key, icon, label }) => {
+        const btn = bottomTab(key, icon, label, view, " af-bottom-sheet-btn");
+        btn.addEventListener("click", () => {
+            sheet.classList.remove("open");
+            moreBtn.classList.remove("active");
+            onSetView(key);
+        });
+        sheet.appendChild(btn);
+    });
+}
+
 /** Mobile bottom nav with a slide-up "More" sheet for secondary views. */
 export function buildBottomNav(opts: {
     view: View;
@@ -248,53 +346,29 @@ export function buildBottomNav(opts: {
     const moreBtn = document.createElement("button");
     moreBtn.className = "af-bottom-tab af-bottom-more-btn";
     moreBtn.innerHTML = `<span class="af-bottom-tab-icon">${iconMarkup("more", 20)}</span><span class="af-bottom-tab-label">More</span>`;
+    wireMoreSheet(sheet, moreBtn);
 
-    const primary: { key: View; icon: IconName; label: string }[] = [
-        { key: "overview", icon: "grid", label: "Overview" },
-        { key: "feed", icon: "list", label: "Feed" },
-        { key: "chat", icon: "chat", label: "Chat" },
-    ];
-    primary.forEach(({ key, icon, label }) => {
-        const btn = bottomTab(key, icon, label, view, "");
-        btn.addEventListener("click", () => {
-            sheet.classList.remove("open");
-            onSetView(key);
-        });
-        nav.appendChild(btn);
-    });
+    wirePrimaryBottomNav(nav, sheet, view, onSetView);
+    wireSecondaryBottomNav(sheet, moreBtn, view, extraViews, onSetView);
     // Devices links out to the HA UI (new tab) rather than switching views.
     nav.appendChild(buildHaNavLink(haUrl, true));
 
-    const secondary: { key: View; icon: IconName; label: string }[] = [
-        ...extraViews,
-        { key: SETTINGS_VIEW.key, icon: SETTINGS_VIEW.icon, label: SETTINGS_VIEW.label },
-    ];
-    secondary.forEach(({ key, icon, label }) => {
-        const btn = bottomTab(key, icon, label, view, " af-bottom-sheet-btn");
-        btn.addEventListener("click", () => {
-            sheet.classList.remove("open");
-            moreBtn.classList.remove("active");
-            onSetView(key);
-        });
-        sheet.appendChild(btn);
-    });
+    nav.append(moreBtn, sheet);
 
-    moreBtn.setAttribute("aria-haspopup", "true");
-    moreBtn.setAttribute("aria-expanded", "false");
-    moreBtn.addEventListener("click", e => {
-        e.stopPropagation();
-        sheet.classList.toggle("open");
-        const open = sheet.classList.contains("open");
-        moreBtn.classList.toggle("active", open);
-        moreBtn.setAttribute("aria-expanded", String(open));
-    });
-    // Page-lifetime listener (see note above): single-instance, not removed by design.
-    document.addEventListener("click", () => {
+    releaseBottomNav();
+    const closeSheet = () => {
         sheet.classList.remove("open");
         moreBtn.classList.remove("active");
         moreBtn.setAttribute("aria-expanded", "false");
-    });
-
-    nav.append(moreBtn, sheet);
+    };
+    const keydown: EventListener = e => {
+        if ((e as KeyboardEvent).key === "Escape" && sheet.classList.contains("open")) {
+            closeSheet();
+            moreBtn.focus();
+        }
+    };
+    document.addEventListener("click", closeSheet);
+    document.addEventListener("keydown", keydown);
+    bottomNavListeners = { click: closeSheet, keydown };
     return nav;
 }

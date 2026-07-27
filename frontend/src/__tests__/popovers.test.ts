@@ -24,7 +24,8 @@ vi.mock("../io/AmbientManager", () => ({
 }));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
-import { buildAudioPopover, buildResetPopover } from "../ui/dashboard/popovers";
+import { buildAudioPopover, buildResetPopover, type AudioPopover } from "../ui/dashboard/popovers";
+import { buildHeader, releaseHeaderPopovers } from "../ui/dashboard/header";
 import { tts } from "../ext/tts";
 import { ambient } from "../io/AmbientManager";
 import { toast } from "../ui/ToastManager";
@@ -103,6 +104,37 @@ describe("buildAudioPopover", () => {
         slider.value = "0.8";
         slider.dispatchEvent(new Event("input"));
         expect(ambient.setVolume).toHaveBeenCalledWith(0.8);
+    });
+
+    it("exposes a _release hook that removes its tts-voices-loaded listener", () => {
+        const removed = vi.spyOn(document, "removeEventListener");
+        const pop = buildAudioPopover();
+        (pop as AudioPopover)._release();
+        expect(removed.mock.calls.some(c => c[0] === "tts-voices-loaded")).toBe(true);
+        removed.mockRestore();
+    });
+
+    it("loses its tts-voices-loaded listener when the header is released (nav rebuild)", () => {
+        const added = vi.spyOn(document, "addEventListener");
+        const removed = vi.spyOn(document, "removeEventListener");
+        const liveVoices = () =>
+            added.mock.calls.filter(c => c[0] === "tts-voices-loaded").length -
+            removed.mock.calls.filter(c => c[0] === "tts-voices-loaded").length;
+
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [],
+        });
+        document.body.appendChild(header);
+        expect(liveVoices()).toBe(1);
+
+        releaseHeaderPopovers(); // what _rebuildNav calls before replacing the header
+        expect(liveVoices()).toBe(0);
+        added.mockRestore();
+        removed.mockRestore();
     });
 });
 

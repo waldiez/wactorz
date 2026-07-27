@@ -255,8 +255,12 @@ disable = [
     # Actors expose internals the monitor legitimately drives (spawn registry,
     # node desired-state); these are one codebase, not a public API boundary.
     "protected-access",
-    # Function-local imports are load-order tools here: they keep package-init
-    # light and break import cycles. See CLAUDE.md.
+    # Some function-local imports are load-order tools: they keep package-init
+    # light and break cycles between `wactorz` modules, and they let an optional
+    # dependency stay optional. That is the whole of it — stdlib and required
+    # dependencies belong at module scope. See AGENTS.md. This blanket disable is
+    # broader than that rule and hides the difference; ruff's PLC0415 can draw
+    # the line properly once the existing violations are cleared.
     "import-outside-toplevel",
     # runtime.py owns process-wide state by design; rebinding needs `global`.
     "global-statement",

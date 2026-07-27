@@ -68,13 +68,13 @@ describe("normaliseChat", () => {
     it("passes through well-formed chat message", () => {
         const msg = normaliseChat({
             id: "msg-1",
-            from: "main-actor",
+            from: "main",
             to: "user",
             content: "Hello",
             timestampMs: 1_700_000_000_000,
         });
         expect(msg.id).toBe("msg-1");
-        expect(msg.from).toBe("main-actor");
+        expect(msg.from).toBe("main");
         expect(msg.to).toBe("user");
         expect(msg.content).toBe("Hello");
     });

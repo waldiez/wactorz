@@ -11,7 +11,7 @@ function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
 }
 
-function makeHost(agents: AgentInfo[] = [agent("main-actor"), agent("worker")]): OverviewHost {
+function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")]): OverviewHost {
     const map = new Map(agents.map(a => [a.id, a]));
     const statData = (): StatCardData => ({
         agents: [...map.values()],
@@ -127,12 +127,12 @@ describe("OverviewView.renderNodes", () => {
     });
 
     it("keeps remote-runner agents out of the local node's agent list", () => {
-        const host = makeHost([agent("main-actor"), agent("cpu-monitor", { node: "rpi-new" })]);
+        const host = makeHost([agent("main"), agent("cpu-monitor", { node: "rpi-new" })]);
         host.remoteNodes.set("rpi-new", { agents: ["cpu-monitor"], lastSeen: Date.now() });
         mount(host);
         const list = host.root.querySelector<HTMLElement>("#af-node-list")!;
         const localMeta = list.querySelector(".af-node-meta")!.textContent!;
-        expect(localMeta).toContain("main-actor");
+        expect(localMeta).toContain("main");
         expect(localMeta).not.toContain("cpu-monitor");
     });
 

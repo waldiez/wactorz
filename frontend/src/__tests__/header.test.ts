@@ -16,6 +16,7 @@ import {
     setHaNavUrl,
     resolveHaNavUrl,
     releaseHeaderPopovers,
+    releaseBottomNav,
 } from "../ui/dashboard/header";
 
 describe("buildHeader", () => {
@@ -83,6 +84,41 @@ describe("buildHeader", () => {
         audioBtn.click(); // close: the else branch (onClose is undefined for audio)
         expect(document.querySelector("div.open")).toBeNull();
         expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("Escape closes an open popover and returns focus to its button", () => {
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [],
+        });
+        document.body.appendChild(header);
+        const audioBtn = header.querySelector<HTMLButtonElement>('[title="Audio settings"]')!;
+        audioBtn.click(); // open
+        expect(document.querySelector("div.open")).not.toBeNull();
+
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+
+        expect(document.querySelector("div.open")).toBeNull();
+        expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
+        expect(document.activeElement).toBe(audioBtn);
+    });
+
+    it("Escape closes the More sheet and returns focus to the More button", () => {
+        const nav = buildBottomNav({ view: "overview", onSetView: vi.fn(), haUrl: null, extraViews: [] });
+        document.body.appendChild(nav);
+        const more = nav.querySelector<HTMLButtonElement>(".af-bottom-more-btn")!;
+        const sheet = nav.querySelector<HTMLElement>(".af-bottom-sheet")!;
+        more.click();
+        expect(sheet.classList.contains("open")).toBe(true);
+
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+
+        expect(sheet.classList.contains("open")).toBe(false);
+        expect(more.getAttribute("aria-expanded")).toBe("false");
+        expect(document.activeElement).toBe(more);
     });
 });
 
@@ -267,5 +303,39 @@ describe("buildBottomNav", () => {
         const nav = buildBottomNav({ view: "overview", onSetView, haUrl: null, extraViews: [] });
         nav.querySelector<HTMLButtonElement>('[data-view="settings"]')!.click();
         expect(onSetView).toHaveBeenCalledWith("settings");
+    });
+});
+
+describe("bottom nav outside-click listener", () => {
+    const opts = () => ({ view: "overview" as const, onSetView: vi.fn(), haUrl: null, extraViews: [] });
+    const clickCount = (calls: unknown[][]) => calls.filter(c => c[0] === "click").length;
+
+    beforeEach(() => {
+        releaseBottomNav();
+        document.body.innerHTML = "";
+    });
+
+    it("keeps exactly one live outside-click listener across nav rebuilds", () => {
+        const added = vi.spyOn(document, "addEventListener");
+        const removed = vi.spyOn(document, "removeEventListener");
+        buildBottomNav(opts());
+        buildBottomNav(opts()); // _rebuildNav replaces the nav with no explicit release
+        buildBottomNav(opts());
+        const live = clickCount(added.mock.calls) - clickCount(removed.mock.calls);
+        expect(live).toBe(1);
+        added.mockRestore();
+        removed.mockRestore();
+    });
+
+    it("releaseBottomNav takes the listener down, and is safe with nothing to release", () => {
+        const added = vi.spyOn(document, "addEventListener");
+        const removed = vi.spyOn(document, "removeEventListener");
+        buildBottomNav(opts());
+        releaseBottomNav();
+        const live = clickCount(added.mock.calls) - clickCount(removed.mock.calls);
+        expect(live).toBe(0);
+        expect(() => releaseBottomNav()).not.toThrow();
+        added.mockRestore();
+        removed.mockRestore();
     });
 });

@@ -88,6 +88,14 @@ describe("IOManager.send", () => {
         // indistinguishable from a message that actually went out
         expect(lastEvent("af-feed-push")).toBeUndefined();
     });
+
+    it("emits af-send-failed when the transport rejects the send", async () => {
+        const io = new IOManager(makeRouter());
+        io.setWSClient(makeWS(false) as unknown as WSClient);
+        await io.send("hi", null);
+        // so the optimistic bubble rendered before the attempt can be rolled back
+        expect(lastEvent("af-send-failed")?.detail).toEqual({ content: "hi", target: "main" });
+    });
 });
 
 describe("IOManager streaming", () => {
@@ -111,7 +119,7 @@ describe("IOManager streaming", () => {
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
         ws.endCb!();
-        expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "", from: "main-actor" });
+        expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "", from: "main" });
         expect(tts.notify).not.toHaveBeenCalled();
         expect(lastEvent("af-feed-push")).toBeUndefined();
     });

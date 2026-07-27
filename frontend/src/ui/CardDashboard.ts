@@ -20,7 +20,13 @@
 import type { AgentInfo } from "../types/agent";
 import { safeStorage } from "../safeStorage";
 import type { FeedItem } from "../types/feed";
-import { buildHeader, buildBottomNav, setHaNavUrl, releaseHeaderPopovers } from "./dashboard/header";
+import {
+    buildHeader,
+    buildBottomNav,
+    setHaNavUrl,
+    releaseHeaderPopovers,
+    releaseBottomNav,
+} from "./dashboard/header";
 import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
 import type { View, ConnState } from "./dashboard/types";
 import { IconName } from "./dashboard/icons";
@@ -153,6 +159,7 @@ export class CardDashboard {
     destroy(): void {
         this.hide();
         releaseHeaderPopovers();
+        releaseBottomNav();
         this.root.remove();
     }
 

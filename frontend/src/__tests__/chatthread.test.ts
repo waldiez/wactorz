@@ -15,8 +15,8 @@ function att(over: Partial<Attachment>): Attachment {
 }
 
 describe("buildChatEmptyState", () => {
-    it("uses the orchestrator copy for main-actor", () => {
-        expect(buildChatEmptyState("main-actor").textContent).toContain("orchestrator");
+    it("uses the orchestrator copy for main", () => {
+        expect(buildChatEmptyState("main").textContent).toContain("orchestrator");
     });
 
     it("names the target agent otherwise", () => {

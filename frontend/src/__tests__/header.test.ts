@@ -10,7 +10,13 @@ vi.mock("../ui/dashboard/popovers", () => ({
     buildResetPopover: () => document.createElement("div"),
 }));
 
-import { buildHeader, buildBottomNav, setHaNavUrl, resolveHaNavUrl } from "../ui/dashboard/header";
+import {
+    buildHeader,
+    buildBottomNav,
+    setHaNavUrl,
+    resolveHaNavUrl,
+    releaseHeaderPopovers,
+} from "../ui/dashboard/header";
 
 describe("buildHeader", () => {
     beforeEach(() => {
@@ -77,6 +83,63 @@ describe("buildHeader", () => {
         audioBtn.click(); // close: the else branch (onClose is undefined for audio)
         expect(document.querySelector("div.open")).toBeNull();
         expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
+    });
+});
+
+describe("popover lifetime across nav rebuilds", () => {
+    const opts = () => ({
+        view: "overview" as const,
+        connState: "live" as const,
+        onSetView: vi.fn(),
+        haUrl: null,
+        extraViews: [],
+    });
+    const popoverCount = () => document.body.querySelectorAll("[data-af-popover]").length;
+
+    beforeEach(() => {
+        releaseHeaderPopovers();
+        document.body.innerHTML = "";
+    });
+
+    it("parks its popovers on the body, outside the header", () => {
+        document.body.appendChild(buildHeader(opts()));
+        // this is why replacing the header alone doesn't clean them up
+        expect(popoverCount()).toBeGreaterThan(0);
+    });
+
+    it("does not accumulate popovers when the header is rebuilt", () => {
+        document.body.appendChild(buildHeader(opts()));
+        const afterFirst = popoverCount();
+
+        for (let i = 0; i < 3; i++) {
+            releaseHeaderPopovers();
+            document.body.appendChild(buildHeader(opts()));
+        }
+
+        expect(popoverCount()).toBe(afterFirst);
+    });
+
+    it("takes its document listeners back down with it", () => {
+        const added = vi.spyOn(document, "addEventListener");
+        const removed = vi.spyOn(document, "removeEventListener");
+
+        document.body.appendChild(buildHeader(opts()));
+        const addedClicks = added.mock.calls.filter(c => c[0] === "click").length;
+        expect(addedClicks).toBeGreaterThan(0);
+
+        releaseHeaderPopovers();
+        const removedClicks = removed.mock.calls.filter(c => c[0] === "click").length;
+
+        // every outside-click listener the header installed is accounted for
+        expect(removedClicks).toBe(addedClicks);
+        added.mockRestore();
+        removed.mockRestore();
+    });
+
+    it("is safe to call with nothing to release", () => {
+        expect(() => releaseHeaderPopovers()).not.toThrow();
+        releaseHeaderPopovers();
+        expect(popoverCount()).toBe(0);
     });
 });
 

@@ -28,14 +28,16 @@ Known sites:
 from __future__ import annotations
 
 import logging
+import os
 
+from .agents.llm_agent import LLMProvider
 from .config import CONFIG
 
 logger = logging.getLogger(__name__)
 
 # Provider instances cached per spec string so repeated spawns (planner,
 # actuator) reuse one client instead of re-constructing it per request.
-_provider_cache: dict[str, object] = {}
+_provider_cache: dict[str, LLMProvider] = {}
 
 
 def parse_overrides(raw: str) -> dict[str, str]:
@@ -57,13 +59,11 @@ def parse_overrides(raw: str) -> dict[str, str]:
     return table
 
 
-def create_provider(provider_name: str, model: str | None = None):
+def create_provider(provider_name: str, model: str | None = None) -> LLMProvider | None:
     """Construct an LLM provider by name, using the same env-var fallbacks as
     the global provider in ``build_system``. Returns None for ``none``/empty.
     Raises ValueError for an unknown provider name.
     """
-    import os
-
     from .agents.llm_agent import (
         AnthropicProvider,
         GeminiProvider,
@@ -98,7 +98,7 @@ def create_provider(provider_name: str, model: str | None = None):
     raise ValueError(f"Unknown LLM provider: {provider_name!r}")
 
 
-def _provider_from_spec(spec: str):
+def _provider_from_spec(spec: str) -> LLMProvider | None:
     cached = _provider_cache.get(spec)
     if cached is not None:
         return cached
@@ -109,7 +109,9 @@ def _provider_from_spec(spec: str):
     return provider
 
 
-def provider_for(site: str, default=None, overrides: dict[str, str] | None = None):
+def provider_for(
+    site: str, default: LLMProvider | None = None, overrides: dict[str, str] | None = None
+) -> LLMProvider | None:
     """Provider for a call site: the ``LLM_OVERRIDES`` entry for ``site`` if one
     exists and constructs cleanly, else ``default`` (the global provider).
     ``overrides`` bypasses the environment for tests.

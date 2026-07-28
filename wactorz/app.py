@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import sys
+from typing import cast
 
 import wactorz._bootstrap  # noqa: F401  side effects: import path, platform, root logging
 from wactorz.config import CONFIG
@@ -34,8 +35,6 @@ async def _start_web_ui(
     port: int, mqtt_broker: str, mqtt_port: int, actor_registry=None, persistence_db=None
 ) -> None:
     """Start the monitor web server as a quiet background asyncio task."""
-    import logging as _log
-
     from wactorz.web import runtime, static_site
     from wactorz.web.app import main as run_server
 
@@ -51,7 +50,7 @@ async def _start_web_ui(
         runtime.set_db(persistence_db)
 
     for _name in ("wactorz.web", "aiohttp.access", "aiohttp.server"):
-        _log.getLogger(_name).setLevel(_log.WARNING)
+        logging.getLogger(_name).setLevel(logging.WARNING)
 
     asyncio.create_task(run_server())
     logger.info("Web UI →  http://localhost:%d", port)
@@ -66,9 +65,10 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
     from wactorz.agents.installer_agent import InstallerAgent
     from wactorz.agents.io_agent import IOAgent
+    from wactorz.agents.llm_agent import LLMProvider
     from wactorz.agents.main_actor import MainActor
     from wactorz.agents.monitor_agent import MonitorActor
-    from wactorz.core.actor import SupervisorStrategy
+    from wactorz.core.actor import Actor, SupervisorStrategy
     from wactorz.core.registry import ActorSystem
     from wactorz.llm_factory import create_provider, provider_for
 
@@ -146,22 +146,23 @@ async def build_system(args: argparse.Namespace):
     )
 
     # ── Factory helpers (called fresh on each (re)start by the Supervisor) ────
-    def _wire_persistence(actor):
+    def _wire_persistence(actor: Actor) -> Actor:
         """Attach the unified persistence API to an actor."""
         actor._persistence_api = PersistenceAPI(_db, _redis, _pickle_store, actor.name)
         return actor
 
-    def make_provider():
+    def make_provider() -> LLMProvider | None:
         return provider  # stateless — same instance is fine
 
-    def make_main():
-        return _wire_persistence(
+    def make_main() -> MainActor:
+        main_actor = _wire_persistence(
             MainActor(
                 llm_provider=provider_for("main", make_provider()),
                 name="main",
                 persistence_dir="./state",
             )
         )
+        return cast(MainActor, main_actor)
 
     def make_monitor():
         return _wire_persistence(
@@ -290,7 +291,7 @@ async def build_system(args: argparse.Namespace):
         sys.exit(1)
 
     logger.info("Wactorz system started. Supervision tree active.")
-    return system, main_actor, _db
+    return system, cast(MainActor, main_actor), _db
 
 
 async def app(args: argparse.Namespace):

@@ -10,7 +10,14 @@ vi.mock("../ui/dashboard/popovers", () => ({
     buildResetPopover: () => document.createElement("div"),
 }));
 
-import { buildHeader, buildBottomNav, setHaNavUrl, resolveHaNavUrl } from "../ui/dashboard/header";
+import {
+    buildHeader,
+    buildBottomNav,
+    setHaNavUrl,
+    resolveHaNavUrl,
+    releaseHeaderPopovers,
+    releaseBottomNav,
+} from "../ui/dashboard/header";
 
 describe("buildHeader", () => {
     beforeEach(() => {
@@ -77,6 +84,98 @@ describe("buildHeader", () => {
         audioBtn.click(); // close: the else branch (onClose is undefined for audio)
         expect(document.querySelector("div.open")).toBeNull();
         expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("Escape closes an open popover and returns focus to its button", () => {
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [],
+        });
+        document.body.appendChild(header);
+        const audioBtn = header.querySelector<HTMLButtonElement>('[title="Audio settings"]')!;
+        audioBtn.click(); // open
+        expect(document.querySelector("div.open")).not.toBeNull();
+
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+
+        expect(document.querySelector("div.open")).toBeNull();
+        expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
+        expect(document.activeElement).toBe(audioBtn);
+    });
+
+    it("Escape closes the More sheet and returns focus to the More button", () => {
+        const nav = buildBottomNav({ view: "overview", onSetView: vi.fn(), haUrl: null, extraViews: [] });
+        document.body.appendChild(nav);
+        const more = nav.querySelector<HTMLButtonElement>(".af-bottom-more-btn")!;
+        const sheet = nav.querySelector<HTMLElement>(".af-bottom-sheet")!;
+        more.click();
+        expect(sheet.classList.contains("open")).toBe(true);
+
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+
+        expect(sheet.classList.contains("open")).toBe(false);
+        expect(more.getAttribute("aria-expanded")).toBe("false");
+        expect(document.activeElement).toBe(more);
+    });
+});
+
+describe("popover lifetime across nav rebuilds", () => {
+    const opts = () => ({
+        view: "overview" as const,
+        connState: "live" as const,
+        onSetView: vi.fn(),
+        haUrl: null,
+        extraViews: [],
+    });
+    const popoverCount = () => document.body.querySelectorAll("[data-af-popover]").length;
+
+    beforeEach(() => {
+        releaseHeaderPopovers();
+        document.body.innerHTML = "";
+    });
+
+    it("parks its popovers on the body, outside the header", () => {
+        document.body.appendChild(buildHeader(opts()));
+        // this is why replacing the header alone doesn't clean them up
+        expect(popoverCount()).toBeGreaterThan(0);
+    });
+
+    it("does not accumulate popovers when the header is rebuilt", () => {
+        document.body.appendChild(buildHeader(opts()));
+        const afterFirst = popoverCount();
+
+        for (let i = 0; i < 3; i++) {
+            releaseHeaderPopovers();
+            document.body.appendChild(buildHeader(opts()));
+        }
+
+        expect(popoverCount()).toBe(afterFirst);
+    });
+
+    it("takes its document listeners back down with it", () => {
+        const added = vi.spyOn(document, "addEventListener");
+        const removed = vi.spyOn(document, "removeEventListener");
+
+        document.body.appendChild(buildHeader(opts()));
+        const addedClicks = added.mock.calls.filter(c => c[0] === "click").length;
+        expect(addedClicks).toBeGreaterThan(0);
+
+        releaseHeaderPopovers();
+        const removedClicks = removed.mock.calls.filter(c => c[0] === "click").length;
+
+        // every outside-click listener the header installed is accounted for
+        expect(removedClicks).toBe(addedClicks);
+        added.mockRestore();
+        removed.mockRestore();
+    });
+
+    it("is safe to call with nothing to release", () => {
+        expect(() => releaseHeaderPopovers()).not.toThrow();
+        releaseHeaderPopovers();
+        expect(popoverCount()).toBe(0);
     });
 });
 
@@ -204,5 +303,39 @@ describe("buildBottomNav", () => {
         const nav = buildBottomNav({ view: "overview", onSetView, haUrl: null, extraViews: [] });
         nav.querySelector<HTMLButtonElement>('[data-view="settings"]')!.click();
         expect(onSetView).toHaveBeenCalledWith("settings");
+    });
+});
+
+describe("bottom nav outside-click listener", () => {
+    const opts = () => ({ view: "overview" as const, onSetView: vi.fn(), haUrl: null, extraViews: [] });
+    const clickCount = (calls: unknown[][]) => calls.filter(c => c[0] === "click").length;
+
+    beforeEach(() => {
+        releaseBottomNav();
+        document.body.innerHTML = "";
+    });
+
+    it("keeps exactly one live outside-click listener across nav rebuilds", () => {
+        const added = vi.spyOn(document, "addEventListener");
+        const removed = vi.spyOn(document, "removeEventListener");
+        buildBottomNav(opts());
+        buildBottomNav(opts()); // _rebuildNav replaces the nav with no explicit release
+        buildBottomNav(opts());
+        const live = clickCount(added.mock.calls) - clickCount(removed.mock.calls);
+        expect(live).toBe(1);
+        added.mockRestore();
+        removed.mockRestore();
+    });
+
+    it("releaseBottomNav takes the listener down, and is safe with nothing to release", () => {
+        const added = vi.spyOn(document, "addEventListener");
+        const removed = vi.spyOn(document, "removeEventListener");
+        buildBottomNav(opts());
+        releaseBottomNav();
+        const live = clickCount(added.mock.calls) - clickCount(removed.mock.calls);
+        expect(live).toBe(0);
+        expect(() => releaseBottomNav()).not.toThrow();
+        added.mockRestore();
+        removed.mockRestore();
     });
 });

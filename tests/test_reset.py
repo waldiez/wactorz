@@ -100,6 +100,56 @@ class ResetLogsTest(unittest.TestCase):
                 logging.root.removeHandler(handler)
                 handler.close()
 
+    def test_releases_the_handler_lock_when_truncation_fails(self):
+        """A failed truncate must not strand the logger's lock.
+
+        The failure this guards is silent and total: the exception is caught and
+        logged, so the reset reports success, but every later log call blocks
+        forever on a lock nobody holds a reference to — and nothing explains why,
+        because logging is what deadlocked.
+
+        The lock has to be probed from another thread: handlers use an RLock, so
+        the thread that leaked it could re-acquire it and see nothing wrong.
+        """
+        import threading
+
+        from wactorz.reset import reset_logs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "wactorz.log"
+            handler = logging.FileHandler(str(log_path))
+            assert handler.stream
+            handler.stream.write("content\n")
+            handler.stream.flush()
+
+            def _explode(*_args, **_kwargs):
+                raise OSError("disk gone")
+
+            handler.stream.truncate = _explode  # type: ignore[method-assign]
+            logging.root.addHandler(handler)
+            try:
+                reset_logs(log_dir=tmp)  # swallows the error by design
+
+                acquired: list[bool] = []
+
+                def _probe() -> None:
+                    # Acquire and release on the same thread: an RLock may only
+                    # be released by its owner, and releasing from elsewhere
+                    # raises while leaving the lock held for good.
+                    got = handler.lock.acquire(timeout=2)
+                    acquired.append(got)
+                    if got:
+                        handler.lock.release()
+
+                probe = threading.Thread(target=_probe)
+                probe.start()
+                probe.join(timeout=5)
+
+                self.assertTrue(acquired and acquired[0], "handler lock was never released")
+            finally:
+                logging.root.removeHandler(handler)
+                handler.close()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2 & 3. reset_handler — scope validation and response shape

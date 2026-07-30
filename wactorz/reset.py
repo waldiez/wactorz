@@ -144,11 +144,18 @@ def reset_logs(log_dir: str | None = None) -> None:
         if isinstance(handler, logging.FileHandler):
             try:
                 handler.acquire()
-                if handler.stream is not None:  # None for a delay-opened handler
-                    handler.stream.truncate(0)
-                    handler.stream.seek(0)
-                    truncated.add(str(Path(handler.baseFilename).resolve()))
-                handler.release()
+                # The release must be guaranteed, not merely the next statement:
+                # this failure is caught and logged below, so a stranded lock
+                # would leave the reset reporting success while every later log
+                # call blocks forever — with nothing in the log to say why,
+                # because logging is what deadlocked.
+                try:
+                    if handler.stream is not None:  # None for a delay-opened handler
+                        handler.stream.truncate(0)
+                        handler.stream.seek(0)
+                        truncated.add(str(Path(handler.baseFilename).resolve()))
+                finally:
+                    handler.release()
             except Exception as exc:
                 logger.warning(
                     "[reset] could not truncate handler %s: %s", handler.baseFilename, exc

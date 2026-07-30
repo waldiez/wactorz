@@ -28,6 +28,7 @@ import { AgentStore } from "./agents/AgentStore";
 import { ServerEventRouter } from "./io/ServerEventRouter";
 import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
+import { createOutageTracker } from "./io/outage";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
 import { register as registerTTS } from "./ext/tts";
@@ -107,7 +108,16 @@ function reportGlobalError(context: string, detail: unknown): void {
         message: "Something went wrong — see the console for details.",
     });
 }
-window.addEventListener("error", e => reportGlobalError("uncaught", e.error ?? e.message));
+window.addEventListener("error", e => {
+    // Scripts injected from another origin (browser extensions, an embedding
+    // webview's JS bridge) report as an opaque "Script error." with no error
+    // object, filename or line — nothing anyone can act on. Toasting those
+    // blames the app for someone else's script, so only report real page errors.
+    if (!e.error && !e.filename) {
+        return;
+    }
+    reportGlobalError("uncaught", e.error ?? e.message);
+});
 window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
 
 const agentStore = new AgentStore();
@@ -134,6 +144,7 @@ let _feedLive = false;
 let liveSyncInFlight = false;
 // Seed only once — reconnects must not re-add already-known agents.
 let seeded = false;
+const actorOutage = createOutageTracker();
 
 // ═══ 3 · Helpers ═════════════════════════════════════════════════════════════
 
@@ -153,13 +164,19 @@ function refreshLiveActors(): void {
     fetch(`${_apiBase}/api/actors`, { signal: ctrl.signal })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((actors: AgentInfo[]) => {
+            actorOutage.recordSuccess();
             agentStore.reconcileAgents(reconcileActorList(actors, isDeleted));
             log.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
         })
         .catch(err => {
             // Dev mode without a running server is expected; log at debug so a
-            // genuine backend failure still leaves a trace.
+            // genuine backend failure still leaves a trace. A run of them is not
+            // routine, so say that once, at a level that survives a production
+            // build.
             log.debug("[Dashboard] live actor refresh failed:", err);
+            if (actorOutage.recordFailure()) {
+                log.warn("[Dashboard] backend unreachable — live actor list is stale");
+            }
         })
         .finally(() => {
             window.clearTimeout(timer);
@@ -386,6 +403,9 @@ router.on("raw", ({ topic, payload }) => {
 
 // Streaming reply finished — notify
 listen("af-stream-end", detail => {
+    if (!detail) {
+        return;
+    }
     const { text, from } = detail;
     if (!text) {
         return;

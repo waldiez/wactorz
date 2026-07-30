@@ -8,41 +8,11 @@ the Supervisor, and verifies behaviour by inspecting actor state.
 
 import argparse
 import asyncio
-import importlib
 import sys
+import time
 import traceback
-import types
-
-
-def _stub(name):
-    """Provide an empty stand-in ONLY for optional deps that aren't installed,
-    so the core import chain succeeds without the heavy ML/PDF extras. Never
-    shadow a real, importable module — doing so would poison it for every other
-    test sharing this process.
-    """
-    try:
-        importlib.import_module(name)
-    except Exception:
-        sys.modules.setdefault(name, types.ModuleType(name))
-
-
-for _m in [
-    "aiomqtt",
-    "psutil",
-    "anthropic",
-    "openai",
-    "aiohttp",
-    "discord",
-    "twilio",
-    "pdfplumber",
-    "fitz",
-    "ultralytics",
-    "torch",
-    "numpy",
-    "asyncssh",
-]:
-    _stub(_m)
-
+from collections.abc import Callable
+from typing import Any
 
 from wactorz.core.actor import Actor, ActorState, Message, SupervisorStrategy
 from wactorz.core.registry import ActorSystem, Supervisor
@@ -55,8 +25,8 @@ FAIL = "❌ FAIL"
 _results: list[tuple[str, bool, str]] = []
 
 
-def assert_eq(label, got, expected):
-    ok = got == expected
+def assert_eq(label: str, got: Any, expected: Any) -> bool:
+    ok = bool(got == expected)
     _results.append((label, ok, f"got={got!r}, expected={expected!r}"))
     marker = PASS if ok else FAIL
     print(f"  {marker}  {label}")
@@ -64,7 +34,7 @@ def assert_eq(label, got, expected):
     return ok
 
 
-def assert_true(label, value, detail=""):
+def assert_true(label: str, value: Any, detail: str = "") -> bool:
     ok = bool(value)
     _results.append((label, ok, detail or str(value)))
     marker = PASS if ok else FAIL
@@ -73,7 +43,7 @@ def assert_true(label, value, detail=""):
     return ok
 
 
-def section(title):
+def section(title: str) -> None:
     print(f"\n{'─' * 60}")
     print(f"  {title}")
     print(f"{'─' * 60}")
@@ -85,71 +55,88 @@ def section(title):
 class StableActor(Actor):
     """An actor that stays healthy forever."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "stable-actor")
         super().__init__(**kwargs)
         self.started_count = 0
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         self.started_count += 1
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         pass
 
 
 class CrashOnceActor(Actor):
     """Crashes on first on_start. crash_state is controlled externally via closure."""
 
-    def __init__(self, should_crash: bool = False, **kwargs):
+    def __init__(self, should_crash: bool = False, **kwargs: Any) -> None:
         kwargs.setdefault("name", "crash-once")
         super().__init__(**kwargs)
         self.started_count = 0
         self._should_crash = should_crash  # set by factory closure
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         self.started_count += 1
         if self._should_crash:
             self.state = ActorState.FAILED
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         pass
 
 
 class AlwaysCrashActor(Actor):
     """Crashes every time it starts — exhausts restart budget."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "always-crash")
         super().__init__(**kwargs)
         self.started_count = 0
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         self.started_count += 1
         self.state = ActorState.FAILED
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         pass
 
 
 class DependentActor(Actor):
     """Simulates an actor that depends on a sibling being healthy."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "dependent")
         super().__init__(**kwargs)
         self.started_count = 0
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         self.started_count += 1
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         pass
 
 
 # ── Test infrastructure ───────────────────────────────────────────────────────
 
 
-def make_system(poll_interval: float = 0.05):
+async def wait_until(
+    predicate: Callable[[], bool], timeout: float = 5.0, interval: float = 0.02
+) -> bool:
+    """Poll until `predicate()` is true. Returns False on timeout.
+
+    Preferred over a fixed `asyncio.sleep`: the test ends as soon as the
+    supervisor has acted, and a slow machine gets more time rather than a
+    spurious failure.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(interval)
+    return predicate()
+
+
+def make_system(poll_interval: float = 0.05) -> ActorSystem:
     """Create a minimal ActorSystem with a no-op MQTT client.
     poll_interval sets how fast the supervisor watch loop fires (default 50ms for tests).
     """
@@ -158,13 +145,13 @@ def make_system(poll_interval: float = 0.05):
 
     # Inject a no-op MQTT so actors don't need a broker
     class _NoOpMQTT:
-        async def publish(self, t, p):
+        async def publish(self, t: str, p: dict[str, Any]) -> None:
             pass
 
-        async def disconnect(self):
+        async def disconnect(self) -> None:
             pass
 
-    system._mqtt_client = _NoOpMQTT()
+    system._mqtt_client = _NoOpMQTT()  # pyright: ignore[reportAttributeAccessIssue]
     # Override supervisor with fast poll_interval
     system._supervisor = Supervisor(system.registry, system._inject, poll_interval=poll_interval)
     return system
@@ -173,14 +160,14 @@ def make_system(poll_interval: float = 0.05):
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
-async def test_stable_actor_not_restarted():
+async def test_stable_actor_not_restarted() -> None:
     """A healthy actor should never be restarted."""
     section("TEST 1 — Stable actor: no restarts")
 
     system = make_system()
     actor_ref = {}
 
-    def factory():
+    def factory() -> StableActor:
         a = StableActor(persistence_dir="/tmp/af_test")
         actor_ref["a"] = a
         return a
@@ -193,8 +180,9 @@ async def test_stable_actor_not_restarted():
     )
     await system.supervisor.start()
 
-    # Let the watch loop run a few cycles
-    await asyncio.sleep(0.15)
+    # A stable actor must NOT be restarted, so there is no event to wait for —
+    # give the watch loop several real chances to misbehave instead.
+    await asyncio.sleep(system.supervisor._poll_interval * 4)
 
     actor = actor_ref["a"]
     assert_eq("actor state is RUNNING", actor.state, ActorState.RUNNING)
@@ -204,7 +192,7 @@ async def test_stable_actor_not_restarted():
     await system.supervisor.stop()
 
 
-async def test_one_for_one_restart():
+async def test_one_for_one_restart() -> None:
     """Crashed actor is restarted; siblings are untouched."""
     section("TEST 2 — ONE_FOR_ONE: crashed actor restarted, sibling untouched")
 
@@ -213,7 +201,7 @@ async def test_one_for_one_restart():
     stable_ref = {}
     call_n = {"crash": 0}
 
-    def crash_factory():
+    def crash_factory() -> CrashOnceActor:
         call_n["crash"] += 1
         # Only the FIRST instance should crash; subsequent restarts get healthy actor
         should_crash = call_n["crash"] == 1
@@ -221,7 +209,7 @@ async def test_one_for_one_restart():
         crash_ref["a"] = a
         return a
 
-    def stable_factory():
+    def stable_factory() -> StableActor:
         a = StableActor(name="sibling", persistence_dir="/tmp/af_test")
         stable_ref["a"] = a
         return a
@@ -243,10 +231,10 @@ async def test_one_for_one_restart():
     )
     await system.supervisor.start()
 
-    # Let the watch loop detect failure and restart
-    await asyncio.sleep(0.25)
+    await wait_until(lambda: call_n["crash"] >= 2)
 
     new_crash_actor = system.supervisor._specs["crash-once"].actor
+    assert new_crash_actor
     sibling = stable_ref["a"]
 
     # The factory was called more than once — a new instance replaced the original
@@ -259,7 +247,7 @@ async def test_one_for_one_restart():
     await system.supervisor.stop()
 
 
-async def test_restart_count_increments():
+async def test_restart_count_increments() -> None:
     """restart_count on ActorMetrics increments after each supervisor restart."""
     section("TEST 3 — restart_count increments correctly")
 
@@ -268,7 +256,7 @@ async def test_restart_count_increments():
     # Build an actor that crashes the first 2 times, then is healthy
     crash_counter = {"n": 0}
 
-    def factory():
+    def factory() -> CrashOnceActor:
         crash_counter["n"] += 1
         should_crash = crash_counter["n"] <= 2
         return CrashOnceActor(
@@ -284,10 +272,10 @@ async def test_restart_count_increments():
     )
     await system.supervisor.start()
 
-    # Wait for 2 restarts
-    await asyncio.sleep(0.35)
+    await wait_until(lambda: crash_counter["n"] >= 3)  # initial + 2 restarts
 
     final = system.supervisor._specs["counted"].actor
+    assert final
     assert_true(
         "restart_count >= 2", final.metrics.restart_count >= 2, f"got {final.metrics.restart_count}"
     )
@@ -296,7 +284,7 @@ async def test_restart_count_increments():
     await system.supervisor.stop()
 
 
-async def test_budget_exhausted_gives_up():
+async def test_budget_exhausted_gives_up() -> None:
     """After max_restarts within the window the supervisor stops trying."""
     section("TEST 4 — Budget exhausted: supervisor gives up")
 
@@ -309,15 +297,14 @@ async def test_budget_exhausted_gives_up():
         _pending_notifications = notifications
         actor_id = "fake-main-id"
 
-    system.registry._actors["fake-main-id"] = FakeMain()
-    system.registry._actors  # trick find_by_name
+    system.registry._actors["fake-main-id"] = FakeMain()  # pyright: ignore[reportArgumentType]
     # Patch find_by_name to return FakeMain
     original_find = system.registry.find_by_name
-    system.registry.find_by_name = lambda n: FakeMain() if n == "main" else original_find(n)
+    system.registry.find_by_name = lambda n: FakeMain() if n == "main" else original_find(n)  # pyright: ignore[reportAttributeAccessIssue]
 
     start_count = {"n": 0}
 
-    def factory():
+    def factory() -> Actor:
         a = AlwaysCrashActor(persistence_dir="/tmp/af_test")
         start_count["n"] += 1
         return a
@@ -332,8 +319,7 @@ async def test_budget_exhausted_gives_up():
     )
     await system.supervisor.start()
 
-    # Give it time to exhaust the budget (3 restarts + initial spawn = 4 starts)
-    await asyncio.sleep(0.5)
+    await wait_until(lambda: system.supervisor._specs["always-crash"].exhausted)
 
     spec = system.supervisor._specs["always-crash"]
     assert_true("restart budget exhausted", spec.exhausted, f"restart_times={spec._restart_times}")
@@ -346,17 +332,17 @@ async def test_budget_exhausted_gives_up():
     await system.supervisor.stop()
 
 
-async def test_one_for_all_restarts_siblings():
+async def test_one_for_all_restarts_siblings() -> None:
     """ONE_FOR_ALL: crashing one restarts all supervised actors."""
     section("TEST 5 — ONE_FOR_ALL: all actors restart when one crashes")
 
     system = make_system()
     start_counts = {"alpha": 0, "beta": 0, "gamma": 0}
 
-    def make_factory(name, should_crash):
+    def make_factory(name: str, should_crash: bool) -> Callable[[], CrashOnceActor]:
         call_n = {"n": 0}
 
-        def factory():
+        def factory() -> CrashOnceActor:
             call_n["n"] += 1
             start_counts[name] += 1
             crash_this_time = should_crash and call_n["n"] == 1
@@ -391,7 +377,7 @@ async def test_one_for_all_restarts_siblings():
     )
     await system.supervisor.start()
 
-    await asyncio.sleep(0.4)
+    await wait_until(lambda: min(start_counts.values()) >= 2)
 
     # All three should have been started more than once
     assert_true(
@@ -411,17 +397,17 @@ async def test_one_for_all_restarts_siblings():
     await system.supervisor.stop()
 
 
-async def test_rest_for_one_only_downstream():
+async def test_rest_for_one_only_downstream() -> None:
     """REST_FOR_ONE: only the crashed actor and those after it restart."""
     section("TEST 6 — REST_FOR_ONE: only downstream actors restart")
 
     system = make_system()
     start_counts = {"upstream": 0, "middle": 0, "downstream": 0}
 
-    def make_factory(name, should_crash):
+    def make_factory(name: str, should_crash: bool) -> Callable[[], CrashOnceActor]:
         call_n = {"n": 0}
 
-        def factory():
+        def factory() -> CrashOnceActor:
             call_n["n"] += 1
             start_counts[name] += 1
             crash_this_time = should_crash and call_n["n"] == 1
@@ -459,7 +445,7 @@ async def test_rest_for_one_only_downstream():
     )
     await system.supervisor.start()
 
-    await asyncio.sleep(0.4)
+    await wait_until(lambda: start_counts["middle"] >= 2 and start_counts["downstream"] >= 2)
 
     assert_eq("upstream NOT restarted (started once)", start_counts["upstream"], 1)
     assert_true(
@@ -474,13 +460,13 @@ async def test_rest_for_one_only_downstream():
     await system.supervisor.stop()
 
 
-async def test_supervisor_status_snapshot():
+async def test_supervisor_status_snapshot() -> None:
     """supervisor.status() returns correct info for all registered actors."""
     section("TEST 7 — supervisor.status() snapshot")
 
     system = make_system()
 
-    def factory():
+    def factory() -> Actor:
         return StableActor(name="snap", persistence_dir="/tmp/af_test")
 
     system.supervisor.supervise(
@@ -504,13 +490,13 @@ async def test_supervisor_status_snapshot():
     await system.supervisor.stop()
 
 
-async def test_supervised_flag_on_actor():
+async def test_supervised_flag_on_actor() -> None:
     """Actor.get_status() reports supervised=True when under a supervisor."""
     section("TEST 8 — Actor reports supervised=True in get_status()")
 
     system = make_system()
 
-    def factory():
+    def factory() -> Actor:
         return StableActor(name="flag-test", persistence_dir="/tmp/af_test")
 
     system.supervisor.supervise(
@@ -520,6 +506,7 @@ async def test_supervised_flag_on_actor():
     await asyncio.sleep(0.1)
 
     actor = system.supervisor._specs["flag-test"].actor
+    assert actor
     status = actor.get_status()
     assert_eq("supervised=True in get_status", status.get("supervised"), True)
     assert_eq("restart_count=0 in get_status", status.get("restart_count"), 0)
@@ -527,13 +514,13 @@ async def test_supervised_flag_on_actor():
     await system.supervisor.stop()
 
 
-async def test_stop_all_stops_supervisor():
+async def test_stop_all_stops_supervisor() -> None:
     """ActorSystem.stop_all() shuts down the supervisor watch loop."""
     section("TEST 9 — stop_all() cancels supervisor watch loop")
 
     system = make_system()
 
-    def factory():
+    def factory() -> Actor:
         return StableActor(name="teardown", persistence_dir="/tmp/af_test")
 
     system.supervisor.supervise(
@@ -567,7 +554,7 @@ ALL_TESTS = [
 ]
 
 
-async def run_all(filter_name: str | None = None):
+async def run_all(filter_name: str | None = None) -> None:
     failed = 0
     skipped = 0
     for name, fn in ALL_TESTS:

@@ -14,6 +14,8 @@ import logging
 import uuid
 from typing import ClassVar
 
+from wactorz.llm_factory import provider_for
+
 from ..helpers.main_actor_helpers import (
     PENDING_PLANS_KEY,
     PIPELINE_RULES_KEY,
@@ -387,7 +389,7 @@ class PlanningMixin:
             planner = await self.spawn(
                 PlannerAgent,
                 name=planner_name,
-                llm_provider=self.llm,
+                llm_provider=provider_for("planner", self.llm),
                 task=enriched_task,
                 reply_to_id=self.actor_id,
                 reply_task_id=task_id,
@@ -812,44 +814,3 @@ class PlanningMixin:
         )
 
         # ── Spawn ──────────────────────────────────────────────────────────────
-
-    async def run_pipeline(
-        self, goal: str, agents: list[str], timeout: float = 300.0, force_replan: bool = False
-    ) -> dict:
-        """Spawn an ephemeral TaskManager to coordinate a multi-agent pipeline.
-        Returns the final synthesised result without blocking main's context.
-
-        Usage:
-            result = await main.run_pipeline(
-                goal="Find the Philips EP2220 manual and answer: how do I descale it?",
-                agents=["manual-agent", "installer"]
-            )
-        """
-        from ..task_manager import TaskManager
-
-        task_id = uuid.uuid4().hex[:8]
-        future = asyncio.get_event_loop().create_future()
-        self._result_futures[task_id] = future
-
-        mgr = await self.spawn(
-            TaskManager,
-            goal=goal,
-            available_agents=agents,
-            llm_provider=self.llm,
-            reply_to_id=self.actor_id,
-            reply_task_id=task_id,
-            auto_destroy=True,
-            force_replan=force_replan,
-            cache_dir=str(self._persistence_dir.parent / "plan_cache"),
-            persistence_dir=str(self._persistence_dir.parent),
-        )
-
-        logger.info(f"[{self.name}] Pipeline started: {mgr.name} for goal: {goal[:60]}")
-
-        try:
-            return await asyncio.wait_for(future, timeout=timeout)
-        except asyncio.TimeoutError:
-            logger.warning(f"[{self.name}] Pipeline timed out after {timeout}s")
-            return {"error": f"Pipeline timed out after {timeout}s"}
-        finally:
-            self._result_futures.pop(task_id, None)

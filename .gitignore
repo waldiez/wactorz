@@ -152,6 +152,7 @@ pyrightconfig.json
 .claude/
 .codex/
 CLAUDE.local.md
+CODEX.md
 .codex
 .gemini/
 __pycache__/
@@ -211,3 +212,5 @@ coverage/
 
 
 yolov8n.pt
+
+eval_results/

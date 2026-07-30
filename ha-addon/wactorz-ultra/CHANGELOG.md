@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.2
 
 - Added: `ha_connection` add-on option (`auto` / `supervisor` / `custom`) — explicit Home Assistant connection mode. `auto` keeps the previous token-presence inference, so existing installs are unaffected.
 - Added: startup auth probe — the add-on log now shows one deterministic line with the HA connection mode, URL, and auth result (e.g. `HA connection OK — mode=supervisor ...` or `HA auth FAILED (401) ...`).

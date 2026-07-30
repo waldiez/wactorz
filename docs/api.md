@@ -105,14 +105,14 @@ Send a chat message to a named agent.
 
 **Request body**
 ```json
-{ "message": "what is the weather?", "agent_name": "main-actor" }
+{ "message": "what is the weather?", "agent_name": "main" }
 ```
 
-`agent_name` is optional and defaults to `main-actor`.
+`agent_name` is optional and defaults to `main`, the orchestrator.
 
 **Response** `200 OK`
 ```json
-{ "status": "sent", "agent": "main-actor" }
+{ "status": "sent", "agent": "main" }
 ```
 
 The reply is delivered asynchronously over MQTT (`agents/{id}/chat`) and via the `/ws` WebSocket bridge.

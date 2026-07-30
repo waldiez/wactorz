@@ -9,19 +9,19 @@ Covers three recent features:
 
 import json
 import sqlite3
-import sys
 import tempfile
 import types
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from wactorz.web import api_actors, cost, events, runtime
-
 # ── Minimal stubs so heavy optional deps don't need to be installed ──────────
 # aiohttp is a hard dependency and monitor_server imports it fully at module
 # level (web, WSMsgType, …), so it must NOT be stubbed — handler responses are
 # real aiohttp Response objects, read via _payload() below.
-sys.modules.setdefault("openai", types.ModuleType("openai"))
+from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissingImports]
+from wactorz.web import api_actors, cost, events, runtime
+
+ensure_importable("openai")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -126,8 +126,8 @@ class PersistCostTest(unittest.TestCase):
         agent = self._make_agent()
         agent._persist_cost()
 
-        agent.persist.assert_called_once()
-        key, payload = agent.persist.call_args[0]
+        agent.persist.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]
+        key, payload = agent.persist.call_args[0]  # pyright: ignore[reportAttributeAccessIssue]
         self.assertEqual(key, "_final_cost")
         self.assertEqual(payload["input_tokens"], 300)
         self.assertEqual(payload["output_tokens"], 120)
@@ -139,7 +139,7 @@ class PersistCostTest(unittest.TestCase):
         agent.total_cost_usd = 1 / 3
         agent._persist_cost()
 
-        _, payload = agent.persist.call_args[0]
+        _, payload = agent.persist.call_args[0]  # pyright: ignore[reportAttributeAccessIssue]
         # round() to 6 places: 0.333333
         self.assertEqual(payload["cost_usd"], round(1 / 3, 6))
 
@@ -251,7 +251,7 @@ class HistoricalCostTest(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class _KVStub:
+class _RoundTripKV:
     """Minimal kv_get/kv_set db stub with JSON round-trip, like WactorzDB."""
 
     def __init__(self, store=None):
@@ -273,7 +273,7 @@ class LifetimeCostLedgerTest(unittest.TestCase):
         self._orig_loaded = cost.lifetime_loaded
         cost.lifetime_cost.clear()
         cost.lifetime_loaded = False
-        runtime.db = _KVStub()
+        runtime.db = _RoundTripKV()
 
     def tearDown(self):
         runtime.db = self._orig_db
@@ -517,7 +517,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
     async def test_returns_empty_list_when_registry_none(self):
         runtime.registry = None
 
-        resp = await api_actors.actor_history_handler(self._make_request("any"))
+        resp = await api_actors.actor_history_handler(self._make_request("any"))  # pyright: ignore[reportArgumentType]
 
         self.assertEqual(_payload(resp), [])
         self.assertEqual(resp.status, 200)
@@ -527,7 +527,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = None
         runtime.registry = registry
 
-        resp = await api_actors.actor_history_handler(self._make_request("ghost"))
+        resp = await api_actors.actor_history_handler(self._make_request("ghost"))  # pyright: ignore[reportArgumentType]
 
         self.assertEqual(_payload(resp), [])
 
@@ -544,7 +544,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = actor
         runtime.registry = registry
 
-        resp = await api_actors.actor_history_handler(self._make_request("test-agent"))
+        resp = await api_actors.actor_history_handler(self._make_request("test-agent"))  # pyright: ignore[reportArgumentType]
 
         payload = _payload(resp)
         self.assertEqual(len(payload), 2)
@@ -558,7 +558,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = actor
         runtime.registry = registry
 
-        resp = await api_actors.actor_history_handler(self._make_request("quiet-agent"))
+        resp = await api_actors.actor_history_handler(self._make_request("quiet-agent"))  # pyright: ignore[reportArgumentType]
 
         self.assertEqual(_payload(resp), [])
 
@@ -569,7 +569,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = actor
         runtime.registry = registry
 
-        resp = await api_actors.actor_history_handler(self._make_request("dumb-agent"))
+        resp = await api_actors.actor_history_handler(self._make_request("dumb-agent"))  # pyright: ignore[reportArgumentType]
 
         self.assertEqual(_payload(resp), [])
 
@@ -579,7 +579,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class _KVStub:
+class _SerializedKV:
     """Minimal kv_get/kv_set store standing in for WactorzDB."""
 
     def __init__(self):
@@ -614,7 +614,7 @@ class GlobalCostAccumulationTest(unittest.TestCase):
         import wactorz.agents.llm_agent as L
 
         self.L = L
-        self.db = _KVStub()
+        self.db = _SerializedKV()
         self._p_db = patch.object(L, "get_db", lambda: self.db)
         self._p_db.start()
 

@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-Guidance for Claude Code (and human contributors) working in this repository.
+Guidance for coding agents (and human contributors) working in this repository.
 Keep changes small, tested, and consistent with what's already here.
 
 ## What this is
@@ -52,6 +52,18 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 
 - Python 3.10+. Tests are **pytest** (`asyncio_mode = auto`); new code and bug fixes ship with a test in `tests/`.
 - Async-first (`aiohttp` / `aiomqtt`) — prefer `async`/`await` over blocking calls in the event loop.
+  A synchronous call inside `async def` freezes *every* actor in the process, not just its own —
+  MQTT keepalive included. Anything that waits on the network or disk goes through `await`, or
+  `asyncio.to_thread` when the library offers no async API. Give every outbound call a timeout,
+  and prefer one too generous over one too tight: the bug being prevented is an unbounded wait,
+  so a limit that cuts off slow-but-healthy work just trades one failure for another.
+- **Imports go at the top of the file.** A function-local import is for exactly two things: an
+  optional dependency that must not be required to import the module (`openai`, `torch`,
+  `telegram`), or breaking a genuine circular import between `wactorz` modules. Never for the
+  standard library, and never for a required dependency such as `aiohttp` or `aiomqtt` — those
+  cost nothing at module scope, and hiding them there conceals what a module actually depends on
+  and complicates patching in tests. When one is load-bearing, say which of the two reasons
+  applies on the line itself.
 - A linter/formatter/type-checker is being introduced via `pyproject.toml` `[tool.ruff]` — run it
   before pushing once it lands. Until then, match the style of the file you're editing.
 

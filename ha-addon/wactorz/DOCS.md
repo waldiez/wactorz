@@ -35,15 +35,25 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `ha_connection` | `auto` | `auto`: use the Supervisor proxy when `ha_token` is blank, your `ha_url` otherwise. `supervisor`/`custom`: force a mode explicitly. |
 | `ha_url` | `http://homeassistant.local:8123` | Home Assistant base URL seen from inside the addon container (only used in `custom` mode) |
 | `ha_token` | *(blank)* | Long-lived access token (HA → Profile → Security → Long-Lived Access Tokens). Blank = Supervisor proxy mode, `ha_url` ignored |
-| `discord_bot_token` | *(blank)* | Discord bot token (optional) |
-| `telegram_bot_token` | *(blank)* | Telegram bot token (optional) |
-| `telegram_allowed_user_id` | `0` | Telegram user ID allowed to send commands (0 = disabled) |
+| `discord_bot_token` | *(blank)* | Discord bot token (optional). Requires `discord_allowed_user_ids`. |
+| `discord_allowed_user_ids` | *(blank)* | **Required with the token** — comma-separated Discord user IDs allowed to talk to the bot. Without it the bot will not start. Enable Developer Mode, right-click your name, Copy User ID. |
+| `telegram_bot_token` | *(blank)* | Telegram bot token (optional). Requires `telegram_allowed_user_ids`. |
+| `telegram_allowed_user_ids` | *(blank)* | **Required with the token** — comma-separated Telegram user IDs. Without it the bot only answers `/start` with your user ID, so you can fill this in and restart. |
+| `telegram_allowed_user_id` | `0` | Older single-ID form of the above; still honoured. `0` means unset. |
+| `social_rate_limit_per_min` | `12` | Max messages per minute per sender on the bots. `0` disables the limit. |
 | `otel_endpoint` | *(blank)* | OTLP HTTP collector URL (e.g. `http://192.168.1.10:4318`). Leave blank to disable OpenTelemetry. |
 | `otel_service_name` | `wactorz` | Service name reported to the OTLP collector. |
 | `influx_url` | *(blank)* | InfluxDB 2.x base URL (e.g. `http://homeassistant:8086`). Leave blank to disable. `wactorz[influx]` is installed automatically when set. |
 | `influx_token` | *(blank)* | InfluxDB API token. |
 | `influx_org` | `wactorz` | InfluxDB organisation name. |
 | `influx_bucket` | `wactorz` | InfluxDB bucket name. |
+
+> **The bots are capability-restricted.** Discord and Telegram allow conversation, Home Assistant
+> questions, and everyday device control (lights, switches, climate, covers, media players). They
+> cannot spawn or delete agents, run code, create automations, or reach Home Assistant service
+> domains like `shell_command`, `python_script` or `hassio` — use the dashboard for those. The
+> allow-lists are required because a bot that answers strangers would let them control your home
+> and spend your LLM budget.
 
 ## MQTT
 

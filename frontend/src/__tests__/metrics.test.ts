@@ -3,6 +3,10 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
+
+import { toast } from "../ui/ToastManager";
 import { MetricsController, type MetricsHost } from "../ui/dashboard/metrics";
 import type { View } from "../ui/dashboard/types";
 
@@ -25,6 +29,8 @@ function makeHost(view: View, root = hostBarMarkup()) {
 describe("MetricsController", () => {
     beforeEach(() => {
         (window as unknown as Record<string, unknown>).__WACTORZ_INGRESS_PATH = "";
+        // the mock lives in the module factory, so restoreAllMocks won't reset it
+        vi.mocked(toast.show).mockClear();
     });
     afterEach(() => vi.restoreAllMocks());
 
@@ -145,6 +151,68 @@ describe("MetricsController", () => {
                 expect.objectContaining({ method: "POST" }),
             ),
         );
-        expect(fetch).toHaveBeenCalledWith("/api/cost"); // refetch
+        // the refetch is a further await past the POST, so wait for it too
+        await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/cost"));
+    });
+
+    describe("a rejected spend-limit change is not reported as success", () => {
+        it("says so when the backend refuses the save", async () => {
+            globalThis.fetch = vi.fn(async (url: string) =>
+                String(url).includes("/limit")
+                    ? { ok: false, status: 400, json: async () => ({}) }
+                    : { ok: true, json: async () => ({}) },
+            ) as unknown as typeof fetch;
+            const m = new MetricsController(makeHost("settings"));
+            const view = m.buildSettingsView();
+            view.querySelector<HTMLInputElement>('input[type="number"]')!.value = "7";
+            byText(view, "Save limit").click();
+
+            await vi.waitFor(() =>
+                expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" })),
+            );
+        });
+
+        it("says so when the save cannot reach the backend", async () => {
+            globalThis.fetch = vi.fn(async () => {
+                throw new Error("network down");
+            }) as unknown as typeof fetch;
+            const m = new MetricsController(makeHost("settings"));
+            const view = m.buildSettingsView();
+            byText(view, "Save limit").click();
+
+            await vi.waitFor(() =>
+                expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" })),
+            );
+        });
+
+        it("says so when the reset is refused", async () => {
+            globalThis.fetch = vi.fn(async (url: string) =>
+                String(url).includes("/reset")
+                    ? { ok: false, status: 503, json: async () => ({}) }
+                    : { ok: true, json: async () => ({}) },
+            ) as unknown as typeof fetch;
+            window.confirm = vi.fn(() => true);
+            const m = new MetricsController(makeHost("settings"));
+            const view = m.buildSettingsView();
+            byText(view, "Reset spend").click();
+
+            await vi.waitFor(() =>
+                expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" })),
+            );
+        });
+
+        it("stays quiet when the save succeeds", async () => {
+            globalThis.fetch = vi.fn(async () => ({
+                ok: true,
+                json: async () => ({}),
+            })) as unknown as typeof fetch;
+            const host = makeHost("settings");
+            const m = new MetricsController(host);
+            const view = m.buildSettingsView();
+            byText(view, "Save limit").click();
+
+            await vi.waitFor(() => expect(host.renderView).toHaveBeenCalled());
+            expect(toast.show).not.toHaveBeenCalled();
+        });
     });
 });

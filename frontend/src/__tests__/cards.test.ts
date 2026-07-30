@@ -102,7 +102,7 @@ describe("appendActionBtns", () => {
 
     it("protected (but messageable) → Pause only, no Stop/Delete", () => {
         const c = document.createElement("div");
-        appendActionBtns(c, agent("main-actor", { protected: true }));
+        appendActionBtns(c, agent("main", { protected: true }));
         expect(actions(c)).toEqual(["pause"]);
     });
 
@@ -133,7 +133,7 @@ describe("buildWactorCard", () => {
     });
 
     it("shows the protected shield and hides destructive actions for protected agents", () => {
-        const card = buildWactorCard(agent("main-actor", { protected: true }), 1000, cb());
+        const card = buildWactorCard(agent("main", { protected: true }), 1000, cb());
         expect(card.querySelector(".af-card-protected")).not.toBeNull();
         expect(actions(card)).not.toContain("delete");
     });

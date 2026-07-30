@@ -10,6 +10,16 @@
  * human-facing name is the `<name>` segment.
  */
 
+/**
+ * The orchestrator's registered name, and the default chat target.
+ *
+ * Mirrors the backend's `MAIN_ACTOR_NAME`; the two must agree, since routing is
+ * by `@name`. It was written out at a dozen call sites across the transport and
+ * the dashboard, which is how the old `"main-actor"` spelling survived in some
+ * of them long after the backend stopped using it.
+ */
+export const MAIN_AGENT: string = "main";
+
 /** Extract the embedded `<name>` from a WID id, or return the input unchanged. */
 export function nameFromWid(raw: string | undefined): string {
     if (!raw) {

@@ -24,14 +24,18 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Pinned from package.json's "packageManager": this build's output is
+      # published, so it must match the assets CI verified against the tree.
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: frontend/package.json
 
       - name: Install build deps
         run: pip install hatchling twine
 
       - name: Build frontend
         working-directory: frontend
-        run: bun install && bun run build
+        run: bun install --frozen-lockfile && bun run build
 
       - name: Build wheel + sdist
         run: WACTORZ_FRONTEND_STALE=0 python -m hatchling build

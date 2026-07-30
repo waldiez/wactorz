@@ -3,6 +3,10 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
+
+import { toast } from "../ui/ToastManager";
 import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
 import { pickChatTarget, resolveSendTarget, stripLeadingMention } from "../ui/dashboard/chatRouting";
 import type { AgentInfo, ChatMessage } from "../types/agent";
@@ -12,10 +16,7 @@ function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
 }
 
-function makeHost(
-    agents: AgentInfo[] = [agent("main-actor"), agent("worker")],
-    view: View = "chat",
-): ChatHost {
+function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")], view: View = "chat"): ChatHost {
     const map = new Map(agents.map(a => [a.name, a]));
     let current = view;
     return {
@@ -57,7 +58,7 @@ describe("pickChatTarget", () => {
     });
 
     it("falls back to the alphabetical-first messageable agent when main is absent", () => {
-        expect(pickChatTarget([agent("catalog"), agent("worker")], "main-actor", false)).toBe("catalog");
+        expect(pickChatTarget([agent("catalog"), agent("worker")], "main", false)).toBe("catalog");
     });
 
     it("keeps a user-picked target even when main is present", () => {
@@ -69,27 +70,27 @@ describe("pickChatTarget", () => {
     });
 
     it("returns current when there are no messageable agents", () => {
-        expect(pickChatTarget([], "main-actor", false)).toBe("main-actor");
+        expect(pickChatTarget([], "main", false)).toBe("main");
     });
 });
 
 describe("resolveSendTarget", () => {
-    const names = ["main-actor", "catalog", "worker"];
+    const names = ["main", "catalog", "worker"];
 
     it("routes to a leading @mention over the picker target", () => {
-        expect(resolveSendTarget("@catalog do the thing", names, "main-actor")).toBe("catalog");
+        expect(resolveSendTarget("@catalog do the thing", names, "main")).toBe("catalog");
     });
 
     it("matches the mention case-insensitively", () => {
-        expect(resolveSendTarget("@Catalog hi", names, "main-actor")).toBe("catalog");
+        expect(resolveSendTarget("@Catalog hi", names, "main")).toBe("catalog");
     });
 
     it("falls back to the picker when there is no mention", () => {
-        expect(resolveSendTarget("do the thing", names, "main-actor")).toBe("main-actor");
+        expect(resolveSendTarget("do the thing", names, "main")).toBe("main");
     });
 
     it("falls back when the mention names no known agent", () => {
-        expect(resolveSendTarget("@ghost hi", names, "main-actor")).toBe("main-actor");
+        expect(resolveSendTarget("@ghost hi", names, "main")).toBe("main");
     });
 });
 
@@ -100,7 +101,7 @@ describe("stripLeadingMention", () => {
     });
 
     it("handles a hyphenated agent name", () => {
-        expect(stripLeadingMention("@main-actor hi", "main-actor")).toBe("hi");
+        expect(stripLeadingMention("@main hi", "main")).toBe("hi");
     });
 
     it("leaves content untouched when the leading mention isn't the target", () => {
@@ -123,7 +124,7 @@ describe("DashboardChat — syncChatTarget", () => {
     it("never auto-targets a raw id — stays on the default when nothing better exists", () => {
         const dc = new DashboardChat(makeHost([agent(UUID)]));
         dc.syncChatTarget();
-        expect(dc.chatTarget).toBe("main-actor"); // the default, NOT the uuid
+        expect(dc.chatTarget).toBe("main"); // the default, NOT the uuid
     });
 
     it("falls back to the first human-named agent (ignoring id-named ones) when there is no main", () => {
@@ -188,7 +189,7 @@ describe("DashboardChat — view construction", () => {
     it("renders the pane header with the current target and its state", () => {
         mount(host);
         const hdr = host.root.querySelector<HTMLElement>("#af-chat-pane-header")!;
-        expect(hdr.querySelector(".af-chat-pane-title")!.textContent).toBe("@main-actor");
+        expect(hdr.querySelector(".af-chat-pane-title")!.textContent).toBe("@main");
         expect(hdr.querySelector(".af-chat-agent-dot")).not.toBeNull();
         expect(hdr.querySelector(".af-chat-pane-state")!.textContent).toBe("running");
     });
@@ -217,27 +218,27 @@ describe("DashboardChat — target selection", () => {
     });
 
     it("does not switch to a non-messageable (system) agent", () => {
-        host = makeHost([agent("main-actor"), agent("io-agent")]);
+        host = makeHost([agent("main"), agent("io-agent")]);
         const dc = mount(host);
         host.root.querySelector<HTMLElement>('.af-chat-agent-row[data-name="io-agent"]')?.click();
-        expect(dc.chatTarget).toBe("main-actor"); // unchanged
+        expect(dc.chatTarget).toBe("main"); // unchanged
     });
 
     it("syncChatTarget falls back to main when the target vanished", () => {
         const dc = mount(host);
         dc.chatTarget = "ghost";
         dc.syncChatTarget();
-        expect(dc.chatTarget).toBe("main-actor");
+        expect(dc.chatTarget).toBe("main");
     });
 
     it("populates the iobar select with messageable agents, main pinned first", () => {
-        host = makeHost([agent("zeta"), agent("main-actor"), agent("io-agent")]);
+        host = makeHost([agent("zeta"), agent("main"), agent("io-agent")]);
         const dc = mount(host);
         const iobar = dc.buildIobar();
         const opts = [...iobar.querySelectorAll<HTMLOptionElement>("#af-target-select option")].map(
             o => o.value,
         );
-        expect(opts[0]).toBe("main-actor"); // PRIORITY pin
+        expect(opts[0]).toBe("main"); // PRIORITY pin
         expect(opts).not.toContain("io-agent"); // system agent excluded
     });
 });
@@ -275,7 +276,7 @@ describe("DashboardChat — sending & live events", () => {
     it("an incoming af-chat-message from the open agent appends to the thread", () => {
         const msg: ChatMessage = {
             id: "m1",
-            from: "main-actor",
+            from: "main",
             to: "user",
             content: "hi back",
             timestampMs: Date.now(),
@@ -286,11 +287,9 @@ describe("DashboardChat — sending & live events", () => {
 
     it("streams chunks into a live bubble then commits on stream-end", () => {
         document.dispatchEvent(
-            new CustomEvent("af-stream-chunk", { detail: { chunk: "Hel", from: "main-actor" } }),
+            new CustomEvent("af-stream-chunk", { detail: { chunk: "Hel", from: "main" } }),
         );
-        document.dispatchEvent(
-            new CustomEvent("af-stream-chunk", { detail: { chunk: "lo", from: "main-actor" } }),
-        );
+        document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk: "lo", from: "main" } }));
         expect(thread(host).textContent).toContain("Hello");
         document.dispatchEvent(new CustomEvent("af-stream-end"));
         // committed into chatMessages → re-render still shows it
@@ -301,18 +300,18 @@ describe("DashboardChat — sending & live events", () => {
     it("caps accumulation on a runaway stream instead of growing without bound", () => {
         const chunk = "x".repeat(10_000);
         for (let i = 0; i < 30; i++) {
-            document.dispatchEvent(
-                new CustomEvent("af-stream-chunk", { detail: { chunk, from: "main-actor" } }),
-            );
+            document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk, from: "main" } }));
         }
-        expect((dc as unknown as { _streamText: string })._streamText.length).toBeLessThan(300_000);
+        const streams = (dc as unknown as { _streamUI: { streams: { text: (from: string) => string } } })
+            ._streamUI.streams;
+        expect(streams.text("main").length).toBeLessThan(300_000);
     });
 
     it("af-reset-chat clears the thread", () => {
         document.dispatchEvent(
             new CustomEvent("af-chat-message", {
                 detail: {
-                    msg: { id: "m", from: "main-actor", to: "user", content: "x", timestampMs: 1 },
+                    msg: { id: "m", from: "main", to: "user", content: "x", timestampMs: 1 },
                 },
             }),
         );
@@ -325,11 +324,84 @@ describe("DashboardChat — sending & live events", () => {
         document.dispatchEvent(
             new CustomEvent("af-chat-message", {
                 detail: {
-                    msg: { id: "m2", from: "main-actor", to: "user", content: "ignored", timestampMs: 1 },
+                    msg: { id: "m2", from: "main", to: "user", content: "ignored", timestampMs: 1 },
                 },
             }),
         );
         expect(thread(host).textContent).not.toContain("ignored");
+    });
+});
+
+describe("DashboardChat — thread integrity", () => {
+    let host: ChatHost;
+    let dc: DashboardChat;
+    const messages = () => (dc as unknown as { chatMessages: ChatMessage[] }).chatMessages;
+
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        host = makeHost();
+        dc = mount(host);
+        dc.wire();
+    });
+
+    it("scoped af-reset-chat drops only that agent's thread, keeping user messages to others", () => {
+        document.dispatchEvent(
+            new CustomEvent("af-send-message", {
+                detail: { content: "hi main", target: "main", attachments: [] },
+            }),
+        );
+        document.dispatchEvent(
+            new CustomEvent("af-chat-message", {
+                detail: {
+                    msg: { id: "r1", from: "main", to: "user", content: "reply", timestampMs: 1 },
+                },
+            }),
+        );
+        document.dispatchEvent(
+            new CustomEvent("af-send-message", {
+                detail: { content: "hi worker", target: "worker", attachments: [] },
+            }),
+        );
+
+        document.dispatchEvent(new CustomEvent("af-reset-chat", { detail: { agent: "main" } }));
+
+        // the old filter dropped every user message regardless of its target
+        expect(messages().map(m => `${m.from}->${m.to}:${m.content}`)).toEqual(["user->worker:hi worker"]);
+    });
+
+    it("removes the optimistic bubble when the send fails (af-send-failed)", () => {
+        document.dispatchEvent(
+            new CustomEvent("af-send-message", {
+                detail: { content: "hello?", target: "main", attachments: [] },
+            }),
+        );
+        expect(thread(host).textContent).toContain("hello?");
+
+        document.dispatchEvent(
+            new CustomEvent("af-send-failed", { detail: { content: "hello?", target: "main" } }),
+        );
+
+        expect(thread(host).textContent).not.toContain("hello?");
+        expect(messages().some(m => m.content === "hello?")).toBe(false);
+    });
+
+    it("keeps concurrent agent streams separate (no merged bubble)", () => {
+        const chunk = (c: string, from: string) =>
+            document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk: c, from } }));
+        const end = (from: string, text: string) =>
+            document.dispatchEvent(new CustomEvent("af-stream-end", { detail: { text, from } }));
+
+        chunk("A1", "alpha");
+        chunk("B1", "beta");
+        chunk("A2", "alpha");
+        end("alpha", "A1A2");
+
+        // with a single shared buffer this committed "A1B1A2" attributed to alpha
+        expect(messages().find(m => m.from === "alpha")?.content).toBe("A1A2");
+        expect(messages().some(m => m.content.includes("A1B1"))).toBe(false);
+
+        end("beta", "B1");
+        expect(messages().find(m => m.from === "beta")?.content).toBe("B1");
     });
 });
 
@@ -348,9 +420,9 @@ describe("DashboardChat — history & misc state", () => {
             json: async () => [{ id: 1, ts: 1_700_000_000, role: "assistant", content: "from history" }],
         })) as unknown as typeof fetch;
         const dc = mount(host);
-        await dc.loadHistory("main-actor");
+        await dc.loadHistory("main");
         expect(thread(host).textContent).toContain("from history");
-        await dc.loadHistory("main-actor"); // already loaded → no second fetch
+        await dc.loadHistory("main"); // already loaded → no second fetch
         expect(fetch).toHaveBeenCalledTimes(1);
     });
 
@@ -360,10 +432,22 @@ describe("DashboardChat — history & misc state", () => {
             json: async () => [{ id: 1, ts: 1_700_000_000, role: "assistant", content: "h" }],
         })) as unknown as typeof fetch;
         const dc = mount(host);
-        await dc.loadHistory("main-actor"); // 1 fetch (chat_log non-empty → no fallback)
+        await dc.loadHistory("main"); // 1 fetch (chat_log non-empty → no fallback)
         dc.clearAll();
-        await dc.loadHistory("main-actor"); // history-loaded set cleared → fetches again
+        await dc.loadHistory("main"); // history-loaded set cleared → fetches again
         expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("loadHistory retries after a failed fetch instead of caching it as loaded", async () => {
+        globalThis.fetch = vi.fn(async () => ({ ok: false })) as unknown as typeof fetch;
+        const dc = mount(host);
+        await dc.loadHistory("main"); // fails — must NOT mark loaded
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => [{ id: 1, ts: 1_700_000_000, role: "assistant", content: "later" }],
+        })) as unknown as typeof fetch;
+        await dc.loadHistory("main"); // transient failure earlier → real fetch now
+        expect(thread(host).textContent).toContain("later");
     });
 
     it("setTarget changes the active thread target", () => {
@@ -382,13 +466,49 @@ describe("DashboardChat — stop, attachments, external events", () => {
         return { id: "a1", name: "x.png", mime: "image/png", size: 10, url: "blob:abc", ...over };
     }
 
-    it("stop generation fire-and-forgets a POST to /api/chat/stop", () => {
+    it("stop generation POSTs to /api/chat/stop", () => {
         const dc = mount(makeHost()) as any;
         const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as unknown as Response);
         dc._stopGeneration();
         expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/chat/stop"), {
             method: "POST",
         });
+        fetchSpy.mockRestore();
+    });
+
+    it("says so when stop cannot reach the backend", async () => {
+        const dc = mount(makeHost()) as any;
+        vi.mocked(toast.show).mockClear();
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+
+        await dc._stopGeneration();
+
+        // clicking Stop against a dead backend used to do nothing at all
+        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
+        fetchSpy.mockRestore();
+    });
+
+    it("says so when the backend refuses the stop", async () => {
+        const dc = mount(makeHost()) as any;
+        vi.mocked(toast.show).mockClear();
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValue({ ok: false, status: 503 } as unknown as Response);
+
+        await dc._stopGeneration();
+
+        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
+        fetchSpy.mockRestore();
+    });
+
+    it("stays quiet when stop succeeds", async () => {
+        const dc = mount(makeHost()) as any;
+        vi.mocked(toast.show).mockClear();
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as unknown as Response);
+
+        await dc._stopGeneration();
+
+        expect(toast.show).not.toHaveBeenCalled();
         fetchSpy.mockRestore();
     });
 
@@ -430,6 +550,33 @@ describe("DashboardChat — stop, attachments, external events", () => {
         revoke.mockRestore();
     });
 
+    it("sending revokes pending blob attachment URLs (dev-stub uploads)", () => {
+        const dc = mount(makeHost()) as any;
+        const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+        dc._pendingAttachments = [att({ url: "blob:send-me" })];
+        const input = document.createElement("textarea");
+        input.value = "hi";
+        const select = document.createElement("select");
+        const opt = document.createElement("option");
+        opt.value = "worker";
+        select.append(opt);
+        select.value = "worker";
+        dc._sendMessage(input, select);
+        expect(revoke).toHaveBeenCalledWith("blob:send-me");
+        expect(dc._pendingAttachments).toEqual([]);
+        revoke.mockRestore();
+    });
+
+    it("clearAll revokes pending blob attachment URLs", () => {
+        const dc = mount(makeHost()) as any;
+        const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+        dc._pendingAttachments = [att({ url: "blob:wipe-me" })];
+        dc.clearAll();
+        expect(revoke).toHaveBeenCalledWith("blob:wipe-me");
+        expect(dc._pendingAttachments).toEqual([]);
+        revoke.mockRestore();
+    });
+
     it("an external af-send-message (not self-dispatched) appends to the thread", () => {
         const host = makeHost();
         const dc = mount(host) as any;
@@ -448,7 +595,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
         dc.wire();
         dc.chatMessages = [
             { id: "1", from: "worker", to: "user", content: "w", timestampMs: 1 },
-            { id: "2", from: "main-actor", to: "user", content: "m", timestampMs: 2 },
+            { id: "2", from: "main", to: "user", content: "m", timestampMs: 2 },
             { id: "3", from: "user", to: "worker", content: "u", timestampMs: 3 },
         ];
         document.dispatchEvent(new CustomEvent("af-reset-chat", { detail: { agent: "worker" } }));
@@ -467,10 +614,9 @@ describe("DashboardChat — stop, attachments, external events", () => {
     it("re-rendering mid-stream reattaches the live bubble with its accumulated text", () => {
         const host = makeHost();
         const dc = mount(host) as any;
-        dc._streamFrom = "main-actor";
-        dc._streamTarget = "main-actor";
-        dc._lastSentTarget = "main-actor";
-        dc._streamText = "partial reply";
+        dc._streamUI.streams.append("main", "partial reply");
+        dc._streamUI["_targets"].set("main", "main");
+        dc._lastSentTarget = "main";
         dc.renderChatThread();
         expect(thread(host).textContent).toContain("partial reply");
     });
@@ -481,7 +627,7 @@ describe("DashboardChat — @mention target stickiness", () => {
 
     it("stays on an @mentioned agent after a later reconcile (no snap back to main)", () => {
         globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => [] })) as unknown as typeof fetch;
-        const host = makeHost([agent("main-actor"), agent("catalog")], "chat");
+        const host = makeHost([agent("main"), agent("catalog")], "chat");
         const dc = mount(host);
         dc.wire();
         const iobar = dc.buildIobar();

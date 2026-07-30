@@ -1,10 +1,11 @@
-import sys
 import tempfile
 import types
 import unittest
 from unittest.mock import AsyncMock, patch
 
-sys.modules.setdefault("openai", types.ModuleType("openai"))
+from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissingImports]
+
+ensure_importable("openai")
 
 from wactorz.agents.llm_agent import OpenAIProvider
 from wactorz.agents.main_actor import MainActor
@@ -38,7 +39,7 @@ class _FakeHAClient:
 
 class MainActorActuateRoutingTest(unittest.IsolatedAsyncioTestCase):
     async def test_classify_intent_accepts_actuate(self):
-        actor = MainActor(llm_provider=_FakeLLM("ACTUATE"))
+        actor = MainActor(llm_provider=_FakeLLM("ACTUATE"))  # pyright: ignore[reportArgumentType]
         self.assertEqual(await actor._classify_intent("turn on the light"), "ACTUATE")
 
     async def test_process_user_input_routes_actuate_to_one_off_handler(self):
@@ -57,7 +58,7 @@ class MainActorActuateRoutingTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_classify_intent_requests_none_reasoning_effort(self):
         llm = types.SimpleNamespace(complete=AsyncMock(return_value=("ACTUATE", {})))
-        actor = MainActor(llm_provider=llm)
+        actor = MainActor(llm_provider=llm)  # pyright: ignore[reportArgumentType]
 
         result = await actor._classify_intent("turn off the office light")
 
@@ -80,7 +81,7 @@ class OpenAIProviderReasoningTest(unittest.IsolatedAsyncioTestCase):
 
         provider = OpenAIProvider.__new__(OpenAIProvider)
         provider.model = "gpt-5-mini"
-        provider.client = types.SimpleNamespace(
+        provider.client = types.SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
             chat=types.SimpleNamespace(completions=_FakeCompletions())
         )
 
@@ -91,7 +92,7 @@ class OpenAIProviderReasoningTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(text, "HA")
-        self.assertEqual(provider.client.chat.completions.calls[0]["reasoning_effort"], "low")
+        self.assertEqual(provider.client.chat.completions.calls[0]["reasoning_effort"], "low")  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
@@ -99,7 +100,7 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = OneOffActuatorAgent(
                 request="turn on the mystery light",
-                llm_provider=_FakeLLM("[]"),
+                llm_provider=_FakeLLM("[]"),  # pyright: ignore[reportArgumentType]
                 task_id="actuate_test",
                 reply_to_id="main-actor",
                 persistence_dir=tmpdir,
@@ -124,7 +125,7 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
             fake_client = _FakeHAClient("ws://ha.local:8123/api/websocket", "token")
             agent = OneOffActuatorAgent(
                 request="turn on the living room light",
-                llm_provider=_FakeLLM(
+                llm_provider=_FakeLLM(  # pyright: ignore[reportArgumentType]
                     '[{"domain":"light","service":"turn_on","entity_id":"light.living_room","service_data":{"brightness_pct":50}}]'
                 ),
                 task_id="actuate_test",
@@ -166,7 +167,7 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
             )
             agent = OneOffActuatorAgent(
                 request="turn off the office light",
-                llm_provider=llm,
+                llm_provider=llm,  # pyright: ignore[reportArgumentType]
                 task_id="actuate_test",
                 reply_to_id="main-actor",
                 persistence_dir=tmpdir,

@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import sys
+from typing import cast
 
 import wactorz._bootstrap  # noqa: F401  side effects: import path, platform, root logging
 from wactorz.config import CONFIG
@@ -34,8 +35,6 @@ async def _start_web_ui(
     port: int, mqtt_broker: str, mqtt_port: int, actor_registry=None, persistence_db=None
 ) -> None:
     """Start the monitor web server as a quiet background asyncio task."""
-    import logging as _log
-
     from wactorz.web import runtime, static_site
     from wactorz.web.app import main as run_server
 
@@ -51,7 +50,7 @@ async def _start_web_ui(
         runtime.set_db(persistence_db)
 
     for _name in ("wactorz.web", "aiohttp.access", "aiohttp.server"):
-        _log.getLogger(_name).setLevel(_log.WARNING)
+        logging.getLogger(_name).setLevel(logging.WARNING)
 
     asyncio.create_task(run_server())
     logger.info("Web UI →  http://localhost:%d", port)
@@ -66,43 +65,38 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
     from wactorz.agents.installer_agent import InstallerAgent
     from wactorz.agents.io_agent import IOAgent
-    from wactorz.agents.llm_agent import (
-        AnthropicProvider,
-        GeminiProvider,
-        NIMProvider,
-        OllamaProvider,
-        OpenAIProvider,
-    )
+    from wactorz.agents.llm_agent import LLMProvider
     from wactorz.agents.main_actor import MainActor
     from wactorz.agents.monitor_agent import MonitorActor
-    from wactorz.core.actor import SupervisorStrategy
+    from wactorz.core.actor import Actor, SupervisorStrategy
     from wactorz.core.registry import ActorSystem
+    from wactorz.llm_factory import create_provider, provider_for
 
     llm = args.llm or CONFIG.llm_provider
-    if llm == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY") or CONFIG.llm_api_key
-        provider = AnthropicProvider(model=CONFIG.llm_model, api_key=api_key)
-    elif llm == "openai":
-        api_key = os.getenv("OPENAI_API_KEY") or CONFIG.llm_api_key
-        provider = OpenAIProvider(
-            model=CONFIG.llm_model, api_key=api_key, base_url=CONFIG.openai_url or None
-        )
-    elif llm == "ollama":
-        ollama_model = args.ollama_model or CONFIG.llm_model
-        provider = OllamaProvider(model=ollama_model, base_url=CONFIG.ollama_url)
-    elif llm == "nim":
-        nim_model = args.nim_model or CONFIG.llm_model
-        provider = NIMProvider(
-            model=nim_model,
-            api_key=CONFIG.nim_api_key or CONFIG.nvidia_api_key or CONFIG.llm_api_key,
-        )
-    elif llm == "gemini":
-        gemini_model = args.gemini_model or CONFIG.llm_model or "gemini-2.5-flash"
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or CONFIG.llm_api_key
-        provider = GeminiProvider(model=gemini_model, api_key=api_key)
-    else:
+    model_flag = {
+        "ollama": args.ollama_model,
+        "nim": args.nim_model,
+        "gemini": args.gemini_model,
+    }.get(llm)
+    try:
+        provider = create_provider(llm, model_flag)
+    except ValueError:
         provider = None
+    if provider is None:
         logger.warning("No LLM provider set. Agents will have limited capabilities.")
+    else:
+        # One deterministic startup line so the active model and sampling
+        # settings are visible without digging through provider dashboards.
+        temperature = (
+            "provider default" if CONFIG.llm_temperature is None else CONFIG.llm_temperature
+        )
+        logger.info(
+            "LLM: %s/%s | temperature=%s%s",
+            llm,
+            getattr(provider, "model", None) or getattr(provider, "model_name", "?"),
+            temperature,
+            f" | overrides: {CONFIG.llm_overrides}" if CONFIG.llm_overrides else "",
+        )
 
     # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
     _sd = _state_dir()
@@ -152,18 +146,23 @@ async def build_system(args: argparse.Namespace):
     )
 
     # ── Factory helpers (called fresh on each (re)start by the Supervisor) ────
-    def _wire_persistence(actor):
+    def _wire_persistence(actor: Actor) -> Actor:
         """Attach the unified persistence API to an actor."""
         actor._persistence_api = PersistenceAPI(_db, _redis, _pickle_store, actor.name)
         return actor
 
-    def make_provider():
+    def make_provider() -> LLMProvider | None:
         return provider  # stateless — same instance is fine
 
-    def make_main():
-        return _wire_persistence(
-            MainActor(llm_provider=make_provider(), name="main", persistence_dir="./state")
+    def make_main() -> MainActor:
+        main_actor = _wire_persistence(
+            MainActor(
+                llm_provider=provider_for("main", make_provider()),
+                name="main",
+                persistence_dir="./state",
+            )
         )
+        return cast(MainActor, main_actor)
 
     def make_monitor():
         return _wire_persistence(
@@ -181,7 +180,9 @@ async def build_system(args: argparse.Namespace):
     def make_ha_agent():
         return _wire_persistence(
             HomeAssistantAgent(
-                llm_provider=make_provider(), name="home-assistant-agent", persistence_dir="./state"
+                llm_provider=provider_for("ha", make_provider()),
+                name="home-assistant-agent",
+                persistence_dir="./state",
             )
         )
 
@@ -290,7 +291,7 @@ async def build_system(args: argparse.Namespace):
         sys.exit(1)
 
     logger.info("Wactorz system started. Supervision tree active.")
-    return system, main_actor, _db
+    return system, cast(MainActor, main_actor), _db
 
 
 async def app(args: argparse.Namespace):
@@ -314,15 +315,23 @@ async def app(args: argparse.Namespace):
         RESTInterface,
         TelegramInterface,
         WhatsAppInterface,
+        build_social_companions,
+    )
+    from wactorz.interfaces.chat_interfaces import (
+        run_all_interfaces as _run_all,
     )
 
     interface = args.interface or CONFIG.interface
+
+    # Configured social channels run alongside the primary interface, not
+    # instead of it (the dashboard stays primary; the bots ride along).
+    companions = build_social_companions(main_actor, interface)
 
     try:
         if interface == "cli":
             if sys.stdin.isatty():
                 iface = CLIInterface(main_actor)
-                await asyncio.gather(iface.run(), system.run_forever())
+                await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
             else:
                 # No TTY (piped/Docker/systemd): input() would raise EOFError on
                 # the first read, finishing iface.run() instantly and — paired
@@ -330,18 +339,22 @@ async def app(args: argparse.Namespace):
                 # after boot. Skip the interactive loop and just stay up.
                 logger.info("stdin is not a TTY — running headless (no interactive CLI)")
                 system._running = True
-                await system.run_forever()
+                await asyncio.gather(system.run_forever(), *_run_all(companions))
         elif interface == "rest":
             port = args.port or CONFIG.port
             iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)
-            await asyncio.gather(iface.run(), system.run_forever())
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "discord":
             discord_token = args.discord_token or CONFIG.discord_token
             if not discord_token:
                 logger.error("DISCORD_BOT_TOKEN not set.")
                 sys.exit(1)
-            iface = DiscordInterface(main_actor, token=discord_token)
-            await asyncio.gather(iface.run(), system.run_forever())
+            iface = DiscordInterface(
+                main_actor,
+                token=discord_token,
+                allowed_user_ids=CONFIG.discord_allowed_user_ids,
+            )
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "whatsapp":
             port = args.port or CONFIG.port
             iface = WhatsAppInterface(
@@ -350,20 +363,21 @@ async def app(args: argparse.Namespace):
                 auth_token=CONFIG.twilio_auth_token,
                 from_number=CONFIG.twilio_whatsapp_number,
                 port=port,
+                allowed_numbers=CONFIG.whatsapp_allowed_numbers,
             )
-            await asyncio.gather(iface.run(), system.run_forever())
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "telegram":
             telegram_token = args.telegram_token or CONFIG.telegram_token
             if not telegram_token:
                 logger.error("TELEGRAM_BOT_TOKEN not set.")
                 sys.exit(1)
-            allowed_user_id = (
-                args.telegram_allowed_user_id or CONFIG.telegram_allowed_user_id or None
-            )
             iface = TelegramInterface(
-                main_actor, token=telegram_token, allowed_user_id=allowed_user_id
+                main_actor,
+                token=telegram_token,
+                allowed_user_id=args.telegram_allowed_user_id or None,
+                allowed_user_ids=CONFIG.telegram_allowed_user_ids,
             )
-            await asyncio.gather(iface.run(), system.run_forever())
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     except Exception as exc:
         logger.error(f"System error: {exc}", exc_info=True)
     finally:

@@ -72,11 +72,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
+      # Pinned from package.json's "packageManager" so the build below is
+      # byte-reproducible — the staleness check compares its output against
+      # committed bytes, and an unpinned toolchain would fail PRs on a hash
+      # that changed for no reason of theirs.
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: frontend/package.json
 
       - name: Install
         working-directory: frontend
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Lint
         working-directory: frontend
@@ -89,3 +95,17 @@ jobs:
       - name: Build
         working-directory: frontend
         run: bun run build
+
+      # static/app is committed and shipped in the wheel, so a source change
+      # without a rebuild silently releases stale assets. The build above
+      # already produces the real thing; this only asks whether it matches
+      # what the PR committed. Untracked files count — a changed bundle
+      # arrives under a new hashed name, which `git diff` alone would miss.
+      - name: static/app matches the frontend source
+        run: |
+          if [ -n "$(git status --porcelain -- static/app)" ]; then
+            echo "::error::static/app is stale. Run 'make build-frontend' and commit static/app."
+            git status --porcelain -- static/app
+            exit 1
+          fi
+          echo "static/app is up to date."

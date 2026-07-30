@@ -15,6 +15,15 @@ set -e
 : "${WACTORZ_STATE_DIR:=/app/state}"
 
 mkdir -p "$WACTORZ_STATE_DIR"
-chown -R wactorz:wactorz "$WACTORZ_STATE_DIR"
+
+# Best-effort, deliberately not fatal. On Linux this is what makes the mount
+# writable and it succeeds. On Docker Desktop (macOS/Windows) the bind mount goes
+# through a virtualising filesystem that presents files as accessible regardless
+# and may refuse the chown outright — there it is unnecessary, so failing hard
+# would break the container on the platforms that never needed it. If it does
+# fail somewhere it matters, the app reports an unwritable state directory next.
+if ! chown -R wactorz:wactorz "$WACTORZ_STATE_DIR" 2>/dev/null; then
+    echo "[entrypoint] could not chown $WACTORZ_STATE_DIR — continuing" >&2
+fi
 
 exec setpriv --reuid=wactorz --regid=wactorz --clear-groups --no-new-privs "$@"

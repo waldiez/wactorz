@@ -29,13 +29,17 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Set after the build-time install so it only affects runtime ones. Agents install
-# packages at runtime (the spawn config's `install` list, via InstallerAgent), and
-# the runtime user cannot write system site-packages — PIP_USER sends those to
-# ~/.local instead, which pip honours without the caller passing --user. Keeping
-# them there also means anything installed at runtime stays distinguishable from
-# what the image shipped.
+# packages at runtime (the spawn config's `install` list, via InstallerAgent) and
+# the runtime user cannot write system site-packages, so PIP_USER redirects those —
+# pip honours it without the caller passing --user. The target sits inside the state
+# directory rather than ~/.local for three reasons: it is the one location already
+# guaranteed writable, so the root filesystem can be mounted read-only; packages
+# then survive container recreation instead of dying with the writable layer; and
+# what an agent installed stays clearly separate from what the image shipped.
 ENV HOME=/home/wactorz \
-    PIP_USER=1
+    PIP_USER=1 \
+    PYTHONUSERBASE=/app/state/.python \
+    PIP_CACHE_DIR=/tmp/pip-cache
 
 ENV INTERFACE=rest
 

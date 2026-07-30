@@ -34,7 +34,12 @@ services:
       - "${MQTT_EXTERNAL_PORT:-1883}:1883"
       - "${MQTT_WS_EXTERNAL_PORT:-9001}:9001"
     volumes:
-      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      # Read-only: the broker never writes its own config, and the image's
+      # entrypoint otherwise chowns everything under /mosquitto — which travels
+      # back through the bind mount and rewrites the ownership of this tracked
+      # repo file. That then breaks rootless Podman, where the new owner falls
+      # outside the user-namespace ID mapping.
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
     networks:
@@ -69,6 +74,12 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, SETUID, SETGID]
     security_opt: ["no-new-privileges:true"]
+    # Everything the container writes goes to the state mount below, so the image
+    # itself can be immutable at runtime. /tmp is a tmpfs because pip needs a
+    # scratch area when an agent installs a package.
+    read_only: true
+    tmpfs:
+      - /tmp
     networks:
       - wactorz-net
     # Loopback-bound: these carry no authentication of their own, so they are

@@ -163,8 +163,10 @@ def reset_logs(log_dir: str | None = None) -> None:
                     "[reset] could not truncate handler %s: %s", handler.baseFilename, exc
                 )
 
-    # Also handle files by path (supports offline use)
-    base = Path(log_dir or ".")
+    # Also handle files by path (supports offline use). Defaults to the resolved
+    # state directory, which is where _bootstrap writes the log — a cwd default
+    # would truncate nothing whenever the wipe runs from a different directory.
+    base = Path(log_dir or _DEFAULT_STATE)
     for name in ("wactorz.log", "monitor.log"):
         p = (base / name).resolve()
         if p.exists() and str(p) not in truncated:

@@ -9,6 +9,7 @@ points import it.
 import asyncio
 import io
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -42,13 +43,31 @@ def _bootstrap() -> None:
                 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
                 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+        # The log file lives beside the rest of the durable state rather than in
+        # the working directory: a cwd-relative path assumes the process can
+        # write wherever it happens to have been started, which is false for a
+        # container whose WORKDIR holds only read-only application files, and for
+        # any service run from a directory it does not own. Falls back to a
+        # stream-only setup rather than refusing to start.
+        # Resolved inline rather than through ``core.paths.resolve_state_dir``:
+        # this module must stay importable before anything else in the package
+        # (the sys.path fixup above exists for launches where ``wactorz`` is not
+        # yet importable), and a package-internal import here would both defeat
+        # that and pull the whole agent tree in at bootstrap. ``tests/
+        # test_state_dir.py`` asserts the two resolutions agree, so they cannot
+        # drift apart silently.
+        handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+        try:
+            log_dir = Path(os.environ.get("WACTORZ_STATE_DIR", "").strip() or "./state")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(log_dir / "wactorz.log", encoding="utf-8"))
+        except OSError as exc:  # unwritable target — console logging still works
+            print(f"[bootstrap] file logging disabled: {exc}", file=sys.stderr)
+
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            handlers=[
-                logging.StreamHandler(sys.stdout),
-                logging.FileHandler("wactorz.log", encoding="utf-8"),
-            ],
+            handlers=handlers,
         )
 
 

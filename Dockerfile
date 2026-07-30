@@ -12,12 +12,34 @@ COPY wactorz/ ./wactorz/
 COPY static/ ./static/
 COPY scripts/ ./scripts/
 
-RUN pip install --no-cache-dir ".[all]"
+# Installed into the root-owned system site-packages on purpose: the runtime user
+# must not be able to rewrite the code it is running. The build inputs are removed
+# in the same layer, or they stay in the image as a second, shadowing copy of the
+# package (~22MB) that `python` picks up ahead of the installed one.
+RUN pip install --no-cache-dir ".[all]" \
+    && rm -rf /app/wactorz /app/static /app/scripts /app/pyproject.toml /app/README.md
 
-RUN mkdir -p /app/state
+# Unprivileged runtime user. The entrypoint chowns the state directory before
+# dropping to it — see docker-entrypoint.sh for why that cannot happen here.
+RUN adduser --system --uid 1000 --group --home /home/wactorz wactorz \
+    && mkdir -p /home/wactorz /app/state \
+    && chown -R wactorz:wactorz /home/wactorz /app/state
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Set after the build-time install so it only affects runtime ones. Agents install
+# packages at runtime (the spawn config's `install` list, via InstallerAgent), and
+# the runtime user cannot write system site-packages — PIP_USER sends those to
+# ~/.local instead, which pip honours without the caller passing --user. Keeping
+# them there also means anything installed at runtime stays distinguishable from
+# what the image shipped.
+ENV HOME=/home/wactorz \
+    PIP_USER=1
 
 ENV INTERFACE=rest
 
 EXPOSE 8000 8888
 
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["wactorz"]

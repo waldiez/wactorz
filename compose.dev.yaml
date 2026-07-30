@@ -68,9 +68,11 @@ services:
       INTERFACE: rest
     networks:
       - wactorz-net
+    # Loopback-bound: these carry no authentication of their own, so they are
+    # reachable from this host only. Drop the 127.0.0.1 prefix to expose them.
     ports:
-      - "8000:8000"
-      - "8888:8888"
+      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8888:8888"
     volumes:
       - ./state:/app/state
     depends_on:
@@ -143,11 +145,15 @@ services:
       - "${INFLUX_EXTERNAL_PORT:-8086}:8086"
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME: admin
-      DOCKER_INFLUXDB_INIT_PASSWORD: adminadmin
+      # No fallback values: these seed a real admin account and API token, and a
+      # default would be a published credential. Left unset, InfluxDB's own setup
+      # refuses to initialise — set INFLUX_USERNAME / INFLUX_PASSWORD /
+      # INFLUX_TOKEN in .env before enabling this profile.
+      DOCKER_INFLUXDB_INIT_USERNAME: "${INFLUX_USERNAME:-}"
+      DOCKER_INFLUXDB_INIT_PASSWORD: "${INFLUX_PASSWORD:-}"
       DOCKER_INFLUXDB_INIT_ORG: "${INFLUX_ORG:-wactorz}"
       DOCKER_INFLUXDB_INIT_BUCKET: "${INFLUX_BUCKET:-wactorz}"
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: "${INFLUX_TOKEN:-wactorz-dev-token}"
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: "${INFLUX_TOKEN:-}"
     volumes:
       - influxdb-data:/var/lib/influxdb2
     networks:

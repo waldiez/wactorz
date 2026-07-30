@@ -41,6 +41,11 @@ build/
 target/
 site/
 
+# Generated API docs (pdoc/TypeDoc): gitignored, so a CI build never has them, but
+# Docker does not read .gitignore and the Dockerfile copies static/ wholesale — a
+# local build would otherwise bake in ~13MB the published image lacks.
+static/docs/api/
+
 # Repo metadata and large local artefacts
 .git/
 .github/

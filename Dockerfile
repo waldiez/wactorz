@@ -36,7 +36,14 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # guaranteed writable, so the root filesystem can be mounted read-only; packages
 # then survive container recreation instead of dying with the writable layer; and
 # what an agent installed stays clearly separate from what the image shipped.
-ENV HOME=/home/wactorz \
+#
+# HOME points inside the state directory, not at a home in the image layer: the
+# root filesystem is (should be) read-only at runtime, and code that writes under 
+# `~` would otherwise fail. The Google integrations are the live example — they keep 
+# OAuth tokens at `~/.wactorz/` and refresh them in place, so an image-layer home 
+# means Calendar and Gmail break at the first token expiry rather than at startup.
+# Putting it in the state mount makes those writes work *and* persist.
+ENV HOME=/app/state/home \
     PIP_USER=1 \
     PYTHONUSERBASE=/app/state/.python \
     PIP_CACHE_DIR=/tmp/pip-cache

@@ -9,12 +9,20 @@
 # privilege drop — real, effective AND saved uid, verified unable to regain
 # root — with no extra package, plus --no-new-privs, which stops any setuid
 # binary in the image from elevating afterwards. It execs rather than forks, so
-# the app keeps PID 1 and receives signals directly.
+# no shell lingers between the supervisor and the app; under compose an init
+# process owns PID 1 and forwards signals (see `init: true` there).
 set -e
 
 : "${WACTORZ_STATE_DIR:=/app/state}"
 
 mkdir -p "$WACTORZ_STATE_DIR"
+
+# HOME lives under the state directory (see the Dockerfile) because the root
+# filesystem is read-only. Attempted here so a fresh, root-owned volume gets it
+# before the chown below, but non-fatal: with DAC_OVERRIDE dropped, root cannot
+# create a subdirectory in a state directory owned by the host user, and it does
+# not need to — the application creates it on demand, as the user that owns it.
+mkdir -p "${HOME:-$WACTORZ_STATE_DIR/home}" 2>/dev/null || true
 
 # Best-effort, deliberately not fatal. On Linux this is what makes the mount
 # writable and it succeeds. On Docker Desktop (macOS/Windows) the bind mount goes

@@ -61,6 +61,14 @@ services:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
       INTERFACE: "${INTERFACE:-rest}"
+    # The entrypoint is root only long enough to chown the state directory, then
+    # drops to uid 1000. These three are the only capabilities that step needs —
+    # the app itself runs with none. Dropping the rest shrinks the bounding set,
+    # so nothing can be picked back up during that window or via a file
+    # capability later. `cap_drop: [ALL]` on its own breaks the chown.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
     networks:
       - wactorz-net
     # Loopback-bound: these carry no authentication of their own, so they are

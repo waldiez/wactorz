@@ -66,6 +66,11 @@ services:
       INFLUX_ORG: "${INFLUX_ORG:-wactorz}"
       INFLUX_BUCKET: "${INFLUX_BUCKET:-wactorz}"
       INTERFACE: rest
+    # See compose.yaml for why these three, and only these three: the entrypoint
+    # needs them to chown the state directory before dropping to uid 1000.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
     networks:
       - wactorz-net
     # Loopback-bound: these carry no authentication of their own, so they are

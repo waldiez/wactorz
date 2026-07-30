@@ -617,14 +617,15 @@ class MyAgent(Actor):
             await asyncio.sleep(10)
 ```
 
-Then register it in `cli.py` inside `build_system()`:
+Then register it in `app.py` inside `build_system()`. `_sd` there is the state directory
+resolved at startup, and `_wire_persistence` attaches the persistence API:
 
 ```python
 from wactorz.agents.my_agent import MyAgent
 
 def make_my_agent():
     return _wire_persistence(
-        MyAgent(name="my-agent", persistence_dir="./state"))
+        MyAgent(name="my-agent", persistence_dir=_sd))
 
 system.supervisor.supervise(
     "my-agent", make_my_agent,

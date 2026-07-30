@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — pending
 
 ### Fixed
+- **A configured `WACTORZ_STATE_DIR` only moved part of the state.** The central stores honoured it, but every agent was still created with a working-directory-relative `./state`, so a deployment that pinned an absolute durable location — the Home Assistant add-on, or any container with a mounted volume — had agents writing beside the process instead, and the one-time migration of pre-upgrade pickle state looked in the wrong place. The path now resolves in exactly one place for the whole system: an explicit setting first, then `WACTORZ_STATE_DIR`, then `./state`. A blank `WACTORZ_STATE_DIR=` left in a `.env` file counts as unset rather than resolving to the working directory, and `wactorz-reset` still targets the same location the app writes to without creating it just by being imported.
 - **GitHub releases no longer paste the entire changelog into the release body.** The release
   workflow used `CHANGELOG.md` verbatim, so every release page carried `[Unreleased]` plus every
   past version — an endless scroll. It now extracts only the section matching the tag, and fails

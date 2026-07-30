@@ -28,6 +28,7 @@ import time
 from typing import TYPE_CHECKING, cast
 
 from ..core.actor import Actor, Message, MessageType
+from ..core.paths import resolve_state_dir
 
 if TYPE_CHECKING:
     from .main_actor import MainActor
@@ -751,7 +752,7 @@ class CatalogAgent(Actor):
             persistence_dir = (
                 str(getattr(main, "_persistence_dir", pathlib.Path("./state/main")).parent)
                 if main
-                else "./state"
+                else resolve_state_dir()
             )
 
             if recipe.get("type") == "native":

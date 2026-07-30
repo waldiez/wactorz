@@ -1,7 +1,7 @@
 # Wactorz — Docker Compose stack
 #
 # Default (docker compose up -d):
-#   mosquitto only — MQTT broker on :1883 (TCP) and :9001 (WebSocket)
+#   mosquitto only — MQTT broker on :1883
 #   Then run:  wactorz
 #
 # Profiles:
@@ -12,7 +12,6 @@
 #
 # External ports (defaults, override via .env):
 #   :1883  → MQTT TCP                  MQTT_EXTERNAL_PORT
-#   :9001  → MQTT WebSocket            MQTT_WS_EXTERNAL_PORT
 #   :8000  → Python REST API           REST_EXTERNAL_PORT       (python/full)
 #   :8888  → Python monitor Web UI     MONITOR_EXTERNAL_PORT    (python/full)
 #   :9090  → Prometheus UI            (python profile)
@@ -32,7 +31,6 @@ services:
     hostname: mosquitto
     ports:
       - "${MQTT_EXTERNAL_PORT:-1883}:1883"
-      - "${MQTT_WS_EXTERNAL_PORT:-9001}:9001"
     volumes:
       # Read-only: the broker never writes its own config, and the image's
       # entrypoint otherwise chowns everything under /mosquitto — which travels

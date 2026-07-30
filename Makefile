@@ -27,7 +27,7 @@ dev-backend: ## Start the backend in dev mode (Python REST on :8080)
 
 # ── Development ─────────────────────────────────────────────────────────────
 
-dev: ## Start the MQTT broker only (mosquitto on 1883/9001)
+dev: ## Start the MQTT broker only (mosquitto on 1883)
 	$(COMPOSE_DEV) up
 
 dev-down: ## Stop the dev compose stack (all profiles)

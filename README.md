@@ -229,8 +229,8 @@ See [docs/evaluation.md](docs/evaluation.md) for the benchmark format and metric
 
 - ✅ Run on a **trusted local network** you control (a home LAN, a private VLAN).
 - ✅ Prefer the **Home Assistant add-on**, which keeps the UI behind HA's ingress auth.
-- ❌ **Do not** expose ports `8888` (dashboard), `8000` (REST/WS), or `1883`/`9001`
-  (MQTT) to the internet or a shared/untrusted network.
+- ❌ **Do not** expose ports `8888` (dashboard), `8000` (REST/WS), or `1883` (MQTT)
+  to the internet or a shared/untrusted network.
 - ❌ **Do not** run it as a multi-user or multi-tenant service yet.
 - If you must reach it remotely, put it behind a VPN or an authenticating reverse
   proxy — never a bare port-forward.

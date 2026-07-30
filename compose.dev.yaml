@@ -22,7 +22,6 @@ services:
       - wactorz-net
     ports:
       - "1883:1883"
-      - "9001:9001"
     volumes:
       # Read-only — see compose.yaml: without it the image's entrypoint chowns
       # this tracked repo file through the bind mount.

@@ -45,7 +45,7 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 
 | Profile | Service | Internal address | External port |
 |---|---|---|---|
-| _(all)_ | mosquitto | `mosquitto:1883` / `:9001` | `:1883`, `:9001` |
+| _(all)_ | mosquitto | `mosquitto:1883` | `:1883` |
 | `python` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
 | `python` | monitor UI | `wactorz-python:8888` | `:8888` |
 | `python` | prometheus | `wactorz-prometheus:9090` | `:9090` |

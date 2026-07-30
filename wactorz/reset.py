@@ -21,15 +21,17 @@ import os
 import sys
 from pathlib import Path
 
+from wactorz.core.paths import resolve_state_dir
+
 logger = logging.getLogger(__name__)
 
 _CHAT_KV_KEYS = ("conversation_history", "history_summary")
 _METRIC_KV_KEYS = ("_final_cost", "_messages_processed")
 
 
-# Honour WACTORZ_STATE_DIR so a wipe targets the same durable location the app
-# writes to (the HA addon pins it to /data/state). Falls back to ./state.
-_DEFAULT_STATE = os.environ.get("WACTORZ_STATE_DIR", "./state")
+# Resolved, not ensured: a wipe must target the same durable location the app
+# writes to without creating it as an import side effect.
+_DEFAULT_STATE = resolve_state_dir()
 _DEFAULT_DB = os.path.join(_DEFAULT_STATE, "wactorz.db")
 
 

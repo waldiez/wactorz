@@ -101,10 +101,12 @@ from wactorz.core.registry import ActorSystem
 system = ActorSystem(
     mqtt_broker="localhost",
     mqtt_port=1883,
-    state_dir="./state",
 )
 await system.start()
 ```
+
+Pass `state_dir` to override where durable state is written; omitted, it follows
+`WACTORZ_STATE_DIR`, else `./state`.
 
 **Key attributes:**
 
@@ -215,17 +217,18 @@ Three-tier persistence layer routed automatically by key name:
 
 | Store | Location | Used for |
 |---|---|---|
-| **SQLite** | `state/wactorz.db` | Durable structured data: spawn registry, pipeline rules, user facts, contracts, time-series |
+| **SQLite** | `{state_dir}/wactorz.db` | Durable structured data: spawn registry, pipeline rules, user facts, contracts, time-series |
 | **Redis** | `redis://localhost:6379` (in-memory fallback if unavailable) | Ephemeral fast-access: observed samples, metrics, heartbeat state |
-| **Pickle** | `state/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state, ML models |
+| **Pickle** | `{state_dir}/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state, ML models |
+
+`state_dir` defaults to `WACTORZ_STATE_DIR`, else `./state` — see
+[Deployment](deployment.md#environment-variables).
 
 ```python
 from wactorz.core.persistence import init_persistence, PersistenceAPI
 
 db, redis, pickle_store = init_persistence(
-    db_path="./state/wactorz.db",
     redis_url="redis://localhost:6379",
-    state_dir="./state",
     run_migration=True,   # migrate existing .pkl files on first run
 )
 

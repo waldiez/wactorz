@@ -13,22 +13,10 @@ from typing import cast
 
 import wactorz._bootstrap  # noqa: F401  side effects: import path, platform, root logging
 from wactorz.config import CONFIG
+from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader
 
 logger = logging.getLogger(__name__)
-
-
-def _state_dir() -> str:
-    """Resolve the persistent state directory.
-
-    Honours ``WACTORZ_STATE_DIR`` so deployments can pin an absolute,
-    durable location (the HA addon sets it to ``/data/state`` so chat /
-    pickle / SQLite state survives addon updates). Falls back to ``./state``
-    for local/dev runs. The directory is created if missing.
-    """
-    base = os.environ.get("WACTORZ_STATE_DIR", "./state")
-    os.makedirs(base, exist_ok=True)
-    return base
 
 
 async def _start_web_ui(
@@ -99,7 +87,7 @@ async def build_system(args: argparse.Namespace):
         )
 
     # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
-    _sd = _state_dir()
+    _sd = ensure_state_dir()
 
     # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
     system = ActorSystem(
@@ -159,54 +147,54 @@ async def build_system(args: argparse.Namespace):
             MainActor(
                 llm_provider=provider_for("main", make_provider()),
                 name="main",
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
         return cast(MainActor, main_actor)
 
-    def make_monitor():
+    def make_monitor() -> Actor:
         return _wire_persistence(
             MonitorActor(
                 check_interval=15.0,
                 heartbeat_timeout=60.0,
                 auto_restart=False,
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
 
-    def make_installer():
-        return _wire_persistence(InstallerAgent(name="installer", persistence_dir="./state"))
+    def make_installer() -> Actor:
+        return _wire_persistence(InstallerAgent(name="installer", persistence_dir=_sd))
 
-    def make_ha_agent():
+    def make_ha_agent() -> Actor:
         return _wire_persistence(
             HomeAssistantAgent(
                 llm_provider=provider_for("ha", make_provider()),
                 name="home-assistant-agent",
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
 
-    def make_ha_map_agent():
+    def make_ha_map_agent() -> Actor:
         return _wire_persistence(
             HomeAssistantMapAgent(
                 name="home-assistant-map-agent",
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
 
-    def make_ha_state_bridge():
+    def make_ha_state_bridge() -> Actor:
         return _wire_persistence(
             HomeAssistantStateBridgeAgent(
                 name="home-assistant-state-bridge",
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
 
-    def make_io_agent():
-        return _wire_persistence(IOAgent(name="io-agent", persistence_dir="./state"))
+    def make_io_agent() -> Actor:
+        return _wire_persistence(IOAgent(name="io-agent", persistence_dir=_sd))
 
-    def make_catalog():
-        return _wire_persistence(CatalogAgent(name="catalog", persistence_dir="./state"))
+    def make_catalog() -> Actor:
+        return _wire_persistence(CatalogAgent(name="catalog", persistence_dir=_sd))
 
     (
         system.supervisor.supervise(

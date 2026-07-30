@@ -13,11 +13,14 @@ to the correct store based on key prefixes. Existing agent code works without ch
 
 import json
 import logging
+import os
 import pickle
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+
+from .paths import resolve_state_dir
 
 logger = logging.getLogger(__name__)
 
@@ -196,14 +199,14 @@ class WactorzDB:
     One instance per process, created at startup.
     """
 
-    def __init__(self, db_path: str = "./state/wactorz.db"):
+    def __init__(self, db_path: str = "./state/wactorz.db") -> None:
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
         self._connect()
         self._init_schema()
 
-    def _connect(self):
+    def _connect(self) -> None:
         self._conn = sqlite3.connect(
             str(self._path),
             check_same_thread=False,  # safe with WAL mode
@@ -216,7 +219,7 @@ class WactorzDB:
         self._conn.row_factory = sqlite3.Row
         logger.info(f"[Persistence] SQLite opened: {self._path}")
 
-    def _init_schema(self):
+    def _init_schema(self) -> None:
         self.conn.executescript(_SCHEMA_SQL)
         # Check/set version
         row = self.conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
@@ -231,14 +234,14 @@ class WactorzDB:
             raise RuntimeError("WactorzDB connection is closed")
         return self._conn
 
-    def close(self):
+    def close(self) -> None:
         if self._conn:
             self._conn.close()
             self._conn = None
 
     # ── KV store (general purpose) ─────────────────────────────────────────
 
-    def kv_set(self, agent: str, key: str, value: Any):
+    def kv_set(self, agent: str, key: str, value: Any) -> None:
         """Store a JSON-serializable value."""
         self.conn.execute(
             "INSERT OR REPLACE INTO kv_store (agent, key, value, updated) VALUES (?, ?, ?, ?)",
@@ -259,7 +262,7 @@ class WactorzDB:
                 return row[0]
         return default
 
-    def kv_delete(self, agent: str, key: str):
+    def kv_delete(self, agent: str, key: str) -> None:
         self.conn.execute("DELETE FROM kv_store WHERE agent=? AND key=?", (agent, key))
         self.conn.commit()
 
@@ -274,7 +277,7 @@ class WactorzDB:
         self.conn.commit()
         return cur.rowcount or 0
 
-    def kv_all(self, agent: str) -> dict:
+    def kv_all(self, agent: str) -> dict[str, Any]:
         """Return all key-value pairs for an agent."""
         rows = self.conn.execute(
             "SELECT key, value FROM kv_store WHERE agent=?", (agent,)
@@ -300,7 +303,7 @@ class WactorzDB:
         unit: str = "",
         agent: str = "",
         node: str = "",
-    ):
+    ) -> None:
         self.conn.execute(
             "INSERT INTO sensor_readings "
             "(ts, topic, entity_id, field, value, value_str, unit, agent, node) "
@@ -308,7 +311,7 @@ class WactorzDB:
             (ts, topic, entity_id, field, value, value_str, unit, agent, node),
         )
 
-    def write_sensor_batch(self, rows: list[tuple]):
+    def write_sensor_batch(self, rows: list[tuple]) -> None:
         """Batch insert sensor readings. Each tuple matches write_sensor args."""
         self.conn.executemany(
             "INSERT INTO sensor_readings "
@@ -328,7 +331,7 @@ class WactorzDB:
         frame_id: int = 0,
         metadata: str = "{}",
         node: str = "",
-    ):
+    ) -> None:
         self.conn.execute(
             "INSERT INTO detections "
             "(ts, agent, class_name, confidence, bbox, frame_id, metadata, node) "
@@ -346,7 +349,7 @@ class WactorzDB:
         domain: str = "",
         attributes: str = "{}",
         context: str = "",
-    ):
+    ) -> None:
         self.conn.execute(
             "INSERT INTO ha_state_changes "
             "(ts, entity_id, old_state, new_state, domain, attributes, context) "
@@ -365,7 +368,7 @@ class WactorzDB:
         payload: str = "{}",
         trigger: str = "{}",
         rule_id: str = "",
-    ):
+    ) -> None:
         self.conn.execute(
             "INSERT INTO actuations "
             "(ts, agent, domain, service, entity_id, payload, trigger, rule_id) "
@@ -378,7 +381,7 @@ class WactorzDB:
 
     def write_chat_log(
         self, ts: float, agent_name: str, role: str, content: str, session_id: str = ""
-    ):
+    ) -> None:
         """Persist a single chat turn so the UI feed can be rebuilt with real
         timestamps after a restart. The schema is created in init_state.sql.
         """
@@ -413,7 +416,7 @@ class WactorzDB:
         role: str | None = None,
         since: float | None = None,
         limit: int = 200,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Return chat_log rows newest-first as plain dicts. Used by the
         /api/chats endpoint and by feed_handler to seed the UI feed.
         """
@@ -446,7 +449,7 @@ class WactorzDB:
         entity_id: str | None = None,
         field: str | None = None,
         limit: int = 100_000,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Query sensor readings by time range, topic, entity, or field.
         Returns list of dicts suitable for pandas DataFrame conversion.
         """
@@ -480,7 +483,7 @@ class WactorzDB:
         class_name: str | None = None,
         min_confidence: float = 0.0,
         limit: int = 50_000,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         since = time.time() - (hours * 3600)
         conditions = ["ts >= ?", "confidence >= ?"]
         params: list = [since, min_confidence]
@@ -507,7 +510,7 @@ class WactorzDB:
         entity_id: str | None = None,
         domain: str | None = None,
         limit: int = 50_000,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         since = time.time() - (hours * 3600)
         conditions = ["ts >= ?"]
         params: list = [since]
@@ -533,7 +536,7 @@ class WactorzDB:
         hours: float = 24,
         entity_id: str | None = None,
         limit: int = 10_000,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         since = time.time() - (hours * 3600)
         conditions = ["ts >= ?"]
         params: list = [since]
@@ -553,7 +556,7 @@ class WactorzDB:
 
     # ── Retention / cleanup ────────────────────────────────────────────────
 
-    def prune_old_data(self, days: int = 30):
+    def prune_old_data(self, days: int = 30) -> int:
         """Delete time-series data older than N days. Run periodically."""
         cutoff = time.time() - (days * 86400)
         tables = ["sensor_readings", "detections", "ha_state_changes", "actuations"]
@@ -566,7 +569,7 @@ class WactorzDB:
             logger.info(f"[Persistence] Pruned {total} rows older than {days}d")
         return total
 
-    def stats(self) -> dict:
+    def stats(self) -> dict[str, Any]:
         """Return row counts for all time-series tables."""
         tables = ["sensor_readings", "detections", "ha_state_changes", "actuations"]
         result = {}
@@ -584,7 +587,7 @@ class RedisStore:
     Falls back to an in-memory dict if Redis is unavailable.
     """
 
-    def __init__(self, url: str = "redis://localhost:6379", prefix: str = "wactorz:"):
+    def __init__(self, url: str = "redis://localhost:6379", prefix: str = "wactorz:") -> None:
         self._prefix = prefix
         self._redis = None
         self._fallback: dict[str, Any] = {}
@@ -604,7 +607,7 @@ class RedisStore:
     def _key(self, key: str) -> str:
         return f"{self._prefix}{key}"
 
-    def set(self, key: str, value: Any, ttl: int | None = None):
+    def set(self, key: str, value: Any, ttl: int | None = None) -> None:
         """Store a JSON-serializable value with optional TTL (seconds)."""
         serialized = json.dumps(value, default=str)
         if self._redis:
@@ -639,7 +642,7 @@ class RedisStore:
             except (json.JSONDecodeError, TypeError):
                 return entry["value"]
 
-    def delete(self, key: str):
+    def delete(self, key: str) -> None:
         if self._redis:
             self._redis.delete(self._key(key))
         else:
@@ -667,8 +670,9 @@ class PickleStore:
     Used ONLY for agent.state dicts (ML models, numpy arrays, cv2 captures).
     """
 
-    def __init__(self, base_dir: str = "./state"):
-        self._base = Path(base_dir)
+    def __init__(self, base_dir: str | None = None) -> None:
+        _base_dir = base_dir or os.environ.get("WACTORZ_STATE_DIR", "./state")
+        self._base = Path(_base_dir)
         self._base.mkdir(parents=True, exist_ok=True)
 
     def _path(self, agent_name: str) -> Path:
@@ -677,7 +681,7 @@ class PickleStore:
         p.mkdir(parents=True, exist_ok=True)
         return p / "state.pkl"
 
-    def save(self, agent_name: str, state: dict):
+    def save(self, agent_name: str, state: dict[str, Any]) -> None:
         path = self._path(agent_name)
         try:
             with open(path, "wb") as f:
@@ -685,7 +689,7 @@ class PickleStore:
         except Exception as e:
             logger.debug(f"[Persistence] Pickle save failed for {agent_name}: {e}")
 
-    def load(self, agent_name: str) -> dict:
+    def load(self, agent_name: str) -> dict[str, Any]:
         path = self._path(agent_name)
         if path.exists():
             try:
@@ -695,7 +699,7 @@ class PickleStore:
                 logger.warning(f"[Persistence] Pickle load failed for {agent_name}: {e}")
         return {}
 
-    def delete(self, agent_name: str):
+    def delete(self, agent_name: str) -> None:
         """Remove the agent's state.pkl AND its containing directory.
 
         Without removing the directory, a subsequent re-spawn of an agent
@@ -769,13 +773,13 @@ class PersistenceAPI:
 
     def __init__(
         self, db: WactorzDB, redis: RedisStore, pickle_store: PickleStore, agent_name: str
-    ):
+    ) -> None:
         self.db = db
         self.redis = redis
         self.pickle = pickle_store
         self.agent = agent_name
 
-    def set(self, key: str, value: Any):
+    def set(self, key: str, value: Any) -> None:
         if key in _SQLITE_KEYS:
             self.db.kv_set(self.agent, key, value)
         elif key in _REDIS_KEYS:
@@ -794,7 +798,7 @@ class PersistenceAPI:
         state = self.pickle.load(self.agent)
         return state.get(key, default)
 
-    def delete(self, key: str):
+    def delete(self, key: str) -> None:
         if key in _SQLITE_KEYS:
             self.db.kv_delete(self.agent, key)
         elif key in _REDIS_KEYS:
@@ -804,7 +808,7 @@ class PersistenceAPI:
             state.pop(key, None)
             self.pickle.save(self.agent, state)
 
-    def all(self) -> dict:
+    def all(self) -> dict[str, Any]:
         """Return all key-value pairs across all stores."""
         result = {}
         result.update(self.db.kv_all(self.agent))
@@ -815,7 +819,7 @@ class PersistenceAPI:
         result.update(self.pickle.load(self.agent))
         return result
 
-    def load_snapshot(self, snapshot: dict, *, replace: bool = True) -> dict:
+    def load_snapshot(self, snapshot: dict[str, Any], *, replace: bool = True) -> dict[str, Any]:
         """Bulk-load a state snapshot (the inverse of all()).
 
         Used at migration time: the source node ships its complete state, and
@@ -869,7 +873,7 @@ class PersistenceAPI:
         )
         return applied
 
-    def purge(self) -> dict:
+    def purge(self) -> dict[str, Any]:
         """Permanently delete EVERY stored value for this agent across all
         backends (SQLite kv_store, Redis ephemeral keys, pickle state file).
 
@@ -913,7 +917,7 @@ class PersistenceAPI:
 # ── Migration helper ───────────────────────────────────────────────────────
 
 
-def migrate_from_pickle(state_dir: str, db: WactorzDB, redis: RedisStore):
+def migrate_from_pickle(state_dir: str, db: WactorzDB, redis: RedisStore) -> None:
     """One-time migration: read existing .pkl files and write to SQLite/Redis.
 
     Only migrates keys that do NOT already exist in SQLite/Redis — this makes the
@@ -967,9 +971,9 @@ _pickle: PickleStore | None = None
 
 
 def init_persistence(
-    db_path: str = "./state/wactorz.db",
+    db_path: str | None = None,
     redis_url: str | None = None,
-    state_dir: str = "./state",
+    state_dir: str | None = None,
     run_migration: bool = True,
 ) -> tuple[WactorzDB, RedisStore, PickleStore]:
     """Initialize the persistence layer. Call once at startup from cli.py.
@@ -983,20 +987,20 @@ def init_persistence(
 
     Returns (db, redis, pickle_store) for passing to ActorSystem.
     """
-    import os
-
     global _db, _redis, _pickle
 
     if redis_url is None:
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
-    _db = WactorzDB(db_path)
+    _state_dir = resolve_state_dir(state_dir)
+    _db_path = db_path or os.path.join(_state_dir, "wactorz.db")
+    _db = WactorzDB(_db_path)
     _redis = RedisStore(redis_url)
-    _pickle = PickleStore(state_dir)
+    _pickle = PickleStore(_state_dir)
 
     if run_migration:
         # 1. Migrate legacy pickle data to new stores
-        migrate_from_pickle(state_dir, _db, _redis)
+        migrate_from_pickle(_state_dir, _db, _redis)
 
         # 2. Run framework migrations (schema upgrades, state upgrades, spawn validation)
         try:

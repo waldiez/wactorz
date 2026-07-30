@@ -76,6 +76,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    init: true
     networks:
       - wactorz-net
     # Loopback-bound: these carry no authentication of their own, so they are

@@ -12,8 +12,12 @@ startup: application
 boot: auto
 init: false
 homeassistant_api: true
+# hassio_api is needed to read this add-on's own options; the default role is
+# enough for that. Nothing here calls the Supervisor's own endpoints (/addons,
+# /backups, /host, /store), and `admin` would additionally expose every other
+# add-on's configuration and secrets.
 hassio_api: true
-hassio_role: admin
+hassio_role: default
 ingress: true
 ingress_port: 8888
 ingress_stream: true
@@ -22,13 +26,17 @@ panel_title: Wactorz Ultra
 webui: http://[HOST]:[PORT:8888]
 
 # ── Ports ──────────────────────────────────────────────────────────────────────
+# Nothing is published to the host by default: the dashboard is reached through
+# the Wactorz panel (ingress), which goes through Home Assistant's own login.
+# Assign a host port below only if you need to reach these from outside Home
+# Assistant, and note that doing so puts them on your network directly.
 ports:
-  8000/tcp: 8000
-  8888/tcp: 8888
+  8000/tcp: null
+  8888/tcp: null
   1883/tcp: null
 ports_description:
-  8000/tcp: Wactorz REST + WebSocket API
-  8888/tcp: Wactorz Monitor UI
+  8000/tcp: Wactorz REST + WebSocket API — not published by default
+  8888/tcp: Wactorz Monitor UI — not published by default; use the Wactorz panel
   1883/tcp: MQTT TCP broker (only active when mosquitto_embedded is true)
 
 # ── Persistent state ───────────────────────────────────────────────────────────
@@ -58,7 +66,6 @@ options:
   # MQTT broker — set to the Mosquitto addon host if using the official addon
   mqtt_host: core-mosquitto
   mqtt_port: 1883
-  mqtt_ws_port: 8083
   # Broker credentials (optional) — leave blank for an anonymous broker.
   # The official Mosquitto addon disables anonymous access, so set these to a
   # Home Assistant user/password (or a broker-specific login) when not embedded.
@@ -121,7 +128,6 @@ schema:
   openai_url: str?
   mqtt_host: str
   mqtt_port: port
-  mqtt_ws_port: port
   mqtt_username: str?
   mqtt_password: str?
   ha_connection: list(auto|supervisor|custom)?

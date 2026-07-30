@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Fixed
+- **GitHub releases no longer paste the entire changelog into the release body.** The release
+  workflow used `CHANGELOG.md` verbatim, so every release page carried `[Unreleased]` plus every
+  past version — an endless scroll. It now extracts only the section matching the tag, and fails
+  the job if no section for that version exists rather than publishing empty notes.
+
 ## [0.5.2] - 2026-07-30
 
 ### Added

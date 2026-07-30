@@ -1,5 +1,5 @@
 name: Wactorz Ultra
-version: "0.5.1.3"
+version: "0.5.2"
 slug: wactorz-ultra
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime. Also run machine learning models for data analysis, like image recognition.
 url: https://github.com/waldiez/wactorz

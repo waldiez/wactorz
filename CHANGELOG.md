@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+## [0.5.2] - 2026-07-30
+
 ### Added
 - **Per-call-site LLM overrides (`LLM_OVERRIDES`).** Route individual call sites to different
   providers/models — e.g. `LLM_OVERRIDES="intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6"`
@@ -100,6 +102,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The `mcp` extra now excludes the incompatible 2.x line (`mcp>=1.0.0,<2`).** `mcp` 2.0.0 removed
+  `mcp.server.fastmcp`, so a fresh `pip install wactorz[mcp]` picked up a release the MCP interface
+  cannot import. The pin restores installability while the 2.x migration is worked out separately.
 - **An unresponsive Ollama server hung the conversation indefinitely.** None of the three calls to it had a time limit, so a wedged or half-started server left the turn waiting with no error and no way out short of a restart. They are now bounded — generously, because a large prompt on a local machine legitimately takes minutes, and for streaming replies the limit applies to the gap between chunks rather than the whole reply, so a long answer is never cut short. HTTP errors from Ollama were also being read as an empty reply rather than raised, which turned a server-side failure into a silently blank answer.
 - **A task that failed never told whoever asked for it.** Only one specific kind of failure sent a reply; everything else — including a missing or misconfigured LLM provider — was logged locally and dropped, leaving the caller waiting out its own timeout with no idea what happened. Every outcome now answers, so a failed task reports the reason instead of looking like a slow one.
 - **A Gemini reply that stopped early looked like it had finished.** When the stream stalled, the partial answer was delivered with an ordinary completion marker, so nothing downstream — the chat log, the activity feed, or any retry logic — could distinguish half an answer from a whole one. The text that did arrive is still delivered, and the tokens are still billed, but the result now says the reply is incomplete, and the truncation is logged.

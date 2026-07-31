@@ -47,7 +47,7 @@ class ResetLogsTest(unittest.TestCase):
     def test_truncates_wactorz_log(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             log = Path(tmp) / "wactorz.log"
             log.write_text("some log content\nmore content\n")
             reset_logs(log_dir=tmp)
@@ -56,7 +56,7 @@ class ResetLogsTest(unittest.TestCase):
     def test_truncates_monitor_log(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             log = Path(tmp) / "monitor.log"
             log.write_text("monitor output\n")
             reset_logs(log_dir=tmp)
@@ -68,7 +68,7 @@ class ResetLogsTest(unittest.TestCase):
         known secret shapes, so the ones it misses are what would stay behind."""
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             log = Path(tmp) / "wactorz.log"
             log.write_text("current\n")
             backups = [Path(tmp) / f"wactorz.log.{i}" for i in (1, 2, 3)]
@@ -85,7 +85,7 @@ class ResetLogsTest(unittest.TestCase):
     def test_leaves_unrelated_files_alone(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             keep = Path(tmp) / "wactorz.db"
             keep.write_text("not a log\n")
             reset_logs(log_dir=tmp)
@@ -94,14 +94,14 @@ class ResetLogsTest(unittest.TestCase):
     def test_skips_missing_files_silently(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             # Neither file exists — should not raise
             reset_logs(log_dir=tmp)
 
     def test_truncates_both_logs_when_both_present(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             for name in ("wactorz.log", "monitor.log"):
                 (Path(tmp) / name).write_text("data")
             reset_logs(log_dir=tmp)
@@ -111,7 +111,7 @@ class ResetLogsTest(unittest.TestCase):
     def test_truncates_open_file_handler(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             log_path = Path(tmp) / "wactorz.log"
             handler = logging.FileHandler(str(log_path))
             assert handler.stream
@@ -144,7 +144,7 @@ class ResetLogsTest(unittest.TestCase):
 
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             log_path = Path(tmp) / "wactorz.log"
             handler = logging.FileHandler(str(log_path))
             assert handler.stream
@@ -523,7 +523,7 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
     def test_all_clears_kv_spawn_registry(self):
         from wactorz.reset import reset_spawns
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = str(Path(tmp) / "wactorz.db")
             db = self._db(tmp)
             db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
@@ -533,7 +533,7 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
     def test_single_agent_pops_only_that_entry(self):
         from wactorz.reset import reset_spawns
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = str(Path(tmp) / "wactorz.db")
             db = self._db(tmp)
             db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
@@ -554,7 +554,7 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
         )
         from wactorz.reset import reset_all
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = str(Path(tmp) / "wactorz.db")
             db = self._db(tmp)
             api = PersistenceAPI(db, RedisStore(), PickleStore(tmp), "main")
@@ -703,7 +703,8 @@ class FactoryResetKeepSetTest(unittest.TestCase):
         import re
 
         app_src = Path(__file__).resolve().parents[1] / "wactorz" / "app.py"
-        supervised = re.findall(r'supervise\(\s*"([^"]+)"', app_src.read_text())
+        src_txt = app_src.read_text(encoding="utf-8", errors="ignore")
+        supervised = re.findall(r'supervise\(\s*"([^"]+)"', src_txt)
         self.assertGreaterEqual(len(supervised), 8, "app.py supervise chain not found")
         # Protection lives on the actor class; treat the known protected names as
         # protected here so the guard checks name-coverage, not the flag itself.

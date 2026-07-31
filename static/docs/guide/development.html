@@ -239,8 +239,8 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 cp<span class="w"> </span>.env.template<span class="w"> </span>.env
 <span class="c1"># edit .env and set LLM_API_KEY (or whichever provider you use)</span>
 
-<span class="c1"># 2. Get/run MQTT broker (if you don&#39;t have already) and open ports 1883, 9001</span>
-docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span>-p<span class="w"> </span><span class="m">9001</span>:9001<span class="w"> </span>eclipse-mosquitto
+<span class="c1"># 2. Get/run MQTT broker (if you don&#39;t have already) and open port 1883</span>
+docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span>eclipse-mosquitto
 
 <span class="c1"># 3. Start Wactorz</span>
 wactorz
@@ -314,7 +314,7 @@ MQTT_PASSWORD=
 
 <hr />
 <h2 id="running-mosquitto-via-docker">Running Mosquitto via Docker</h2>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span>-p<span class="w"> </span><span class="m">9001</span>:9001<span class="w"> </span>eclipse-mosquitto
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span>eclipse-mosquitto
 </code></pre></div>
 
 <blockquote>
@@ -413,7 +413,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <tr>
 <td><em>(default)</em></td>
 <td>mosquitto</td>
-<td>:1883, :9001</td>
+<td>:1883</td>
 </tr>
 <tr>
 <td><code>python</code></td>
@@ -495,8 +495,8 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 </tr>
 <tr>
 <td><code>wactorz-dev-mosquitto</code></td>
-<td>:1883, :9001</td>
-<td>MQTT broker (TCP + WebSocket)</td>
+<td>:1883</td>
+<td>MQTT broker (TCP)</td>
 </tr>
 </tbody>
 </table>

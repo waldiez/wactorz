@@ -284,7 +284,7 @@ The dashboard also receives bespoke control frames (`delete_agent`, snapshot dif
 
 ## MQTT
 
-Broker: `mosquitto:1883` (TCP) / `ws://host:9001` (WebSocket). The dashboard does not use MQTT directly — the monitor relays broker activity to the browser over `/ws` (see above).
+Broker: `mosquitto:1883` (TCP). The dashboard does not use MQTT directly — the monitor relays broker activity to the browser over `/ws` (see above).
 
 All payloads are **snake_case JSON** with `timestamp` as a float (Unix seconds).
 

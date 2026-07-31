@@ -53,7 +53,7 @@
   <body>
     <!-- CSP note: inline scripts are allowed only because the monitor server stamps
          each first-party inline script with a per-request nonce at serve time (see
-         monitor_server.index_handler / _csp_report_only). It also injects a nonced
+         wactorz/web/static_site.py — index_handler and csp_policy). It also injects a nonced
          window.__WACTORZ_INGRESS_PATH bootstrap into the document head. Keep inline
          scripts first-party — never inline remote or user-supplied content here. -->
     <script>

@@ -19,6 +19,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
+- **The `wactorz-monitor` command.** It started the dashboard as a standalone process, separate from the agents, and chat then had to travel to them over MQTT and back. Every supported way of running Wactorz — `wactorz`, the container, the Home Assistant add-on — starts the dashboard in the same process as the agents, so that second path had no users and simply doubled the code every chat message could take. Run `wactorz` instead. As part of this, `POST /chat/stop` no longer returns the `published` field, which only ever reported whether the stop request had been forwarded over MQTT.
 - **The MQTT WebSocket listener, on both brokers, and the `mqtt_ws_port` add-on option.** The listener existed for a browser MQTT client the dashboard no longer has — real-time updates arrive over the monitor's own WebSocket — so it was an open endpoint with no consumer, and in the Compose stack it was published to every interface. The add-on's listener on `8083` and the Compose broker's on `9001` are both gone, along with the `mqtt_ws_port` option, `MQTT_WS_EXTERNAL_PORT`, and `--mqtt-ws-port` on `wactorz-monitor`. **If you connect anything else to the broker over WebSockets** — an MQTT client in a browser, Node-RED, a dashboard of your own — add the listener back to `infra/mosquitto/mosquitto.conf` and republish the port. Existing add-on installations may log a one-time "not in schema" notice for the removed option until their configuration is saved again.
 
 ### Fixed

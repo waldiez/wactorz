@@ -12,10 +12,12 @@ import signal
 import sys
 from typing import cast
 
-import wactorz._bootstrap  # noqa: F401  side effects: import path, platform, root logging
+import wactorz._bootstrap  # noqa: F401  side effects: import path, platform fixups
 from wactorz.config import CONFIG
 from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader
+from wactorz.monitoring.log_buffer import install as install_log_buffer
+from wactorz.monitoring.log_setup import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -339,6 +341,12 @@ def _install_signal_handlers() -> None:
 
 
 async def app(args: argparse.Namespace):
+    # First, so both cover startup as well as steady state. setup_logging builds
+    # the handlers with redaction already attached, so no record reaches an
+    # unfiltered console or log file.
+    setup_logging()
+    install_log_buffer()
+
     if args.reload:
         start_reloader(logger)
 

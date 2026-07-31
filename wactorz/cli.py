@@ -8,7 +8,7 @@ import argparse
 import asyncio
 import os
 
-import wactorz._bootstrap  # noqa: F401  side effects: import path, platform, root logging
+import wactorz._bootstrap  # noqa: F401  side effects: import path, platform fixups
 from wactorz.config import CONFIG
 
 

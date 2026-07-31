@@ -103,30 +103,3 @@ class TestResetTargetsTheSameDir:
         monkeypatch.chdir(tmp_path)
         importlib.reload(reset_mod)
         assert not (tmp_path / "state").exists()
-
-
-class TestBootstrapAgreesWithResolver:
-    """_bootstrap resolves the log directory inline to stay importable before the
-    rest of the package. These pin the two implementations together so the
-    duplication cannot drift."""
-
-    def _bootstrap_resolution(self) -> str:
-        # Mirror of the expression in wactorz/_bootstrap.py.
-        return os.environ.get("WACTORZ_STATE_DIR", "").strip() or "./state"
-
-    def test_agrees_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("WACTORZ_STATE_DIR", raising=False)
-        assert self._bootstrap_resolution() == resolve_state_dir()
-
-    def test_agrees_when_set(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path / "st"))
-        assert self._bootstrap_resolution() == resolve_state_dir()
-
-    def test_agrees_when_blank(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("WACTORZ_STATE_DIR", "   ")
-        assert self._bootstrap_resolution() == resolve_state_dir()
-
-    def test_bootstrap_source_matches_this_mirror(self) -> None:
-        # If the expression in _bootstrap changes, this mirror must change too.
-        src = (Path(__file__).parent.parent / "wactorz" / "_bootstrap.py").read_text()
-        assert 'os.environ.get("WACTORZ_STATE_DIR", "").strip() or "./state"' in src

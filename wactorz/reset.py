@@ -164,7 +164,7 @@ def reset_logs(log_dir: str | None = None) -> None:
                 )
 
     # Also handle files by path (supports offline use). Defaults to the resolved
-    # state directory, which is where _bootstrap writes the log — a cwd default
+    # state directory, which is where log_setup writes the log — a cwd default
     # would truncate nothing whenever the wipe runs from a different directory.
     base = Path(log_dir or _DEFAULT_STATE)
     for name in ("wactorz.log", "monitor.log"):
@@ -175,6 +175,18 @@ def reset_logs(log_dir: str | None = None) -> None:
                 logger.info("[reset] truncated log file: %s", p)
             except Exception as exc:
                 logger.warning("[reset] could not truncate %s: %s", p, exc)
+
+        # Rotated backups (wactorz.log.1, .2, …). Deleted rather than truncated:
+        # nothing holds them open, and an empty backup is only clutter. Without
+        # this a wipe leaves every earlier generation of the log in place, which
+        # is the opposite of what "reset" promises — redaction covers known
+        # secret shapes, so the ones it misses are exactly what stays behind.
+        for backup in sorted(base.glob(f"{name}.*")):
+            try:
+                backup.unlink()
+                logger.info("[reset] removed rotated log: %s", backup)
+            except Exception as exc:
+                logger.warning("[reset] could not remove %s: %s", backup, exc)
 
     logger.info("[reset] logs cleared")
 

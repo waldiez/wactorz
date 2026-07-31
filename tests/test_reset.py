@@ -62,6 +62,35 @@ class ResetLogsTest(unittest.TestCase):
             reset_logs(log_dir=tmp)
             self.assertEqual(log.read_text(), "")
 
+    def test_removes_rotated_backups(self):
+        """Truncating only the active file leaves every earlier generation in
+        place — the opposite of what a reset promises, and redaction covers
+        known secret shapes, so the ones it misses are what would stay behind."""
+        from wactorz.reset import reset_logs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "wactorz.log"
+            log.write_text("current\n")
+            backups = [Path(tmp) / f"wactorz.log.{i}" for i in (1, 2, 3)]
+            for backup in backups:
+                backup.write_text("older content\n")
+
+            reset_logs(log_dir=tmp)
+
+            self.assertEqual(log.read_text(), "")
+            self.assertTrue(log.exists(), "the active file is truncated, not removed")
+            for backup in backups:
+                self.assertFalse(backup.exists(), f"{backup.name} survived the reset")
+
+    def test_leaves_unrelated_files_alone(self):
+        from wactorz.reset import reset_logs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            keep = Path(tmp) / "wactorz.db"
+            keep.write_text("not a log\n")
+            reset_logs(log_dir=tmp)
+            self.assertEqual(keep.read_text(), "not a log\n")
+
     def test_skips_missing_files_silently(self):
         from wactorz.reset import reset_logs
 

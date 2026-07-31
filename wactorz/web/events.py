@@ -30,7 +30,15 @@ def update_agent(agent_id: str, key: str, data) -> None:
 
 
 def add_log(entry: dict) -> None:
-    """Append to the bounded log feed shared with connected browsers."""
+    """Append to the bounded log feed shared with connected browsers.
+
+    Stamps ``source`` here rather than at each of the call sites, so a later one
+    cannot forget it. The value is a constant discriminator telling the feed view
+    which kind of entry it is holding — deliberately *not* derived from the
+    payload, because this feed already crosses the wire and reading new fields
+    out of broker messages would widen what browsers receive.
+    """
+    entry.setdefault("source", "agent")
     runtime.state["log_feed"].insert(0, entry)
     if len(runtime.state["log_feed"]) > 100:
         runtime.state["log_feed"].pop()

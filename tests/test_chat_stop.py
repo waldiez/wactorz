@@ -1,12 +1,11 @@
-"""Tests for POST /chat/stop (monitor_server.rest_chat_stop_handler).
+"""Tests for POST /chat/stop (web.chat.rest_chat_stop_handler).
 
 The handler must work in both runtime modes:
   • direct_ws — cancel the in-process generation task(s) tracked locally.
-  • mqtt (legacy) — publish {"action": "stop"} to io/chat/control qos 1.
 
 The handler returns a real aiohttp ``web.json_response``; its payload is read
 back with ``_payload`` (json.loads on the response body). No aiohttp stubbing —
-faking the module cannot reach monitor_server's module-level ``web`` reference
+faking the module cannot reach web.chat's module-level ``web`` reference
 anyway, and real aiohttp keeps the test fully order-independent.
 """
 
@@ -51,7 +50,7 @@ def patched_fixture(monkeypatch):
     monkeypatch.setattr(runtime, "mqtt_client_ref", None)
 
 
-async def test_stop_cancels_inflight_and_publishes(patched: pytest.MonkeyPatch):
+async def test_stop_cancels_inflight(patched: pytest.MonkeyPatch):
     running = _FakeTask(done=False)
     finished = _FakeTask(done=True)
     mqtt = _FakeMqtt()
@@ -66,13 +65,9 @@ async def test_stop_cancels_inflight_and_publishes(patched: pytest.MonkeyPatch):
     assert finished.cancelled is False
     assert payload["cancelled"] == 1
 
-    # Legacy MQTT path: io/chat/control {"action": "stop"} qos 1.
-    assert len(mqtt.published) == 1
-    topic, published, qos = mqtt.published[0]
-    assert topic == "io/chat/control"
-    assert json.loads(published) == {"action": "stop"}
-    assert qos == 1
-    assert payload["published"] is True
+    # Cancelling the in-process task is the whole mechanism now: the standalone
+    # monitor that needed a broker round-trip to reach the IOAgent is gone.
+    assert mqtt.published == []
     assert payload["status"] == "stopped"
 
 
@@ -81,5 +76,4 @@ async def test_stop_when_idle_and_no_broker_is_harmless(patched: pytest.MonkeyPa
     payload = _payload(resp)
 
     assert payload["cancelled"] == 0
-    assert payload["published"] is False
     assert payload["status"] == "stopped"

@@ -30,7 +30,7 @@ from wactorz.web import api_reset, cost, runtime
 def _payload(resp):
     """Decode the JSON body of a real aiohttp ``web.json_response``.
 
-    monitor_server binds ``web`` at import (real aiohttp), so its handlers always
+    the web app binds ``web`` at import (real aiohttp), so its handlers always
     return a real Response no matter what other tests do to ``sys.modules`` — read
     the body directly instead of faking ``json_response`` (which cannot reach the
     handler's already-bound ``web`` reference anyway).

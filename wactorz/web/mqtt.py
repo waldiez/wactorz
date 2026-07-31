@@ -13,7 +13,7 @@ import time
 from typing import Any
 
 from ..core.mqtt import mqtt_client
-from . import chat, events, runtime, ws
+from . import events, runtime, ws
 
 logger = logging.getLogger(__name__)
 
@@ -70,14 +70,6 @@ async def mqtt_listener() -> None:
                     async for message in client.messages:
                         topic = str(message.topic)
                         payload = message.payload.decode(errors="replace")
-
-                        if topic == "io/chat":
-                            if runtime.registry is not None:
-                                try:
-                                    asyncio.create_task(chat.handle_chat_mqtt(json.loads(payload)))
-                                except Exception as exc:
-                                    logger.error("[io/chat] error: %s", exc)
-                            continue
 
                         event: dict[str, Any] | None = events.parse_topic(topic, payload)
                         await broadcast_mqtt_msg(topic, payload)

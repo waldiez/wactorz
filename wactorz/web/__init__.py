@@ -8,5 +8,5 @@ Split into focused modules: ``app`` (route table + entry point), ``runtime``
 ``runtime`` holds the shared mutable state; sibling modules import it as
 ``from . import runtime`` and read attributes at use time. Named ``web`` to
 avoid collision with ``wactorz.monitoring`` (Prometheus/OTel) and the
-``MonitorActor`` agent. ``wactorz.monitor_server`` remains a back-compat shim.
+``MonitorActor`` agent.
 """

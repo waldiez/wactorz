@@ -55,7 +55,7 @@ The framework is built on three ideas: every agent is an independent **actor** w
 
 | File | Responsibility |
 |------|----------------|
-| `actor.py` | `Actor` base class — message loop, heartbeat, persistence (SQLite / Redis / Pickle), supervisor strategy enum |
+| `actor.py` | `Actor` base class — message loop, heartbeat, persistence (SQLite / memory / Pickle), supervisor strategy enum |
 | `registry.py` | `ActorSystem`, `ActorRegistry`, `Supervisor`, `_MQTTPublisher` (shared aiomqtt connection) |
 
 ### Built-in Agents — `wactorz/agents/`
@@ -107,19 +107,19 @@ The Supervisor wraps each actor with a `ONE_FOR_ONE` restart policy. If an actor
 
 ## Persistence
 
-Wactorz uses a three-tier persistence layer (`wactorz/core/persistence.py`) that routes each key to the appropriate store:
+Wactorz uses a three-tier persistence layer (`wactorz/core/persistence/`) that routes each key to the appropriate store:
 
 | Store | Location | Used for |
 |-------|----------|----------|
 | **SQLite** | `state/wactorz.db` | Durable structured data: spawn registry, pipeline rules, user facts, topic contracts, conversation history, time-series sensor/detection/HA-state data |
-| **Redis** | `redis://localhost:6379` (falls back to in-memory if Redis is unavailable) | Ephemeral fast-access data: observed topic samples, agent metrics, heartbeat state |
+| **Process memory** | in-process, lost on restart | Ephemeral fast-access data: observed topic samples, agent metrics, heartbeat state |
 | **Pickle** | `state/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state dicts, ML models, numpy arrays, cv2 captures |
 
 `Actor.persist(key, value)` and `Actor.recall(key)` route automatically to the correct store based on the key name. Existing agent code works without changes.
 
 The spawn registry (`_spawned_agents`) is stored in SQLite. On restart, MainActor re-spawns every entry so dynamic agents and catalog agents survive reboots.
 
-On first startup after upgrading from an older version, `migrate_from_pickle()` reads existing `.pkl` files and moves structured keys to SQLite/Redis. Pickle files are left in place for keys that remain in pickle.
+On first startup after upgrading from an older version, `migrate_from_pickle()` reads existing `.pkl` files and moves structured keys to their store. Pickle files are left in place for keys that remain in pickle.
 
 ---
 

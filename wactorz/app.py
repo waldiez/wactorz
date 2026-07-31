@@ -139,27 +139,20 @@ async def build_system(args: argparse.Namespace):
     )
     logger.info("TopicBus initialised")
 
-    # ── Initialise persistence layer (SQLite + Redis + Pickle) ──────────────
-    # Replaces pickle-only storage. Redis is optional — falls back to
-    # in-memory dict if not running. Run migration once to move existing
-    # .pkl data to the new stores.
+    # ── Initialise persistence layer (SQLite + Pickle) ──────────────────────
     from wactorz.core.persistence import PersistenceAPI, init_persistence
 
-    _db, _redis, _pickle_store = init_persistence(
+    _db, _pickle_store = init_persistence(
         db_path=os.path.join(_sd, "wactorz.db"),
-        redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379"),
         state_dir=_sd,
         run_migration=True,
     )
-    logger.info(
-        "Persistence layer initialised (SQLite + %s + Pickle)",
-        "Redis" if not _redis._using_fallback else "in-memory fallback",
-    )
+    logger.info("Persistence layer initialised (SQLite + Pickle)")
 
     # ── Factory helpers (called fresh on each (re)start by the Supervisor) ────
     def _wire_persistence(actor: Actor) -> Actor:
         """Attach the unified persistence API to an actor."""
-        actor._persistence_api = PersistenceAPI(_db, _redis, _pickle_store, actor.name)
+        actor._persistence_api = PersistenceAPI(_db, _pickle_store, actor.name)
         return actor
 
     def make_provider() -> LLMProvider | None:
@@ -354,6 +347,7 @@ async def app(args: argparse.Namespace):
 
     system, main_actor, _db = await build_system(args)
 
+    from wactorz.core.persistence import close_persistence
     from wactorz.monitoring.influx import setup_influx, shutdown_influx
     from wactorz.monitoring.otel import setup_otel, shutdown_otel
 
@@ -441,3 +435,7 @@ async def app(args: argparse.Namespace):
         shutdown_otel()
         shutdown_influx()
         await system.stop_all()
+        # Last: actors write state as they stop, so the connection has to outlive
+        # them. Closing checkpoints the WAL rather than leaving -wal/-shm behind
+        # for the next start to recover.
+        close_persistence()

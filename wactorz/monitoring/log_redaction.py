@@ -23,6 +23,10 @@ Three properties this file has to keep, all easy to lose in a later edit:
 import logging
 import re
 
+# Rendering a traceback needs a formatter; only ``formatException`` is used.
+EXC_FORMATTER = logging.Formatter()
+
+
 REDACTED = "[redacted]"
 
 # Key names worth hiding, with an optional prefix so environment-variable forms
@@ -40,6 +44,14 @@ _KEYS = r"(?:password|passwd|pwd|token|api[_-]?key|apikey|secret|access[_-]?key|
 # to every handler, so a record is filtered once per handler.
 _ASSIGNMENT = re.compile(
     rf"(?i)\b({_PREFIX}{_KEYS})(\s*=\s*)(?!{re.escape(REDACTED)})([^\s,;&)\]}}'\"]+)",
+)
+
+# `password="hunter2"`, `token='abc'` — a quoted assignment, as it appears in a
+# kwargs repr or a source line. The unquoted pattern below cannot reach these:
+# its value class excludes quotes, so it never matches a value that starts with
+# one, and the dict pattern only covers the `'key': 'value'` colon form.
+_ASSIGNMENT_QUOTED = re.compile(
+    rf"(?i)\b({_PREFIX}{_KEYS})(\s*=\s*)(['\"])([^'\"]*)(['\"])",
 )
 
 # `'api_key': 'sk-live-...'` — a dict repr reaching the log via %s or f-string.
@@ -92,6 +104,10 @@ def redact(text: str) -> str:
     text = _DICT_ITEM.sub(rf"\1\2{REDACTED}\4", text)
     text = _DICT_ITEM_OPEN.sub(rf"\1\2{REDACTED}", text)
     text = _AUTH_SCHEME.sub(rf"\1\2{REDACTED}", text)
+    # Quoted before unquoted: the unquoted value class stops at a quote, so it
+    # would leave `password="x"` untouched rather than mangle it, but running
+    # the specific pattern first keeps the order obvious.
+    text = _ASSIGNMENT_QUOTED.sub(rf"\1\2\3{REDACTED}\5", text)
     return _ASSIGNMENT.sub(rf"\1\2{REDACTED}", text)
 
 
@@ -110,7 +126,7 @@ def redacted_message(record: logging.LogRecord) -> str | None:
 
 
 class SecretRedactingFilter(logging.Filter):
-    """Rewrite a record's message in place, so a handler's *output* is redacted.
+    """Rewrite a record in place, so a handler's *output* is redacted.
 
     Attached to the stream and file handlers, this is what keeps secrets out of
     ``wactorz.log`` and the console. Merging args here means ``args`` must be
@@ -122,12 +138,38 @@ class SecretRedactingFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         cleaned = redacted_message(record)
-        if cleaned is None:
-            return True
-        if cleaned != record.msg or record.args:
+        if cleaned is not None and (cleaned != record.msg or record.args):
             record.msg = cleaned
             record.args = None
+        self._redact_traceback(record)
         return True
+
+    @staticmethod
+    def _redact_traceback(record: logging.LogRecord) -> None:
+        """Redact the exception and stack text a formatter renders separately.
+
+        Rewriting ``msg`` is not enough: ``Formatter.format`` builds the
+        traceback from ``exc_info`` on its own, so a secret inside an exception's
+        *message* — an SSH auth failure, a URL error, ``KeyError: 'secret'`` —
+        reached the file and the console untouched while only the in-memory
+        buffer was clean.
+
+        Pre-setting ``exc_text`` is what fixes it: the formatter uses that when
+        present instead of rendering the traceback itself. It also makes this
+        idempotent across handlers for free — the first pass fills the cache and
+        later ones skip.
+        """
+        try:
+            if record.exc_info and not record.exc_text:
+                record.exc_text = redact(EXC_FORMATTER.formatException(record.exc_info))
+            if record.stack_info:
+                record.stack_info = redact(record.stack_info)
+        except Exception:
+            # Never raise on the logging path; an unredacted traceback is worse
+            # than none of the record at all, so drop the text rather than
+            # letting it through unfiltered.
+            record.exc_info = None
+            record.exc_text = f"<traceback withheld: {REDACTED} could not be applied>"
 
 
 def install_redaction() -> None:

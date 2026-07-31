@@ -12,7 +12,7 @@ import signal
 import sys
 from typing import cast
 
-import wactorz._bootstrap  # noqa: F401  side effects: import path, platform, root logging
+import wactorz._bootstrap  # noqa: F401  side effects: import path, platform fixups
 from wactorz.config import CONFIG
 from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader

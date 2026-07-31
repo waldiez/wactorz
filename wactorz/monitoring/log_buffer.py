@@ -19,15 +19,9 @@ import logging
 from collections import deque
 from typing import Any
 
-from .log_redaction import redact, redacted_message
+from .log_redaction import EXC_FORMATTER, redact, redacted_message
 
 DEFAULT_CAPACITY = 1000
-
-
-# Exception text is where a traceback lives, and a traceback is the thing a
-# reader opened the log for. Only ``formatException`` is used, so the envelope
-# fields are not duplicated into the text.
-_EXC_FORMATTER = logging.Formatter()
 
 
 class LogRingBuffer(logging.Handler):
@@ -70,7 +64,7 @@ class LogRingBuffer(logging.Handler):
         if record.exc_info:
             # Redacted too — an exception's *message* can carry a credential
             # even though the frames themselves do not.
-            text = f"{text}\n{redact(_EXC_FORMATTER.formatException(record.exc_info))}"
+            text = f"{text}\n{redact(EXC_FORMATTER.formatException(record.exc_info))}"
         return {
             "source": "app",
             "ts": record.created,

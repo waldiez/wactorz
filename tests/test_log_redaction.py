@@ -13,6 +13,7 @@ take the process with it.
 """
 
 import logging
+import sys
 import time
 
 import pytest
@@ -74,6 +75,26 @@ class TestAssignmentPairs:
 
     def test_spaces_around_equals(self) -> None:
         assert "hunter2" not in scrub("token = hunter2")
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            'password="hunter2"',
+            "token='hunter2'",
+            'connect(host="broker", password="hunter2")',
+            "MQTT_PASSWORD='hunter2'",
+        ],
+    )
+    def test_quoted_value(self, line: str) -> None:
+        """A kwargs repr or a source line quotes the value, and the unquoted
+        pattern's value class stops at the opening quote."""
+        out = scrub(line)
+        assert "hunter2" not in out
+        assert REDACTED in out
+
+    def test_quoted_value_keeps_the_rest_of_the_call(self) -> None:
+        out = scrub('connect(host="broker", password="hunter2")')
+        assert "broker" in out
 
 
 class TestHeaders:
@@ -189,6 +210,7 @@ class TestIdempotent:
             "MQTT_PASSWORD=hunter2 host=broker",
             "{'api_key': 'sk-live-9f3a'}",
             "Authorization: Bearer eyJ.abc",
+            'password="hunter2"',
             "mqtt://user:s3cr3t@broker.local:1883",
             "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----",
         ],
@@ -244,6 +266,61 @@ class TestInstallRedaction:
         finally:
             root.removeHandler(capture)
         assert seen and all("hunter2" not in line for line in seen)
+
+
+class TestTracebackRedaction:
+    """``Formatter.format`` renders ``exc_info`` separately from ``msg``."""
+
+    def _record_with_exception(self, message: str) -> logging.LogRecord:
+        try:
+            raise ValueError(message)
+        except ValueError:
+            rec = record("connect failed")
+            rec.exc_info = sys.exc_info()
+            return rec
+
+    def test_exc_text_is_populated_and_redacted(self) -> None:
+        rec = self._record_with_exception("auth failed for password=hunter2")
+        SecretRedactingFilter().filter(rec)
+        assert rec.exc_text is not None
+        assert "hunter2" not in rec.exc_text
+        assert "ValueError" in rec.exc_text
+
+    def test_formatter_uses_the_redacted_text(self) -> None:
+        """Pre-setting ``exc_text`` is what makes the formatter use ours."""
+        rec = self._record_with_exception("token=sk-live-9f3a")
+        SecretRedactingFilter().filter(rec)
+        assert "sk-live-9f3a" not in logging.Formatter().format(rec)
+
+    def test_idempotent_across_handlers(self) -> None:
+        """The filter runs once per handler; the cache must not be re-wrapped."""
+        rec = self._record_with_exception("password=hunter2")
+        filt = SecretRedactingFilter()
+        filt.filter(rec)
+        first = rec.exc_text
+        filt.filter(rec)
+        assert rec.exc_text == first
+
+    def test_stack_info_is_redacted(self) -> None:
+        rec = record("with stack")
+        rec.stack_info = 'Stack (most recent call last):\n  connect(password="hunter2")'
+        SecretRedactingFilter().filter(rec)
+        assert rec.stack_info is not None
+        assert "hunter2" not in rec.stack_info
+
+    def test_records_without_exceptions_are_untouched(self) -> None:
+        rec = record("ordinary line")
+        SecretRedactingFilter().filter(rec)
+        assert rec.exc_text is None
+
+    def test_unformattable_traceback_is_withheld_not_leaked(self) -> None:
+        """Failing open here would emit the very text we could not clean."""
+        rec = record("boom")
+        rec.exc_info = ("not", "a", "valid exc_info")  # type: ignore[assignment]
+        assert SecretRedactingFilter().filter(rec) is True
+        assert rec.exc_info is None
+        assert rec.exc_text is not None
+        assert "withheld" in rec.exc_text
 
 
 class TestFilterRecordHandling:

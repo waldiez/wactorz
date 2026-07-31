@@ -11,6 +11,7 @@ gets two sets of handlers and every line is duplicated.
 
 import logging
 import logging.handlers
+import sys
 
 import pytest
 
@@ -77,6 +78,41 @@ class TestSetupLogging:
         written = (tmp_path / "wactorz.log").read_text(encoding="utf-8")
         assert "s3cr3t" not in written
         assert "mqtt://u:" in written, "only the credential is removed"
+
+    def test_secret_in_a_traceback_never_reaches_the_file(self, tmp_path, monkeypatch) -> None:
+        """The regression this pins: rewriting ``msg`` leaves the traceback alone.
+
+        ``Formatter.format`` renders ``exc_info`` itself, so a secret inside an
+        exception's *message* — an SSH auth failure, a URL error — reached the
+        file and console untouched while only the in-memory buffer was clean.
+        Credential-bearing text is more likely in an exception than in a plain
+        message, so this is the path that mattered most.
+        """
+        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path))
+        log_setup.setup_logging()
+        file_handler = next(
+            h for h in logging.getLogger().handlers if isinstance(h, logging.FileHandler)
+        )
+        try:
+            raise ValueError("auth failed for mqtt://u:s3cr3t@broker password=hunter2")
+        except ValueError:
+            file_handler.handle(
+                logging.LogRecord(
+                    name="wactorz.test.setup",
+                    level=logging.ERROR,
+                    pathname=__file__,
+                    lineno=1,
+                    msg="connect failed",
+                    args=None,
+                    exc_info=sys.exc_info(),
+                )
+            )
+        file_handler.flush()
+        written = (tmp_path / "wactorz.log").read_text(encoding="utf-8")
+        assert "s3cr3t" not in written
+        assert "hunter2" not in written
+        assert "ValueError" in written, "the traceback is redacted, not discarded"
+        assert "connect failed" in written
 
     def test_idempotent(self, tmp_path, monkeypatch) -> None:
         """A second call must not double every line."""

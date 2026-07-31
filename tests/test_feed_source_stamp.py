@@ -38,10 +38,16 @@ class TestSourceStamp:
             events.add_log({"type": "log", "agent_id": f"a{i}"})
         assert all(entry["source"] == "agent" for entry in feed())
 
-    def test_explicit_source_is_kept(self) -> None:
-        """Application-log entries will arrive already labelled."""
+    def test_payload_cannot_override_source(self) -> None:
+        """The ``logs`` and ``spawned`` branches spread ``**data`` from the
+        broker payload, so a publisher must not be able to label its own row
+        ``app`` and have the feed render it as an application log line."""
         events.add_log({"type": "log", "source": "app"})
-        assert feed()[0]["source"] == "app"
+        assert feed()[0]["source"] == "agent"
+
+    def test_payload_via_parse_topic_cannot_override_source(self) -> None:
+        events.parse_topic("agents/abc/logs", '{"message": "hi", "source": "app"}')
+        assert feed()[0]["source"] == "agent"
 
 
 class TestProjectionNotEnrichment:

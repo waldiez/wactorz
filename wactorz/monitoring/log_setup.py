@@ -12,6 +12,7 @@ and the Windows event-loop and encoding fixups.
 """
 
 import logging
+import logging.handlers
 import sys
 from pathlib import Path
 
@@ -20,6 +21,11 @@ from wactorz.core.paths import resolve_state_dir
 from .log_redaction import install_redaction
 
 _FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+# 50 MB across all files. The log used to grow without bound, which on a
+# long-lived add-on or container ends as a full disk.
+MAX_BYTES = 10 * 1024 * 1024
+BACKUP_COUNT = 5
 
 _configured = False
 
@@ -37,11 +43,22 @@ def _file_handler() -> logging.Handler | None:
     because it could not import from the package, and a set of tests existed
     purely to pin the copy to the original; as an ordinary module this has no
     such constraint, so the duplication is gone rather than guarded.
+
+    Rotating: a rollover renames the file, which fails on Windows while another
+    process holds it open — during a dev reload, say. ``emit`` routes that
+    through ``handleError``, so it degrades to a complaint on stderr and a file
+    that keeps growing until the next rollover succeeds, rather than an error
+    that reaches the application.
     """
     try:
         log_dir = Path(resolve_state_dir())
         log_dir.mkdir(parents=True, exist_ok=True)
-        return logging.FileHandler(log_dir / "wactorz.log", encoding="utf-8")
+        return logging.handlers.RotatingFileHandler(
+            log_dir / "wactorz.log",
+            maxBytes=MAX_BYTES,
+            backupCount=BACKUP_COUNT,
+            encoding="utf-8",
+        )
     except OSError as exc:  # unwritable target — console logging still works
         print(f"[logging] file logging disabled: {exc}", file=sys.stderr)
         return None

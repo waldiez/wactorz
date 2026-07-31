@@ -10,6 +10,7 @@ gets two sets of handlers and every line is duplicated.
 """
 
 import logging
+import logging.handlers
 
 import pytest
 
@@ -84,6 +85,49 @@ class TestSetupLogging:
         count = len(logging.getLogger().handlers)
         log_setup.setup_logging()
         assert len(logging.getLogger().handlers) == count
+
+    def test_file_handler_rotates(self, tmp_path, monkeypatch) -> None:
+        """Unbounded growth ends as a full disk on a long-lived add-on."""
+        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path))
+        log_setup.setup_logging()
+        handler = next(
+            h
+            for h in logging.getLogger().handlers
+            if isinstance(h, logging.handlers.RotatingFileHandler)
+        )
+        assert handler.maxBytes == log_setup.MAX_BYTES
+        assert handler.backupCount == log_setup.BACKUP_COUNT
+
+    def test_rollover_failure_does_not_reach_the_caller(self, tmp_path, monkeypatch) -> None:
+        """A rollover renames the file, which fails on Windows while another
+        process holds it open. ``emit`` must absorb that: logging is the one
+        subsystem that has to keep working while everything else is failing."""
+        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path))
+        log_setup.setup_logging()
+        handler = next(
+            h
+            for h in logging.getLogger().handlers
+            if isinstance(h, logging.handlers.RotatingFileHandler)
+        )
+        monkeypatch.setattr(handler, "shouldRollover", lambda record: True, raising=False)
+        monkeypatch.setattr(
+            handler,
+            "doRollover",
+            lambda: (_ for _ in ()).throw(PermissionError("file in use")),
+            raising=False,
+        )
+        monkeypatch.setattr(logging, "raiseExceptions", False)
+        handler.handle(
+            logging.LogRecord(
+                name="wactorz.test.setup",
+                level=logging.ERROR,
+                pathname=__file__,
+                lineno=1,
+                msg="still running",
+                args=None,
+                exc_info=None,
+            )
+        )  # must not raise
 
     def test_unwritable_state_dir_still_logs_to_console(self, tmp_path, monkeypatch) -> None:
         """A read-only target disables the file, it does not stop the process."""

@@ -104,7 +104,6 @@ This replaces all previous keyword heuristics with a single LLM classification s
 | `agents/home_assistant_actuator_agent.py` | Agent | Reactive MQTT→HA actuator — subscribes to topics, calls HA services |
 | `interfaces/chat_interfaces.py` | I/O | CLI (streaming), REST, Discord, WhatsApp, Telegram — all call `process_user_input[_stream]` |
 | `interfaces/mcp_server.py` | I/O | MCP server exposing Wactorz and Home Assistant tools to MCP-compatible clients |
-| `monitor_server.py` | I/O | MQTT→WebSocket bridge that feeds the live dashboard (also serves the SPA from `static/app/`) |
 
 ---
 
@@ -1321,7 +1320,6 @@ wactorz/
 ├── cli.py                                     argparse, supervision tree wiring, interface dispatch
 ├── config.py                                  Env-driven `AppConfig` (LLM_*, MQTT_*, HA_*, …)
 ├── remote_runner.py                           Self-contained edge node runner — deploy to any Pi or machine
-├── monitor_server.py                          aiohttp dashboard + MQTT↔WS bridge (serves `static/app/`)
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
 │
 ├── core/

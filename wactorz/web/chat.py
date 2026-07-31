@@ -23,9 +23,8 @@ from . import runtime
 
 logger = logging.getLogger(__name__)
 
-# In-flight chat-generation tasks (direct_ws + REST paths) so POST /chat/stop can
-# cancel a turn mid-stream. The legacy MQTT path is handled separately by the
-# IOAgent via the io/chat/control topic.
+# In-flight chat-generation tasks (WebSocket + REST paths) so POST /chat/stop can
+# cancel a turn mid-stream.
 inflight_chat_tasks: set = set()
 
 MAIN_ACTOR_NAME = "main"
@@ -49,11 +48,6 @@ async def discard_reply(_text: str) -> None:
     function taking one argument — a bare lambda raises TypeError on the first
     chunk and silently abandons the stream after the tokens are paid for.
     """
-
-
-def chat_mode() -> str:
-    """Which chat path is active: ``direct_ws`` when a registry is wired, else ``mqtt``."""
-    return "direct_ws" if runtime.registry is not None else "mqtt"
 
 
 def find_main() -> MainActor | None:
@@ -549,34 +543,6 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             await _end_fn()
 
 
-# ── MQTT chat handler (legacy / IOAgent-less fallback) ─────────────────────
-
-
-async def handle_chat_mqtt(data: dict):
-    """Called when io/chat arrives via MQTT and registry is wired in."""
-    if runtime.registry is None:
-        return  # IOAgent handles it
-    content = (data.get("content") or "").strip()
-    if not content:
-        return
-
-    async def mqtt_reply(text: str):
-        if runtime.mqtt_client_ref:
-            await runtime.mqtt_client_ref.publish(
-                f"agents/{runtime.IO_GATEWAY_ID}/chat",
-                json.dumps(
-                    {
-                        "from": runtime.IO_GATEWAY_ID,
-                        "to": "user",
-                        "content": text,
-                        "timestamp": time.time(),
-                    }
-                ),
-            )
-
-    await route_chat(content, mqtt_reply)  # MQTT path: no streaming, reply_fn used for all output
-
-
 # ── REST chat endpoints ────────────────────────────────────────────────────
 
 
@@ -602,39 +568,20 @@ async def rest_chat_handler(request: web.Request) -> Response:
     return web.json_response({"status": "sent", "agent": agent_name})
 
 
-async def rest_chat_stop_handler(request: web.Request) -> Response:
+async def rest_chat_stop_handler(request: web.Request | None) -> Response:
     """POST /chat/stop — cancel any in-flight generation. No request body needed.
 
-    Works in both runtime modes:
-      - direct_ws — cancels the in-process generation task(s) running here; the
-        cancelled stream finalizes and posts "⏹ Stopped." over the WebSocket.
-      - mqtt (legacy) — publishes {"action": "stop"} to io/chat/control so the
-        IOAgent cancels the turn it is streaming and replies on io/chat/response.
-    The user-facing confirmation rides the usual chat reply path, so the UI
-    needs no extra subscription.
+    Cancels the in-process generation task(s); the cancelled stream finalizes and
+    posts "⏹ Stopped." over the WebSocket. The user-facing confirmation rides the
+    usual chat reply path, so the UI needs no extra subscription.
     """
-    # direct_ws: cancel the in-process generation task(s).
     tasks = [t for t in inflight_chat_tasks if not t.done()]
     for t in tasks:
         t.cancel()
-
-    # legacy MQTT: tell the IOAgent to stop whatever it is generating.
-    published = False
-    if runtime.registry is None and runtime.mqtt_client_ref:
-        try:
-            await runtime.mqtt_client_ref.publish(
-                "io/chat/control",
-                json.dumps({"action": "stop"}),
-                qos=1,
-            )
-            published = True
-        except Exception as exc:
-            logger.warning("[chat/stop] io/chat/control publish failed: %s", exc)
 
     return web.json_response(
         {
             "status": "stopped",
             "cancelled": len(tasks),
-            "published": published,
         }
     )

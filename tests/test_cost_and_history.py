@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # ── Minimal stubs so heavy optional deps don't need to be installed ──────────
-# aiohttp is a hard dependency and monitor_server imports it fully at module
+# aiohttp is a hard dependency and the web app imports it fully at module
 # level (web, WSMsgType, …), so it must NOT be stubbed — handler responses are
 # real aiohttp Response objects, read via _payload() below.
 from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissingImports]
@@ -145,7 +145,7 @@ class PersistCostTest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Historical cost accounting in monitor_server
+# 4. Historical cost accounting in the web app
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -247,7 +247,7 @@ class HistoricalCostTest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4b. Durable lifetime cost ledger in monitor_server
+# 4b. Durable lifetime cost ledger in the web app
 # ─────────────────────────────────────────────────────────────────────────────
 
 

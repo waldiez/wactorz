@@ -27,7 +27,6 @@ MQTT_TOPICS = [
     "agents/#",
     "system/#",
     "nodes/#",
-    "io/chat",
     "homeassistant/state_changes/#",
 ]
 

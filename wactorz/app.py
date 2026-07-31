@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import logging
 import os
+import signal
 import sys
 from typing import cast
 
@@ -23,7 +24,7 @@ async def _start_web_ui(
     port: int, mqtt_broker: str, mqtt_port: int, actor_registry=None, persistence_db=None
 ) -> None:
     """Start the monitor web server as a quiet background asyncio task."""
-    from wactorz.web import runtime, static_site
+    from wactorz.web import runtime
     from wactorz.web.app import main as run_server
 
     runtime.MQTT_BROKER = mqtt_broker
@@ -40,9 +41,30 @@ async def _start_web_ui(
         logging.getLogger(_name).setLevel(logging.WARNING)
 
     asyncio.create_task(run_server())
-    logger.info("Web UI →  http://localhost:%d", port)
+
+
+def _print_ready_banner(port: int) -> None:
+    """Print where to point a browser, once everything is up.
+
+    Last, not first: the web server binds before the agents start, so logging the
+    URL at bind time buried it under the whole supervision tree coming up. A
+    reader wants the address at the point the thing is actually usable.
+
+    ``print`` rather than ``logger``: this is the one line a person is meant to
+    act on, and when the login ceremony lands it gains a one-time link — which
+    must reach the terminal without also being written to the unrotated log file
+    or shipped onward by a metrics exporter.
+    """
+    from wactorz.web import static_site
+
+    lines = [f"Dashboard   http://localhost:{port}/"]
     if static_site.DOCS_SITE.is_dir():
-        logger.info("Docs   →  http://localhost:%d/docs/", port)
+        lines.append(f"Docs        http://localhost:{port}/docs/")
+    width = max(len(line) for line in lines) + 4
+    print("\n    ┌" + "─" * width + "┐")
+    for line in lines:
+        print(f"    │  {line.ljust(width - 4)}  │")
+    print("    └" + "─" * width + "┘\n", flush=True)
 
 
 async def build_system(args: argparse.Namespace):
@@ -281,9 +303,46 @@ async def build_system(args: argparse.Namespace):
     return system, cast(MainActor, main_actor), _db
 
 
+def _install_signal_handlers() -> None:
+    """Make SIGTERM shut down the way Ctrl-C already does.
+
+    Cancelling this task unwinds into the ``finally`` below, which stops the
+    supervisor, the actors and the broker connection. Without a handler SIGTERM
+    does nothing at all when the process is PID 1 — the kernel applies no default
+    action there — so ``docker stop`` and ``systemctl stop`` waited out their
+    timeout and killed the process mid-write instead.
+
+    ``add_signal_handler`` is POSIX-only; Windows gets ``signal.signal``, which
+    runs the callback in the main thread between bytecodes rather than on the
+    loop, hence ``call_soon_threadsafe``.
+    """
+    task = asyncio.current_task()
+    if task is None:  # pragma: no cover - app() is always run as a task
+        return
+    loop = asyncio.get_running_loop()
+    stopping = False
+
+    def _request_stop(*_: object) -> None:
+        nonlocal stopping
+        if stopping:
+            logger.warning("Shutdown already in progress — waiting for actors to stop.")
+            return
+        stopping = True
+        logger.info("Shutdown signal received — stopping actors.")
+        loop.call_soon_threadsafe(task.cancel)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _request_stop)
+        except (NotImplementedError, AttributeError):
+            signal.signal(sig, _request_stop)
+
+
 async def app(args: argparse.Namespace):
     if args.reload:
         start_reloader(logger)
+
+    _install_signal_handlers()
 
     system, main_actor, _db = await build_system(args)
 
@@ -292,6 +351,9 @@ async def app(args: argparse.Namespace):
 
     setup_otel(lambda: system.registry)
     setup_influx()
+
+    if not getattr(args, "no_monitor", False):
+        _print_ready_banner(args.monitor_port)
 
     # NOTE: the monitor web UI is now started inside build_system(), before the
     # supervisor, so it binds even if the broker stalls agent startup.

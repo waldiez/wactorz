@@ -7,6 +7,7 @@ import importlib.util
 import logging
 import os
 import socket
+import threading
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -482,13 +483,36 @@ class CLIInterface:
 
     # ── Main loop ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    async def _prompt(prompt: str) -> str:
+        """Read one line from stdin without blocking the loop *or* interpreter exit.
+
+        ``run_in_executor`` puts the read on the default thread pool, whose
+        threads are non-daemon: cancelling the await leaves the thread parked in
+        ``input()`` forever, and shutdown then waits for it twice — once in
+        ``Runner.close``'s ``shutdown_default_executor``, once in the threading
+        atexit hook. That is why stopping the CLI used to need repeated Ctrl-C.
+        Owning a daemon thread means a parked read never delays exit.
+        """
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+
+        def _read() -> None:
+            try:
+                line = input(prompt)
+            except (EOFError, KeyboardInterrupt):
+                loop.call_soon_threadsafe(lambda: future.done() or future.cancel())
+                return
+            loop.call_soon_threadsafe(lambda: future.done() or future.set_result(line))
+
+        threading.Thread(target=_read, daemon=True, name="wactorz-cli-stdin").start()
+        return await future
+
     async def run(self):
         print("\nWactorz CLI | Type /help for commands\n")
         while True:
             try:
-                user_input = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: input("You: ")
-                )
+                user_input = await self._prompt("You: ")
                 text = user_input.strip()
                 if not text:
                     continue

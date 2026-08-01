@@ -47,7 +47,7 @@ class ResetLogsTest(unittest.TestCase):
     def test_truncates_wactorz_log(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "wactorz.log"
             log.write_text("some log content\nmore content\n")
             reset_logs(log_dir=tmp)
@@ -56,7 +56,7 @@ class ResetLogsTest(unittest.TestCase):
     def test_truncates_monitor_log(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "monitor.log"
             log.write_text("monitor output\n")
             reset_logs(log_dir=tmp)
@@ -68,7 +68,7 @@ class ResetLogsTest(unittest.TestCase):
         known secret shapes, so the ones it misses are what would stay behind."""
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "wactorz.log"
             log.write_text("current\n")
             backups = [Path(tmp) / f"wactorz.log.{i}" for i in (1, 2, 3)]
@@ -85,7 +85,7 @@ class ResetLogsTest(unittest.TestCase):
     def test_leaves_unrelated_files_alone(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             keep = Path(tmp) / "wactorz.db"
             keep.write_text("not a log\n")
             reset_logs(log_dir=tmp)
@@ -94,14 +94,14 @@ class ResetLogsTest(unittest.TestCase):
     def test_skips_missing_files_silently(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             # Neither file exists — should not raise
             reset_logs(log_dir=tmp)
 
     def test_truncates_both_logs_when_both_present(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             for name in ("wactorz.log", "monitor.log"):
                 (Path(tmp) / name).write_text("data")
             reset_logs(log_dir=tmp)
@@ -111,7 +111,7 @@ class ResetLogsTest(unittest.TestCase):
     def test_truncates_open_file_handler(self):
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "wactorz.log"
             handler = logging.FileHandler(str(log_path))
             assert handler.stream
@@ -144,7 +144,7 @@ class ResetLogsTest(unittest.TestCase):
 
         from wactorz.reset import reset_logs
 
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "wactorz.log"
             handler = logging.FileHandler(str(log_path))
             assert handler.stream

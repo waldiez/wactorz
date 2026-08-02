@@ -45,7 +45,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     await ws.send_str(json.dumps({"type": "full_snapshot", "state": events.snapshot()}))
 
     # Advertise chat mode so the frontend knows where to send messages
-    await ws.send_str(json.dumps({"type": "config", "chat.chat_mode": chat.chat_mode()}))
+    await ws.send_str(json.dumps({"type": "config", "chat.chat_mode": "direct_ws"}))
 
     # Current server↔broker state so the "live" badge is right immediately on load.
     await ws.send_str(json.dumps({"type": "mqtt_status", "connected": runtime.mqtt_connected}))
@@ -136,25 +136,6 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 _stream_buffer.clear()
                 _persist_chat("assistant", full, _reply_from["name"])
 
-    async def _relay_chat_to_ioagent(content: str) -> None:
-        """Standalone monitor (no in-process registry): forward the browser's turn
-        to the IOAgent over MQTT `io/chat`. The reply returns on
-        `agents/{id}/chat`, which this process relays to the browser over /ws.
-
-        Only used in the legacy `wactorz-monitor` (registry-None) mode; remove it
-        when that entry point is retired from pyproject scripts.
-        """
-        if not runtime.mqtt_client_ref:
-            await ws_reply("[system] Chat unavailable — no broker connection.")
-            return
-        who = "main" if content.startswith("/") else chat.parse_mention(content)[0]
-        _persist_chat("user", content, who)
-        await runtime.mqtt_client_ref.publish(
-            "io/chat",
-            json.dumps({"content": content, "from": "user", "timestamp": time.time()}),
-            qos=1,
-        )
-
     try:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
@@ -210,7 +191,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
                             chat.track_chat_task(asyncio.create_task(_safe_route()))
                         elif content:
-                            await _relay_chat_to_ioagent(content)
+                            await ws_reply("[system] Chat unavailable — no actor registry.")
 
                 except Exception as e:
                     logger.warning("[ws] Bad message: %s", e)

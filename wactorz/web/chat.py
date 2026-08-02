@@ -23,10 +23,11 @@ from . import runtime
 
 logger = logging.getLogger(__name__)
 
-# In-flight chat-generation tasks (direct_ws + REST paths) so POST /chat/stop can
-# cancel a turn mid-stream. The legacy MQTT path is handled separately by the
-# IOAgent via the io/chat/control topic.
+# In-flight chat-generation tasks (WebSocket + REST paths) so POST /chat/stop can
+# cancel a turn mid-stream.
 inflight_chat_tasks: set = set()
+
+MAIN_ACTOR_NAME = "main"
 
 
 def track_chat_task(task):
@@ -40,14 +41,18 @@ async def no_op_async() -> None:
     """No op. To use instead of lambdas."""
 
 
-def chat_mode() -> str:
-    """Which chat path is active: ``direct_ws`` when a registry is wired, else ``mqtt``."""
-    return "direct_ws" if runtime.registry is not None else "mqtt"
+async def discard_reply(_text: str) -> None:
+    """Drop a reply chunk, for fire-and-forget callers with nowhere to send it.
+
+    ``route_chat`` does ``await reply_fn(text)``, so this must be a coroutine
+    function taking one argument — a bare lambda raises TypeError on the first
+    chunk and silently abandons the stream after the tokens are paid for.
+    """
 
 
 def find_main() -> MainActor | None:
     """Return the main actor from the registry, or ``None`` in legacy MQTT mode."""
-    actor = runtime.registry.find_by_name("main") if runtime.registry else None
+    actor = runtime.registry.find_by_name(MAIN_ACTOR_NAME) if runtime.registry else None
     if actor:
         return cast(MainActor, actor)
     return None
@@ -61,7 +66,90 @@ def parse_mention(content: str) -> tuple[str, str]:
     if content.startswith("@"):
         parts = content[1:].split(None, 1)
         return parts[0], (parts[1].strip() if len(parts) > 1 else "")
-    return "main", content
+    return MAIN_ACTOR_NAME, content
+
+
+# ── Catalog / experimental-agent presentation ──────────────────────────────
+
+
+def catalog_agent_line(agent: dict) -> str:
+    name = agent.get("name", "unknown")
+    description = agent.get("description", "")
+    return f"- `{name}` - {description}" if description else f"- `{name}`"
+
+
+def format_catalog_agents_response(payload: dict) -> str:
+    agents = payload.get("agents", [])
+    if not isinstance(agents, list):
+        return str(payload)
+
+    show_experimental = bool(payload.get("show_experimental", False))
+    recommended = [a for a in agents if isinstance(a, dict) and not a.get("experimental")]
+    experimental = [a for a in agents if isinstance(a, dict) and a.get("experimental")]
+    total = len(recommended) + len(experimental)
+
+    lines = [
+        "**Catalog agents**",
+        f"`{total}` total - `{len(recommended)}` recommended, "
+        f"`{len(experimental)}` experimental beta",
+    ]
+
+    if recommended:
+        lines.extend(
+            [
+                "",
+                "### Recommended",
+                *(catalog_agent_line(agent) for agent in recommended),
+            ]
+        )
+
+    if experimental:
+        if show_experimental:
+            lines.extend(
+                [
+                    "",
+                    "### Experimental / Beta",
+                    *(catalog_agent_line(agent) for agent in experimental),
+                ]
+            )
+        else:
+            # Hidden by default — nudge the user toward the opt-in instead of
+            # listing beta agents in the normal view.
+            lines.extend(
+                [
+                    "",
+                    f"_{len(experimental)} experimental/beta agent(s) hidden — "
+                    f"say `list experimental` to show them._",
+                ]
+            )
+
+    return "\n".join(lines)
+
+
+# Agents already warned in this process — so the beta banner shows on the first
+# user message to an experimental agent, not on every turn.
+beta_warned_agents: set = set()
+
+
+def experimental_first_use_banner(agent_name: str) -> str | None:
+    """One-time beta banner for the first user message to an experimental agent.
+
+    Returns the banner the first time ``agent_name`` is messaged in this process,
+    then None afterwards so the warning isn't repeated every turn. Non-experimental
+    or unknown agents always return None. The experimental flag and per-agent
+    warning come from main's manifest, populated by the catalog at startup.
+    """
+    if agent_name in beta_warned_agents:
+        return None
+    main = find_main()
+    manifest = (getattr(main, "_agent_manifests", {}) or {}).get(agent_name) if main else None
+    if not manifest or not manifest.get("experimental"):
+        return None
+    beta_warned_agents.add(agent_name)
+    from ..agents.catalog_agent import BETA_WARNING
+
+    warning = manifest.get("warning") or BETA_WARNING
+    return f"⚠️ **{agent_name}** is an experimental/beta agent. {warning}\n\n"
 
 
 # ── Slash commands ─────────────────────────────────────────────────────────
@@ -358,6 +446,12 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
     msg = f"[io-gateway] → {target.name}: {text[:60]!r}"
     logger.info(msg)
 
+    # First user message to an experimental/beta agent gets a one-time warning
+    # banner, emitted through the same channel the reply will use.
+    banner = experimental_first_use_banner(target_name)
+    if banner:
+        await _chunk_fn(banner)
+
     gen_fn = getattr(target, "process_user_input_stream", None) or getattr(
         target, "chat_stream", None
     )
@@ -432,10 +526,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                     or str(payload)
                 )
                 if "agents" in payload and isinstance(payload["agents"], list):
-                    lines = [payload.get("message", "Available agents:")]
-                    for a in payload["agents"]:
-                        lines.append(f"  • {a['name']}: {a.get('description', '')}")
-                    text_out = "\n".join(lines)
+                    text_out = format_catalog_agents_response(payload)
             else:
                 text_out = str(payload)
 
@@ -452,34 +543,6 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             await _end_fn()
 
 
-# ── MQTT chat handler (legacy / IOAgent-less fallback) ─────────────────────
-
-
-async def handle_chat_mqtt(data: dict):
-    """Called when io/chat arrives via MQTT and registry is wired in."""
-    if runtime.registry is None:
-        return  # IOAgent handles it
-    content = (data.get("content") or "").strip()
-    if not content:
-        return
-
-    async def mqtt_reply(text: str):
-        if runtime.mqtt_client_ref:
-            await runtime.mqtt_client_ref.publish(
-                f"agents/{runtime.IO_GATEWAY_ID}/chat",
-                json.dumps(
-                    {
-                        "from": runtime.IO_GATEWAY_ID,
-                        "to": "user",
-                        "content": text,
-                        "timestamp": time.time(),
-                    }
-                ),
-            )
-
-    await route_chat(content, mqtt_reply)  # MQTT path: no streaming, reply_fn used for all output
-
-
 # ── REST chat endpoints ────────────────────────────────────────────────────
 
 
@@ -492,7 +555,7 @@ async def rest_chat_handler(request: web.Request) -> Response:
     except Exception:
         return web.json_response({"error": "invalid JSON"}, status=400)
     message = data.get("message", "").strip()
-    agent_name = data.get("agent_name", "main-actor")
+    agent_name = data.get("agent_name", MAIN_ACTOR_NAME)
     if not message:
         return web.json_response({"error": "message required"}, status=400)
     target = runtime.registry.find_by_name(agent_name)
@@ -501,43 +564,24 @@ async def rest_chat_handler(request: web.Request) -> Response:
     # As above: route to the named agent, since route_chat would otherwise
     # default to main when the message carries no @mention.
     routed = message if message.startswith(("@", "/")) else f"@{target.name} {message}"
-    track_chat_task(asyncio.create_task(route_chat(routed, lambda t: None)))
+    track_chat_task(asyncio.create_task(route_chat(routed, discard_reply)))
     return web.json_response({"status": "sent", "agent": agent_name})
 
 
-async def rest_chat_stop_handler(request: web.Request) -> Response:
+async def rest_chat_stop_handler(request: web.Request | None) -> Response:
     """POST /chat/stop — cancel any in-flight generation. No request body needed.
 
-    Works in both runtime modes:
-      - direct_ws — cancels the in-process generation task(s) running here; the
-        cancelled stream finalizes and posts "⏹ Stopped." over the WebSocket.
-      - mqtt (legacy) — publishes {"action": "stop"} to io/chat/control so the
-        IOAgent cancels the turn it is streaming and replies on io/chat/response.
-    The user-facing confirmation rides the usual chat reply path, so the UI
-    needs no extra subscription.
+    Cancels the in-process generation task(s); the cancelled stream finalizes and
+    posts "⏹ Stopped." over the WebSocket. The user-facing confirmation rides the
+    usual chat reply path, so the UI needs no extra subscription.
     """
-    # direct_ws: cancel the in-process generation task(s).
     tasks = [t for t in inflight_chat_tasks if not t.done()]
     for t in tasks:
         t.cancel()
-
-    # legacy MQTT: tell the IOAgent to stop whatever it is generating.
-    published = False
-    if runtime.registry is None and runtime.mqtt_client_ref:
-        try:
-            await runtime.mqtt_client_ref.publish(
-                "io/chat/control",
-                json.dumps({"action": "stop"}),
-                qos=1,
-            )
-            published = True
-        except Exception as exc:
-            logger.warning("[chat/stop] io/chat/control publish failed: %s", exc)
 
     return web.json_response(
         {
             "status": "stopped",
             "cancelled": len(tasks),
-            "published": published,
         }
     )

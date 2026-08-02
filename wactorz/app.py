@@ -8,41 +8,30 @@ import argparse
 import asyncio
 import logging
 import os
+import signal
 import sys
+from typing import cast
 
-import wactorz._bootstrap  # noqa: F401  side effects: import path, platform, root logging
+import wactorz._bootstrap  # noqa: F401  side effects: import path, platform fixups
 from wactorz.config import CONFIG
+from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader
+from wactorz.monitoring.log_buffer import install as install_log_buffer
+from wactorz.monitoring.log_setup import setup_logging
 
 logger = logging.getLogger(__name__)
-
-
-def _state_dir() -> str:
-    """Resolve the persistent state directory.
-
-    Honours ``WACTORZ_STATE_DIR`` so deployments can pin an absolute,
-    durable location (the HA addon sets it to ``/data/state`` so chat /
-    pickle / SQLite state survives addon updates). Falls back to ``./state``
-    for local/dev runs. The directory is created if missing.
-    """
-    base = os.environ.get("WACTORZ_STATE_DIR", "./state")
-    os.makedirs(base, exist_ok=True)
-    return base
 
 
 async def _start_web_ui(
     port: int, mqtt_broker: str, mqtt_port: int, actor_registry=None, persistence_db=None
 ) -> None:
     """Start the monitor web server as a quiet background asyncio task."""
-    import logging as _log
-
-    from wactorz.web import runtime, static_site
+    from wactorz.web import runtime
     from wactorz.web.app import main as run_server
 
     runtime.MQTT_BROKER = mqtt_broker
     runtime.MQTT_PORT = mqtt_port
     runtime.WS_PORT = port
-    runtime.MQTT_WS_PORT = int(os.getenv("MQTT_WS_PORT", "9001"))
 
     # Wire the registry in so chat is routed directly — no IOAgent needed
     if actor_registry is not None:
@@ -51,12 +40,33 @@ async def _start_web_ui(
         runtime.set_db(persistence_db)
 
     for _name in ("wactorz.web", "aiohttp.access", "aiohttp.server"):
-        _log.getLogger(_name).setLevel(_log.WARNING)
+        logging.getLogger(_name).setLevel(logging.WARNING)
 
     asyncio.create_task(run_server())
-    logger.info("Web UI →  http://localhost:%d", port)
+
+
+def _print_ready_banner(port: int) -> None:
+    """Print where to point a browser, once everything is up.
+
+    Last, not first: the web server binds before the agents start, so logging the
+    URL at bind time buried it under the whole supervision tree coming up. A
+    reader wants the address at the point the thing is actually usable.
+
+    ``print`` rather than ``logger``: this is the one line a person is meant to
+    act on, and when the login ceremony lands it gains a one-time link — which
+    must reach the terminal without also being written to the unrotated log file
+    or shipped onward by a metrics exporter.
+    """
+    from wactorz.web import static_site
+
+    lines = [f"Dashboard   http://localhost:{port}/"]
     if static_site.DOCS_SITE.is_dir():
-        logger.info("Docs   →  http://localhost:%d/docs/", port)
+        lines.append(f"Docs        http://localhost:{port}/docs/")
+    width = max(len(line) for line in lines) + 4
+    print("\n    ┌" + "─" * width + "┐")
+    for line in lines:
+        print(f"    │  {line.ljust(width - 4)}  │")
+    print("    └" + "─" * width + "┘\n", flush=True)
 
 
 async def build_system(args: argparse.Namespace):
@@ -66,46 +76,41 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
     from wactorz.agents.installer_agent import InstallerAgent
     from wactorz.agents.io_agent import IOAgent
-    from wactorz.agents.llm_agent import (
-        AnthropicProvider,
-        GeminiProvider,
-        NIMProvider,
-        OllamaProvider,
-        OpenAIProvider,
-    )
+    from wactorz.agents.llm_agent import LLMProvider
     from wactorz.agents.main_actor import MainActor
     from wactorz.agents.monitor_agent import MonitorActor
-    from wactorz.core.actor import SupervisorStrategy
+    from wactorz.core.actor import Actor, SupervisorStrategy
     from wactorz.core.registry import ActorSystem
+    from wactorz.llm_factory import create_provider, provider_for
 
     llm = args.llm or CONFIG.llm_provider
-    if llm == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY") or CONFIG.llm_api_key
-        provider = AnthropicProvider(model=CONFIG.llm_model, api_key=api_key)
-    elif llm == "openai":
-        api_key = os.getenv("OPENAI_API_KEY") or CONFIG.llm_api_key
-        provider = OpenAIProvider(
-            model=CONFIG.llm_model, api_key=api_key, base_url=CONFIG.openai_url or None
-        )
-    elif llm == "ollama":
-        ollama_model = args.ollama_model or CONFIG.llm_model
-        provider = OllamaProvider(model=ollama_model, base_url=CONFIG.ollama_url)
-    elif llm == "nim":
-        nim_model = args.nim_model or CONFIG.llm_model
-        provider = NIMProvider(
-            model=nim_model,
-            api_key=CONFIG.nim_api_key or CONFIG.nvidia_api_key or CONFIG.llm_api_key,
-        )
-    elif llm == "gemini":
-        gemini_model = args.gemini_model or CONFIG.llm_model or "gemini-2.5-flash"
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or CONFIG.llm_api_key
-        provider = GeminiProvider(model=gemini_model, api_key=api_key)
-    else:
+    model_flag = {
+        "ollama": args.ollama_model,
+        "nim": args.nim_model,
+        "gemini": args.gemini_model,
+    }.get(llm)
+    try:
+        provider = create_provider(llm, model_flag)
+    except ValueError:
         provider = None
+    if provider is None:
         logger.warning("No LLM provider set. Agents will have limited capabilities.")
+    else:
+        # One deterministic startup line so the active model and sampling
+        # settings are visible without digging through provider dashboards.
+        temperature = (
+            "provider default" if CONFIG.llm_temperature is None else CONFIG.llm_temperature
+        )
+        logger.info(
+            "LLM: %s/%s | temperature=%s%s",
+            llm,
+            getattr(provider, "model", None) or getattr(provider, "model_name", "?"),
+            temperature,
+            f" | overrides: {CONFIG.llm_overrides}" if CONFIG.llm_overrides else "",
+        )
 
     # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
-    _sd = _state_dir()
+    _sd = ensure_state_dir()
 
     # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
     system = ActorSystem(
@@ -134,78 +139,78 @@ async def build_system(args: argparse.Namespace):
     )
     logger.info("TopicBus initialised")
 
-    # ── Initialise persistence layer (SQLite + Redis + Pickle) ──────────────
-    # Replaces pickle-only storage. Redis is optional — falls back to
-    # in-memory dict if not running. Run migration once to move existing
-    # .pkl data to the new stores.
+    # ── Initialise persistence layer (SQLite + Pickle) ──────────────────────
     from wactorz.core.persistence import PersistenceAPI, init_persistence
 
-    _db, _redis, _pickle_store = init_persistence(
+    _db, _pickle_store = init_persistence(
         db_path=os.path.join(_sd, "wactorz.db"),
-        redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379"),
         state_dir=_sd,
         run_migration=True,
     )
-    logger.info(
-        "Persistence layer initialised (SQLite + %s + Pickle)",
-        "Redis" if not _redis._using_fallback else "in-memory fallback",
-    )
+    logger.info("Persistence layer initialised (SQLite + Pickle)")
 
     # ── Factory helpers (called fresh on each (re)start by the Supervisor) ────
-    def _wire_persistence(actor):
+    def _wire_persistence(actor: Actor) -> Actor:
         """Attach the unified persistence API to an actor."""
-        actor._persistence_api = PersistenceAPI(_db, _redis, _pickle_store, actor.name)
+        actor._persistence_api = PersistenceAPI(_db, _pickle_store, actor.name)
         return actor
 
-    def make_provider():
+    def make_provider() -> LLMProvider | None:
         return provider  # stateless — same instance is fine
 
-    def make_main():
-        return _wire_persistence(
-            MainActor(llm_provider=make_provider(), name="main", persistence_dir="./state")
+    def make_main() -> MainActor:
+        main_actor = _wire_persistence(
+            MainActor(
+                llm_provider=provider_for("main", make_provider()),
+                name="main",
+                persistence_dir=_sd,
+            )
         )
+        return cast(MainActor, main_actor)
 
-    def make_monitor():
+    def make_monitor() -> Actor:
         return _wire_persistence(
             MonitorActor(
                 check_interval=15.0,
                 heartbeat_timeout=60.0,
                 auto_restart=False,
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
 
-    def make_installer():
-        return _wire_persistence(InstallerAgent(name="installer", persistence_dir="./state"))
+    def make_installer() -> Actor:
+        return _wire_persistence(InstallerAgent(name="installer", persistence_dir=_sd))
 
-    def make_ha_agent():
+    def make_ha_agent() -> Actor:
         return _wire_persistence(
             HomeAssistantAgent(
-                llm_provider=make_provider(), name="home-assistant-agent", persistence_dir="./state"
+                llm_provider=provider_for("ha", make_provider()),
+                name="home-assistant-agent",
+                persistence_dir=_sd,
             )
         )
 
-    def make_ha_map_agent():
+    def make_ha_map_agent() -> Actor:
         return _wire_persistence(
             HomeAssistantMapAgent(
                 name="home-assistant-map-agent",
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
 
-    def make_ha_state_bridge():
+    def make_ha_state_bridge() -> Actor:
         return _wire_persistence(
             HomeAssistantStateBridgeAgent(
                 name="home-assistant-state-bridge",
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
 
-    def make_io_agent():
-        return _wire_persistence(IOAgent(name="io-agent", persistence_dir="./state"))
+    def make_io_agent() -> Actor:
+        return _wire_persistence(IOAgent(name="io-agent", persistence_dir=_sd))
 
-    def make_catalog():
-        return _wire_persistence(CatalogAgent(name="catalog", persistence_dir="./state"))
+    def make_catalog() -> Actor:
+        return _wire_persistence(CatalogAgent(name="catalog", persistence_dir=_sd))
 
     (
         system.supervisor.supervise(
@@ -290,20 +295,67 @@ async def build_system(args: argparse.Namespace):
         sys.exit(1)
 
     logger.info("Wactorz system started. Supervision tree active.")
-    return system, main_actor, _db
+    return system, cast(MainActor, main_actor), _db
+
+
+def _install_signal_handlers() -> None:
+    """Make SIGTERM shut down the way Ctrl-C already does.
+
+    Cancelling this task unwinds into the ``finally`` below, which stops the
+    supervisor, the actors and the broker connection. Without a handler SIGTERM
+    does nothing at all when the process is PID 1 — the kernel applies no default
+    action there — so ``docker stop`` and ``systemctl stop`` waited out their
+    timeout and killed the process mid-write instead.
+
+    ``add_signal_handler`` is POSIX-only; Windows gets ``signal.signal``, which
+    runs the callback in the main thread between bytecodes rather than on the
+    loop, hence ``call_soon_threadsafe``.
+    """
+    task = asyncio.current_task()
+    if task is None:  # pragma: no cover - app() is always run as a task
+        return
+    loop = asyncio.get_running_loop()
+    stopping = False
+
+    def _request_stop(*_: object) -> None:
+        nonlocal stopping
+        if stopping:
+            logger.warning("Shutdown already in progress — waiting for actors to stop.")
+            return
+        stopping = True
+        logger.info("Shutdown signal received — stopping actors.")
+        loop.call_soon_threadsafe(task.cancel)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _request_stop)
+        except (NotImplementedError, AttributeError):
+            signal.signal(sig, _request_stop)
 
 
 async def app(args: argparse.Namespace):
+    # First, so both cover startup as well as steady state. setup_logging builds
+    # the handlers with redaction already attached, so no record reaches an
+    # unfiltered console or log file.
+    setup_logging()
+    install_log_buffer()
+
     if args.reload:
         start_reloader(logger)
 
+    _install_signal_handlers()
+
     system, main_actor, _db = await build_system(args)
 
+    from wactorz.core.persistence import close_persistence
     from wactorz.monitoring.influx import setup_influx, shutdown_influx
     from wactorz.monitoring.otel import setup_otel, shutdown_otel
 
     setup_otel(lambda: system.registry)
     setup_influx()
+
+    if not getattr(args, "no_monitor", False):
+        _print_ready_banner(args.monitor_port)
 
     # NOTE: the monitor web UI is now started inside build_system(), before the
     # supervisor, so it binds even if the broker stalls agent startup.
@@ -314,15 +366,23 @@ async def app(args: argparse.Namespace):
         RESTInterface,
         TelegramInterface,
         WhatsAppInterface,
+        build_social_companions,
+    )
+    from wactorz.interfaces.chat_interfaces import (
+        run_all_interfaces as _run_all,
     )
 
     interface = args.interface or CONFIG.interface
+
+    # Configured social channels run alongside the primary interface, not
+    # instead of it (the dashboard stays primary; the bots ride along).
+    companions = build_social_companions(main_actor, interface)
 
     try:
         if interface == "cli":
             if sys.stdin.isatty():
                 iface = CLIInterface(main_actor)
-                await asyncio.gather(iface.run(), system.run_forever())
+                await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
             else:
                 # No TTY (piped/Docker/systemd): input() would raise EOFError on
                 # the first read, finishing iface.run() instantly and — paired
@@ -341,14 +401,18 @@ async def app(args: argparse.Namespace):
         elif interface == "rest":
             port = args.port or CONFIG.port
             iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)
-            await asyncio.gather(iface.run(), system.run_forever())
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "discord":
             discord_token = args.discord_token or CONFIG.discord_token
             if not discord_token:
                 logger.error("DISCORD_BOT_TOKEN not set.")
                 sys.exit(1)
-            iface = DiscordInterface(main_actor, token=discord_token)
-            await asyncio.gather(iface.run(), system.run_forever())
+            iface = DiscordInterface(
+                main_actor,
+                token=discord_token,
+                allowed_user_ids=CONFIG.discord_allowed_user_ids,
+            )
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "whatsapp":
             port = args.port or CONFIG.port
             iface = WhatsAppInterface(
@@ -357,23 +421,28 @@ async def app(args: argparse.Namespace):
                 auth_token=CONFIG.twilio_auth_token,
                 from_number=CONFIG.twilio_whatsapp_number,
                 port=port,
+                allowed_numbers=CONFIG.whatsapp_allowed_numbers,
             )
-            await asyncio.gather(iface.run(), system.run_forever())
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "telegram":
             telegram_token = args.telegram_token or CONFIG.telegram_token
             if not telegram_token:
                 logger.error("TELEGRAM_BOT_TOKEN not set.")
                 sys.exit(1)
-            allowed_user_id = (
-                args.telegram_allowed_user_id or CONFIG.telegram_allowed_user_id or None
-            )
             iface = TelegramInterface(
-                main_actor, token=telegram_token, allowed_user_id=allowed_user_id
+                main_actor,
+                token=telegram_token,
+                allowed_user_id=args.telegram_allowed_user_id or None,
+                allowed_user_ids=CONFIG.telegram_allowed_user_ids,
             )
-            await asyncio.gather(iface.run(), system.run_forever())
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     except Exception as exc:
         logger.error(f"System error: {exc}", exc_info=True)
     finally:
         shutdown_otel()
         shutdown_influx()
         await system.stop_all()
+        # Last: actors write state as they stop, so the connection has to outlive
+        # them. Closing checkpoints the WAL rather than leaving -wal/-shm behind
+        # for the next start to recover.
+        close_persistence()

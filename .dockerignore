@@ -1,9 +1,55 @@
-__pycache__
-*.pyc
-*.log
+# Build context exclusions. The Dockerfile only COPYs pyproject.toml, README.md,
+# wactorz/, static/ and scripts/, so this is about keeping the context small and
+# not handing anything sensitive to the daemon in the first place.
+
+# Secrets and local agent notes
 .env
+.env.*
+!.env.template
+.local/
+.claude/
+.codex/
+.gemini/
+infra/homeassistant/secrets.yaml
+
+# Runtime state and databases
+state/
+actor_state/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Virtualenvs and dependency trees
+.venv/
 myenv/
 node_modules/
 frontend/node_modules/
+
+# Caches and build output
+__pycache__
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+dist/
+build/
+*.egg-info/
+target/
+site/
+
+# Generated API docs (pdoc/TypeDoc): gitignored, so a CI build never has them, but
+# Docker does not read .gitignore and the Dockerfile copies static/ wholesale — a
+# local build would otherwise bake in ~13MB the published image lacks.
+static/docs/api/
+
+# Repo metadata and large local artefacts
 .git/
-state/
+.github/
+models/
+eval_results/
+*.zip
+*.tar.gz

@@ -26,6 +26,7 @@ from .mixins import (
     SpawnMixin,
     SpawnPlaceholder,
 )
+from .one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from .prompts.main_actor_prompts import (
     ORCHESTRATOR_PROMPT,
 )
@@ -1401,6 +1402,103 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         return note_prefix + clean
 
+    # Delegation allow-list for social channels. A deny-list won't hold: any
+    # DynamicAgent or code-agent runs code, so delegating to one launders code
+    # execution. Allow only bounded native agents; fail closed.
+    _RESTRICTED_DELEGATION_ALLOW = frozenset({"weather-agent", "home-assistant-agent"})
+
+    @staticmethod
+    def _neutralize_action_blocks(response: str) -> tuple[str, bool]:
+        """Strip <spawn>/<delete> blocks without running them; return (cleaned, had_any)."""
+        had = bool(re.search(r"<(spawn|delete)>", response))
+        cleaned = re.sub(r"<spawn>.*?</spawn>", "", response, flags=re.DOTALL)
+        cleaned = re.sub(r"<delete>.*?</delete>", "", cleaned, flags=re.DOTALL)
+        return cleaned.strip(), had
+
+    async def process_user_input_restricted(self, text: str) -> str:
+        """Social-channel (Discord/Telegram) entry point — the untrusted-surface
+        counterpart of process_user_input.
+
+        Conversation, device control (ACTUATE), and HA queries only. Spawning,
+        deleting, code, pipelines, admin commands, and delegation to
+        non-allowlisted agents are blocked — at the action, not by classifying
+        the text, so it can't be talked around.
+        """
+        note_prefix = self._drain_notifications()
+        stripped = text.strip()
+
+        # Slash / pipeline! commands are the admin surface — not exposed here.
+        if stripped.startswith("/") or stripped.lower().startswith("pipeline!"):
+            reply = (
+                "Admin commands aren't available on this channel — just talk to me "
+                "normally. I can answer questions, tell you what's going on, and "
+                "control your devices. (Spawning, deleting, and running code stay "
+                "on the dashboard.)"
+            )
+            await self._record_external_exchange(text, reply)
+            return note_prefix + reply
+
+        # Reuse the main intent classifier; PIPELINE (creates rules/agents) is refused.
+        intent = await self._classify_intent(text)
+        logger.info(f"[{self.name}] Intent (restricted): {intent} — {text[:60]}")
+
+        if intent == "PIPELINE":
+            reply = (
+                "I can't create automations or new agents from a social channel — "
+                "set those up on the dashboard. I can still answer questions and "
+                "control your devices from here."
+            )
+            await self._record_external_exchange(text, reply)
+            return note_prefix + reply
+
+        if intent == "ACTUATE":
+            # Everyday devices only. The actuator executes the domain/service the
+            # LLM picked, so without this gate "control my devices" reaches
+            # shell_command/python_script/hassio and becomes code execution.
+            response = await self._handle_actuate_intent(
+                text, allowed_domains=SOCIAL_ACTUATE_DOMAINS
+            )
+            await self._record_external_exchange(text, response)
+            return note_prefix + response
+
+        if intent == "HA":
+            result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
+            if result and isinstance(result, dict) and result.get("result"):
+                response = str(result["result"])
+            elif not result:
+                response = "I could not reach the Home Assistant agent right now. Please retry."
+            else:
+                response = "The Home Assistant agent did not return a result. Please retry."
+            await self._record_external_exchange(text, response)
+            return note_prefix + response
+
+        # OTHER: converse, but run no action executors.
+        self._rebuild_system_prompt()
+        prefixed_text = self._prefix_with_live_context(text)
+        response = await self.chat(prefixed_text)
+        for i in range(len(self._conversation_history) - 1, -1, -1):
+            m = self._conversation_history[i]
+            if m.get("role") == "user" and m.get("content") == prefixed_text:
+                m["content"] = text
+                break
+        self.persist("conversation_history", self._conversation_history)
+
+        # The prose around a spawn/delete block asserts the action happened, so
+        # stripping the block would leave a false claim. Discard the whole reply.
+        clean, had_actions = self._neutralize_action_blocks(response)
+        if had_actions:
+            reply = (
+                "I can't create or delete agents from this channel — that's a "
+                "dashboard-only action. I'm happy to chat, answer questions, or "
+                "control your devices instead."
+            )
+            await self._record_external_exchange(text, reply)
+            return note_prefix + reply
+
+        # Structured delegation only (allow-listed, no spawn); skip loose @mentions.
+        clean, _ = await self._process_delegate_commands(clean, restricted=True)
+        return note_prefix + clean.strip()
+
     async def process_user_input_stream(self, text: str):
         """Streaming version of process_user_input().
         Yields text chunks as the LLM generates them, then a final dict:
@@ -1699,7 +1797,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         except Exception as e:
             return f"[{agent_name} error: {e}]"
 
-    async def _process_delegate_commands(self, response: str):
+    async def _process_delegate_commands(self, response: str, restricted: bool = False):
         """Scan the LLM response for structured delegation blocks and execute them:
 
             <delegate>{"agent": "manual-agent", "task": "search for the Philips 2200 manual"}</delegate>
@@ -1746,7 +1844,16 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             else:
                 payload = {"text": str(cfg.get("task", "")).strip()}
 
-            target, _spawnable = await self._resolve_or_spawn(agent_name)
+            if restricted:
+                # Resolve-only (no spawn), allow-listed targets only.
+                if agent_name.lower() not in self._RESTRICTED_DELEGATION_ALLOW:
+                    result_str = f"[{agent_name} isn't available from this channel]"
+                    results.append(result_str)
+                    response = response.replace(m.group(0), result_str)
+                    continue
+                target = self._registry.find_by_name(agent_name) if self._registry else None
+            else:
+                target, _spawnable = await self._resolve_or_spawn(agent_name)
             if not target:
                 result_str = f"[Could not reach {agent_name}]"
             else:
@@ -3137,7 +3244,7 @@ async def handle_task(agent, payload):
             #
             # We've already snapshotted `initial_state` above — that's the
             # authoritative copy now being shipped to the remote node. The
-            # local SQLite rows / pickle / Redis values are about to become
+            # local SQLite rows / pickle / in-memory values are about to become
             # stale ghosts. If the user later migrates the agent back here
             # without those being cleared, they'd merge with the freshly
             # arrived state and produce duplicate conversation entries.
@@ -3148,7 +3255,7 @@ async def handle_task(agent, payload):
                         await self._registry.unregister(local.actor_id)
                         await local.stop()
                         self._agent_manifests.pop(agent_name, None)
-                        # Wipe SQLite / Redis / pickle for this agent. Uses
+                        # Wipe SQLite / memory / pickle for this agent. Uses
                         # the same purge primitive as permanent delete — the
                         # difference is the agent is being re-created on the
                         # target node with the snapshot we already have.
@@ -3792,7 +3899,7 @@ async def handle_task(agent, payload):
             ``delete=True`` so the runner unlinks <name>_state.json on disk
             and purges this agent's retained MQTT topics from the broker.
           - For local agents: the underlying PersistenceAPI.purge() wipes
-            SQLite kv_store rows, Redis ephemeral keys, and the agent's
+            SQLite kv_store rows, in-memory ephemeral keys, and the agent's
             state.pkl directory.
           - Either way, main also publishes empty retained payloads on the
             per-agent MQTT topics as a defensive second pass — if the runner
@@ -3888,7 +3995,7 @@ async def handle_task(agent, payload):
 
     async def _purge_local_agent_persistence(self, actor, name: str) -> None:
         """For a local actor: hard-delete its persisted state across all
-        backends (SQLite kv_store rows, Redis ephemeral keys, pickle file).
+        backends (SQLite kv_store rows, in-memory ephemeral keys, pickle file).
 
         Uses the actor's own PersistenceAPI when available so the right
         databases are touched. Falls back to a best-effort filesystem cleanup

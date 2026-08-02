@@ -573,7 +573,9 @@ class DynamicAgent(Actor):
 
         # Pre-inject the LLM shim so generated code can call agent.llm directly
         def _get_llm_shim(*args, **kwargs):
-            return self._api.llm
+            from ..llm_factory import provider_for
+
+            return provider_for("dynamic", self._api.llm)
 
         self._ns["get_llm"] = _get_llm_shim
         self._ns["setup_llm"] = _get_llm_shim

@@ -58,8 +58,8 @@ The `[all]` extra installs everything except the ML stack (heavy torch dependenc
 cp .env.template .env
 # edit .env and set LLM_API_KEY (or whichever provider you use)
 
-# 2. Get/run MQTT broker (if you don't have already) and open ports 1883, 9001
-docker run -d --name mosquitto -p 1883:1883 -p 9001:9001 eclipse-mosquitto
+# 2. Get/run MQTT broker (if you don't have already) and open port 1883
+docker run -d --name mosquitto -p 1883:1883 eclipse-mosquitto
 
 # 3. Start Wactorz
 wactorz
@@ -152,7 +152,7 @@ WS_PORT=8888   # dashboard port, default 8888
 ## Running Mosquitto via Docker
 
 ```bash
-docker run -d --name mosquitto -p 1883:1883 -p 9001:9001 eclipse-mosquitto
+docker run -d --name mosquitto -p 1883:1883 eclipse-mosquitto
 ```
 
 > **Note (Docker Desktop on Windows/Mac):** When services run inside Docker and need to reach the broker on the host, use `host.docker.internal` as the broker hostname instead of `localhost`.
@@ -261,7 +261,7 @@ docker compose --profile full up -d
 
 | Profile | Services | Ports |
 |---|---|---|
-| *(default)* | mosquitto | :1883, :9001 |
+| *(default)* | mosquitto | :1883 |
 | `python` | + wactorz-python | + :8000, :8888 |
 | `full` | + wactorz-python, homeassistant | + :8000, :8888, :8123 |
 
@@ -313,7 +313,7 @@ Services started:
 | Container | Port | Description |
 |---|---|---|
 | `wactorz-app` | :8000, :8888 | Python agent system (REST API + Web UI) |
-| `wactorz-dev-mosquitto` | :1883, :9001 | MQTT broker (TCP + WebSocket) |
+| `wactorz-dev-mosquitto` | :1883 | MQTT broker (TCP) |
 
 ### Environment variables in Docker
 
@@ -333,7 +333,6 @@ wactorz/                         ← repo root
 ├── wactorz/                     ← Python package
 │   ├── cli.py                   ← entry point (wactorz command)
 │   ├── config.py                ← .env loading, CONFIG object
-│   ├── monitor_server.py        ← back-compat shim → wactorz/web/
 │   ├── web/                     ← web server: dashboard SPA + REST + WS + docs (aiohttp)
 │   │   ├── app.py               ← route table, build_app(), entry point
 │   │   ├── runtime.py           ← shared mutable state (registry, db, live state)

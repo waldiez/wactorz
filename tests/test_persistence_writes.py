@@ -14,7 +14,7 @@ import tempfile
 import time
 import unittest
 
-from wactorz.core.persistence import _SCHEMA_SQL, WactorzDB
+from wactorz.core.persistence import SCHEMA_SQL, WactorzDB
 
 
 class WactorzDBWritePathTest(unittest.TestCase):
@@ -71,7 +71,7 @@ class SchemaPortabilityTest(unittest.TestCase):
         """
         for fn in ("unixepoch", "timediff"):
             self.assertNotRegex(
-                _SCHEMA_SQL,
+                SCHEMA_SQL,
                 rf"\b{fn}\s*\(",
                 f"{fn}() requires a recent SQLite; use the julianday()-based "
                 f"expression for portability",
@@ -81,7 +81,7 @@ class SchemaPortabilityTest(unittest.TestCase):
         """The full schema must compile on the running SQLite engine."""
         conn = sqlite3.connect(":memory:")
         try:
-            conn.executescript(_SCHEMA_SQL)
+            conn.executescript(SCHEMA_SQL)
         finally:
             conn.close()
 

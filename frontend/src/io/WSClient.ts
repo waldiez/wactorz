@@ -14,6 +14,7 @@
 import { log } from "./logger";
 import { toMs } from "../time";
 import { emit } from "../events";
+import { MAIN_AGENT } from "../agents/naming";
 import type { StatePatchAgent, SnapshotStats, LogFeedItem } from "../types/ws";
 
 export type ChatHandler = (content: string, from: string, timestampMs: number) => void;
@@ -70,7 +71,7 @@ export class WSClient {
     private _closed = false;
     /** The agent the last chat was addressed to — used to attribute replies,
      *  which the server stamps with the generic transport id "io-gateway". */
-    private _lastAgentName = "main-actor";
+    private _lastAgentName = MAIN_AGENT;
 
     /** True while the WebSocket is open. */
     get connected(): boolean {
@@ -150,7 +151,7 @@ export class WSClient {
      * Send a chat message over the WebSocket.
      * Returns false when the socket is not open.
      */
-    send(content: string, agentName = "main-actor"): boolean {
+    send(content: string, agentName = MAIN_AGENT): boolean {
         if (!this.connected) {
             return false;
         }

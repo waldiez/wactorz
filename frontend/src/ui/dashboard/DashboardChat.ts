@@ -10,7 +10,13 @@
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import { uid } from "../../ids";
 import type { View } from "./types";
-import { canDirectMessage, messageableNames, stateColor, stateLabel } from "./agentState";
+import {
+    canDirectMessage,
+    messageableNames,
+    stateColor,
+    stateLabel,
+    MESSAGEABLE_PRIORITY,
+} from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar } from "./chatIobar";
@@ -18,7 +24,9 @@ import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
 import { ChatInput } from "./chatInput";
 import { pickChatTarget, resolveSendTarget, stripLeadingMention } from "./chatRouting";
 import { SpeechToText } from "../../io/SpeechToText";
-import { renderMarkdown } from "../markdown";
+import { ChatStreamUI } from "./chatStreaming";
+import { postOrWarn } from "./mutate";
+import { MAIN_AGENT } from "../../agents/naming";
 import { UPLOADS_ENABLED } from "./uploads";
 import { renderAttachTray } from "./attachTray";
 import { emit, listen } from "../../events";
@@ -31,21 +39,27 @@ export interface ChatHost {
     getView(): View;
     /** Switch the active dashboard view. */
     setView(v: View): void;
-    /** Agents sorted with main-actor pinned first (shared with the overview). */
+    /** Agents sorted with main pinned first (shared with the overview). */
     sortedAgents(): AgentInfo[];
 }
 
 export class DashboardChat {
-    chatTarget = "main-actor";
+    chatTarget = MAIN_AGENT;
     private chatMessages: ChatMessage[] = [];
     private sidebarFilter = "";
 
-    private _streamRow: HTMLElement | null = null;
-    private _streamBody: HTMLElement | null = null;
-    private _streamFrom: string | null = null;
-    private _streamTarget: string | null = null;
-    private _streamText = "";
-    private _lastSentTarget = "main-actor";
+    /** Stream accumulation, live bubble and commit — extracted (size + per-agent keying). */
+    private _streamUI = new ChatStreamUI({
+        isChatView: () => this.host.getView() === "chat",
+        lastSentTarget: () => this._lastSentTarget,
+        belongsHere: (from, to) => this._msgBelongsHere({ id: "", from, to, content: "", timestampMs: 0 }),
+        thread: () => this.root.querySelector<HTMLElement>(".af-chat-thread"),
+        scrollThread: () => this._scrollThread(),
+        commit: msg => {
+            this.chatMessages.push(msg);
+        },
+    });
+    private _lastSentTarget = MAIN_AGENT;
     // True once the user has explicitly chosen a target. Until then the picker
     // prefers main (so an agent registering before main on startup can't stick).
     private _userPicked = false;
@@ -66,6 +80,7 @@ export class DashboardChat {
     private _evEnd: EventListener | null = null;
     private _evResetChat: EventListener | null = null;
     private _evSendMessage: EventListener | null = null;
+    private _evSendFailed: EventListener | null = null;
     private _evAttach: EventListener | null = null;
 
     /** Files attached but not yet sent (rendered as chips in the iobar tray). */
@@ -92,6 +107,7 @@ export class DashboardChat {
     clearAll(): void {
         this.chatMessages = [];
         this._historyLoaded.clear();
+        this._dropPendingAttachments();
     }
 
     /** Forget that an agent's history was loaded (so it re-fetches if re-added). */
@@ -131,6 +147,16 @@ export class DashboardChat {
             URL.revokeObjectURL(att.url);
         }
         this._renderAttachTray();
+    }
+
+    /** Discard all pending attachments (send/wipe), revoking dev-stub blob URLs. */
+    private _dropPendingAttachments(): void {
+        this._pendingAttachments.forEach(a => {
+            if (a.url?.startsWith("blob:")) {
+                URL.revokeObjectURL(a.url);
+            }
+        });
+        this._pendingAttachments = [];
     }
 
     private _buildChatSidebar(): HTMLElement {
@@ -259,47 +285,19 @@ export class DashboardChat {
         }
         thread.innerHTML = "";
         // The wipe detached any live stream bubble; drop the stale DOM refs.
-        this._streamRow = null;
-        this._streamBody = null;
+        this._streamUI.dropRefs();
 
-        const streamHere =
-            !!this._streamFrom &&
-            this._streamText.length > 0 &&
-            this._msgBelongsHere({
-                id: "",
-                from: this._streamFrom,
-                to: this._streamTarget ?? this._lastSentTarget,
-                content: "",
-                timestampMs: 0,
-            });
-
+        const streamText = this._streamUI.streamHereText();
         const msgs = this.chatMessages.filter(m => this._msgBelongsHere(m));
-        if (msgs.length === 0 && !streamHere) {
+        if (msgs.length === 0 && !streamText) {
             thread.appendChild(buildChatEmptyState(this.chatTarget));
         } else {
             msgs.forEach(m => this._appendChatMsgEl(m, thread));
         }
-        if (streamHere) {
-            this._buildStreamRow(thread, this._streamText);
+        if (streamText) {
+            this._streamUI.reattachRow(thread);
         }
         this._scrollThread();
-    }
-
-    /** Build the streaming agent bubble, append it to `thread`, and latch the
-     *  row/body refs. `initialText` pre-fills the bubble (reattach on re-render). */
-    private _buildStreamRow(thread: HTMLElement, initialText = ""): void {
-        const row = document.createElement("div");
-        row.className = "af-chat-msg af-chat-msg-agent";
-        const fromEl = document.createElement("div");
-        fromEl.className = "af-chat-msg-from";
-        fromEl.textContent = this._streamFrom ?? "";
-        const bubble = document.createElement("div");
-        bubble.className = "af-chat-msg-bubble";
-        bubble.textContent = initialText;
-        row.append(fromEl, bubble);
-        thread.appendChild(row);
-        this._streamRow = row;
-        this._streamBody = bubble;
     }
 
     private _appendChatMsgEl(msg: ChatMessage, container?: HTMLElement): void {
@@ -324,8 +322,12 @@ export class DashboardChat {
         if (this._historyLoaded.has(agentName)) {
             return;
         }
-        this._historyLoaded.add(agentName);
         const incoming = await fetchChatHistory(agentName);
+        // null = transient failure — don't mark loaded, so the next open retries.
+        if (incoming === null) {
+            return;
+        }
+        this._historyLoaded.add(agentName);
         if (!incoming.length) {
             return;
         }
@@ -344,25 +346,24 @@ export class DashboardChat {
             setTarget: name => this.setTarget(name),
             populateSelect: select => this._populateSelect(select),
             send: (input, select) => this._sendMessage(input, select),
-            stop: () => this._stopGeneration(),
+            stop: () => void this._stopGeneration(),
         });
     }
 
-    /** Ask the backend to cancel the in-flight generation. Fire-and-forget: the
-     *  server emits the "⏹ Stopped." confirmation on the usual chat reply path. */
-    private _stopGeneration(): void {
-        const base = window.__WACTORZ_INGRESS_PATH ?? "";
-        void fetch(`${base}/api/chat/stop`, { method: "POST" }).catch(() => {});
+    /** Cancel the in-flight generation. Success is silent (the server confirms on
+     *  the chat reply path); failure is not — an unreachable backend is exactly
+     *  when the user reaches for Stop. */
+    private async _stopGeneration(): Promise<void> {
+        await postOrWarn(`${window.__WACTORZ_INGRESS_PATH ?? ""}/api/chat/stop`, { method: "POST" }, "stop");
     }
 
     private _populateSelect(select: HTMLSelectElement): void {
-        const PRIORITY = ["main", "main-actor", "home-assistant-agent", "catalog"];
         select.innerHTML = "";
         [...this.host.agents.values()]
             .filter(canDirectMessage)
             .sort((a, b) => {
-                const ai = PRIORITY.indexOf(a.name);
-                const bi = PRIORITY.indexOf(b.name);
+                const ai = MESSAGEABLE_PRIORITY.indexOf(a.name);
+                const bi = MESSAGEABLE_PRIORITY.indexOf(b.name);
                 if (ai !== -1 && bi !== -1) {
                     return ai - bi;
                 }
@@ -421,7 +422,7 @@ export class DashboardChat {
         const target = resolveSendTarget(
             content,
             [...this.host.agents.values()].map(a => a.name),
-            select.value || "main-actor",
+            select.value || MAIN_AGENT,
         );
         this.chatTarget = target;
         // An @mention that routes elsewhere is a deliberate pick — keep it sticky
@@ -441,7 +442,7 @@ export class DashboardChat {
             ...(attachments.length ? { attachments: [...attachments] } : {}),
         };
         this.chatMessages.push(msg);
-        this._pendingAttachments = [];
+        this._dropPendingAttachments();
         this._renderAttachTray();
         this._showSentMessage(msg, prevTarget !== target);
         input.value = "";
@@ -498,6 +499,7 @@ export class DashboardChat {
             ["af-stream-end", this._evEnd],
             ["af-reset-chat", this._evResetChat],
             ["af-send-message", this._evSendMessage],
+            ["af-send-failed", this._evSendFailed],
             ["af-attachment-added", this._evAttach],
         ];
         pairs.forEach(([name, fn]) => {
@@ -506,7 +508,7 @@ export class DashboardChat {
             }
         });
         this._evChat = this._evChunk = this._evEnd = this._evResetChat = this._evSendMessage = null;
-        this._evAttach = null;
+        this._evSendFailed = this._evAttach = null;
     }
 
     private _wireChatEvents(): void {
@@ -528,10 +530,32 @@ export class DashboardChat {
 
         this._evResetChat = listen("af-reset-chat", detail => {
             const agent = detail.agent;
+            // Scoped reset: drop that agent's replies and the user's messages
+            // *to that agent* — user messages addressed to others survive.
             this.chatMessages = agent
-                ? this.chatMessages.filter(m => m.from !== agent && m.from !== "user")
+                ? this.chatMessages.filter(m => m.from !== agent && !(m.from === "user" && m.to === agent))
                 : [];
             this._historyLoaded.clear();
+            if (this.host.getView() === "chat") {
+                this.renderChatThread();
+            }
+        });
+
+        this._evSendFailed = listen("af-send-failed", detail => {
+            // The optimistic bubble was rendered before the transport attempt;
+            // a failed send must not stay on screen looking delivered.
+            let idx = -1;
+            for (let i = this.chatMessages.length - 1; i >= 0; i--) {
+                const m = this.chatMessages[i];
+                if (m && m.from === "user" && m.content === detail.content) {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx === -1) {
+                return;
+            }
+            this.chatMessages.splice(idx, 1);
             if (this.host.getView() === "chat") {
                 this.renderChatThread();
             }
@@ -558,54 +582,7 @@ export class DashboardChat {
     }
 
     private _wireStreamEvents(): void {
-        this._evChunk = listen("af-stream-chunk", detail => {
-            const { chunk, from } = detail;
-            if (this._streamFrom === null) {
-                this._streamFrom = from;
-                this._streamTarget = this._lastSentTarget;
-                this._streamText = "";
-            }
-            // Cap accumulation so a runaway/looping stream can't grow this without bound.
-            this._streamText =
-                this._streamText.length < 200_000 ? this._streamText + chunk : this._streamText;
-            if (this.host.getView() !== "chat") {
-                return;
-            }
-            if (!this._streamRow) {
-                this._ensureStreamRow();
-            }
-            if (this._streamBody) {
-                this._streamBody.textContent = this._streamText;
-            }
-            this._scrollThread();
-        });
-
-        this._evEnd = listen("af-stream-end", () => {
-            if (this._streamFrom && this._streamText) {
-                this.chatMessages.push({
-                    id: uid("stream"),
-                    from: this._streamFrom,
-                    to: this._streamTarget ?? this._lastSentTarget,
-                    content: this._streamText,
-                    timestampMs: Date.now(),
-                });
-            }
-            if (this._streamBody && this._streamText) {
-                this._streamBody.textContent = "";
-                this._streamBody.appendChild(renderMarkdown(this._streamText));
-            }
-            this._streamRow = this._streamBody = null;
-            this._streamFrom = this._streamTarget = null;
-            this._streamText = "";
-        });
-    }
-
-    /** Lazily create the streaming agent bubble in the open chat thread. */
-    private _ensureStreamRow(): void {
-        const thread = this.root.querySelector<HTMLElement>(".af-chat-thread");
-        if (!thread) {
-            return;
-        }
-        this._buildStreamRow(thread);
+        this._evChunk = listen("af-stream-chunk", detail => this._streamUI.onChunk(detail));
+        this._evEnd = listen("af-stream-end", detail => this._streamUI.onEnd(detail));
     }
 }

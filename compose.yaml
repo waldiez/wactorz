@@ -1,7 +1,7 @@
 # Wactorz — Docker Compose stack
 #
 # Default (docker compose up -d):
-#   mosquitto only — MQTT broker on :1883 (TCP) and :9001 (WebSocket)
+#   mosquitto only — MQTT broker on :1883
 #   Then run:  wactorz
 #
 # Profiles:
@@ -12,7 +12,6 @@
 #
 # External ports (defaults, override via .env):
 #   :1883  → MQTT TCP                  MQTT_EXTERNAL_PORT
-#   :9001  → MQTT WebSocket            MQTT_WS_EXTERNAL_PORT
 #   :8000  → Python REST API           REST_EXTERNAL_PORT       (python/full)
 #   :8888  → Python monitor Web UI     MONITOR_EXTERNAL_PORT    (python/full)
 #   :9090  → Prometheus UI            (python profile)
@@ -32,9 +31,13 @@ services:
     hostname: mosquitto
     ports:
       - "${MQTT_EXTERNAL_PORT:-1883}:1883"
-      - "${MQTT_WS_EXTERNAL_PORT:-9001}:9001"
     volumes:
-      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      # Read-only: the broker never writes its own config, and the image's
+      # entrypoint otherwise chowns everything under /mosquitto — which travels
+      # back through the bind mount and rewrites the ownership of this tracked
+      # repo file. That then breaks rootless Podman, where the new owner falls
+      # outside the user-namespace ID mapping.
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
     networks:
@@ -61,11 +64,28 @@ services:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
       INTERFACE: "${INTERFACE:-rest}"
+    # The entrypoint is root only long enough to chown the state directory, then
+    # drops to uid 1000. These three are the only capabilities that step needs —
+    # the app itself runs with none. Dropping the rest shrinks the bounding set,
+    # so nothing can be picked back up during that window or via a file
+    # capability later. `cap_drop: [ALL]` on its own breaks the chown.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    # Everything the container writes goes to the state mount below, so the image
+    # itself can be immutable at runtime. /tmp is a tmpfs because pip needs a
+    # scratch area when an agent installs a package.
+    read_only: true
+    tmpfs:
+      - /tmp
+    init: true
     networks:
       - wactorz-net
+    # Loopback-bound: these carry no authentication of their own, so they are
+    # reachable from this host only. Drop the 127.0.0.1 prefix to expose them.
     ports:
-      - "${REST_EXTERNAL_PORT:-8000}:8000"              # REST API
-      - "${MONITOR_PORT:-8888}:${MONITOR_PORT:-8888}"  # Web UI monitor
+      - "127.0.0.1:${REST_EXTERNAL_PORT:-8000}:8000"              # REST API
+      - "127.0.0.1:${MONITOR_PORT:-8888}:${MONITOR_PORT:-8888}"  # Web UI monitor
     volumes:
       - ./state:/app/state
     depends_on:
@@ -115,8 +135,10 @@ services:
       PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
       PROMETHEUS_MONITOR_OTELCOL: "${PROMETHEUS_MONITOR_OTELCOL:-0}"
       REST_EXTERNAL_PORT: "${REST_EXTERNAL_PORT:-8000}"
+    # Loopback-bound: the Prometheus UI has no auth and exposes agent names and
+    # spend. Scraping happens over the internal network, not this port.
     ports:
-      - "${PROMETHEUS_EXTERNAL_PORT:-9090}:9090"
+      - "127.0.0.1:${PROMETHEUS_EXTERNAL_PORT:-9090}:9090"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -161,14 +183,20 @@ services:
     container_name: wactorz-influxdb
     restart: unless-stopped
     ports:
-      - "${INFLUX_EXTERNAL_PORT:-8086}:8086"
+      - "127.0.0.1:${INFLUX_EXTERNAL_PORT:-8086}:8086"
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME: admin
-      DOCKER_INFLUXDB_INIT_PASSWORD: adminadmin
+      # No fallback values: these seed a real admin account and API token, and a
+      # default would be a published credential. Left unset, InfluxDB's own setup
+      # refuses to initialise — set INFLUX_USERNAME / INFLUX_PASSWORD /
+      # INFLUX_TOKEN in .env before enabling this profile. (A `:?` guard here
+      # would break `docker compose up -d` for everyone, since compose
+      # interpolates every service regardless of the active profile.)
+      DOCKER_INFLUXDB_INIT_USERNAME: "${INFLUX_USERNAME:-}"
+      DOCKER_INFLUXDB_INIT_PASSWORD: "${INFLUX_PASSWORD:-}"
       DOCKER_INFLUXDB_INIT_ORG: "${INFLUX_ORG:-wactorz}"
       DOCKER_INFLUXDB_INIT_BUCKET: "${INFLUX_BUCKET:-wactorz}"
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: "${INFLUX_TOKEN:-wactorz-dev-token}"
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: "${INFLUX_TOKEN:-}"
     volumes:
       - influxdb-data:/var/lib/influxdb2
     networks:
@@ -186,6 +214,10 @@ services:
     image: homeassistant/home-assistant:stable
     container_name: wactorz-homeassistant
     restart: unless-stopped
+    # Home Assistant's own documented requirement for the container install —
+    # it needs host device access for Bluetooth, USB radios (Zigbee/Z-Wave) and
+    # mDNS discovery. Not a Wactorz requirement; drop it if you run HA without
+    # local hardware.
     privileged: true
     networks:
       - wactorz-net

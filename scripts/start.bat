@@ -23,7 +23,7 @@ powershell -ExecutionPolicy Bypass -Command ^
   "if($LASTEXITCODE -ne 0){ $s='missing' };" ^
   "$conf=$r+'\infra\mosquitto\mosquitto.conf';" ^
   "if($s -eq 'running'){ Write-Host 'mosquitto already running' }" ^
-  "elseif($s -eq 'missing'){ docker run -d --name mosquitto --restart unless-stopped -p 1883:1883 -p 9001:9001 -v \"${conf}:/mosquitto/config/mosquitto.conf\" eclipse-mosquitto:2.0 }" ^
+  "elseif($s -eq 'missing'){ docker run -d --name mosquitto --restart unless-stopped -p 1883:1883 -v \"${conf}:/mosquitto/config/mosquitto.conf\" eclipse-mosquitto:2.0 }" ^
   "else{ docker start mosquitto };" ^
   "pip install --force-reinstall -e '.[all]';" ^
   "wactorz"

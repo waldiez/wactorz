@@ -6,12 +6,14 @@ Supervisor implements Erlang/OTP-style supervision trees.
 import asyncio
 import inspect
 import logging
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Optional
 
 from .actor import Actor, Message, MessageType, SupervisorStrategy
+from .paths import resolve_state_dir
 
 logger = logging.getLogger(__name__)
 
@@ -511,7 +513,7 @@ class ActorSystem:
     """Top-level orchestrator."""
 
     def __init__(
-        self, mqtt_broker: str = "localhost", mqtt_port: int = 1883, state_dir: str = "./state"
+        self, mqtt_broker: str = "localhost", mqtt_port: int = 1883, state_dir: str | None = None
     ):
         self.registry = ActorRegistry()
         self._mqtt_broker = mqtt_broker
@@ -519,7 +521,7 @@ class ActorSystem:
         self._mqtt_client = None
         self._running = False
         self._supervisor: Supervisor | None = None
-        self._state_dir = state_dir
+        self._state_dir = resolve_state_dir(state_dir)
 
     def _inject(self, actor: Actor):
         """Inject MQTT client + broker/port into an actor so it can publish and subscribe."""
@@ -549,7 +551,6 @@ class ActorSystem:
 
     async def start(self, *initial_actors: Actor):
         self._running = True
-        import os
 
         os.makedirs(self._state_dir, exist_ok=True)
         db_path = os.path.join(self._state_dir, "mqtt_outbox.db")
@@ -668,7 +669,6 @@ class _MQTTPublisher:
 
     def _init_db(self):
         """Create outbox table if it doesn't exist."""
-        import os
         import sqlite3
 
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)

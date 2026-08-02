@@ -165,7 +165,7 @@ async def main(exit_on_failure: bool = False) -> None:
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", runtime.WS_PORT)
     await site.start()
-    msg = f"Monitor  → http://localhost:{runtime.WS_PORT}/  [chat: {chat.chat_mode()}]"
+    msg = f"Monitor  → http://localhost:{runtime.WS_PORT}/"
     logger.info(msg)
     if static_site.DOCS_SITE.is_dir():
         msg = f"Docs     → http://localhost:{runtime.WS_PORT}/docs/"

@@ -239,8 +239,8 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 cp<span class="w"> </span>.env.template<span class="w"> </span>.env
 <span class="c1"># edit .env and set LLM_API_KEY (or whichever provider you use)</span>
 
-<span class="c1"># 2. Get/run MQTT broker (if you don&#39;t have already) and open ports 1883, 9001</span>
-docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span>-p<span class="w"> </span><span class="m">9001</span>:9001<span class="w"> </span>eclipse-mosquitto
+<span class="c1"># 2. Get/run MQTT broker (if you don&#39;t have already) and open port 1883</span>
+docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span>eclipse-mosquitto
 
 <span class="c1"># 3. Start Wactorz</span>
 wactorz
@@ -314,7 +314,7 @@ MQTT_PASSWORD=
 
 <hr />
 <h2 id="running-mosquitto-via-docker">Running Mosquitto via Docker</h2>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span>-p<span class="w"> </span><span class="m">9001</span>:9001<span class="w"> </span>eclipse-mosquitto
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span>eclipse-mosquitto
 </code></pre></div>
 
 <blockquote>
@@ -413,7 +413,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <tr>
 <td><em>(default)</em></td>
 <td>mosquitto</td>
-<td>:1883, :9001</td>
+<td>:1883</td>
 </tr>
 <tr>
 <td><code>python</code></td>
@@ -495,8 +495,8 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 </tr>
 <tr>
 <td><code>wactorz-dev-mosquitto</code></td>
-<td>:1883, :9001</td>
-<td>MQTT broker (TCP + WebSocket)</td>
+<td>:1883</td>
+<td>MQTT broker (TCP)</td>
 </tr>
 </tbody>
 </table>
@@ -512,7 +512,6 @@ MQTT_HOST=mosquitto         # container name, not localhost
 ├── <span class="n">wactorz</span>/                     ← <span class="n">Python</span> <span class="nb">package</span>
 │   ├── <span class="n">cli</span>.<span class="n">py</span>                   ← <span class="n">entry</span> <span class="n">point</span> (<span class="n">wactorz</span> <span class="nb">command</span>)
 │   ├── <span class="nb">config</span>.<span class="n">py</span>                ← .<span class="n">env</span> <span class="n">loading</span>, <span class="n">CONFIG</span> <span class="n">object</span>
-│   ├── <span class="n">monitor_server</span>.<span class="n">py</span>        ← <span class="n">back-compat</span> <span class="n">shim</span> → <span class="n">wactorz</span><span class="o">/</span><span class="n">web</span>/
 │   ├── <span class="n">web</span>/                     ← <span class="n">web</span> <span class="n">server:</span> <span class="n">dashboard</span> <span class="n">SPA</span> + <span class="n">REST</span> + <span class="n">WS</span> + <span class="n">docs</span> (<span class="n">aiohttp</span>)
 │   │   ├── <span class="n">app</span>.<span class="n">py</span>               ← <span class="n">route</span> <span class="n">table</span>, <span class="n">build_app</span>(), <span class="n">entry</span> <span class="n">point</span>
 │   │   ├── <span class="n">runtime</span>.<span class="n">py</span>           ← <span class="n">shared</span> <span class="n">mutable</span> <span class="k">state</span> (<span class="n">registry</span>, <span class="n">db</span>, <span class="nb">live</span> <span class="k">state</span>)

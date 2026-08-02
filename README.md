@@ -20,17 +20,49 @@
 </p>
 
 <p align="center">
+<a href="https://github.com/waldiez/wactorz/actions/workflows/ci.yml"><img src="https://github.com/waldiez/wactorz/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+<a href="https://pypi.org/project/wactorz/"><img src="https://img.shields.io/pypi/v/wactorz.svg" alt="PyPI"/></a>
 <a href="https://github.com/waldiez/wactorz/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"/></a>
 <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python"/></a>
 <a href="https://mosquitto.org"><img src="https://img.shields.io/badge/transport-MQTT-purple.svg" alt="MQTT"/></a>
 <a href="https://github.com/waldiez/wactorz/blob/main/ha-addon/DOCS.md"><img src="https://img.shields.io/badge/Home%20Assistant-addon-41BDF5.svg" alt="Home Assistant"/></a>
+<img src="https://img.shields.io/badge/status-alpha-orange.svg" alt="Status: alpha"/>
 </p>
 
 ---
 
+<!--
+  TODO(promo): drop a hero demo GIF here — the highest-impact addition to this README.
+  Record a ~15s screencast of the dashboard running one end-to-end automation
+  (e.g. the "person detected on camera → office light on" example below), export
+  to GIF, commit under .github/assets/demo.gif, and uncomment:
+
+  <p align="center"><img src="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/demo.gif" width="720" alt="Wactorz dashboard demo"/></p>
+-->
+
 Wactorz runs LLM-driven agents as long-lived actors on the hardware you already have - a Raspberry Pi in the garage, an old laptop, a VM in your closet. You describe what you want in chat; the planner writes the Python, spawns it on a node, and supervises it. When an agent crashes, only that one restarts. State persists across restarts and you can move an agent to a different machine without losing it.
 
 It runs on MQTT, so anything happening inside the system surfaces as a topic external code can subscribe to. Home Assistant talks to it the same way Discord and Telegram do - it's one channel among several, alongside a REST API and an MCP server. The LLM provider is configurable (Anthropic, OpenAI, Gemini, NIM) or fully local via Ollama for offline use.
+
+---
+
+## How Wactorz is different
+
+Most agent frameworks build a **crew that runs a task and exits**. Wactorz builds a
+**system that keeps running**. Agents are long-lived, supervised actors — they persist
+their state, restart themselves when they crash, and can move between machines — rather
+than functions you call inside one script.
+
+| | Wactorz | Orchestration libraries (LangChain, CrewAI, AutoGen) | Visual automation (n8n, Node-RED) | HA native automations |
+|---|---|---|---|---|
+| **Lifecycle** | Long-lived, self-supervising actors | Task-scoped, exit when the script ends | Long-lived flows | Long-lived rules |
+| **Failure handling** | Per-agent crash isolation + restart | Your code handles it | Per-flow | Per-rule |
+| **Distribution** | Agents spawn and migrate across nodes over MQTT | Single process | Single instance | Single instance |
+| **How agents are built** | LLM writes and runs the Python at runtime | You write the chain | You wire nodes by hand | You write YAML |
+| **Runs offline / self-hosted** | Yes — BYO key or fully local via Ollama | Varies | Yes | Yes |
+
+It's **not** a replacement for Home Assistant — it sits alongside it, adding an LLM
+planner and dynamic agents on top of the home you already automate.
 
 ---
 
@@ -53,6 +85,12 @@ python -m wactorz
 ```
 
 Dashboard: `http://localhost:8888`.
+
+> [!WARNING]
+> **Run Wactorz only on a trusted local network.** The dashboard, REST API, and MQTT
+> broker are unauthenticated by default, and agents can execute code. Do not expose
+> ports `8888`, `8000`, or `1883` to the internet or an untrusted LAN. See
+> [Security](#security) before deploying anywhere shared.
 
 If you'd rather skip the clone, [pull the image from Docker Hub](https://docs.waldiez.io/wactorz/guide/dockerhub.html). To run without an API key, use Ollama:
 
@@ -132,7 +170,73 @@ LLM_MODEL=claude-sonnet-4-6
 # For Ollama, set OLLAMA_URL instead (default: http://localhost:11434)
 # For OpenAI-compatible endpoints (Groq, Together, vLLM…), set OPENAI_URL to redirect
 LLM_API_KEY=your-key-here
+
+# Optional — sampling temperature for every LLM call.
+# 0 = deterministic (recommended for device control and classification);
+# leave unset/empty to keep each provider's own default.
+LLM_TEMPERATURE=0
 ```
+
+At startup Wactorz logs the configuration it resolved, so you can confirm it at a glance:
+
+```text
+LLM: anthropic/claude-sonnet-4-6 | temperature=0.0
+```
+
+### Per-call-site overrides (hybrid setups)
+
+Optionally, route individual call sites to different models with `LLM_OVERRIDES` —
+for example run the cheap, high-frequency calls on a local model and keep the
+planner on a hosted one:
+
+```bash
+# <site>=<provider>[:<model>], comma-separated. Unlisted sites use the global provider.
+LLM_OVERRIDES="intent=ollama:qwen3:4b,actuator=ollama:llama3,planner=anthropic:claude-sonnet-4-6"
+```
+
+Sites: `main` (conversation), `intent` (intent routing), `planner` (pipeline
+planning/codegen), `actuator` (one-off device control), `ha` (Home Assistant
+agent), `dynamic` (the `get_llm()` shim inside generated agents).
+
+To compare models per call site before choosing an override, run the built-in
+evaluation harness — it scores each site automatically and reports accuracy,
+latency and cost:
+
+```bash
+python -m wactorz.evalharness \
+  --models "ollama:qwen3:4b,anthropic:claude-sonnet-4-6" --temperature 0
+```
+
+See [docs/evaluation.md](docs/evaluation.md) for the benchmark format and metrics.
+
+---
+
+## Security
+
+> Wactorz is under active development. Treat the current release as **alpha** from a
+> security standpoint and deploy accordingly.
+
+**Threat model — what to assume today:**
+
+- The **monitor dashboard, REST API, WebSocket, and MQTT broker are unauthenticated**
+  by default. Anyone who can reach those ports can spawn, control, and delete agents.
+- **Agents can execute code** (the planner generates and runs Python; remote nodes run
+  spawned code over SSH/MQTT). Anyone who can reach the control plane can run code on
+  the host and on any connected node.
+- The bundled MQTT broker ships with **anonymous access** for local development.
+
+**Deployment rules:**
+
+- ✅ Run on a **trusted local network** you control (a home LAN, a private VLAN).
+- ✅ Prefer the **Home Assistant add-on**, which keeps the UI behind HA's ingress auth.
+- ❌ **Do not** expose ports `8888` (dashboard), `8000` (REST/WS), or `1883` (MQTT)
+  to the internet or a shared/untrusted network.
+- ❌ **Do not** run it as a multi-user or multi-tenant service yet.
+- If you must reach it remotely, put it behind a VPN or an authenticating reverse
+  proxy — never a bare port-forward.
+
+Found a security issue? Please see [SECURITY.md](https://github.com/waldiez/wactorz/blob/main/SECURITY.md)
+rather than opening a public issue.
 
 ---
 
@@ -163,6 +267,7 @@ LLM_API_KEY=your-key-here
 | [API reference](https://github.com/waldiez/wactorz/blob/main/docs/api.md) | REST endpoints and payloads |
 | [Deployment](https://docs.waldiez.io/wactorz/guide/deployment.html) | Docker, Home Assistant add-on, environment setup |
 | [Prometheus](https://docs.waldiez.io/wactorz/guide/prometheus.html) | Metrics and monitoring |
+| [Evaluation harness](https://github.com/waldiez/wactorz/blob/main/docs/evaluation.md) | Compare models per LLM call site |
 | [Technical reference](https://github.com/waldiez/wactorz/blob/main/docs/reference.md) | Deeper internals |
 
 ---
@@ -228,7 +333,7 @@ Contributions of any kind are welcome. See [CONTRIBUTING.md](https://github.com/
 |---|---|
 | Found a bug | [Open an issue](https://github.com/waldiez/wactorz/issues/new?template=bug_report.yml) |
 | Have an idea | [Start a discussion](https://github.com/waldiez/wactorz/discussions) |
-| Want to code | Fork, branch, and open a PR against `main` |
+| Want to code | Fork, branch, and open a PR against `dev` (`main` is releases only) |
 | Docs, tests, UI | Same drill, open a PR |
 | New agent recipe | Add it in `wactorz/catalogue_agents/` and open a PR |
 | Home Assistant | HA integrations and addon config PRs are very welcome |

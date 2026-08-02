@@ -19,6 +19,35 @@ def _env_int(name: str, default: int) -> int:
     return int(value)
 
 
+def _env_id_set(*names: str) -> frozenset[int]:
+    """Parse a comma/space separated list of numeric ids from the first set var.
+
+    Used for the social-channel sender allow-lists, where an empty result means
+    "nobody is allowed" rather than "everybody" — the caller decides, but the
+    parse never silently turns junk into an open door.
+    """
+    for name in names:
+        raw = (os.getenv(name) or "").strip()
+        if not raw:
+            continue
+        ids = set()
+        for part in raw.replace(";", ",").replace(" ", ",").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                value = int(part)
+            except ValueError:
+                continue
+            # 0 is the add-on's "not set" default, and no real account id is
+            # <= 0 — treat it as absent so the channel stays in setup mode.
+            if value > 0:
+                ids.add(value)
+        if ids:
+            return frozenset(ids)
+    return frozenset()
+
+
 def _env_float(name: str, default: float) -> float:
     value = os.getenv(name)
     if value is None:
@@ -26,6 +55,17 @@ def _env_float(name: str, default: float) -> float:
     value = value.strip()
     if not value:
         return default
+    return float(value)
+
+
+def _env_opt_float(name: str) -> float | None:
+    """Float env var where unset/empty means None (no override)."""
+    value = os.getenv(name)
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
     return float(value)
 
 
@@ -45,6 +85,8 @@ class AppConfig:
     llm_provider: str
     llm_model: str
     llm_api_key: str
+    llm_overrides: str
+    llm_temperature: float | None
     ollama_url: str
     mqtt_host: str
     mqtt_port: int
@@ -73,6 +115,12 @@ class AppConfig:
     energy_rate: float
     energy_currency: str
     openai_url: str
+    # Social-channel safety. The allow-lists say who may talk to a bot at all;
+    # empty means the channel refuses to start rather than serving everyone.
+    discord_allowed_user_ids: frozenset[int]
+    telegram_allowed_user_ids: frozenset[int]
+    whatsapp_allowed_numbers: frozenset[str]
+    social_rate_limit_per_min: int
 
 
 CONFIG = AppConfig(
@@ -81,6 +129,12 @@ CONFIG = AppConfig(
     llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
     llm_model=os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
     llm_api_key=os.getenv("LLM_API_KEY", ""),
+    # Per-call-site model overrides, e.g. "intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6".
+    # See wactorz/llm_factory.py for the site list and format.
+    llm_overrides=os.getenv("LLM_OVERRIDES", ""),
+    # Sampling temperature for every LLM call (0.0 = deterministic). Unset or
+    # empty keeps each provider's own default (the previous behavior).
+    llm_temperature=_env_opt_float("LLM_TEMPERATURE"),
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),
     mqtt_port=_env_int("MQTT_PORT", 1883),
@@ -94,8 +148,9 @@ CONFIG = AppConfig(
     ha_state_bridge_domains=os.getenv("HA_STATE_BRIDGE_DOMAINS", ""),
     ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0")
     not in ("0", "false", "no"),
-    discord_token=os.getenv("DISCORD_BOT_TOKEN", ""),
-    telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+    # Also accept the shorter DISCORD_TOKEN / TELEGRAM_TOKEN names.
+    discord_token=os.getenv("DISCORD_BOT_TOKEN", "") or os.getenv("DISCORD_TOKEN", ""),
+    telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "") or os.getenv("TELEGRAM_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
     ws_port=_env_int("WS_PORT", 8888),
     nim_api_key=os.getenv("NIM_API_KEY", ""),
@@ -112,4 +167,13 @@ CONFIG = AppConfig(
     energy_rate=_env_float("ENERGY_RATE", 0.138),
     energy_currency=os.getenv("ENERGY_CURRENCY", "EUR"),
     openai_url=os.getenv("OPENAI_URL", ""),
+    discord_allowed_user_ids=_env_id_set("DISCORD_ALLOWED_USER_IDS", "DISCORD_ALLOWED_USER_ID"),
+    # TELEGRAM_ALLOWED_USER_ID (singular) predates the list form; still honored.
+    telegram_allowed_user_ids=_env_id_set("TELEGRAM_ALLOWED_USER_IDS", "TELEGRAM_ALLOWED_USER_ID"),
+    whatsapp_allowed_numbers=frozenset(
+        n.strip()
+        for n in (os.getenv("WHATSAPP_ALLOWED_NUMBERS", "") or "").replace(";", ",").split(",")
+        if n.strip()
+    ),
+    social_rate_limit_per_min=_env_int("SOCIAL_RATE_LIMIT_PER_MIN", 12),
 )

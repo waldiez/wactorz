@@ -8,7 +8,7 @@ import argparse
 import asyncio
 import os
 
-import wactorz._bootstrap  # noqa: F401  side effects: import path, platform, root logging
+import wactorz._bootstrap  # noqa: F401  side effects: import path, platform fixups
 from wactorz.config import CONFIG
 
 
@@ -56,7 +56,15 @@ def get_args():
 def main():
     from wactorz.app import app
 
-    asyncio.run(app(get_args()))
+    try:
+        asyncio.run(app(get_args()))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # A signal shuts down by cancelling the app task, which unwinds through
+        # its own `finally` — the actors are already stopped by the time the
+        # cancellation surfaces here. Swallow it so an intentional stop exits 0
+        # and silently, rather than printing a traceback and reporting failure
+        # to whatever supervises the process.
+        pass
 
 
 if __name__ == "__main__":

@@ -3,10 +3,15 @@ Supported: CLI (terminal), Discord, WhatsApp (via Twilio), REST.
 """
 
 import asyncio
+import importlib.util
 import logging
 import os
+import socket
+import threading
+import time
 from typing import TYPE_CHECKING, Any
 
+from ..config import CONFIG
 from ..core.mqtt import mqtt_client
 from ..monitoring import PrometheusMonitor
 
@@ -14,6 +19,157 @@ if TYPE_CHECKING:
     from ..agents.main_actor import MainActor
 
 logger = logging.getLogger(__name__)
+
+
+async def _resolve_host(hostname: str) -> str | None:
+    """Resolve `hostname`, or None if it does not resolve.
+
+    Off the event loop: `gethostbyname` blocks the calling thread, and a name
+    that does not resolve blocks it for the resolver's full timeout — seconds,
+    during which every other actor in the process is frozen and MQTT keepalive
+    stops.
+    """
+    try:
+        return await asyncio.to_thread(socket.gethostbyname, hostname)
+    except OSError:
+        return None
+
+
+# Import name → pip package for each social channel's optional dependency.
+_INTERFACE_DEPENDENCIES = {
+    "discord": ("discord", "discord.py"),
+    "telegram": ("telegram", "python-telegram-bot"),
+}
+
+
+def missing_dependency(channel: str) -> str | None:
+    """Return the pip package a social channel needs, or None if it's importable.
+
+    Checked up front so a missing library warns at startup instead of failing
+    silently inside run().
+    """
+    spec = _INTERFACE_DEPENDENCIES.get(channel)
+    if not spec:
+        return None
+    module_name, pip_name = spec
+    return None if importlib.util.find_spec(module_name) else pip_name
+
+
+class SocialRateLimiter:
+    """Per-sender request budget for the social channels.
+
+    Every inbound message costs at least one intent classification plus one
+    completion, so an unbounded channel is an unbounded bill. Holds a sliding
+    one-minute window per sender and refuses one turn at a time — and refuses
+    while that sender's previous turn is still running, so a user cannot stack
+    concurrent generations by sending faster than the model replies.
+    """
+
+    def __init__(self, per_minute: int | None = None) -> None:
+        self.per_minute = CONFIG.social_rate_limit_per_min if per_minute is None else per_minute
+        self._hits: dict[str, list[float]] = {}
+        self._in_flight: set[str] = set()
+
+    def check(self, sender: str) -> str | None:
+        """Return None to proceed, or the message to send back instead."""
+        if self.per_minute <= 0:  # 0 disables the limit for trusted deployments
+            return None
+        if sender in self._in_flight:
+            return "Still working on your last message — one at a time, please."
+        now = time.monotonic()
+        window = [t for t in self._hits.get(sender, []) if now - t < 60.0]
+        if len(window) >= self.per_minute:
+            self._hits[sender] = window
+            return (
+                f"That's more than {self.per_minute} messages in a minute, so I'm pausing "
+                "for a moment. Try again shortly."
+            )
+        window.append(now)
+        self._hits[sender] = window
+        self._in_flight.add(sender)
+        return None
+
+    def done(self, sender: str) -> None:
+        """Release the in-flight slot. Always call this, including on error."""
+        self._in_flight.discard(sender)
+
+
+def social_channel_blocked(channel: str, token: str, allowed: frozenset) -> str | None:
+    """Why ``channel`` must not start, or None when it's safe to.
+
+    A bot with a token but no sender allow-list answers anyone who finds it, and
+    on these channels answering means spending tokens and controlling the user's
+    home. That is not a safe default, so it fails closed with instructions.
+    """
+    if not token:
+        return None
+    missing = missing_dependency(channel)
+    if missing:
+        return (
+            f"'{missing}' is not installed. Run `pip install {missing}` "
+            "(or `pip install 'wactorz[all]'`) to enable it."
+        )
+    if not allowed:
+        env = {
+            "discord": "DISCORD_ALLOWED_USER_IDS",
+            "telegram": "TELEGRAM_ALLOWED_USER_IDS",
+        }.get(channel, "the allow-list")
+        return (
+            f"no sender allow-list configured. Set {env} to the user id(s) allowed "
+            "to talk to the bot — without it anyone who finds the bot could control "
+            "your devices and spend your LLM budget."
+        )
+    return None
+
+
+def build_social_companions(main_actor: "MainActor", primary: str) -> list:
+    """Discord/Telegram interfaces to run alongside the primary interface.
+
+    These talk to the main agent in restricted mode (no spawn/delete/code), so
+    they run next to the dashboard rather than replacing it — how the HA add-on
+    exposes them. Skips a channel that's already the primary (no duplicate login),
+    one whose library is missing, and one with no sender allow-list — each with a
+    log line saying why. Returns interface objects, not coroutines, so the
+    selection is easy to unit-test.
+    """
+    companions: list = []
+    if CONFIG.discord_token and primary != "discord":
+        blocked = social_channel_blocked(
+            "discord", CONFIG.discord_token, CONFIG.discord_allowed_user_ids
+        )
+        if blocked:
+            logger.warning("Discord companion NOT started: %s", blocked)
+        else:
+            companions.append(
+                DiscordInterface(
+                    main_actor,
+                    token=CONFIG.discord_token,
+                    allowed_user_ids=CONFIG.discord_allowed_user_ids,
+                )
+            )
+            logger.info("Discord companion interface enabled (alongside '%s').", primary)
+    if CONFIG.telegram_token and primary != "telegram":
+        blocked = social_channel_blocked(
+            "telegram", CONFIG.telegram_token, CONFIG.telegram_allowed_user_ids
+        )
+        if blocked:
+            logger.warning("Telegram companion NOT started: %s", blocked)
+        else:
+            companions.append(
+                TelegramInterface(
+                    main_actor,
+                    token=CONFIG.telegram_token,
+                    allowed_user_ids=CONFIG.telegram_allowed_user_ids,
+                )
+            )
+            logger.info("Telegram companion interface enabled (alongside '%s').", primary)
+    return companions
+
+
+def run_all_interfaces(interfaces: list) -> list:
+    """Turn companion interface objects into their ``.run()`` coroutines for gather."""
+    return [iface.run() for iface in interfaces]
+
 
 # Path to remote_runner.py inside the wactorz package.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -191,8 +347,6 @@ class CLIInterface:
         2. Scan  — scan local subnet for SSH (port 22)
         3. Manual — ask user
         """
-        import socket
-
         print(f"\n[discover] Searching for '{node_name}' on the network...")
 
         # 1. mDNS
@@ -202,8 +356,8 @@ class CLIInterface:
             f"{node_name.replace('-', '')}.local",
         ]
         for hostname in candidates:
-            try:
-                ip = socket.gethostbyname(hostname)
+            ip = await _resolve_host(hostname)
+            if ip:
                 print(f"[discover] Found via mDNS: {hostname} → {ip}")
                 ans = await asyncio.get_event_loop().run_in_executor(
                     None,
@@ -211,15 +365,10 @@ class CLIInterface:
                 )
                 if ans in ("", "y", "yes"):
                     return hostname
-            except socket.gaierror:
-                pass
 
         # 2. Network scan
-        try:
-            local_ip = socket.gethostbyname(socket.gethostname())
-            subnet = ".".join(local_ip.split(".")[:3])
-        except Exception:
-            subnet = "192.168.1"
+        local_ip = await _resolve_host(socket.gethostname())
+        subnet = ".".join(local_ip.split(".")[:3]) if local_ip else "192.168.1"
 
         print(f"[discover] mDNS not found. Scanning {subnet}.1-254 for SSH (~10s)...")
         found = await self._scan_subnet_ssh(subnet)
@@ -334,13 +483,36 @@ class CLIInterface:
 
     # ── Main loop ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    async def _prompt(prompt: str) -> str:
+        """Read one line from stdin without blocking the loop *or* interpreter exit.
+
+        ``run_in_executor`` puts the read on the default thread pool, whose
+        threads are non-daemon: cancelling the await leaves the thread parked in
+        ``input()`` forever, and shutdown then waits for it twice — once in
+        ``Runner.close``'s ``shutdown_default_executor``, once in the threading
+        atexit hook. That is why stopping the CLI used to need repeated Ctrl-C.
+        Owning a daemon thread means a parked read never delays exit.
+        """
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+
+        def _read() -> None:
+            try:
+                line = input(prompt)
+            except (EOFError, KeyboardInterrupt):
+                loop.call_soon_threadsafe(lambda: future.done() or future.cancel())
+                return
+            loop.call_soon_threadsafe(lambda: future.done() or future.set_result(line))
+
+        threading.Thread(target=_read, daemon=True, name="wactorz-cli-stdin").start()
+        return await future
+
     async def run(self):
         print("\nWactorz CLI | Type /help for commands\n")
         while True:
             try:
-                user_input = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: input("You: ")
-                )
+                user_input = await self._prompt("You: ")
                 text = user_input.strip()
                 if not text:
                     continue
@@ -529,16 +701,34 @@ class DiscordInterface:
     Set DISCORD_BOT_TOKEN in environment.
     """
 
-    def __init__(self, main_actor: "MainActor", token: str, channel_id: int = None):
+    def __init__(
+        self,
+        main_actor: "MainActor",
+        token: str,
+        channel_id: int = None,
+        allowed_user_ids: frozenset[int] | set[int] | None = None,
+    ):
         self.agent = main_actor
         self.token = token
         self.channel_id = channel_id
+        self.allowed_user_ids = frozenset(allowed_user_ids or ())
+        self.limiter = SocialRateLimiter()
 
     async def run(self):
         try:
             import discord
         except ImportError:
             logger.error("discord.py not installed. Run: pip install discord.py")
+            return
+
+        # Fail closed: a bot that answers anyone can drain the LLM budget and
+        # control the user's home. Refuse to log in without an allow-list.
+        if not self.allowed_user_ids:
+            logger.error(
+                "[Discord] Not starting: DISCORD_ALLOWED_USER_IDS is empty. Set it to the "
+                "Discord user id(s) allowed to talk to the bot (enable Developer Mode, "
+                "right-click your name, Copy User ID)."
+            )
             return
 
         intents = discord.Intents.default()
@@ -557,14 +747,27 @@ class DiscordInterface:
                 return
             if not client.user.mentioned_in(message):
                 return  # Only respond when the bot is mentioned
+            if message.author.id not in self.allowed_user_ids:
+                logger.warning("[Discord] Rejected message from user %s", message.author.id)
+                return
+
+            sender = str(message.author.id)
+            throttled = self.limiter.check(sender)
+            if throttled:
+                await message.channel.send(throttled)
+                return
 
             text = (
                 message.content.replace(f"<@{client.user.id}>", "")
                 .replace(f"<@!{client.user.id}>", "")
                 .strip()
             )
-            async with message.channel.typing():
-                response = await self.agent.process_user_input(text)
+            # Restricted mode: converse + control devices, no spawn/delete/code.
+            try:
+                async with message.channel.typing():
+                    response = await self.agent.process_user_input_restricted(text)
+            finally:
+                self.limiter.done(sender)
             for i in range(0, len(response), 2000):
                 await message.channel.send(response[i : i + 2000])
 
@@ -575,10 +778,29 @@ class DiscordInterface:
 
 
 class TelegramInterface:
-    def __init__(self, main_actor: "MainActor", token: str, allowed_user_id: int | None = None):
+    """Telegram bot interface.
+
+    With no allow-list the bot runs in **setup mode**: it answers `/start` with
+    the sender's user id and nothing else. That keeps the documented way of
+    finding your id working (the id is needed to fill the allow-list) without
+    letting a stranger reach the LLM or the user's devices.
+    """
+
+    def __init__(
+        self,
+        main_actor: "MainActor",
+        token: str,
+        allowed_user_id: int | None = None,
+        allowed_user_ids: frozenset[int] | set[int] | None = None,
+    ):
         self.agent = main_actor
         self.token = token
-        self.allowed_user_id = allowed_user_id
+        # allowed_user_id (singular) is the older single-user form; fold it in.
+        ids = set(allowed_user_ids or ())
+        if allowed_user_id:
+            ids.add(int(allowed_user_id))
+        self.allowed_user_ids = frozenset(ids)
+        self.limiter = SocialRateLimiter()
 
     async def run(self):
         try:
@@ -595,11 +817,28 @@ class TelegramInterface:
             logger.error("python-telegram-bot not installed. Run: pip install python-telegram-bot")
             return
 
+        setup_mode = not self.allowed_user_ids
+        if setup_mode:
+            logger.warning(
+                "[Telegram] TELEGRAM_ALLOWED_USER_IDS is empty — starting in setup mode. "
+                "The bot will only reply to /start with your user id; add that id to "
+                "TELEGRAM_ALLOWED_USER_IDS (or the add-on option) and restart to enable chat."
+            )
+
         async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user = update.effective_user
+            uid = user.id if user else "unknown"
+            if setup_mode:
+                await update.message.reply_text(
+                    f"Your Telegram user id is: {uid}\n\n"
+                    "This bot isn't configured yet. Add that id to "
+                    "TELEGRAM_ALLOWED_USER_IDS (or the add-on's telegram_allowed_user_id "
+                    "option) and restart Wactorz to start chatting."
+                )
+                return
             await update.message.reply_text(
                 f"Hi {user.first_name if user else ''}. Telegram interface is online.\n"
-                f"Your Telegram user id is: {user.id if user else 'unknown'}"
+                f"Your Telegram user id is: {uid}"
             )
 
         async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -617,8 +856,20 @@ class TelegramInterface:
                 update.message.text[:60],
             )
 
-            if self.allowed_user_id and user.id != self.allowed_user_id:
+            if setup_mode:
+                await update.message.reply_text(
+                    "This bot isn't configured yet. Send /start to get your user id."
+                )
+                return
+
+            if user.id not in self.allowed_user_ids:
                 logger.warning("[Telegram] Rejected message from user %s", user.id)
+                return
+
+            sender = str(user.id)
+            throttled = self.limiter.check(sender)
+            if throttled:
+                await update.message.reply_text(throttled)
                 return
 
             text = update.message.text.strip()
@@ -626,7 +877,11 @@ class TelegramInterface:
                 chat_id=update.effective_chat.id, action=ChatAction.TYPING
             )
 
-            response = await self.agent.process_user_input(text)
+            # Restricted mode: converse + control devices, no spawn/delete/code.
+            try:
+                response = await self.agent.process_user_input_restricted(text)
+            finally:
+                self.limiter.done(sender)
             response = response or "(no response)"
 
             for i in range(0, len(response), 4096):
@@ -660,12 +915,38 @@ class WhatsAppInterface:
         auth_token: str,
         from_number: str,
         port: int = 8080,
+        allowed_numbers: frozenset[str] | set[str] | None = None,
     ):
         self.agent = main_actor
         self.account_sid = account_sid
         self.auth_token = auth_token
         self.from_number = from_number
         self.port = port
+        # The webhook is a public HTTP endpoint, so anyone who finds it can spend
+        # tokens unless senders are pinned. Numbers are compared without the
+        # `whatsapp:` prefix Twilio adds.
+        self.allowed_numbers = frozenset(
+            self._normalize_number(n) for n in (allowed_numbers or CONFIG.whatsapp_allowed_numbers)
+        )
+        self.limiter = SocialRateLimiter()
+
+    @staticmethod
+    def _normalize_number(number: str) -> str:
+        return str(number or "").strip().replace("whatsapp:", "")
+
+    async def _send_message(self, twilio, body: str, to: str) -> None:
+        """Send one WhatsApp message, off the event loop.
+
+        The Twilio SDK is synchronous, so calling it directly from the webhook
+        handler froze every actor in the process for a full network round-trip —
+        on every inbound message.
+        """
+        await asyncio.to_thread(
+            twilio.messages.create,
+            body=body,
+            from_=f"whatsapp:{self.from_number}",
+            to=to,
+        )
 
     async def run(self):
         try:
@@ -673,6 +954,14 @@ class WhatsAppInterface:
             from twilio.rest import Client as TwilioClient
         except ImportError:
             logger.error("Missing deps. Run: pip install aiohttp twilio")
+            return
+
+        if not self.allowed_numbers:
+            logger.error(
+                "[WhatsApp] Not starting: WHATSAPP_ALLOWED_NUMBERS is empty. The webhook is a "
+                "public endpoint — set it to the number(s) allowed to message the bot "
+                "(e.g. WHATSAPP_ALLOWED_NUMBERS=+306912345678)."
+            )
             return
 
         twilio = TwilioClient(self.account_sid, self.auth_token)
@@ -683,13 +972,23 @@ class WhatsAppInterface:
             from_number = data.get("From", "")
             logger.info(f"[WhatsApp] Message from {from_number}: {user_msg[:60]}")
 
-            response_text = await self.agent.process_user_input(user_msg)
+            sender = self._normalize_number(from_number)
+            if sender not in self.allowed_numbers:
+                logger.warning("[WhatsApp] Rejected message from %s (not allow-listed)", sender)
+                return web.Response(text="OK")
 
-            twilio.messages.create(
-                body=response_text,
-                from_=f"whatsapp:{self.from_number}",
-                to=from_number,
-            )
+            throttled = self.limiter.check(sender)
+            if throttled:
+                await self._send_message(twilio, throttled, from_number)
+                return web.Response(text="OK")
+
+            # Restricted mode: same guarantees as the other social channels.
+            try:
+                response_text = await self.agent.process_user_input_restricted(user_msg)
+            finally:
+                self.limiter.done(sender)
+
+            await self._send_message(twilio, response_text, from_number)
             return web.Response(text="OK")
 
         app = web.Application()

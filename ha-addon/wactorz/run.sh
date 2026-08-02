@@ -63,8 +63,6 @@ MQTT_HOST=$(get_config_safe 'mqtt_host' 'core-mosquitto')
 export MQTT_HOST="${MQTT_HOST}"
 MQTT_PORT=$(get_config_safe 'mqtt_port' '1883')
 export MQTT_PORT="${MQTT_PORT}"
-MQTT_WS_PORT=$(get_config_safe 'mqtt_ws_port' '8083')
-export MQTT_WS_PORT="${MQTT_WS_PORT}"
 # Optional broker credentials (blank = anonymous). Needed for the official
 # Mosquitto addon and any broker with allow_anonymous false.
 MQTT_USERNAME=$(get_config_safe 'mqtt_username' '')
@@ -140,10 +138,16 @@ export API_KEY="${API_KEY}"
 
 DISCORD_BOT_TOKEN=$(get_config_safe 'discord_bot_token' '')
 export DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN}"
+DISCORD_ALLOWED_USER_IDS=$(get_config_safe 'discord_allowed_user_ids' '')
+export DISCORD_ALLOWED_USER_IDS="${DISCORD_ALLOWED_USER_IDS}"
 TELEGRAM_BOT_TOKEN=$(get_config_safe 'telegram_bot_token' '')
 export TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
+TELEGRAM_ALLOWED_USER_IDS=$(get_config_safe 'telegram_allowed_user_ids' '')
+export TELEGRAM_ALLOWED_USER_IDS="${TELEGRAM_ALLOWED_USER_IDS}"
 TELEGRAM_ALLOWED_USER_ID=$(get_config_safe 'telegram_allowed_user_id' '0')
 export TELEGRAM_ALLOWED_USER_ID="${TELEGRAM_ALLOWED_USER_ID}"
+SOCIAL_RATE_LIMIT_PER_MIN=$(get_config_safe 'social_rate_limit_per_min' '12')
+export SOCIAL_RATE_LIMIT_PER_MIN="${SOCIAL_RATE_LIMIT_PER_MIN}"
 
 OTEL_ENDPOINT=$(get_config_safe 'otel_endpoint' '')
 if [ -n "$OTEL_ENDPOINT" ]; then
@@ -193,21 +197,41 @@ if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
     # cost, state) survives addon restarts AND updates. /data is addon-private
     # and preserved across image rebuilds.
     mkdir -p /data/mosquitto
+    # Hand the persistence directory to the unprivileged user the broker drops
+    # to when started as root, so it no longer has to stay root to write it.
+    # Order matters: chown first, or mosquitto starts and cannot write its DB.
+    chown -R mosquitto:mosquitto /data/mosquitto
+
+    # Broker credentials. Generated once and kept under /data (which survives
+    # restarts AND updates) rather than regenerated per boot: the port is not
+    # published by default, but an operator who maps 1883 for edge nodes would
+    # otherwise have every node's stored password invalidated on each restart.
+    MQTT_CREDS=/data/mosquitto/credentials
+    if [ ! -s "$MQTT_CREDS" ]; then
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$MQTT_CREDS"
+        chmod 600 "$MQTT_CREDS"
+        bashio::log.info "Generated embedded broker credentials."
+    fi
+    MQTT_PW=$(cat "$MQTT_CREDS")
+    # The broker reads this file after dropping privileges, so it must be
+    # readable by the mosquitto user and by nobody else.
+    mosquitto_passwd -b -c /tmp/mosquitto.passwd wactorz "$MQTT_PW"
+    chown mosquitto:mosquitto /tmp/mosquitto.passwd
+    chmod 600 /tmp/mosquitto.passwd
 
     cat > /tmp/mosquitto.conf << 'MQTTEOF'
-# Stay as root so the broker can write the persistence DB under /data
-# (started as root, mosquitto otherwise drops to the unprivileged
-# "mosquitto" user, which cannot write the root-owned /data/mosquitto).
-user root
+# No `user` directive: started as root, mosquitto drops to the unprivileged
+# "mosquitto" user by default, and the persistence directory is chowned to it
+# above.
 
-# TCP listener
+# Authentication applies to both listeners below. The add-on publishes no
+# broker port by default, so the reachable set is other containers on the
+# Home Assistant network — which is exactly who this keeps out.
+allow_anonymous false
+password_file /tmp/mosquitto.passwd
+
+# TCP listener only.
 listener 1883
-allow_anonymous true
-
-# WebSocket listener (used by the wactorz frontend via /mqtt proxy)
-listener 8083
-protocol websockets
-allow_anonymous true
 
 persistence true
 persistence_location /data/mosquitto/
@@ -216,23 +240,25 @@ MQTTEOF
 
     mosquitto -c /tmp/mosquitto.conf &
 
-    # Override wactorz MQTT config to use the local broker (anonymous)
+    # Point wactorz at the local broker with the credentials above.
     export MQTT_HOST="localhost"
     export MQTT_PORT="1883"
-    export MQTT_WS_PORT="8083"
-    export MQTT_USERNAME=""
-    export MQTT_PASSWORD=""
+    export MQTT_USERNAME="wactorz"
+    export MQTT_PASSWORD="$MQTT_PW"
 
-    # Wait until Mosquitto is accepting connections (up to 15 s)
+    # Wait until Mosquitto is accepting connections (up to 15 s). This must
+    # authenticate: an anonymous probe against the config above always fails,
+    # so the loop would burn its full timeout on every boot.
     i=0
     while [ $i -lt 15 ]; do
-        if mosquitto_pub -h localhost -p 1883 -t "wactorz/probe" -m "" -q 0 2>/dev/null; then
+        if mosquitto_pub -h localhost -p 1883 -u "wactorz" -P "$MQTT_PW" \
+            -t "wactorz/probe" -m "" -q 0 2>/dev/null; then
             break
         fi
         sleep 1
         i=$((i+1))
     done
-    bashio::log.info "Embedded Mosquitto ready on 1883/8083"
+    bashio::log.info "Embedded Mosquitto ready on 1883 (authenticated)"
 fi
 
 # ── External broker readiness (non-embedded) ─────────────────────────────────

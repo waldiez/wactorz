@@ -47,9 +47,10 @@ anthropic = ["anthropic>=0.86.0"]
 openai    = ["openai>=2.29.0"]
 google    = ["google-genai>=1.0.0"]
 discord   = ["discord.py>=2.7.1"]
+telegram  = ["python-telegram-bot>=21.0"]
 whatsapp  = ["twilio>=9.10.4"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
-mcp       = ["mcp>=1.0.0"]
+mcp       = ["mcp>=1.0.0,<2"]
 otel      = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
@@ -84,6 +85,9 @@ dev       = [
     "pytest-asyncio>=0.24.0",
     "ruff>=0.15.0",
     "basedpyright>=1.20.0",
+    # The packaging build backend, so the custom build hook can be imported and
+    # tested directly rather than exercised only through a real wheel build.
+    "hatchling>=1.27.0",
 ]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
@@ -92,6 +96,7 @@ all = [
     "wactorz[openai]",
     "wactorz[google]",
     "wactorz[discord]",
+    "wactorz[telegram]",
     "wactorz[whatsapp]",
     "wactorz[mcp]",
     "wactorz[otel]",
@@ -102,7 +107,6 @@ all = [
 
 [project.scripts]
 wactorz         = "wactorz.cli:main"
-wactorz-monitor = "wactorz.monitor_server:cli_main"
 wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
 wactorz-tui     = "wactorz.tui.app:run"
@@ -258,8 +262,12 @@ disable = [
     # Actors expose internals the monitor legitimately drives (spawn registry,
     # node desired-state); these are one codebase, not a public API boundary.
     "protected-access",
-    # Function-local imports are load-order tools here: they keep package-init
-    # light and break import cycles. See CLAUDE.md.
+    # Some function-local imports are load-order tools: they keep package-init
+    # light and break cycles between `wactorz` modules, and they let an optional
+    # dependency stay optional. That is the whole of it — stdlib and required
+    # dependencies belong at module scope. See AGENTS.md. This blanket disable is
+    # broader than that rule and hides the difference; ruff's PLC0415 can draw
+    # the line properly once the existing violations are cleared.
     "import-outside-toplevel",
     # runtime.py owns process-wide state by design; rebinding needs `global`.
     "global-statement",

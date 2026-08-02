@@ -1145,12 +1145,13 @@ LLM_COST_LIMIT_PERIOD=daily   # daily | weekly | monthly | total
             <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
 </code></pre></div>
 
-<p>Then register it in <code>cli.py</code> inside <code>build_system()</code>:</p>
+<p>Then register it in <code>app.py</code> inside <code>build_system()</code>. <code>_sd</code> there is the state directory
+resolved at startup, and <code>_wire_persistence</code> attaches the persistence API:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.agents.my_agent</span><span class="w"> </span><span class="kn">import</span> <span class="n">MyAgent</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">make_my_agent</span><span class="p">():</span>
     <span class="k">return</span> <span class="n">_wire_persistence</span><span class="p">(</span>
-        <span class="n">MyAgent</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;my-agent&quot;</span><span class="p">,</span> <span class="n">persistence_dir</span><span class="o">=</span><span class="s2">&quot;./state&quot;</span><span class="p">))</span>
+        <span class="n">MyAgent</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;my-agent&quot;</span><span class="p">,</span> <span class="n">persistence_dir</span><span class="o">=</span><span class="n">_sd</span><span class="p">))</span>
 
 <span class="n">system</span><span class="o">.</span><span class="n">supervisor</span><span class="o">.</span><span class="n">supervise</span><span class="p">(</span>
     <span class="s2">&quot;my-agent&quot;</span><span class="p">,</span> <span class="n">make_my_agent</span><span class="p">,</span>

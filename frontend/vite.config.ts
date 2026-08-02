@@ -5,8 +5,14 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
-    // Read .env from the repo root (one level up from frontend/)
-    envDir: "..",
+    // envDir is deliberately left at its default (this directory) rather than
+    // pointed at the repo root. The root `.env` is the backend's secrets file,
+    // and Vite inlines every `VITE_`-prefixed value it finds into the client
+    // bundle — so anything named that way there would be published, both in the
+    // committed `static/app` and in the wheel. Keeping it here also makes the
+    // build reproducible: `static/app` is committed, so its contents must not
+    // depend on who built it. There are no env files here, by design; runtime
+    // configuration reaches the dashboard through `/api/config` instead.
     server: {
         port: 3000,
         // Don't auto-open a browser tab by default.

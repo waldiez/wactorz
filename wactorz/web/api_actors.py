@@ -52,7 +52,7 @@ async def send_message_handler(request: web.Request) -> Response:
     # actor is dropped. Prepend the mention to route there, unless the caller
     # already addressed someone (@) or it's a slash command (/).
     routed = content if content.startswith(("@", "/")) else f"@{actor.name} {content}"
-    chat.track_chat_task(asyncio.create_task(chat.route_chat(routed, lambda t: None)))
+    chat.track_chat_task(asyncio.create_task(chat.route_chat(routed, chat.discard_reply)))
     return web.json_response({"status": "sent"})
 
 

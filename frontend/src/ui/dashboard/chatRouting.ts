@@ -9,7 +9,7 @@
  * agent, and strips the now-redundant prefix from what it shows.
  */
 import type { AgentInfo } from "../../types/agent";
-import { looksLikeAgentId } from "../../agents/naming";
+import { looksLikeAgentId, MAIN_AGENT } from "../../agents/naming";
 import { canDirectMessage } from "./agentState";
 
 /**
@@ -29,7 +29,7 @@ export function pickChatTarget(agents: AgentInfo[], current: string, userPicked 
     if (!messageable.length) {
         return current;
     }
-    const main = messageable.find(a => a.name === "main" || a.name === "main-actor");
+    const main = messageable.find(a => a.name === MAIN_AGENT);
     if (!userPicked && main) {
         return main.name;
     }

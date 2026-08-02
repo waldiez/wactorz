@@ -1,14 +1,17 @@
-"""Process bootstrap: import path, platform fixups, and root logging.
+"""Process bootstrap: import path and platform fixups.
 
 Importing this module prepares the interpreter to run Wactorz as an application.
 The work happens at import time and is effectively idempotent: Python caches the
 module, so the side effects apply exactly once regardless of how many entry
 points import it.
+
+Only what genuinely must happen at import lives here — the Windows event-loop
+policy has to be set before any async library starts. Root logging is configured
+by :func:`wactorz.monitoring.log_setup.setup_logging` instead.
 """
 
 import asyncio
 import io
-import logging
 import sys
 from pathlib import Path
 
@@ -41,15 +44,6 @@ def _bootstrap() -> None:
             if _need_wrap:
                 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
                 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            handlers=[
-                logging.StreamHandler(sys.stdout),
-                logging.FileHandler("wactorz.log", encoding="utf-8"),
-            ],
-        )
 
 
 _bootstrap()

@@ -42,10 +42,25 @@ describe("openLightbox", () => {
         expect(img.getAttribute("src")).toBe("http://example.com/b.png");
     });
 
+    it("does not leave the replaced instance listening on document", () => {
+        openLightbox("http://example.com/a.png");
+        openLightbox("http://example.com/b.png");
+
+        // one Escape must close the one that is open, not merely the stale one
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+        expect(document.querySelector(".af-lightbox")).toBeNull();
+    });
+
     it("closes when the overlay is clicked", () => {
         openLightbox("http://example.com/a.png");
         const overlay = document.querySelector<HTMLElement>(".af-lightbox")!;
         overlay.click();
+        expect(document.querySelector(".af-lightbox")).toBeNull();
+    });
+
+    it("still closes on a click on the image itself", () => {
+        openLightbox("http://example.com/a.png");
+        document.querySelector<HTMLElement>(".af-lightbox img")!.click();
         expect(document.querySelector(".af-lightbox")).toBeNull();
     });
 
@@ -61,5 +76,85 @@ describe("openLightbox", () => {
         openLightbox("http://example.com/a.png");
         document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
         expect(document.querySelector(".af-lightbox")).not.toBeNull();
+    });
+
+    describe("keyboard access", () => {
+        function invoker(): HTMLButtonElement {
+            const btn = document.createElement("button");
+            document.body.appendChild(btn);
+            btn.focus();
+            return btn;
+        }
+
+        it("offers a close control, not only Escape and a backdrop click", () => {
+            openLightbox("http://example.com/a.png");
+            const closeBtn = document.querySelector<HTMLButtonElement>(".af-lightbox button");
+            expect(closeBtn).not.toBeNull();
+            expect(closeBtn!.getAttribute("aria-label")).toBeTruthy();
+        });
+
+        it("closes from the close control", () => {
+            openLightbox("http://example.com/a.png");
+            document.querySelector<HTMLButtonElement>(".af-lightbox button")!.click();
+            expect(document.querySelector(".af-lightbox")).toBeNull();
+        });
+
+        it("moves focus into the dialog on open", () => {
+            invoker();
+            openLightbox("http://example.com/a.png");
+            const overlay = document.querySelector<HTMLElement>(".af-lightbox")!;
+            expect(overlay.contains(document.activeElement)).toBe(true);
+        });
+
+        it("returns focus to whatever opened it", () => {
+            const btn = invoker();
+            openLightbox("http://example.com/a.png");
+            document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+            expect(document.activeElement).toBe(btn);
+        });
+
+        it("keeps Tab inside the dialog", () => {
+            invoker();
+            openLightbox("http://example.com/a.png");
+            const overlay = document.querySelector<HTMLElement>(".af-lightbox")!;
+
+            for (let i = 0; i < 4; i++) {
+                document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+                expect(overlay.contains(document.activeElement)).toBe(true);
+            }
+        });
+
+        it("keeps Shift+Tab inside the dialog", () => {
+            invoker();
+            openLightbox("http://example.com/a.png");
+            const overlay = document.querySelector<HTMLElement>(".af-lightbox")!;
+
+            for (let i = 0; i < 4; i++) {
+                document.dispatchEvent(
+                    new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
+                );
+                expect(overlay.contains(document.activeElement)).toBe(true);
+            }
+        });
+
+        it("lets Tab through if the dialog somehow has nothing focusable", () => {
+            openLightbox("http://example.com/a.png");
+            document.querySelector(".af-lightbox button")!.remove();
+
+            const e = new KeyboardEvent("keydown", { key: "Tab", cancelable: true });
+            document.dispatchEvent(e);
+
+            // nothing to trap onto, so don't swallow the key and strand the user
+            expect(e.defaultPrevented).toBe(false);
+        });
+
+        it("survives being opened with nothing focused", () => {
+            (document.activeElement as HTMLElement | null)?.blur();
+            openLightbox("http://example.com/a.png");
+            expect(() =>
+                document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+            ).not.toThrow();
+            expect(document.querySelector(".af-lightbox")).toBeNull();
+        });
     });
 });

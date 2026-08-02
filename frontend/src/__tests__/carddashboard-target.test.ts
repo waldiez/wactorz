@@ -7,8 +7,8 @@ import { CardDashboard } from "../ui/CardDashboard";
 import type { AgentInfo } from "../types/agent";
 
 // Regression tests for the chat-target <select> never rendering blank.
-// The bug: chatTarget defaulted to "main-actor" but if the live agent is named
-// "main" (or main-actor is absent), select.value matched no option and the
+// The bug: chatTarget defaulted to "main" but if the live agent is named
+// "main" (or main is absent), select.value matched no option and the
 // control rendered with nothing selected. _populateSelect now re-syncs the
 // target to a messageable agent and falls back to the first option.
 
@@ -25,10 +25,10 @@ describe("CardDashboard chat-target selection", () => {
         cd.agents.clear();
     });
 
-    it("falls back to 'main' when chatTarget default ('main-actor') is absent", () => {
+    it("falls back to 'main' when chatTarget default ('main') is absent", () => {
         cd.agents.set("1", agent("main", true)); // protected, but always messageable
         cd.agents.set("2", agent("io-agent", true)); // system → not messageable
-        cd._chat.chatTarget = "main-actor";
+        cd._chat.chatTarget = "main";
 
         const select = document.createElement("select");
         cd._chat._populateSelect(select);
@@ -42,7 +42,7 @@ describe("CardDashboard chat-target selection", () => {
     it("falls back to the first messageable agent when no main exists", () => {
         cd.agents.set("1", agent("catalog"));
         cd.agents.set("2", agent("monitor-agent", true)); // system → excluded
-        cd._chat.chatTarget = "main-actor";
+        cd._chat.chatTarget = "main";
 
         const select = document.createElement("select");
         cd._chat._populateSelect(select);

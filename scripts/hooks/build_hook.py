@@ -1,5 +1,4 @@
-"""
-Hatchling pre-build hook — ensures the Vite frontend is built before packaging.
+"""Hatchling pre-build hook — ensures the Vite frontend is built before packaging.
 
 ``static/app/`` (Vite SPA) and ``static/docs/`` (docs site) are committed
 to the repository and bundled into the wheel as-is — no build tools are
@@ -12,15 +11,17 @@ Configure in pyproject.toml:
     path = "scripts/hooks/build_hook.py"
 """
 
+import hashlib
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
-# Rebuild if the dist is older than this (seconds).  Set to 0 in CI.
+# Set to 0 to force a rebuild regardless of what changed (release/CI). Any
+# other value defers to the input fingerprint — see _is_stale. The name and the
+# legacy default are kept so existing invocations keep working.
 STALE_AFTER: int = int(os.getenv("WACTORZ_FRONTEND_STALE", "600"))
 
 
@@ -61,13 +62,69 @@ def _pm_available(pm: list[str]) -> bool:
     return shutil.which(pm[0]) is not None
 
 
-def _is_stale(dist_index: Path) -> bool:
+# Files whose contents end up in the bundle. Anything outside these cannot
+# change the build output, so it must not trigger a rebuild.
+_SOURCE_GLOBS: tuple[str, ...] = (
+    "src/**/*",
+    "index.html",
+    "package.json",
+    "bun.lock",
+    "vite.config.ts",
+    "tsconfig.json",
+)
+
+
+# Where the fingerprint of the last successful build is remembered. Inside
+# node_modules so it is already ignored by git and never reaches the wheel;
+# losing it (a wiped node_modules) costs one redundant rebuild, nothing more.
+_FINGERPRINT_REL = Path("node_modules") / ".cache" / "wactorz-frontend-inputs"
+
+
+def _input_fingerprint(frontend: Path) -> str:
+    """SHA-256 over the contents of every file that can affect the bundle."""
+    digest = hashlib.sha256()
+    files = sorted(p for pattern in _SOURCE_GLOBS for p in frontend.glob(pattern) if p.is_file())
+    for path in files:
+        digest.update(path.relative_to(frontend).as_posix().encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _is_stale(dist_index: Path, frontend: Path) -> bool:
+    """Whether ``static/app`` needs rebuilding — i.e. an input actually changed.
+
+    Compares a content hash of the inputs against the one recorded by the last
+    successful build. Neither timestamp scheme this replaced was trustworthy:
+    wall-clock age answers "when was this built", not "is it still correct", so
+    it rebuilt after any idle period (rewriting ``static/app`` and dirtying the
+    tree for no reason) while missing edits made just after a build; and mtime
+    ordering breaks on a fresh clone, where checkout stamps sources and dist
+    alike with the current time, and fires for a ``touch`` that changed nothing.
+    Content is the thing we actually care about, so compare that.
+    """
     if not dist_index.exists():
         return True
     if STALE_AFTER == 0:
-        return True  # always rebuild when STALE_AFTER=0 (CI)
-    age = time.time() - dist_index.stat().st_mtime
-    return age > STALE_AFTER
+        return True  # forced rebuild (release/CI)
+    if not frontend.is_dir():
+        return False  # no sources to compare against; keep what is committed
+    recorded = frontend / _FINGERPRINT_REL
+    try:
+        return recorded.read_text().strip() != _input_fingerprint(frontend)
+    except OSError:
+        return True  # never built here, or unreadable — build and record
+
+
+def _record_fingerprint(frontend: Path) -> None:
+    """Remember the inputs that produced the current ``static/app``."""
+    target = frontend / _FINGERPRINT_REL
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_input_fingerprint(frontend))
+    except OSError:
+        pass  # a cache we cannot write is a slower build, not a failure
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -88,7 +145,7 @@ class CustomBuildHook(BuildHookInterface):
             )
             return
 
-        if not _is_stale(dist_index):
+        if not _is_stale(dist_index, frontend):
             self.app.display_info("[build-hook] static/app is fresh — skipping rebuild")
             return
 
@@ -125,8 +182,8 @@ class CustomBuildHook(BuildHookInterface):
                 )
 
         try:
-            _run(pm + ["install", "--frozen-lockfile"] if pm[0] != "npm" else pm + ["ci"])
-            _run(pm + ["run", "build"])
+            _run([*pm, "install", "--frozen-lockfile"] if pm[0] != "npm" else [*pm, "ci"])
+            _run([*pm, "run", "build"])
         except RuntimeError as exc:
             if STRICT:
                 self.app.display_error(str(exc))
@@ -134,4 +191,5 @@ class CustomBuildHook(BuildHookInterface):
             self.app.display_warning(str(exc) + " — continuing with existing static/app")
             return
 
+        _record_fingerprint(frontend)
         self.app.display_info("[build-hook] frontend build complete ✓")

@@ -11,6 +11,7 @@ import type { ChatMessage, Attachment } from "../../types/agent";
 import { renderMarkdown } from "../markdown";
 import { isImage, humanSize } from "./uploads";
 import { iconMarkup } from "./icons";
+import { MAIN_AGENT } from "../../agents/naming";
 import { openLightbox } from "./lightbox";
 import { escapeHtml } from "../escapeHtml";
 
@@ -119,8 +120,8 @@ export function buildChatEmptyState(chatTarget: string): HTMLElement {
     const empty = document.createElement("div");
     empty.className = "af-chat-empty";
     empty.innerHTML =
-        chatTarget === "main-actor"
-            ? `<p>Say hello to <strong>@main-actor</strong> — the system orchestrator.</p>`
+        chatTarget === MAIN_AGENT
+            ? `<p>Say hello to <strong>@main</strong> — the system orchestrator.</p>`
             : `<p>No messages with <strong>@${escapeHtml(chatTarget)}</strong> yet.</p>
            <p style="font-size:11px;opacity:0.5">New messages will be sent directly to this agent.</p>`;
     return empty;

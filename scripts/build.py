@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Build script for Wactorz — produces a PyPI-ready wheel and sdist.
+"""Build script for Wactorz — produces a PyPI-ready wheel and sdist.
 
 Usage:
     python scripts/build.py           # build only

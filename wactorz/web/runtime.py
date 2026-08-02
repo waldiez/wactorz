@@ -22,13 +22,11 @@ if TYPE_CHECKING:
 # ── Injected config (app.py overwrites these at boot from CLI/env) ───────────
 MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
-MQTT_WS_PORT = 9001
 WS_PORT = 8888
 MQTT_TOPICS = [
     "agents/#",
     "system/#",
     "nodes/#",
-    "io/chat",
     "homeassistant/state_changes/#",
 ]
 

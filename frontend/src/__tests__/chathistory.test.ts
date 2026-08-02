@@ -69,7 +69,8 @@ describe("fetchChatHistory", () => {
 
         const out = await fetchChatHistory("main");
         expect(out).toHaveLength(1);
-        expect(out[0]).toMatchObject({
+        const firstOut = out ? out[0] : null;
+        expect(firstOut).toMatchObject({
             id: "hist-main-1",
             from: "user",
             to: "main",
@@ -88,7 +89,8 @@ describe("fetchChatHistory", () => {
 
         const out = await fetchChatHistory("main");
         expect(out).toHaveLength(1);
-        expect(out[0]).toMatchObject({ id: "hist-main-0", from: "main", to: "user", content: "hello" });
+        const firstOut = out ? out[0] : null;
+        expect(firstOut).toMatchObject({ id: "hist-main-0", from: "main", to: "user", content: "hello" });
     });
 
     it("strips the [SYSTEM] deletion note and its paired ack from kv_store history", async () => {
@@ -109,9 +111,9 @@ describe("fetchChatHistory", () => {
         }) as unknown as typeof fetch;
 
         const out = await fetchChatHistory("main");
-        expect(out.map(m => m.content)).toEqual(["spawn image-gen-agent", "done", "what now?"]);
-        expect(out.some(m => m.content.startsWith("[SYSTEM]"))).toBe(false);
-        expect(out.some(m => m.content.startsWith("Acknowledged"))).toBe(false);
+        expect((out || []).map(m => m.content)).toEqual(["spawn image-gen-agent", "done", "what now?"]);
+        expect((out || []).some(m => m.content.startsWith("[SYSTEM]"))).toBe(false);
+        expect((out || []).some(m => m.content.startsWith("Acknowledged"))).toBe(false);
     });
 
     it("drops a lone [SYSTEM] note but keeps a following real user turn", async () => {
@@ -129,7 +131,7 @@ describe("fetchChatHistory", () => {
         }) as unknown as typeof fetch;
 
         const out = await fetchChatHistory("main");
-        expect(out.map(m => m.content)).toEqual(["hello"]);
+        expect((out || []).map(m => m.content)).toEqual(["hello"]);
     });
 
     it("keeps a real assistant reply that is not the paired ack", async () => {
@@ -147,18 +149,18 @@ describe("fetchChatHistory", () => {
         }) as unknown as typeof fetch;
 
         const out = await fetchChatHistory("main");
-        expect(out.map(m => m.content)).toEqual(["Sure, anything else?"]);
+        expect((out || []).map(m => m.content)).toEqual(["Sure, anything else?"]);
     });
 
-    it("returns [] when both sources fail", async () => {
+    it("returns null (a retryable failure) when both sources fail", async () => {
         globalThis.fetch = vi.fn(async () => ({ ok: false })) as unknown as typeof fetch;
-        expect(await fetchChatHistory("main")).toEqual([]);
+        expect(await fetchChatHistory("main")).toBeNull();
     });
 
-    it("returns [] when fetch throws", async () => {
+    it("returns null (a retryable failure) when fetch throws", async () => {
         globalThis.fetch = vi.fn(async () => {
             throw new Error("network");
         }) as unknown as typeof fetch;
-        expect(await fetchChatHistory("main")).toEqual([]);
+        expect(await fetchChatHistory("main")).toBeNull();
     });
 });

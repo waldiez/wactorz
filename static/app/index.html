@@ -46,14 +46,14 @@
     <link rel="icon" href="./icon.png" type="image/png" sizes="512x512" />
     <!-- crossorigin: send the ingress auth cookie, else HA ingress 401s the manifest -->
     <link rel="manifest"         href="./site.webmanifest" crossorigin="use-credentials" />
-    <script type="module" crossorigin src="./assets/index-C9CjO0Jl.js"></script>
+    <script type="module" crossorigin src="./assets/index-CK8xdJ1t.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/vendor-DVCETZFR.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-vj2OEFug.css">
+    <link rel="stylesheet" crossorigin href="./assets/index-BTB0a_sn.css">
   </head>
   <body>
     <!-- CSP note: inline scripts are allowed only because the monitor server stamps
          each first-party inline script with a per-request nonce at serve time (see
-         monitor_server.index_handler / _csp_report_only). It also injects a nonced
+         wactorz/web/static_site.py — index_handler and csp_policy). It also injects a nonced
          window.__WACTORZ_INGRESS_PATH bootstrap into the document head. Keep inline
          scripts first-party — never inline remote or user-supplied content here. -->
     <script>

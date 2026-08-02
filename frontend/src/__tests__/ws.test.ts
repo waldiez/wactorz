@@ -148,7 +148,7 @@ describe("WSClient", () => {
         c.connect("ws://localhost/ws");
         // Before any send, the gateway/absent sender falls back to the default agent.
         ws().emit("message", { data: JSON.stringify({ type: "chat", content: "Hi" }) });
-        expect(chatSpy.mock.calls[0]![1]).toBe("main-actor");
+        expect(chatSpy.mock.calls[0]![1]).toBe("main");
         // After addressing a specific agent, the gateway reply is re-attributed to it.
         c.send("hello", "catalog");
         ws().emit("message", {
@@ -248,20 +248,20 @@ describe("WSClient", () => {
     it("send() sends JSON to the WebSocket and returns true", () => {
         const c = new WSClient();
         c.connect("ws://localhost/ws");
-        const ok = c.send("hello", "main-actor");
+        const ok = c.send("hello", "main");
         expect(ok).toBe(true);
         expect(JSON.parse(ws().sent[0]!)).toEqual({
             type: "chat",
             content: "hello",
-            agent_name: "main-actor",
+            agent_name: "main",
         });
     });
 
-    it("send() defaults agentName to 'main-actor'", () => {
+    it("send() defaults agentName to 'main'", () => {
         const c = new WSClient();
         c.connect("ws://localhost/ws");
         c.send("hi");
-        expect(JSON.parse(ws().sent[0]!).agent_name).toBe("main-actor");
+        expect(JSON.parse(ws().sent[0]!).agent_name).toBe("main");
     });
 
     it("send() returns false when not connected", () => {

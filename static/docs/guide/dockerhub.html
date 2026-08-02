@@ -167,8 +167,6 @@
 </blockquote>
 <p><strong><code>mosquitto.conf</code></strong></p>
 <div class="highlight"><pre><span></span><code>listener 1883
-listener 9001
-protocol websockets
 allow_anonymous true
 persistence true
 persistence_location /mosquitto/data/
@@ -185,7 +183,6 @@ log_dest stdout
 <span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
 <span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;1883:1883&quot;</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;9001:9001&quot;</span>
 <span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mosquitto-data:/mosquitto/data</span>
@@ -293,7 +290,7 @@ log_dest stdout
 <h3 id="step-3-start-mosquitto">Step 3 — Start Mosquitto</h3>
 <div class="highlight"><pre><span></span><code><span class="no">[System.IO.File]</span><span class="p">::</span><span class="n">WriteAllText</span><span class="p">(</span>
   <span class="p">(</span><span class="nb">Join-Path</span> <span class="p">(</span><span class="nb">Get-Location</span><span class="p">)</span> <span class="s2">&quot;mosquitto.conf&quot;</span><span class="p">),</span>
-  <span class="s2">&quot;listener 1883</span><span class="se">`n</span><span class="s2">listener 9001</span><span class="se">`n</span><span class="s2">protocol websockets</span><span class="se">`n</span><span class="s2">allow_anonymous true</span><span class="se">`n</span><span class="s2">persistence true</span><span class="se">`n</span><span class="s2">persistence_location /mosquitto/data/</span><span class="se">`n</span><span class="s2">log_dest stdout</span><span class="se">`n</span><span class="s2">&quot;</span><span class="p">,</span>
+  <span class="s2">&quot;listener 1883</span><span class="se">`n</span><span class="s2">allow_anonymous true</span><span class="se">`n</span><span class="s2">persistence true</span><span class="se">`n</span><span class="s2">persistence_location /mosquitto/data/</span><span class="se">`n</span><span class="s2">log_dest stdout</span><span class="se">`n</span><span class="s2">&quot;</span><span class="p">,</span>
   <span class="no">[System.Text.UTF8Encoding]</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="nv">$false</span><span class="p">)</span>
 <span class="p">)</span>
 
@@ -301,7 +298,6 @@ log_dest stdout
 <span class="n">docker</span> <span class="n">run</span> <span class="n">-d</span> <span class="p">-</span><span class="n">-name</span> <span class="n">wactorz-mosquitto</span> <span class="p">`</span>
   <span class="p">-</span><span class="n">-network</span> <span class="n">wactorz-net</span> <span class="p">`</span>
   <span class="n">-p</span> <span class="s2">&quot;1883:1883&quot;</span> <span class="p">`</span>
-  <span class="n">-p</span> <span class="s2">&quot;9001:9001&quot;</span> <span class="p">`</span>
   <span class="n">-v</span> <span class="s2">&quot;${PWD}\mosquitto.conf:/mosquitto/config/mosquitto.conf&quot;</span> <span class="p">`</span>
   <span class="n">eclipse-mosquitto</span><span class="p">:</span><span class="n">2</span><span class="p">.</span><span class="n">0</span>
 </code></pre></div>

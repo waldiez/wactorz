@@ -25,7 +25,7 @@ maps to the same ID across restarts.
 | `async send(target_id, msg_type, payload)` | Send a typed message to another actor by ID |
 | `async broadcast(msg_type, payload)` | Send to all registered actors |
 | `async spawn(actor_class, **kwargs)` | Spawn a child actor (inherits MQTT, registry, persistence) |
-| `persist(key, value)` | Save a value (auto-routed to SQLite / Redis / Pickle) |
+| `persist(key, value)` | Save a value (auto-routed to SQLite / memory / Pickle) |
 | `recall(key, default=None)` | Load a persisted value |
 | `async publish_manifest(description="", publishes=None, capabilities=None, input_schema=None, output_schema=None)` | Publish a retained capability manifest so main can discover this actor |
 
@@ -101,10 +101,12 @@ from wactorz.core.registry import ActorSystem
 system = ActorSystem(
     mqtt_broker="localhost",
     mqtt_port=1883,
-    state_dir="./state",
 )
 await system.start()
 ```
+
+Pass `state_dir` to override where durable state is written; omitted, it follows
+`WACTORZ_STATE_DIR`, else `./state`.
 
 **Key attributes:**
 
@@ -215,22 +217,22 @@ Three-tier persistence layer routed automatically by key name:
 
 | Store | Location | Used for |
 |---|---|---|
-| **SQLite** | `state/wactorz.db` | Durable structured data: spawn registry, pipeline rules, user facts, contracts, time-series |
-| **Redis** | `redis://localhost:6379` (in-memory fallback if unavailable) | Ephemeral fast-access: observed samples, metrics, heartbeat state |
-| **Pickle** | `state/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state, ML models |
+| **SQLite** | `{state_dir}/wactorz.db` | Durable structured data: spawn registry, pipeline rules, user facts, contracts, time-series |
+| **Process memory** | in-process, lost on restart | Ephemeral fast-access: observed samples, metrics, heartbeat state |
+| **Pickle** | `{state_dir}/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state, ML models |
+
+`state_dir` defaults to `WACTORZ_STATE_DIR`, else `./state` — see
+[Deployment](deployment.md#environment-variables).
 
 ```python
 from wactorz.core.persistence import init_persistence, PersistenceAPI
 
-db, redis, pickle_store = init_persistence(
-    db_path="./state/wactorz.db",
-    redis_url="redis://localhost:6379",
-    state_dir="./state",
+db, pickle_store = init_persistence(
     run_migration=True,   # migrate existing .pkl files on first run
 )
 
 # Attach to an actor
-actor._persistence_api = PersistenceAPI(db, redis, pickle_store, actor.name)
+actor._persistence_api = PersistenceAPI(db, pickle_store, actor.name)
 
 # Then from the actor:
 actor.persist("my_key", {"value": 42})

@@ -24,8 +24,9 @@ export interface AppEventMap {
     "af-attachment-added": { attachment: Attachment };
     "af-agent-command": { command: string; agentId: string };
     "af-send-message": { content: string; target: string; attachments: string[] };
+    "af-send-failed": { content: string; target: string };
     "af-stream-chunk": { chunk: string; from: string };
-    "af-stream-end": { text: string | null; from: string };
+    "af-stream-end": { text: string | null; from: string } | null;
     "af-reset-chat": { agent: string | null };
     "af-wipe-all": void;
     "af-clear-feed": void;

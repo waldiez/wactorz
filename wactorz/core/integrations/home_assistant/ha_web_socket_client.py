@@ -1,7 +1,26 @@
+import asyncio
 import json
+import time
 from typing import Any
 
 import websockets
+
+# How long a request/response exchange may take before it is treated as failed.
+#
+# `connect()` sets ping_interval/ping_timeout, which closes a socket that has
+# gone away — but not one whose peer answers pings and never replies. Without a
+# deadline that case blocks the caller for good.
+#
+# This bounds commands only. Waiting indefinitely for the *next event* is what a
+# subscription is for, so `receive_event` is deliberately left unbounded.
+#
+# Deliberately generous. The point is to be finite, not tight: the slow-but-
+# healthy case is real — a full area/device/entity registry dump plus
+# `get_states` on a large installation running on modest hardware — and failing
+# one of those would be a new bug in place of the old one. Callers that hold a
+# connection open retry on a timeout, so overshooting costs a little latency
+# while undershooting costs correctness.
+_RESPONSE_TIMEOUT = 60
 
 
 class HAWebSocketClient:
@@ -20,14 +39,22 @@ class HAWebSocketClient:
         if self._ws:
             await self._ws.close()
 
+    async def _recv(self, timeout: float | None) -> Any:
+        """Receive one frame, optionally bounded. `None` waits indefinitely."""
+        assert self._ws is not None
+        raw = self._ws.recv()
+        if timeout is not None:
+            raw = asyncio.wait_for(raw, timeout=timeout)
+        return json.loads(await raw)
+
     async def _authenticate(self):
         assert self._ws is not None
-        hello = json.loads(await self._ws.recv())
+        hello = await self._recv(_RESPONSE_TIMEOUT)
         if hello.get("type") != "auth_required":
             raise RuntimeError(f"Unexpected hello: {hello}")
 
         await self._ws.send(json.dumps({"type": "auth", "access_token": self.token}))
-        resp = json.loads(await self._ws.recv())
+        resp = await self._recv(_RESPONSE_TIMEOUT)
         if resp.get("type") != "auth_ok":
             raise RuntimeError(f"Auth failed: {resp}")
 
@@ -41,17 +68,30 @@ class HAWebSocketClient:
         payload.update(kwargs)
         await self._ws.send(json.dumps(payload))
 
+        # One deadline for the whole exchange rather than per frame: this loop
+        # skips messages belonging to other requests, so a busy connection would
+        # otherwise keep resetting the clock and the call would never end.
+        deadline = time.monotonic() + _RESPONSE_TIMEOUT
         while True:
-            resp = json.loads(await self._ws.recv())
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Home Assistant did not answer {ws_type!r} within {_RESPONSE_TIMEOUT}s"
+                )
+            resp = await self._recv(remaining)
             if resp.get("id") == msg_id:
                 if not resp.get("success"):
                     raise RuntimeError(f"WS call failed: {resp}")
                 return resp.get("result")
 
-    async def receive_json(self) -> dict[str, Any]:
-        """Receive the next raw JSON message from Home Assistant."""
-        assert self._ws is not None
-        payload = json.loads(await self._ws.recv())
+    async def receive_json(self, timeout: float | None = None) -> dict[str, Any]:
+        """Receive the next raw JSON message from Home Assistant.
+
+        Unbounded by default, because the caller waiting for the next event
+        should wait as long as it takes. Command paths pass their remaining
+        deadline.
+        """
+        payload = await self._recv(timeout)
         if not isinstance(payload, dict):
             raise RuntimeError(f"Unexpected websocket payload: {payload!r}")
         return payload
@@ -67,8 +107,14 @@ class HAWebSocketClient:
             payload["event_type"] = event_type
         await self._ws.send(json.dumps(payload))
 
+        deadline = time.monotonic() + _RESPONSE_TIMEOUT
         while True:
-            resp = await self.receive_json()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Home Assistant did not confirm the subscription within {_RESPONSE_TIMEOUT}s"
+                )
+            resp = await self.receive_json(remaining)
             if resp.get("id") != msg_id:
                 continue
             if not resp.get("success"):

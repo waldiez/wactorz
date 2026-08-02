@@ -1326,7 +1326,7 @@ wactorz/
 │   ├── actor.py                               Base Actor — mailbox, lifecycle, heartbeat, spawn, supervisor
 │   ├── registry.py                            ActorSystem, ActorRegistry, Supervisor — routing & OTP restarts
 │   ├── topic_bus.py                           TopicBus — TopicContract / TopicRegistry, schema introspection
-│   └── persistence.py                         SQLite + Redis + Pickle three-tier persistence
+│   └── persistence/                           SQLite + memory + Pickle three-tier persistence
 │
 ├── agents/
 │   ├── llm_agent.py                           LLMAgent — 5 providers, rolling summarization, cost tracking

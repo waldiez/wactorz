@@ -20,6 +20,7 @@ import psutil
 
 if TYPE_CHECKING:
     # Imported for type hints only — avoids a runtime import cycle (registry imports actor).
+    from .persistence import PersistenceAPI
     from .registry import ActorRegistry
 
 
@@ -149,7 +150,7 @@ class Actor(ABC):
 
         # Unified persistence API — set by ActorSystem if available,
         # otherwise falls back to legacy pickle behavior
-        self._persistence_api: Any | None = None
+        self._persistence_api: PersistenceAPI | None = None
 
         # Protection — if True, stop/delete/pause commands are ignored
         self.protected: bool = False
@@ -506,7 +507,7 @@ class Actor(ABC):
         - MQTT client (so it can publish heartbeats/status)
         - Registry (so it can send/receive messages)
         - Persistence dir defaults to same root
-        - Persistence API (SQLite/Redis/Pickle routing)
+        - Persistence API (SQLite/memory/Pickle routing)
 
         Erlang/OTP supervision: if the owning ActorSystem has a Supervisor,
         the child is automatically registered under it with ONE_FOR_ONE so it
@@ -526,13 +527,12 @@ class Actor(ABC):
         # Inherit persistence API if available
         if self._persistence_api is not None:
             try:
-                from .persistence import PersistenceAPI, get_db, get_pickle_store, get_redis
+                from .persistence import PersistenceAPI, get_db, get_pickle_store
 
                 db = get_db()
-                redis = get_redis()
                 pkl = get_pickle_store()
-                if db and redis and pkl:
-                    child._persistence_api = PersistenceAPI(db, redis, pkl, child.name)
+                if db and pkl:
+                    child._persistence_api = PersistenceAPI(db, pkl, child.name)
             except ImportError:
                 pass
 
@@ -577,14 +577,12 @@ class Actor(ABC):
                                     PersistenceAPI,
                                     get_db,
                                     get_pickle_store,
-                                    get_redis,
                                 )
 
                                 db = get_db()
-                                redis = get_redis()
                                 pkl = get_pickle_store()
-                                if db and redis and pkl:
-                                    c._persistence_api = PersistenceAPI(db, redis, pkl, c.name)
+                                if db and pkl:
+                                    c._persistence_api = PersistenceAPI(db, pkl, c.name)
                             except ImportError:
                                 pass
                         return c
@@ -676,7 +674,7 @@ class Actor(ABC):
     def persist(self, key: str, value: Any):
         """Persist a key-value pair. Routes to the correct backend:
           - Known structured keys → SQLite
-          - Known ephemeral keys → Redis
+          - Known ephemeral keys → process memory
           - Everything else → Pickle
 
         If the new PersistenceAPI is not available, falls back to legacy

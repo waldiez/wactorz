@@ -31,11 +31,11 @@ ensure_importable("openai")
 
 class FinalCostRoutingTest(unittest.TestCase):
     def test_final_cost_key_is_in_sqlite_keys(self):
-        from wactorz.core.persistence import _SQLITE_KEYS
+        from wactorz.core.persistence import SQLITE_KEYS
 
         self.assertIn(
             "_final_cost",
-            _SQLITE_KEYS,
+            SQLITE_KEYS,
             "_final_cost must route to SQLite so it survives restarts "
             "and is queryable for deleted-agent cost accounting",
         )

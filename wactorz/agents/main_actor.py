@@ -3244,7 +3244,7 @@ async def handle_task(agent, payload):
             #
             # We've already snapshotted `initial_state` above — that's the
             # authoritative copy now being shipped to the remote node. The
-            # local SQLite rows / pickle / Redis values are about to become
+            # local SQLite rows / pickle / in-memory values are about to become
             # stale ghosts. If the user later migrates the agent back here
             # without those being cleared, they'd merge with the freshly
             # arrived state and produce duplicate conversation entries.
@@ -3255,7 +3255,7 @@ async def handle_task(agent, payload):
                         await self._registry.unregister(local.actor_id)
                         await local.stop()
                         self._agent_manifests.pop(agent_name, None)
-                        # Wipe SQLite / Redis / pickle for this agent. Uses
+                        # Wipe SQLite / memory / pickle for this agent. Uses
                         # the same purge primitive as permanent delete — the
                         # difference is the agent is being re-created on the
                         # target node with the snapshot we already have.
@@ -3899,7 +3899,7 @@ async def handle_task(agent, payload):
             ``delete=True`` so the runner unlinks <name>_state.json on disk
             and purges this agent's retained MQTT topics from the broker.
           - For local agents: the underlying PersistenceAPI.purge() wipes
-            SQLite kv_store rows, Redis ephemeral keys, and the agent's
+            SQLite kv_store rows, in-memory ephemeral keys, and the agent's
             state.pkl directory.
           - Either way, main also publishes empty retained payloads on the
             per-agent MQTT topics as a defensive second pass — if the runner
@@ -3995,7 +3995,7 @@ async def handle_task(agent, payload):
 
     async def _purge_local_agent_persistence(self, actor, name: str) -> None:
         """For a local actor: hard-delete its persisted state across all
-        backends (SQLite kv_store rows, Redis ephemeral keys, pickle file).
+        backends (SQLite kv_store rows, in-memory ephemeral keys, pickle file).
 
         Uses the actor's own PersistenceAPI when available so the right
         databases are touched. Falls back to a best-effort filesystem cleanup

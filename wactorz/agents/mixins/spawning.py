@@ -446,7 +446,6 @@ class SpawnMixin:
                 PersistenceAPI,
                 get_db,
                 get_pickle_store,
-                get_redis,
             )
         except Exception as e:
             logger.debug(
@@ -470,19 +469,19 @@ class SpawnMixin:
                 logger.warning(f"[{self.name}] Legacy state injection failed for '{name}': {e2}")
             return
 
-        db, redis, pkl = get_db(), get_redis(), get_pickle_store()
-        if not (db and redis and pkl):
+        db, pkl = get_db(), get_pickle_store()
+        if not (db and pkl):
             logger.warning(
                 f"[{self.name}] PersistenceAPI stores not initialised — "
                 f"cannot apply migrated state for '{name}'"
             )
             return
 
-        api = PersistenceAPI(db, redis, pkl, name)
+        api = PersistenceAPI(db, pkl, name)
         applied = api.load_snapshot(snapshot, replace=True)
         logger.info(
             f"[{self.name}] Applied migrated state for '{name}': "
-            f"{applied['sqlite']} SQLite, {applied['redis']} Redis, "
+            f"{applied['sqlite']} SQLite, {applied['memory']} in-memory, "
             f"{applied['pickle']} pickle key(s)"
         )
 

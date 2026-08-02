@@ -390,14 +390,19 @@ async def app(args: argparse.Namespace):
                 # after boot. Skip the interactive loop and just stay up.
                 logger.info("stdin is not a TTY — running headless (no interactive CLI)")
                 system._running = True
-                await system.run_forever()
+                await asyncio.gather(system.run_forever(), *_run_all(companions))
         elif interface == "tui":
             try:
                 from wactorz.tui.app import run_async as _tui_run
             except ImportError:
                 logger.error("TUI needs the 'tui' extra — pip install 'wactorz[tui]'")
                 sys.exit(1)
-            await _tui_run()
+            bots = [asyncio.create_task(c) for c in _run_all(companions)]
+            try:
+                await _tui_run()
+            finally:
+                for bot in bots:
+                    bot.cancel()
         elif interface == "rest":
             port = args.port or CONFIG.port
             iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)

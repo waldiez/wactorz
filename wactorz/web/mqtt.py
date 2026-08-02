@@ -39,6 +39,48 @@ async def set_mqtt_status(connected: bool) -> None:
     await ws.broadcast({"type": "mqtt_status", "connected": connected})
 
 
+async def handle_message(topic: str, payload: str) -> None:
+    """Dispatch one broker message: update state, then tell the browsers.
+
+    Extracted from the listener loop so it can be exercised without a broker —
+    the loop around it is connection management, this is the part with rules.
+    """
+    event: dict[str, Any] | None = events.parse_topic(topic, payload)
+    await broadcast_mqtt_msg(topic, payload)
+    if not event or runtime.hard_resetting:
+        return
+
+    metric = event.get("metric", "")
+    log_event = None if metric == "heartbeat" else event
+    # Without the totals: this runs for every broker message, and they are the
+    # only part of a snapshot that queries the database. The browser keeps the
+    # figures it already has — a full snapshot on connect, and the lifecycle
+    # events elsewhere, carry the current ones.
+    await ws.broadcast(
+        {
+            "type": "patch",
+            "event": log_event,
+            "state": events.snapshot(include_totals=False),
+        }
+    )
+
+    # Agent-originated user-facing message. The browser already renders it from
+    # agents/{id}/chat (the broadcast above), so no second frame is sent here —
+    # this only persists it so it survives a reload like any other turn.
+    push = event.get("_push_chat")
+    if push:
+        try:
+            if runtime.db is not None and push.get("content"):
+                runtime.db.write_chat_log(
+                    ts=push.get("timestamp", time.time()),
+                    agent_name=push.get("from", "agent"),
+                    role="assistant",
+                    content=push["content"],
+                )
+        except Exception as exc:
+            logger.debug("[chat-bridge] persist failed: %s", exc)
+
+
 async def mqtt_listener() -> None:
     """Subscribe to topics and handle mqtt messages."""
     logger.info("Connecting to MQTT %s:%s...", runtime.MQTT_BROKER, runtime.MQTT_PORT)
@@ -68,33 +110,9 @@ async def mqtt_listener() -> None:
                     await set_mqtt_status(True)
 
                     async for message in client.messages:
-                        topic = str(message.topic)
-                        payload = message.payload.decode(errors="replace")
-
-                        event: dict[str, Any] | None = events.parse_topic(topic, payload)
-                        await broadcast_mqtt_msg(topic, payload)
-                        if event and not runtime.hard_resetting:
-                            metric = event.get("metric", "")
-                            log_event = None if metric == "heartbeat" else event
-                            await ws.broadcast(
-                                {"type": "patch", "event": log_event, "state": events.snapshot()}
-                            )
-                            # Agent-originated user-facing message. The browser already
-                            # renders it from the agents/{id}/chat (the ws.broadcast above)
-                            # so we do NOT ws.broadcast a second frame here. We only persist
-                            # it so it survives a browser reload like any other turn.
-                            push = event.get("_push_chat")
-                            if push:
-                                try:
-                                    if runtime.db is not None and push.get("content"):
-                                        runtime.db.write_chat_log(
-                                            ts=push.get("timestamp", time.time()),
-                                            agent_name=push.get("from", "agent"),
-                                            role="assistant",
-                                            content=push["content"],
-                                        )
-                                except Exception as _exc:
-                                    logger.debug("[chat-bridge] persist failed: %s", _exc)
+                        await handle_message(
+                            str(message.topic), message.payload.decode(errors="replace")
+                        )
 
             except Exception as e:
                 runtime.mqtt_client_ref = None

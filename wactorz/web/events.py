@@ -275,8 +275,20 @@ def node_online(last_seen: float, threshold: float = 45.0) -> bool:
     return (time.time() - last_seen) < threshold
 
 
-def snapshot() -> dict[str, Any]:
-    """Render the full dashboard state for a newly connected websocket client."""
+def snapshot(include_totals: bool = True) -> dict[str, Any]:
+    """Render the dashboard state for a websocket client.
+
+    Everything here reads from ``runtime.state`` — in memory, cheap — **except**
+    the two headline totals, which are the only part that touches the database.
+    Resolving them costs one query per agent whose cost is not in an MQTT frame
+    (``best_cost`` falls through to the ``_final_cost`` row), plus two full scans
+    of ``kv_store``.
+
+    ``include_totals=False`` omits them, for callers on a hot path. The browser
+    keeps whatever it last received: ``WSClient._applyStatePatch`` assigns each
+    total only when the key is present, so omitting them is not the same as
+    sending zero, and no protocol or frontend change is involved.
+    """
     if runtime.hard_resetting:
         return {
             "agents": [],
@@ -288,6 +300,15 @@ def snapshot() -> dict[str, Any]:
         }
     for nd in runtime.state["nodes"].values():
         nd["online"] = node_online(nd.get("last_seen", 0))
+
+    if not include_totals:
+        return {
+            "agents": list(runtime.state["agents"].values()),
+            "nodes": list(runtime.state["nodes"].values()),
+            "alerts": runtime.state["alerts"][:10],
+            "log_feed": runtime.state["log_feed"][:20],
+            "system_health": runtime.state["system_health"],
+        }
 
     # The headline totals must match what the dashboard actually shows on the
     # cards. Each card resolves its cost via _actor_cost() — MQTT state, then the

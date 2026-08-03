@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any
 
 import psutil
 
+from .atomic_io import write_pickle
+
 if TYPE_CHECKING:
     # Imported for type hints only — avoids a runtime import cycle (registry imports actor).
     from .persistence import PersistenceAPI
@@ -668,12 +670,10 @@ class Actor(ABC):
             # But keep pickle save for agent.state (arbitrary objects) backward compat.
             return
         # Legacy pickle path
-        path = self._persistence_dir / "state.pkl"
         try:
-            with open(path, "wb") as f:
-                pickle.dump(self._persistent_state, f)
+            write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
         except Exception as e:
-            logger.error(f"[{self.name}] Failed to save state: {e}")
+            logger.error("[%s] Failed to save state: %s", self.name, e)
 
     async def _load_persistent_state(self):
         """Load state from disk. Called on start() before on_start()."""
@@ -714,14 +714,13 @@ class Actor(ABC):
             self._persistence_api.set(key, value)
             return
 
-        # Legacy pickle path — write to disk immediately
+        # Legacy pickle path — the whole dict goes to disk on every call, so an
+        # interrupted write here would lose every key, not just this one.
         self._persistent_state[key] = value
-        path = self._persistence_dir / "state.pkl"
         try:
-            with open(path, "wb") as f:
-                pickle.dump(self._persistent_state, f)
+            write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
         except Exception as e:
-            logger.debug(f"[{self.name}] persist write failed: {e}")
+            logger.warning("[%s] persist write failed for %r: %s", self.name, key, e)
 
     def recall(self, key: str, default: Any = None) -> Any:
         """Recall a persisted value. Routes to the correct backend.

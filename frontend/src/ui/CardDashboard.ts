@@ -469,11 +469,7 @@ export class CardDashboard {
         el.textContent = `${healthy}/${agents.length} wactorz healthy`;
     }
 
-    private _sendCommand(
-        id: string,
-        action: AgentAction,
-        btn?: HTMLButtonElement,
-    ): void {
+    private _sendCommand(id: string, action: AgentAction, btn?: HTMLButtonElement): void {
         if (btn) {
             btn.disabled = true;
             btn.classList.add("sending");

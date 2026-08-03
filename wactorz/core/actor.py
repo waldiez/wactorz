@@ -418,8 +418,65 @@ class Actor(ABC):
             "restart_count": self.metrics.restart_count,
         }
 
+    LIFECYCLE_COMMANDS = ("pause", "resume", "stop", "delete")
+
+    def _release_from_supervision(self) -> None:
+        """Tell the supervisor this actor is leaving deliberately.
+
+        The Erlang unlink. Stopping without it is indistinguishable from
+        crashing, so the heartbeat-silence watchdog fires ~35s later and
+        restarts the actor that was just deliberately stopped.
+        """
+        if self._registry and hasattr(self._registry, "_supervisor_ref"):
+            sup = self._registry._supervisor_ref
+            if sup is not None:
+                sup.release(self.name)
+
+    async def apply_command(self, command: str) -> bool:
+        """Run a lifecycle command on this actor. Returns whether it took effect.
+
+        These are not a dispatch table, which is why they live here rather than
+        in the transport below: ``stop`` must release from supervision first, and
+        ``delete`` also clears the spawn registry and unregisters. A caller that
+        holds the actor and simply awaits ``stop()`` gets it restarted half a
+        minute later by the watchdog.
+
+        Every entry point routes through this — the broker listener, and the web
+        layer when the actor is local — so the two cannot drift apart.
+
+        Returns ``False`` when the command was refused (protected actor) or
+        unknown, so a caller can report that rather than claim success.
+        """
+        if self.protected and command in ("stop", "pause", "delete"):
+            logger.warning("[%s] Ignoring %r — actor is protected.", self.name, command)
+            return False
+
+        if command == "pause":
+            await self.pause()
+        elif command == "resume":
+            await self.resume()
+        elif command == "stop":
+            self._release_from_supervision()
+            await self.stop()
+        elif command == "delete":
+            self._release_from_supervision()
+            if self._registry:
+                main = self._registry.find_by_name("main")
+                if main and hasattr(main, "_remove_from_spawn_registry"):
+                    main._remove_from_spawn_registry(self.name)  # pyright: ignore[reportAttributeAccessIssue]
+                await self._registry.unregister(self.actor_id)
+            await self.stop()
+        else:
+            logger.warning("[%s] Unknown command: %r", self.name, command)
+            return False
+        return True
+
     async def _command_listener(self):
-        """Listen for commands published to agents/{id}/commands via MQTT."""
+        """Carry commands from agents/{id}/commands to :meth:`apply_command`.
+
+        Transport only. Needed for actors a caller cannot reach in process —
+        after the direct-dispatch change that means agents on remote nodes.
+        """
         try:
             import aiomqtt  # noqa: F401
         except ImportError:
@@ -431,47 +488,20 @@ class Actor(ABC):
             try:
                 async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe(topic)
-                    logger.debug(f"[{self.name}] Subscribed to {topic}")
+                    logger.debug("[%s] Subscribed to %s", self.name, topic)
                     async for message in client.messages:
                         try:
                             data = json.loads(message.payload.decode())
                             command = data.get("command", "")
-                            logger.info(f"[{self.name}] Received command: {command}")
-                            if self.protected and command in ("stop", "pause", "delete"):
-                                logger.warning(
-                                    f"[{self.name}] Ignoring '{command}' — actor is protected."
-                                )
-                                continue
-                            if command == "stop":
-                                # ── Erlang unlink: release from supervision FIRST ──
-                                # If we just stop without releasing, the heartbeat-silence
-                                # watchdog will fire ~35s later and restart us anyway.
-                                if self._registry and hasattr(self._registry, "_supervisor_ref"):
-                                    sup = self._registry._supervisor_ref
-                                    if sup is not None:
-                                        sup.release(self.name)
-                                await self.stop()
+                            logger.info("[%s] Received command: %s", self.name, command)
+                            applied = await self.apply_command(command)
+                            # Only stop listening if it actually took effect: a
+                            # protected actor refuses stop/delete and must keep
+                            # receiving commands afterwards.
+                            if applied and command in ("stop", "delete"):
                                 return
-                            if command == "pause":
-                                await self.pause()
-                            elif command == "resume":
-                                await self.resume()
-                            elif command == "delete":
-                                # ── Erlang unlink: release from supervision FIRST ──
-                                if self._registry and hasattr(self._registry, "_supervisor_ref"):
-                                    sup = self._registry._supervisor_ref
-                                    if sup is not None:
-                                        sup.release(self.name)
-                                # If main actor knows about this agent, remove from spawn registry
-                                if self._registry:
-                                    main = self._registry.find_by_name("main")
-                                    if main and hasattr(main, "_remove_from_spawn_registry"):
-                                        main._remove_from_spawn_registry(self.name)
-                                    await self._registry.unregister(self.actor_id)
-                                await self.stop()
-                                return
-                        except Exception as e:
-                            logger.error(f"[{self.name}] Command parse error: {e}")
+                        except Exception as exc:
+                            logger.error("[%s] Command parse error: %s", self.name, exc)
             except asyncio.CancelledError:
                 break
             except Exception:

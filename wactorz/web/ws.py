@@ -312,29 +312,36 @@ async def handle_command(cmd: dict[str, Any]) -> None:
     if command not in {"pause", "stop", "resume", "delete"}:
         return
 
-    msg = f"[cmd] {command.upper()} -> {agent_id[:8]}"
-    logger.info(msg)
-    if not runtime.mqtt_client_ref:
-        logger.warning("[cmd] No MQTT client available")
-        return
-
-    payload = json.dumps(
-        {"command": command, "sender": "monitor-dashboard", "timestamp": time.time()}
-    )
+    logger.info("[cmd] %s -> %s", command.upper(), agent_id[:8])
     try:
-        await runtime.mqtt_client_ref.publish(f"agents/{agent_id}/commands", payload)
-        events.add_log(
-            {"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()}
-        )
-        if command in ("stop", "pause", "resume"):
-            runtime.state["agents"].get(agent_id, {})["state"] = (
-                "stopped" if command == "stop" else "paused" if command == "pause" else "running"
-            )
-            await broadcast({"type": "patch", "state": events.snapshot()})
-        elif command == "delete":
+        if command == "delete":
+            # delete_agent has its own routing: main's spawn registry, then the
+            # local actor, then the broker for agents on other nodes.
             await lifecycle.delete_agent(agent_id)
+            events.add_log(
+                {
+                    "type": "command",
+                    "agent_id": agent_id,
+                    "command": command,
+                    "timestamp": time.time(),
+                }
+            )
             await broadcast(
                 {"type": "lifecycle.delete_agent", "agent_id": agent_id, "state": events.snapshot()}
             )
-    except Exception as e:
-        logger.error("[cmd] Publish failed: %s", e)
+            return
+
+        if not await lifecycle.dispatch_command(agent_id, command, "monitor-dashboard"):
+            # Reflecting the new state here regardless would leave the browser
+            # showing an agent as paused that is still running, with nothing to
+            # correct it until the next heartbeat.
+            return
+        events.add_log(
+            {"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()}
+        )
+        runtime.state["agents"].get(agent_id, {})["state"] = (
+            "stopped" if command == "stop" else "paused" if command == "pause" else "running"
+        )
+        await broadcast({"type": "patch", "state": events.snapshot()})
+    except Exception as exc:
+        logger.error("[cmd] %s failed: %s", command, exc)
